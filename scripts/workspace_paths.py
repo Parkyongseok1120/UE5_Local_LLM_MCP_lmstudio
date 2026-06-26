@@ -12,7 +12,7 @@ DEFAULT_ENGINE_VERSION = "5.8"
 DEFAULT_INDEX_NAMESPACE = "unreal58"
 FALLBACK_INDEX_REL = Path("data/unreal58/rag.sqlite")
 
-WORKSPACE_DIR_NAMES = ("Unreal58-RAG", "Gemma4 LORA", "UnrealEngine57Dev_RAG")
+WORKSPACE_DIR_NAMES = ("UE5_Local_LLM_MCP_lmstudio", "Unreal58-RAG", "Gemma4 LORA", "UnrealEngine57Dev_RAG")
 
 LEGACY_LOCATOR_PREFIXES: tuple[str, ...] = ()
 

@@ -4,24 +4,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Resolve-PortableRoot {
-    param([string]$Override)
-    if ($Override) {
-        return (Resolve-Path $Override).Path
-    }
-    $parent = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-    $leaf = Split-Path $parent -Leaf
-    if ($leaf -eq "Unreal58-RAG") {
-        $grand = (Resolve-Path (Join-Path $parent "..")).Path
-        if (Test-Path (Join-Path $grand "lmstudio-unreal-agent-mcp")) {
-            return $grand
-        }
-    }
-    return $parent
-}
+. (Join-Path $PSScriptRoot "Resolve-StackLayout.ps1")
 
-$root = Resolve-PortableRoot $PortableRoot
-$ragRoot = Join-Path $root "Unreal58-RAG"
+$layout = Resolve-StackLayout $PortableRoot
+$root = $layout.Root
+$ragRoot = $layout.RagRoot
+$agentRoot = $layout.AgentRoot
 $py = & {
     $bundled = Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
     if (Test-Path $bundled) { return $bundled }
@@ -51,7 +39,7 @@ Check "unreal_rag_mcp.py compile" {
     try { & $py -m py_compile unreal_rag_mcp.py rag_search.py workspace_paths.py }
     finally { Pop-Location }
 }
-Check "agent server.js" { if (-not (Test-Path (Join-Path $root "lmstudio-unreal-agent-mcp\src\server.js"))) { throw "missing" } }
+Check "agent server.js" { if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) { throw "missing" } }
 Check "python version" {
     $out = & $py --version 2>&1 | Out-String
     if ($out -notmatch "Python") { throw $out.Trim() }
@@ -98,7 +86,7 @@ Check "clinerules" {
     if (-not (Test-Path (Join-Path $ragRoot ".clinerules"))) { throw "missing .clinerules" }
 }
 Check "validate-write hook" {
-    if (-not (Test-Path (Join-Path $root "lmstudio-unreal-agent-mcp\src\validate-write.js"))) { throw "missing validate-write.js" }
+    if (-not (Test-Path (Join-Path $agentRoot "src\validate-write.js"))) { throw "missing validate-write.js" }
 }
 
 if ($fail -gt 0) {

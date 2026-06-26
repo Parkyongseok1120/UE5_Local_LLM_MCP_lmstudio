@@ -105,7 +105,7 @@ foreach ($file in $scanFiles) {
     if ($rel -match '\.sqlite$') {
         Fail "sqlite file in scan set: $rel"
     }
-    if ($rel -eq 'config\workspace.json' -or $rel -eq 'config/agent-mcp.json') {
+    if ($rel -eq 'config\workspace.json' -or $rel -eq 'config/agent-mcp.json' -or $rel -match '(?i)^lmstudio-unreal-agent-mcp/config/agent-mcp\.json$') {
         Fail "live config should not be tracked: $rel"
     }
 
@@ -138,7 +138,8 @@ $required = @(
     'README.md',
     '.gitignore',
     'scripts\rag_doctor.py',
-    'scripts\workspace_paths.py'
+    'scripts\workspace_paths.py',
+    'lmstudio-unreal-agent-mcp\src\server.js'
 )
 foreach ($item in $required) {
     if (-not (Test-Path (Join-Path $root $item))) {

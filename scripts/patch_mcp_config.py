@@ -94,8 +94,20 @@ def patch_unreal_rag(entry: dict[str, Any], workspace: Path, python_exe: Path) -
     return entry
 
 
+def resolve_agent_root(workspace: Path) -> Path:
+    bundled = workspace / "lmstudio-unreal-agent-mcp"
+    if (bundled / "src" / "server.js").is_file():
+        return bundled.resolve()
+    fallback = DEFAULT_LMSTUDIO_ROOT / "lmstudio-unreal-agent-mcp"
+    if (fallback / "src" / "server.js").is_file():
+        return fallback.resolve()
+    raise FileNotFoundError(
+        "lmstudio-unreal-agent-mcp not found beside workspace or under ~/.lmstudio"
+    )
+
+
 def patch_unreal_agent(entry: dict[str, Any], workspace: Path, node_exe: Path) -> dict[str, Any]:
-    agent_root = DEFAULT_LMSTUDIO_ROOT / "lmstudio-unreal-agent-mcp"
+    agent_root = resolve_agent_root(workspace)
     entry["command"] = str(node_exe)
     entry["args"] = [str(agent_root / "src" / "server.js")]
     env = dict(entry.get("env") or {})

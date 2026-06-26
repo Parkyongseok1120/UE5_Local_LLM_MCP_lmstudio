@@ -1,0 +1,16 @@
+{
+  "name": "lmstudio-unreal-agent-mcp",
+  "version": "0.1.0",
+  "description": "Safe local file/build MCP server for LM Studio Unreal Engine coding agents.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

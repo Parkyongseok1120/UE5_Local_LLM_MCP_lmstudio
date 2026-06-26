@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "unreal-agent": {
+      "command": "node",
+      "args": [
+        "%USERPROFILE%\\.lmstudio\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-unreal-agent-mcp\\src\\server.js"
+      ],
+      "env": {
+        "WORKSPACE_ROOT": "%USERPROFILE%\\Documents",
+        "AGENT_MCP_CONFIG": "%USERPROFILE%\\.lmstudio\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-unreal-agent-mcp\\config\\agent-mcp.json",
+        "ALLOW_WRITE": "1",
+        "ALLOW_COMMANDS": "1",
+        "ALLOW_UNREAL_BUILD": "1",
+        "MAX_READ_BYTES": "524288",
+        "MAX_OUTPUT_BYTES": "262144",
+        "COMMAND_TIMEOUT_MS": "600000"
+      }
+    }
+  }
+}

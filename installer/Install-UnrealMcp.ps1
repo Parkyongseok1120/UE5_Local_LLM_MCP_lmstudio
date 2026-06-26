@@ -8,21 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Resolve-PortableRoot {
-    param([string]$Override)
-    if ($Override) {
-        return (Resolve-Path $Override).Path
-    }
-    $parent = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-    $leaf = Split-Path $parent -Leaf
-    if ($leaf -eq "Unreal58-RAG") {
-        $grand = (Resolve-Path (Join-Path $parent "..")).Path
-        if (Test-Path (Join-Path $grand "lmstudio-unreal-agent-mcp")) {
-            return $grand
-        }
-    }
-    return $parent
-}
+. (Join-Path $PSScriptRoot "Resolve-StackLayout.ps1")
 
 function Find-PythonExe {
     $found = [System.Collections.Generic.List[string]]::new()
@@ -88,11 +74,11 @@ function Merge-McpServer($Servers, [string]$Name, $Entry) {
     return $Servers
 }
 
-$root = Resolve-PortableRoot $PortableRoot
-$ragRoot = Join-Path $root "Unreal58-RAG"
-$agentRoot = Join-Path $root "lmstudio-unreal-agent-mcp"
-$mcpToolsRoot = Join-Path $root "mcp-tools"
-$configRoot = Join-Path $root "config"
+$layout = Resolve-StackLayout $PortableRoot
+$root = $layout.Root
+$ragRoot = $layout.RagRoot
+$agentRoot = $layout.AgentRoot
+$mcpToolsRoot = $layout.McpToolsRoot
 
 if (-not (Test-Path (Join-Path $ragRoot "rag.ps1"))) {
     throw "Unreal58-RAG not found under: $root"

@@ -59,21 +59,31 @@ The first goal is simply to make local models hallucinate less when dealing with
 
 ## Recommended folder layout
 
-For LM Studio, I recommend putting the two folders side by side like this.
+This repository is a **monorepo**: RAG at the repo root plus `lmstudio-unreal-agent-mcp/` for the agent MCP server.
+
+After clone, a typical LM Studio layout looks like this.
 
 ```text
 ~/.lmstudio/
-  UE5_Local_LLM_MCP_lmstudio/    # this repo (old name: Unreal58-RAG)
-  lmstudio-unreal-agent-mcp/      # separate repo — required for unreal-agent MCP
+  UE5_Local_LLM_MCP_lmstudio/          # this repo (RAG + agent MCP)
+    rag.ps1
+    scripts/
+    lmstudio-unreal-agent-mcp/
+      src/server.js
 ```
 
-You do not have to use it as a monorepo.  
-You can clone both repos side by side and just point the MCP config to each root correctly.
+Legacy two-folder layout (still supported by the installer):
 
-**Two repos, two MCP servers:**
+```text
+~/.lmstudio/
+  Unreal58-RAG/
+  lmstudio-unreal-agent-mcp/
+```
 
-- `unreal-rag` → **this repo** (`UE5_Local_LLM_MCP_lmstudio`)
-- `unreal-agent` → **separate repo** `lmstudio-unreal-agent-mcp` (file write / UBT build tools)
+**Two MCP servers:**
+
+- `unreal-rag` → this repo root (`scripts/unreal_rag_mcp.py`)
+- `unreal-agent` → `lmstudio-unreal-agent-mcp/` in this same clone
 
 RAG-only Q&A works with `unreal-rag` alone. Agent-style file edit / compile loop needs both.
 
@@ -111,8 +121,8 @@ prompts/lmstudio_unreal_agent_system.md
 5. Enable the MCP servers in LM Studio.
 
 ```text
-unreal-rag        # from this repo
-unreal-agent      # from lmstudio-unreal-agent-mcp (clone separately)
+unreal-rag        # this repo root
+unreal-agent      # lmstudio-unreal-agent-mcp/ in this same clone
 ```
 
 ---

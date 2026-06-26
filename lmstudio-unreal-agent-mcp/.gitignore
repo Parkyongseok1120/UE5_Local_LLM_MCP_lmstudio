@@ -1,0 +1,3 @@
+node_modules/
+config/agent-mcp.json
+config/lmstudio-mcp-unreal-agent.json

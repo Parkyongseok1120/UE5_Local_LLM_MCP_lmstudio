@@ -7,7 +7,7 @@
     "lmStudio": "0.3+"
   },
   "components": [
-    "Unreal58-RAG",
+    "UE5_Local_LLM_MCP_lmstudio",
     "lmstudio-unreal-agent-mcp",
     "mcp-tools",
     "config"
