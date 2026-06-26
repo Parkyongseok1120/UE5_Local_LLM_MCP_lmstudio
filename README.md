@@ -1,8 +1,6 @@
-# Unreal58-RAG
+# UE5_Local_LLM_MCP_lmstudio
 
-## Quick Start (English)
-
-Local **Unreal Engine 5.x RAG stack** for LM Studio. Officially tested on **UE 5.8**; use BYOI (`collect-source`) for other 5.x versions.
+Local **Unreal Engine 5.x RAG stack** for LM Studio (formerly **Unreal58-RAG**). Officially tested on **UE 5.8**; use BYOI (`collect-source`) for other 5.x versions.
 
 **Monorepo layout (recommended):**
 ```text
