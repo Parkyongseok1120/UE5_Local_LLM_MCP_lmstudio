@@ -1,0 +1,53 @@
+{
+  "description": "Runtime debug retrieval regression queries.",
+  "cases": [
+    {
+      "id": "runtime_null_uobject",
+      "query": "runtime crash null UObject garbage collection UPROPERTY access violation",
+      "options": { "mode": "runtime_debug" },
+      "expected": [{ "title_contains": "Runtime Debugging Playbook", "source": "project_guideline", "max_rank": 5 }]
+    },
+    {
+      "id": "replication_onrep",
+      "query": "PIE replication bug Server RPC client OnRep",
+      "options": { "mode": "runtime_debug" },
+      "expected": [{ "title_contains": "Runtime Debugging Playbook", "source": "project_guideline", "max_rank": 5 }]
+    },
+    {
+      "id": "beginplay_order",
+      "query": "BeginPlay constructor GetWorld null lifecycle order",
+      "options": { "mode": "runtime_debug" },
+      "expected": [{ "title_contains": "Runtime Debugging Playbook", "source": "project_guideline", "max_rank": 5 }]
+    },
+    {
+      "id": "enhanced_input_not_firing",
+      "query": "Enhanced Input not working SetupInputComponent mapping context",
+      "options": { "mode": "runtime_debug" },
+      "expected": [{ "title_contains": "Enhanced Input", "source": "project_guideline", "max_rank": 8 }]
+    },
+    {
+      "id": "compile_triage",
+      "query": "fatal error C2065 undeclared identifier compile triage",
+      "options": { "mode": "compile_fix" },
+      "expected": [{ "title_contains": "Compile Error Triage", "source": "project_guideline", "max_rank": 5 }]
+    },
+    {
+      "id": "module_fix_buildcs",
+      "query": "LNK2019 unresolved external Build.cs module dependency",
+      "options": { "mode": "module_fix" },
+      "expected": [{ "title_contains": "Compile Error Triage", "source": "project_guideline", "max_rank": 5 }]
+    },
+    {
+      "id": "shooter_genre",
+      "query": "shooter prototype core loop line trace weapon",
+      "options": { "mode": "prototype_component", "genre": ["shooter"] },
+      "expected": [{ "title_contains": "Shooter", "source": "project_guideline", "max_rank": 8 }]
+    },
+    {
+      "id": "platformer_genre",
+      "query": "platformer jump movement prototype scope",
+      "options": { "mode": "prototype_component" },
+      "expected": [{ "title_contains": "Platformer", "source": "project_guideline", "max_rank": 8 }]
+    }
+  ]
+}

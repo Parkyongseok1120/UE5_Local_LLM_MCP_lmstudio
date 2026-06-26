@@ -1,0 +1,15 @@
+{
+  "name": "Unreal58-RAG Portable MCP",
+  "version": "1.0.0",
+  "requires": {
+    "python": "3.10+",
+    "node": "20+",
+    "lmStudio": "0.3+"
+  },
+  "components": [
+    "Unreal58-RAG",
+    "lmstudio-unreal-agent-mcp",
+    "mcp-tools",
+    "config"
+  ]
+}

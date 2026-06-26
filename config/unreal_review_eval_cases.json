@@ -1,0 +1,237 @@
+{
+  "description": "End-to-end Unreal C++ review cases for scoring model answers, not retrieval quality. Each case checks whether the answer finds the real issue, avoids unsafe fixes, and handles compile-readiness honestly.",
+  "defaults": {
+    "compile_ready_claim_patterns": [
+      "\\bcompile-ready\\b",
+      "컴파일\\s*(가능|준비|완료)",
+      "그대로\\s*컴파일",
+      "빌드\\s*(통과|가능)"
+    ],
+    "verification_patterns": [
+      "\\bUBT\\b",
+      "UnrealBuildTool",
+      "정적\\s*검증",
+      "빌드\\s*검증",
+      "실제\\s*빌드"
+    ],
+    "compile_ready_penalty": 1.5
+  },
+  "cases": [
+    {
+      "id": "reflected_type_namespace_and_generated_h_order",
+      "category": ["reflection", "namespace", "generated_h"],
+      "prompt": "다음 UE C++ 헤더를 리뷰하고, 컴파일/UE reflection 관점에서 문제와 최소 수정안을 말해줘.",
+      "files": [
+        {
+          "path": "Source/Sample/Public/DamageReceiverComponent.h",
+          "content": "#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"DamageReceiverComponent.generated.h\"\n#include \"Components/ActorComponent.h\"\n\nnamespace Combat\n{\nUCLASS(Blueprintable, ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))\nclass SAMPLE_API UDamageReceiverComponent : public UActorComponent\n{\n    GENERATED_BODY()\n\npublic:\n    UFUNCTION(BlueprintCallable)\n    void ApplyDamage(float Amount);\n};\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "generated_h_not_last",
+          "points": 2.0,
+          "diagnosis": ["generated\\.h", "(last|마지막|순서|뒤에 include)"],
+          "fix": ["generated\\.h.*(last|마지막)", "ActorComponent\\.h.*generated\\.h", "include.*순서"]
+        },
+        {
+          "id": "reflected_type_inside_namespace",
+          "points": 2.0,
+          "diagnosis": ["(namespace|네임스페이스)", "(UCLASS|reflected|reflection|리플렉션)"],
+          "fix": ["(namespace|네임스페이스).*(제거|빼|밖|사용하지)", "global namespace", "전역"]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "keep_namespace",
+          "penalty": 2.0,
+          "patterns": ["(namespace|네임스페이스).*(문제\\s*없|괜찮|유지)", "using namespace"]
+        }
+      ]
+    },
+    {
+      "id": "missing_generated_h_for_ustruct",
+      "category": ["reflection", "generated_h"],
+      "prompt": "다음 USTRUCT 헤더 리뷰. 왜 UHT가 실패할 수 있는지와 최소 수정안을 말해줘.",
+      "files": [
+        {
+          "path": "Source/Sample/Public/HitPayload.h",
+          "content": "#pragma once\n\n#include \"CoreMinimal.h\"\n\nUSTRUCT(BlueprintType)\nstruct FHitPayload\n{\n    GENERATED_BODY()\n\n    UPROPERTY(EditAnywhere, BlueprintReadWrite)\n    float Damage = 0.0f;\n};\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "missing_generated_header",
+          "points": 3.0,
+          "diagnosis": ["generated\\.h", "(없|누락|missing)", "(USTRUCT|GENERATED_BODY|UHT)"],
+          "fix": ["#include\\s+\"HitPayload\\.generated\\.h\"", "HitPayload\\.generated\\.h.*(마지막|last)"]
+        }
+      ]
+    },
+    {
+      "id": "blueprint_native_event_interface_misuse",
+      "category": ["interface", "uht", "blueprint_native_event"],
+      "prompt": "다음 UInterface 코드의 UE C++ 문제를 리뷰하고, 올바른 호출/구현 방향을 말해줘.",
+      "files": [
+        {
+          "path": "Source/Sample/Public/Interactable.h",
+          "content": "#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"UObject/Interface.h\"\n#include \"Interactable.generated.h\"\n\nUINTERFACE(BlueprintType)\nclass SAMPLE_API UInteractable : public UInterface\n{\n    GENERATED_BODY()\n};\n\nclass SAMPLE_API IInteractable\n{\n    GENERATED_BODY()\n\npublic:\n    UFUNCTION(BlueprintNativeEvent, BlueprintCallable)\n    bool CanInteract(AActor* Instigator) const;\n\n    virtual bool CanInteract(AActor* Instigator) const = 0;\n};\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "duplicate_or_pure_virtual_blueprint_native_event",
+          "points": 2.0,
+          "diagnosis": ["BlueprintNativeEvent", "(pure virtual|=\\s*0|중복|duplicate|virtual)"],
+          "fix": ["_Implementation", "(UFUNCTION.*선언|이벤트 선언).*하나", "pure virtual.*(제거|쓰지)"]
+        },
+        {
+          "id": "execute_call_required",
+          "points": 1.5,
+          "diagnosis": ["(Execute_|BlueprintNativeEvent|interface)", "(호출|call)"],
+          "fix": ["IInteractable::Execute_CanInteract", "Execute_CanInteract"]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "direct_virtual_call_only",
+          "penalty": 1.5,
+          "patterns": ["IInteractable\\*.*->\\s*CanInteract", "Cast<IInteractable>.*CanInteract"]
+        }
+      ]
+    },
+    {
+      "id": "cpp_definition_declaration_mismatch",
+      "category": ["cpp", "declaration_consistency"],
+      "prompt": "다음 .h/.cpp 쌍을 리뷰하고, 새 컴파일 오류 없이 고치려면 무엇을 확인해야 하는지 말해줘.",
+      "files": [
+        {
+          "path": "Source/Sample/Public/HackComponent.h",
+          "content": "#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"Components/ActorComponent.h\"\n#include \"HackComponent.generated.h\"\n\nUCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))\nclass SAMPLE_API UHackComponent : public UActorComponent\n{\n    GENERATED_BODY()\n\npublic:\n    UFUNCTION(BlueprintCallable)\n    void StartHack(AActor* TargetActor);\n};\n"
+        },
+        {
+          "path": "Source/Sample/Private/HackComponent.cpp",
+          "content": "#include \"HackComponent.h\"\n\nvoid UHackComponent::StartHack()\n{\n    CurrentTarget = TargetActor;\n    GetWorld()->GetTimerManager().SetTimer(HackTimerHandle, this, &UHackComponent::FinishHack, 1.0f, false);\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "signature_mismatch",
+          "points": 2.0,
+          "diagnosis": ["StartHack", "(signature|시그니처|선언|정의)", "(AActor\\*|TargetActor|인자|parameter)"],
+          "fix": ["StartHack\\(AActor\\*\\s*TargetActor\\)", "선언과 정의.*(맞|일치)"]
+        },
+        {
+          "id": "undeclared_members_and_function",
+          "points": 2.0,
+          "diagnosis": ["(CurrentTarget|HackTimerHandle|FinishHack)", "(선언|undeclared|없|누락)"],
+          "fix": ["UPROPERTY.*CurrentTarget", "FTimerHandle.*HackTimerHandle", "FinishHack.*선언"]
+        }
+      ]
+    },
+    {
+      "id": "public_header_gameplaytags_module_dependency",
+      "category": ["build_cs", "module_dependency", "public_header"],
+      "prompt": "다음 코드가 C1083 또는 타입 인식 문제를 낼 수 있는지 리뷰하고 Build.cs 수정 방향을 말해줘.",
+      "files": [
+        {
+          "path": "Source/Sample/Sample.Build.cs",
+          "content": "using UnrealBuildTool;\n\npublic class Sample : ModuleRules\n{\n    public Sample(ReadOnlyTargetRules Target) : base(Target)\n    {\n        PublicDependencyModuleNames.AddRange(new string[] { \"Core\", \"CoreUObject\", \"Engine\" });\n        PrivateDependencyModuleNames.AddRange(new string[] { });\n    }\n}\n"
+        },
+        {
+          "path": "Source/Sample/Public/TaggedDamage.h",
+          "content": "#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"GameplayTagContainer.h\"\n#include \"TaggedDamage.generated.h\"\n\nUSTRUCT(BlueprintType)\nstruct FTaggedDamage\n{\n    GENERATED_BODY()\n\n    UPROPERTY(EditAnywhere, BlueprintReadWrite)\n    FGameplayTagContainer DamageTags;\n};\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "gameplaytags_missing_public_dependency",
+          "points": 3.0,
+          "diagnosis": ["GameplayTags", "(Build\\.cs|module|모듈|dependency|의존성)", "(PublicDependencyModuleNames|public header|Public)"],
+          "fix": ["PublicDependencyModuleNames.*GameplayTags", "GameplayTags.*PublicDependencyModuleNames"]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "private_dependency_for_public_header",
+          "penalty": 1.5,
+          "patterns": ["PrivateDependencyModuleNames.*GameplayTags"]
+        }
+      ]
+    },
+    {
+      "id": "editor_only_include_in_runtime_module",
+      "category": ["module_boundary", "editor_only"],
+      "prompt": "다음 런타임 컴포넌트 헤더를 리뷰하고, 모듈 경계 관점의 문제를 말해줘.",
+      "files": [
+        {
+          "path": "Source/Sample/Public/DebugSpawnComponent.h",
+          "content": "#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"Components/ActorComponent.h\"\n#include \"EditorUtilityWidget.h\"\n#include \"DebugSpawnComponent.generated.h\"\n\nUCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))\nclass SAMPLE_API UDebugSpawnComponent : public UActorComponent\n{\n    GENERATED_BODY()\n\npublic:\n    UPROPERTY(EditAnywhere)\n    TObjectPtr<UEditorUtilityWidget> DebugWidget;\n};\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "editor_only_type_in_runtime_header",
+          "points": 3.0,
+          "diagnosis": ["(EditorUtilityWidget|Editor-only|editor-only|에디터)", "(runtime|런타임|module|모듈)"],
+          "fix": ["Editor module", "WITH_EDITOR", "(런타임.*분리|에디터.*분리)", "runtime header.*(제거|빼)"]
+        }
+      ]
+    },
+    {
+      "id": "raw_uobject_member_without_uproperty",
+      "category": ["uobject_lifetime", "gc"],
+      "prompt": "다음 컴포넌트의 UObject lifetime/GC 위험을 리뷰하고 최소 수정안을 말해줘.",
+      "files": [
+        {
+          "path": "Source/Sample/Public/EffectHolderComponent.h",
+          "content": "#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"Components/ActorComponent.h\"\n#include \"EffectHolderComponent.generated.h\"\n\nUCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))\nclass SAMPLE_API UEffectHolderComponent : public UActorComponent\n{\n    GENERATED_BODY()\n\nprivate:\n    UObject* ActiveEffect;\n\npublic:\n    void CreateEffect();\n};\n"
+        },
+        {
+          "path": "Source/Sample/Private/EffectHolderComponent.cpp",
+          "content": "#include \"EffectHolderComponent.h\"\n\nvoid UEffectHolderComponent::CreateEffect()\n{\n    ActiveEffect = NewObject<UObject>(this);\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "raw_uobject_member_not_tracked_by_gc",
+          "points": 3.0,
+          "diagnosis": ["(UObject\\*|ActiveEffect)", "(UPROPERTY|TObjectPtr|GC|garbage collection|가비지|수명)"],
+          "fix": ["UPROPERTY.*TObjectPtr<UObject>", "UPROPERTY.*UObject\\*", "TObjectPtr<UObject>.*ActiveEffect"]
+        }
+      ]
+    },
+    {
+      "id": "damage_api_signature_and_component_causer_misuse",
+      "category": ["damage_api", "api_signature"],
+      "prompt": "다음 데미지 적용 코드를 리뷰하고, UE API 시그니처와 책임 분리 관점에서 위험을 말해줘.",
+      "files": [
+        {
+          "path": "Source/Sample/Private/WeaponComponent.cpp",
+          "content": "#include \"WeaponComponent.h\"\n#include \"Kismet/GameplayStatics.h\"\n\nvoid UWeaponComponent::HitTarget(AActor* Target, float Damage)\n{\n    UGameplayStatics::ApplyDamage(Target, Damage, this, this, nullptr);\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "applydamage_signature_misuse",
+          "points": 2.0,
+          "diagnosis": ["ApplyDamage", "(AController|EventInstigator|DamageCauser|시그니처|signature)", "(this|UWeaponComponent|component)"],
+          "fix": ["GetOwner", "Controller", "DamageCauser.*AActor", "EventInstigator.*AController"]
+        },
+        {
+          "id": "do_not_claim_unverified_damage_code_compile_ready",
+          "points": 1.0,
+          "diagnosis": ["(확인 필요|컴파일 근접|검증|signature|시그니처)", "(AActor::TakeDamage|UGameplayStatics::ApplyDamage|DamageEvent|DamageCauser|Damage API)"],
+          "fix": ["(UBT|UnrealBuildTool|API.*확인|시그니처.*확인)"]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "component_as_controller_or_actor_is_ok",
+          "penalty": 2.0,
+          "patterns": ["ApplyDamage\\(Target,\\s*Damage,\\s*this,\\s*this", "this.*(EventInstigator|DamageCauser).*(가능|괜찮|문제\\s*없)"]
+        }
+      ]
+    }
+  ]
+}

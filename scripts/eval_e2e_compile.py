@@ -1,0 +1,120 @@
+#!/usr/bin/env python
+"""E2E compile-readiness eval: static validate fixtures (+ optional UBT)."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from glob import glob
+from pathlib import Path
+
+from lmstudio_unreal_wrapper import has_static_errors, validate_unreal_readiness
+
+DEFAULT_UBT = Path(
+    r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
+)
+
+
+def latest_glob(root: Path, pattern: str) -> Path | None:
+    matches = sorted(root.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches[0] if matches else None
+
+
+def run_static(project_root: Path, expect_codes: list[str], forbid_errors: bool) -> tuple[bool, str]:
+    findings = validate_unreal_readiness(project_root)
+    codes = {f.code for f in findings}
+    missing = [code for code in expect_codes if code not in codes]
+    if missing:
+        return False, f"expected codes not found: {missing} (got {sorted(codes)})"
+    if forbid_errors and has_static_errors(findings):
+        errors = [f for f in findings if f.severity == "error"]
+        return False, f"unexpected errors: {[e.code for e in errors[:5]]}"
+    return True, f"findings={len(findings)} codes={sorted(codes)}"
+
+
+def run_ubt(project_file: Path, target: str, ubt_path: Path, timeout: int) -> tuple[bool, str]:
+    if not ubt_path.is_file():
+        return False, f"UBT missing: {ubt_path}"
+    if not project_file.is_file():
+        return False, f"uproject missing: {project_file}"
+    cmd = [
+        str(ubt_path),
+        target,
+        "Win64",
+        "Development",
+        f"-Project={project_file}",
+        "-WaitMutex",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(project_file.parent),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "UBT timeout"
+    ok = proc.returncode == 0
+    tail = (proc.stdout or proc.stderr or "")[-2000:]
+    return ok, f"returncode={proc.returncode}\n{tail}"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="E2E compile eval")
+    parser.add_argument("--config", type=Path, default=Path("config/rag_eval_e2e_compile_cases.json"))
+    parser.add_argument("--run-ubt", action="store_true")
+    parser.add_argument("--ubt-path", type=Path, default=DEFAULT_UBT)
+    parser.add_argument("--ubt-timeout", type=int, default=1200)
+    args = parser.parse_args()
+
+    rag_root = Path(__file__).resolve().parent.parent
+    config = json.loads((rag_root / args.config).read_text(encoding="utf-8-sig"))
+    fail = 0
+    for case in config.get("cases") or []:
+        case_id = case.get("id", "?")
+        case_type = case.get("type", "")
+        ok = False
+        detail = ""
+
+        if case_type == "static_validate":
+            root = Path(str(case.get("projectRoot") or ""))
+            expect = list(case.get("expectErrorCodes") or [])
+            ok, detail = run_static(root, expect, forbid_errors=False)
+        elif case_type == "static_validate_glob":
+            pattern = str(case.get("projectGlob") or "")
+            latest = latest_glob(rag_root, pattern)
+            if not latest:
+                ok, detail = False, f"no match for {pattern}"
+            else:
+                uproject = next(latest.glob("*.uproject"), None)
+                root = latest if uproject is None else latest
+                expect = list(case.get("expectErrorCodes") or [])
+                ok, detail = run_static(root, expect, forbid_errors=True)
+        elif case_type == "ubt_build":
+            if not args.run_ubt:
+                print(f"[SKIP] {case_id}: UBT (use --run-ubt)")
+                continue
+            ok, detail = run_ubt(
+                Path(str(case.get("projectFile") or "")),
+                str(case.get("target") or ""),
+                args.ubt_path,
+                args.ubt_timeout,
+            )
+        else:
+            ok, detail = False, f"unknown type {case_type}"
+
+        status = "PASS" if ok else "FAIL"
+        print(f"[{status}] {case_id}: {detail}")
+        if not ok:
+            fail += 1
+
+    print(f"\nsummary: {len(config.get('cases') or []) - fail} passed, {fail} failed")
+    return 1 if fail else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

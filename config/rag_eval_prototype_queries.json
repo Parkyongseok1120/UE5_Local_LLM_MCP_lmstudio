@@ -1,0 +1,57 @@
+{
+  "description": "Prototype component/subsystem retrieval regression queries.",
+  "defaults": {
+    "top_k": 6,
+    "candidate_limit": 200
+  },
+  "cases": [
+    {
+      "id": "prototype_component_recipe",
+      "query": "prototype UActorComponent Tick off BeginPlay minimal compiling skeleton",
+      "options": { "mode": "prototype_component" },
+      "expected": [
+        {
+          "title_contains": "Prototype Recipes",
+          "source": "project_guideline",
+          "max_rank": 3
+        }
+      ]
+    },
+    {
+      "id": "prototype_world_subsystem",
+      "query": "UWorldSubsystem Initialize Deinitialize no CreateDefaultSubobject",
+      "options": { "mode": "prototype_subsystem" },
+      "expected": [
+        {
+          "title_contains": "Prototype",
+          "source": "project_guideline",
+          "max_rank": 6
+        }
+      ]
+    },
+    {
+      "id": "prototype_gameinstance_subsystem",
+      "query": "UGameInstanceSubsystem session state prototype",
+      "options": { "mode": "prototype_subsystem" },
+      "expected": [
+        {
+          "title_contains": "Prototype Recipes",
+          "source": "project_guideline",
+          "max_rank": 3
+        }
+      ]
+    },
+    {
+      "id": "component_codegen_symbol",
+      "query": "UActorComponent new component GENERATED_BODY",
+      "options": { "mode": "prototype_component" },
+      "expected": [
+        {
+          "symbol_name": "UActorComponent",
+          "source": "unreal_symbol",
+          "max_rank": 6
+        }
+      ]
+    }
+  ]
+}

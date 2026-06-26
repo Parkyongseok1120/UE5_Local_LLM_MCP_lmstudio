@@ -1,0 +1,5 @@
+{
+  "description": "E2E compile cases (optional). Add local overrides; UBT cases require -RunUbt.",
+  "engineVersion": "5.8",
+  "cases": []
+}

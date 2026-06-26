@@ -1,0 +1,18 @@
+{
+  "health": ["Health", "HealthComponent", "LyraHealth", "LyraHealthComponent", "Damage", "Vitality"],
+  "health component": ["LyraHealthComponent", "HealthComponent", "UHealthComponent", "LyraHealth"],
+  "player health": ["LyraHealthComponent", "HealthComponent", "LyraHealth"],
+  "player": ["Player", "PlayerController", "PlayerState", "Character", "Pawn", "LyraCharacter"],
+  "movement": ["Movement", "CharacterMovement", "Move", "Velocity"],
+  "camera": ["Camera", "CameraComponent", "SpringArm", "ViewTarget"],
+  "input": ["Input", "EnhancedInput", "InputAction", "InputMapping"],
+  "weapon": ["Weapon", "WeaponComponent", "Fire", "Ammo"],
+  "shield": ["Shield", "Armor", "Defense"],
+  "component": ["Component", "ActorComponent", "UActorComponent"],
+  "체력": ["Health", "HealthComponent", "LyraHealth", "LyraHealthComponent", "Damage"],
+  "체력 컴포넌트": ["LyraHealthComponent", "HealthComponent", "LyraHealth"],
+  "플레이어": ["Player", "PlayerController", "Character", "Pawn", "LyraCharacter"],
+  "이동": ["Movement", "CharacterMovement"],
+  "카메라": ["Camera", "SpringArm"],
+  "입력": ["Input", "EnhancedInput"]
+}

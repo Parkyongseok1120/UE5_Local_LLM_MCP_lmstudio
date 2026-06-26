@@ -1,0 +1,43 @@
+{
+  "C_Cpp.default.compilerPath": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+  "C_Cpp.default.cppStandard": "c++20",
+  "C_Cpp.default.cStandard": "c17",
+  "C_Cpp.default.intelliSenseMode": "msvc-x64",
+  "C_Cpp.errorSquiggles": "enabled",
+  "C_Cpp.intelliSenseEngine": "default",
+  "C_Cpp.workspaceParsingPriority": "medium",
+  "C_Cpp.autocompleteAddParentheses": true,
+  "C_Cpp.codeAnalysis.clangTidy.enabled": false,
+  "files.associations": {
+    "*.Build.cs": "csharp",
+    "*.Target.cs": "csharp",
+    "*.uproject": "jsonc",
+    "*.uplugin": "jsonc",
+    "*.ini": "ini",
+    "*.usf": "hlsl",
+    "*.ush": "hlsl"
+  },
+  "files.exclude": {
+    "**/.vs": true,
+    "**/Binaries": true,
+    "**/DerivedDataCache": true,
+    "**/Intermediate": true,
+    "**/Saved": true
+  },
+  "search.exclude": {
+    "**/.vs": true,
+    "**/Binaries": true,
+    "**/DerivedDataCache": true,
+    "**/Intermediate": true,
+    "**/Saved": true
+  },
+  "files.watcherExclude": {
+    "**/.vs/**": true,
+    "**/Binaries/**": true,
+    "**/DerivedDataCache/**": true,
+    "**/Intermediate/**": true,
+    "**/Saved/**": true
+  },
+  "cmake.configureOnOpen": false,
+  "dotnet.completion.showCompletionItemsFromUnimportedNamespaces": true
+}

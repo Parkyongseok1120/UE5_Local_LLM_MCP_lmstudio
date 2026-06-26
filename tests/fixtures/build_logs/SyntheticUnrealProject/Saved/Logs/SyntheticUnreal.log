@@ -1,0 +1,5 @@
+Log file open, 05/23/26 02:00:00
+C:\Projects\SyntheticUnreal\Source\SyntheticGame\Private\TagUser.cpp(18): fatal error C1083: Cannot open include file: 'GameplayTagContainer.h': No such file or directory
+C:\Projects\SyntheticUnreal\Source\SyntheticGame\Private\CombatComponent.cpp.obj : error LNK2019: unresolved external symbol "public: void __cdecl UCombatComponent::ApplyDamage(float)" (?ApplyDamage@UCombatComponent@@QEAAXM@Z) referenced in function "public: void __cdecl ACombatActor::Fire(void)" (?Fire@ACombatActor@@QEAAXXZ)
+LogCompile: Error: UnrealHeaderTool failed for target 'SyntheticGameEditor' (platform: Win64, module info: C:\Projects\SyntheticUnreal\Intermediate\Build\Win64\SyntheticGameEditor\Development\SyntheticGameEditor.uhtmanifest)
+C:\Projects\SyntheticUnreal\Source\SyntheticGame\Public\BrokenActor.h(5): fatal error C1083: Cannot open include file: 'BrokenActor.generated.h': No such file or directory

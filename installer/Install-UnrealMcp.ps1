@@ -1,0 +1,251 @@
+param(
+    [string]$PortableRoot = "",
+    [string]$LmStudioHome = "",
+    [string]$DocumentsRoot = "",
+    [switch]$SkipNpm,
+    [switch]$SkipPythonDeps
+)
+
+$ErrorActionPreference = "Stop"
+
+function Resolve-PortableRoot {
+    param([string]$Override)
+    if ($Override) {
+        return (Resolve-Path $Override).Path
+    }
+    $parent = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    $leaf = Split-Path $parent -Leaf
+    if ($leaf -eq "Unreal58-RAG") {
+        $grand = (Resolve-Path (Join-Path $parent "..")).Path
+        if (Test-Path (Join-Path $grand "lmstudio-unreal-agent-mcp")) {
+            return $grand
+        }
+    }
+    return $parent
+}
+
+function Find-PythonExe {
+    $found = [System.Collections.Generic.List[string]]::new()
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and (Test-Path $cmd.Source)) { $found.Add($cmd.Source) }
+    foreach ($path in @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe"),
+            (Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe")
+        )) {
+        if ((Test-Path $path)) { $found.Add($path) }
+    }
+    if ($found.Count -eq 0) {
+        throw "Python 3.10+ not found. Install from https://www.python.org/downloads/"
+    }
+    return $found[0]
+}
+
+function Find-NodeExe {
+    $found = [System.Collections.Generic.List[string]]::new()
+    foreach ($path in @(
+            (Join-Path $env:ProgramFiles "nodejs\node.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "nodejs\node.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\nodejs\node.exe")
+        )) {
+        if (Test-Path $path) { $found.Add((Resolve-Path $path).Path) }
+    }
+    $cmd = Get-Command node -ErrorAction SilentlyContinue
+    if ($cmd -and (Test-Path $cmd.Source)) { $found.Add($cmd.Source) }
+    if ($found.Count -eq 0) {
+        throw "Node.js 20+ not found. Install from https://nodejs.org/"
+    }
+    return $found[0]
+}
+
+function Expand-UserPath([string]$Text) {
+    return $Text.Replace("%USERPROFILE%", $HOME).Replace("$env:USERPROFILE", $HOME)
+}
+
+function Read-JsonObject([string]$Path) {
+    if (-not (Test-Path $Path)) { return $null }
+    return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
+}
+
+function Write-JsonUtf8([string]$Path, $Object) {
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $json = $Object | ConvertTo-Json -Depth 40
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $utf8)
+}
+
+function Merge-McpServer($Servers, [string]$Name, $Entry) {
+    if ($null -eq $Servers) {
+        $Servers = [ordered]@{}
+    }
+  if ($Servers -is [System.Collections.IDictionary]) {
+        $Servers[$Name] = $Entry
+        return $Servers
+    }
+    $Servers | Add-Member -NotePropertyName $Name -NotePropertyValue $Entry -Force
+    return $Servers
+}
+
+$root = Resolve-PortableRoot $PortableRoot
+$ragRoot = Join-Path $root "Unreal58-RAG"
+$agentRoot = Join-Path $root "lmstudio-unreal-agent-mcp"
+$mcpToolsRoot = Join-Path $root "mcp-tools"
+$configRoot = Join-Path $root "config"
+
+if (-not (Test-Path (Join-Path $ragRoot "rag.ps1"))) {
+    throw "Unreal58-RAG not found under: $root"
+}
+if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) {
+    throw "lmstudio-unreal-agent-mcp not found under: $root"
+}
+
+$python = Find-PythonExe
+$node = Find-NodeExe
+$lmHome = if ($LmStudioHome) { (Resolve-Path $LmStudioHome).Path } else { Join-Path $HOME ".lmstudio" }
+$docsRoot = if ($DocumentsRoot) { $DocumentsRoot } else { Join-Path $HOME "Documents" }
+
+Write-Host "Portable root : $root"
+Write-Host "Python        : $python"
+Write-Host "Node          : $node"
+Write-Host "LM Studio home: $lmHome"
+
+# npm dependencies
+if (-not $SkipNpm) {
+    foreach ($pair in @(
+            @{ Dir = $agentRoot; Name = "unreal-agent" },
+            @{ Dir = $mcpToolsRoot; Name = "mcp-tools" }
+        )) {
+        $pkg = Join-Path $pair.Dir "package.json"
+        if (-not (Test-Path $pkg)) { continue }
+        Write-Host "npm install in $($pair.Name)..."
+        Push-Location $pair.Dir
+        try {
+            & npm install --no-fund --no-audit 2>&1 | Out-Host
+        }
+        finally {
+            Pop-Location
+        }
+    }
+}
+
+# optional python deps for hybrid search
+if (-not $SkipPythonDeps) {
+    Write-Host "Installing fastembed (optional hybrid search)..."
+    & $python -m pip install fastembed --quiet 2>&1 | Out-Null
+}
+
+# shared workspace config
+$sharedConfigPath = Join-Path $lmHome "config\unreal-workspace.json"
+if (-not (Test-Path $sharedConfigPath)) {
+    $templatePath = Join-Path $PSScriptRoot "templates\unreal-workspace.template.json"
+    $templateText = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+    $templateText = Expand-UserPath $templateText
+    $templateText = $templateText.Replace("%USERPROFILE%", $HOME)
+    $sharedDir = Split-Path -Parent $sharedConfigPath
+    New-Item -ItemType Directory -Force -Path $sharedDir | Out-Null
+    [System.IO.File]::WriteAllText($sharedConfigPath, $templateText + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Created $sharedConfigPath"
+}
+
+# agent config
+$agentConfigPath = Join-Path $agentRoot "config\agent-mcp.json"
+$agentConfig = Read-JsonObject $agentConfigPath
+if ($null -eq $agentConfig) {
+    $agentConfig = [ordered]@{}
+}
+$agentConfig.projectSearchRoots = @(
+    (Join-Path $docsRoot "Git"),
+    (Join-Path $docsRoot "Unreal Projects"),
+    (Join-Path $ragRoot "data")
+)
+$agentConfig.defaultEngineRoot = "C:\Program Files\Epic Games\UE_5.8"
+$agentConfig.defaultPlatform = "Win64"
+$agentConfig.defaultConfiguration = "Development"
+Write-JsonUtf8 $agentConfigPath $agentConfig
+
+$ragServer = Join-Path $ragRoot "scripts\unreal_rag_mcp.py"
+$ragIndex = Join-Path $ragRoot "data\unreal58\rag.sqlite"
+$agentServer = Join-Path $agentRoot "src\server.js"
+$dateTimeJs = Join-Path $mcpToolsRoot "current-datetime.js"
+$mcpRemoteProxy = Join-Path $mcpToolsRoot "node_modules\mcp-remote\dist\proxy.js"
+
+$mcpPaths = @(
+    (Join-Path $lmHome "mcp.json"),
+    (Join-Path $lmHome ".internal\last-synced-mcp-state.json")
+)
+
+foreach ($mcpPath in $mcpPaths) {
+    $config = Read-JsonObject $mcpPath
+    if ($null -eq $config) {
+        $config = [ordered]@{ mcpServers = [ordered]@{} }
+    }
+    if ($null -eq $config.mcpServers) {
+        $config.mcpServers = [ordered]@{}
+    }
+
+    $config.mcpServers."unreal-rag" = [ordered]@{
+        command = $python
+        args    = @($ragServer, "--index", $ragIndex)
+        env     = [ordered]@{
+            SHARED_UNREAL_CONFIG = $sharedConfigPath
+            UNREAL58_ROOT        = $ragRoot
+            UNREAL58_PORTABLE_ROOT = $root
+        }
+    }
+
+    $config.mcpServers."unreal-agent" = [ordered]@{
+        command = $node
+        args    = @($agentServer)
+        env     = [ordered]@{
+            WORKSPACE_ROOT       = $docsRoot
+            AGENT_MCP_CONFIG     = $agentConfigPath
+            SHARED_UNREAL_CONFIG = $sharedConfigPath
+            UNREAL58_ROOT        = $ragRoot
+            ALLOW_WRITE          = "1"
+            ALLOW_COMMANDS       = "1"
+            ALLOW_UNREAL_BUILD   = "1"
+            MAX_READ_BYTES       = "524288"
+            MAX_OUTPUT_BYTES     = "262144"
+            COMMAND_TIMEOUT_MS   = "600000"
+        }
+    }
+
+    if (Test-Path $dateTimeJs) {
+        $config.mcpServers."current-datetime" = [ordered]@{
+            command = $node
+            args    = @($dateTimeJs)
+        }
+    }
+
+    if (Test-Path $mcpRemoteProxy) {
+        # preserve existing tavily entry only if not already set — optional remote search
+        if (-not $config.mcpServers."tavily-remote") {
+            Write-Host "Note: tavily-remote not configured (needs API key in mcp.json)."
+        }
+    }
+
+    if (Test-Path $mcpPath) {
+        Copy-Item -LiteralPath $mcpPath -Destination "$mcpPath.bak-portable-$(Get-Date -Format yyyyMMddHHmmss)" -Force
+    }
+    Write-JsonUtf8 $mcpPath $config
+    Write-Host "Updated $mcpPath"
+}
+
+# portable marker for user
+$markerPath = Join-Path $root "PORTABLE_ROOT.txt"
+Set-Content -LiteralPath $markerPath -Encoding UTF8 -Value @(
+    "UNREAL58_PORTABLE_ROOT=$root"
+    "InstalledAt=$(Get-Date -Format o)"
+    "Python=$python"
+    "Node=$node"
+)
+
+Write-Host ""
+Write-Host "=== Install complete ==="
+Write-Host "1. Restart LM Studio"
+Write-Host "2. Enable MCP: unreal-rag, unreal-agent, current-datetime"
+Write-Host "3. cd `"$ragRoot`""
+Write-Host "   .\rag.ps1 pick-project"
+Write-Host "4. Optional verify: .\installer\Verify-UnrealMcp.ps1"

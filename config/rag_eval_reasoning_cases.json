@@ -1,0 +1,60 @@
+{
+  "description": "Sonnet-4 proxy reasoning eval — fixture paths (override locally for real projects).",
+  "engineVersion": "5.8",
+  "defaults": { "minScore": 80 },
+  "cases": [
+    {
+      "id": "r0_ssot_fixture",
+      "type": "plan_validate",
+      "stage": "R0",
+      "planFile": "tests/fixtures/reasoning/r0_action_combat_plan.txt",
+      "expectOk": true
+    },
+    {
+      "id": "genre_action_combat_plan",
+      "type": "genre_scope",
+      "genre": "action_combat",
+      "planFile": "tests/fixtures/reasoning/r0_action_combat_plan.txt",
+      "expectOk": true
+    },
+    {
+      "id": "genre_soulslike_project",
+      "type": "genre_scope_project",
+      "genre": "action_combat",
+      "projectRoot": "tests/fixtures/projects/soulslike",
+      "expectMinPassRatio": 0.0,
+      "notes": "Synthetic fixture — add tests/fixtures/projects/soulslike or point to your project locally"
+    },
+    {
+      "id": "runtime_soulslike",
+      "type": "runtime_config",
+      "projectRoot": "tests/fixtures/projects/soulslike",
+      "expectOk": false,
+      "notes": "Synthetic fixture baseline"
+    },
+    {
+      "id": "tool_order_plan_turn",
+      "type": "tool_order",
+      "expectedSequence": [
+        "unreal_agent_session",
+        "unreal_rag_search",
+        "unreal_refactor_plan_validate"
+      ]
+    },
+    {
+      "id": "compile_fix_retrieval",
+      "type": "rag_retrieval",
+      "query": "GENERATED_BODY namespace UHT reflection fix",
+      "mode": "reflection_fix",
+      "expectTitleContains": "Reflection",
+      "maxRank": 8
+    }
+  ],
+  "weights": {
+    "plan_validate": 0.2,
+    "genre_scope": 0.2,
+    "compile_3_attempt": 0.25,
+    "runtime_config": 0.2,
+    "tool_order": 0.15
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "description": "Knowledge coverage audit across genres and domain recipes.",
+  "categories": {
+    "domain_input": {
+      "queries": [
+        { "query": "Enhanced Input SetupInputComponent UEnhancedInputComponent", "mode": "codegen", "expect_title": "Enhanced Input" },
+        { "query": "Input Mapping Context IA IMC bind action", "mode": "codegen", "expect_title": "Enhanced Input" }
+      ]
+    },
+    "domain_damage": {
+      "queries": [
+        { "query": "ApplyDamage TakeDamage Instigator DamageCauser", "mode": "codegen", "expect_title": "Damage" },
+        { "query": "damage responsibility rules design review", "mode": "design", "expect_title": "Damage" }
+      ]
+    },
+    "domain_camera": {
+      "queries": [
+        { "query": "SpringArm CameraComponent third person camera", "mode": "codegen", "expect_title": "TPS Camera" },
+        { "query": "camera relative movement character TPS", "mode": "codegen", "expect_title": "TPS Camera" }
+      ]
+    },
+    "genre_shooter": {
+      "queries": [
+        { "query": "shooter prototype hitscan line trace", "mode": "prototype_component", "expect_title": "Shooter" },
+        { "query": "TPS third person weapon attach socket line trace", "mode": "prototype_component", "expect_title": "TPS Camera" }
+      ]
+    },
+    "genre_action": {
+      "queries": [
+        { "query": "action combat stamina hit reaction", "mode": "prototype_component", "expect_title": "Action Combat" }
+      ]
+    },
+    "genre_platformer": {
+      "queries": [
+        { "query": "platformer jump coyote time movement", "mode": "prototype_component", "expect_title": "Platformer" }
+      ]
+    }
+  }
+}

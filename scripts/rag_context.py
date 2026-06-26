@@ -1,0 +1,486 @@
+#!/usr/bin/env python
+"""Assemble retrieved RAG rows into mode-aware prompt context."""
+
+from __future__ import annotations
+
+import re
+from collections import OrderedDict
+from typing import Any
+
+import token_budget
+
+
+SOURCE_TYPE_LABELS = {
+    "project_guideline": "User RAG guideline",
+    "game_design_doc": "Game design document",
+    "unreal_symbol": "Unreal symbol metadata",
+    "module_graph": "Unreal module/include graph",
+    "project_profile": "Unreal project profile",
+    "build_log": "Unreal build/editor log",
+    "epic_docs": "Epic official documentation",
+    "unreal_source": "Unreal Engine source",
+    "unreal_project_text": "Local project source",
+    "unreal_project_asset_path": "Local project asset path",
+}
+
+SECTION_LABELS = [
+    "Universal Unreal Header Rules",
+    "Recipe: UActorComponent",
+    "Recipe: AActor",
+    "Recipe: UObject",
+    "Recipe: UDataAsset",
+    "Recipe: GameInstance Or World Subsystem",
+    "Recipe: UInterface",
+    "Recipe: Delegate",
+    "Recipe: Enhanced Input",
+    "Recipe: Replication",
+    "Recipe: Gameplay Tags",
+    "Recipe: TimerManager",
+    "Recipe: SaveGame",
+    "Recipe: Runtime Module Or Plugin Module",
+    "Recipe: Prototype UActorComponent",
+    "Recipe: Prototype UWorldSubsystem",
+    "Recipe: Prototype UGameInstanceSubsystem",
+    "Stage R0",
+    "Stage R1",
+    "Refactor Stage Contract",
+    "Prototype scope gate",
+    "Playbook: C1083",
+    "Playbook: LNK2019",
+    "Playbook: generated.h",
+    "Playbook: UHT",
+    "Playbook: Build.cs",
+    "Playbook: Live Coding",
+    "Runtime Evidence Order",
+    "Codegen Context Order",
+    "Compile-Fix Context Order",
+    "Module-Fix Context Order",
+    "Reflection-Fix Context Order",
+    "Runtime-Debug Context Order",
+    "API-Lookup Context Order",
+    "Agent-Edit Context Order",
+    "Feedback Loop",
+    "Required Edit Discipline",
+    "Global File Edit Rules",
+    "Agentic Unreal Edit Operating Protocol",
+    "Stop Conditions",
+    "Current State Contract",
+    "Critical Rule: Do Not Mix Interface and Event",
+    "Critical Rule: Prefer Intent-Revealing Mutation APIs",
+    "Critical Rule: Label Code Accuracy",
+    "Critical Response Rules",
+    "Critical Review Gates",
+    "Critical AI Anti-Patterns",
+    "Process Ownership Rules",
+    "Default: Performer-Owned Process",
+    "Interface / Event Separation Gate",
+    "Generic Setter Ban",
+    "Code Example Mode Gate",
+    "RAG Citation Gate",
+    "Purpose",
+]
+
+BUDGET_MODE_ALIASES: dict[str, str] = {
+    "refactor_r0": "plan",
+    "refactor_r1": "plan",
+    "refactor_r2": "execute",
+    "refactor_r3": "execute",
+    "refactor_r4": "execute",
+    "compile_fix": "compile_fix",
+    "module_fix": "compile_fix",
+    "reflection_fix": "compile_fix",
+    "runtime_debug": "compile_fix",
+    "agent_edit": "execute",
+    "codegen": "codegen",
+    "prototype_component": "codegen",
+    "prototype_subsystem": "codegen",
+    "api_lookup": "api_lookup",
+    "review": "review",
+}
+
+
+def budget_mode_for(resolved_mode: str) -> str:
+    return BUDGET_MODE_ALIASES.get(resolved_mode, "execute")
+
+
+MODE_BUCKETS = {
+    "agent_edit": [
+        ("agent_rules", "1. Agent edit rules and stop conditions"),
+        ("project_profile", "2. Project profile and module layout"),
+        ("project_examples", "3. Current/local project files and examples"),
+        ("target_symbols", "4. Symbols and declarations"),
+        ("include_evidence", "5. Include evidence"),
+        ("module_evidence", "6. Module / Build.cs evidence"),
+        ("build_errors", "7. Static/build feedback"),
+        ("playbooks", "8. Codegen and fix playbooks"),
+        ("other", "9. Other retrieved evidence"),
+    ],
+    "codegen": [
+        ("target_symbols", "1. Target symbols"),
+        ("include_evidence", "2. Include evidence"),
+        ("module_evidence", "3. Module / Build.cs evidence"),
+        ("project_profile", "4. Project profile"),
+        ("project_examples", "5. Local project examples"),
+        ("playbooks", "6. Codegen recipes and likely-failure playbooks"),
+        ("other", "7. Other retrieved evidence"),
+    ],
+    "compile_fix": [
+        ("build_errors", "1. Build/UHT/linker error records"),
+        ("target_symbols", "2. Matching symbols and declarations"),
+        ("module_evidence", "3. Module / Build.cs evidence"),
+        ("include_evidence", "4. Include evidence"),
+        ("project_profile", "5. Project profile"),
+        ("project_examples", "6. Local project examples"),
+        ("playbooks", "7. Fix playbooks"),
+        ("other", "8. Other retrieved evidence"),
+    ],
+    "module_fix": [
+        ("build_errors", "1. Include/module error records"),
+        ("include_evidence", "2. Include owner evidence"),
+        ("module_evidence", "3. Module / Build.cs evidence"),
+        ("project_profile", "4. Project profile"),
+        ("project_examples", "5. Local project examples"),
+        ("playbooks", "6. Module-fix playbooks"),
+        ("target_symbols", "7. Related symbols"),
+        ("other", "8. Other retrieved evidence"),
+    ],
+    "reflection_fix": [
+        ("build_errors", "1. UHT/generated.h error records"),
+        ("target_symbols", "2. Reflected symbols and macros"),
+        ("include_evidence", "3. Include order / generated.h evidence"),
+        ("module_evidence", "4. Module dependency evidence"),
+        ("project_profile", "5. Project profile"),
+        ("project_examples", "6. Local project examples"),
+        ("playbooks", "7. Reflection-fix playbooks"),
+        ("other", "8. Other retrieved evidence"),
+    ],
+    "runtime_debug": [
+        ("build_errors", "1. Runtime log/assert/crash records"),
+        ("project_examples", "2. Local project code near callstack"),
+        ("target_symbols", "3. Related functions/classes"),
+        ("project_profile", "4. Project profile"),
+        ("playbooks", "5. Runtime debugging playbooks"),
+        ("module_evidence", "6. Module evidence"),
+        ("other", "7. Other retrieved evidence"),
+    ],
+    "api_lookup": [
+        ("target_symbols", "1. Exact API symbols"),
+        ("include_evidence", "2. Include evidence"),
+        ("module_evidence", "3. Module evidence"),
+        ("project_examples", "4. Local usage examples"),
+        ("playbooks", "5. API usage rules"),
+        ("other", "6. Other retrieved evidence"),
+    ],
+    "prototype_component": [
+        ("playbooks", "1. Component prototype recipe"),
+        ("target_symbols", "2. UActorComponent symbols"),
+        ("project_examples", "3. Local component examples"),
+        ("module_evidence", "4. Build.cs / modules"),
+        ("include_evidence", "5. Include evidence"),
+        ("other", "6. Other evidence"),
+    ],
+    "prototype_subsystem": [
+        ("playbooks", "1. Subsystem prototype recipe"),
+        ("target_symbols", "2. Subsystem symbols"),
+        ("project_examples", "3. Local subsystem examples"),
+        ("module_evidence", "4. Build.cs / modules"),
+        ("agent_rules", "5. Lifecycle / SSOT rules"),
+        ("other", "6. Other evidence"),
+    ],
+    "refactor_r0": [
+        ("agent_rules", "1. R0 discover contract"),
+        ("playbooks", "2. Core architecture / SSOT"),
+        ("project_profile", "3. Project profile"),
+        ("project_examples", "4. Local examples (reference only)"),
+        ("other", "5. Other evidence"),
+    ],
+    "refactor_r1": [
+        ("agent_rules", "1. R1 boundary contract"),
+        ("playbooks", "2. Interface / API boundary rules"),
+        ("target_symbols", "3. Related symbols"),
+        ("project_examples", "4. Local patterns"),
+        ("other", "5. Other evidence"),
+    ],
+    "refactor_r2": [
+        ("agent_rules", "1. R2 move-impl contract"),
+        ("project_examples", "2. Local implementation patterns"),
+        ("target_symbols", "3. Symbols to move"),
+        ("module_evidence", "4. Module evidence"),
+        ("playbooks", "5. Compile-fix playbooks"),
+        ("other", "6. Other evidence"),
+    ],
+    "refactor_r3": [
+        ("agent_rules", "1. R3 rewire contract"),
+        ("project_examples", "2. Caller examples"),
+        ("build_errors", "3. Build errors"),
+        ("playbooks", "4. Fix playbooks"),
+        ("other", "5. Other evidence"),
+    ],
+    "refactor_r4": [
+        ("agent_rules", "1. R4 cleanup contract"),
+        ("project_examples", "2. Dead code context"),
+        ("playbooks", "3. Cleanup / compile rules"),
+        ("other", "4. Other evidence"),
+    ],
+    "review": [
+        ("project_profile", "1. Project architecture and profile"),
+        ("project_examples", "2. Local project source"),
+        ("target_symbols", "3. Related symbols and APIs"),
+        ("playbooks", "4. Guidelines and review gates"),
+        ("build_errors", "5. Build/log evidence"),
+        ("other", "6. Other evidence"),
+    ],
+}
+
+DEFAULT_BUCKETS = [
+    ("target_symbols", "1. Symbols"),
+    ("include_evidence", "2. Includes"),
+    ("module_evidence", "3. Modules"),
+    ("project_profile", "4. Project profile"),
+    ("project_examples", "5. Project examples"),
+    ("playbooks", "6. Guidelines / playbooks"),
+    ("build_errors", "7. Build/log evidence"),
+    ("other", "8. Other evidence"),
+]
+
+
+def source_type_label(source: str) -> str:
+    return SOURCE_TYPE_LABELS.get(source, source or "Unknown source")
+
+
+def infer_section(row: dict[str, Any]) -> str:
+    text = str(row.get("text") or "")
+    title = str(row.get("title") or "").strip()
+    for label in SECTION_LABELS:
+        if label != "Purpose" and label.lower() in text.lower():
+            return label
+
+    headings = re.findall(r"(?:^|\n)#{2,6}\s+(.+)", text)
+    for heading in headings:
+        heading = re.sub(r"\s+", " ", heading).strip()
+        if heading and heading != title:
+            return heading[:120]
+    return f"chunk {row.get('chunk_index')}"
+
+
+def citation_label(row: dict[str, Any]) -> str:
+    return f"{source_type_label(str(row.get('source') or ''))}: {row.get('title')} > {infer_section(row)}"
+
+
+def bucket_for_row(row: dict[str, Any]) -> str:
+    source = str(row.get("source") or "")
+    layer = str(row.get("layer") or "")
+    doc_type = str(row.get("doc_type") or "")
+    symbol_kind = str(row.get("symbol_kind") or "")
+    title = str(row.get("title") or "").lower()
+    text = str(row.get("text") or "").lower()
+
+    if source == "project_guideline" and any(
+        marker in title or marker in text
+        for marker in (
+            "global file edit",
+            "agentic",
+            "edit discipline",
+            "current state contract",
+            "stop conditions",
+            "wrapper mandatory",
+        )
+    ):
+        return "agent_rules"
+    if source == "build_log" or doc_type == "build_error":
+        return "build_errors"
+    if source == "project_profile":
+        return "project_profile"
+    if source == "module_graph":
+        if symbol_kind in {"include_owner", "include_edge"} or "include" in title:
+            return "include_evidence"
+        return "module_evidence"
+    if source == "unreal_symbol":
+        if symbol_kind == "include_map" or doc_type == "include_symbol":
+            return "include_evidence"
+        if symbol_kind == "module" or doc_type == "module_symbol":
+            return "module_evidence"
+        return "target_symbols"
+    if source in {"unreal_project_text", "unreal_source"}:
+        return "project_examples"
+    if source == "project_guideline":
+        if any(marker in title or marker in text for marker in ("playbook", "recipe", "triage", "context order")):
+            return "playbooks"
+        return "playbooks"
+    return "other"
+
+
+def dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: OrderedDict[str, dict[str, Any]] = OrderedDict()
+    for row in rows:
+        key = str(row.get("chunk_id") or f"{row.get('source')}:{row.get('locator')}:{row.get('chunk_index')}")
+        if key not in deduped:
+            deduped[key] = row
+    return list(deduped.values())
+
+
+def ordered_groups(rows: list[dict[str, Any]], mode: str) -> list[tuple[str, str, list[dict[str, Any]]]]:
+    rows = dedupe_rows(rows)
+    by_bucket: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_bucket.setdefault(bucket_for_row(row), []).append(row)
+
+    buckets = MODE_BUCKETS.get(mode) or DEFAULT_BUCKETS
+    groups: list[tuple[str, str, list[dict[str, Any]]]] = []
+    used = set()
+    for bucket, label in buckets:
+        values = by_bucket.get(bucket) or []
+        if values:
+            groups.append((bucket, label, values))
+            used.add(bucket)
+    leftovers = [row for bucket, values in by_bucket.items() if bucket not in used for row in values]
+    if leftovers:
+        groups.append(("other", "Other retrieved evidence", leftovers))
+    return groups
+
+
+def metadata_line(row: dict[str, Any]) -> str:
+    return (
+        f"Resolved Mode: {row.get('resolved_mode', '')}; "
+        f"Layer: {row.get('layer', '')}; "
+        f"Project: {row.get('project', '')}; "
+        f"Genre: {row.get('genre', '')}; "
+        f"Extension: {row.get('extension', '')}; "
+        f"Symbol: {row.get('symbol_kind', '')} {row.get('symbol_name', '')}; "
+        f"Module: {row.get('module_name', '')}; "
+        f"Error: {row.get('error_code', '')} {row.get('error_file', '')}"
+    )
+
+
+def format_row(row: dict[str, Any], index: int, max_chars: int, *, compact: bool = True) -> str:
+    text = str(row.get("text") or "")
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "\n...[truncated]"
+    if compact:
+        header = " | ".join(
+            [
+                f"[RAG {index}]",
+                source_type_label(str(row.get("source") or "")),
+                citation_label(row),
+                f"Title: {row.get('title')}",
+                f"Locator: {row.get('locator')}",
+                metadata_line(row),
+                f"Section: {infer_section(row)}",
+                f"Chunk: {row.get('chunk_index')}",
+            ]
+        )
+        return f"{header}\nText:\n{text}"
+    return "\n".join(
+        [
+            f"[RAG Result {index}]",
+            f"Evidence Type: {source_type_label(str(row.get('source') or ''))}",
+            f"Citation Label: {citation_label(row)}",
+            f"Title: {row.get('title')}",
+            f"Locator: {row.get('locator')}",
+            metadata_line(row),
+            f"Section: {infer_section(row)}",
+            f"Chunk: {row.get('chunk_index')}",
+            "Text:",
+            text,
+        ]
+    )
+
+
+def assembly_instructions(mode: str) -> str:
+    if mode == "agent_edit":
+        return (
+            "Use the context in this order: global edit rules, current project profile/state, "
+            "local files, target symbols, include/module evidence, then validation feedback. "
+            "Make the smallest non-duplicate file bundle; stop with no edits if the request is already satisfied."
+        )
+    if mode == "codegen":
+        return (
+            "Use the context in this order: target symbol, include, module dependency, "
+            "project profile/example, then recipe/playbook. Output files changed, code, "
+            "Build.cs notes, and validation steps."
+        )
+    if mode == "compile_fix":
+        return (
+            "Classify the error first. Prefer exact build-log evidence, then symbol and "
+            "module evidence. Suggest the smallest fix and the next file/log to inspect."
+        )
+    if mode == "reflection_fix":
+        return (
+            "Prioritize UHT/generated.h evidence, reflected macros, include order, and "
+            "Build.cs modules. Remember that UHT may need full definitions where C++ "
+            "forward declarations compile."
+        )
+    if mode == "module_fix":
+        return (
+            "Resolve include owner module first. Public header exposure usually needs "
+            "PublicDependencyModuleNames; private .cpp use usually needs PrivateDependencyModuleNames."
+        )
+    if mode == "runtime_debug":
+        return (
+            "Cite the log/callstack first, then connect it to lifecycle, ownership, GC, "
+            "replication, or threading evidence."
+        )
+    if mode == "api_lookup":
+        return "Prefer exact symbol, signature, include path, and owning module over memory."
+    return "Use the grouped RAG evidence first. If evidence is insufficient, say what is missing."
+
+
+def assemble_context(
+    rows: list[dict[str, Any]],
+    query: str,
+    mode: str,
+    *,
+    max_chars_per_row: int | None = None,
+    max_assembly_chars: int | None = None,
+    include_header: bool = True,
+    compact: bool = True,
+) -> str:
+    if not rows:
+        return "No matching Unreal RAG context was found. Ask for more exact class, file, module, log, or asset names."
+
+    resolved_mode = str(rows[0].get("resolved_mode") or mode or "auto")
+    budget_mode = budget_mode_for(resolved_mode)
+    if max_assembly_chars is None:
+        max_assembly_chars = token_budget.effective_rag_assembly_chars(budget_mode)
+    if max_chars_per_row is None:
+        max_chars_per_row = token_budget.max_chars_per_row(budget_mode)
+
+    parts: list[str] = []
+    if include_header:
+        parts.extend(
+            [
+                "## Mode-Aware RAG Context Assembly",
+                f"Query: {query}",
+                f"Resolved mode: {resolved_mode}",
+                f"Assembly rule: {assembly_instructions(resolved_mode)}",
+                f"Assembly budget: {max_assembly_chars} chars",
+                "Citation rule: cite evidence by type plus document/file and section, not by source number alone.",
+            ]
+        )
+
+    result_index = 1
+    used_chars = sum(len(p) for p in parts)
+    truncated = False
+    for _, label, group_rows in ordered_groups(rows, resolved_mode):
+        if used_chars >= max_assembly_chars:
+            truncated = True
+            break
+        section_parts = [f"\n### {label}"]
+        for row in group_rows:
+            if used_chars >= max_assembly_chars:
+                truncated = True
+                break
+            formatted = format_row(row, result_index, max_chars_per_row, compact=compact)
+            if used_chars + len(formatted) > max_assembly_chars:
+                remaining = max(0, max_assembly_chars - used_chars - 80)
+                if remaining > 200:
+                    formatted = formatted[:remaining].rstrip() + "\n...[assembly budget truncated]"
+                truncated = True
+            section_parts.append(formatted)
+            used_chars += len(formatted)
+            result_index += 1
+        parts.extend(section_parts)
+
+    if truncated:
+        parts.append("\n### Assembly note\nSome evidence was truncated to fit mode assembly budget.")
+    return "\n\n".join(parts)

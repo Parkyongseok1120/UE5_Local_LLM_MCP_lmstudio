@@ -1,0 +1,13 @@
+data/
+Reports/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.sqlite
+config/workspace.json
+config/lmstudio_mcp_unreal_rag.json
+config/continue_*.config.yaml
+data/baseline/
+data/wrapper_runs/
+data/scaffold_runs/

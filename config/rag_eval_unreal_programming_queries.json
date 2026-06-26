@@ -1,0 +1,311 @@
+{
+  "description": "Regression queries for Unreal C++ codegen, compile-fix, module, reflection, runtime debugging, and context assembly retrieval.",
+  "defaults": {
+    "top_k": 5,
+    "candidate_limit": 200
+  },
+  "cases": [
+    {
+      "id": "uactorcomponent_component_codegen",
+      "query": "UActorComponent new component create UCLASS GENERATED_BODY",
+      "options": {
+        "mode": "codegen"
+      },
+      "expected": [
+        {
+          "source": "unreal_symbol",
+          "symbol_name": "UActorComponent",
+          "symbol_kind": "class",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "generated_h_reflection_error",
+      "query": "generated.h error UCLASS GENERATED_BODY UnrealHeaderTool reflection fix",
+      "options": {
+        "mode": "reflection_fix"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Compile Error Triage",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "build_cs_dependency_missing",
+      "query": "Build.cs missing module dependency Cannot open include file C1083 GameplayTags",
+      "options": {
+        "mode": "module_fix"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Compile Error Triage",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "lnk2019_unresolved_external",
+      "query": "LNK2019 unresolved external symbol Unreal C++ compile fix missing definition module",
+      "options": {
+        "mode": "compile_fix"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Compile Error Triage",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "uht_unrecognized_type",
+      "query": "UHT unrecognized type UPROPERTY USTRUCT forward declaration include module dependency",
+      "options": {
+        "mode": "reflection_fix"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Compile Error Triage",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "actor_codegen_recipe",
+      "query": "AActor 새 Actor 만들기 UCLASS constructor BeginPlay Tick",
+      "options": {
+        "mode": "codegen"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Codegen Recipes: Core Types",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "subsystem_codegen_recipe",
+      "query": "UGameInstanceSubsystem 만들기 Initialize Deinitialize subsystem",
+      "options": {
+        "mode": "codegen"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Codegen Recipes: Core Types",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "enhanced_input_recipe",
+      "query": "Enhanced Input 연결 UInputAction BindAction Build.cs EnhancedInput",
+      "options": {
+        "mode": "codegen"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Codegen Recipes: Gameplay Systems",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "replication_recipe",
+      "query": "replication 변수 Server RPC GetLifetimeReplicatedProps DOREPLIFETIME",
+      "options": {
+        "mode": "codegen"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Codegen Recipes: Gameplay Systems",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "delegate_recipe",
+      "query": "dynamic multicast delegate 선언 바인딩 Broadcast BlueprintAssignable",
+      "options": {
+        "mode": "codegen"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Codegen Recipes: Gameplay Systems",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "gameplay_tags_module_recipe",
+      "query": "GameplayTags FGameplayTag UPROPERTY Build.cs module dependency",
+      "options": {
+        "mode": "module_fix"
+      },
+      "expected": [
+        {
+          "source": "unreal_symbol",
+          "symbol_name": "GameplayTags",
+          "symbol_kind": "module",
+          "module_name": "GameplayTags",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "gameplay_tags_codegen_recipe",
+      "query": "GameplayTag 사용 Recipe FGameplayTag UPROPERTY 코드 생성",
+      "options": {
+        "mode": "codegen"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Codegen Recipes: Gameplay Systems",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "c1083_include_fix_playbook",
+      "query": "C1083 Cannot open include file Build.cs missing module dependency",
+      "options": {
+        "mode": "module_fix"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Error Fix Playbook",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "runtime_null_uobject_debug",
+      "query": "runtime crash null UObject garbage collection UPROPERTY access violation callstack",
+      "options": {
+        "mode": "runtime_debug"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Runtime Debugging Playbook",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "replication_runtime_debug",
+      "query": "PIE replication bug Server RPC client does not own actor OnRep",
+      "options": {
+        "mode": "runtime_debug"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Runtime Debugging Playbook",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "rag_context_assembly_27b",
+      "query": "27B model Unreal codegen RAG context include module build log feedback loop",
+      "options": {
+        "mode": "codegen"
+      },
+      "expected": [
+        {
+          "title_contains": "RAG Context Assembly For Unreal Programming",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "gameplaytagcontainer_include_owner_graph",
+      "query": "GameplayTagContainer.h 어느 module Build.cs dependency",
+      "options": {
+        "mode": "module_fix"
+      },
+      "expected": [
+        {
+          "source": "module_graph",
+          "symbol_name": "GameplayTagContainer.h",
+          "symbol_kind": "include_owner",
+          "module_name": "GameplayTags",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "lyra_project_profile",
+      "query": "LyraStarterGame project profile modules plugins Build.cs Target.cs Config",
+      "options": {
+        "mode": "implementation"
+      },
+      "expected": [
+        {
+          "title_contains": "LyraStarterGame project profile",
+          "source": "project_profile",
+          "doc_type": "project_profile",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "agent_edit_global_file_rules",
+      "query": "agent_edit current file state duplicate edit prevention all files Build.cs header cpp",
+      "options": {
+        "mode": "agent_edit"
+      },
+      "expected": [
+        {
+          "title_contains": "Global File Edit Rules",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "agentic_unreal_edit_protocol",
+      "query": "VS Code local 27B coding agent current diff no-op build feedback loop",
+      "options": {
+        "mode": "agent_edit"
+      },
+      "expected": [
+        {
+          "title_contains": "Agentic Unreal Edit Operating Protocol",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    }
+  ]
+}

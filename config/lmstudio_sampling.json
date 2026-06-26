@@ -1,0 +1,170 @@
+{
+  "description": "LM Studio inference presets for Unreal C++ agent work. Profiles switch via activeProfile or UNREAL_RAG_MODEL_PROFILE.",
+  "activeProfile": "qwen3_6_27b",
+  "modeMap": {
+    "refactor_r0": "plan",
+    "refactor_r1": "plan",
+    "refactor_r2": "execute",
+    "refactor_r3": "execute",
+    "refactor_r4": "execute",
+    "prototype_component": "execute",
+    "prototype_subsystem": "execute",
+    "agent_edit": "execute",
+    "codegen": "execute",
+    "compile_fix": "compile_fix_analyze",
+    "module_fix": "compile_fix_analyze",
+    "reflection_fix": "compile_fix_analyze",
+    "runtime_debug": "compile_fix_analyze",
+    "api_lookup": "api_lookup"
+  },
+  "modelAliases": {
+    "qwen3.6-27b": "qwen3_6_27b",
+    "qwen3.6": "qwen3_6_27b",
+    "qwen3-8b": "qwen3_8b",
+    "qwen3_8b": "qwen3_8b",
+    "generic-large": "generic_large"
+  },
+  "profiles": {
+    "qwen3_6_27b": {
+      "contextLength": 32768,
+      "assemblyBudgetScale": 1.0,
+      "quantDefault": "Q4_K_M",
+      "abTuning": {
+        "preserve_thinking": ["off", "on"],
+        "contextLength": [32768, 49152],
+        "quant": ["Q4_K_M", "Q5_K_M"]
+      },
+      "turnPresets": {
+        "plan": {
+          "thinking": "on",
+          "temperature": 0.6,
+          "topP": 0.95,
+          "maxTokens": 6144,
+          "notes": "R0 / refactor_r0 / Turn1 plan — no code writes"
+        },
+        "critique": {
+          "thinking": "on",
+          "temperature": 0.6,
+          "topP": 0.95,
+          "maxTokens": 6144,
+          "notes": "Turn2 gap analysis — no code writes"
+        },
+        "execute": {
+          "thinking": "off",
+          "temperature": 0.15,
+          "topP": 0.8,
+          "maxTokens": 4096,
+          "notes": "Turn3 patch — max 3 files"
+        },
+        "compile_fix_analyze": {
+          "thinking": "on",
+          "temperature": 0.6,
+          "topP": 0.95,
+          "maxTokens": 6144
+        },
+        "compile_fix_patch": {
+          "thinking": "off",
+          "temperature": 0.15,
+          "topP": 0.8,
+          "maxTokens": 4096
+        },
+        "api_lookup": {
+          "thinking": "off",
+          "temperature": 0.05,
+          "topP": 0.8,
+          "maxTokens": 2048
+        }
+      }
+    },
+    "qwen3_8b": {
+      "contextLength": 8192,
+      "assemblyBudgetScale": 0.5,
+      "quantDefault": "Q4_K_M",
+      "turnPresets": {
+        "plan": {
+          "thinking": "off",
+          "temperature": 0.4,
+          "topP": 0.9,
+          "maxTokens": 2048,
+          "notes": "Small model 2-turn shortcut — compact plan, no thinking"
+        },
+        "critique": {
+          "thinking": "off",
+          "temperature": 0.4,
+          "topP": 0.9,
+          "maxTokens": 1536,
+          "notes": "Optional; skip for 2-turn shortcut"
+        },
+        "execute": {
+          "thinking": "off",
+          "temperature": 0.1,
+          "topP": 0.8,
+          "maxTokens": 2048,
+          "notes": "Turn2 patch — max 2 files"
+        },
+        "compile_fix_analyze": {
+          "thinking": "off",
+          "temperature": 0.4,
+          "topP": 0.9,
+          "maxTokens": 2048
+        },
+        "compile_fix_patch": {
+          "thinking": "off",
+          "temperature": 0.1,
+          "topP": 0.8,
+          "maxTokens": 2048
+        },
+        "api_lookup": {
+          "thinking": "off",
+          "temperature": 0.05,
+          "topP": 0.8,
+          "maxTokens": 1024
+        }
+      }
+    },
+    "generic_large": {
+      "contextLength": 49152,
+      "assemblyBudgetScale": 1.25,
+      "quantDefault": "Q5_K_M",
+      "turnPresets": {
+        "plan": {
+          "thinking": "on",
+          "temperature": 0.6,
+          "topP": 0.95,
+          "maxTokens": 8192,
+          "notes": "Large model — full 3-turn with critique"
+        },
+        "critique": {
+          "thinking": "on",
+          "temperature": 0.6,
+          "topP": 0.95,
+          "maxTokens": 8192
+        },
+        "execute": {
+          "thinking": "off",
+          "temperature": 0.15,
+          "topP": 0.8,
+          "maxTokens": 6144
+        },
+        "compile_fix_analyze": {
+          "thinking": "on",
+          "temperature": 0.6,
+          "topP": 0.95,
+          "maxTokens": 8192
+        },
+        "compile_fix_patch": {
+          "thinking": "off",
+          "temperature": 0.15,
+          "topP": 0.8,
+          "maxTokens": 6144
+        },
+        "api_lookup": {
+          "thinking": "off",
+          "temperature": 0.05,
+          "topP": 0.8,
+          "maxTokens": 3072
+        }
+      }
+    }
+  }
+}

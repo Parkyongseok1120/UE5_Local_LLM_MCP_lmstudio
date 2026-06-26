@@ -1,0 +1,80 @@
+{
+  "description": "Phase 4b unified token/character budgets per mode. Assembly chars scale via lmstudio_sampling profile assemblyBudgetScale.",
+  "modes": {
+    "plan": {
+      "ragAssemblyChars": 6000,
+      "readFileMaxBytes": 65536,
+      "maxOutputTokens": 6144,
+      "feedbackTailChars": 12000,
+      "historyAttempts": 2,
+      "maxHistoryMessages": 6
+    },
+    "critique": {
+      "ragAssemblyChars": 6000,
+      "readFileMaxBytes": 65536,
+      "maxOutputTokens": 6144,
+      "feedbackTailChars": 12000,
+      "historyAttempts": 2,
+      "maxHistoryMessages": 6
+    },
+    "execute": {
+      "ragAssemblyChars": 10000,
+      "readFileMaxBytes": 65536,
+      "maxOutputTokens": 4096,
+      "feedbackTailChars": 12000,
+      "historyAttempts": 2,
+      "maxHistoryMessages": 8
+    },
+    "compile_fix": {
+      "ragAssemblyChars": 8000,
+      "readFileMaxBytes": 65536,
+      "maxOutputTokens": 4096,
+      "feedbackTailChars": 12000,
+      "historyAttempts": 2,
+      "maxHistoryMessages": 8,
+      "compileFixEngineSourceMax": 2
+    },
+    "review": {
+      "ragAssemblyChars": 8000,
+      "readFileMaxBytes": 32768,
+      "maxOutputTokens": 4096,
+      "feedbackTailChars": 8000,
+      "historyAttempts": 1,
+      "maxHistoryMessages": 6,
+      "pabSummaryMaxChars": 2000
+    },
+    "codegen": {
+      "ragAssemblyChars": 10000,
+      "readFileMaxBytes": 65536,
+      "maxOutputTokens": 4096,
+      "feedbackTailChars": 12000,
+      "historyAttempts": 2,
+      "maxHistoryMessages": 8
+    },
+    "api_lookup": {
+      "ragAssemblyChars": 6000,
+      "readFileMaxBytes": 32768,
+      "maxOutputTokens": 2048,
+      "feedbackTailChars": 4000,
+      "historyAttempts": 1,
+      "maxHistoryMessages": 4
+    }
+  },
+  "session": {
+    "newChatPerSlice": true,
+    "maxHistoryMessages": 8
+  },
+  "maxCharsPerRow": {
+    "plan": 3000,
+    "critique": 3000,
+    "execute": 5000,
+    "compile_fix": 5000,
+    "review": 4000,
+    "default": 5000
+  },
+  "kpi": {
+    "executeSliceInputTokensMax": 12000,
+    "reviewInputTokensMax": 12000,
+    "pabSummaryMaxChars": 2000
+  }
+}

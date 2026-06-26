@@ -1,0 +1,96 @@
+{
+  "description": "Grounded project review fixtures (MJS-style). Uses snippet text, not absolute paths.",
+  "defaults": {
+    "minRecall": 0.8,
+    "requireCitation": false
+  },
+  "cases": [
+    {
+      "id": "project_mjs_cinematic",
+      "prompt": "시네마틱 입력 잠금과 참가자 컴포넌트 관점에서 다음 코드를 리뷰하고 기존 시스템을 인식한 개선안을 말해줘.",
+      "snippets": [
+        {
+          "path": "Source/ProjectMJS/Public/Cinematic/CinematicInputLockSubsystem.h",
+          "content": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"Subsystems/GameInstanceSubsystem.h\"\n#include \"CinematicInputLockSubsystem.generated.h\"\n\nUCLASS()\nclass PROJECTMJS_API UCinematicInputLockSubsystem : public UGameInstanceSubsystem\n{\n    GENERATED_BODY()\npublic:\n    void LockInputForCinematic();\n    void UnlockInput();\n};\n"
+        },
+        {
+          "path": "Source/ProjectMJS/Public/Cinematic/CinematicParticipantComponent.h",
+          "content": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"Components/ActorComponent.h\"\n#include \"CinematicParticipantComponent.generated.h\"\n\nUCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))\nclass PROJECTMJS_API UCinematicParticipantComponent : public UActorComponent\n{\n    GENERATED_BODY()\npublic:\n    UPROPERTY(EditAnywhere)\n    bool bParticipatesInCinematic = false;\n};\n"
+        }
+      ],
+      "mustDetect": [
+        "CinematicInputLockSubsystem",
+        "CinematicParticipantComponent",
+        "bParticipatesInCinematic"
+      ],
+      "mustNotSuggest": [
+        "new\\s+InputLock\\s+Subsystem",
+        "새.*InputLock.*Subsystem",
+        "신규.*Subsystem.*InputLock"
+      ],
+      "forbiddenClaims": [
+        "InputLock Subsystem이 없음",
+        "missing InputLock subsystem"
+      ],
+      "badAnswerFixture": "InputLock Subsystem이 없으므로 새 UCinematicInputLockSubsystem을 Subsystem으로 분리해야 합니다."
+    },
+    {
+      "id": "project_mjs_dodge",
+      "prompt": "회피 컴포넌트에서 BackStepDodgeMontage 사용 여부를 리뷰해줘.",
+      "snippets": [
+        {
+          "path": "Source/ProjectMJS/Private/Combat/DodgeComponent.cpp",
+          "content": "#include \"Combat/DodgeComponent.h\"\n#include \"Animation/AnimMontage.h\"\n\nvoid UDodgeComponent::PerformBackStepDodge()\n{\n    if (BackStepDodgeMontage)\n    {\n        PlayAnimMontage(BackStepDodgeMontage);\n    }\n}\n"
+        },
+        {
+          "path": "Source/ProjectMJS/Public/Combat/DodgeComponent.h",
+          "content": "UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))\nclass PROJECTMJS_API UDodgeComponent : public UActorComponent\n{\n    GENERATED_BODY()\npublic:\n    UPROPERTY(EditAnywhere)\n    TObjectPtr<UAnimMontage> BackStepDodgeMontage;\n    void PerformBackStepDodge();\n};\n"
+        }
+      ],
+      "mustDetect": [
+        "BackStepDodgeMontage",
+        "PerformBackStepDodge",
+        "PlayAnimMontage"
+      ],
+      "mustNotSuggest": [
+        "montage.*unused",
+        "미사용.*몽타주",
+        "BackStepDodgeMontage.*(안|없|미사용)"
+      ],
+      "forbiddenClaims": [
+        "BackStepDodgeMontage는 사용되지 않음",
+        "montage unused"
+      ],
+      "badAnswerFixture": "BackStepDodgeMontage는 선택 로직이 없고 미사용입니다."
+    },
+    {
+      "id": "project_mjs_attack",
+      "prompt": "공격 데이터 구조와 콤보 공격 DataAsset 사용을 리뷰해줘.",
+      "snippets": [
+        {
+          "path": "Source/ProjectMJS/Public/Combat/ComboAttackDataAsset.h",
+          "content": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"Engine/DataAsset.h\"\n#include \"ComboAttackDataAsset.generated.h\"\n\nUCLASS(BlueprintType)\nclass PROJECTMJS_API UComboAttackDataAsset : public UDataAsset\n{\n    GENERATED_BODY()\npublic:\n    UPROPERTY(EditAnywhere)\n    TArray<float> ComboDamageValues;\n};\n"
+        },
+        {
+          "path": "Source/ProjectMJS/Public/Combat/AttackComponent.h",
+          "content": "UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))\nclass PROJECTMJS_API UAttackComponent : public UActorComponent\n{\n    GENERATED_BODY()\npublic:\n    UPROPERTY(EditAnywhere)\n    TObjectPtr<UComboAttackDataAsset> ComboData;\n};\n"
+        }
+      ],
+      "mustDetect": [
+        "ComboAttackDataAsset",
+        "UDataAsset",
+        "ComboData"
+      ],
+      "mustNotSuggest": [
+        "new\\s+FAttackData",
+        "FAttackData.*(새로|from scratch|처음)",
+        "DataAsset.*(없|누락|missing)"
+      ],
+      "forbiddenClaims": [
+        "DataAsset이 없음",
+        "Attack data를 새 struct로 정의"
+      ],
+      "badAnswerFixture": "공격 데이터용 FAttackData struct를 새로 만들고 DataAsset으로 분리해야 합니다."
+    }
+  ]
+}

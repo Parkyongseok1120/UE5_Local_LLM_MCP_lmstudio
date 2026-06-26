@@ -1,0 +1,132 @@
+#!/usr/bin/env python
+"""Load LM Studio sampling presets from config/lmstudio_sampling.json."""
+
+from __future__ import annotations
+
+import json
+import os
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+DEFAULT_PRESET = {
+    "thinking": "off",
+    "temperature": 0.15,
+    "topP": 0.8,
+    "maxTokens": 4096,
+}
+
+_PROFILE_OVERRIDE = ""
+
+
+def set_sampling_profile(name: str) -> None:
+    """Override active profile for this process (CLI --sampling-profile)."""
+    global _PROFILE_OVERRIDE
+    _PROFILE_OVERRIDE = str(name or "").strip()
+
+
+@lru_cache(maxsize=1)
+def sampling_config_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "config" / "lmstudio_sampling.json"
+
+
+@lru_cache(maxsize=1)
+def load_sampling_config() -> dict[str, Any]:
+    path = sampling_config_path()
+    if not path.is_file():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def resolve_profile_name(config: dict[str, Any] | None = None) -> str:
+    if _PROFILE_OVERRIDE:
+        return _PROFILE_OVERRIDE
+    env_name = os.environ.get("UNREAL_RAG_MODEL_PROFILE", "").strip()
+    if env_name:
+        return env_name
+    cfg = config or load_sampling_config()
+    return str(cfg.get("activeProfile") or cfg.get("model") or "qwen3_6_27b")
+
+
+def resolve_active_profile(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = config or load_sampling_config()
+    profile_name = resolve_profile_name(cfg)
+    profiles = cfg.get("profiles") or {}
+    if isinstance(profiles.get(profile_name), dict):
+        return dict(profiles[profile_name])
+    legacy = cfg.get(profile_name)
+    if isinstance(legacy, dict) and legacy.get("turnPresets"):
+        return dict(legacy)
+    fallback = cfg.get("qwen3_6_27b")
+    if isinstance(fallback, dict):
+        return dict(fallback)
+    return {}
+
+
+def resolve_turn_name(mode: str = "", turn: str = "") -> str:
+    if turn:
+        return turn.strip().lower()
+    config = load_sampling_config()
+    mode_map = config.get("modeMap") or {}
+    mapped = mode_map.get(str(mode or "").strip().lower())
+    if mapped:
+        return str(mapped)
+    if str(mode or "").startswith("refactor_r"):
+        return "plan" if mode.endswith("0") or mode.endswith("1") else "execute"
+    return "execute"
+
+
+def load_sampling_preset(mode: str = "", turn: str = "", profile: str = "") -> dict[str, Any]:
+    config = load_sampling_config()
+    if profile:
+        profiles = config.get("profiles") or {}
+        active = profiles.get(profile) if isinstance(profiles.get(profile), dict) else resolve_active_profile(config)
+    else:
+        active = resolve_active_profile(config)
+    turn_presets = active.get("turnPresets") or {}
+    turn_name = resolve_turn_name(mode, turn)
+    preset = dict(DEFAULT_PRESET)
+    preset.update(turn_presets.get(turn_name) or {})
+    return preset
+
+
+def preset_for_wrapper(mode: str = "agent_edit", *, compile_patch: bool = False) -> dict[str, Any]:
+    turn = "compile_fix_patch" if compile_patch else resolve_turn_name(mode)
+    return load_sampling_preset(turn=turn)
+
+
+def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Print resolved LM Studio sampling preset.")
+    parser.add_argument("--mode", default="")
+    parser.add_argument("--turn", default="")
+    parser.add_argument("--sampling-profile", default="", help="Override active profile for this invocation.")
+    parser.add_argument("--show-profile", action="store_true", help="Print active profile name and scale.")
+    args = parser.parse_args()
+
+    if args.sampling_profile:
+        set_sampling_profile(args.sampling_profile)
+
+    if args.show_profile:
+        cfg = load_sampling_config()
+        profile = resolve_active_profile(cfg)
+        print(
+            json.dumps(
+                {
+                    "profile": resolve_profile_name(cfg),
+                    "assemblyBudgetScale": profile.get("assemblyBudgetScale", 1.0),
+                    "contextLength": profile.get("contextLength"),
+                },
+                indent=2,
+            )
+        )
+        return 0
+
+    preset = load_sampling_preset(mode=args.mode, turn=args.turn, profile=args.sampling_profile)
+    print(json.dumps(preset, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

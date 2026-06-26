@@ -1,0 +1,92 @@
+{
+  "description": "Regression queries for game-planning RAG retrieval. Each expected document should appear in the top_k results.",
+  "defaults": {
+    "top_k": 5,
+    "mode": "planning",
+    "candidate_limit": 160
+  },
+  "cases": [
+    {
+      "id": "action_combat_core_loop",
+      "query": "action combat prototype core loop first implementation slice",
+      "options": {
+        "genre": ["action_combat"]
+      },
+      "expected": [
+        {
+          "title_contains": "Action Combat Prototype Adapter",
+          "source": "project_guideline",
+          "layer": "genre",
+          "genre": "action_combat",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "prototype_planning_template",
+      "query": "game prototype planning must have should have later first playable loop",
+      "expected": [
+        {
+          "title_contains": "Prototype Planning Template",
+          "source": "project_guideline",
+          "layer": "planning",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "prototype_scope_failure_patterns",
+      "query": "reference feature copy production roadmap drift network first prototype scope risk",
+      "expected": [
+        {
+          "title_contains": "Prototype Planning Failure Patterns",
+          "source": "project_guideline",
+          "layer": "planning",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "shooter_core_feedback_loop",
+      "query": "shooter prototype aim fire hit miss feedback reload",
+      "options": {
+        "genre": ["shooter"]
+      },
+      "expected": [
+        {
+          "title_contains": "Shooter Prototype Adapter",
+          "source": "project_guideline",
+          "layer": "genre",
+          "genre": "shooter",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "roguelike_reward_loop",
+      "query": "roguelike room fight choose reward build synergy next room prototype",
+      "expected": [
+        {
+          "title_contains": "Roguelike Deckbuilder Management Prototype Adapters",
+          "source": "project_guideline",
+          "layer": "genre",
+          "genre": "roguelike",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "strategy_command_loop",
+      "query": "strategy tactics select command move act resolve combat reposition prototype",
+      "expected": [
+        {
+          "title_contains": "Strategy Stealth Horror Prototype Adapters",
+          "source": "project_guideline",
+          "layer": "genre",
+          "genre": "strategy_tactics",
+          "max_rank": 5
+        }
+      ]
+    }
+  ]
+}

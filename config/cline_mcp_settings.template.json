@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "unreal-rag": {
+      "command": "{PYTHON_EXE}",
+      "args": [
+        "{REPO_ROOT}/scripts/unreal_rag_mcp.py",
+        "--index",
+        "{REPO_ROOT}/data/unreal58/rag.sqlite"
+      ],
+      "env": {
+        "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
+        "UNREAL58_ROOT": "{REPO_ROOT}"
+      }
+    },
+    "unreal-agent": {
+      "command": "{NODE_EXE}",
+      "args": [
+        "{AGENT_MCP_ROOT}/src/server.js"
+      ],
+      "env": {
+        "WORKSPACE_ROOT": "{USER_DOCUMENTS}",
+        "AGENT_MCP_CONFIG": "{AGENT_MCP_ROOT}/config/agent-mcp.json",
+        "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
+        "UNREAL58_ROOT": "{REPO_ROOT}"
+      }
+    }
+  }
+}

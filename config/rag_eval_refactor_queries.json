@@ -1,0 +1,33 @@
+{
+  "description": "Refactor stage contract retrieval regression queries.",
+  "defaults": {
+    "top_k": 6,
+    "candidate_limit": 200
+  },
+  "cases": [
+    {
+      "id": "refactor_r0_contract",
+      "query": "R0 discover SSOT ownership no code snippets refactor stage",
+      "options": { "mode": "refactor_r0" },
+      "expected": [
+        {
+          "title_contains": "Refactor Stage Contract",
+          "source": "project_guideline",
+          "max_rank": 4
+        }
+      ]
+    },
+    {
+      "id": "refactor_r2_move",
+      "query": "R2 move implementation files UBT verify build",
+      "options": { "mode": "refactor_r2" },
+      "expected": [
+        {
+          "title_contains": "Refactor Stage",
+          "source": "project_guideline",
+          "max_rank": 5
+        }
+      ]
+    }
+  ]
+}

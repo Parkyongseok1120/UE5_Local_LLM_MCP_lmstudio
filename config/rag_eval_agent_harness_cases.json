@@ -1,0 +1,24 @@
+{
+  "description": "N-turn agent harness fixtures — expected tool order and turn contracts.",
+  "cases": [
+    {
+      "id": "soulslike_input_slice",
+      "genre": "action_combat",
+      "turns": [
+        { "turn": 1, "role": "plan", "forbiddenTools": ["write_file", "replace_in_file"] },
+        { "turn": 2, "role": "critique", "requiredTools": ["unreal_genre_scope_validate"] },
+        { "turn": 3, "role": "execute", "maxFiles": 3, "requiredTools": ["build_unreal_project"] }
+      ],
+      "expectedToolSequence": [
+        "unreal_agent_session",
+        "unreal_rag_search",
+        "unreal_refactor_plan_validate",
+        "unreal_genre_scope_validate",
+        "read_file",
+        "replace_in_file",
+        "build_unreal_project",
+        "unreal_runtime_config_check"
+      ]
+    }
+  ]
+}

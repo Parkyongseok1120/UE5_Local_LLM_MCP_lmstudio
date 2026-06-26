@@ -1,0 +1,30 @@
+{
+  "description": "Genre adapter retrieval regression (FTS).",
+  "defaults": { "top_k": 6, "candidate_limit": 80 },
+  "cases": [
+    {
+      "id": "shooter_adapter",
+      "query": "shooter prototype hitscan line trace weapon",
+      "options": { "mode": "prototype_component" },
+      "expected": [{ "title_contains": "Shooter", "source": "project_guideline", "max_rank": 5 }]
+    },
+    {
+      "id": "tps_camera_recipe",
+      "query": "TPS SpringArm CameraComponent third person line trace",
+      "options": { "mode": "codegen" },
+      "expected": [{ "title_contains": "TPS Camera", "source": "project_guideline", "max_rank": 5 }]
+    },
+    {
+      "id": "action_adapter",
+      "query": "action combat stamina prototype component",
+      "options": { "mode": "prototype_component" },
+      "expected": [{ "title_contains": "Action Combat", "source": "project_guideline", "max_rank": 6 }]
+    },
+    {
+      "id": "platformer_adapter",
+      "query": "platformer jump movement prototype",
+      "options": { "mode": "prototype_component" },
+      "expected": [{ "title_contains": "Platformer", "source": "project_guideline", "max_rank": 6 }]
+    }
+  ]
+}

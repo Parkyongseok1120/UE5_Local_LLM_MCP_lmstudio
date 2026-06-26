@@ -1,0 +1,36 @@
+{
+  "description": "Refactor stage plan validation cases for R0-R4 contract.",
+  "cases": [
+    {
+      "id": "r0_good_plan",
+      "stage": "R0",
+      "planText": "## R0 Discover\n### SSOT table\n| State | Owner |\n| Health | UHealthComponent |\n### Impact files\n- Source/Game/HealthComponent.h\n- Source/Game/Character.cpp\n### Risks\n- Duplicate health on Character",
+      "expectOk": true
+    },
+    {
+      "id": "r0_bad_has_code",
+      "stage": "R0",
+      "planText": "#include \"CoreMinimal.h\"\nUCLASS()\nclass UFoo : public UObject { GENERATED_BODY() };",
+      "expectOk": false
+    },
+    {
+      "id": "r2_many_files_warning",
+      "stage": "R2",
+      "planText": "Move impl to files a.h a.cpp b.h b.cpp c.h c.cpp d.h d.cpp e.h e.cpp then build with UBT",
+      "expectOk": true,
+      "expectWarning": true
+    },
+    {
+      "id": "r1_boundary_ok",
+      "stage": "R1",
+      "planText": "R1 boundary: add IHealthInterface.h with query API only. No cpp bodies yet.",
+      "expectOk": true
+    },
+    {
+      "id": "r3_rewire_build",
+      "stage": "R3",
+      "planText": "Rewire PlayerController to call UHealthComponent. Files: Controller.h Controller.cpp. Verify with UBT build.",
+      "expectOk": true
+    }
+  ]
+}
