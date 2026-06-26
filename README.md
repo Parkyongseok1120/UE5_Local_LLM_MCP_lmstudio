@@ -1,3 +1,4 @@
+# UE5_Local_LLM_MCP_lmstudio
 
 This is a **local RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
