@@ -11,21 +11,22 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "Resolve-StackLayout.ps1")
 
 function Find-PythonExe {
-    $found = [System.Collections.Generic.List[string]]::new()
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd -and (Test-Path $cmd.Source)) { $found.Add($cmd.Source) }
+    $bundled = Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+    if (Test-Path $bundled) {
+        return $bundled
+    }
     foreach ($path in @(
             (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
             (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
-            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe"),
-            (Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe")
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe")
         )) {
-        if ((Test-Path $path)) { $found.Add($path) }
+        if (Test-Path $path) { return $path }
     }
-    if ($found.Count -eq 0) {
-        throw "Python 3.10+ not found. Install from https://www.python.org/downloads/"
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -notlike "*\WindowsApps\*" -and (Test-Path $cmd.Source)) {
+        return $cmd.Source
     }
-    return $found[0]
+    throw "Python 3.10+ not found. Install from https://www.python.org/downloads/"
 }
 
 function Find-NodeExe {
@@ -108,7 +109,10 @@ if (-not $SkipNpm) {
         Write-Host "npm install in $($pair.Name)..."
         Push-Location $pair.Dir
         try {
-            & npm install --no-fund --no-audit 2>&1 | Out-Host
+            cmd /c "npm install --no-fund --no-audit 2>&1"
+            if ($LASTEXITCODE -ne 0) {
+                throw "npm install failed in $($pair.Name) (exit $LASTEXITCODE)"
+            }
         }
         finally {
             Pop-Location
@@ -119,7 +123,7 @@ if (-not $SkipNpm) {
 # optional python deps for hybrid search
 if (-not $SkipPythonDeps) {
     Write-Host "Installing fastembed (optional hybrid search)..."
-    & $python -m pip install fastembed --quiet 2>&1 | Out-Null
+    cmd /c "`"$python`" -m pip install fastembed --quiet 2>&1"
 }
 
 # shared workspace config
