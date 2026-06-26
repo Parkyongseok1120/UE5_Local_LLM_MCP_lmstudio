@@ -1,162 +1,92 @@
 # UE5_Local_LLM_MCP_lmstudio
 
-This is a **local RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
+Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
-The old name was **Unreal58-RAG**, but I changed it so the LM Studio / MCP / Unreal structure is clearer.
+Old name: **Unreal58-RAG**. Officially tested on **UE 5.8**. Other 5.x versions can work, but build your own index from **your** licensed UE install (BYOI).
 
-For now, this has been officially tested on **UE 5.8**.  
-Other UE 5.x versions are not impossible to use, but in that case I recommend building your own index from your local Unreal Engine source or project data.
+> **BYOI** = Bring Your Own Index. This repo ships **tooling only** — not Epic source, not a pre-built `rag.sqlite`.
 
-Basically, it is meant to be used in a BYOI style.
-
-> BYOI = Bring Your Own Index  
-> Build your own RAG index from the Unreal Engine install, project code, and build logs on your own PC.
-
-Index folders like `data\unreal58\` are namespace names from the default UE 5.8 setup. Other 5.x versions may use a different folder name after `Configure-Knowledge.ps1`.
-
----
-
-## What this is
-
-If you just load a local model in LM Studio and ask it “teach me Unreal C++,” the model will answer based on what it already knows.
-
-The problem is that Unreal has many versions, a large API surface, and lots of issues that depend on the actual project structure, such as `Build.cs` or include problems.  
-So if you rely only on the model’s memory, it can hallucinate pretty easily or give vague answers.
-
-This project creates a search index from Unreal documentation, source code, project code, and build logs, then injects relevant context when asking questions.
-
-Roughly, the responsibilities are split like this.
+This is not trying to become a fully automatic developer. The first goal is simply to make local models hallucinate less on Unreal C++ — especially `Build.cs`, include, UHT, and project-specific stuff.
 
 ```text
 Unreal knowledge / API evidence = RAG
-Answer tone / format / habits = LoRA
-Actual workflow integration = MCP / Agent
+Answer tone / format / habits     = LoRA (optional, later)
+Workflow (search / files / build) = MCP
 ```
-
-So the goal is not to force all Unreal documentation into a LoRA.  
-That would be painful to maintain, and once the Unreal version changes, it quickly becomes awkward.
-
-I think it is much more realistic to first improve RAG search quality, then later use a small LoRA only for answer style and habits.
 
 ---
 
-## Roughly, this is for
+## Minimum requirements
 
-- Unreal C++ code assistance
-- Explaining `UCLASS`, `UPROPERTY`, and `UFUNCTION`
-- Checking `Build.cs` module dependencies
-- Checking include issues
-- Analyzing UHT / `generated.h` errors
-- Finding fix directions from compile logs
-- Building a local Unreal Agent setup with Rider / Cline / LM Studio
-- Asking questions based on your own project code
-- Adding game design documents to help with prototype planning
+### PC (Windows)
 
-This is not trying to become some kind of fully automatic developer.  
-The first goal is simply to make local models hallucinate less when dealing with Unreal C++.
+| | Minimum | Recommended (what I actually test on) |
+|---|---|---|
+| **OS** | Windows 10/11 | Windows 11 |
+| **RAM** | 16 GB (RAG Q&A + 8B model) | **32 GB+** (UE Editor + 27B + index build) |
+| **GPU VRAM** | 8 GB (7–8B Q4) | **16 GB+** (27B Q4, e.g. Qwen 3.6 27B) |
+| **Free disk** | ~30 GB (repo + local index) | **100 GB+** (UE 5.8 + projects + index) |
+| **CPU** | 6-core modern CPU | 8-core+ (index collect/build is slow otherwise) |
+
+Also required:
+
+- **Python 3.10+** (real install — not the Windows Store stub)
+- **Node.js 20+**
+- **LM Studio 0.3+**
+- **Licensed Unreal Engine 5.x** (5.8 recommended)
+
+RAG-only Q&A is lighter. Agent file-write + UBT compile loop needs UE installed and more headroom.
+
+### Local model (LM Studio)
+
+| | Minimum | Recommended |
+|---|---|---|
+| **Size** | **7–8B** instruct/coding model | **24–27B** coding model |
+| **Example** | Qwen3-8B (Q4) | **Qwen 3.6 27B** (Q4_K_M) |
+| **Context** | 8k (tight; use 2-turn flow) | **32k** |
+| **Quant** | Q4 acceptable | Q4_K_M / Q5_K_M |
+
+Below ~7B, Unreal C++ codegen and compile-fix quality drops fast in my experience — fine for lookup/Q&A, not great for multi-file agent work.
+
+8B path: see [docs/Small_Model_Shortcut.md](docs/Small_Model_Shortcut.md) (2-turn, hybrid off, smaller RAG budget).
+
+Hybrid embedding search (`fastembed`) is optional — `pip install fastembed` if you want it.
 
 ---
 
-## Recommended folder layout
+## Quick install
 
-This repository is a **monorepo**: RAG at the repo root plus `lmstudio-unreal-agent-mcp/` for the agent MCP server.
-
-After clone, a typical LM Studio layout looks like this.
+Monorepo layout — one clone has both RAG and agent MCP:
 
 ```text
-~/.lmstudio/
-  UE5_Local_LLM_MCP_lmstudio/          # this repo (RAG + agent MCP)
-    rag.ps1
-    scripts/
-    lmstudio-unreal-agent-mcp/
-      src/server.js
-```
-
-Legacy two-folder layout (still supported by the installer):
-
-```text
-~/.lmstudio/
-  Unreal58-RAG/
+UE5_Local_LLM_MCP_lmstudio/
+  rag.ps1
+  scripts/
   lmstudio-unreal-agent-mcp/
+    src/server.js
 ```
-
-**Two MCP servers:**
-
-- `unreal-rag` → this repo root (`scripts/unreal_rag_mcp.py`)
-- `unreal-agent` → `lmstudio-unreal-agent-mcp/` in this same clone
-
-RAG-only Q&A works with `unreal-rag` alone. Agent-style file edit / compile loop needs both.
-
----
-
-## Quick install flow
 
 ```powershell
-cd $HOME\.lmstudio\UE5_Local_LLM_MCP_lmstudio   # or wherever you cloned this repo
+git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
+cd UE5_Local_LLM_MCP_lmstudio
 .\installer\INSTALL.bat
-.\installer\Configure-Knowledge.ps1               # builds the index from your UE install
+.\installer\Configure-Knowledge.ps1
 .\rag.ps1 doctor
 ```
 
-The basic flow is this.
+Then in LM Studio:
 
-1. Install LM Studio.
-2. Load a local coding model.  
-   Example: Qwen 3.6 27B.
-3. Patch the MCP config.
+1. Load your local model and start Local Server.
+2. Paste system prompt: `prompts/lmstudio_unreal_agent_system.md`
+3. Enable MCP: **`unreal-rag`** + **`unreal-agent`**
+4. Restart LM Studio if paths do not refresh.
 
-```powershell
-python scripts\patch_mcp_config.py
-```
-
-If `python` is not found, use your Python 3.10+ full path, or run from a shell where Python is on PATH.  
-Most day-to-day commands go through `.\rag.ps1`, which resolves Python for you. A few setup scripts still call `python` directly.
-
-4. Apply the system prompt.
-
-```text
-prompts/lmstudio_unreal_agent_system.md
-```
-
-5. Enable the MCP servers in LM Studio.
-
-```text
-unreal-rag        # this repo root
-unreal-agent      # lmstudio-unreal-agent-mcp/ in this same clone
-```
-
----
-
-## Important notice
-
-This project is not for redistributing Epic Games’ Unreal Engine source code or documentation.
-
-**Do not commit pre-built `data/` indexes or Epic source exports.**
-
-The related details are written here.
-
-```text
-EPIC_NOTICE.md
-```
-
-**For maintainers / forkers:** before your first public push, run this check at least once.
-
-```powershell
-.\installer\Verify-Oss-Ready.ps1
-```
-
-End users who only clone and build a local index do not need this unless they plan to publish their own fork.
-
-This is not there just because I felt like adding another script.  
-It is a safety check to prevent accidentally uploading Epic source files or generated indexes.
+`INSTALL.bat` patches `%USERPROFILE%\.lmstudio\mcp.json` with full paths to Python/Node.  
+RAG-only chat works with **`unreal-rag` alone**. File edit / UBT build needs **`unreal-agent`** too.
 
 ---
 
 ## Quick start
-
-Install **Python 3.10+** and add it to `PATH` if you can. That is the normal setup for this repo.
-
-If `python` is not in `PATH`, `rag.ps1` may also try a **Codex CLI cached runtime** at `~/.cache/codex-runtimes/...` — but only if you already have Codex installed on that PC. **Codex is not bundled in this repository**, and you do not need Codex to use this project.
 
 ```powershell
 .\rag.ps1 collect-source
@@ -165,558 +95,51 @@ If `python` is not in `PATH`, `rag.ps1` may also try a **Codex CLI cached runtim
 .\rag.ps1 query -Question "How do I create a UActorComponent in C++?"
 ```
 
-After starting the LM Studio Local Server, you can ask questions like this.
+With LM Studio Local Server running:
 
 ```powershell
 .\rag.ps1 lmstudio-models
 .\rag.ps1 ask -Question "Show me a C++ example of attaching a custom Component to an Actor"
 ```
 
----
-
-## Collecting local Unreal C++ source
-
-If you have Unreal Engine 5.8 source locally, you can include it in the index.
-
-```powershell
-python scripts\collect_unreal_source.py `
-  --root "C:\Program Files\Epic Games\UE_5.8\Engine\Source" `
-  --out data\unreal58\raw_source.jsonl
-```
-
-If your source path is different, just change `--root`.
-
-By default, the `ThirdParty` folder is excluded.  
-If you want to include external libraries like Boost or WebRTC too, add this option.
-
-```powershell
---include-third-party
-```
-
-You can also run it through the wrapper command.
-
-```powershell
-.\rag.ps1 collect-source -IncludeThirdParty
-```
-
-Personally, I recommend starting without ThirdParty first.  
-If you put too much in from the beginning, the search quality can actually become less clear.
-
----
-
-## Collecting local Unreal projects
-
-By default, it searches for `.uproject` files under this path.
-
-```text
-$HOME\Documents\Unreal Projects
-```
-
-Run it like this.
-
-```powershell
-.\rag.ps1 collect-projects -CopyProjectText
-.\rag.ps1 build
-```
-
-If you use another path, specify it directly.
-
-```powershell
-.\rag.ps1 collect-projects -ProjectsRoot "D:\MyUnrealProjects" -CopyProjectText
-```
-
-The text snapshot is generated here.
-
-```text
-data\unreal_projects\text_snapshot
-```
-
-This does not copy the entire project.  
-It mainly collects C++ / Config / Plugin / text files needed for RAG.
-
-So it is closer to a tool that extracts only the readable text for the model, not a backup tool.
-
----
-
-## Extra collection for Unreal programming assistance
-
-If you want better support for Unreal C++ code generation, compile error fixes, UHT/reflection issues, and Build.cs dependency advice, it is better to collect these extra data sources too.
+Extra collection for compile/module/symbol help (worth it if you do real C++ work):
 
 ```powershell
 .\rag.ps1 collect-symbols
 .\rag.ps1 collect-module-graph
 .\rag.ps1 collect-project-profile -ProjectsRoot "C:\Path\To\YourProject"
-.\rag.ps1 collect-build-logs -BuildLogRoot "C:\Path\To\YourProject" -LogsOnly
 .\rag.ps1 build
 ```
 
-The main collected data includes:
-
-- `UCLASS`
-- `USTRUCT`
-- `UINTERFACE`
-- `UENUM`
-- `UFUNCTION`
-- `UPROPERTY`
-- include lists
-- `*.Build.cs` module dependencies
-- optional partial C++ function definitions
-
-This part helps more directly with Unreal C++ assistance than plain document search.  
-Especially for Build.cs, include, and generated.h issues, models often give vague answers unless they can see project-specific information.
+Search modes: `codegen`, `compile_fix`, `module_fix`, `reflection_fix`, `api_lookup`, `runtime_debug` — see [docs/LMStudio_Unreal_Agent_Setup.md](docs/LMStudio_Unreal_Agent_Setup.md).
 
 ---
 
-## Search modes
+## Important
 
-The search modes are separated for Unreal programming assistance.
+- **Do not commit** `data/`, `*.sqlite`, or Epic source exports. See [EPIC_NOTICE.md](EPIC_NOTICE.md).
+- Not affiliated with Epic Games or LM Studio.
+- Codex Python is **not** bundled. Install Python normally; `rag.ps1` may optionally find a Codex cached runtime if you already have it.
 
-| Mode | Purpose |
+Maintainers: `.\installer\Verify-Oss-Ready.ps1` before publishing a fork.
+
+---
+
+## More docs
+
+| Topic | File |
 |---|---|
-| `codegen` | Search evidence for writing new Unreal C++ code |
-| `compile_fix` | Fix compile / link errors |
-| `runtime_debug` | Analyze Editor logs, crashes, asserts, and ensures |
-| `api_lookup` | Check Unreal API, signatures, and includes |
-| `module_fix` | Fix Build.cs, include, and module dependency issues |
-| `reflection_fix` | Fix UHT, generated.h, and reflection macro issues |
-
-For example, `compile_fix` does not just pull random documents.  
-It assembles context in this order: build log → symbol → module/include → project profile → fix playbook.
-
-Basically, it tries to bring the most relevant material for the current situation to the front.
-
-When asking through LM Studio, search results are reordered by mode-specific context assemblers. For example, `codegen` tends toward symbol → include → module → project profile/example → recipe/playbook, while `compile_fix` tends toward build log → symbol → module/include → project profile/example → fix playbook.
-
----
-
-## module graph
-
-`collect-module-graph` builds a module dependency graph from the collected symbols and include information.
-
-For example, it adds evidence for checking things like:
-
-- which module owns `GameplayTagContainer.h`
-- whether `PublicDependencyModuleNames` is needed when used in a public header
-- whether `PrivateDependencyModuleNames` is enough when used only in a private `.cpp`
-- where the include owner is
-
-The generated summary report is here.
-
-```text
-Reports/unreal_module_include_graph.md
-```
-
-I added this because it is a surprisingly common place to get stuck in Unreal C++.  
-A lot of times, the code itself looks correct, but the build breaks because Build.cs is wrong.
-
----
-
-## project profile
-
-`collect-project-profile` summarizes project-specific settings and adds them to RAG.
-
-It roughly collects these files and settings.
-
-- `.uproject`
-- `.uplugin`
-- `*.Build.cs`
-- `*.Target.cs`
-- `Config/*.ini`
-- module list
-- plugin list
-
-Once you have an actual project, you can collect it again by specifying `-ProjectFile` or `-ProjectsRoot`.
-
-```powershell
-.\rag.ps1 collect-project-profile -ProjectFile "C:\Path\To\YourProject\YourProject.uproject"
-```
-
-With this included, the model can answer while seeing some of your actual module structure, instead of only giving generic Unreal answers.
-
----
-
-## Regression tests
-
-Basic regression test commands:
-
-```powershell
-.\rag.ps1 eval-unreal-programming
-.\rag.ps1 eval-unreal-review -Answers tests\fixtures\unreal_review_answers\good_answers.jsonl
-.\rag.ps1 test-build-logs
-.\rag.ps1 test-unreal-readiness
-```
-
-`test-build-logs` uses synthetic Unreal log fixtures to check whether these errors are correctly split into `build_log` JSONL records.
-
-- `C1083`
-- `LNK2019`
-- `UnrealHeaderTool`
-- `generated.h` related errors
-
-`eval-unreal-review` scores model answer JSON / JSONL files against Unreal C++ review E2E cases.
-
-To print only the prompts, use this command.
-
-```powershell
-.\rag.ps1 eval-unreal-review -PrintPrompts
-```
-
-`test-unreal-readiness` checks whether the wrapper static validation catches these risks.
-
-- `generated.h`
-- reflection namespace
-- `BlueprintNativeEvent`
-- editor-only include
-- UObject lifetime risks
-
-It may look like there are a lot of tests, but with Unreal, one tiny mistake can break the whole build.  
-So I think having these checks is the better direction.
-
----
-
-## Extra operation commands
-
-```powershell
-.\rag.ps1 doctor
-.\rag.ps1 bench-mcp
-.\rag.ps1 eval-debug
-.\rag.ps1 eval-genre
-.\rag.ps1 eval-e2e-compile
-.\rag.ps1 knowledge-audit
-.\rag.ps1 agent-session -Question "TPS shooter prototype component"
-.\rag.ps1 scaffold-prototype -ScaffoldGenre shooter
-.\installer\Install-ClineUnrealMcp.ps1
-```
-
----
-
-## Usage modes
-
-| Mode | Surface | Flow |
-|---|---|---|
-| Q&A | LM Studio chat | `unreal_rag_search` only |
-| Agent | Cline + MCP, build/debug in Rider | `unreal_agent_session` → write → Rider Build |
-| Compile loop | LM Studio / Cline | `unreal_start_compile_loop` |
-| Runtime debug | LM Studio + MCP | `read_unreal_logs` → `runtime_debug` RAG |
-
-For LM Studio setup, see this document.
-
-```text
-docs/LMStudio_Unreal_Agent_Setup.md
-```
-
-For Rider + Cline setup, I recommend this document.
-
-```text
-docs/Cline_Rider_Unreal_Agent_Setup.md
-```
-
----
-
-## VSCode Unreal C++ setup
-
-This is optional.
-
-If you want to set up C++ IntelliSense and debugging settings for a UE 5.8 project in VSCode, use this script.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_vscode_unreal.ps1 `
-  -ProjectFile "C:\Path\To\MyGame.uproject"
-```
-
-You can also apply it to multiple project roots at once.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_vscode_unreal.ps1 `
-  -ProjectsRoot "$HOME\Documents\Github"
-```
-
-This script roughly configures:
-
-- global VSCode C++ defaults
-- Unreal Editor Source Code Editor setting
-- UBT project file format
-- per-project `.vscode/settings.json`
-- `tasks.json`
-- `launch.json`
-- `extensions.json`
-- `compileCommands_*.json`
-
-However, Blueprint-only projects without a `Source` folder are skipped because they are not C++ IntelliSense targets.
-
----
-
-## UBT feedback loop
-
-Once you have an actual project, the UnrealBuildTool-based feedback loop can be run like this.
-
-```powershell
-.\rag.ps1 ubt-feedback `
-  -ProjectFile "C:\Path\To\YourProject\YourProject.uproject" `
-  -UbtTarget "YourProjectEditor" `
-  -Mode compile_fix `
-  -Question "Find the cause of the latest build failure and suggest the minimum fix"
-```
-
-The goal is not just to explain what the error means.  
-The goal is to find the minimum fix based on the build log.
-
-In Unreal, it is often hard to fix things by looking at only one error message, so this is designed to also use the project profile, Build.cs, and include information when possible.
-
----
-
-## Collecting game design documents
-
-Project-specific game design documents should go under this path.
-
-```text
-Game_Design_Docs\<ProjectName>
-```
-
-An example is included here.
-
-```text
-Game_Design_Docs\_TEMPLATE
-```
-
-Folders starting with `_` are excluded from the default collection.
-
-```powershell
-.\rag.ps1 collect-game-design
-.\rag.ps1 build
-.\rag.ps1 query -Mode planning -Source game_design_doc -Project "MyGame" -Question "Summarize the core loop and first implementation unit"
-```
-
-You can optionally add front matter at the top of a document.
-
-```markdown
----
-title: Core Loop
-genre: action_combat
-design_area: core_loop
----
-```
-
-These values are reflected in search filters.
-
-You can check game design search quality with this regression test.
-
-```powershell
-.\rag.ps1 eval-game-design
-```
-
-It checks whether the expected document appears in the top 5 results for each query.
-
-This feature is meant to let the model look not only at Unreal API information, but also at what kind of game the project is supposed to be.
-
----
-
-## Optional: collecting official documentation
-
-Epic’s documentation site can sometimes return only titles instead of full body text because of SPA behavior and security checks.
-
-So the more stable starting point is to index your local Unreal Engine source and project code first, rather than relying on official web documentation crawling.
-
-Still, if you want to try collecting official documentation, you can run this.
-
-```powershell
-python scripts\collect_unreal_docs.py `
-  --seeds config\unreal_58_seed_urls.txt `
-  --out data\unreal58\raw_docs.jsonl `
-  --max-pages 200 `
-  --delay 0.5
-```
-
-Do not start with a huge crawl.  
-I recommend testing with a small number first.
-
-```powershell
---max-pages 20
-```
-
-Start around there, then increase it if it looks fine.
-
----
-
-## Building the RAG index
-
-```powershell
-python scripts\build_rag_index.py `
-  --input data\unreal58\raw_docs.jsonl data\unreal58\raw_source.jsonl `
-  --out-dir data\unreal58
-```
-
-The generated files are:
-
-```text
-data\unreal58\chunks.jsonl
-data\unreal58\rag.sqlite
-```
-
-If `raw_source.jsonl` does not exist yet, you can build with only `raw_docs.jsonl`.
-
----
-
-## Search test
-
-```powershell
-python scripts\query_rag.py `
-  --index data\unreal58\rag.sqlite `
-  "What macros and Build.cs settings are needed when creating a UActorComponent in C++?"
-```
-
----
-
-## Connecting to LM Studio
-
-Load the model you want in LM Studio, start the Local Server, then run this.
-
-If `-Model` is omitted, the first model loaded in LM Studio is used automatically.
-
-```powershell
-python scripts\query_rag.py `
-  --index data\unreal58\rag.sqlite `
-  --ask-lmstudio `
-  "Show me a C++ example of attaching a custom Component to an Actor in UE 5.8"
-```
-
-If you want to specify a model directly, use this.
-
-```powershell
---model "MODEL_ID"
-```
-
-Or run it through the wrapper command.
-
-```powershell
-.\rag.ps1 ask -Model "MODEL_ID" -Question "your question"
-```
-
-You can check the model IDs currently detected by LM Studio with this command.
-
-```powershell
-.\rag.ps1 lmstudio-models
-```
-
----
-
-## Using MCP in the LM Studio app chat
-
-LM Studio can connect MCP servers to the app chat.  
-This project provides the following MCP tool.
-
-```text
-unreal_rag_search
-```
-
-The setup flow is:
-
-1. Open the `Program` tab in the right sidebar of LM Studio.
-2. Click `Install > Edit mcp.json`.
-3. Add the `mcpServers` contents from this template to LM Studio’s `mcp.json`.
-
-```text
-config/cline_mcp_settings.template.json
-```
-
-4. Restart LM Studio or refresh the MCP list.
-5. When asking Unreal-related questions in chat, say something like this.
-
-```text
-Use unreal_rag_search first if needed.
-```
-
----
-
-## mcp.json BOM error
-
-LM Studio may show this error.
-
-```text
-Unexpected token '﻿'
-```
-
-This is likely caused by `mcp.json` being saved as UTF-8 with BOM.  
-You can rewrite the config as UTF-8 without BOM using this command.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_lmstudio_mcp.ps1
-```
-
----
-
-## Workspace name (legacy migration)
-
-This section is only for people migrating from the old folder name `Gemma4 LORA`. If you cloned this repo fresh from GitHub, you can skip this.
-
-The old folder name `Gemma4 LORA` does not really fit the current structure, so I unified it as **Unreal58-RAG**, and later renamed the public repo to **UE5_Local_LLM_MCP_lmstudio**.
-
-The reason is simple.
-
-- It matches the MCP server name `unreal-rag`
-- It does not make LoRA look like the main feature
-- The real core is RAG + MCP + Unreal assistance
-
-If the physical folder is still named `Gemma4 LORA`, either create a junction named `UE5_Local_LLM_MCP_lmstudio`, or close LM Studio / Cursor and rename the folder.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rename_workspace_and_refresh_lmstudio.ps1
-```
-
----
-
-## Workspace folder rename
-
-This is optional.
-
-The script handles these tasks after renaming the folder.
-
-- Rebuilds the RAG index
-- Updates the LM Studio `mcp.json` path
-- Updates internal sync file paths
-- Checks that files are saved without UTF-8 BOM
-
-The tool name remains:
-
-```text
-unreal_rag_search
-```
-
----
-
-## When should LoRA be used?
-
-Personally, I think it is better to improve RAG search quality first.
-
-LoRA should not be used from the beginning as a way to store Unreal knowledge.  
-It is better to start with small goals like these.
-
-- Fixing the Unreal C++ answer format
-- Making the model consistently explain `UCLASS`, `UPROPERTY`, `UFUNCTION`, and `Build.cs`
-- Making the model search for evidence instead of inventing unknown APIs
-- Fixing Korean explanation + C++ example code style
-- Making the model avoid skipping risky code or vague include/module dependency issues
-
-Trying to put everything into LoRA from the start is too hard to maintain.  
-Unreal has version differences, a huge API surface, and project-specific Build.cs structures, so memorizing everything is not as useful as it sounds.
-
-So this project starts by improving local RAG quality first,  
-then adds LoRA only as much as needed later.
+| LM Studio + MCP setup | [docs/LMStudio_Unreal_Agent_Setup.md](docs/LMStudio_Unreal_Agent_Setup.md) |
+| Rider + Cline agent | [docs/Cline_Rider_Unreal_Agent_Setup.md](docs/Cline_Rider_Unreal_Agent_Setup.md) |
+| BYOI / engine versions | [docs/BYOI_Knowledge_Setup.md](docs/BYOI_Knowledge_Setup.md) |
+| Small 8B models | [docs/Small_Model_Shortcut.md](docs/Small_Model_Shortcut.md) |
+| Agent MCP details | [lmstudio-unreal-agent-mcp/README.md](lmstudio-unreal-agent-mcp/README.md) |
+| Security | [SECURITY.md](SECURITY.md) |
 
 ---
 
 ## Summary
 
-The goal of this project is not to build some grand “fully automatic developer.”
+Still experimental. Structure may change.
 
-For now, the goal is to make local models better at answering Unreal Engine C++ questions by:
-
-- reducing hallucinations
-- searching for evidence first
-- handling Build.cs / include / reflection issues better
-- connecting into a real workflow inside Rider / Cline / LM Studio
-
-This project is not perfect yet.  
-It is still experimental, and the structure may change.
-
-Still, I think it can be a starting point for people who want to use local LLMs with Unreal C++.
+But if you want local LLMs for Unreal C++ with less hallucination — search evidence first, then answer — this is a workable starting point. Improve RAG first; use LoRA later only for answer style if you need it.
