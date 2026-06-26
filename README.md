@@ -1,6 +1,4 @@
-업로드한 마크다운 기준으로, 제목은 전부 `##` 형태로 맞춰서 다시 코드블록으로 정리함. 
 
-````markdown
 ## UE5_Local_LLM_MCP_lmstudio
 
 This is a **local RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
