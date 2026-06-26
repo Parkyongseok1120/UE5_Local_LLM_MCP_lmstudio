@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 echo Unreal58-RAG Portable MCP Installer
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0installer\Install-UnrealMcp.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-UnrealMcp.ps1" %*
 if errorlevel 1 (
   echo.
   echo Install failed. See messages above.
