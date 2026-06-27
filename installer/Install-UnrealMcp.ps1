@@ -176,7 +176,7 @@ foreach ($mcpPath in $mcpPaths) {
         $config.mcpServers = [ordered]@{}
     }
 
-    $config.mcpServers."unreal-rag" = [ordered]@{
+    $config.mcpServers = Merge-McpServer $config.mcpServers "unreal-rag" ([ordered]@{
         command = $python
         args    = @($ragServer, "--index", $ragIndex)
         env     = [ordered]@{
@@ -186,13 +186,13 @@ foreach ($mcpPath in $mcpPaths) {
             PYTHONUTF8           = "1"
             PYTHONIOENCODING     = "utf-8"
         }
-    }
+    })
 
     $allowWrite = if ($EnableAgentMode) { "1" } else { "0" }
     $allowCommands = if ($EnableAgentMode) { "1" } else { "0" }
     $allowBuild = if ($EnableAgentMode) { "1" } else { "0" }
 
-    $config.mcpServers."unreal-agent" = [ordered]@{
+    $config.mcpServers = Merge-McpServer $config.mcpServers "unreal-agent" ([ordered]@{
         command = $node
         args    = @($agentServer)
         env     = [ordered]@{
@@ -207,7 +207,7 @@ foreach ($mcpPath in $mcpPaths) {
             MAX_OUTPUT_BYTES     = "262144"
             COMMAND_TIMEOUT_MS   = "600000"
         }
-    }
+    })
 
     if ($EnableAgentMode) {
         Write-Host "Agent mode ENABLED (write/build/commands)." -ForegroundColor Yellow
@@ -216,10 +216,10 @@ foreach ($mcpPath in $mcpPaths) {
     }
 
     if (Test-Path $dateTimeJs) {
-        $config.mcpServers."current-datetime" = [ordered]@{
+        $config.mcpServers = Merge-McpServer $config.mcpServers "current-datetime" ([ordered]@{
             command = $node
             args    = @($dateTimeJs)
-        }
+        })
     }
 
     if (Test-Path $mcpRemoteProxy) {
