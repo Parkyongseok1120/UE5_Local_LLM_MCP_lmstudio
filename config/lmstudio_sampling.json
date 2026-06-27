@@ -22,13 +22,31 @@
     "qwen3.6": "qwen3_6_27b",
     "qwen3-8b": "qwen3_8b",
     "qwen3_8b": "qwen3_8b",
-    "generic-large": "generic_large"
+    "generic-large": "generic_large",
+    "gpt-oss-20b": "gpt_oss_20b",
+    "gpt-oss-120b": "gpt_oss_120b",
+    "qwen-coder-large": "qwen_coder_large",
+    "conservative-compile-fix": "conservative_compile_fix",
+    "review-only": "review_only"
   },
   "profiles": {
     "qwen3_6_27b": {
       "contextLength": 32768,
       "assemblyBudgetScale": 1.0,
+      "maxFilesPerEdit": 3,
+      "preferPatchOverFullFile": true,
       "quantDefault": "Q4_K_M",
+      "agentPolicy": {
+        "ragBudgetScale": 1.0,
+        "maxFilesPerEdit": 3,
+        "preferPatch": true,
+        "planningRequired": true,
+        "deepSearch": false,
+        "compileFixMaxAttempts": 4,
+        "allowRefactorModes": true,
+        "jsonRepairStrict": true,
+        "historyTurns": 4
+      },
       "abTuning": {
         "preserve_thinking": ["off", "on"],
         "contextLength": [32768, 49152],
@@ -164,6 +182,85 @@
           "topP": 0.8,
           "maxTokens": 3072
         }
+      }
+    },
+    "gpt_oss_20b": {
+      "contextLength": 16384,
+      "assemblyBudgetScale": 0.75,
+      "maxFilesPerEdit": 2,
+      "preferPatchOverFullFile": true,
+      "agentPolicy": {
+        "ragBudgetScale": 0.75,
+        "maxFilesPerEdit": 2,
+        "preferPatch": true,
+        "planningRequired": true,
+        "deepSearch": false,
+        "compileFixMaxAttempts": 3,
+        "allowRefactorModes": false,
+        "jsonRepairStrict": true,
+        "historyTurns": 2
+      },
+      "quantDefault": "Q4_K_M",
+      "turnPresets": {
+        "plan": { "thinking": "off", "temperature": 0.4, "topP": 0.9, "maxTokens": 2048 },
+        "execute": { "thinking": "off", "temperature": 0.1, "topP": 0.8, "maxTokens": 2048 },
+        "compile_fix_patch": { "thinking": "off", "temperature": 0.1, "topP": 0.8, "maxTokens": 2048 }
+      }
+    },
+    "gpt_oss_120b": {
+      "contextLength": 49152,
+      "assemblyBudgetScale": 1.25,
+      "maxFilesPerEdit": 4,
+      "preferPatchOverFullFile": false,
+      "agentPolicy": {
+        "ragBudgetScale": 1.25,
+        "maxFilesPerEdit": 4,
+        "preferPatch": false,
+        "planningRequired": true,
+        "deepSearch": true,
+        "compileFixMaxAttempts": 4,
+        "allowRefactorModes": true,
+        "jsonRepairStrict": false,
+        "historyTurns": 6
+      },
+      "quantDefault": "Q5_K_M",
+      "turnPresets": {
+        "plan": { "thinking": "on", "temperature": 0.5, "topP": 0.95, "maxTokens": 8192 },
+        "critique": { "thinking": "on", "temperature": 0.5, "topP": 0.95, "maxTokens": 8192 },
+        "execute": { "thinking": "off", "temperature": 0.15, "topP": 0.8, "maxTokens": 6144 }
+      }
+    },
+    "qwen_coder_large": {
+      "contextLength": 32768,
+      "assemblyBudgetScale": 1.1,
+      "maxFilesPerEdit": 3,
+      "preferPatchOverFullFile": true,
+      "quantDefault": "Q4_K_M",
+      "turnPresets": {
+        "plan": { "thinking": "on", "temperature": 0.5, "topP": 0.95, "maxTokens": 6144 },
+        "execute": { "thinking": "off", "temperature": 0.12, "topP": 0.8, "maxTokens": 4096 }
+      }
+    },
+    "conservative_compile_fix": {
+      "contextLength": 16384,
+      "assemblyBudgetScale": 0.8,
+      "maxFilesPerEdit": 2,
+      "preferPatchOverFullFile": true,
+      "quantDefault": "Q4_K_M",
+      "turnPresets": {
+        "compile_fix_analyze": { "thinking": "on", "temperature": 0.2, "topP": 0.85, "maxTokens": 4096 },
+        "compile_fix_patch": { "thinking": "off", "temperature": 0.08, "topP": 0.75, "maxTokens": 2048 }
+      }
+    },
+    "review_only": {
+      "contextLength": 8192,
+      "assemblyBudgetScale": 0.6,
+      "maxFilesPerEdit": 0,
+      "preferPatchOverFullFile": true,
+      "quantDefault": "Q4_K_M",
+      "turnPresets": {
+        "plan": { "thinking": "off", "temperature": 0.3, "topP": 0.9, "maxTokens": 2048 },
+        "api_lookup": { "thinking": "off", "temperature": 0.05, "topP": 0.8, "maxTokens": 2048 }
       }
     }
   }

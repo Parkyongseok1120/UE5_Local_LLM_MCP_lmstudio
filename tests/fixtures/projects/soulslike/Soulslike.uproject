@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Soulslike eval fixture",
+	"Modules": [
+		{
+			"Name": "Soulslike",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

@@ -102,6 +102,31 @@ def scan_symbol_impact(project_root: str, symbol: str, *, max_files: int = 40) -
     if len(query) < 2:
         return {"ok": False, "error": "symbol must be at least 2 characters", "matches": []}
 
+    # Try clangd references on first matching file when compile_commands exists
+    try:
+        from clangd_helper import find_compile_commands, find_references
+
+        cc = find_compile_commands(root)
+        if cc:
+            for path in root.rglob("*.h"):
+                if any(p in path.parts for p in ("Intermediate", "Binaries", "Saved")):
+                    continue
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                if query not in text:
+                    continue
+                rel = str(path.relative_to(root))
+                line = next((i + 1 for i, ln in enumerate(text.splitlines()) if query in ln), 1)
+                refs = find_references(root, rel, line)
+                if refs.get("ok") and refs.get("references"):
+                    return {
+                        "ok": True,
+                        "symbol": query,
+                        "method": "clangd_references",
+                        "matches": [{"path": str(root), "referenceCount": len(refs["references"])}],
+                    }
+    except Exception:
+        pass
+
     skip = {"Binaries", "Intermediate", "Saved", "DerivedDataCache", ".git"}
     suffixes = {".h", ".hpp", ".cpp", ".c", ".cc", ".cs", ".Build.cs"}
     matches: list[dict[str, Any]] = []

@@ -95,6 +95,34 @@ def preset_for_wrapper(mode: str = "agent_edit", *, compile_patch: bool = False)
     return load_sampling_preset(turn=turn)
 
 
+def profile_edit_limits(profile: str = "") -> dict[str, Any]:
+    """Return maxFilesPerEdit and preferPatchOverFullFile from active profile."""
+    config = load_sampling_config()
+    if profile:
+        profiles = config.get("profiles") or {}
+        active = profiles.get(profile) if isinstance(profiles.get(profile), dict) else resolve_active_profile(config)
+    else:
+        active = resolve_active_profile(config)
+    policy = active.get("agentPolicy") or {}
+    return {
+        "maxFilesPerEdit": int(policy.get("maxFilesPerEdit") or active.get("maxFilesPerEdit") or 4),
+        "preferPatchOverFullFile": bool(
+            policy.get("preferPatch") if "preferPatch" in policy else active.get("preferPatchOverFullFile", True)
+        ),
+        "assemblyBudgetScale": float(policy.get("ragBudgetScale") or active.get("assemblyBudgetScale") or 1.0),
+        "compileFixMaxAttempts": int(policy.get("compileFixMaxAttempts") or 4),
+        "planningRequired": bool(policy.get("planningRequired", True)),
+        "deepSearch": bool(policy.get("deepSearch", False)),
+        "allowRefactorModes": bool(policy.get("allowRefactorModes", True)),
+        "jsonRepairStrict": bool(policy.get("jsonRepairStrict", True)),
+        "historyTurns": int(policy.get("historyTurns") or 4),
+    }
+
+
+def profile_agent_policy(profile: str = "") -> dict[str, Any]:
+    return profile_edit_limits(profile)
+
+
 def main() -> int:
     import argparse
 

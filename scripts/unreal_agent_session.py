@@ -13,6 +13,10 @@ from rag_search import SearchOptions, search_hybrid
 from resolve_genre_adapters import resolve_genre_adapters
 from workspace_paths import load_shared_config
 
+SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
+from agent_orchestrator import build_agent_plan  # noqa: E402
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Unreal agent session orchestrator")
@@ -40,16 +44,21 @@ def main() -> int:
         else __import__("rag_search").search(index, args.request, args.top_k, options)
     )
     context = assemble_context(rows, args.request, args.mode)
+    plan = build_agent_plan(args.request, args.mode)
 
     payload = {
         "ok": True,
         "phase": "plan",
+        "taskKind": plan.task_kind,
+        "editStrategy": plan.edit_strategy,
         "activeProject": config.get("activeProject"),
         "resolvedGenres": genres,
         "mode": args.mode,
         "matchCount": len(rows),
         "contextPreview": context[:4000],
-        "nextSteps": [
+        "taskPlan": plan.to_dict(),
+        "toolPolicy": plan.tool_policy,
+        "nextSteps": plan.tool_policy or [
             "unreal_get_active_project (confirm .uproject)",
             "read_file on target Source files (unreal-agent)",
             "write_file minimal patch (unreal-agent; VALIDATE_ON_WRITE)",

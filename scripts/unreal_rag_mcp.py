@@ -18,7 +18,8 @@ from workspace_paths import (
     save_shared_config,
     shared_config_path,
 )
-from rag_context import assemble_context
+from project_routing import resolve_project_filters
+from rag_context import assemble_context, assemble_context_mixed
 from rag_embeddings import embedding_status
 from rag_index_ops import capabilities_summary, index_health, rebuild_status
 from rag_search import SearchOptions, search, search_hybrid
@@ -29,6 +30,9 @@ from genre_scope_validate import validate_genre_scope
 from review_claim_validate import validate_claims
 from runtime_config_checklist import check_runtime_config
 from wrapper_job_manager import job_status, list_jobs, start_job
+from mcp_stdio import configure_stdio_utf8, write_json_line, write_utf8_line
+
+configure_stdio_utf8()
 
 
 def load_project_architecture(workspace: Path, index_dir: Path) -> dict[str, Any]:
@@ -68,11 +72,10 @@ class McpServer:
                 self.log(f"error: {exc}")
 
     def log(self, message: str) -> None:
-        print(message, file=sys.stderr, flush=True)
+        write_utf8_line(sys.stderr, message)
 
     def send(self, payload: dict[str, Any]) -> None:
-        sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
+        write_json_line(sys.stdout, payload)
 
     def notify(self, message: str, level: str = "info") -> None:
         self.send(
@@ -176,6 +179,17 @@ class McpServer:
                         "genre": {"type": "array", "items": {"type": "string"}},
                         "extension": {"type": "array", "items": {"type": "string"}},
                         "required_term": {"type": "array", "items": {"type": "string"}},
+                        "scope": {
+                            "type": "string",
+                            "enum": ["auto", "engine", "project", "mixed"],
+                            "default": "auto",
+                            "description": "Project filter routing: auto classifies query; engine skips activeProject filter.",
+                        },
+                        "use_active_project": {
+                            "type": "boolean",
+                            "default": True,
+                            "description": "When false, never apply activeProject filter.",
+                        },
                     },
                     ["query"],
                 ),
@@ -450,14 +464,90 @@ class McpServer:
                     ["claims"],
                 ),
             },
+            {
+                "name": "clangd_document_symbols",
+                "title": "Document symbols (heuristic / optional clangd)",
+                "description": "List symbols in a project file. Navigation helper only - UBT is build truth.",
+                "inputSchema": self._schema(
+                    {
+                        "path": {"type": "string", "description": "Relative path under active project"},
+                    },
+                    ["path"],
+                ),
+            },
+            {
+                "name": "unreal_agent_plan",
+                "title": "Build agent task plan (read-only)",
+                "description": "Classify task, evidence plan, edit strategy, and tool policy before edits.",
+                "inputSchema": self._schema(
+                    {
+                        "request": {"type": "string"},
+                        "mode": {"type": "string", "default": "auto"},
+                    },
+                    ["request"],
+                ),
+            },
+            {
+                "name": "clangd_goto_definition",
+                "title": "Go to definition (clangd navigation)",
+                "description": "clangd go-to-definition. Navigation only - UBT is build truth.",
+                "inputSchema": self._schema(
+                    {
+                        "path": {"type": "string"},
+                        "line": {"type": "integer", "minimum": 1},
+                        "column": {"type": "integer", "minimum": 1, "default": 1},
+                    },
+                    ["path", "line"],
+                ),
+            },
+            {
+                "name": "clangd_find_references",
+                "title": "Find references (clangd navigation)",
+                "description": "clangd find-references with grep fallback. Navigation only.",
+                "inputSchema": self._schema(
+                    {
+                        "path": {"type": "string"},
+                        "line": {"type": "integer", "minimum": 1},
+                        "column": {"type": "integer", "minimum": 1, "default": 1},
+                    },
+                    ["path", "line"],
+                ),
+            },
+            {
+                "name": "unreal_project_graph_query",
+                "title": "Query project graph",
+                "description": "Query nodes from data/unreal_projects/*_project_graph.json.",
+                "inputSchema": self._schema(
+                    {
+                        "nodeType": {"type": "string", "description": "module, class, blueprint, subsystem, ..."},
+                        "nameContains": {"type": "string"},
+                        "projectName": {"type": "string"},
+                    },
+                ),
+            },
         ]
 
-    def search_options_from_args(self, arguments: dict[str, Any], top_k: int) -> SearchOptions:
-        projects = list(arguments.get("project") or [])
-        if not projects and arguments.get("use_active_project", True) is not False:
-            projects = active_project_names()
-        return SearchOptions(
-            mode=str(arguments.get("mode") or "auto"),
+    def search_options_from_args(self, arguments: dict[str, Any], top_k: int) -> tuple[SearchOptions, str]:
+        config = load_shared_config()
+        explicit = list(arguments.get("project") or [])
+        active_names = active_project_names()
+        active_path = str(config.get("activeProject") or "").strip() or None
+        mode = str(arguments.get("mode") or "auto")
+        query = str(arguments.get("query") or arguments.get("request") or "")
+        scope = str(arguments.get("scope") or "auto")
+        use_active = arguments.get("use_active_project", True) is not False
+
+        projects, resolved_scope = resolve_project_filters(
+            query,
+            mode,
+            explicit,
+            active_names,
+            scope=scope,
+            use_active_project=use_active,
+            active_project_path=active_path,
+        )
+        options = SearchOptions(
+            mode=mode,
             sources=list(arguments.get("source") or []),
             projects=projects,
             layers=list(arguments.get("layer") or []),
@@ -467,6 +557,53 @@ class McpServer:
             required_terms=list(arguments.get("required_term") or []),
             candidate_limit=max(120, top_k * 20),
         )
+        return options, resolved_scope
+
+    def run_search(
+        self,
+        query: str,
+        top_k: int,
+        arguments: dict[str, Any],
+        use_hybrid: bool,
+    ) -> tuple[list[dict[str, Any]], str, str]:
+        mode = str(arguments.get("mode") or "auto")
+        arguments = dict(arguments)
+        arguments["query"] = query
+        options, resolved_scope = self.search_options_from_args(arguments, top_k)
+
+        if resolved_scope == "mixed" and options.projects:
+            engine_opts = SearchOptions(
+                mode=options.mode,
+                sources=options.sources,
+                projects=[],
+                layers=options.layers,
+                doc_types=options.doc_types,
+                genres=options.genres,
+                extensions=options.extensions,
+                required_terms=options.required_terms,
+                candidate_limit=options.candidate_limit,
+            )
+            local_rows = search_hybrid(self.index, query, top_k, options) if use_hybrid else search(
+                self.index, query, top_k, options
+            )
+            engine_rows = search_hybrid(self.index, query, top_k, engine_opts) if use_hybrid else search(
+                self.index, query, top_k, engine_opts
+            )
+            seen = {r.get("chunk_id") for r in local_rows}
+            merged = list(local_rows)
+            for row in engine_rows:
+                cid = row.get("chunk_id")
+                if cid not in seen:
+                    merged.append(row)
+                    seen.add(cid)
+            context = assemble_context_mixed(local_rows, engine_rows, query, mode)
+            return merged, context, resolved_scope
+
+        rows = search_hybrid(self.index, query, top_k, options) if use_hybrid else search(
+            self.index, query, top_k, options
+        )
+        context = assemble_context(rows, query, mode)
+        return rows, context, resolved_scope
 
     def launch_project_picker(self, explorer: bool = False) -> dict[str, Any]:
         script = self.workspace / "scripts" / "pick_active_project.ps1"
@@ -639,6 +776,74 @@ class McpServer:
                 project_root = str(arguments.get("projectRoot") or "").strip() or None
                 payload = validate_claims(claims, project_root)
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "clangd_document_symbols":
+                from clangd_helper import document_symbols
+
+                config = load_shared_config()
+                active = str(config.get("activeProject") or "").strip()
+                if not active:
+                    self.tool_result(message_id, "No activeProject set.", is_error=True)
+                    return
+                active_path = Path(active).resolve()
+                project_root = active_path.parent if active_path.suffix.lower() == ".uproject" else active_path
+                rel = str(arguments.get("path") or "").strip()
+                payload = document_symbols(project_root, rel)
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_agent_plan":
+                from agent_orchestrator import build_agent_plan
+
+                request = str(arguments.get("request") or "").strip()
+                mode = str(arguments.get("mode") or "auto")
+                if not request:
+                    self.tool_result(message_id, "Missing request", is_error=True)
+                    return
+                payload = build_agent_plan(request, mode).to_dict()
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name in {"clangd_goto_definition", "clangd_find_references"}:
+                from clangd_helper import find_references, goto_definition
+
+                config = load_shared_config()
+                active = str(config.get("activeProject") or "").strip()
+                if not active:
+                    self.tool_result(message_id, "No activeProject set.", is_error=True)
+                    return
+                active_path = Path(active).resolve()
+                project_root = active_path.parent if active_path.suffix.lower() == ".uproject" else active_path
+                rel = str(arguments.get("path") or "").strip()
+                line = int(arguments.get("line") or 1)
+                column = int(arguments.get("column") or 1)
+                if name == "clangd_goto_definition":
+                    payload = goto_definition(project_root, rel, line, column)
+                else:
+                    payload = find_references(project_root, rel, line, column)
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_project_graph_query":
+                from build_project_graph import load_json, query_graph
+
+                project_name = str(arguments.get("projectName") or "").strip()
+                graph_dir = self.workspace / "data" / "unreal_projects"
+                candidates = list(graph_dir.glob("*_project_graph.json"))
+                graph_path = None
+                if project_name:
+                    p = graph_dir / f"{project_name}_project_graph.json"
+                    if p.is_file():
+                        graph_path = p
+                elif candidates:
+                    graph_path = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+                if not graph_path or not graph_path.is_file():
+                    self.tool_result(message_id, "No project graph found. Run build-project-graph first.", is_error=True)
+                    return
+                graph = load_json(graph_path)
+                if not isinstance(graph, dict):
+                    self.tool_result(message_id, "Invalid graph file", is_error=True)
+                    return
+                nodes = query_graph(
+                    graph,
+                    node_type=str(arguments.get("nodeType") or ""),
+                    name_contains=str(arguments.get("nameContains") or ""),
+                )
+                payload = {"ok": True, "graphPath": str(graph_path), "nodes": nodes, "summary": graph.get("summary")}
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             else:
                 self.error(message_id, -32602, f"Unknown tool: {name}")
         except Exception as exc:
@@ -655,23 +860,19 @@ class McpServer:
         explicit_genres = list(arguments.get("genres") or [])
         genres = resolve_genre_adapters(request, explicit_genres or None)
         use_hybrid = arguments.get("hybrid") is True
+        arguments = dict(arguments)
+        arguments["request"] = request
+        arguments["mode"] = mode
+        arguments["genre"] = genres
 
-        options = SearchOptions(
-            mode=mode,
-            genres=genres,
-            projects=active_project_names(),
-            candidate_limit=max(40, top_k * 10),
-        )
-        rows = search_hybrid(self.index, request, top_k, options) if use_hybrid else search(
-            self.index, request, top_k, options
-        )
+        rows, context, resolved_scope = self.run_search(request, top_k, arguments, use_hybrid)
         config = load_shared_config()
-        context = assemble_context(rows, request, mode)
         payload = {
             "ok": True,
             "activeProject": config.get("activeProject"),
             "resolvedGenres": genres,
             "mode": mode,
+            "scope": resolved_scope,
             "hybrid": use_hybrid,
             "matchCount": len(rows),
             "nextSteps": [
@@ -743,11 +944,11 @@ class McpServer:
             return
 
         options = self.search_options_from_args(arguments, top_k)
-        rows = search_hybrid(self.index, query, top_k, options) if use_hybrid else search(self.index, query, top_k, options)
+        rows, context, resolved_scope = self.run_search(query, top_k, arguments, use_hybrid)
         self.tool_result(
             message_id,
-            assemble_context(rows, query, mode),
-            structured={"matches": rows, "hybrid": use_hybrid},
+            context,
+            structured={"matches": rows, "hybrid": use_hybrid, "scope": resolved_scope},
         )
 
     def handle_symbol_lookup(self, message_id: Any, arguments: dict[str, Any]) -> None:

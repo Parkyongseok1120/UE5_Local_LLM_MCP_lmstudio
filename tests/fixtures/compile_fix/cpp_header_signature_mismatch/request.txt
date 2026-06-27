@@ -1,0 +1,1 @@
+HackComponent.cpp의 DoWork 정의가 헤더 선언 DoWork(int Value)와 다릅니다. 시그니처를 헤더와 일치시켜 주세요.

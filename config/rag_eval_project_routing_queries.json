@@ -1,0 +1,29 @@
+{
+  "description": "Routing eval — engine queries must not require activeProject filter",
+  "defaults": { "top_k": 8, "candidate_limit": 120 },
+  "cases": [
+    {
+      "id": "uactorcomponent_engine_scope",
+      "query": "UActorComponent include path BeginPlay example",
+      "options": { "mode": "api_lookup", "scope": "engine" },
+      "expected": [
+        {
+          "locator_contains": "ActorComponent",
+          "max_rank": 8
+        }
+      ]
+    },
+    {
+      "id": "generated_h_engine_scope",
+      "query": "GENERATED_BODY generated.h must be last include UHT reflection fix",
+      "options": { "mode": "reflection_fix", "scope": "engine" },
+      "expected": [
+        {
+          "source": "project_guideline",
+          "title_contains": "Playbook",
+          "max_rank": 8
+        }
+      ]
+    }
+  ]
+}

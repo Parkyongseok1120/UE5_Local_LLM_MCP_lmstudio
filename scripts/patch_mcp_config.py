@@ -90,6 +90,8 @@ def patch_unreal_rag(entry: dict[str, Any], workspace: Path, python_exe: Path) -
     entry = patch_server(entry, workspace, SHARED_CONFIG)
     env = dict(entry.get("env") or {})
     env["UNREAL58_ROOT"] = str(workspace)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     entry["env"] = env
     return entry
 

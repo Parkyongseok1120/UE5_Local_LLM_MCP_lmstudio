@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from rag_search import SearchOptions, search
-from workspace_paths import resolve_index_path
+from project_routing import resolve_project_filters
+from workspace_paths import load_shared_config, resolve_index_path
 
 FALLBACK_INDEX = Path("data/unreal58/rag.sqlite")
 
@@ -62,10 +63,35 @@ def list_value(value: Any) -> list[str]:
     return [str(value)]
 
 
-def merge_options(defaults: dict[str, Any], case_options: dict[str, Any]) -> tuple[int, SearchOptions]:
+def active_project_names() -> tuple[list[str], str | None]:
+    shared = load_shared_config()
+    active = str(shared.get("activeProject") or "").strip()
+    if not active:
+        return [], None
+    path = Path(active)
+    if path.suffix.lower() == ".uproject":
+        return [path.stem], str(path.resolve())
+    return [path.name], str(path.resolve())
+
+
+def merge_options(
+    defaults: dict[str, Any],
+    case_options: dict[str, Any],
+    *,
+    query: str = "",
+) -> tuple[int, SearchOptions]:
     merged = dict(defaults)
     merged.update(case_options)
     top_k = int(merged.pop("top_k", 5))
+
+    apply_routing = (
+        "scope" in case_options
+        or "scope" in defaults
+        or "use_active_project" in case_options
+        or "use_active_project" in defaults
+    )
+    scope = str(merged.pop("scope", "auto") or "auto") if apply_routing else "auto"
+    use_active_project = bool(merged.pop("use_active_project", True)) if apply_routing else False
 
     search_kwargs: dict[str, Any] = {
         "mode": str(merged.pop("mode", "auto")),
@@ -74,6 +100,23 @@ def merge_options(defaults: dict[str, Any], case_options: dict[str, Any]) -> tup
     for key, target in OPTION_ALIASES.items():
         if key in merged:
             search_kwargs[target] = list_value(merged.pop(key))
+
+    if apply_routing:
+        explicit_projects = list(search_kwargs.get("projects") or [])
+        active_names, active_path = active_project_names()
+        project_filters, _resolved_scope = resolve_project_filters(
+            query,
+            search_kwargs["mode"],
+            explicit_projects,
+            active_names,
+            scope=scope,
+            use_active_project=use_active_project,
+            active_project_path=active_path,
+        )
+        if project_filters:
+            search_kwargs["projects"] = project_filters
+        elif "projects" in search_kwargs and not explicit_projects:
+            search_kwargs.pop("projects", None)
 
     unknown = ", ".join(sorted(merged))
     if unknown:
@@ -123,7 +166,7 @@ def evaluate_case(index: Path, defaults: dict[str, Any], case: dict[str, Any]) -
     if not query:
         return False, f"[FAIL] {case_id}: missing query"
 
-    top_k, options = merge_options(defaults, dict(case.get("options") or {}))
+    top_k, options = merge_options(defaults, dict(case.get("options") or {}), query=query)
     rows = search(index, query, top_k, options)
 
     failures: list[str] = []

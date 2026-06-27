@@ -6,6 +6,15 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 Push-Location $root
 try {
+    if ($Live) {
+        Write-Host "=== preflight-lmstudio ===" -ForegroundColor Cyan
+        & .\rag.ps1 preflight-lmstudio -RequireLive
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Tier B skipped: start LM Studio Local Server on http://localhost:1234" -ForegroundColor Yellow
+            exit 1
+        }
+    }
+
     $steps = @(
         @{ name = "doctor"; cmd = { .\rag.ps1 doctor } },
         @{ name = "bench-mcp"; cmd = { .\rag.ps1 bench-mcp } },
@@ -13,16 +22,19 @@ try {
         @{ name = "eval-refactor"; cmd = { .\rag.ps1 eval-refactor } },
         @{ name = "eval-unreal-programming"; cmd = { .\rag.ps1 eval-unreal-programming } },
         @{ name = "test-unreal-readiness"; cmd = { .\rag.ps1 test-unreal-readiness } },
+        @{ name = "eval-e2e-compile"; cmd = { .\rag.ps1 eval-e2e-compile } },
         @{ name = "eval-reasoning"; cmd = { .\rag.ps1 eval-reasoning } },
         @{ name = "eval-agent-harness"; cmd = { .\rag.ps1 eval-agent-harness } },
         @{ name = "bench-token-budget"; cmd = { .\rag.ps1 bench-token-budget } },
-        @{ name = "eval-project-review"; cmd = { .\rag.ps1 eval-project-review } }
+        @{ name = "eval-project-review"; cmd = { .\rag.ps1 eval-project-review } },
+        @{ name = "eval-unreal-review"; cmd = { .\rag.ps1 eval-unreal-review } }
     )
 
     if ($Live) {
         $steps += @(
-            @{ name = "eval-soulslike-live"; cmd = { .\rag.ps1 eval-soulslike-live -Live } },
-            @{ name = "eval-project-review-live"; cmd = { .\rag.ps1 eval-project-review -Live } }
+            @{ name = "eval-soulslike-live"; cmd = { .\rag.ps1 eval-soulslike-live -Live -RequireLive } },
+            @{ name = "eval-project-review-live"; cmd = { .\rag.ps1 eval-project-review -Live -RequireLive } },
+            @{ name = "eval-pass-at-k"; cmd = { .\rag.ps1 eval-pass-at-k -Live -RequireLive } }
         )
     }
 

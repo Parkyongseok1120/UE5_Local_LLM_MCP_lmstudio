@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Compile fix eval — missing generated.h",
+	"Modules": [
+		{
+			"Name": "CompileFixGenH",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

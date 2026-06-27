@@ -11,12 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-BUILD_DEP_RE = re.compile(
-    r"(?P<kind>PublicDependencyModuleNames|PrivateDependencyModuleNames|PublicIncludePathModuleNames|PrivateIncludePathModuleNames)"
-    r"\.AddRange\s*\(\s*new\s+string\[\]\s*\{(?P<body>.*?)\}\s*\)",
-    re.DOTALL,
-)
-QUOTED_RE = re.compile(r'"([^"]+)"')
+from parse_build_cs import parse_build_deps as parse_build_deps_file
 SKIP_DIRS = {".git", ".vs", "Binaries", "DerivedDataCache", "Intermediate", "Saved"}
 
 
@@ -60,11 +55,7 @@ def find_projects(root: Path) -> list[Path]:
 
 
 def parse_build_deps(path: Path) -> dict[str, list[str]]:
-    text = read_text(path) or ""
-    deps: dict[str, list[str]] = {}
-    for match in BUILD_DEP_RE.finditer(text):
-        deps[match.group("kind")] = QUOTED_RE.findall(match.group("body"))
-    return deps
+    return parse_build_deps_file(path)
 
 
 def relative(project_root: Path, path: Path) -> str:

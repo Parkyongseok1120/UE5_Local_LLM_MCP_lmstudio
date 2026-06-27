@@ -1,5 +1,23 @@
 {
-  "description": "E2E compile cases (optional). Add local overrides; UBT cases require -RunUbt.",
+  "description": "E2E compile-readiness eval — static validate fixtures (+ optional UBT with -RunUbt).",
   "engineVersion": "5.8",
-  "cases": []
+  "cases": [
+    {
+      "id": "static_readiness_fixture",
+      "type": "readiness_fixture",
+      "notes": "Runs test_unreal_readiness_fixture.py — UHT/static codes"
+    },
+    {
+      "id": "pass_at_k_dry_run",
+      "type": "pass_at_k",
+      "notes": "Golden overlay + UBT for compile_fix fixtures"
+    },
+    {
+      "id": "soulslike_ubt_smoke",
+      "type": "ubt_build",
+      "projectFile": "tests/fixtures/projects/soulslike/Soulslike.uproject",
+      "target": "SoulslikeEditor",
+      "notes": "Optional — use rag.ps1 eval-e2e-compile -RunUbt"
+    }
+  ]
 }

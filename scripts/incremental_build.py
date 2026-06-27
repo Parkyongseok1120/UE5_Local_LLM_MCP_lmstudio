@@ -19,6 +19,8 @@ RAW_INPUT_FILES = (
     "raw_module_graph.jsonl",
     "raw_project_profiles.jsonl",
     "raw_project_architecture.jsonl",
+    "raw_blueprint_metadata.jsonl",
+    "raw_failure_memory.jsonl",
     "raw_build_logs.jsonl",
     "raw_docs.jsonl",
     "raw_source.jsonl",

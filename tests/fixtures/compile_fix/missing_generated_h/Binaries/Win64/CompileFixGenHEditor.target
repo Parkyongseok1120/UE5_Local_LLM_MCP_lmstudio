@@ -1,0 +1,27 @@
+{
+	"TargetName": "CompileFixGenHEditor",
+	"Platform": "Win64",
+	"Configuration": "Development",
+	"BuildSettingsVersion": "V5",
+	"TargetBuildEnvironment": "Shared",
+	"TargetType": "Editor",
+	"IsTestTarget": false,
+	"Architecture": "x64",
+	"Project": "../../CompileFixGenH.uproject",
+	"Version": 
+	{
+		"MajorVersion": 5,
+		"MinorVersion": 8,
+		"PatchVersion": 0,
+		"Changelist": 55116800,
+		"CompatibleChangelist": 0,
+		"IsLicenseeVersion": 0,
+		"IsPromotedBuild": 0,
+		"BranchName": "++UE5+Release-5.8",
+		"BuildId": "55116800"
+	},
+	"BuildProducts": [
+	],
+	"RuntimeDependencies": [
+	]
+}

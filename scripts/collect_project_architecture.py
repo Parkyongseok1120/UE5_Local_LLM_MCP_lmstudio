@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from workspace_paths import load_shared_config
+from parse_build_cs import parse_build_cs_file
 
 SOURCE_EXTENSIONS = {".h", ".hpp", ".hh", ".cpp", ".cxx", ".cc", ".cs"}
 SKIP_DIRS = {".git", ".vs", "Binaries", "DerivedDataCache", "Intermediate", "Saved"}
@@ -28,15 +29,18 @@ SUBOBJECT_RE = re.compile(
 INTERFACE_RE = re.compile(
     r"\bclass\s+[A-Z0-9_]+_API\s+(?P<iface>I[A-Za-z_][A-Za-z0-9_]*)",
 )
-BUILD_DEP_RE = re.compile(
-    r"(?P<kind>PublicDependencyModuleNames|PrivateDependencyModuleNames)"
-    r"\.AddRange\s*\(\s*new\s+string\[\]\s*\{(?P<body>.*?)\}\s*\)",
-    re.DOTALL,
-)
-QUOTED_RE = re.compile(r'"([^"]+)"')
+from parse_build_cs import parse_build_cs_file
+
 DATA_ASSET_RE = re.compile(
     r"\bclass\s+[A-Z0-9_]+_API\s+(?P<name>U[A-Za-z_][A-Za-z0-9_]*DataAsset)\b",
 )
+GAMEPLAY_FRAMEWORK_RE = re.compile(
+    r"\bclass\s+[A-Z0-9_]+_API\s+(?P<name>A(?:GameMode(?:Base)?|GameState(?:Base)?|PlayerState|PlayerController|Character|Pawn)[A-Za-z0-9_]*)",
+)
+REPLICATED_UPROP_RE = re.compile(r"UPROPERTY\s*\([^)]*Replicated", re.I)
+DELEGATE_RE = re.compile(r"DECLARE_(?:DYNAMIC_)?(?:MULTICAST_)?DELEGATE\w*\s*\(\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)")
+GAMEPLAY_TAG_RE = re.compile(r"FGameplayTag(?:Container)?\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)")
+INPUT_BINDING_RE = re.compile(r"BindAction\s*\(|SetupPlayerInputComponent")
 
 
 def stable_id(value: str) -> str:
@@ -98,6 +102,11 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
     data_assets: list[dict[str, Any]] = []
     subobjects: list[dict[str, Any]] = []
     modules: list[dict[str, Any]] = []
+    game_framework: list[dict[str, Any]] = []
+    replicated_properties: list[dict[str, Any]] = []
+    delegates: list[dict[str, Any]] = []
+    gameplay_tags: list[dict[str, Any]] = []
+    input_bindings: list[dict[str, Any]] = []
 
     source_root = project_root / "Source"
     if not source_root.is_dir():
@@ -112,6 +121,11 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
             "dataAssets": data_assets,
             "subobjects": subobjects,
             "modules": modules,
+            "gameFramework": game_framework,
+            "replicatedProperties": replicated_properties,
+            "delegates": delegates,
+            "gameplayTags": gameplay_tags,
+            "inputBindings": input_bindings,
         }
 
     for path in sorted(source_root.rglob("*")):
@@ -125,16 +139,16 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
 
         if path.suffix.lower() == ".Build.cs":
             module_name = path.name.removesuffix(".Build.cs")
-            deps: dict[str, list[str]] = {}
-            for match in BUILD_DEP_RE.finditer(text):
-                deps[match.group("kind")] = QUOTED_RE.findall(match.group("body"))
-            modules.append(
-                {
-                    "name": module_name,
-                    "path": rel,
-                    "dependencies": deps,
-                }
-            )
+            parsed = parse_build_cs_file(path)
+            deps = parsed.get("dependencies") or {}
+            mod_entry: dict[str, Any] = {
+                "name": module_name,
+                "path": rel,
+                "dependencies": deps,
+            }
+            if parsed.get("conditional_dependencies"):
+                mod_entry["conditional_dependencies"] = parsed["conditional_dependencies"]
+            modules.append(mod_entry)
             continue
 
         for match in UCLASS_RE.finditer(text):
@@ -183,6 +197,23 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
                 }
             )
 
+        for match in GAMEPLAY_FRAMEWORK_RE.finditer(text):
+            gf_name = match.group("name")
+            if gf_name not in {g["name"] for g in game_framework}:
+                game_framework.append({"name": gf_name, "path": rel})
+
+        for match in REPLICATED_UPROP_RE.finditer(text):
+            replicated_properties.append({"path": rel, "snippet": match.group(0)[:80]})
+
+        for match in DELEGATE_RE.finditer(text):
+            delegates.append({"name": match.group("name"), "path": rel})
+
+        for match in GAMEPLAY_TAG_RE.finditer(text):
+            gameplay_tags.append({"name": match.group("name"), "path": rel})
+
+        if INPUT_BINDING_RE.search(text):
+            input_bindings.append({"path": rel, "ownerClass": owner_class or "(file-level)"})
+
     return {
         "project": project_name,
         "projectRoot": str(project_root),
@@ -194,6 +225,11 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
         "dataAssets": data_assets,
         "subobjects": subobjects,
         "modules": modules,
+        "gameFramework": game_framework,
+        "replicatedProperties": replicated_properties,
+        "delegates": delegates,
+        "gameplayTags": gameplay_tags,
+        "inputBindings": input_bindings,
         "summary": {
             "classCount": len(classes),
             "subsystemCount": len(subsystems),
@@ -201,6 +237,8 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
             "interfaceCount": len(interfaces),
             "dataAssetCount": len(data_assets),
             "moduleCount": len(modules),
+            "gameFrameworkCount": len(game_framework),
+            "delegateCount": len(delegates),
         },
     }
 
@@ -226,6 +264,21 @@ def make_summary_text(arch: dict[str, Any], max_chars: int = 2000) -> str:
     lines.extend(["", "Modules:"])
     for item in arch.get("modules") or []:
         lines.append(f"  - {item['name']}")
+    lines.extend(["", "Game framework (GameMode/Character/Pawn):"])
+    for item in (arch.get("gameFramework") or [])[:12]:
+        lines.append(f"  - {item['name']} ({item.get('path', '')})")
+    lines.extend(["", "Replicated properties (sample):"])
+    for item in (arch.get("replicatedProperties") or [])[:8]:
+        lines.append(f"  - {item.get('snippet', '')} ({item.get('path', '')})")
+    lines.extend(["", "Delegates:"])
+    for item in (arch.get("delegates") or [])[:12]:
+        lines.append(f"  - {item['name']} ({item.get('path', '')})")
+    lines.extend(["", "Gameplay tags:"])
+    for item in (arch.get("gameplayTags") or [])[:12]:
+        lines.append(f"  - {item['name']} ({item.get('path', '')})")
+    lines.extend(["", "Input bindings:"])
+    for item in (arch.get("inputBindings") or [])[:12]:
+        lines.append(f"  - {item.get('ownerClass', '')} ({item.get('path', '')})")
     text = "\n".join(lines)
     if len(text) > max_chars:
         return text[: max_chars - 3] + "..."

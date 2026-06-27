@@ -1,0 +1,8 @@
+{
+	"SourceFiles": [
+		"C:\\Users\\sster\\.lmstudio\\Unreal58-RAG\\tests\\fixtures\\compile_fix\\missing_generated_h\\Source\\CompileFixGenH\\CompileFixGenH.Build.cs",
+		"C:\\Users\\sster\\.lmstudio\\Unreal58-RAG\\tests\\fixtures\\compile_fix\\missing_generated_h\\Source\\CompileFixGenH.Target.cs",
+		"C:\\Users\\sster\\.lmstudio\\Unreal58-RAG\\tests\\fixtures\\compile_fix\\missing_generated_h\\Source\\CompileFixGenHEditor.Target.cs"
+	],
+	"EngineVersion": "5.8.0"
+}

@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from eval_reasoning import load_cases, run_case  # noqa: E402
 from genre_scope_validate import validate_genre_scope  # noqa: E402
+from preflight_lmstudio import check_lmstudio, extract_assistant_text  # noqa: E402
 
 
 def lmstudio_reachable(url: str) -> bool:
@@ -83,7 +84,8 @@ def run_live(workspace: Path, index_path: Path, url: str, model: str) -> dict:
         )
         with urlopen(req, timeout=120) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
-        content = str((payload.get("choices") or [{}])[0].get("message", {}).get("content", ""))
+        message = (payload.get("choices") or [{}])[0].get("message") or {}
+        content = extract_assistant_text(message)
         chat_ok = len(content) > 40
     except Exception as exc:
         chat_error = str(exc)
@@ -103,6 +105,7 @@ def main() -> int:
     parser.add_argument("--no-dry-run", action="store_true", help="Run live LM Studio + reasoning cases")
     parser.add_argument("--url", default="http://localhost:1234/v1")
     parser.add_argument("--model", default="local-model")
+    parser.add_argument("--require-live", action="store_true", help="Exit 1 if LM Studio unreachable (Tier B gate)")
     args = parser.parse_args()
 
     workspace = SCRIPTS.parent
@@ -110,7 +113,25 @@ def main() -> int:
 
     live = args.no_dry_run
     if live:
-        report = run_live(workspace, index_path, args.url, args.model)
+        preflight = check_lmstudio(args.url, args.model)
+        if not preflight.get("ok"):
+            msg = preflight.get("error") or "LM Studio not reachable"
+            print(f"[SKIP] {msg}", file=sys.stderr)
+            report = {"ok": False, "error": msg, "skipped": True}
+            kpi = {
+                "generatedAt": datetime.now(timezone.utc).isoformat(),
+                "mode": "live",
+                "report": report,
+                "pass": False,
+            }
+            out = workspace / "data" / "baseline" / "soulslike-live-kpi.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(kpi, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"Wrote {out}")
+            return 1 if args.require_live else 0
+        model = str(preflight.get("resolvedModel") or args.model)
+        print(f"Using LM Studio model: {model}")
+        report = run_live(workspace, index_path, args.url, model)
         for row in report.get("reasoningResults") or []:
             status = "PASS" if row.get("pass") else "FAIL"
             print(f"[{status}] {row['id']} ({row.get('type')})")
@@ -124,7 +145,7 @@ def main() -> int:
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "mode": "live" if live else "dry-run",
         "report": report,
-        "pass": report.get("ok", True),
+        "pass": report.get("ok", False) if live else False,
     }
     out = workspace / "data" / "baseline" / "soulslike-live-kpi.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -133,6 +154,9 @@ def main() -> int:
 
     if live and not report.get("ok"):
         return 1
+    if not live:
+        print("Dry-run only — use --no-dry-run for live eval. Exiting 0 (informational).")
+        return 0
     return 0
 
 

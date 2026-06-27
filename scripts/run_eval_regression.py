@@ -1,0 +1,187 @@
+#!/usr/bin/env python
+"""Regression gate: run Tier-A eval bundle, compare to last green, write Reports/eval/."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = ROOT / "scripts"
+EVAL_DIR = ROOT / "Reports" / "eval"
+HISTORY_DIR = EVAL_DIR / "history"
+DELTA_DIR = EVAL_DIR / "deltas"
+FAILURES_DIR = EVAL_DIR / "failures"
+
+
+def load_json(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def run_cmd(label: str, cmd: list[str]) -> dict:
+    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
+    return {
+        "label": label,
+        "exitCode": proc.returncode,
+        "pass": proc.returncode == 0,
+        "stdoutTail": (proc.stdout or "")[-3000:],
+        "stderrTail": (proc.stderr or "")[-1500:],
+    }
+
+
+def collect_kpi_metrics() -> dict:
+    baseline = ROOT / "data" / "baseline"
+    metrics: dict = {}
+    reasoning = load_json(baseline / "reasoning-kpi.json")
+    pass_at_k = load_json(baseline / "pass-at-k-kpi.json")
+    project_review = load_json(baseline / "project-review-kpi.json")
+    mcp_bench = load_json(baseline / "mcp-bench-latest.json")
+    if reasoning:
+        metrics["reasoningScore"] = float(reasoning.get("score") or 0)
+    if pass_at_k:
+        metrics["passAtKRate"] = float(pass_at_k.get("passRate") or 0)
+        metrics["passAtKMode"] = pass_at_k.get("mode")
+    if project_review:
+        metrics["projectReviewRecall"] = float(project_review.get("aggregateRecall") or 0)
+    if mcp_bench:
+        metrics["mcpBench"] = mcp_bench.get("results") or mcp_bench
+    return metrics
+
+
+def compare_reports(current: dict, baseline: dict | None) -> dict:
+    if not baseline:
+        return {"hasBaseline": False, "regressions": [], "improvements": []}
+    regressions: list[str] = []
+    improvements: list[str] = []
+    cur_pass = int(current.get("passCount") or 0)
+    base_pass = int(baseline.get("passCount") or 0)
+    cur_total = int(current.get("total") or 0)
+    base_total = int(baseline.get("total") or 0)
+    if cur_pass < base_pass or cur_total < base_total:
+        regressions.append(f"step pass count {cur_pass}/{cur_total} vs baseline {base_pass}/{base_total}")
+    elif cur_pass > base_pass:
+        improvements.append(f"step pass count improved to {cur_pass}/{cur_total}")
+
+    cur_steps = {s["label"]: s for s in current.get("steps") or []}
+    base_steps = {s["label"]: s for s in baseline.get("steps") or []}
+    for label, row in cur_steps.items():
+        prev = base_steps.get(label)
+        if prev and prev.get("pass") and not row.get("pass"):
+            regressions.append(f"step {label} regressed")
+        if prev and not prev.get("pass") and row.get("pass"):
+            improvements.append(f"step {label} improved")
+
+    cur_metrics = current.get("metrics") or {}
+    base_metrics = baseline.get("metrics") or {}
+    pak = cur_metrics.get("passAtKRate")
+    base_pak = base_metrics.get("passAtKRate")
+    if pak is not None and base_pak is not None and pak < base_pak - 0.10:
+        regressions.append(f"Pass@K rate dropped {base_pak:.0%} -> {pak:.0%}")
+
+    return {"hasBaseline": True, "regressions": regressions, "improvements": improvements}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run eval regression gate.")
+    parser.add_argument("--compare", default="", help="Baseline latest.json path")
+    parser.add_argument("--skip-pytest", action="store_true")
+    parser.add_argument("--live", action="store_true", help="Include Tier-B live steps")
+    args = parser.parse_args()
+
+    EVAL_DIR.mkdir(parents=True, exist_ok=True)
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    DELTA_DIR.mkdir(parents=True, exist_ok=True)
+    FAILURES_DIR.mkdir(parents=True, exist_ok=True)
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    python = sys.executable
+
+    steps_spec = [
+        ("retrieval_unreal_programming", [python, str(SCRIPTS / "evaluate_rag_queries.py"), "--query-set", "config/rag_eval_unreal_programming_queries.json"]),
+        ("eval_reasoning", [python, str(SCRIPTS / "eval_reasoning.py")]),
+        ("eval_e2e_compile", [python, str(SCRIPTS / "eval_e2e_compile.py")]),
+        ("eval_pass_at_k_dry", [python, str(SCRIPTS / "eval_pass_at_k.py"), "--dry-run"]),
+        ("eval_agent_harness", [python, str(SCRIPTS / "eval_agent_harness.py")]),
+        ("bench_mcp", [python, str(SCRIPTS / "bench_mcp.py")]),
+        ("report_tier_kpi", [python, str(SCRIPTS / "report_tier_kpi.py")]),
+    ]
+    if not args.skip_pytest:
+        steps_spec.extend([
+            ("test_agent_orchestrator", [python, "-m", "pytest", "tests/test_agent_orchestrator.py", "-q"]),
+            ("test_apply_patch", [python, "-m", "pytest", "tests/test_apply_patch.py", "-q"]),
+        ])
+    if args.live:
+        steps_spec.extend([
+            ("eval_soulslike_live", [python, str(SCRIPTS / "eval_soulslike_live.py"), "--no-dry-run", "--require-live"]),
+            ("eval_project_review_live", [python, str(SCRIPTS / "eval_project_review.py"), "--live", "--require-live"]),
+            ("eval_pass_at_k_live", [python, str(SCRIPTS / "eval_pass_at_k.py"), "--live", "--require-live"]),
+        ])
+
+    report: dict = {
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "tier": "B-live" if args.live else "A-static",
+        "steps": [],
+    }
+    for label, cmd in steps_spec:
+        row = run_cmd(label, cmd)
+        report["steps"].append(row)
+        if not row["pass"]:
+            fail_dir = FAILURES_DIR / label / stamp
+            fail_dir.mkdir(parents=True, exist_ok=True)
+            (fail_dir / "stdout.txt").write_text(row.get("stdoutTail") or "", encoding="utf-8")
+            (fail_dir / "stderr.txt").write_text(row.get("stderrTail") or "", encoding="utf-8")
+
+    report["passCount"] = sum(1 for s in report["steps"] if s["pass"])
+    report["total"] = len(report["steps"])
+    report["metrics"] = collect_kpi_metrics()
+
+    baseline_path = Path(args.compare) if args.compare else EVAL_DIR / "latest.json"
+    baseline = load_json(baseline_path) if baseline_path.is_file() else None
+    report["delta"] = compare_reports(report, baseline)
+
+    latest_json = EVAL_DIR / "latest.json"
+    latest_md = EVAL_DIR / "latest.md"
+    history_json = HISTORY_DIR / f"{stamp}.json"
+    delta_json = DELTA_DIR / f"{stamp}.json"
+
+    for path, payload in [
+        (latest_json, report),
+        (history_json, report),
+        (delta_json, report["delta"]),
+    ]:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    md = [
+        f"# Eval regression {stamp}",
+        f"Tier: {report['tier']}",
+        f"Pass: {report['passCount']}/{report['total']}",
+        "",
+        "## Steps",
+    ]
+    for step in report["steps"]:
+        md.append(f"- {step['label']}: {'PASS' if step['pass'] else 'FAIL'}")
+    if report["metrics"]:
+        md.extend(["", "## Metrics", json.dumps(report["metrics"], indent=2)])
+    if report["delta"].get("regressions"):
+        md.extend(["", "## Regressions"] + [f"- {r}" for r in report["delta"]["regressions"]])
+    latest_md.write_text("\n".join(md) + "\n", encoding="utf-8")
+
+    print(f"Wrote {latest_json}")
+    print(f"Wrote {latest_md}")
+    if report["delta"].get("regressions"):
+        print("REGRESSIONS:", "; ".join(report["delta"]["regressions"]), file=sys.stderr)
+    ok = report["passCount"] == report["total"] and not report["delta"].get("regressions")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

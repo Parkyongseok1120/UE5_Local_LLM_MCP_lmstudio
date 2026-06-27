@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 
+from parse_build_cs import format_dependency_lines, parse_build_cs_text
 
 SOURCE_EXTENSIONS = {".h", ".hpp", ".hh", ".cpp", ".cxx", ".cc", ".inl"}
 SKIP_DIRS = {
@@ -39,12 +40,6 @@ PROPERTY_NAME_RE = re.compile(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=.*)?$")
 DEFINITION_RE = re.compile(
     r"(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<name>~?[A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
-BUILD_DEP_RE = re.compile(
-    r"(?P<kind>PublicDependencyModuleNames|PrivateDependencyModuleNames|PublicIncludePathModuleNames|PrivateIncludePathModuleNames)"
-    r"\.AddRange\s*\(\s*new\s+string\[\]\s*\{(?P<body>.*?)\}\s*\)",
-    re.DOTALL,
-)
-QUOTED_RE = re.compile(r'"([^"]+)"')
 
 
 def stable_id(value: str) -> str:
@@ -169,19 +164,24 @@ def make_item(
 
 def collect_module(root: Path, path: Path, text: str) -> list[dict]:
     module_name = infer_module_name(root, path)
-    dependencies: dict[str, list[str]] = {}
-    for match in BUILD_DEP_RE.finditer(text):
-        dependencies[match.group("kind")] = QUOTED_RE.findall(match.group("body"))
+    parsed = parse_build_cs_text(text, module_name)
+    dependencies = parsed.get("dependencies") or {}
+    conditional = parsed.get("conditional_dependencies") or []
 
     lines = [
         f"Unreal module: {module_name}",
         f"Build.cs: {relative_path(root, path)}",
         "",
     ]
-    for key, values in dependencies.items():
-        lines.append(f"{key}: {', '.join(values) if values else '(empty)'}")
-    if not dependencies:
+    dep_lines = format_dependency_lines(parsed)
+    if dep_lines:
+        lines.extend(dep_lines)
+    else:
         lines.append(clean_decl(text[:2000]))
+
+    extra: dict = {"dependencies": dependencies}
+    if conditional:
+        extra["conditional_dependencies"] = conditional
 
     return [
         make_item(
@@ -193,7 +193,7 @@ def collect_module(root: Path, path: Path, text: str) -> list[dict]:
             symbol_name=module_name,
             symbol_kind="module",
             module_name=module_name,
-            extra={"dependencies": dependencies},
+            extra=extra,
         )
     ]
 

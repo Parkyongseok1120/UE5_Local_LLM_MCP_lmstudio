@@ -7,6 +7,7 @@ Execute **one approved slice only** (≤3 files).
 1. Confirm Turn 2 critique PASS for this slice.
 2. `detect_unreal_project` if build target unknown.
 3. `read_file` targets → `replace_in_file` preferred over full `write_file`.
+   When using the **wrapper** JSON path, prefer `patches[]` with exact `oldText`/`newText` for large files; use full `files[]` only for new or small files.
 4. `build_unreal_project` after every C++/Build.cs change.
 5. On UBT fail: log → `unreal_rag_search mode=compile_fix` → patch → rebuild (max 4 attempts).
 6. On UBT pass: `unreal_runtime_config_check` → fix config if needed → rebuild.

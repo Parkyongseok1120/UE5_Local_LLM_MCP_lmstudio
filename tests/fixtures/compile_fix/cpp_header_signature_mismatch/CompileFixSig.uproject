@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Compile fix eval — cpp/h signature mismatch",
+	"Modules": [
+		{
+			"Name": "CompileFixSig",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

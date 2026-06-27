@@ -1,0 +1,35 @@
+{
+  "description": "Pass@K compile-fix eval — dry-run uses golden/ overlay + UBT",
+  "engineVersion": "5.8",
+  "defaults": {
+    "maxAttempts": 4,
+    "minPassRate": 0.67,
+    "ubtTimeout": 900
+  },
+  "cases": [
+    {
+      "id": "missing_generated_h",
+      "fixtureDir": "tests/fixtures/compile_fix/missing_generated_h",
+      "projectFile": "CompileFixGenH.uproject",
+      "target": "CompileFixGenHEditor",
+      "mode": "reflection_fix",
+      "requestFile": "request.txt"
+    },
+    {
+      "id": "missing_gameplaytags_dep",
+      "fixtureDir": "tests/fixtures/compile_fix/missing_gameplaytags_dep",
+      "projectFile": "CompileFixTags.uproject",
+      "target": "CompileFixTagsEditor",
+      "mode": "module_fix",
+      "requestFile": "request.txt"
+    },
+    {
+      "id": "cpp_header_signature_mismatch",
+      "fixtureDir": "tests/fixtures/compile_fix/cpp_header_signature_mismatch",
+      "projectFile": "CompileFixSig.uproject",
+      "target": "CompileFixSigEditor",
+      "mode": "compile_fix",
+      "requestFile": "request.txt"
+    }
+  ]
+}

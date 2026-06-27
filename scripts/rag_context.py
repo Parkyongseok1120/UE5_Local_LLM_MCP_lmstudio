@@ -21,6 +21,8 @@ SOURCE_TYPE_LABELS = {
     "unreal_source": "Unreal Engine source",
     "unreal_project_text": "Local project source",
     "unreal_project_asset_path": "Local project asset path",
+    "unreal_blueprint_metadata": "Blueprint metadata export",
+    "unreal_failure_memory": "Prior compile fix memory (hint only)",
 }
 
 SECTION_LABELS = [
@@ -423,6 +425,73 @@ def assembly_instructions(mode: str) -> str:
     if mode == "api_lookup":
         return "Prefer exact symbol, signature, include path, and owning module over memory."
     return "Use the grouped RAG evidence first. If evidence is insufficient, say what is missing."
+
+
+PROJECT_SOURCES = frozenset({
+    "unreal_project_text",
+    "project_profile",
+    "build_log",
+    "unreal_project_asset_path",
+    "project_guideline",
+    "unreal_blueprint_metadata",
+})
+ENGINE_SOURCES = frozenset({
+    "unreal_source",
+    "epic_docs",
+    "unreal_symbol",
+    "module_graph",
+    "game_design_doc",
+})
+
+
+def is_project_row(row: dict[str, Any]) -> bool:
+    source = str(row.get("source") or "")
+    if source in PROJECT_SOURCES:
+        return True
+    if row.get("project"):
+        return True
+    return False
+
+
+def assemble_context_mixed(
+    project_rows: list[dict[str, Any]],
+    engine_rows: list[dict[str, Any]],
+    query: str,
+    mode: str,
+    **kwargs: Any,
+) -> str:
+    parts: list[str] = []
+    if project_rows:
+        parts.append(
+            assemble_context(
+                project_rows,
+                query,
+                mode,
+                include_header=True,
+                **kwargs,
+            ).replace(
+                "## Mode-Aware RAG Context Assembly",
+                "## Local project evidence",
+                1,
+            )
+        )
+    if engine_rows:
+        parts.append(
+            assemble_context(
+                engine_rows,
+                query,
+                mode,
+                include_header=True,
+                **kwargs,
+            ).replace(
+                "## Mode-Aware RAG Context Assembly",
+                "## Engine, symbols, and guidelines evidence",
+                1,
+            )
+        )
+    if not parts:
+        return assemble_context([], query, mode)
+    return "\n\n---\n\n".join(parts)
 
 
 def assemble_context(

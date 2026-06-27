@@ -59,16 +59,10 @@ def infer_project(root: Path, path: Path) -> str:
 
 
 def classify_error(message: str, code: str) -> str:
-    value = f"{code} {message}".lower()
-    if "generated.h" in value or "unrealheadertool" in value or "uht" in value:
-        return "reflection_fix"
-    if "cannot open include file" in value or "build.cs" in value or "module" in value:
-        return "module_fix"
-    if "lnk" in value or "unresolved external symbol" in value:
-        return "link_fix"
-    if "ensure" in value or "assert" in value or "crash" in value:
-        return "runtime_debug"
-    return "compile_fix"
+    from error_taxonomy import classify_error_subkind
+
+    _, broad = classify_error_subkind(message, code)
+    return broad
 
 
 def find_error_match(line: str) -> re.Match | None:
@@ -110,6 +104,9 @@ def extract_error(path: Path, root: Path, lines: list[str], index: int, radius: 
         symbol_name = symbol_match.group(1)
 
     error_kind = classify_error(message, error_code)
+    from error_taxonomy import classify_error_subkind
+
+    error_subkind, _ = classify_error_subkind(message, error_code)
     project = infer_project(root, path)
     text = "\n".join(
         [
@@ -136,6 +133,7 @@ def extract_error(path: Path, root: Path, lines: list[str], index: int, radius: 
         "error_code": error_code,
         "error_file": error_file,
         "error_kind": error_kind,
+        "error_subkind": error_subkind,
         "symbol_name": symbol_name,
         "symbol_kind": "error",
         "module_name": "",

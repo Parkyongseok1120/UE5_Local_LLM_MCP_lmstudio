@@ -84,6 +84,17 @@ Then in LM Studio:
 `INSTALL.bat` patches `%USERPROFILE%\.lmstudio\mcp.json` with full paths to Python/Node.  
 RAG-only chat works with **`unreal-rag` alone**. File edit / UBT build needs **`unreal-agent`** too.
 
+### Safe vs agent mode
+
+Default install is **read-only safe mode** (`ALLOW_WRITE=0`). Enable file writes and UBT only when you trust the project:
+
+```powershell
+.\installer\Enable-AgentMode.ps1   # agent mode
+.\installer\Disable-AgentMode.ps1  # back to safe mode
+```
+
+See [docs/Safe_Agent_Mode.md](docs/Safe_Agent_Mode.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ---
 
 ## Quick start
@@ -129,6 +140,15 @@ Maintainers: `.\installer\Verify-Oss-Ready.ps1` before publishing a fork.
 
 | Topic | File |
 |---|---|
+| Architecture & pipeline | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Safe vs agent mode | [docs/Safe_Agent_Mode.md](docs/Safe_Agent_Mode.md) |
+| Build.cs parser | [docs/Build_Cs_Parser.md](docs/Build_Cs_Parser.md) |
+| Project routing | [docs/Project_Routing.md](docs/Project_Routing.md) |
+| Error taxonomy | [docs/Error_Taxonomy.md](docs/Error_Taxonomy.md) |
+| clangd policy | [docs/Clangd_Policy.md](docs/Clangd_Policy.md) |
+| Blueprint metadata | [docs/Blueprint_Metadata.md](docs/Blueprint_Metadata.md) |
+| Eval harness | [docs/Eval_Harness.md](docs/Eval_Harness.md) |
+| Troubleshooting | [docs/Troubleshooting.md](docs/Troubleshooting.md) |
 | LM Studio + MCP setup | [docs/LMStudio_Unreal_Agent_Setup.md](docs/LMStudio_Unreal_Agent_Setup.md) |
 | Rider + Cline agent | [docs/Cline_Rider_Unreal_Agent_Setup.md](docs/Cline_Rider_Unreal_Agent_Setup.md) |
 | BYOI / engine versions | [docs/BYOI_Knowledge_Setup.md](docs/BYOI_Knowledge_Setup.md) |

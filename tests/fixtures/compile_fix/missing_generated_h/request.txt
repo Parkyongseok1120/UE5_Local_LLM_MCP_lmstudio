@@ -1,0 +1,1 @@
+UBadComponent.h에 UCLASS/GENERATED_BODY가 있지만 BadComponent.generated.h include가 없습니다. generated.h를 마지막 include로 추가해 UHT reflection 오류를 수정해 주세요.

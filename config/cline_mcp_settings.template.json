@@ -9,7 +9,9 @@
       ],
       "env": {
         "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
-        "UNREAL58_ROOT": "{REPO_ROOT}"
+        "UNREAL58_ROOT": "{REPO_ROOT}",
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
       }
     },
     "unreal-agent": {

@@ -8,6 +8,9 @@ import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
+
+from tool_policy import tool_sequence_for_task  # noqa: E402
 
 
 def main() -> int:
@@ -19,6 +22,11 @@ def main() -> int:
         turns = case.get("turns") or []
         sequence = case.get("expectedToolSequence") or []
         ok = len(turns) >= 3 and len(sequence) >= 5
+        # Phase 20: first tool in policy should match harness opener when present
+        if sequence and ok:
+            policy = tool_sequence_for_task("edit")
+            if policy and sequence[0] not in policy[:3]:
+                ok = False
         status = "PASS" if ok else "FAIL"
         print(f"[{status}] {case['id']} - {len(turns)} turns, {len(sequence)} tool steps")
         if not ok:

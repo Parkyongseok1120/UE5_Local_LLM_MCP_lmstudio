@@ -1,0 +1,32 @@
+{
+  "description": "Mode-specific retrieval layer priorities (weights are rerank bonuses)",
+  "layers": {
+    "exact_symbol": { "sources": ["unreal_symbol"], "bonus": 8.0 },
+    "fts_bm25": { "sources": ["*"], "bonus": 0.0 },
+    "module_graph": { "sources": ["module_graph"], "bonus": 6.0 },
+    "code_semantic": { "sources": ["unreal_source", "unreal_project_text"], "bonus": 3.0 },
+    "design_semantic": { "sources": ["project_guideline", "game_design_doc"], "bonus": 2.0 },
+    "build_log": { "sources": ["build_log"], "bonus": 7.0 },
+    "playbook": { "sources": ["project_guideline"], "bonus": 4.0 }
+  },
+  "profiles": {
+    "compile_fix": {
+      "layer_order": ["build_log", "exact_symbol", "module_graph", "fts_bm25", "code_semantic", "playbook"]
+    },
+    "api_lookup": {
+      "layer_order": ["exact_symbol", "module_graph", "fts_bm25", "code_semantic"]
+    },
+    "agent_edit": {
+      "layer_order": ["code_semantic", "exact_symbol", "module_graph", "playbook", "design_semantic"]
+    },
+    "module_fix": {
+      "layer_order": ["module_graph", "exact_symbol", "build_log", "playbook"]
+    },
+    "reflection_fix": {
+      "layer_order": ["playbook", "exact_symbol", "build_log", "code_semantic"]
+    },
+    "planning": {
+      "layer_order": ["design_semantic", "code_semantic", "playbook"]
+    }
+  }
+}

@@ -3,7 +3,8 @@ param(
     [string]$LmStudioHome = "",
     [string]$DocumentsRoot = "",
     [switch]$SkipNpm,
-    [switch]$SkipPythonDeps
+    [switch]$SkipPythonDeps,
+    [switch]$EnableAgentMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -182,8 +183,14 @@ foreach ($mcpPath in $mcpPaths) {
             SHARED_UNREAL_CONFIG = $sharedConfigPath
             UNREAL58_ROOT        = $ragRoot
             UNREAL58_PORTABLE_ROOT = $root
+            PYTHONUTF8           = "1"
+            PYTHONIOENCODING     = "utf-8"
         }
     }
+
+    $allowWrite = if ($EnableAgentMode) { "1" } else { "0" }
+    $allowCommands = if ($EnableAgentMode) { "1" } else { "0" }
+    $allowBuild = if ($EnableAgentMode) { "1" } else { "0" }
 
     $config.mcpServers."unreal-agent" = [ordered]@{
         command = $node
@@ -193,13 +200,19 @@ foreach ($mcpPath in $mcpPaths) {
             AGENT_MCP_CONFIG     = $agentConfigPath
             SHARED_UNREAL_CONFIG = $sharedConfigPath
             UNREAL58_ROOT        = $ragRoot
-            ALLOW_WRITE          = "1"
-            ALLOW_COMMANDS       = "1"
-            ALLOW_UNREAL_BUILD   = "1"
+            ALLOW_WRITE          = $allowWrite
+            ALLOW_COMMANDS       = $allowCommands
+            ALLOW_UNREAL_BUILD   = $allowBuild
             MAX_READ_BYTES       = "524288"
             MAX_OUTPUT_BYTES     = "262144"
             COMMAND_TIMEOUT_MS   = "600000"
         }
+    }
+
+    if ($EnableAgentMode) {
+        Write-Host "Agent mode ENABLED (write/build/commands)." -ForegroundColor Yellow
+    } else {
+        Write-Host "Safe mode default (read-only agent). Run installer/Enable-AgentMode.ps1 to enable writes/builds." -ForegroundColor Cyan
     }
 
     if (Test-Path $dateTimeJs) {

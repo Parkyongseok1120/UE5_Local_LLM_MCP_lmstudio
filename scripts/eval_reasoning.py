@@ -49,9 +49,12 @@ def run_case(workspace: Path, case: dict, index_path: Path) -> dict:
         result["detail"] = payload
 
     elif case_type == "genre_scope_project":
+        project_root = case.get("projectRoot") or ""
+        if project_root and not Path(project_root).is_absolute():
+            project_root = str((workspace / project_root).resolve())
         payload = validate_genre_scope(
             case.get("genre", "action_combat"),
-            project_root=case.get("projectRoot"),
+            project_root=project_root,
             min_pass_ratio=float(case.get("expectMinPassRatio", 0.6)),
         )
         ratio = payload.get("passRatio", 0)
@@ -67,8 +70,9 @@ def run_case(workspace: Path, case: dict, index_path: Path) -> dict:
 
     elif case_type == "tool_order":
         expected = list(case.get("expectedSequence") or [])
-        result["pass"] = len(expected) >= 2
-        result["detail"] = {"expectedSequence": expected, "note": "Mock compliance — fixture only"}
+        # Structural check only until live agent log replay exists
+        result["pass"] = len(expected) >= 2 and "unreal_agent_session" in expected
+        result["detail"] = {"expectedSequence": expected, "note": "Sequence structure check"}
 
     elif case_type == "rag_retrieval":
         rows = search(

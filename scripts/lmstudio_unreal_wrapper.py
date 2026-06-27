@@ -17,7 +17,8 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from rag_context import assemble_context
-from load_sampling_preset import preset_for_wrapper
+from load_sampling_preset import preset_for_wrapper, profile_edit_limits
+from preflight_lmstudio import extract_assistant_text
 from rag_search import SearchOptions, search as search_index
 import token_budget
 
@@ -173,7 +174,7 @@ def chat_lmstudio(
     )
     with urlopen(request, timeout=args.timeout) as response:
         result = json.loads(response.read().decode("utf-8"))
-    return result["choices"][0]["message"]["content"]
+    return extract_assistant_text(result["choices"][0]["message"])
 
 
 def sanitize_module_name(value: str) -> str:
@@ -546,9 +547,46 @@ def normalize_bundle(data: Any) -> dict[str, Any]:
             raise ValueError(f"files[{index}] must contain string path and content")
         normalized_files.append({"path": path, "content": content})
     data["files"] = normalized_files
+
+    patches = data.get("patches")
+    if patches is None:
+        patches = []
+    if not isinstance(patches, list):
+        raise ValueError("patches must be a list")
+    normalized_patches: list[dict[str, Any]] = []
+    for index, item in enumerate(patches, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"patches[{index}] must be an object")
+        path = item.get("path")
+        old_text = item.get("oldText")
+        new_text = item.get("newText")
+        if not isinstance(path, str) or not isinstance(old_text, str) or not isinstance(new_text, str):
+            raise ValueError(f"patches[{index}] requires path, oldText, newText strings")
+        normalized_patches.append(
+            {
+                "path": path,
+                "oldText": old_text,
+                "newText": new_text,
+                "expectedOccurrences": int(item.get("expectedOccurrences") or 1),
+            }
+        )
+    data["patches"] = normalized_patches
     if "answer" in data and not isinstance(data["answer"], str):
         data["answer"] = str(data["answer"])
     return data
+
+
+def enforce_edit_limits(bundle: dict[str, Any], limits: dict[str, Any]) -> None:
+    max_files = int(limits.get("maxFilesPerEdit") or 0)
+    file_count = len(bundle.get("files") or [])
+    patch_count = len(bundle.get("patches") or [])
+    total = file_count + patch_count
+    if max_files <= 0 and total > 0:
+        raise ValueError("active sampling profile disallows file edits (maxFilesPerEdit=0)")
+    if max_files > 0 and total > max_files:
+        raise ValueError(
+            f"too many edits ({total}); active profile maxFilesPerEdit={max_files}"
+        )
 
 
 def parse_json_response(text: str) -> dict[str, Any]:
@@ -592,6 +630,18 @@ def answer_claims_no_changes(answer: str) -> bool:
 
 def apply_bundle(root: Path, bundle: dict[str, Any]) -> list[Path]:
     written: list[Path] = []
+    for item in bundle.get("patches") or []:
+        target = safe_output_path(root, item["path"])
+        ok, msg, updated = apply_single_patch(
+            target,
+            item["oldText"],
+            item["newText"],
+            int(item.get("expectedOccurrences") or 1),
+        )
+        if not ok:
+            raise ValueError(f"patch failed for {item['path']}: {msg}")
+        write_file(target, updated)
+        written.append(target)
     for item in bundle["files"]:
         target = safe_output_path(root, item["path"])
         write_file(target, item["content"])
@@ -1065,19 +1115,18 @@ def build_cs_text(root: Path) -> str:
     return "\n".join(parts)
 
 
+from apply_patch import apply_patch as apply_single_patch
+from parse_build_cs import declared_modules_from_text, public_modules_from_text
+
+PATCH_PREFERRED_LINE_THRESHOLD = 200
+
+
 def declared_build_modules(build_text_value: str) -> set[str]:
-    return set(re.findall(r'"([A-Za-z0-9_]+)"', build_text_value))
+    return declared_modules_from_text(build_text_value)
 
 
 def public_build_modules(build_text_value: str) -> set[str]:
-    public_modules: set[str] = set()
-    for match in re.finditer(
-        r"PublicDependencyModuleNames\s*\.\s*(?:AddRange|Add)\s*\((?P<body>.*?)\)\s*;",
-        build_text_value,
-        flags=re.DOTALL,
-    ):
-        public_modules.update(re.findall(r'"([A-Za-z0-9_]+)"', match.group("body")))
-    return public_modules
+    return public_modules_from_text(build_text_value)
 
 
 def load_include_owner_map(path: Path) -> dict[str, list[str]]:
@@ -1839,10 +1888,11 @@ def parse_build_feedback(log_path: Path, project_root: Path, output: str, contex
     return records[:12]
 
 
+from error_taxonomy import mode_from_error_kind as taxonomy_mode_from_error_kind
+
+
 def mode_from_error_kind(error_kind: str) -> str:
-    if error_kind in {"module_fix", "reflection_fix", "runtime_debug"}:
-        return error_kind
-    return "compile_fix"
+    return taxonomy_mode_from_error_kind(error_kind)
 
 
 def build_error_query(records: list[dict[str, Any]], output: str) -> str:
@@ -1907,8 +1957,17 @@ def format_build_records(records: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def system_prompt(rules_text: str) -> str:
-    base_prompt = read_text(PROMPT_PATH, "You are an Unreal Engine 5.7 C++ assistant.")
+def system_prompt(rules_text: str, edit_limits: dict[str, Any] | None = None) -> str:
+    base_prompt = read_text(PROMPT_PATH, "You are an Unreal Engine 5.8 C++ assistant.")
+    threshold = PATCH_PREFERRED_LINE_THRESHOLD
+    limits = edit_limits or {}
+    max_files = int(limits.get("maxFilesPerEdit") or 4)
+    prefer_patch = bool(limits.get("preferPatchOverFullFile", True))
+    patch_hint = (
+        f"Prefer patches[] for existing files over ~{threshold} lines when possible."
+        if prefer_patch
+        else f"You may use full files[] up to {max_files} files per response."
+    )
     return f"""{base_prompt}
 
 You are now running inside an automated compile wrapper.
@@ -1938,10 +1997,23 @@ The JSON object must match this schema:
       "content": "full file content"
     }}
   ],
+  "patches": [
+    {{
+      "path": "Source/MyGame/Private/MyFile.cpp",
+      "oldText": "exact text to replace",
+      "newText": "replacement text",
+      "expectedOccurrences": 1
+    }}
+  ],
   "notes": ["optional implementation notes"]
 }}
 
-Every file entry must contain the complete final file content. Do not output partial patches.
+For NEW files or small files (under ~{threshold} lines), use files[] with full content.
+For LARGE existing files, prefer patches[] with exact oldText/newText (expectedOccurrences required).
+{patch_hint}
+Maximum edits per response: {max_files} (files + patches combined).
+Omit unchanged files. patches and files may both be empty if no edit is needed.
+Every files[] entry must contain complete final content. patches require exact match.
 Use compile-ready Unreal C++ only when creating code. generated.h must be the last include in headers.
 """
 
@@ -2131,11 +2203,23 @@ def run(args: argparse.Namespace) -> int:
     baseline_snapshot = snapshot_project_files(project_root)
     final_diff_path = run_dir / "final_diff.patch"
     rules_text = read_text(WRAPPER_RULES_PATH, "")
+
+    agent_plan_block = ""
+    agent_plan = None
+    if getattr(args, "orchestrate", False) or __import__("agent_orchestrator").orchestrator_enabled():
+        from agent_orchestrator import build_agent_plan, format_plan_for_prompt
+
+        plan = build_agent_plan(request, args.mode)
+        agent_plan = plan
+        agent_plan_block = format_plan_for_prompt(plan) + "\n\n"
+        write_file(run_dir / "agent_plan.json", json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
+
     rag_context = collect_rag_context(args, request)
     previous_feedback = ""
     last_build_records: list[dict[str, Any]] = []
+    original_mode = args.mode
 
-    initial_prompt = user_prompt(
+    initial_prompt = agent_plan_block + user_prompt(
         request=request,
         rag_context=rag_context,
         project_state=summarize_project_state(project_root, mode=args.mode),
@@ -2151,16 +2235,20 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     model = resolve_model(args)
-    messages = [{"role": "system", "content": system_prompt(rules_text)}]
+    edit_limits = profile_edit_limits()
+    messages = [{"role": "system", "content": system_prompt(rules_text, edit_limits)}]
     last_answer = ""
     last_written: list[Path] = []
     last_findings: list[Finding] = []
     last_build: BuildResult | None = None
 
     for attempt in range(1, args.max_attempts + 1):
-        if attempt >= 2:
+        budget_mode = "compile_fix" if attempt >= 2 else original_mode
+        if attempt >= 2 and original_mode in {
+            "agent_edit", "codegen", "compile_fix", "module_fix", "reflection_fix",
+            "prototype_component", "prototype_subsystem",
+        }:
             args.mode = "compile_fix"
-        budget_mode = "compile_fix" if attempt >= 2 else args.mode
         if attempt >= 2:
             changed_files = changed_files_from_feedback(last_build_records, last_findings)
             query_parts = [request]
@@ -2185,7 +2273,7 @@ def run(args: argparse.Namespace) -> int:
             project_file=project_file,
             target=target,
             previous_feedback=attempt_prefix + previous_feedback,
-            mode=args.mode,
+            mode=original_mode if attempt >= 2 else args.mode,
         )
         if attempt >= 3:
             messages = cap_message_history(messages, budget_mode)
@@ -2211,6 +2299,19 @@ def run(args: argparse.Namespace) -> int:
 
         try:
             bundle = parse_json_response(raw_response)
+            enforce_edit_limits(bundle, edit_limits)
+            if agent_plan is not None:
+                from agent_orchestrator import verify_edit_allowed
+
+                gate = verify_edit_allowed(
+                    agent_plan,
+                    files_count=len(bundle.get("files") or []),
+                    patches_count=len(bundle.get("patches") or []),
+                )
+                if not gate.get("ok"):
+                    previous_feedback = "Orchestrator blocked edit: " + "; ".join(gate.get("issues") or [])
+                    write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                    continue
             write_json(attempt_dir / "model_response.json", bundle)
         except Exception as exc:
             previous_feedback = f"Model response was not valid JSON: {exc}"
@@ -2218,7 +2319,8 @@ def run(args: argparse.Namespace) -> int:
             continue
 
         last_answer = str(bundle.get("answer") or "")
-        if not bundle["files"]:
+        has_edits = bool(bundle["files"]) or bool(bundle.get("patches"))
+        if not has_edits:
             if not args.allow_empty_files and not answer_claims_no_changes(last_answer):
                 previous_feedback = (
                     "Model returned no files without clearly saying the current files already satisfy the request. "
@@ -2313,6 +2415,32 @@ def run(args: argparse.Namespace) -> int:
             args.build_timeout,
         )
         if last_build.ok:
+            if attempt >= 2 and last_build_records:
+                try:
+                    from failure_memory import append_failure_memory, maybe_auto_reindex_failure_memory
+                    from load_sampling_preset import resolve_profile_name
+
+                    meta = (last_build_records[0].get("metadata") or {}) if last_build_records else {}
+                    append_failure_memory(
+                        Path(__file__).resolve().parent.parent / "data" / "failure_memory",
+                        project_name,
+                        error_subkind=str(meta.get("error_subkind") or "COMPILE_GENERIC"),
+                        error_code=str(meta.get("error_code") or ""),
+                        symbol_name=str(meta.get("symbol_name") or ""),
+                        failed_summary=previous_feedback[:500] if previous_feedback else "",
+                        fix_summary=last_answer[:500] if last_answer else "",
+                        changed_files=[str(p.relative_to(project_root)) for p in last_written],
+                        diff_excerpt=read_text(final_diff_path) or "",
+                        rag_evidence_ids=[],
+                        original_request=request[:500],
+                        failed_output_summary=previous_feedback[:500] if previous_feedback else "",
+                        retry_count=attempt,
+                        model=model,
+                        sampling_profile=resolve_profile_name(),
+                    )
+                    maybe_auto_reindex_failure_memory(Path(__file__).resolve().parent.parent)
+                except Exception:
+                    pass
             write_file(final_diff_path, diff_snapshots(baseline_snapshot, snapshot_project_files(project_root)) + "\n")
             summary = final_summary(
                 status="BUILD_OK",
@@ -2399,7 +2527,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-static-gate", action="store_true")
     parser.add_argument("--allow-empty-files", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args()
+    parser.add_argument("--orchestrate", action="store_true", help="Inject agent orchestrator plan into prompts")
+    parser.add_argument("--no-orchestrate", action="store_true", help="Disable orchestrator even when env enabled")
+    args = parser.parse_args()
+    if args.no_orchestrate:
+        args.orchestrate = False
+    elif not args.orchestrate:
+        import os
+        args.orchestrate = os.environ.get("UNREAL_AGENT_ORCHESTRATE", "1").strip().lower() not in {"0", "false", "no", "off"}
+    return args
 
 
 if __name__ == "__main__":

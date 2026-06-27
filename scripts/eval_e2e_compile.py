@@ -94,12 +94,25 @@ def main() -> int:
                 root = latest if uproject is None else latest
                 expect = list(case.get("expectErrorCodes") or [])
                 ok, detail = run_static(root, expect, forbid_errors=True)
+        elif case_type == "readiness_fixture":
+            script = rag_root / "scripts" / "test_unreal_readiness_fixture.py"
+            proc = subprocess.run([sys.executable, str(script)], cwd=str(rag_root), capture_output=True, text=True)
+            ok = proc.returncode == 0
+            detail = proc.stdout[-500:] or proc.stderr[-500:]
+        elif case_type == "pass_at_k":
+            cmd = [sys.executable, str(rag_root / "scripts" / "eval_pass_at_k.py"), "--dry-run"]
+            proc = subprocess.run(cmd, cwd=str(rag_root), capture_output=True, text=True)
+            ok = proc.returncode == 0
+            detail = (proc.stdout or proc.stderr or "")[-800:]
         elif case_type == "ubt_build":
             if not args.run_ubt:
-                print(f"[SKIP] {case_id}: UBT (use --run-ubt)")
+                print(f"[SKIP] {case_id}: UBT (use -RunUbt)")
                 continue
+            project_path = Path(str(case.get("projectFile") or ""))
+            if not project_path.is_absolute():
+                project_path = rag_root / project_path
             ok, detail = run_ubt(
-                Path(str(case.get("projectFile") or "")),
+                project_path,
                 str(case.get("target") or ""),
                 args.ubt_path,
                 args.ubt_timeout,

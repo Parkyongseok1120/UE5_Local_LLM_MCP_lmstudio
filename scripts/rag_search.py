@@ -34,6 +34,12 @@ def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
         return set()
 
 
+def _header_basenames_from_query(query: str) -> list[str]:
+    """Extract Unreal-style header basenames from a query (e.g. GameplayTagContainer.h)."""
+    found = re.findall(r"[A-Za-z_][A-Za-z0-9_]*\.h(?:pp)?", query, flags=re.IGNORECASE)
+    return list(dict.fromkeys(b.lower() for b in found))
+
+
 def fetch_module_graph_sidecar(
     conn: sqlite3.Connection,
     query: str,
@@ -47,12 +53,33 @@ def fetch_module_graph_sidecar(
     if "include_owners" not in tables:
         return []
 
+    rows: list[sqlite3.Row] = []
+    seen: set[str] = set()
+
+    def add_row(row: sqlite3.Row) -> None:
+        oid = str(row["owner_id"])
+        if oid in seen:
+            return
+        seen.add(oid)
+        rows.append(row)
+
+    for basename in _header_basenames_from_query(query):
+        for row in conn.execute(
+            """
+            select owner_id, include_path, symbol_name, module_name, title, text
+            from include_owners
+            where lower(symbol_name) = ?
+               or lower(include_path) like ?
+            limit ?
+            """,
+            (basename, f"%/{basename}", limit),
+        ):
+            add_row(row)
+
     terms = [t for t in tokenize(query) if len(t) > 2]
     if not terms:
         terms = [query.strip()]
 
-    rows: list[sqlite3.Row] = []
-    seen: set[str] = set()
     for term in terms[:8]:
         pattern = f"%{term.lower()}%"
         for row in conn.execute(
@@ -67,11 +94,7 @@ def fetch_module_graph_sidecar(
             """,
             (pattern, pattern, pattern, pattern, limit),
         ):
-            oid = str(row["owner_id"])
-            if oid in seen:
-                continue
-            seen.add(oid)
-            rows.append(row)
+            add_row(row)
 
     results: list[dict[str, Any]] = []
     for row in rows:
@@ -790,6 +813,15 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
     options = options or SearchOptions()
     mode = resolve_mode(query, options.mode)
     effective_query = query
+    if mode in {"compile_fix", "module_fix", "reflection_fix"}:
+        try:
+            from failure_memory_rerank import expand_query_with_memory
+
+            mem_dir = Path(__file__).resolve().parent.parent / "data" / "failure_memory"
+            project = (options.projects or [""])[0] if options.projects else ""
+            effective_query = expand_query_with_memory(query, mem_dir, project=project)
+        except Exception:
+            effective_query = query
     if mode == "agent_edit":
         effective_query = (
             query
@@ -855,14 +887,21 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
     ranked.sort(key=lambda row: (float(row.get("rank_score") or 0.0), float(row.get("score") or 0.0)))
 
     if mode == "module_fix":
-        sidecar = fetch_module_graph_sidecar(conn, effective_query, limit=max(6, top_k))
+        sidecar = fetch_module_graph_sidecar(conn, effective_query, limit=max(12, top_k * 2))
         if sidecar:
             query_lower = effective_query.lower()
+            header_names = set(_header_basenames_from_query(effective_query))
             sidecar_ranked = [rerank_row(dict(row), query_terms, mode) for row in sidecar]
             for row in sidecar_ranked:
-                sym = str(row.get("symbol_name") or "")
-                if sym and sym.lower() in query_lower:
-                    row["rank_score"] = float(row.get("rank_score") or 0.0) - 45.0
+                sym = str(row.get("symbol_name") or "").lower()
+                path = str(row.get("locator") or row.get("include_path") or "").lower()
+                boost = 0.0
+                if sym and sym in query_lower:
+                    boost = 45.0
+                if sym in header_names or any(sym == h or path.endswith("/" + h) for h in header_names):
+                    boost = 100.0
+                if boost:
+                    row["rank_score"] = float(row.get("rank_score") or 0.0) - boost
             merged_map: dict[str, dict[str, Any]] = {str(r["chunk_id"]): r for r in ranked}
             for row in sidecar_ranked:
                 merged_map[str(row["chunk_id"])] = row
@@ -871,6 +910,9 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
                 key=lambda row: (float(row.get("rank_score") or 0.0), float(row.get("score") or 0.0)),
             )
 
+    from retrieval_profiles import apply_retrieval_layer_bonus
+
+    ranked = apply_retrieval_layer_bonus(ranked, mode)
     return ranked[:top_k]
 
 

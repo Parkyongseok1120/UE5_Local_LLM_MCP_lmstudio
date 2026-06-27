@@ -1,0 +1,64 @@
+{
+  "description": "Tool invocation order by task kind (Phase 20). Writes forbidden unless noted.",
+  "tasks": {
+    "answer_only": {
+      "sequence": [
+        "unreal_symbol_lookup",
+        "unreal_rag_search",
+        "answer_with_evidence"
+      ],
+      "writesAllowed": false
+    },
+    "inspect_only": {
+      "sequence": [
+        "unreal_project_architecture",
+        "unreal_rag_search",
+        "read_file",
+        "unreal_review_claim_validate"
+      ],
+      "writesAllowed": false
+    },
+    "edit": {
+      "sequence": [
+        "unreal_agent_session",
+        "unreal_rag_search",
+        "read_file",
+        "replace_in_file",
+        "build_unreal_project"
+      ],
+      "writesAllowed": true
+    },
+    "compile_fix": {
+      "sequence": [
+        "parse_build_log",
+        "unreal_rag_search",
+        "read_file",
+        "replace_in_file",
+        "static_validate",
+        "build_unreal_project"
+      ],
+      "writesAllowed": true
+    },
+    "refactor": {
+      "sequence": [
+        "unreal_refactor_impact_scan",
+        "unreal_project_architecture",
+        "unreal_refactor_plan_validate",
+        "read_file",
+        "replace_in_file",
+        "build_unreal_project"
+      ],
+      "writesAllowed": true
+    },
+    "runtime_debug": {
+      "sequence": [
+        "unreal_project_architecture",
+        "unreal_runtime_config_check",
+        "read_unreal_logs",
+        "unreal_rag_search",
+        "read_file"
+      ],
+      "writesAllowed": false
+    }
+  }
+}

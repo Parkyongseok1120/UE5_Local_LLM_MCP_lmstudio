@@ -1,6 +1,6 @@
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "sonnet-tier-gate", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
+    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-blueprint-metadata", "collect-editor-metadata", "collect-failure-memory", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "eval-pass-at-k", "eval-harness", "eval-regression", "preflight-lmstudio", "report-tier-kpi", "sonnet-tier-gate", "verify-release", "build-project-graph", "agent-plan", "reject-failure-memory", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
     [string]$Command,
 
     [string]$IndexNamespace = "",
@@ -55,7 +55,8 @@ param(
     [switch]$PrintPrompts,
     [switch]$Explorer,
     [switch]$ClearActiveProject,
-    [switch]$RunUbt
+    [switch]$RunUbt,
+    [switch]$RequireLive
 )
 
 $ErrorActionPreference = "Stop"
@@ -237,6 +238,16 @@ switch ($Command) {
         }
         & $py @logArgs
     }
+    "collect-blueprint-metadata" {
+        if (-not $Question) {
+            throw "collect-blueprint-metadata requires -Question pointing to Editor-export JSONL"
+        }
+        $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
+        & $py scripts\collect_blueprint_metadata.py --in $Question --out data\unreal58\raw_blueprint_metadata.jsonl --project $proj
+    }
+    "collect-failure-memory" {
+        & $py scripts\collect_failure_memory.py --out data\unreal58\raw_failure_memory.jsonl
+    }
     "build" {
         if (Test-Path $GuidelinesRoot) {
             & $py scripts\collect_project_guidelines.py --root $GuidelinesRoot --out data\unreal58\raw_guidelines.jsonl
@@ -271,6 +282,15 @@ switch ($Command) {
         }
         if (Test-Path "data\unreal58\raw_projects.jsonl") {
             $inputs += "data\unreal58\raw_projects.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_project_architecture.jsonl") {
+            $inputs += "data\unreal58\raw_project_architecture.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_blueprint_metadata.jsonl") {
+            $inputs += "data\unreal58\raw_blueprint_metadata.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_failure_memory.jsonl") {
+            $inputs += "data\unreal58\raw_failure_memory.jsonl"
         }
         if ($inputs.Count -eq 0) {
             throw "Run collect-source, collect-projects, or collect-docs first."
@@ -357,6 +377,11 @@ switch ($Command) {
         $reviewArgs = @("scripts\evaluate_unreal_review_answers.py", "--case-set", $ReviewCaseSet)
         if ($Answers) {
             $reviewArgs += @("--answers", $Answers)
+        } elseif (-not $AnswersDir -and -not $PrintPrompts) {
+            $defaultAnswers = Join-Path $PSScriptRoot "tests\fixtures\unreal_review_answers\good_answers.jsonl"
+            if (Test-Path $defaultAnswers) {
+                $reviewArgs += @("--answers", $defaultAnswers)
+            }
         }
         if ($AnswersDir) {
             $reviewArgs += @("--answers-dir", $AnswersDir)
@@ -395,6 +420,7 @@ switch ($Command) {
     "eval-project-review" {
         $reviewProjectArgs = @("scripts\eval_project_review.py")
         if ($Live) { $reviewProjectArgs += "--live" }
+        if ($RequireLive) { $reviewProjectArgs += "--require-live" }
         if ($Model) { $reviewProjectArgs += @("--model", $Model) }
         & $py @reviewProjectArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -402,9 +428,66 @@ switch ($Command) {
     "eval-soulslike-live" {
         $soulslikeArgs = @("scripts\eval_soulslike_live.py")
         if ($Live) { $soulslikeArgs += "--no-dry-run" }
+        if ($RequireLive) { $soulslikeArgs += "--require-live" }
         if ($Model) { $soulslikeArgs += @("--model", $Model) }
         & $py @soulslikeArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    "eval-pass-at-k" {
+        $pakArgs = @("scripts\eval_pass_at_k.py")
+        if ($Live) { $pakArgs += "--live" } else { $pakArgs += "--dry-run" }
+        if ($RequireLive) { $pakArgs += "--require-live" }
+        if ($Model) { $pakArgs += @("--model", $Model) }
+        & $py @pakArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    "preflight-lmstudio" {
+        $pfArgs = @("scripts\preflight_lmstudio.py")
+        if ($RequireLive) { $pfArgs += "--json" }
+        & $py @pfArgs
+        if ($RequireLive -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    "report-tier-kpi" {
+        & $py scripts\report_tier_kpi.py
+    }
+    "eval-harness" {
+        & $py scripts\run_eval_harness.py
+    }
+    "eval-regression" {
+        $regArgs = @("scripts\run_eval_regression.py")
+        if ($Live) { $regArgs += "--live" }
+        & $py @regArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    "verify-release" {
+        & $py scripts\verify_release.py
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    "build-project-graph" {
+        if (-not $ProjectFile) {
+            $cfg = Get-Content (Join-Path $HOME ".lmstudio\config\unreal-workspace.json") -Raw | ConvertFrom-Json
+            $ProjectFile = $cfg.activeProject
+        }
+        if (-not $ProjectFile) { throw "build-project-graph requires -ProjectFile or activeProject" }
+        $projRoot = Split-Path $ProjectFile -Parent
+        $graphArgs = @("scripts\build_project_graph.py", "--project-root", $projRoot)
+        if ($ProjectName) { $graphArgs += @("--project-name", $ProjectName) }
+        & $py @graphArgs
+    }
+    "agent-plan" {
+        if (-not $Question) { throw "agent-plan requires -Question" }
+        & $py scripts\agent_orchestrator.py --request $Question --mode $Mode --json
+    }
+    "reject-failure-memory" {
+        if (-not $ProjectName -or -not $Question) {
+            throw "reject-failure-memory requires -ProjectName and -Question (record id)"
+        }
+        & $py scripts\reject_failure_memory.py --project-name $ProjectName --record-id $Question
+    }
+    "collect-editor-metadata" {
+        if (-not $ProjectName) { throw "collect-editor-metadata requires -ProjectName" }
+        if (-not $Question) { throw "collect-editor-metadata requires -Question as export spec path:type" }
+        & $py scripts\collect_editor_metadata.py --project-name $ProjectName --export $Question
     }
     "sonnet-tier-gate" {
         $gateArgs = @("-File", (Join-Path $PSScriptRoot "scripts\run_sonnet_tier_gate.ps1"))
