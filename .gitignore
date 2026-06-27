@@ -15,3 +15,4 @@ node_modules/
 lmstudio-unreal-agent-mcp/node_modules/
 lmstudio-unreal-agent-mcp/config/agent-mcp.json
 lmstudio-unreal-agent-mcp/config/lmstudio-mcp-unreal-agent.json
+PORTABLE_ROOT.txt
