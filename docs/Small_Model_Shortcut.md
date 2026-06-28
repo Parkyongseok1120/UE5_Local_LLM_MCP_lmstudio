@@ -1,68 +1,79 @@
-# Small Model Shortcut (2-Turn Workflow)
+# Small Model Shortcut
 
-Use this guide when running **7–14B models** (e.g. Qwen3-8B) via LM Studio with Unreal58-RAG. Large 27B+ models should use the full 3-turn plan → critique → execute flow.
+Use this guide for GPT OSS below 20B, Qwen 8B-class models, and other compact local models. The goal is to make them useful in the same workflow as Qwen 3.6 27B, but with tighter limits.
 
-## Profile setup
+## Profile Setup
 
-1. Set the sampling profile:
+For GPT OSS 20B:
 
-   ```powershell
-   $env:UNREAL_RAG_MODEL_PROFILE = "qwen3_8b"
-   ```
+```powershell
+$env:UNREAL_RAG_MODEL_PROFILE = "gpt_oss_20b"
+```
 
-   Or edit `config/lmstudio_sampling.json` → `"activeProfile": "qwen3_8b"`.
+For GPT OSS 20B Claude/Opus/Sonnet reasoning i1 community GGUF:
 
-2. Confirm scale (assembly budget is halved for 8B):
+```powershell
+$env:UNREAL_RAG_MODEL_PROFILE = "gpt_oss_20b_claude_opus_sonnet_reasoning_i1"
+```
 
-   ```powershell
-   python scripts/load_sampling_preset.py --show-profile
-   ```
+For GPT OSS below 20B:
 
-   Expect `assemblyBudgetScale: 0.5` — RAG context assembly stays within ~8k context.
+```powershell
+$env:UNREAL_RAG_MODEL_PROFILE = "gpt_oss_small"
+```
 
-## 2-turn contract
-
-| Turn | Role | Thinking | Max files | MCP modes |
-|------|------|----------|-----------|-----------|
-| **1** | Compact plan + RAG evidence | OFF | 0 (no writes) | `refactor_r0`, `unreal_rag_search` hybrid **off**, top_k **4** |
-| **2** | Patch + build | OFF | **≤2** | `agent_edit` / `execute`, compile loop if needed |
-
-Skip the critique turn unless you have spare context. Small models degrade on long multi-turn chains.
-
-## RAG search settings
-
-- `hybrid: false` — FTS-only saves tokens and latency
-- `top_k: 4` — fewer chunks, tighter assembly
-- Prefer `mode=codegen` or `refactor_r0` for Turn 1
-- Filter by `source` when you know the bucket (e.g. `unreal_source`, `project_guideline`)
-
-## Slice rules
-
-- **≤2 files** per execute turn (profile preset caps `maxTokens` at 2048)
-- One subsystem or component at a time
-- Run `unreal_refactor_plan_validate` on Turn 1 output before Turn 2 if using refactor modes
-
-## When not to use this shortcut
-
-- Multi-file refactors (>2 files)
-- Genre-scoped prototypes (action_combat Must Have checks)
-- Runtime/config checklist work (needs full context)
-- Korean + English hybrid review (use 27B or EXAONE hybrid instead)
-
-## Quick smoke test
+For Qwen 8B:
 
 ```powershell
 $env:UNREAL_RAG_MODEL_PROFILE = "qwen3_8b"
-.\rag.ps1 query -Mode refactor_r0 -Question "UActorComponent BeginPlay override pattern"
-.\rag.ps1 wrapper -Mode agent_edit -Question "Add a simple UActorComponent that logs BeginPlay" -SkipBuild
 ```
 
-## Profile reference
+For Qwen 3.5 9B:
 
-| Profile | Context | assemblyBudgetScale | Turns |
-|---------|---------|---------------------|-------|
-| `qwen3_8b` | 8192 | 0.5 | 2-turn shortcut |
-| `qwen3_6_27b` | 32768 | 1.0 | 3-turn (plan/critique/execute) |
-| `generic_large` | 49152 | 1.25 | 3-turn + deep hybrid |
+```powershell
+$env:UNREAL_RAG_MODEL_PROFILE = "qwen3_5_9b"
+```
 
-See also: `config/lmstudio_sampling.json`, `docs/LMStudio_Unreal_Agent_Setup.md`.
+For Qwen3.5-9B-DeepSeek-V4-Flash-GGUF community fine-tune:
+
+```powershell
+$env:UNREAL_RAG_MODEL_PROFILE = "qwen3_5_9b_deepseek_v4_flash"
+```
+
+Confirm the active profile:
+
+```powershell
+python scripts/load_sampling_preset.py --show-profile
+```
+
+## Compact Contract
+
+| Step | Role | Writes | Retrieval | Notes |
+|------|------|--------|-----------|-------|
+| 1 | Compact evidence plan | no | top_k 4-6 | Identify exact file/module/symbol |
+| 2 | Minimal patch | yes | top_k 4-6 | One or two files only |
+| 3 | Failure retry | yes | delta top_k 2-4 | Use only current build error context |
+
+Skip broad critique turns unless the model has enough context. Compact models degrade when the prompt contains too many unrelated docs.
+
+## Rules
+
+- Prefer patches over full file rewrites.
+- Keep edits to one subsystem or one compile surface.
+- Avoid broad refactor modes.
+- Use FTS/default search first; use hybrid only when a larger model/profile is active.
+- Treat a pass without UBT/Editor validation as proposed, not proven.
+
+## Profile Reference
+
+| Profile | Context | top_k | delta top_k | Max files | Attempts |
+|---------|---------|-------|-------------|-----------|----------|
+| `gpt_oss_small` | 8192 | 4 | 2 | 1 | 3 |
+| `qwen3_8b` | 8192 | 5 | 3 | 2 | 3 |
+| `qwen3_5_9b` | 16384 | 5 | 3 | 2 | 4 |
+| `qwen3_5_9b_deepseek_v4_flash` | 16384 | 6 | 3 | 2 | 4 |
+| `gpt_oss_20b` | 16384 | 7 | 4 | 2 | 4 |
+| `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | 16384 | 8 | 4 | 2 | 5 |
+| `qwen3_6_27b` | 32768 | 10 | 5 | 3 | 5 |
+
+The compact profiles are Sonnet 4.5-oriented workflow targets, not Sonnet 4.5 claims.

@@ -37,6 +37,16 @@ Includes retrieval, reasoning, e2e compile fixture, Pass@K dry-run, Build.cs par
 
 KPI scorecard: `data/baseline/tier-kpi-latest.json`
 
+## Interpretation guardrail
+
+Tier/KPI output is an internal UE RAG/MCP/UBT scorecard, not an external model benchmark. Keep Pass@1 separate from Pass@K, and do not claim that Qwen 27B itself is Sonnet 4-grade.
+
+Use this wording instead:
+
+> For UE C++ compile-fix/project-review only, this system showed practical behavior near upper Sonnet 3.7 to lower Sonnet 4 range inside the RAG/MCP/UBT validation loop.
+
+See [Evaluation_Risk_Register.md](Evaluation_Risk_Register.md) and [Real_Project_Validation_Plan.md](Real_Project_Validation_Plan.md).
+
 ## Regression gate (Phases 14-23)
 
 ```powershell

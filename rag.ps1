@@ -1,6 +1,6 @@
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-blueprint-metadata", "collect-material-metadata", "collect-editor-metadata", "collect-failure-memory", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "eval-pass-at-k", "eval-harness", "eval-regression", "preflight-lmstudio", "report-tier-kpi", "sonnet-tier-gate", "verify-release", "build-project-graph", "agent-plan", "reject-failure-memory", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
+    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-blueprint-metadata", "collect-material-metadata", "collect-animation-metadata", "collect-skeletal-mesh-metadata", "collect-anim-blueprint-metadata", "collect-anim-montage-metadata", "collect-sequencer-metadata", "collect-editor-metadata", "collect-failure-memory", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "eval-pass-at-k", "eval-harness", "eval-regression", "summarize-real-project-eval", "preflight-lmstudio", "report-tier-kpi", "sonnet-tier-gate", "verify-release", "build-project-graph", "agent-plan", "reject-failure-memory", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
     [string]$Command,
 
     [string]$IndexNamespace = "",
@@ -252,6 +252,41 @@ switch ($Command) {
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
         & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:material"
     }
+    "collect-animation-metadata" {
+        if (-not $Question) {
+            throw "collect-animation-metadata requires -Question pointing to Editor-export JSONL"
+        }
+        $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:animation"
+    }
+    "collect-skeletal-mesh-metadata" {
+        if (-not $Question) {
+            throw "collect-skeletal-mesh-metadata requires -Question pointing to Editor-export JSONL"
+        }
+        $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:skeletal_mesh"
+    }
+    "collect-anim-blueprint-metadata" {
+        if (-not $Question) {
+            throw "collect-anim-blueprint-metadata requires -Question pointing to Editor-export JSONL"
+        }
+        $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:anim_blueprint"
+    }
+    "collect-anim-montage-metadata" {
+        if (-not $Question) {
+            throw "collect-anim-montage-metadata requires -Question pointing to Editor-export JSONL"
+        }
+        $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:anim_montage"
+    }
+    "collect-sequencer-metadata" {
+        if (-not $Question) {
+            throw "collect-sequencer-metadata requires -Question pointing to Editor-export JSONL"
+        }
+        $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:sequencer"
+    }
     "collect-failure-memory" {
         & $py scripts\collect_failure_memory.py --out data\unreal58\raw_failure_memory.jsonl
     }
@@ -298,6 +333,30 @@ switch ($Command) {
         }
         if (Test-Path "data\unreal58\raw_material_metadata.jsonl") {
             $inputs += "data\unreal58\raw_material_metadata.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_animation_metadata.jsonl") {
+            $inputs += "data\unreal58\raw_animation_metadata.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_skeletal_mesh_metadata.jsonl") {
+            $inputs += "data\unreal58\raw_skeletal_mesh_metadata.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_anim_blueprint_metadata.jsonl") {
+            $inputs += "data\unreal58\raw_anim_blueprint_metadata.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_anim_montage_metadata.jsonl") {
+            $inputs += "data\unreal58\raw_anim_montage_metadata.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_sequencer_metadata.jsonl") {
+            $inputs += "data\unreal58\raw_sequencer_metadata.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_asset_registry.jsonl") {
+            $inputs += "data\unreal58\raw_asset_registry.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_project_settings.jsonl") {
+            $inputs += "data\unreal58\raw_project_settings.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_level_metadata.jsonl") {
+            $inputs += "data\unreal58\raw_level_metadata.jsonl"
         }
         if (Test-Path "data\unreal58\raw_failure_memory.jsonl") {
             $inputs += "data\unreal58\raw_failure_memory.jsonl"
@@ -469,6 +528,13 @@ switch ($Command) {
         & $py @regArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
+    "summarize-real-project-eval" {
+        if (-not $Question) {
+            throw "summarize-real-project-eval requires -Question pointing to a real-project eval JSON file"
+        }
+        & $py scripts\summarize_real_project_eval.py --input $Question --out-dir Reports\real_project_eval\latest
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
     "verify-release" {
         & $py scripts\verify_release.py
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -497,7 +563,7 @@ switch ($Command) {
     "collect-editor-metadata" {
         if (-not $ProjectName) { throw "collect-editor-metadata requires -ProjectName" }
         if (-not $Question) { throw "collect-editor-metadata requires -Question as export spec path:type" }
-        & $py scripts\collect_editor_metadata.py --project-name $ProjectName --export $Question
+        & $py scripts\collect_editor_metadata.py --project-name $ProjectName --out-dir data\unreal58 --export $Question
     }
     "sonnet-tier-gate" {
         $gateArgs = @("-File", (Join-Path $PSScriptRoot "scripts\run_sonnet_tier_gate.ps1"))

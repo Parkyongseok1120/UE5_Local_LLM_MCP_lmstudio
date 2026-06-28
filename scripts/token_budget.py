@@ -84,7 +84,13 @@ def effective_rag_assembly_chars(mode: str) -> int:
 def max_chars_per_row(mode: str) -> int:
     data = load_token_budget_file()
     row_map = data.get("maxCharsPerRow") or ROW_CHARS_DEFAULTS
-    return int(row_map.get(mode) or row_map.get("default") or 5000)
+    base = int(row_map.get(mode) or row_map.get("default") or 5000)
+    scale = assembly_budget_scale()
+    if scale < 1.0:
+        return max(1200, int(base * max(scale, 0.35)))
+    if scale > 1.0:
+        return min(7000, int(base * min(scale, 1.25)))
+    return base
 
 
 def project_summary_limits(mode: str = "execute") -> tuple[int, int]:

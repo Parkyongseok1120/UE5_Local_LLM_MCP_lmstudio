@@ -5,7 +5,7 @@
     "fts_bm25": { "sources": ["*"], "bonus": 0.0 },
     "module_graph": { "sources": ["module_graph"], "bonus": 6.0 },
     "code_semantic": { "sources": ["unreal_source", "unreal_project_text"], "bonus": 3.0 },
-    "asset_metadata": { "sources": ["unreal_blueprint_metadata", "unreal_material_metadata"], "bonus": 5.0 },
+    "asset_metadata": { "sources": ["unreal_blueprint_metadata", "unreal_material_metadata", "unreal_animation_metadata", "unreal_skeletal_mesh_metadata", "unreal_anim_blueprint_metadata", "unreal_anim_montage_metadata", "unreal_sequencer_metadata"], "bonus": 5.0 },
     "design_semantic": { "sources": ["project_guideline", "game_design_doc"], "bonus": 2.0 },
     "build_log": { "sources": ["build_log"], "bonus": 7.0 },
     "playbook": { "sources": ["project_guideline"], "bonus": 4.0 }

@@ -65,6 +65,22 @@ def infer_doc_type(source: str, metadata: dict) -> str:
         return "blueprint_metadata"
     if source == "unreal_material_metadata":
         return "material_metadata"
+    if source == "unreal_animation_metadata":
+        return "animation_metadata"
+    if source == "unreal_skeletal_mesh_metadata":
+        return "skeletal_mesh_metadata"
+    if source == "unreal_anim_blueprint_metadata":
+        return "anim_blueprint_metadata"
+    if source == "unreal_anim_montage_metadata":
+        return "anim_montage_metadata"
+    if source == "unreal_sequencer_metadata":
+        return "sequencer_metadata"
+    if source == "unreal_asset_registry":
+        return "asset_registry"
+    if source == "unreal_project_settings":
+        return "project_settings"
+    if source == "unreal_level_metadata":
+        return "level_metadata"
     if source == "unreal_failure_memory":
         return "failure_memory"
     return source or "unknown"
@@ -82,6 +98,17 @@ def infer_layer(source: str, title: str, metadata: dict) -> str:
     if source == "unreal_blueprint_metadata":
         return "project_architecture"
     if source == "unreal_material_metadata":
+        return "project_architecture"
+    if source in {
+        "unreal_animation_metadata",
+        "unreal_skeletal_mesh_metadata",
+        "unreal_anim_blueprint_metadata",
+        "unreal_anim_montage_metadata",
+        "unreal_sequencer_metadata",
+        "unreal_asset_registry",
+        "unreal_project_settings",
+        "unreal_level_metadata",
+    }:
         return "project_architecture"
     if source == "unreal_failure_memory":
         return "failure_memory"

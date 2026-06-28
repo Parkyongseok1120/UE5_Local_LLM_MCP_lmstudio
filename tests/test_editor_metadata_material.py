@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from build_rag_index import infer_doc_type, infer_layer  # noqa: E402
-from collect_editor_metadata import parse_export_spec, row_to_chunk  # noqa: E402
+from collect_editor_metadata import parse_export_spec, row_to_chunk, source_for_row  # noqa: E402
 
 
 def test_parse_export_spec_keeps_windows_drive_colon():
@@ -58,3 +58,27 @@ def test_material_metadata_index_classification():
 
     assert infer_doc_type("unreal_material_metadata", meta) == "material_metadata"
     assert infer_layer("unreal_material_metadata", "MI_PlayerArmor", meta) == "project_architecture"
+
+
+def test_animation_source_for_row_splits_mixed_export():
+    row = {"asset_path": "/Game/Characters/ABP_Player", "asset_type": "AnimBlueprint"}
+
+    assert source_for_row("animation", row) == "unreal_anim_blueprint_metadata"
+
+
+def test_anim_montage_row_to_chunk_includes_sections_and_notifies():
+    chunk = row_to_chunk(
+        "unreal_anim_montage_metadata",
+        {
+            "asset_path": "/Game/Characters/M_Attack",
+            "asset_type": "AnimMontage",
+            "skeleton": "SKEL_Player",
+            "montage_sections": [{"name": "Start", "start_time": "0.0"}],
+            "notifies": [{"name": "AnimNotify_HitWindow", "time": "0.25"}],
+        },
+        "DemoProject",
+    )
+
+    assert infer_doc_type("unreal_anim_montage_metadata", chunk["metadata"]) == "anim_montage_metadata"
+    assert infer_layer("unreal_anim_montage_metadata", "M_Attack", chunk["metadata"]) == "project_architecture"
+    assert "AnimNotify_HitWindow" in chunk["text"]

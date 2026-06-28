@@ -26,6 +26,11 @@ SOURCE_TYPE_LABELS = {
     "unreal_project_asset_path": "Local project asset path",
     "unreal_blueprint_metadata": "Blueprint metadata export",
     "unreal_material_metadata": "Material metadata export",
+    "unreal_animation_metadata": "Animation metadata export",
+    "unreal_skeletal_mesh_metadata": "SkeletalMesh metadata export",
+    "unreal_anim_blueprint_metadata": "AnimBlueprint metadata export",
+    "unreal_anim_montage_metadata": "AnimMontage metadata export",
+    "unreal_sequencer_metadata": "Sequencer metadata export",
 }
 
 SECTION_LABELS = [

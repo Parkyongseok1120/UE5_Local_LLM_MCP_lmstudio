@@ -87,6 +87,16 @@ def main() -> int:
         "projectReviewRecall": review_recall,
         "estimatedGradeOutOf10": estimated,
         "claim9_0": tier_a_ok and tier_b_ok and (pass_rate or 0) >= 0.67,
+        "interpretation": {
+            "scoreMeaning": "Internal UE RAG/MCP/UBT scorecard only; not an external standardized benchmark.",
+            "recommendedPublicClaim": (
+                "For UE C++ compile-fix/project-review only, the system showed practical behavior "
+                "near upper Sonnet 3.7 to lower Sonnet 4 range under this RAG/MCP/UBT validation loop."
+            ),
+            "forbiddenOverclaim": "Do not state that Qwen 27B itself is Sonnet 4-grade or objectively 9.6/10.",
+            "validationNextStep": "Run 20 unseen real-project errors and report Pass@1, Pass@3, and failure categories.",
+            "forwardTarget": "Sonnet 4.5-oriented local Unreal workflow; target only, not a current model-grade claim.",
+        },
         "sources": {
             "sonnetTier": str(baseline / "sonnet-tier-latest.json"),
             "harness": str(harness_path) if harness_path else None,
@@ -112,6 +122,14 @@ def main() -> int:
         f"- Pass@K rate: {pass_rate:.0%}" if pass_rate is not None else "- Pass@K: not run",
         f"- **Estimated grade: {estimated}/10**",
         f"- 9.0 claim: {'YES' if scorecard['claim9_0'] else 'NO'}",
+        "",
+        "## Interpretation guardrail",
+        "",
+        "- This is an internal UE RAG/MCP/UBT scorecard, not an external standardized benchmark.",
+        "- Do not claim that Qwen 27B itself is Sonnet 4-grade.",
+        "- Safer wording: UE C++ compile-fix/project-review behavior approached upper Sonnet 3.7 to lower Sonnet 4 range inside this validation loop.",
+        "- Next required check: 20 unseen real-project errors with Pass@1, Pass@3, and failure-type reporting.",
+        "- Forward target: Sonnet 4.5-oriented local Unreal workflow. This is a target, not a current model-grade claim.",
     ]
     out_md.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
     print(f"Wrote {out_json}")

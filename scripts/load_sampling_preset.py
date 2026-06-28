@@ -107,7 +107,7 @@ def resolve_active_profile(config: dict[str, Any] | None = None) -> dict[str, An
     legacy = cfg.get(profile_name)
     if isinstance(legacy, dict) and legacy.get("turnPresets"):
         return dict(legacy)
-    fallback = cfg.get("qwen3_6_27b")
+    fallback = profiles.get("qwen3_6_27b") or cfg.get("qwen3_6_27b")
     if isinstance(fallback, dict):
         return dict(fallback)
     return {}
@@ -166,6 +166,11 @@ def profile_edit_limits(profile: str = "") -> dict[str, Any]:
         "allowRefactorModes": bool(policy.get("allowRefactorModes", True)),
         "jsonRepairStrict": bool(policy.get("jsonRepairStrict", True)),
         "historyTurns": int(policy.get("historyTurns") or 4),
+        "defaultTopK": int(policy.get("defaultTopK") or active.get("defaultTopK") or 8),
+        "deltaTopK": int(policy.get("deltaTopK") or active.get("deltaTopK") or 4),
+        "candidateLimitScale": int(policy.get("candidateLimitScale") or active.get("candidateLimitScale") or 20),
+        "targetTier": str(policy.get("targetTier") or active.get("targetTier") or ""),
+        "promptContract": str(policy.get("promptContract") or active.get("promptContract") or ""),
     }
 
 
@@ -195,6 +200,9 @@ def main() -> int:
                     "profile": resolve_profile_name(cfg),
                     "assemblyBudgetScale": profile.get("assemblyBudgetScale", 1.0),
                     "contextLength": profile.get("contextLength"),
+                    "targetTier": profile.get("targetTier", ""),
+                    "defaultTopK": (profile.get("agentPolicy") or {}).get("defaultTopK") or profile.get("defaultTopK"),
+                    "maxFilesPerEdit": (profile.get("agentPolicy") or {}).get("maxFilesPerEdit") or profile.get("maxFilesPerEdit"),
                 },
                 indent=2,
             )

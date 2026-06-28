@@ -20,10 +20,21 @@
   "modelAliases": {
     "qwen3.6-27b": "qwen3_6_27b",
     "qwen3.6": "qwen3_6_27b",
+    "qwen3.5-9b": "qwen3_5_9b",
+    "qwen3-5-9b": "qwen3_5_9b",
+    "qwen-3.5-9b": "qwen3_5_9b",
+    "qwen3.5-9b-deepseek-v4-flash": "qwen3_5_9b_deepseek_v4_flash",
+    "qwen3.5-9b-deepseek-v4-flash-gguf": "qwen3_5_9b_deepseek_v4_flash",
+    "qwen3-5-9b-deepseek-v4-flash-gguf": "qwen3_5_9b_deepseek_v4_flash",
     "qwen3-8b": "qwen3_8b",
     "qwen3_8b": "qwen3_8b",
+    "gpt-oss-8b": "gpt_oss_small",
+    "gpt-oss-12b": "gpt_oss_small",
+    "gpt-oss-small": "gpt_oss_small",
     "generic-large": "generic_large",
     "gpt-oss-20b": "gpt_oss_20b",
+    "gpt-oss-20b-claude-opus-sonnet-reasoning-i1": "gpt_oss_20b_claude_opus_sonnet_reasoning_i1",
+    "gpt-oss-20b-claude-opus-sonnet-reasoning-i1-gguf": "gpt_oss_20b_claude_opus_sonnet_reasoning_i1",
     "gpt-oss-120b": "gpt_oss_120b",
     "qwen-coder-large": "qwen_coder_large",
     "conservative-compile-fix": "conservative_compile_fix",
@@ -32,20 +43,27 @@
   "profiles": {
     "qwen3_6_27b": {
       "contextLength": 32768,
-      "assemblyBudgetScale": 1.0,
+      "assemblyBudgetScale": 1.1,
+      "targetTier": "sonnet_4_5_track",
+      "promptContract": "evidence_then_patch_strict",
       "maxFilesPerEdit": 3,
       "preferPatchOverFullFile": true,
       "quantDefault": "Q4_K_M",
       "agentPolicy": {
-        "ragBudgetScale": 1.0,
+        "ragBudgetScale": 1.1,
         "maxFilesPerEdit": 3,
         "preferPatch": true,
         "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 4,
+        "deepSearch": true,
+        "compileFixMaxAttempts": 5,
         "allowRefactorModes": true,
         "jsonRepairStrict": true,
-        "historyTurns": 4
+        "historyTurns": 5,
+        "defaultTopK": 10,
+        "deltaTopK": 5,
+        "candidateLimitScale": 24,
+        "targetTier": "sonnet_4_5_track",
+        "promptContract": "evidence_then_patch_strict"
       },
       "abTuning": {
         "preserve_thinking": ["off", "on"],
@@ -96,8 +114,28 @@
     },
     "qwen3_8b": {
       "contextLength": 8192,
-      "assemblyBudgetScale": 0.5,
+      "assemblyBudgetScale": 0.55,
+      "targetTier": "compact_sonnet_4_5_track",
+      "promptContract": "compact_evidence_patch_only",
+      "maxFilesPerEdit": 2,
+      "preferPatchOverFullFile": true,
       "quantDefault": "Q4_K_M",
+      "agentPolicy": {
+        "ragBudgetScale": 0.55,
+        "maxFilesPerEdit": 2,
+        "preferPatch": true,
+        "planningRequired": true,
+        "deepSearch": false,
+        "compileFixMaxAttempts": 3,
+        "allowRefactorModes": false,
+        "jsonRepairStrict": true,
+        "historyTurns": 2,
+        "defaultTopK": 5,
+        "deltaTopK": 3,
+        "candidateLimitScale": 14,
+        "targetTier": "compact_sonnet_4_5_track",
+        "promptContract": "compact_evidence_patch_only"
+      },
       "turnPresets": {
         "plan": {
           "thinking": "off",
@@ -138,6 +176,72 @@
           "topP": 0.8,
           "maxTokens": 1024
         }
+      }
+    },
+    "qwen3_5_9b": {
+      "contextLength": 16384,
+      "assemblyBudgetScale": 0.65,
+      "targetTier": "compact_sonnet_4_5_track",
+      "promptContract": "compact_evidence_patch_only",
+      "maxFilesPerEdit": 2,
+      "preferPatchOverFullFile": true,
+      "quantDefault": "Q4_K_M",
+      "agentPolicy": {
+        "ragBudgetScale": 0.65,
+        "maxFilesPerEdit": 2,
+        "preferPatch": true,
+        "planningRequired": true,
+        "deepSearch": false,
+        "compileFixMaxAttempts": 4,
+        "allowRefactorModes": false,
+        "jsonRepairStrict": true,
+        "historyTurns": 2,
+        "defaultTopK": 5,
+        "deltaTopK": 3,
+        "candidateLimitScale": 14,
+        "targetTier": "compact_sonnet_4_5_track",
+        "promptContract": "compact_evidence_patch_only"
+      },
+      "turnPresets": {
+        "plan": { "thinking": "off", "temperature": 0.22, "topP": 0.85, "maxTokens": 2304 },
+        "critique": { "thinking": "off", "temperature": 0.18, "topP": 0.85, "maxTokens": 1536 },
+        "execute": { "thinking": "off", "temperature": 0.07, "topP": 0.75, "maxTokens": 2304 },
+        "compile_fix_analyze": { "thinking": "off", "temperature": 0.12, "topP": 0.8, "maxTokens": 2304 },
+        "compile_fix_patch": { "thinking": "off", "temperature": 0.05, "topP": 0.75, "maxTokens": 2304 },
+        "api_lookup": { "thinking": "off", "temperature": 0.03, "topP": 0.75, "maxTokens": 1280 }
+      }
+    },
+    "qwen3_5_9b_deepseek_v4_flash": {
+      "contextLength": 16384,
+      "assemblyBudgetScale": 0.75,
+      "targetTier": "compact_sonnet_4_5_track",
+      "promptContract": "flash_reasoning_compact_patch",
+      "maxFilesPerEdit": 2,
+      "preferPatchOverFullFile": true,
+      "quantDefault": "Q4_K_M",
+      "agentPolicy": {
+        "ragBudgetScale": 0.75,
+        "maxFilesPerEdit": 2,
+        "preferPatch": true,
+        "planningRequired": true,
+        "deepSearch": false,
+        "compileFixMaxAttempts": 4,
+        "allowRefactorModes": false,
+        "jsonRepairStrict": true,
+        "historyTurns": 3,
+        "defaultTopK": 6,
+        "deltaTopK": 3,
+        "candidateLimitScale": 16,
+        "targetTier": "compact_sonnet_4_5_track",
+        "promptContract": "flash_reasoning_compact_patch"
+      },
+      "turnPresets": {
+        "plan": { "thinking": "off", "temperature": 0.18, "topP": 0.82, "maxTokens": 3072 },
+        "critique": { "thinking": "off", "temperature": 0.14, "topP": 0.82, "maxTokens": 2048 },
+        "execute": { "thinking": "off", "temperature": 0.06, "topP": 0.72, "maxTokens": 2816 },
+        "compile_fix_analyze": { "thinking": "off", "temperature": 0.1, "topP": 0.78, "maxTokens": 3072 },
+        "compile_fix_patch": { "thinking": "off", "temperature": 0.04, "topP": 0.72, "maxTokens": 2816 },
+        "api_lookup": { "thinking": "off", "temperature": 0.03, "topP": 0.72, "maxTokens": 1536 }
       }
     },
     "generic_large": {
@@ -186,26 +290,99 @@
     },
     "gpt_oss_20b": {
       "contextLength": 16384,
-      "assemblyBudgetScale": 0.75,
+      "assemblyBudgetScale": 0.9,
+      "targetTier": "compact_sonnet_4_5_track",
+      "promptContract": "strict_json_evidence_patch",
       "maxFilesPerEdit": 2,
       "preferPatchOverFullFile": true,
       "agentPolicy": {
-        "ragBudgetScale": 0.75,
+        "ragBudgetScale": 0.9,
         "maxFilesPerEdit": 2,
+        "preferPatch": true,
+        "planningRequired": true,
+        "deepSearch": false,
+        "compileFixMaxAttempts": 4,
+        "allowRefactorModes": false,
+        "jsonRepairStrict": true,
+        "historyTurns": 3,
+        "defaultTopK": 7,
+        "deltaTopK": 4,
+        "candidateLimitScale": 18,
+        "targetTier": "compact_sonnet_4_5_track",
+        "promptContract": "strict_json_evidence_patch"
+      },
+      "quantDefault": "Q4_K_M",
+      "turnPresets": {
+        "plan": { "thinking": "off", "temperature": 0.2, "topP": 0.82, "maxTokens": 3584 },
+        "execute": { "thinking": "off", "temperature": 0.06, "topP": 0.72, "maxTokens": 3328 },
+        "compile_fix_analyze": { "thinking": "off", "temperature": 0.1, "topP": 0.78, "maxTokens": 3584 },
+        "compile_fix_patch": { "thinking": "off", "temperature": 0.04, "topP": 0.72, "maxTokens": 3328 },
+        "api_lookup": { "thinking": "off", "temperature": 0.03, "topP": 0.75, "maxTokens": 1536 }
+      }
+    },
+    "gpt_oss_20b_claude_opus_sonnet_reasoning_i1": {
+      "contextLength": 16384,
+      "assemblyBudgetScale": 0.95,
+      "targetTier": "compact_sonnet_4_5_track",
+      "promptContract": "reasoning_i1_strict_patch_verify",
+      "maxFilesPerEdit": 2,
+      "preferPatchOverFullFile": true,
+      "agentPolicy": {
+        "ragBudgetScale": 0.95,
+        "maxFilesPerEdit": 2,
+        "preferPatch": true,
+        "planningRequired": true,
+        "deepSearch": false,
+        "compileFixMaxAttempts": 5,
+        "allowRefactorModes": false,
+        "jsonRepairStrict": true,
+        "historyTurns": 3,
+        "defaultTopK": 8,
+        "deltaTopK": 4,
+        "candidateLimitScale": 18,
+        "targetTier": "compact_sonnet_4_5_track",
+        "promptContract": "reasoning_i1_strict_patch_verify"
+      },
+      "quantDefault": "Q4_K_M",
+      "turnPresets": {
+        "plan": { "thinking": "off", "temperature": 0.16, "topP": 0.8, "maxTokens": 4096 },
+        "critique": { "thinking": "off", "temperature": 0.12, "topP": 0.78, "maxTokens": 3072 },
+        "execute": { "thinking": "off", "temperature": 0.05, "topP": 0.72, "maxTokens": 3584 },
+        "compile_fix_analyze": { "thinking": "off", "temperature": 0.08, "topP": 0.76, "maxTokens": 4096 },
+        "compile_fix_patch": { "thinking": "off", "temperature": 0.035, "topP": 0.7, "maxTokens": 3584 },
+        "api_lookup": { "thinking": "off", "temperature": 0.025, "topP": 0.72, "maxTokens": 1792 }
+      }
+    },
+    "gpt_oss_small": {
+      "contextLength": 8192,
+      "assemblyBudgetScale": 0.5,
+      "targetTier": "compact_baseline_track",
+      "promptContract": "minimal_schema_patch",
+      "maxFilesPerEdit": 1,
+      "preferPatchOverFullFile": true,
+      "agentPolicy": {
+        "ragBudgetScale": 0.5,
+        "maxFilesPerEdit": 1,
         "preferPatch": true,
         "planningRequired": true,
         "deepSearch": false,
         "compileFixMaxAttempts": 3,
         "allowRefactorModes": false,
         "jsonRepairStrict": true,
-        "historyTurns": 2
+        "historyTurns": 1,
+        "defaultTopK": 4,
+        "deltaTopK": 2,
+        "candidateLimitScale": 12,
+        "targetTier": "compact_baseline_track",
+        "promptContract": "minimal_schema_patch"
       },
       "quantDefault": "Q4_K_M",
       "turnPresets": {
-        "plan": { "thinking": "off", "temperature": 0.4, "topP": 0.9, "maxTokens": 2048 },
-        "execute": { "thinking": "off", "temperature": 0.1, "topP": 0.8, "maxTokens": 2048 },
-        "compile_fix_analyze": { "thinking": "off", "temperature": 0.2, "topP": 0.85, "maxTokens": 2048 },
-        "compile_fix_patch": { "thinking": "off", "temperature": 0.1, "topP": 0.8, "maxTokens": 2048 }
+        "plan": { "thinking": "off", "temperature": 0.2, "topP": 0.85, "maxTokens": 1536 },
+        "execute": { "thinking": "off", "temperature": 0.06, "topP": 0.75, "maxTokens": 1536 },
+        "compile_fix_analyze": { "thinking": "off", "temperature": 0.1, "topP": 0.8, "maxTokens": 1536 },
+        "compile_fix_patch": { "thinking": "off", "temperature": 0.05, "topP": 0.75, "maxTokens": 1536 },
+        "api_lookup": { "thinking": "off", "temperature": 0.03, "topP": 0.75, "maxTokens": 1024 }
       }
     },
     "gpt_oss_120b": {

@@ -54,6 +54,8 @@ try {
     $payload = @{
         generatedAt = (Get-Date).ToUniversalTime().ToString("o")
         tier          = if ($Live) { "B-live" } else { "A-static" }
+        target        = "sonnet_4_5_oriented_workflow"
+        targetNote    = "Internal workflow target only; not a current model-grade claim."
         results       = $results
         passCount     = @($results | Where-Object { $_.pass }).Count
         total         = $results.Count

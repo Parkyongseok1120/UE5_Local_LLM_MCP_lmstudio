@@ -21,7 +21,9 @@ Output:
   "nodes": [
     {"id": "class:UMyActor", "type": "class", "path": "Source/..."},
     {"id": "bp:BP_Player", "type": "blueprint", "assetPath": "/Game/..."},
-    {"id": "material:/Game/Materials/MI_Player", "type": "material", "assetPath": "/Game/Materials/MI_Player"}
+    {"id": "material:/Game/Materials/MI_Player", "type": "material", "assetPath": "/Game/Materials/MI_Player"},
+    {"id": "anim_blueprint:/Game/Characters/ABP_Player", "type": "anim_blueprint", "assetPath": "/Game/Characters/ABP_Player"},
+    {"id": "sequencer:/Game/Cinematics/LS_Intro", "type": "sequencer", "assetPath": "/Game/Cinematics/LS_Intro"}
   ],
   "edges": [
     {"from": "class:UMyActor", "to": "class:AActor", "kind": "inherits"},
@@ -40,6 +42,11 @@ Output:
 - PAB (`project_architecture.json`)
 - Blueprint metadata (`raw_blueprint_metadata.jsonl`)
 - Material metadata (`raw_material_metadata.jsonl`)
+- Animation metadata (`raw_animation_metadata.jsonl`)
+- SkeletalMesh metadata (`raw_skeletal_mesh_metadata.jsonl`)
+- AnimBlueprint metadata (`raw_anim_blueprint_metadata.jsonl`)
+- AnimMontage metadata (`raw_anim_montage_metadata.jsonl`)
+- Sequencer metadata (`raw_sequencer_metadata.jsonl`)
 - Module graph (via PAB modules)
 
 Use for duplicate subsystem detection and architecture review.

@@ -19,6 +19,26 @@ def load_json(path: Path) -> dict | list | None:
         return None
 
 
+def read_jsonl_metadata(path: Path):
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        yield row.get("metadata") or row
+
+
+def add_dependency_edges(edges: list[dict[str, Any]], source_id: str, dependencies: list[Any]) -> None:
+    for dep in dependencies[:80]:
+        dep_path = str(dep)
+        if dep_path:
+            edges.append({"from": source_id, "to": f"asset:{dep_path}", "kind": "depends_on_asset"})
+
+
 def build_graph(workspace: Path, project_root: Path, project_name: str) -> dict[str, Any]:
     index_dir = workspace / "data" / "unreal58"
     pab_path = index_dir / "project_architecture.json"
@@ -48,42 +68,63 @@ def build_graph(workspace: Path, project_root: Path, project_name: str) -> dict[
         nodes.append({"id": f"dataasset:{da.get('name')}", "type": "data_asset", "path": da.get("path")})
 
     bp_raw = index_dir / "raw_blueprint_metadata.jsonl"
-    if bp_raw.is_file():
-        for line in bp_raw.read_text(encoding="utf-8", errors="replace").splitlines():
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            meta = row.get("metadata") or row
-            ap = meta.get("asset_path") or row.get("asset_path")
-            gen = meta.get("generated_class") or row.get("generated_class")
-            parent = meta.get("parent_class") or row.get("parent_class")
-            if ap:
-                nid = f"bp:{gen or ap}"
-                nodes.append({"id": nid, "type": "blueprint", "assetPath": ap, "generatedClass": gen})
-                if parent:
-                    edges.append({"from": nid, "to": f"class:{parent}", "kind": "inherits"})
+    for meta in read_jsonl_metadata(bp_raw) or []:
+        ap = meta.get("asset_path")
+        gen = meta.get("generated_class")
+        parent = meta.get("parent_class")
+        if ap:
+            nid = f"bp:{gen or ap}"
+            nodes.append({"id": nid, "type": "blueprint", "assetPath": ap, "generatedClass": gen})
+            if parent:
+                edges.append({"from": nid, "to": f"class:{parent}", "kind": "inherits"})
+            add_dependency_edges(edges, nid, meta.get("dependencies") or [])
 
     material_raw = index_dir / "raw_material_metadata.jsonl"
-    if material_raw.is_file():
-        for line in material_raw.read_text(encoding="utf-8", errors="replace").splitlines():
-            if not line.strip():
+    for meta in read_jsonl_metadata(material_raw) or []:
+        ap = meta.get("asset_path")
+        asset_type = meta.get("asset_type")
+        parent = meta.get("parent_material")
+        if ap:
+            nid = f"material:{ap}"
+            nodes.append({"id": nid, "type": "material", "assetPath": ap, "assetType": asset_type})
+            if parent:
+                edges.append({"from": nid, "to": f"material:{parent}", "kind": "material_parent"})
+            add_dependency_edges(edges, nid, meta.get("dependencies") or [])
+
+    animation_raws = (
+        index_dir / "raw_animation_metadata.jsonl",
+        index_dir / "raw_skeletal_mesh_metadata.jsonl",
+        index_dir / "raw_anim_blueprint_metadata.jsonl",
+        index_dir / "raw_anim_montage_metadata.jsonl",
+        index_dir / "raw_sequencer_metadata.jsonl",
+    )
+    animation_type_map = {
+        "SkeletalMesh": "skeletal_mesh",
+        "AnimBlueprint": "anim_blueprint",
+        "AnimSequence": "animation",
+        "AnimMontage": "anim_montage",
+        "AnimNotify": "anim_notify",
+        "AnimNotifyState": "anim_notify_state",
+        "LevelSequence": "sequencer",
+    }
+    for raw_path in animation_raws:
+        for meta in read_jsonl_metadata(raw_path) or []:
+            ap = meta.get("asset_path")
+            asset_type = meta.get("asset_type") or "AnimationAsset"
+            if not ap:
                 continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            meta = row.get("metadata") or row
-            ap = meta.get("asset_path") or row.get("asset_path")
-            asset_type = meta.get("asset_type") or row.get("asset_type")
-            parent = meta.get("parent_material") or row.get("parent_material")
-            if ap:
-                nid = f"material:{ap}"
-                nodes.append({"id": nid, "type": "material", "assetPath": ap, "assetType": asset_type})
-                if parent:
-                    edges.append({"from": nid, "to": f"material:{parent}", "kind": "material_parent"})
+            node_type = animation_type_map.get(str(asset_type), "animation")
+            nid = f"{node_type}:{ap}"
+            nodes.append({"id": nid, "type": node_type, "assetPath": ap, "assetType": asset_type})
+            if meta.get("skeleton"):
+                edges.append({"from": nid, "to": f"skeleton:{meta['skeleton']}", "kind": "uses_skeleton"})
+            if meta.get("physics_asset"):
+                edges.append({"from": nid, "to": f"physics_asset:{meta['physics_asset']}", "kind": "uses_physics_asset"})
+            for material in meta.get("materials") or []:
+                material_name = material.get("material") if isinstance(material, dict) else str(material)
+                if material_name:
+                    edges.append({"from": nid, "to": f"material:{material_name}", "kind": "uses_material"})
+            add_dependency_edges(edges, nid, meta.get("dependencies") or [])
 
     graph = {
         "project": project_name,
@@ -97,6 +138,12 @@ def build_graph(workspace: Path, project_root: Path, project_name: str) -> dict[
             "classCount": len(pab.get("classes") or []),
             "blueprintCount": sum(1 for n in nodes if n.get("type") == "blueprint"),
             "materialCount": sum(1 for n in nodes if n.get("type") == "material"),
+            "animationAssetCount": sum(
+                1
+                for n in nodes
+                if n.get("type")
+                in {"skeletal_mesh", "anim_blueprint", "animation", "anim_montage", "anim_notify", "anim_notify_state", "sequencer"}
+            ),
         },
     }
     return graph

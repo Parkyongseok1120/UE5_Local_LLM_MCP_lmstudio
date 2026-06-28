@@ -193,6 +193,11 @@ MODE_SOURCE_BIAS = {
         "epic_docs": -1.0,
         "unreal_blueprint_metadata": -6.0,
         "unreal_material_metadata": -6.0,
+        "unreal_animation_metadata": -6.0,
+        "unreal_skeletal_mesh_metadata": -6.0,
+        "unreal_anim_blueprint_metadata": -6.0,
+        "unreal_anim_montage_metadata": -6.0,
+        "unreal_sequencer_metadata": -6.0,
         "unreal_project_asset_path": 2.0,
     },
     "codegen": {
@@ -327,6 +332,11 @@ MODE_SOURCE_BIAS = {
         "build_log": -1.0,
         "unreal_blueprint_metadata": -5.0,
         "unreal_material_metadata": -5.0,
+        "unreal_animation_metadata": -5.0,
+        "unreal_skeletal_mesh_metadata": -5.0,
+        "unreal_anim_blueprint_metadata": -5.0,
+        "unreal_anim_montage_metadata": -5.0,
+        "unreal_sequencer_metadata": -5.0,
         "unreal_project_asset_path": 1.0,
     },
 }
@@ -572,6 +582,17 @@ ASSET_METADATA_HINTS = {
     "m_",
     "texture",
     "parameter",
+    "skeletalmesh",
+    "skeletal_mesh",
+    "animblueprint",
+    "anim_bp",
+    "anim montage",
+    "animmontage",
+    "montage",
+    "notify",
+    "sequencer",
+    "levelsequence",
+    "level sequence",
     "블루프린트",
     "머티리얼",
     "머터리얼",
@@ -828,6 +849,29 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
         if source == "unreal_material_metadata" and any(
             marker in query_lower
             for marker in ("material", "materials", "materialinstance", "mi_", "m_", "texture", "parameter", "머티리얼", "머터리얼", "재질", "텍스처")
+        ):
+            score -= 12.0
+        if source in {
+            "unreal_animation_metadata",
+            "unreal_skeletal_mesh_metadata",
+            "unreal_anim_blueprint_metadata",
+            "unreal_anim_montage_metadata",
+            "unreal_sequencer_metadata",
+        } and any(
+            marker in query_lower
+            for marker in (
+                "skeletalmesh",
+                "skeletal_mesh",
+                "animblueprint",
+                "anim_bp",
+                "anim montage",
+                "animmontage",
+                "montage",
+                "notify",
+                "sequencer",
+                "levelsequence",
+                "level sequence",
+            )
         ):
             score -= 12.0
         if source == "unreal_project_asset_path":

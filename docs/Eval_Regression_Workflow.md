@@ -24,6 +24,8 @@ Reports/eval/failures/<step>/<timestamp>/   # on fail
 - Compares to previous `Reports/eval/latest.json` before overwrite
 - **Fails** if any step regresses vs baseline pass set
 - **Fails** if Pass@K rate drops >10% vs baseline metrics
+- Treats Tier/KPI values as internal workflow metrics, not external model rankings
+- Requires separate real-project Pass@1/Pass@3 validation before stronger claims
 
 ## CI
 
@@ -37,3 +39,11 @@ After changes to search/rerank/orchestrator, run locally before merge:
 .\rag.ps1 eval-regression
 .\rag.ps1 report-tier-kpi
 ```
+
+For unseen real-project validation:
+
+```powershell
+.\rag.ps1 summarize-real-project-eval -Question config\real_project_eval_template.json
+```
+
+Use a filled copy of `config\real_project_eval_template.json`, not the template itself, for real reporting.

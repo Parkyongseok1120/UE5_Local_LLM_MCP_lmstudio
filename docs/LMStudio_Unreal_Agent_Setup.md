@@ -87,14 +87,16 @@ Install MCP into Cline:
 
 Legacy Continue: [`docs/Continue_Qwen_Unreal_Agent_Setup.md`](Continue_Qwen_Unreal_Agent_Setup.md) (not recommended).
 
-## 10. Sonnet-4 track (Qwen 3.6 27B)
+## 10. Sonnet 4.5-oriented track
 
 Sampling presets: [`config/lmstudio_sampling.json`](../config/lmstudio_sampling.json)
 
-| Turn | thinking | temperature |
-|------|----------|-------------|
-| Plan / Critique | ON | 0.6 |
-| Execute | OFF | 0.15 |
+| Profile | Use |
+|---------|-----|
+| `qwen3_6_27b` | Main local track; broader retrieval and 5-attempt compile loop |
+| `gpt_oss_20b` | Compact 20B track; strict JSON and two-file patch cap |
+| `gpt_oss_small` | GPT OSS below 20B; one-file patch cap |
+| `qwen3_8b` | Small Qwen track; two-turn shortcut |
 
 N-turn prompts:
 - [`prompts/lmstudio_reasoning_turn1_plan.md`](../prompts/lmstudio_reasoning_turn1_plan.md)
@@ -110,5 +112,7 @@ Regression:
 .\rag.ps1 sonnet-tier-gate
 .\rag.ps1 eval-reasoning
 ```
+
+This is a target track, not a current Sonnet 4.5-grade claim. See [Sonnet45_Target_Plan.md](Sonnet45_Target_Plan.md).
 
 Hybrid vs FTS A/B: see `qwen3_6_27b.abTuning` in sampling.json — run Phase 14 only after score ≥80.

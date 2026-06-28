@@ -1871,14 +1871,16 @@ def collect_rag_context(args: argparse.Namespace, request: str, *, top_k: int | 
     index = Path(args.index)
     if not index.exists():
         return f"RAG index does not exist: {index}"
+    policy = profile_edit_limits()
     effective_top_k = top_k if top_k is not None else args.top_k
+    candidate_scale = int(policy.get("candidateLimitScale") or 20)
     rows = search_index(
         index,
         request,
         effective_top_k,
         SearchOptions(
             mode=args.mode,
-            candidate_limit=max(120, effective_top_k * 20),
+            candidate_limit=max(40, effective_top_k * candidate_scale),
         ),
     )
     return assemble_context(rows, request, args.mode)
@@ -1896,11 +1898,14 @@ def collect_delta_rag_context(
     if changed_files:
         query = f"{query} {' '.join(changed_files)}".strip()
     query = query[:4000] or "compile_fix"
+    policy = profile_edit_limits()
+    effective_top_k = int(policy.get("deltaTopK") or 4)
+    candidate_scale = int(policy.get("candidateLimitScale") or 20)
     rows = search_index(
         index,
         query,
-        4,
-        SearchOptions(mode="compile_fix", candidate_limit=40),
+        effective_top_k,
+        SearchOptions(mode="compile_fix", candidate_limit=max(30, effective_top_k * candidate_scale)),
     )
     return assemble_context(rows, query, "compile_fix")
 
@@ -2067,6 +2072,8 @@ def system_prompt(rules_text: str, edit_limits: dict[str, Any] | None = None) ->
     limits = edit_limits or {}
     max_files = int(limits.get("maxFilesPerEdit") or 4)
     prefer_patch = bool(limits.get("preferPatchOverFullFile", True))
+    target_tier = str(limits.get("targetTier") or "").strip()
+    prompt_contract = str(limits.get("promptContract") or "").strip()
     patch_hint = (
         f"Prefer patches[] for existing files over ~{threshold} lines when possible."
         if prefer_patch
@@ -2077,6 +2084,8 @@ def system_prompt(rules_text: str, edit_limits: dict[str, Any] | None = None) ->
 You are now running inside an automated compile wrapper.
 Return only one valid JSON object. Do not use markdown fences.
 Do not use C++ namespaces unless they are truly necessary.
+Target quality track: {target_tier or "standard_unreal_agent"}.
+Active model contract: {prompt_contract or "evidence_first_minimal_patch"}.
 
 Global file edit discipline:
 - The current project files in the user prompt are the source of truth, even if an earlier plan said otherwise.
@@ -2301,19 +2310,60 @@ def prepare_run(args: argparse.Namespace, request: str) -> PreparedRun:
     return PreparedRun(run_dir, project_file, project_name, target, source_project_file, direct_project_write)
 
 
-def run(args: argparse.Namespace) -> int:
-    temperature_was_default = float(getattr(args, "temperature", 0.1)) == 0.1
-    max_tokens_was_default = int(getattr(args, "max_tokens", 0) or 0) == 0
-    feedback_chars_was_default = int(getattr(args, "feedback_chars", 0) or 0) == 12000
+def apply_profile_defaults(
+    args: argparse.Namespace,
+    *,
+    temperature_was_default: bool,
+    max_tokens_was_default: bool,
+    feedback_chars_was_default: bool,
+    top_k_was_default: bool,
+    max_attempts_was_default: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     preset = preset_for_wrapper(args.mode)
+    policy = profile_edit_limits()
     if temperature_was_default:
         args.temperature = float(preset.get("temperature", args.temperature))
     if max_tokens_was_default and preset.get("maxTokens"):
         args.max_tokens = int(preset["maxTokens"])
     if feedback_chars_was_default:
         args.feedback_chars = token_budget.feedback_tail_chars(args.mode)
+    if top_k_was_default and policy.get("defaultTopK"):
+        args.top_k = int(policy["defaultTopK"])
+    if max_attempts_was_default and policy.get("compileFixMaxAttempts"):
+        args.max_attempts = int(policy["compileFixMaxAttempts"])
+    return preset, policy
+
+
+def run(args: argparse.Namespace) -> int:
+    temperature_was_default = float(getattr(args, "temperature", 0.1)) == 0.1
+    max_tokens_was_default = int(getattr(args, "max_tokens", 0) or 0) == 0
+    feedback_chars_was_default = int(getattr(args, "feedback_chars", 0) or 0) == 12000
+    top_k_was_default = int(getattr(args, "top_k", 0) or 0) == 8
+    max_attempts_was_default = int(getattr(args, "max_attempts", 0) or 0) == 4
+    preset, active_policy = apply_profile_defaults(
+        args,
+        temperature_was_default=temperature_was_default,
+        max_tokens_was_default=max_tokens_was_default,
+        feedback_chars_was_default=feedback_chars_was_default,
+        top_k_was_default=top_k_was_default,
+        max_attempts_was_default=max_attempts_was_default,
+    )
 
     request = load_request(args)
+    model = ""
+    if not args.dry_run:
+        model = resolve_model(args)
+        selected_profile = set_sampling_profile_for_model(model)
+        if selected_profile:
+            preset, active_policy = apply_profile_defaults(
+                args,
+                temperature_was_default=temperature_was_default,
+                max_tokens_was_default=max_tokens_was_default,
+                feedback_chars_was_default=feedback_chars_was_default,
+                top_k_was_default=top_k_was_default,
+                max_attempts_was_default=max_attempts_was_default,
+            )
+
     prepared = prepare_run(args, request)
     run_dir = prepared.run_dir
     project_file = prepared.project_file
@@ -2354,16 +2404,6 @@ def run(args: argparse.Namespace) -> int:
         print(f"dry run complete: {run_dir}")
         return 0
 
-    model = resolve_model(args)
-    selected_profile = set_sampling_profile_for_model(model)
-    if selected_profile:
-        preset = preset_for_wrapper(args.mode)
-        if temperature_was_default:
-            args.temperature = float(preset.get("temperature", args.temperature))
-        if max_tokens_was_default and preset.get("maxTokens"):
-            args.max_tokens = int(preset["maxTokens"])
-        if feedback_chars_was_default:
-            args.feedback_chars = token_budget.feedback_tail_chars(args.mode)
     edit_limits = profile_edit_limits()
     messages = [{"role": "system", "content": system_prompt(rules_text, edit_limits)}]
     last_answer = ""

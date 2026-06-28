@@ -180,6 +180,12 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         notes.append("Prefer minimal patch over full-file rewrite.")
     if policy.get("maxFilesPerEdit"):
         notes.append(f"Max files per edit: {policy['maxFilesPerEdit']}")
+    if policy.get("defaultTopK"):
+        notes.append(f"Default retrieval top_k: {policy['defaultTopK']}")
+    if policy.get("targetTier"):
+        notes.append(f"Target track: {policy['targetTier']}")
+    if policy.get("promptContract"):
+        notes.append(f"Prompt contract: {policy['promptContract']}")
     if not policy.get("allowRefactorModes", True) and task_kind == "refactor":
         strategy = "no_edit"
         evidence.writes_allowed = False

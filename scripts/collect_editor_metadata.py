@@ -13,6 +13,11 @@ from typing import Any
 SOURCE_MAP = {
     "blueprint": "unreal_blueprint_metadata",
     "material": "unreal_material_metadata",
+    "animation": "unreal_animation_metadata",
+    "skeletal_mesh": "unreal_skeletal_mesh_metadata",
+    "anim_blueprint": "unreal_anim_blueprint_metadata",
+    "anim_montage": "unreal_anim_montage_metadata",
+    "sequencer": "unreal_sequencer_metadata",
     "asset_registry": "unreal_asset_registry",
     "project_settings": "unreal_project_settings",
     "level": "unreal_level_metadata",
@@ -22,8 +27,21 @@ SOURCE_MAP = {
 UASSET_SOURCES = {
     "unreal_blueprint_metadata",
     "unreal_material_metadata",
+    "unreal_animation_metadata",
+    "unreal_skeletal_mesh_metadata",
+    "unreal_anim_blueprint_metadata",
+    "unreal_anim_montage_metadata",
+    "unreal_sequencer_metadata",
     "unreal_asset_registry",
     "unreal_level_metadata",
+}
+
+
+ANIMATION_ASSET_SOURCE_MAP = {
+    "SkeletalMesh": "unreal_skeletal_mesh_metadata",
+    "AnimBlueprint": "unreal_anim_blueprint_metadata",
+    "AnimMontage": "unreal_anim_montage_metadata",
+    "LevelSequence": "unreal_sequencer_metadata",
 }
 
 
@@ -36,6 +54,13 @@ def parse_export_spec(spec: str) -> tuple[Path, str]:
     return Path(path_str), kind
 
 
+def source_for_row(source_key: str, row: dict[str, Any]) -> str:
+    if source_key == "animation":
+        asset_type = str(row.get("asset_type") or "")
+        return ANIMATION_ASSET_SOURCE_MAP.get(asset_type, "unreal_animation_metadata")
+    return SOURCE_MAP.get(source_key, source_key)
+
+
 def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, Any]:
     path = str(row.get("asset_path") or row.get("path") or row.get("map_path") or project)
     title = str(row.get("title") or row.get("generated_class") or row.get("key") or path)
@@ -44,9 +69,15 @@ def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, An
         "asset_type",
         "parent_class",
         "generated_class",
+        "skeleton",
+        "skeletal_mesh",
+        "physics_asset",
         "parent_material",
         "blend_mode",
         "shading_model",
+        "sequence_length",
+        "rate_scale",
+        "frame_rate",
         "game_mode",
         "setting",
         "value",
@@ -62,6 +93,17 @@ def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, An
         "vector_parameters",
         "texture_parameters",
         "static_switch_parameters",
+        "graphs",
+        "nodes",
+        "pins",
+        "expressions",
+        "materials",
+        "notifies",
+        "notify_tracks",
+        "montage_sections",
+        "slots",
+        "bindings",
+        "tracks",
         "dependencies",
     ):
         if row.get(key):
@@ -79,13 +121,13 @@ def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, An
 
 
 def ingest_export(export_path: Path, source_key: str, project: str, out_handle) -> int:
-    source = SOURCE_MAP.get(source_key, source_key)
     count = 0
     for line in export_path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         line = line.strip()
         if not line:
             continue
         row = json.loads(line)
+        source = source_for_row(source_key, row)
         chunk = row_to_chunk(source, row, project)
         out_handle.write(json.dumps(chunk, ensure_ascii=False) + "\n")
         count += 1

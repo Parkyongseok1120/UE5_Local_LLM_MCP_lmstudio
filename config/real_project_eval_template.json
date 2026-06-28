@@ -1,0 +1,34 @@
+{
+  "description": "Template for 20 unseen real-project Unreal error validation.",
+  "projectName": "",
+  "engineVersion": "5.8",
+  "defaults": {
+    "maxAttempts": 3,
+    "requireUbtOrEditorValidation": true,
+    "requireFixtureLeakageCheck": true
+  },
+  "cases": [
+    {
+      "id": "real_001",
+      "category": "plugin_module_conflict",
+      "projectFile": "C:/Path/To/Project/Game.uproject",
+      "target": "GameEditor",
+      "mode": "module_fix",
+      "requestFile": "Reports/real_project_eval/inputs/real_001_request.txt",
+      "initialErrorSummary": "",
+      "unseen": true,
+      "fixtureLeakageChecked": false
+    },
+    {
+      "id": "real_002",
+      "category": "blueprint_only_reference",
+      "projectFile": "C:/Path/To/Project/Game.uproject",
+      "target": "GameEditor",
+      "mode": "reflection_fix",
+      "requestFile": "Reports/real_project_eval/inputs/real_002_request.txt",
+      "initialErrorSummary": "",
+      "unseen": true,
+      "fixtureLeakageChecked": false
+    }
+  ]
+}
