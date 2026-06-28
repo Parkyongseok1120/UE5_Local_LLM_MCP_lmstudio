@@ -11,6 +11,11 @@ DEFAULT_LMSTUDIO_ROOT = Path.home() / ".lmstudio"
 DEFAULT_ENGINE_VERSION = "5.8"
 DEFAULT_INDEX_NAMESPACE = "unreal58"
 FALLBACK_INDEX_REL = Path("data/unreal58/rag.sqlite")
+DEFAULT_SHARED_CONFIG: dict = {
+    "activeProject": None,
+    "projectSearchRoots": [],
+    "defaultEngineRoot": "",
+}
 
 WORKSPACE_DIR_NAMES = ("UE5_Local_LLM_MCP_lmstudio", "Unreal58-RAG", "Gemma4 LORA", "UnrealEngine57Dev_RAG")
 
@@ -59,12 +64,12 @@ def shared_config_path() -> Path:
 def load_shared_config() -> dict:
     path = shared_config_path()
     if not path.exists():
-        return {
-            "activeProject": None,
-            "projectSearchRoots": [],
-            "defaultEngineRoot": "",
-        }
-    return json.loads(path.read_text(encoding="utf-8"))
+        return dict(DEFAULT_SHARED_CONFIG)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {**DEFAULT_SHARED_CONFIG, "_configError": f"{path}: {exc}"}
+    return data if isinstance(data, dict) else dict(DEFAULT_SHARED_CONFIG)
 
 
 def save_shared_config(config: dict) -> Path:

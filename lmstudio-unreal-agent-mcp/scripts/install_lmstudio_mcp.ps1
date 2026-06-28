@@ -5,6 +5,9 @@ $syncPath = Join-Path $HOME ".lmstudio\.internal\last-synced-mcp-state.json"
 $workspace = Resolve-Path (Join-Path $PSScriptRoot "..")
 $server = Join-Path $workspace "src\server.js"
 $configExample = Join-Path $workspace "config\lmstudio-mcp-unreal-agent.json"
+if (-not (Test-Path $configExample)) {
+    $configExample = Join-Path $workspace "config\lmstudio-mcp-unreal-agent.json.template"
+}
 
 function ConvertTo-OrderedHashtable($value) {
     if ($null -eq $value) {
@@ -23,6 +26,37 @@ function ConvertTo-OrderedHashtable($value) {
             $items += ConvertTo-OrderedHashtable $item
         }
         return $items
+    }
+    return $value
+}
+
+function Expand-TemplateValue($value) {
+    if ($null -eq $value) {
+        return $null
+    }
+    if ($value -is [System.Collections.IDictionary]) {
+        $hash = [ordered]@{}
+        foreach ($key in $value.Keys) {
+            $hash[$key] = Expand-TemplateValue $value[$key]
+        }
+        return $hash
+    }
+    if ($value -is [System.Management.Automation.PSCustomObject]) {
+        $hash = [ordered]@{}
+        foreach ($property in $value.PSObject.Properties) {
+            $hash[$property.Name] = Expand-TemplateValue $property.Value
+        }
+        return $hash
+    }
+    if (($value -is [System.Collections.IEnumerable]) -and -not ($value -is [string])) {
+        $items = @()
+        foreach ($item in $value) {
+            $items += Expand-TemplateValue $item
+        }
+        return $items
+    }
+    if ($value -is [string]) {
+        return $value.Replace("%USERPROFILE%", $HOME).Replace('$env:USERPROFILE', $HOME)
     }
     return $value
 }
@@ -54,7 +88,10 @@ if (-not (Test-Path (Join-Path $workspace "node_modules"))) {
     Write-Host "Running npm install in $workspace"
     Push-Location $workspace
     try {
-        npm install
+        cmd /c "npm install --no-fund --no-audit"
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install failed (exit $LASTEXITCODE)"
+        }
     }
     finally {
         Pop-Location
@@ -83,12 +120,14 @@ if ($null -eq $fragment) {
     }
 }
 
+$fragment = Expand-TemplateValue (ConvertTo-OrderedHashtable $fragment)
+
 $config = Read-McpConfig @($mcpPath, $syncPath)
 if (-not $config.Contains("mcpServers") -or $null -eq $config["mcpServers"]) {
     $config["mcpServers"] = [ordered]@{}
 }
 
-$config["mcpServers"]["unreal-agent"] = ConvertTo-OrderedHashtable $fragment
+$config["mcpServers"]["unreal-agent"] = $fragment
 
 $json = $config | ConvertTo-Json -Depth 30
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

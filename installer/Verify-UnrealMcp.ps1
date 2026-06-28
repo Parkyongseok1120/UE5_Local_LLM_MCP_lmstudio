@@ -31,6 +31,10 @@ function Check([string]$Label, [scriptblock]$Test) {
     }
 }
 
+function Warn([string]$Message) {
+    Write-Host "[WARN] $Message" -ForegroundColor Yellow
+}
+
 Check "Portable root" { if (-not (Test-Path $root)) { throw "missing $root" } }
 Check "Unreal58-RAG" { if (-not (Test-Path (Join-Path $ragRoot "rag.ps1"))) { throw "missing rag.ps1" } }
 Check "RAG index" { if (-not (Test-Path (Join-Path $ragRoot "data\unreal58\rag.sqlite"))) { throw "missing rag.sqlite" } }
@@ -47,8 +51,8 @@ Check "python version" {
 Check "UE 5.8 UBT" { if (-not (Test-Path $ubt58)) { throw "missing $ubt58" } }
 Check "mcp.json unreal-rag python" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
-    if (-not (Test-Path $mcp)) { throw "mcp.json missing — run INSTALL.bat" }
-    $cfg = Get-Content $mcp -Raw | ConvertFrom-Json
+    if (-not (Test-Path $mcp)) { throw "mcp.json missing — run INSTALL-SAFE-MODE.bat" }
+    $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $cfg.mcpServers."unreal-rag") { throw "unreal-rag not in mcp.json" }
     $cmd = [string]$cfg.mcpServers."unreal-rag".command
     if ($cmd -like "*\WindowsApps\*") { throw "WindowsApps python stub: $cmd" }
@@ -58,8 +62,8 @@ Check "mcp.json unreal-rag python" {
 }
 Check "mcp.json unreal-rag entry" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
-    if (-not (Test-Path $mcp)) { throw "mcp.json missing — run INSTALL.bat" }
-    $cfg = Get-Content $mcp -Raw | ConvertFrom-Json
+    if (-not (Test-Path $mcp)) { throw "mcp.json missing — run INSTALL-SAFE-MODE.bat" }
+    $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $cfg.mcpServers."unreal-rag") { throw "unreal-rag not in mcp.json" }
 }
 Check "shared workspace config" {
@@ -74,13 +78,15 @@ Check "Cline MCP settings" {
     $found = $false
     foreach ($p in $paths) {
         if (-not (Test-Path $p)) { continue }
-        $cfg = Get-Content $p -Raw | ConvertFrom-Json
+        $cfg = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($cfg.mcpServers."unreal-rag" -and $cfg.mcpServers."unreal-agent") {
             $found = $true
             break
         }
     }
-    if (-not $found) { throw "unreal-rag/unreal-agent not in Cline MCP settings — run Install-ClineUnrealMcp.ps1" }
+    if (-not $found) {
+        Warn "Cline MCP settings not configured; run Install-ClineUnrealMcp.ps1 only if you use Cline."
+    }
 }
 Check "clinerules" {
     if (-not (Test-Path (Join-Path $ragRoot ".clinerules"))) { throw "missing .clinerules" }

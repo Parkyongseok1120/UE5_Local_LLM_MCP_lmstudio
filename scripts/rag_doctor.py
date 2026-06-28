@@ -25,6 +25,15 @@ from workspace_paths import (
 )
 
 
+def configure_stdio_utf8() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
 def resolve_python() -> Path | None:
     bundled = (
         Path.home()
@@ -132,6 +141,8 @@ def warn(label: str, detail: str = "") -> dict:
 
 
 def main() -> int:
+    configure_stdio_utf8()
+
     parser = argparse.ArgumentParser(description="Unreal58-RAG doctor")
     parser.add_argument("--rag-root", type=Path, default=Path.cwd())
     args = parser.parse_args()
@@ -287,7 +298,14 @@ def main() -> int:
     else:
         checks.append(check("active_project_engine_mismatch", True, "no activeProject configured"))
 
-    checks.append(check("shared_config", shared_config.is_file(), str(shared_config)))
+    shared_error = str(shared.get("_configError") or "")
+    checks.append(
+        check(
+            "shared_config",
+            shared_config.is_file() and not shared_error,
+            shared_error or str(shared_config),
+        )
+    )
     checks.append(check("mcp_json", mcp_config.is_file(), str(mcp_config)))
 
     mcp_python_ok = False
@@ -377,7 +395,10 @@ def main() -> int:
                 break
         except (OSError, json.JSONDecodeError) as exc:
             cline_detail = str(exc)
-    checks.append(check("cline_mcp_config", cline_ok, cline_detail))
+    if cline_ok:
+        checks.append(check("cline_mcp_config", True, cline_detail))
+    else:
+        checks.append(warn("cline_mcp_config", cline_detail))
 
     for entry in checks:
         if entry["status"] == "FAIL":

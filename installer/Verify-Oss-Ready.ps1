@@ -82,6 +82,12 @@ $forbiddenPathPatterns = @(
     '\\data\\scaffold_runs\\'
 )
 
+$ignoredLocalFiles = @(
+    'PORTABLE_ROOT.txt',
+    'lmstudio-unreal-agent-mcp\config\agent-mcp.json',
+    'lmstudio-unreal-agent-mcp\config\lmstudio-mcp-unreal-agent.json'
+)
+
 $forbiddenContentPatterns = @(
     'tvly-',
     'C:\\Users\\',
@@ -93,7 +99,11 @@ $forbiddenContentPatterns = @(
 $scanFiles = Get-ScanFiles $root
 foreach ($file in $scanFiles) {
     $rel = $file.Substring($root.Length).TrimStart('\', '/')
+    $relNormalized = $rel.Replace('/', '\')
     if ($rel -match '(?i)Verify-Oss-Ready\.ps1$') {
+        continue
+    }
+    if ($ignoredLocalFiles -contains $relNormalized) {
         continue
     }
     foreach ($pattern in $forbiddenPathPatterns) {
@@ -112,7 +122,7 @@ foreach ($file in $scanFiles) {
     $ext = [System.IO.Path]::GetExtension($file).ToLowerInvariant()
     if ($ext -in @('.json', '.md', '.py', '.ps1', '.yaml', '.yml', '.js', '.txt', '.bat', '.sh')) {
         try {
-            $text = Get-Content -Path $file -Raw -ErrorAction Stop
+            $text = Get-Content -LiteralPath $file -Raw -Encoding UTF8 -ErrorAction Stop
         }
         catch {
             continue

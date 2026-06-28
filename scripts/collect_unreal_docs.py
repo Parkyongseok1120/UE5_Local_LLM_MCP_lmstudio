@@ -255,7 +255,7 @@ def crawl(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect Unreal Engine docs pages as JSONL.")
-    parser.add_argument("--seeds", default="config/unreal_57_seed_urls.txt")
+    parser.add_argument("--seeds", default="config/unreal_58_seed_urls.txt")
     parser.add_argument("--out", default="data/unreal58/raw_docs.jsonl")
     parser.add_argument("--version", default="5.7")
     parser.add_argument("--max-pages", type=int, default=50)

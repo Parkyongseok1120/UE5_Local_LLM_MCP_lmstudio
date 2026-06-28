@@ -40,23 +40,46 @@ def main() -> int:
     mcp = Path.home() / ".lmstudio" / "mcp.json"
     results.append(check("mcp_json", mcp.is_file(), str(mcp)))
 
-    proc = subprocess.run([py, str(SCRIPTS / "rag_doctor.py")], cwd=str(ROOT), capture_output=True, text=True)
-    results.append(check("doctor", proc.returncode == 0, proc.stdout.strip()[-200:]))
+    proc = subprocess.run(
+        [py, str(SCRIPTS / "rag_doctor.py")],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    results.append(check("doctor", proc.returncode == 0, (proc.stdout or "").strip()[-200:]))
 
     if not args.skip_lmstudio:
-        proc = subprocess.run([py, str(SCRIPTS / "preflight_lmstudio.py")], cwd=str(ROOT), capture_output=True, text=True)
-        results.append(check("lmstudio_preflight", proc.returncode == 0, proc.stdout.strip()[:200]))
+        proc = subprocess.run(
+            [py, str(SCRIPTS / "preflight_lmstudio.py")],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        results.append(check("lmstudio_preflight", proc.returncode == 0, (proc.stdout or "").strip()[:200]))
 
     proc = subprocess.run(
         [py, str(SCRIPTS / "evaluate_rag_queries.py"), "--query-set", "config/rag_eval_genre_queries.json"],
         cwd=str(ROOT),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     results.append(check("sample_rag_query", proc.returncode == 0))
 
-    proc = subprocess.run([py, str(SCRIPTS / "agent_orchestrator.py"), "--request", "Fix missing generated.h", "--mode", "compile_fix", "--json"], cwd=str(ROOT), capture_output=True, text=True)
-    results.append(check("orchestrator_plan", proc.returncode == 0 and "compile_fix" in proc.stdout))
+    proc = subprocess.run(
+        [py, str(SCRIPTS / "agent_orchestrator.py"), "--request", "Fix missing generated.h", "--mode", "compile_fix", "--json"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    results.append(check("orchestrator_plan", proc.returncode == 0 and "compile_fix" in (proc.stdout or "")))
 
     if not args.skip_wrapper_dry:
         proc = subprocess.run(
@@ -64,13 +87,16 @@ def main() -> int:
             cwd=str(ROOT),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         results.append(check("wrapper_dry_run", proc.returncode == 0))
 
     passed = sum(1 for r in results if r["pass"])
     payload = {"passCount": passed, "total": len(results), "results": results}
     out = ROOT / "data" / "baseline" / "verify-release-latest.json"
-    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\nVerify release: {passed}/{len(results)}")
     return 0 if passed == len(results) else 1
 

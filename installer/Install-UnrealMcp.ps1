@@ -47,8 +47,35 @@ function Find-NodeExe {
     return $found[0]
 }
 
-function Expand-UserPath([string]$Text) {
-    return $Text.Replace("%USERPROFILE%", $HOME).Replace("$env:USERPROFILE", $HOME)
+function Expand-TemplateValue($Value) {
+    if ($null -eq $Value) {
+        return $null
+    }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $hash = [ordered]@{}
+        foreach ($property in $Value.PSObject.Properties) {
+            $hash[$property.Name] = Expand-TemplateValue $property.Value
+        }
+        return $hash
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $hash = [ordered]@{}
+        foreach ($key in $Value.Keys) {
+            $hash[$key] = Expand-TemplateValue $Value[$key]
+        }
+        return $hash
+    }
+    if (($Value -is [System.Collections.IEnumerable]) -and -not ($Value -is [string])) {
+        $items = @()
+        foreach ($item in $Value) {
+            $items += Expand-TemplateValue $item
+        }
+        return $items
+    }
+    if ($Value -is [string]) {
+        return $Value.Replace("%USERPROFILE%", $HOME).Replace('$env:USERPROFILE', $HOME)
+    }
+    return $Value
 }
 
 function Read-JsonObject([string]$Path) {
@@ -131,12 +158,11 @@ if (-not $SkipPythonDeps) {
 $sharedConfigPath = Join-Path $lmHome "config\unreal-workspace.json"
 if (-not (Test-Path $sharedConfigPath)) {
     $templatePath = Join-Path $PSScriptRoot "templates\unreal-workspace.template.json"
-    $templateText = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
-    $templateText = Expand-UserPath $templateText
-    $templateText = $templateText.Replace("%USERPROFILE%", $HOME)
+    $template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $sharedConfig = Expand-TemplateValue $template
     $sharedDir = Split-Path -Parent $sharedConfigPath
     New-Item -ItemType Directory -Force -Path $sharedDir | Out-Null
-    [System.IO.File]::WriteAllText($sharedConfigPath, $templateText + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+    Write-JsonUtf8 $sharedConfigPath $sharedConfig
     Write-Host "Created $sharedConfigPath"
 }
 

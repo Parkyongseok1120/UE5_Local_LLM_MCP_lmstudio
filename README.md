@@ -2,6 +2,12 @@
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
+## Project status / 프로젝트 상태
+
+**EN:** As of **June 28, 2026**, this project is entering real-world testing. No additional feature updates are planned until **August 2026**.
+
+**KR:** 이 프로젝트는 **2026년 6월 28일** 기준으로 실전 테스트 단계에 들어갑니다. **2026년 8월까지** 추가 기능 업데이트는 예정되어 있지 않습니다.
+
 Old name: **Unreal58-RAG**. Officially tested on **UE 5.8**. Other 5.x versions can work, but build your own index from **your** licensed UE install (BYOI).
 
 > **BYOI** = Bring Your Own Index. This repo ships **tooling only** — not Epic source, not a pre-built `rag.sqlite`.
@@ -69,7 +75,7 @@ UE5_Local_LLM_MCP_lmstudio/
 ```powershell
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
 cd UE5_Local_LLM_MCP_lmstudio
-.\installer\INSTALL.bat
+.\installer\INSTALL-SAFE-MODE.bat
 .\installer\Configure-Knowledge.ps1
 .\rag.ps1 doctor
 ```
@@ -81,7 +87,7 @@ Then in LM Studio:
 3. Enable MCP: **`unreal-rag`** + **`unreal-agent`**
 4. Restart LM Studio if paths do not refresh.
 
-`INSTALL.bat` patches `%USERPROFILE%\.lmstudio\mcp.json` with full paths to Python/Node.  
+`INSTALL-SAFE-MODE.bat` patches `%USERPROFILE%\.lmstudio\mcp.json` with full paths to Python/Node.  
 RAG-only chat works with **`unreal-rag` alone**. File edit / UBT build needs **`unreal-agent`** too.
 
 ### Safe vs agent mode

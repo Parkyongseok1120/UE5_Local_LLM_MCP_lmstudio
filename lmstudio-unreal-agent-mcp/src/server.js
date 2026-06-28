@@ -78,7 +78,10 @@ const server = new Server(
 );
 
 function launchProjectPicker(explorer = false) {
-  const script = path.join(os.homedir(), ".lmstudio", "Unreal58-RAG", "scripts", "pick_active_project.ps1");
+  const ragRoot = process.env.UNREAL58_ROOT
+    ? path.resolve(process.env.UNREAL58_ROOT)
+    : path.join(os.homedir(), ".lmstudio", "Unreal58-RAG");
+  const script = path.join(ragRoot, "scripts", "pick_active_project.ps1");
   const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script];
   if (explorer) {
     args.push("-Explorer");

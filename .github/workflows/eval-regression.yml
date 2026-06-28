@@ -15,7 +15,6 @@ jobs:
           python-version: "3.12"
       - name: Run Tier-A eval regression
         shell: pwsh
-        working-directory: Unreal58-RAG
         run: |
           python scripts/run_eval_regression.py --skip-pytest
         continue-on-error: false

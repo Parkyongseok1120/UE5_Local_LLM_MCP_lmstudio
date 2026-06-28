@@ -148,7 +148,7 @@ if (-not $UbtPath -or $UbtPath -eq "C:\Program Files\Epic Games\UE_5.8\Engine\Bi
 
 switch ($Command) {
     "collect-docs" {
-        & $py scripts\collect_unreal_docs.py --seeds config\unreal_57_seed_urls.txt --out data\unreal58\raw_docs.jsonl --max-pages $MaxPages --delay 0.5
+        & $py scripts\collect_unreal_docs.py --seeds config\unreal_58_seed_urls.txt --out data\unreal58\raw_docs.jsonl --max-pages $MaxPages --delay 0.5
     }
     "collect-source" {
         $sourceArgs = @("scripts\collect_unreal_source.py", "--root", $SourceRoot, "--out", "data\unreal58\raw_source.jsonl")
@@ -465,7 +465,7 @@ switch ($Command) {
     }
     "build-project-graph" {
         if (-not $ProjectFile) {
-            $cfg = Get-Content (Join-Path $HOME ".lmstudio\config\unreal-workspace.json") -Raw | ConvertFrom-Json
+            $cfg = Get-Content -LiteralPath (Join-Path $HOME ".lmstudio\config\unreal-workspace.json") -Raw -Encoding UTF8 | ConvertFrom-Json
             $ProjectFile = $cfg.activeProject
         }
         if (-not $ProjectFile) { throw "build-project-graph requires -ProjectFile or activeProject" }

@@ -46,7 +46,7 @@ Or run the root installer from the repo root:
 
 ```powershell
 cd $HOME\.lmstudio\UE5_Local_LLM_MCP_lmstudio
-.\installer\INSTALL.bat
+.\installer\INSTALL-SAFE-MODE.bat
 ```
 
 LM Studio를 재시작하거나 MCP 목록을 새로고침하세요.
