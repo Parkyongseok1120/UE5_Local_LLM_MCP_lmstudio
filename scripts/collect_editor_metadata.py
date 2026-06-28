@@ -12,25 +12,60 @@ from typing import Any
 
 SOURCE_MAP = {
     "blueprint": "unreal_blueprint_metadata",
+    "material": "unreal_material_metadata",
     "asset_registry": "unreal_asset_registry",
     "project_settings": "unreal_project_settings",
     "level": "unreal_level_metadata",
 }
 
 
+UASSET_SOURCES = {
+    "unreal_blueprint_metadata",
+    "unreal_material_metadata",
+    "unreal_asset_registry",
+    "unreal_level_metadata",
+}
+
+
+def parse_export_spec(spec: str) -> tuple[Path, str]:
+    path_str, sep, kind = spec.rpartition(":")
+    if not sep:
+        raise ValueError(f"Invalid export spec, expected path:type: {spec}")
+    if not path_str or not kind:
+        raise ValueError(f"Invalid export spec, expected path:type: {spec}")
+    return Path(path_str), kind
+
+
 def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, Any]:
     path = str(row.get("asset_path") or row.get("path") or row.get("map_path") or project)
     title = str(row.get("title") or row.get("generated_class") or row.get("key") or path)
     text_parts = [f"{source} metadata: {title}"]
-    for key in ("asset_type", "parent_class", "generated_class", "game_mode", "setting", "value"):
+    for key in (
+        "asset_type",
+        "parent_class",
+        "generated_class",
+        "parent_material",
+        "blend_mode",
+        "shading_model",
+        "game_mode",
+        "setting",
+        "value",
+    ):
         if row.get(key):
             text_parts.append(f"{key}: {row[key]}")
-    if row.get("components"):
-        text_parts.append(f"components: {row['components']}")
-    if row.get("variables"):
-        text_parts.append(f"variables: {row['variables']}")
-    if row.get("functions"):
-        text_parts.append(f"functions: {row['functions']}")
+    for key in (
+        "components",
+        "variables",
+        "functions",
+        "interfaces",
+        "scalar_parameters",
+        "vector_parameters",
+        "texture_parameters",
+        "static_switch_parameters",
+        "dependencies",
+    ):
+        if row.get(key):
+            text_parts.append(f"{key}: {row[key]}")
     text = "\n".join(text_parts)
     chunk_id = hashlib.sha1(f"{source}|{path}|{title}".encode()).hexdigest()
     return {
@@ -39,7 +74,7 @@ def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, An
         "path": path,
         "title": title,
         "text": text,
-        "metadata": {**row, "project": project, "extension": ".uasset" if "asset" in source else ".ini"},
+        "metadata": {**row, "project": project, "extension": ".uasset" if source in UASSET_SOURCES else ".ini"},
     }
 
 
@@ -69,8 +104,10 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     totals: dict[str, int] = {}
     for spec in args.export:
-        path_str, _, kind = spec.partition(":")
-        path = Path(path_str)
+        try:
+            path, kind = parse_export_spec(spec)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         if not path.is_file():
             print(f"SKIP missing: {path}")
             continue

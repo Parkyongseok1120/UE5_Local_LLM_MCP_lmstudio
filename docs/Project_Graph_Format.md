@@ -20,7 +20,8 @@ Output:
   "generatedAt": "ISO8601",
   "nodes": [
     {"id": "class:UMyActor", "type": "class", "path": "Source/..."},
-    {"id": "bp:BP_Player", "type": "blueprint", "assetPath": "/Game/..."}
+    {"id": "bp:BP_Player", "type": "blueprint", "assetPath": "/Game/..."},
+    {"id": "material:/Game/Materials/MI_Player", "type": "material", "assetPath": "/Game/Materials/MI_Player"}
   ],
   "edges": [
     {"from": "class:UMyActor", "to": "class:AActor", "kind": "inherits"},
@@ -38,6 +39,7 @@ Output:
 
 - PAB (`project_architecture.json`)
 - Blueprint metadata (`raw_blueprint_metadata.jsonl`)
+- Material metadata (`raw_material_metadata.jsonl`)
 - Module graph (via PAB modules)
 
 Use for duplicate subsystem detection and architecture review.

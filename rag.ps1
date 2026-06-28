@@ -1,6 +1,6 @@
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-blueprint-metadata", "collect-editor-metadata", "collect-failure-memory", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "eval-pass-at-k", "eval-harness", "eval-regression", "preflight-lmstudio", "report-tier-kpi", "sonnet-tier-gate", "verify-release", "build-project-graph", "agent-plan", "reject-failure-memory", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
+    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-blueprint-metadata", "collect-material-metadata", "collect-editor-metadata", "collect-failure-memory", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "eval-pass-at-k", "eval-harness", "eval-regression", "preflight-lmstudio", "report-tier-kpi", "sonnet-tier-gate", "verify-release", "build-project-graph", "agent-plan", "reject-failure-memory", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
     [string]$Command,
 
     [string]$IndexNamespace = "",
@@ -245,6 +245,13 @@ switch ($Command) {
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
         & $py scripts\collect_blueprint_metadata.py --in $Question --out data\unreal58\raw_blueprint_metadata.jsonl --project $proj
     }
+    "collect-material-metadata" {
+        if (-not $Question) {
+            throw "collect-material-metadata requires -Question pointing to Editor-export JSONL"
+        }
+        $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:material"
+    }
     "collect-failure-memory" {
         & $py scripts\collect_failure_memory.py --out data\unreal58\raw_failure_memory.jsonl
     }
@@ -288,6 +295,9 @@ switch ($Command) {
         }
         if (Test-Path "data\unreal58\raw_blueprint_metadata.jsonl") {
             $inputs += "data\unreal58\raw_blueprint_metadata.jsonl"
+        }
+        if (Test-Path "data\unreal58\raw_material_metadata.jsonl") {
+            $inputs += "data\unreal58\raw_material_metadata.jsonl"
         }
         if (Test-Path "data\unreal58\raw_failure_memory.jsonl") {
             $inputs += "data\unreal58\raw_failure_memory.jsonl"

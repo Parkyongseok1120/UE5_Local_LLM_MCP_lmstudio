@@ -17,7 +17,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from rag_context import assemble_context
-from load_sampling_preset import preset_for_wrapper, profile_edit_limits
+from load_sampling_preset import preset_for_wrapper, profile_edit_limits, set_sampling_profile_for_model
 from preflight_lmstudio import extract_assistant_text
 from rag_search import SearchOptions, search as search_index
 import token_budget
@@ -53,6 +53,7 @@ IGNORED_PROJECT_DIRS = {
     ".vs",
     "Binaries",
     "DerivedDataCache",
+    "golden",
     "Intermediate",
     "Saved",
 }
@@ -628,6 +629,107 @@ def answer_claims_no_changes(answer: str) -> bool:
     return any(marker.lower() in lowered for marker in NO_CHANGE_ANSWER_MARKERS)
 
 
+def request_mentions_any(request: str, needles: tuple[str, ...]) -> bool:
+    lowered = str(request or "").lower()
+    return any(needle.lower() in lowered for needle in needles)
+
+
+def source_uses_gameplay_tags(root: Path, *, public_only: bool = False) -> bool:
+    tokens = ("GameplayTagContainer.h", "FGameplayTag", "FGameplayTagContainer", "UGameplayTagsManager")
+    for path in iter_source_files(root):
+        if public_only and include_visibility(path) != "public":
+            continue
+        text = read_text(path)
+        if any(token in text for token in tokens):
+            return True
+    return False
+
+
+def no_change_blockers(request: str, root: Path, findings: list[Finding]) -> list[str]:
+    issues: list[str] = []
+    build_text_value = build_cs_text(root)
+    declared_modules = declared_build_modules(build_text_value)
+    public_modules = public_build_modules(build_text_value)
+    uses_gameplay_tags = source_uses_gameplay_tags(root)
+    public_uses_gameplay_tags = source_uses_gameplay_tags(root, public_only=True)
+    if request_mentions_any(request, ("gameplaytags", "gameplaytag", "GameplayTagContainer.h", "Build.cs")) or uses_gameplay_tags:
+        if "GameplayTags" not in declared_modules:
+            issues.append(
+                'The request mentions GameplayTags, but the current Build.cs still does not declare "GameplayTags".'
+            )
+        elif public_uses_gameplay_tags and "GameplayTags" not in public_modules:
+            issues.append(
+                'A public header exposes GameplayTags types, but Build.cs does not declare "GameplayTags" in PublicDependencyModuleNames.'
+            )
+    if request_mentions_any(request, ("generated.h", "uht", "unrealheadertool")):
+        generated_findings = [finding for finding in findings if finding.code.startswith("GENERATED_H")]
+        if generated_findings:
+            issues.append(
+                "The request is a reflection/generated.h fix, but static validation still reports generated.h issues."
+            )
+    if request_mentions_any(request, ("signature", "시그니처", "declaration", "definition", ".cpp")):
+        signature_findings = [
+            finding
+            for finding in findings
+            if finding.code in {"CPP_FUNCTION_NOT_DECLARED_IN_HEADER"}
+        ]
+        if signature_findings:
+            issues.append(
+                "The request appears to be a header/.cpp signature fix, but static validation still reports a .cpp/header mismatch."
+            )
+    return issues
+
+
+def changed_paths_between(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    changed = [path for path in sorted(set(before) | set(after)) if before.get(path) != after.get(path)]
+    return changed
+
+
+def restore_changed_paths(root: Path, snapshot: dict[str, str], changed_paths: list[str]) -> None:
+    for relative in changed_paths:
+        target = safe_output_path(root, relative)
+        old_text = snapshot.get(relative)
+        if old_text is None:
+            if target.exists() and target.is_file():
+                target.unlink()
+            continue
+        write_file(target, old_text)
+
+
+def edit_scope_blockers(request: str, before: dict[str, str], after: dict[str, str], root: Path) -> list[str]:
+    issues: list[str] = []
+    changed = changed_paths_between(before, after)
+    changed_lower = [path.lower() for path in changed]
+    changed_build = any(path.endswith(".build.cs") for path in changed_lower)
+    changed_cpp = any(Path(path).suffix.lower() in {".cpp", ".c", ".cc"} for path in changed)
+    changed_header = any(Path(path).suffix.lower() in {".h", ".hpp"} for path in changed)
+    uses_gameplay_tags = source_uses_gameplay_tags(root)
+    public_uses_gameplay_tags = source_uses_gameplay_tags(root, public_only=True)
+    declared_modules = declared_build_modules(build_cs_text(root))
+    public_modules = public_build_modules(build_cs_text(root))
+
+    if request_mentions_any(request, ("gameplaytags", "gameplaytag", "GameplayTagContainer.h")) or uses_gameplay_tags:
+        if "GameplayTags" not in declared_modules:
+            issues.append(
+                'GameplayTags is still missing from Build.cs; inspect the actual *.Build.cs and add it to PublicDependencyModuleNames when a public header exposes GameplayTags types.'
+            )
+        elif public_uses_gameplay_tags and "GameplayTags" not in public_modules:
+            issues.append(
+                'GameplayTags is declared outside PublicDependencyModuleNames, but a public header exposes GameplayTags types.'
+            )
+    if request_mentions_any(request, ("build.cs", "publicdependencymodulenames", "module dependency")):
+        if not changed_build:
+            issues.append(
+                "The request targets Build.cs/module dependencies, but this edit did not change any *.Build.cs file."
+            )
+    if request_mentions_any(request, ("signature", "시그니처", "declaration", "definition", ".cpp")):
+        if changed_header and not changed_cpp:
+            issues.append(
+                "The request appears to require matching the .cpp definition to the header declaration; do not change only the header unless the request explicitly asks for that."
+            )
+    return issues
+
+
 def apply_bundle(root: Path, bundle: dict[str, Any]) -> list[Path]:
     written: list[Path] = []
     for item in bundle.get("patches") or []:
@@ -1105,7 +1207,7 @@ def validate_component_timer_manager(path: Path, text: str, root: Path, bases: d
 
 
 def find_build_cs_files(root: Path) -> list[Path]:
-    return [path for path in root.rglob("*.Build.cs") if path.is_file()]
+    return [path for path in root.rglob("*.Build.cs") if path.is_file() and not should_ignore_project_path(path)]
 
 
 def build_cs_text(root: Path) -> str:
@@ -1367,13 +1469,15 @@ def validate_build_modules(root: Path, source_text: str, build_text_value: str) 
     }
     build_files = find_build_cs_files(root)
     rel = str(build_files[0].relative_to(root)) if build_files else "Source/*.Build.cs"
+    declared_modules = declared_build_modules(build_text_value)
     for module_name, tokens in module_rules.items():
-        if module_name in build_text_value:
+        if module_name in declared_modules:
             continue
         if any(token in source_text for token in tokens):
+            severity = "error" if module_name == "GameplayTags" else "warning"
             findings.append(
                 Finding(
-                    "warning",
+                    severity,
                     rel,
                     1,
                     "POSSIBLE_MISSING_MODULE",
@@ -2028,6 +2132,19 @@ def mode_directive(mode: str) -> str:
             "Mode directive: prototype_subsystem. Deliver one UWorldSubsystem or UGameInstanceSubsystem only. "
             "Use Initialize/Deinitialize, not BeginPlay. No CreateDefaultSubobject. Max 3 files."
         ),
+        "compile_fix": (
+            "Mode directive: compile_fix. Fix the smallest failing compile surface. Checklist: "
+            "generated.h must be the last include; Build.cs dependencies must be verified from the actual file; "
+            "for signature mismatches, keep the header declaration authoritative and update the .cpp definition."
+        ),
+        "module_fix": (
+            "Mode directive: module_fix. Inspect the actual *.Build.cs before answering. "
+            "If a public header exposes another module type, add the dependency to PublicDependencyModuleNames."
+        ),
+        "reflection_fix": (
+            "Mode directive: reflection_fix. For reflected headers, ensure the matching *.generated.h exists exactly once "
+            "and is the final include before UCLASS/USTRUCT/UINTERFACE declarations."
+        ),
         "refactor_r0": (
             "Mode directive: refactor_r0. Discover only — SSOT table, impact files, risks. No code edits."
         ),
@@ -2185,12 +2302,15 @@ def prepare_run(args: argparse.Namespace, request: str) -> PreparedRun:
 
 
 def run(args: argparse.Namespace) -> int:
+    temperature_was_default = float(getattr(args, "temperature", 0.1)) == 0.1
+    max_tokens_was_default = int(getattr(args, "max_tokens", 0) or 0) == 0
+    feedback_chars_was_default = int(getattr(args, "feedback_chars", 0) or 0) == 12000
     preset = preset_for_wrapper(args.mode)
-    if float(getattr(args, "temperature", 0.1)) == 0.1:
+    if temperature_was_default:
         args.temperature = float(preset.get("temperature", args.temperature))
-    if int(getattr(args, "max_tokens", 0) or 0) == 0 and preset.get("maxTokens"):
+    if max_tokens_was_default and preset.get("maxTokens"):
         args.max_tokens = int(preset["maxTokens"])
-    if int(getattr(args, "feedback_chars", 0) or 0) == 12000:
+    if feedback_chars_was_default:
         args.feedback_chars = token_budget.feedback_tail_chars(args.mode)
 
     request = load_request(args)
@@ -2235,6 +2355,15 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     model = resolve_model(args)
+    selected_profile = set_sampling_profile_for_model(model)
+    if selected_profile:
+        preset = preset_for_wrapper(args.mode)
+        if temperature_was_default:
+            args.temperature = float(preset.get("temperature", args.temperature))
+        if max_tokens_was_default and preset.get("maxTokens"):
+            args.max_tokens = int(preset["maxTokens"])
+        if feedback_chars_was_default:
+            args.feedback_chars = token_budget.feedback_tail_chars(args.mode)
     edit_limits = profile_edit_limits()
     messages = [{"role": "system", "content": system_prompt(rules_text, edit_limits)}]
     last_answer = ""
@@ -2332,6 +2461,15 @@ def run(args: argparse.Namespace) -> int:
             last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
             static_report = format_findings(last_findings)
             write_file(attempt_dir / "static_validation.txt", static_report + "\n")
+            blockers = no_change_blockers(request, project_root, last_findings)
+            if blockers and not args.allow_empty_files:
+                previous_feedback = (
+                    "No-change response rejected because the request is not satisfied:\n"
+                    + "\n".join(f"- {issue}" for issue in blockers)
+                    + "\nInspect the authoritative project state and return the smallest required file change."
+                )
+                write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                continue
             if has_static_errors(last_findings) and not args.skip_static_gate:
                 previous_feedback = static_report
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
@@ -2366,6 +2504,17 @@ def run(args: argparse.Namespace) -> int:
                     "Model returned file entries, but their content produced no effective changes. "
                     "Do not resend identical file contents. If the request is already satisfied, return an empty "
                     "files array with evidence. Otherwise inspect the current files and change only the missing part."
+                )
+                write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                continue
+            scope_blockers = edit_scope_blockers(request, before_apply, after_apply, project_root)
+            if scope_blockers:
+                restore_changed_paths(project_root, before_apply, changed_paths_between(before_apply, after_apply))
+                last_written = []
+                previous_feedback = (
+                    "Edit rejected because it does not match the requested compile-fix scope:\n"
+                    + "\n".join(f"- {issue}" for issue in scope_blockers)
+                    + "\nUse the current project state as authoritative and change the specific file(s) needed."
                 )
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
                 continue

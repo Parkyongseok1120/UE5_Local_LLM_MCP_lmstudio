@@ -66,6 +66,25 @@ def build_graph(workspace: Path, project_root: Path, project_name: str) -> dict[
                 if parent:
                     edges.append({"from": nid, "to": f"class:{parent}", "kind": "inherits"})
 
+    material_raw = index_dir / "raw_material_metadata.jsonl"
+    if material_raw.is_file():
+        for line in material_raw.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            meta = row.get("metadata") or row
+            ap = meta.get("asset_path") or row.get("asset_path")
+            asset_type = meta.get("asset_type") or row.get("asset_type")
+            parent = meta.get("parent_material") or row.get("parent_material")
+            if ap:
+                nid = f"material:{ap}"
+                nodes.append({"id": nid, "type": "material", "assetPath": ap, "assetType": asset_type})
+                if parent:
+                    edges.append({"from": nid, "to": f"material:{parent}", "kind": "material_parent"})
+
     graph = {
         "project": project_name,
         "projectRoot": str(project_root),
@@ -77,6 +96,7 @@ def build_graph(workspace: Path, project_root: Path, project_name: str) -> dict[
             "edgeCount": len(edges),
             "classCount": len(pab.get("classes") or []),
             "blueprintCount": sum(1 for n in nodes if n.get("type") == "blueprint"),
+            "materialCount": sum(1 for n in nodes if n.get("type") == "material"),
         },
     }
     return graph

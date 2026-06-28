@@ -191,6 +191,8 @@ MODE_SOURCE_BIAS = {
         "build_log": -4.0,
         "unreal_source": -3.0,
         "epic_docs": -1.0,
+        "unreal_blueprint_metadata": -6.0,
+        "unreal_material_metadata": -6.0,
         "unreal_project_asset_path": 2.0,
     },
     "codegen": {
@@ -323,6 +325,8 @@ MODE_SOURCE_BIAS = {
         "unreal_source": -2.0,
         "epic_docs": -1.0,
         "build_log": -1.0,
+        "unreal_blueprint_metadata": -5.0,
+        "unreal_material_metadata": -5.0,
         "unreal_project_asset_path": 1.0,
     },
 }
@@ -557,6 +561,23 @@ RUNTIME_DEBUG_HINTS = {"crash", "assert", "ensure", "debug", "디버깅", "크�
 API_LOOKUP_HINTS = {"api", "signature", "시그니처", "사용법", "lookup"}
 MODULE_FIX_HINTS = {"Build.cs", "module", "dependency", "include", "C1083", "모듈", "의존성"}
 REFLECTION_FIX_HINTS = {"generated.h", "UHT", "UnrealHeaderTool", "UCLASS", "USTRUCT", "UFUNCTION", "UPROPERTY", "reflection"}
+ASSET_METADATA_HINTS = {
+    "blueprint",
+    "bp_",
+    "widget",
+    "material",
+    "materials",
+    "materialinstance",
+    "mi_",
+    "m_",
+    "texture",
+    "parameter",
+    "블루프린트",
+    "머티리얼",
+    "머터리얼",
+    "재질",
+    "텍스처",
+}
 
 
 @dataclass
@@ -798,6 +819,18 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
         if source == "unreal_project_text":
             score -= 3.0
         if ".build.cs" in identity_lower or ".target.cs" in identity_lower:
+            score -= 2.0
+    if any(marker in query_lower for marker in ASSET_METADATA_HINTS):
+        if source == "unreal_blueprint_metadata" and any(
+            marker in query_lower for marker in ("blueprint", "bp_", "widget", "블루프린트")
+        ):
+            score -= 12.0
+        if source == "unreal_material_metadata" and any(
+            marker in query_lower
+            for marker in ("material", "materials", "materialinstance", "mi_", "m_", "texture", "parameter", "머티리얼", "머터리얼", "재질", "텍스처")
+        ):
+            score -= 12.0
+        if source == "unreal_project_asset_path":
             score -= 2.0
 
     if str(row.get("path_only") or "") == "1" and mode in {"planning", "design", "implementation", "agent_edit", "codegen"}:

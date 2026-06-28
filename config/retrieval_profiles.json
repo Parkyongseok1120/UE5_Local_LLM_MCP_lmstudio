@@ -5,6 +5,7 @@
     "fts_bm25": { "sources": ["*"], "bonus": 0.0 },
     "module_graph": { "sources": ["module_graph"], "bonus": 6.0 },
     "code_semantic": { "sources": ["unreal_source", "unreal_project_text"], "bonus": 3.0 },
+    "asset_metadata": { "sources": ["unreal_blueprint_metadata", "unreal_material_metadata"], "bonus": 5.0 },
     "design_semantic": { "sources": ["project_guideline", "game_design_doc"], "bonus": 2.0 },
     "build_log": { "sources": ["build_log"], "bonus": 7.0 },
     "playbook": { "sources": ["project_guideline"], "bonus": 4.0 }
@@ -17,7 +18,7 @@
       "layer_order": ["exact_symbol", "module_graph", "fts_bm25", "code_semantic"]
     },
     "agent_edit": {
-      "layer_order": ["code_semantic", "exact_symbol", "module_graph", "playbook", "design_semantic"]
+      "layer_order": ["code_semantic", "asset_metadata", "exact_symbol", "module_graph", "playbook", "design_semantic"]
     },
     "module_fix": {
       "layer_order": ["module_graph", "exact_symbol", "build_log", "playbook"]
@@ -26,7 +27,7 @@
       "layer_order": ["playbook", "exact_symbol", "build_log", "code_semantic"]
     },
     "planning": {
-      "layer_order": ["design_semantic", "code_semantic", "playbook"]
+      "layer_order": ["design_semantic", "asset_metadata", "code_semantic", "playbook"]
     }
   }
 }

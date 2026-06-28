@@ -22,6 +22,7 @@ SOURCE_TYPE_LABELS = {
     "unreal_project_text": "Local project source",
     "unreal_project_asset_path": "Local project asset path",
     "unreal_blueprint_metadata": "Blueprint metadata export",
+    "unreal_material_metadata": "Material metadata export",
     "unreal_failure_memory": "Prior compile fix memory (hint only)",
 }
 
@@ -434,6 +435,7 @@ PROJECT_SOURCES = frozenset({
     "unreal_project_asset_path",
     "project_guideline",
     "unreal_blueprint_metadata",
+    "unreal_material_metadata",
 })
 ENGINE_SOURCES = frozenset({
     "unreal_source",

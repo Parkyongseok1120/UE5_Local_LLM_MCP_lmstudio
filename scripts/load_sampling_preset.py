@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,10 @@ def set_sampling_profile(name: str) -> None:
     """Override active profile for this process (CLI --sampling-profile)."""
     global _PROFILE_OVERRIDE
     _PROFILE_OVERRIDE = str(name or "").strip()
+
+
+def _normalized_model_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
 
 
 @lru_cache(maxsize=1)
@@ -46,6 +51,51 @@ def resolve_profile_name(config: dict[str, Any] | None = None) -> str:
         return env_name
     cfg = config or load_sampling_config()
     return str(cfg.get("activeProfile") or cfg.get("model") or "qwen3_6_27b")
+
+
+def resolve_profile_name_for_model(model_name: str, config: dict[str, Any] | None = None) -> str:
+    """Resolve a sampling profile from the loaded LM Studio model id."""
+    cfg = config or load_sampling_config()
+    profiles = cfg.get("profiles") or {}
+    aliases = cfg.get("modelAliases") or {}
+    raw_model = str(model_name or "").strip().lower()
+    normalized_model = _normalized_model_key(raw_model)
+    if not raw_model:
+        return ""
+
+    alias_items = sorted(
+        ((str(alias).lower(), str(profile)) for alias, profile in aliases.items()),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    for alias, profile in alias_items:
+        if profile not in profiles:
+            continue
+        normalized_alias = _normalized_model_key(alias)
+        if raw_model == alias or normalized_model == normalized_alias:
+            return profile
+    for alias, profile in alias_items:
+        if profile not in profiles:
+            continue
+        normalized_alias = _normalized_model_key(alias)
+        if alias in raw_model or (normalized_alias and normalized_alias in normalized_model):
+            return profile
+
+    for profile in profiles:
+        normalized_profile = _normalized_model_key(str(profile))
+        if normalized_profile and normalized_profile in normalized_model:
+            return str(profile)
+    return ""
+
+
+def set_sampling_profile_for_model(model_name: str, config: dict[str, Any] | None = None) -> str:
+    """Use modelAliases unless the user explicitly selected a profile."""
+    if _PROFILE_OVERRIDE or os.environ.get("UNREAL_RAG_MODEL_PROFILE", "").strip():
+        return ""
+    profile = resolve_profile_name_for_model(model_name, config)
+    if profile:
+        set_sampling_profile(profile)
+    return profile
 
 
 def resolve_active_profile(config: dict[str, Any] | None = None) -> dict[str, Any]:

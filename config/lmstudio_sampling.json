@@ -204,6 +204,7 @@
       "turnPresets": {
         "plan": { "thinking": "off", "temperature": 0.4, "topP": 0.9, "maxTokens": 2048 },
         "execute": { "thinking": "off", "temperature": 0.1, "topP": 0.8, "maxTokens": 2048 },
+        "compile_fix_analyze": { "thinking": "off", "temperature": 0.2, "topP": 0.85, "maxTokens": 2048 },
         "compile_fix_patch": { "thinking": "off", "temperature": 0.1, "topP": 0.8, "maxTokens": 2048 }
       }
     },

@@ -63,6 +63,8 @@ def infer_doc_type(source: str, metadata: dict) -> str:
         return "asset_path"
     if source == "unreal_blueprint_metadata":
         return "blueprint_metadata"
+    if source == "unreal_material_metadata":
+        return "material_metadata"
     if source == "unreal_failure_memory":
         return "failure_memory"
     return source or "unknown"
@@ -78,6 +80,8 @@ def infer_layer(source: str, title: str, metadata: dict) -> str:
     if source == "unreal_project_asset_path":
         return "project_asset_path"
     if source == "unreal_blueprint_metadata":
+        return "project_architecture"
+    if source == "unreal_material_metadata":
         return "project_architecture"
     if source == "unreal_failure_memory":
         return "failure_memory"

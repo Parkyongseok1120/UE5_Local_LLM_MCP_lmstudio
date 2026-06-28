@@ -20,6 +20,7 @@ RAW_INPUT_FILES = (
     "raw_project_profiles.jsonl",
     "raw_project_architecture.jsonl",
     "raw_blueprint_metadata.jsonl",
+    "raw_material_metadata.jsonl",
     "raw_failure_memory.jsonl",
     "raw_build_logs.jsonl",
     "raw_docs.jsonl",

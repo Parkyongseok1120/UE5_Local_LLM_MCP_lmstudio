@@ -19,3 +19,14 @@ Or use the unified collector:
 See [Editor_Metadata_Export.md](Editor_Metadata_Export.md) for asset registry and project settings exports.
 
 Limitations: metadata only — no Blueprint graph parsing in v1.
+
+## Material metadata companion
+
+Material and Material Instance work should ingest editor metadata too:
+
+```powershell
+.\rag.ps1 collect-material-metadata -Question C:\export\materials.jsonl -ProjectName MyGame
+.\rag.ps1 build-incremental
+```
+
+This adds `unreal_material_metadata` chunks for parent material and dependency lookup.

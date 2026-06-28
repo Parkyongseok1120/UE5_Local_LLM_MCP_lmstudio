@@ -8,6 +8,13 @@
 import json
 
 
+def _safe_name(value) -> str:
+    try:
+        return value.get_name()
+    except Exception:
+        return str(value or "")
+
+
 def export_blueprint_metadata(content_path: str, out_path: str) -> None:
     import unreal
 
@@ -27,11 +34,28 @@ def export_blueprint_metadata(content_path: str, out_path: str) -> None:
         try:
             bp = unreal.load_asset(path)
             if bp:
-                gen_class = bp.get_class().get_name()
-                row["generated_class"] = gen_class
-                parent = bp.get_class().get_super_class().get_name() if hasattr(bp.get_class(), "get_super_class") else ""
+                gen_class = None
+                parent = None
+                if hasattr(bp, "generated_class"):
+                    gen_class = bp.generated_class
+                elif hasattr(bp, "get_editor_property"):
+                    gen_class = bp.get_editor_property("generated_class")
+                if gen_class:
+                    row["generated_class"] = _safe_name(gen_class)
+                    if hasattr(gen_class, "get_super_class"):
+                        parent = gen_class.get_super_class()
+                if not parent and hasattr(bp, "parent_class"):
+                    parent = bp.parent_class
+                if not parent and hasattr(bp, "get_editor_property"):
+                    try:
+                        parent = bp.get_editor_property("parent_class")
+                    except Exception:
+                        parent = None
                 if parent:
-                    row["parent_class"] = parent
+                    row["parent_class"] = _safe_name(parent)
+                dependencies = asset_registry.get_dependencies(asset.package_name)
+                if dependencies:
+                    row["dependencies"] = [str(dep) for dep in dependencies[:40]]
         except Exception:
             pass
         rows.append(row)
