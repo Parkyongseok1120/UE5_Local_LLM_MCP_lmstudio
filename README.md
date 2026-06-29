@@ -4,9 +4,10 @@ Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x
 
 ## Project Status / 프로젝트 상태
 
-**EN:** As of **June 2026**, this project is in active real-world testing and KPI-driven agent improvements (Pass@K compile-fix, MCP tool-call, Build.cs write reliability).
+** EN : ** As of June 2026, this project is in active real-world testing and KPI-driven agent improvements, including Pass@K compile-fix, MCP tool-call reliability, and Build.cs write reliability. No further feature updates are expected before the end of August.
 
-**KR:** **2026년 6월** 기준 실전 테스트 및 KPI 기반 에이전트 개선(Pass@K compile-fix, MCP tool-call, Build.cs write)을 진행 중입니다.
+** KR : ** 2026년 6월 기준, 이 프로젝트는 실전 테스트와 KPI 기반 에이전트 개선을 진행 중입니다. 주요 개선 항목은 Pass@K compile-fix, MCP tool-call 안정성, Build.cs write 안정성입니다. 8월 말 전까지는 추가 기능 업데이트가 없을 예정입니다.
+
 
 ### Agent trust (internal KPI)
 
