@@ -43,6 +43,28 @@ def resolve_lmstudio_model(url: str, requested: str = "", timeout: float = 5.0) 
     return ids[0] if ids else (requested or "local-model")
 
 
+def resolve_loaded_chat_model(url: str, requested: str = "", timeout: float = 5.0) -> str:
+    """Prefer a model with state=loaded from LM Studio v0 API, else /v1/models."""
+    if requested and requested not in AUTO_MODEL_ALIASES:
+        return requested
+    base = url.rstrip("/").removesuffix("/v1")
+    try:
+        req = Request(f"{base}/api/v0/models", method="GET")
+        with urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        models = payload.get("models") or payload.get("data") or []
+        if isinstance(models, list):
+            for row in models:
+                if str(row.get("state") or "").lower() != "loaded":
+                    continue
+                model_id = str(row.get("id") or row.get("path") or "")
+                if model_id and not is_embedding_model(model_id):
+                    return model_id
+    except Exception:
+        pass
+    return resolve_lmstudio_model(url, requested, timeout=timeout)
+
+
 def extract_assistant_text(message: dict) -> str:
     """Return visible assistant text; Qwen thinking models may use reasoning_content only."""
     content = str(message.get("content") or "").strip()
@@ -59,7 +81,7 @@ def check_lmstudio(url: str, model: str = "", timeout: float = 5.0) -> dict:
         result["reachable"] = True
         result["modelCount"] = len(ids)
         chat_ids = [mid for mid in ids if not is_embedding_model(mid)]
-        resolved = resolve_lmstudio_model(base, model, timeout=timeout)
+        resolved = resolve_loaded_chat_model(base, model, timeout=timeout)
         result["resolvedModel"] = resolved
         if model in AUTO_MODEL_ALIASES:
             result["modelOk"] = bool(chat_ids)

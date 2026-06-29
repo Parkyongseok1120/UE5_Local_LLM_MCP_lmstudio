@@ -4,9 +4,18 @@ Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x
 
 ## Project Status / 프로젝트 상태
 
-**EN:** As of **June 28, 2026**, this project is entering real-world testing. No additional feature updates are planned until **August 2026**.
+**EN:** As of **June 2026**, this project is in active real-world testing and KPI-driven agent improvements (Pass@K compile-fix, MCP tool-call, Build.cs write reliability).
 
-**KR:** 이 프로젝트는 **2026년 6월 28일** 기준으로 실전 테스트 단계에 들어갑니다. **2026년 8월까지** 추가 기능 업데이트는 계획되어 있지 않습니다.
+**KR:** **2026년 6월** 기준 실전 테스트 및 KPI 기반 에이전트 개선(Pass@K compile-fix, MCP tool-call, Build.cs write)을 진행 중입니다.
+
+### Agent trust (internal KPI)
+
+This repo targets a **Sonnet 4.5-oriented Unreal C++ agent workflow**, not a claim that any local model matches cloud Sonnet quality.
+
+- **Pass@K live compile-fix** is the primary agent KPI (currently validate on **Qwen 3.6 27B**).
+- Single-file C++ fixes score well; **module `Build.cs` dependency fixes remain unreliable** until Pass@K reaches 3/3.
+- **LM Studio MCP chat** is experimental: enable Essential Tools, session bootstrap, and compact system prompts. Verify with `python scripts/bench_lmstudio_mcp.py`.
+- Do not treat chat-only runs as production automation.
 
 ## Evaluation Claim Guardrail
 
@@ -241,7 +250,6 @@ Maintainers: run `.\installer\Verify-Oss-Ready.ps1` before publishing a fork.
 | Real project validation | [docs/Real_Project_Validation_Plan.md](docs/Real_Project_Validation_Plan.md) |
 | Sonnet 4.5 target plan | [docs/Sonnet45_Target_Plan.md](docs/Sonnet45_Target_Plan.md) |
 | Model profiles | [docs/Model_Profiles.md](docs/Model_Profiles.md) |
-| Gemma 4 26B profile | [docs/Gemma4_Model_Profile.md](docs/Gemma4_Model_Profile.md) |
 | Small models | [docs/Small_Model_Shortcut.md](docs/Small_Model_Shortcut.md) |
 | Community fine-tune optimization | [docs/Community_Finetune_Model_Optimization.md](docs/Community_Finetune_Model_Optimization.md) |
 | Troubleshooting | [docs/Troubleshooting.md](docs/Troubleshooting.md) |

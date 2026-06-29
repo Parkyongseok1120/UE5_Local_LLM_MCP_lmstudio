@@ -2,7 +2,7 @@
 
 This guide covers the compact community fine-tune tracks:
 
-- **`gemma4_12b_v2_agentic`** — primary MCP chat (see below)
+- **`qwen3_6_27b`** — primary wrapper + Pass@K KPI
 - `qwen3_5_9b`
 - `qwen3_5_9b_deepseek_v4_flash`
 - `gpt_oss_20b`
@@ -10,26 +10,10 @@ This guide covers the compact community fine-tune tracks:
 
 These profiles are tuned to push small and medium models as far as possible inside the Unreal RAG/MCP/UBT workflow. They are not quality guarantees and should be validated with unseen real-project cases.
 
-## Gemma4-12B v2 Agentic (primary MCP)
-
-Community **Coding + Agentic Edition** on `google/gemma-4-12B-it`. Profile: `gemma4_12b_v2_agentic`.
-
-```powershell
-$env:UNREAL_RAG_MODEL_PROFILE = "gemma4_12b_v2_agentic"
-.\scripts\start_gemma4_v2_llama_server.ps1
-```
-
-- llama-server **Q6_K** + MTP draft, `--jinja`, `repeat_penalty 1.1`
-- llama.cpp **b9553** pin for MTP
-- Thinking **hybrid** (plan on, execute off)
-- LM Studio OpenAI API → `http://localhost:18080/v1`
-- MCP: `MCP_ESSENTIAL_TOOLS=1` + [session bootstrap](../prompts/lmstudio_session_bootstrap.md)
-
-Details: [Gemma4_Llama_Server.md](Gemma4_Llama_Server.md), [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
-
 ## Profile Selection
 
 ```powershell
+$env:UNREAL_RAG_MODEL_PROFILE = "qwen3_6_27b"
 $env:UNREAL_RAG_MODEL_PROFILE = "qwen3_5_9b"
 $env:UNREAL_RAG_MODEL_PROFILE = "qwen3_5_9b_deepseek_v4_flash"
 $env:UNREAL_RAG_MODEL_PROFILE = "gpt_oss_20b"
@@ -42,67 +26,31 @@ Confirm:
 python scripts/load_sampling_preset.py --show-profile
 ```
 
-## Why These Profiles Are Different
+MCP chat: `MCP_ESSENTIAL_TOOLS=1` + [session bootstrap](../prompts/lmstudio_session_bootstrap.md). See [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
 
-Small and medium models usually fail from:
+## Qwen 3.6 27B (primary)
 
-- too much unrelated context
-- output schema drift
-- over-editing too many files
-- repeating already-applied changes
-- losing the current compile error during retries
+- Profile: `qwen3_6_27b`
+- System prompt: [`lmstudio_qwen36_27b_compact_system.md`](../prompts/lmstudio_qwen36_27b_compact_system.md) + compact base
+- Pass@K live compile-fix is the primary agent KPI
+- For `module_fix` / `Build.cs` / `GameplayTags`: patch `*.Build.cs`, not explanation-only replies
 
-The profiles counter this with:
+## Qwen 3.5 9B / DeepSeek V4 Flash
 
-- reduced RAG assembly and per-row context size
-- lower temperature
-- strict JSON patch contracts
-- one- or two-file edit caps
-- failure-specific retry context
-- no broad refactor modes by default
+- Compact MCP alternative when VRAM is tight
+- Thinking OFF; one tool per turn
+- Generally more stable tool-call behavior than base GPT OSS 20B
 
-## Recommended Eval Loop
+## GPT OSS community fine-tunes
 
-Run the same cases for each profile:
+- Variable JSON/tool stability — prefer one-file patch turns
+- Context 32768 for all `gpt_oss_*` profiles
 
-```powershell
-.\rag.ps1 eval-pass-at-k -Live -RequireLive
-.\rag.ps1 eval-project-review -Live -RequireLive
-.\rag.ps1 report-tier-kpi
-```
-
-Then run unseen real-project cases:
+## Validation
 
 ```powershell
-.\rag.ps1 summarize-real-project-eval -Question path\to\filled-real-project-eval.json
+python scripts/eval_pass_at_k.py --live --require-live
+python scripts/bench_lmstudio_mcp.py
 ```
 
-Report:
-
-- Pass@1
-- Pass@3
-- final Pass@K
-- attempts used
-- failure category
-- whether UBT or Editor validation passed
-
-## Practical Expectations
-
-The target is Sonnet 4.5-oriented workflow behavior. Reaching that target requires proof on unseen real-project errors.
-
-**Stability ranking (field use, MCP + UBT loop):**
-
-1. `qwen3_6_27b` — main track when VRAM allows
-2. `qwen3_5_9b` / `qwen3_5_9b_deepseek_v4_flash` — best compact default
-3. `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` — may beat base GPT OSS 20B; still experimental
-4. `gpt_oss_20b` — **variable**; JSON/schema drift and no-op edits are common; profile tightened to one-file patches
-
-Base GPT OSS 20B is not recommended as the primary agent model until your own Pass@1 on real compile errors is acceptable.
-
-The safest near-term goals are:
-
-- Qwen3.5-9B DeepSeek V4 Flash fine-tune: better compact planning than base Qwen 9B
-- GPT OSS 20B reasoning fine-tune: may improve first-shot compile diagnosis vs base 20B — not proven stable vs Qwen
-- all compact tracks: fewer no-op edits when scope is one file and prompts stay short
-
-Do not call either model Sonnet 4.5-grade until the real-project validation plan supports it.
+See also [Model_Profiles.md](Model_Profiles.md) and [Small_Model_Shortcut.md](Small_Model_Shortcut.md).

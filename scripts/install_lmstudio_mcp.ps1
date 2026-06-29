@@ -57,6 +57,26 @@ $config["mcpServers"]["unreal-rag"] = [ordered]@{
     args = @($server, "--index", $index)
     env = [ordered]@{
         SHARED_UNREAL_CONFIG = (Join-Path $HOME ".lmstudio\config\unreal-workspace.json")
+        UNREAL58_ROOT          = "$workspace"
+        PYTHONUTF8             = "1"
+        PYTHONIOENCODING       = "utf-8"
+        MCP_ESSENTIAL_TOOLS    = "1"
+    }
+}
+
+$agentRoot = Join-Path $workspace "lmstudio-unreal-agent-mcp"
+$node = Get-Command node -ErrorAction SilentlyContinue
+if ($node -and (Test-Path (Join-Path $agentRoot "src\server.js"))) {
+    $config["mcpServers"]["unreal-agent"] = [ordered]@{
+        command = $node.Source
+        args    = @((Join-Path $agentRoot "src\server.js"))
+        env     = [ordered]@{
+            WORKSPACE_ROOT       = (Join-Path $HOME "Documents")
+            AGENT_MCP_CONFIG     = (Join-Path $agentRoot "config\agent-mcp.json")
+            SHARED_UNREAL_CONFIG = (Join-Path $HOME ".lmstudio\config\unreal-workspace.json")
+            UNREAL58_ROOT        = "$workspace"
+            MCP_ESSENTIAL_TOOLS  = "1"
+        }
     }
 }
 
@@ -78,6 +98,11 @@ foreach ($path in @($mcpPath, $syncPath)) {
 
 if (Test-Path $patchScript) {
     powershell -NoProfile -ExecutionPolicy Bypass -File $patchScript | Out-Host
+}
+
+$patchPy = Join-Path $workspace "scripts\patch_mcp_config.py"
+if (Test-Path $patchPy) {
+    & $python $patchPy | Out-Host
 }
 
 Write-Host "Installed LM Studio MCP config as UTF-8 without BOM:"

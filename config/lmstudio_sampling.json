@@ -12,7 +12,7 @@
     "agent_edit": "execute",
     "codegen": "execute",
     "compile_fix": "compile_fix_analyze",
-    "module_fix": "compile_fix_analyze",
+    "module_fix": "compile_fix_patch",
     "reflection_fix": "compile_fix_analyze",
     "runtime_debug": "compile_fix_analyze",
     "api_lookup": "api_lookup"
@@ -20,6 +20,8 @@
   "modelAliases": {
     "qwen3.6-27b": "qwen3_6_27b",
     "qwen3.6": "qwen3_6_27b",
+    "qwen3.6-27b-heretic": "qwen3_6_27b",
+    "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max": "qwen3_6_27b",
     "qwen3.5-9b": "qwen3_5_9b",
     "qwen3-5-9b": "qwen3_5_9b",
     "qwen-3.5-9b": "qwen3_5_9b",
@@ -38,19 +40,7 @@
     "gpt-oss-120b": "gpt_oss_120b",
     "qwen-coder-large": "qwen_coder_large",
     "conservative-compile-fix": "conservative_compile_fix",
-    "review-only": "review_only",
-    "gemma-4-26b-a4b-it": "gemma_4_26b_a4b_it_q4_k_m",
-    "gemma-4-26b-a4b-it-q4_k_m": "gemma_4_26b_a4b_it_q4_k_m",
-    "gemma-4-26b-a4b-it-q4-k-m": "gemma_4_26b_a4b_it_q4_k_m",
-    "gemma-4-26b": "gemma_4_26b_a4b_it_q4_k_m",
-    "gemma4-26b-a4b-it": "gemma_4_26b_a4b_it_q4_k_m",
-    "gemma4-v2": "gemma4_12b_v2_agentic",
-    "gemma4-v2-q6_k": "gemma4_12b_v2_agentic",
-    "gemma4-12b-v2": "gemma4_12b_v2_agentic",
-    "gemma4-12b-v2-agentic": "gemma4_12b_v2_agentic",
-    "gemma-4-12b-v2": "gemma4_12b_v2_agentic",
-    "gemma-4-12b-qat": "gemma_4_12b_qat",
-    "gemma4-12b-qat": "gemma_4_12b_qat"
+    "review-only": "review_only"
   },
   "profiles": {
     "qwen3_6_27b": {
@@ -60,6 +50,9 @@
       "promptContract": "evidence_then_patch_strict",
       "maxFilesPerEdit": 2,
       "preferPatchOverFullFile": true,
+      "mcpEssentialTools": true,
+      "recommendedSystemPrompt": "prompts/lmstudio_qwen36_27b_compact_system.md",
+      "mcpToolDiscipline": "one_tool_per_turn",
       "quantDefault": "Q4_K_M",
       "agentPolicy": {
         "ragBudgetScale": 1.1,
@@ -475,189 +468,6 @@
       "turnPresets": {
         "plan": { "thinking": "off", "temperature": 0.3, "topP": 0.9, "maxTokens": 2048 },
         "api_lookup": { "thinking": "off", "temperature": 0.05, "topP": 0.8, "maxTokens": 2048 }
-      }
-    },
-    "gemma_4_26b_a4b_it_q4_k_m": {
-      "contextLength": 32768,
-      "assemblyBudgetScale": 0.88,
-      "targetTier": "gemma4_mcp_track",
-      "promptContract": "gemma4_compact_mcp_thinking_hybrid",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "quantDefault": "Q4_K_M",
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_gemma4_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
-      "agentPolicy": {
-        "ragBudgetScale": 0.88,
-        "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 4,
-        "allowRefactorModes": false,
-        "jsonRepairStrict": true,
-        "historyTurns": 3,
-        "defaultTopK": 6,
-        "deltaTopK": 3,
-        "candidateLimitScale": 16,
-        "targetTier": "gemma4_mcp_track",
-        "promptContract": "gemma4_compact_mcp_thinking_hybrid",
-        "mcpEssentialTools": true,
-        "recommendedSystemPrompt": "prompts/lmstudio_gemma4_compact_system.md",
-        "mcpToolDiscipline": "one_tool_per_turn"
-      },
-      "turnPresets": {
-        "plan": {
-          "thinking": "on",
-          "temperature": 1.0,
-          "topP": 0.95,
-          "maxTokens": 4096,
-          "notes": "Gemma 4 hybrid — plan with thinking on"
-        },
-        "critique": {
-          "thinking": "on",
-          "temperature": 1.0,
-          "topP": 0.95,
-          "maxTokens": 3072,
-          "notes": "Optional critique with thinking on"
-        },
-        "execute": {
-          "thinking": "off",
-          "temperature": 0.1,
-          "topP": 0.82,
-          "maxTokens": 3072,
-          "notes": "Patch — thinking off, max 2 files"
-        },
-        "compile_fix_analyze": {
-          "thinking": "on",
-          "temperature": 1.0,
-          "topP": 0.95,
-          "maxTokens": 4096
-        },
-        "compile_fix_patch": {
-          "thinking": "off",
-          "temperature": 0.06,
-          "topP": 0.8,
-          "maxTokens": 2816
-        },
-        "api_lookup": {
-          "thinking": "off",
-          "temperature": 0.04,
-          "topP": 0.8,
-          "maxTokens": 1536
-        }
-      }
-    },
-    "gemma4_12b_v2_agentic": {
-      "contextLength": 32768,
-      "assemblyBudgetScale": 0.9,
-      "targetTier": "gemma4_agentic_mcp_track",
-      "promptContract": "gemma4_v2_agentic_mcp_thinking_hybrid",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "quantDefault": "Q6_K",
-      "inferenceBackend": "llama-server",
-      "llamaCppPin": "b9553",
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_gemma4_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
-      "agentPolicy": {
-        "ragBudgetScale": 0.9,
-        "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 4,
-        "allowRefactorModes": false,
-        "jsonRepairStrict": true,
-        "historyTurns": 3,
-        "defaultTopK": 6,
-        "deltaTopK": 3,
-        "candidateLimitScale": 16,
-        "targetTier": "gemma4_agentic_mcp_track",
-        "promptContract": "gemma4_v2_agentic_mcp_thinking_hybrid",
-        "mcpEssentialTools": true,
-        "recommendedSystemPrompt": "prompts/lmstudio_gemma4_compact_system.md",
-        "mcpToolDiscipline": "one_tool_per_turn"
-      },
-      "turnPresets": {
-        "plan": {
-          "thinking": "on",
-          "temperature": 1.0,
-          "topP": 0.95,
-          "maxTokens": 4096,
-          "notes": "v2 Agentic — plan with thinking on, temp 1.0"
-        },
-        "critique": {
-          "thinking": "on",
-          "temperature": 1.0,
-          "topP": 0.95,
-          "maxTokens": 3072
-        },
-        "execute": {
-          "thinking": "off",
-          "temperature": 0.1,
-          "topP": 0.82,
-          "maxTokens": 3072,
-          "notes": "Execute — thinking off, read-before-act"
-        },
-        "compile_fix_analyze": {
-          "thinking": "on",
-          "temperature": 1.0,
-          "topP": 0.95,
-          "maxTokens": 4096
-        },
-        "compile_fix_patch": {
-          "thinking": "off",
-          "temperature": 0.1,
-          "topP": 0.82,
-          "maxTokens": 2816
-        },
-        "api_lookup": {
-          "thinking": "off",
-          "temperature": 0.04,
-          "topP": 0.8,
-          "maxTokens": 1536
-        }
-      }
-    },
-    "gemma_4_12b_qat": {
-      "contextLength": 32768,
-      "assemblyBudgetScale": 0.85,
-      "targetTier": "gemma4_mcp_track",
-      "promptContract": "gemma4_compact_mcp_thinking_hybrid",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "quantDefault": "Q4_K_M",
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_gemma4_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
-      "agentPolicy": {
-        "ragBudgetScale": 0.85,
-        "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 4,
-        "allowRefactorModes": false,
-        "jsonRepairStrict": true,
-        "historyTurns": 3,
-        "defaultTopK": 6,
-        "deltaTopK": 3,
-        "candidateLimitScale": 16,
-        "targetTier": "gemma4_mcp_track",
-        "promptContract": "gemma4_compact_mcp_thinking_hybrid",
-        "mcpEssentialTools": true,
-        "recommendedSystemPrompt": "prompts/lmstudio_gemma4_compact_system.md",
-        "mcpToolDiscipline": "one_tool_per_turn"
-      },
-      "turnPresets": {
-        "plan": { "thinking": "on", "temperature": 1.0, "topP": 0.95, "maxTokens": 4096 },
-        "execute": { "thinking": "off", "temperature": 0.1, "topP": 0.82, "maxTokens": 3072 },
-        "compile_fix_analyze": { "thinking": "on", "temperature": 1.0, "topP": 0.95, "maxTokens": 4096 },
-        "compile_fix_patch": { "thinking": "off", "temperature": 0.06, "topP": 0.8, "maxTokens": 2816 },
-        "api_lookup": { "thinking": "off", "temperature": 0.04, "topP": 0.8, "maxTokens": 1536 }
       }
     }
   }

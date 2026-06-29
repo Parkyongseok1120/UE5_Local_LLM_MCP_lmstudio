@@ -1,6 +1,6 @@
 # Small Model Shortcut
 
-Use this guide for GPT OSS below 20B, Qwen 8B-class models, Qwen 3.5 9B, Gemma4 12B, and other compact local models. The goal is not to add a new agent framework; it is to force the existing MCP/RAG/wrapper tools into a smaller, repeatable loop.
+Use this guide for GPT OSS below 20B, Qwen 8B-class models, Qwen 3.5 9B, and other compact local models. The goal is not to add a new agent framework; it is to force the existing MCP/RAG/wrapper tools into a smaller, repeatable loop.
 
 ## Recommended Default
 
@@ -15,7 +15,6 @@ Other compact profiles:
 ```powershell
 $env:UNREAL_RAG_MODEL_PROFILE = "qwen3_8b"
 $env:UNREAL_RAG_MODEL_PROFILE = "qwen3_5_9b_deepseek_v4_flash"
-$env:UNREAL_RAG_MODEL_PROFILE = "gemma4_12b_v2_agentic"
 $env:UNREAL_RAG_MODEL_PROFILE = "gpt_oss_20b"
 $env:UNREAL_RAG_MODEL_PROFILE = "gpt_oss_20b_claude_opus_sonnet_reasoning_i1"
 $env:UNREAL_RAG_MODEL_PROFILE = "gpt_oss_small"
@@ -63,7 +62,6 @@ Values should match `config/lmstudio_sampling.json`.
 | `qwen3_8b` | 24576 | 5 | 3 | 2 | 3 |
 | `qwen3_5_9b` | 24576 | 5 | 3 | 2 | 4 |
 | `qwen3_5_9b_deepseek_v4_flash` | 24576 | 6 | 3 | 2 | 4 |
-| `gemma4_12b_v2_agentic` | 32768 | 6 | 3 | 2 | 4 |
 | `gpt_oss_20b` | 32768 | 5 | 3 | 2 | 3 |
 | `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | 32768 | 8 | 4 | 2 | 5 |
 

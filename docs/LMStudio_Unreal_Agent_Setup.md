@@ -42,13 +42,13 @@ Base rules: [`prompts/lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact
 
 | Model | System prompt |
 |-------|---------------|
-| **Gemma4 v2 Agentic** (primary) | [`lmstudio_gemma4_compact_system.md`](../prompts/lmstudio_gemma4_compact_system.md) + [Gemma4_Llama_Server.md](Gemma4_Llama_Server.md) |
-| Gemma 26B / QAT | [`lmstudio_gemma4_compact_system.md`](../prompts/lmstudio_gemma4_compact_system.md) |
+| **Qwen 3.6 27B** (primary) | [`lmstudio_qwen36_27b_compact_system.md`](../prompts/lmstudio_qwen36_27b_compact_system.md) + base |
 | GPT OSS | [`lmstudio_gpt_oss_compact_system.md`](../prompts/lmstudio_gpt_oss_compact_system.md) |
 | Qwen 3.5 9B / 8B | [`lmstudio_qwen35_9b_compact_system.md`](../prompts/lmstudio_qwen35_9b_compact_system.md) |
-| Qwen 27B | [`lmstudio_unreal_agent_system.md`](../prompts/lmstudio_unreal_agent_system.md) |
 
 Paste the matching file into LM Studio **System Prompt**.
+
+**Qwen 3.6 / thinking models:** disable visible reasoning in LM Studio or use execute turns with thinking OFF. Visible chat must not include "thinking process" text — it breaks tool/JSON parsers.
 
 ## 4. Session start (every chat)
 
@@ -116,13 +116,11 @@ Sampling presets: [`config/lmstudio_sampling.json`](../config/lmstudio_sampling.
 
 | Profile | Use |
 |---------|-----|
-| `gemma4_12b_v2_agentic` | **Primary MCP chat** — v2 Agentic, hybrid thinking, llama-server |
-| `qwen3_6_27b` | Main wrapper track; 2-file cap, 5-attempt compile loop |
+| `qwen3_6_27b` | **Primary** — wrapper + MCP chat; Pass@K KPI |
 | `qwen3_5_9b` | Compact MCP alternative; ctx 24576 |
-| `gpt_oss_20b` | Experimental — ctx 32768, 2-file cap; prefer Gemma v2 / Qwen 9B |
+| `gpt_oss_20b` | Experimental — ctx 32768, 2-file cap |
 | `gpt_oss_small` | GPT OSS below 20B; ctx 32768 |
 | `qwen3_8b` | Small Qwen; ctx 24576 |
-| `gemma_4_26b_a4b_it_q4_k_m` | Gemma 26B; hybrid thinking — [Gemma4_Model_Profile.md](Gemma4_Model_Profile.md) |
 
 N-turn prompts:
 - [`prompts/lmstudio_reasoning_turn1_plan.md`](../prompts/lmstudio_reasoning_turn1_plan.md)

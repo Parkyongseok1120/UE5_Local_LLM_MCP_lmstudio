@@ -152,6 +152,8 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.gates = ["static_validate", "ubt_build"]
         plan.writes_allowed = True
         plan.confidence = 0.7
+        if mode == "module_fix" or "build.cs" in request.lower() or "gameplaytag" in request.lower():
+            plan.files_to_read.append("Source/**/*.Build.cs")
     elif task_kind == "refactor":
         plan.rag_modes = [mode if mode.startswith("refactor_") else "refactor_r0", "planning"]
         plan.gates = ["unreal_refactor_plan_validate", "unreal_refactor_impact_scan"]
@@ -305,6 +307,11 @@ def format_plan_for_prompt(plan: AgentPlan) -> str:
         f"Tool policy: {' -> '.join(plan.tool_policy)}\n"
         f"Write gate: writesAllowed={plan.write_gate.get('writesAllowed')}, "
         f"maxFilesPerEdit={plan.write_gate.get('maxFilesPerEdit')}\n"
+        + (
+            "Files to read first: " + ", ".join(plan.evidence.files_to_read) + "\n"
+            if plan.evidence.files_to_read
+            else ""
+        )
         + ("Checkpoints: " + "; ".join(plan.checkpoints) + "\n" if plan.checkpoints else "")
         + ("Stop conditions: " + "; ".join(plan.stop_conditions) + "\n" if plan.stop_conditions else "")
         + ("Retry policy: " + "; ".join(plan.retry_policy) + "\n" if plan.retry_policy else "")

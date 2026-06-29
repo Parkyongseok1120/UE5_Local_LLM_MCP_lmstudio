@@ -27,7 +27,30 @@ def load_json(path: Path) -> dict | None:
         return None
 
 
-def run_cmd(label: str, cmd: list[str]) -> dict:
+def run_cmd(label: str, cmd: list[str], *, ci: bool = False) -> dict:
+    if ci:
+        index = ROOT / "data" / "unreal58" / "rag.sqlite"
+        ubt = Path(r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe")
+        if label in {"retrieval_unreal_programming", "bench_mcp"} and not index.is_file():
+            return {
+                "label": label,
+                "exitCode": 0,
+                "pass": True,
+                "skipped": True,
+                "reason": "rag index missing (CI skip)",
+                "stdoutTail": "",
+                "stderrTail": "",
+            }
+        if label in {"eval_pass_at_k_dry", "eval_e2e_compile"} and not ubt.is_file():
+            return {
+                "label": label,
+                "exitCode": 0,
+                "pass": True,
+                "skipped": True,
+                "reason": "UBT not installed (CI skip)",
+                "stdoutTail": "",
+                "stderrTail": "",
+            }
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
     return {
         "label": label,
@@ -94,6 +117,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run eval regression gate.")
     parser.add_argument("--compare", default="", help="Baseline latest.json path")
     parser.add_argument("--skip-pytest", action="store_true")
+    parser.add_argument("--ci", action="store_true", help="Skip index/UBT-dependent steps when prerequisites are missing")
     parser.add_argument("--live", action="store_true", help="Include Tier-B live steps")
     args = parser.parse_args()
 
@@ -132,7 +156,7 @@ def main() -> int:
         "steps": [],
     }
     for label, cmd in steps_spec:
-        row = run_cmd(label, cmd)
+        row = run_cmd(label, cmd, ci=args.ci)
         report["steps"].append(row)
         if not row["pass"]:
             fail_dir = FAILURES_DIR / label / stamp
@@ -168,7 +192,8 @@ def main() -> int:
         "## Steps",
     ]
     for step in report["steps"]:
-        md.append(f"- {step['label']}: {'PASS' if step['pass'] else 'FAIL'}")
+        suffix = " (SKIP)" if step.get("skipped") else ""
+        md.append(f"- {step['label']}: {'PASS' if step['pass'] else 'FAIL'}{suffix}")
     if report["metrics"]:
         md.extend(["", "## Metrics", json.dumps(report["metrics"], indent=2)])
     if report["delta"].get("regressions"):

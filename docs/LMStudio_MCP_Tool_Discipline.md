@@ -71,21 +71,20 @@ Paste [`prompts/lmstudio_session_bootstrap.md`](../prompts/lmstudio_session_boot
 
 | Profile / model | System prompt |
 |-----------------|---------------|
-| `gemma4_12b_v2_agentic` (primary) | [`lmstudio_gemma4_compact_system.md`](../prompts/lmstudio_gemma4_compact_system.md) + base |
-| `gemma_4_26b_a4b_it_q4_k_m`, `gemma_4_12b_qat` | Same Gemma compact |
+| `qwen3_6_27b` (primary) | [`lmstudio_qwen36_27b_compact_system.md`](../prompts/lmstudio_qwen36_27b_compact_system.md) + base |
 | `gpt_oss_*` | [`lmstudio_gpt_oss_compact_system.md`](../prompts/lmstudio_gpt_oss_compact_system.md) + base |
 | `qwen3_5_9b`, `qwen3_8b` | [`lmstudio_qwen35_9b_compact_system.md`](../prompts/lmstudio_qwen35_9b_compact_system.md) + base |
-| `qwen3_6_27b` | [`lmstudio_unreal_agent_system.md`](../prompts/lmstudio_unreal_agent_system.md) |
 
 Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_base.md) for one-tool-per-turn and read-before-write discipline.
 
 ## Model-Specific Notes
 
-### Gemma4-12B v2 Agentic
+### Qwen 3.6 27B
 
-- Thinking hybrid: plan/analyze ON (`temp 1.0`), execute/patch OFF (`temp 0.1`).
-- llama-server: Q6_K + MTP, `--jinja`, `repeat_penalty 1.1`, llama.cpp b9553. See [Gemma4_Llama_Server.md](Gemma4_Llama_Server.md).
-- Keep Unreal API names, symbols, and paths in English.
+- Primary wrapper + Pass@K KPI model.
+- Enable Essential Tools; use compact system prompt + base rules.
+- **Thinking leak:** disable visible reasoning in LM Studio or use execute/`compile_fix_patch` turns with thinking OFF. Do not print "thinking process" in visible chat.
+- For `module_fix` / `GameplayTags` / `Build.cs` errors: read full `*.Build.cs` from project state, then patch the file — do not answer with explanation only.
 
 ### GPT OSS 20B
 
@@ -119,5 +118,6 @@ Profiles may include:
 Inspect:
 
 ```powershell
-python scripts/load_sampling_preset.py --sampling-profile gemma4_12b_v2_agentic --show-profile
+python scripts/load_sampling_preset.py --sampling-profile qwen3_6_27b --show-profile
+python scripts/bench_lmstudio_mcp.py
 ```

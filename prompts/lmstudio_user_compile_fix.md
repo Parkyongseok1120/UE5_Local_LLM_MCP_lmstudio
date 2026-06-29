@@ -21,3 +21,5 @@ UBT / compile failed. Fix with tools only (no code in chat until `read_file`).
 5. Repeat until success or state blocker with log line
 
 One MCP tool per turn.
+
+**Build.cs / module dependency fixes:** when the error or user request requires a missing module (e.g. `GameplayTags`), you must edit the relevant `*.Build.cs` and return a concrete patch. Do not only explain the dependency.

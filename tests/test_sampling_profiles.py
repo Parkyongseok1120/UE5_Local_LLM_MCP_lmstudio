@@ -26,75 +26,36 @@ def test_model_alias_resolves_gpt_oss_profile(monkeypatch):
     assert sampling.resolve_profile_name_for_model("gpt-oss-20b (LM Studio live)") == "gpt_oss_20b"
 
 
-def test_model_alias_resolves_gemma_4_profile(monkeypatch):
+def test_model_alias_resolves_qwen36_heretic_profile(monkeypatch):
     monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
     sampling.set_sampling_profile("")
 
     assert (
-        sampling.resolve_profile_name_for_model("gemma-4-26B-A4B-it-Q4_K_M (LM Studio)")
-        == "gemma_4_26b_a4b_it_q4_k_m"
+        sampling.resolve_profile_name_for_model(
+            "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max (LM Studio)"
+        )
+        == "qwen3_6_27b"
     )
 
 
-def test_model_alias_resolves_gemma4_v2_agentic(monkeypatch):
+def test_qwen36_profile_mcp_meta(monkeypatch):
     monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("")
-
-    assert (
-        sampling.resolve_profile_name_for_model("gemma4-v2-Q6_K (LM Studio)")
-        == "gemma4_12b_v2_agentic"
-    )
-
-
-def test_gemma_v2_plan_preset_thinking_on(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("")
-
-    preset = sampling.load_sampling_preset(turn="plan", profile="gemma4_12b_v2_agentic")
-
-    assert preset["thinking"] == "on"
-    assert preset["temperature"] == 1.0
-
-
-def test_gemma_v2_execute_preset_thinking_off(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("")
-
-    preset = sampling.load_sampling_preset(turn="execute", profile="gemma4_12b_v2_agentic")
-
-    assert preset["thinking"] == "off"
-    assert preset["temperature"] == 0.1
-
-
-def test_gemma_profile_execute_preset_thinking_off(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("")
-
-    preset = sampling.load_sampling_preset(
-        turn="execute", profile="gemma_4_26b_a4b_it_q4_k_m"
-    )
-
-    assert preset["thinking"] == "off"
-    assert preset["temperature"] == 0.1
-
-
-def test_gemma_26b_plan_preset_thinking_on(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    preset = sampling.load_sampling_preset(turn="plan", profile="gemma_4_26b_a4b_it_q4_k_m")
-
-    assert preset["thinking"] == "on"
-    assert preset["temperature"] == 1.0
-
-
-def test_gemma_profile_edit_limits(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    limits = sampling.profile_edit_limits("gemma_4_26b_a4b_it_q4_k_m")
+    limits = sampling.profile_edit_limits("qwen3_6_27b")
 
     assert limits["maxFilesPerEdit"] == 2
-    assert limits["allowRefactorModes"] is False
-    assert limits["promptContract"] == "gemma4_compact_mcp_thinking_hybrid"
     assert limits["mcpEssentialTools"] is True
-    assert "lmstudio_gemma4" in limits["recommendedSystemPrompt"]
+    assert "lmstudio_qwen36" in limits["recommendedSystemPrompt"]
+    assert limits["contextLength"] == 32768
+
+
+def test_module_fix_mode_uses_compile_fix_patch_preset(monkeypatch):
+    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
+    sampling.set_sampling_profile("qwen3_6_27b")
+
+    preset = sampling.load_sampling_preset(mode="module_fix")
+
+    assert preset["thinking"] == "off"
+    assert preset["temperature"] == 0.15
 
 
 def test_gpt_oss_compile_fix_analyze_preset_is_low_temperature(monkeypatch):

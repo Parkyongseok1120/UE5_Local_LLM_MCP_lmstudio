@@ -322,7 +322,26 @@ def summarize_project_state(
         "- Treat these files as already existing. Do not re-add declarations, includes, modules, or bindings that are already present.",
         "- Return complete content only for files that need a new change; omitted files remain unchanged.",
     ]
+    modes_with_full_build_cs = frozenset({"module_fix", "compile_fix"})
     included = 0
+    if mode in modes_with_full_build_cs:
+        build_entries = sorted(
+            (rel, txt) for rel, txt in snapshot.items() if rel.lower().endswith(".build.cs")
+        )
+        if build_entries:
+            lines.append(
+                "- Full *.Build.cs content below (authoritative for PublicDependencyModuleNames / module dependencies):"
+            )
+            for relative, text in build_entries:
+                lines.append(f"- {relative} ({len(text.splitlines())} lines, full file):")
+                for line in text.splitlines():
+                    lines.append(f"    {line}")
+                included += 1
+                current = "\n".join(lines)
+                if len(current) >= max_chars:
+                    lines.append("- ... project state summary truncated.")
+                    return "\n".join(lines)
+
     def state_sort_key(item: tuple[str, str]) -> tuple[int, str]:
         relative = item[0]
         if relative.startswith("Source/"):
@@ -339,6 +358,8 @@ def summarize_project_state(
             break
         suffix = Path(relative).suffix.lower()
         if suffix not in {".h", ".hpp", ".cpp", ".c", ".cc", ".cs", ".ini", ".json", ".uproject", ".uplugin"}:
+            continue
+        if relative.lower().endswith(".build.cs") and mode in modes_with_full_build_cs:
             continue
         interesting = summarize_interesting_lines(text)
         included += 1
@@ -590,8 +611,30 @@ def enforce_edit_limits(bundle: dict[str, Any], limits: dict[str, Any]) -> None:
         )
 
 
-def parse_json_response(text: str) -> dict[str, Any]:
+def strip_thinking_from_response(text: str) -> str:
+    """Remove common thinking/reasoning prefixes before JSON extraction."""
     stripped = text.strip()
+    thinking_prefixes = (
+        "here's a thinking process",
+        "here is a thinking process",
+        "thinking process:",
+        "let me think",
+    )
+    lowered = stripped.lower()
+    for prefix in thinking_prefixes:
+        if lowered.startswith(prefix):
+            brace = stripped.find("{")
+            if brace > 0:
+                return stripped[brace:].strip()
+    think_open, think_close = chr(60) + "think" + chr(62), chr(60) + "/think" + chr(62)
+    think_pattern = re.escape(think_open) + r".*?" + re.escape(think_close)
+    stripped = re.sub(think_pattern, "", stripped, flags=re.IGNORECASE | re.DOTALL)
+    stripped = re.sub(r"<think>.*?</think>", "", stripped, flags=re.IGNORECASE | re.DOTALL)
+    return stripped.strip()
+
+
+def parse_json_response(text: str) -> dict[str, Any]:
+    stripped = strip_thinking_from_response(text)
     candidates = [stripped]
     for match in re.finditer(r"```(?:json)?\s*(.*?)```", stripped, flags=re.IGNORECASE | re.DOTALL):
         candidates.insert(0, match.group(1).strip())
@@ -632,6 +675,86 @@ def answer_claims_no_changes(answer: str) -> bool:
 def request_mentions_any(request: str, needles: tuple[str, ...]) -> bool:
     lowered = str(request or "").lower()
     return any(needle.lower() in lowered for needle in needles)
+
+
+BUILD_CS_CLAIM_MARKERS = (
+    "build.cs",
+    "publicdependencymodulenames",
+    "privatedependencymodulenames",
+)
+BUILD_CS_ACTION_MARKERS = (
+    "add ",
+    "added ",
+    "modify",
+    "modified",
+    "update",
+    "updated",
+    "patch",
+    "include ",
+    "insert",
+)
+
+
+def answer_claims_build_cs_edit(answer: str) -> bool:
+    lowered = str(answer or "").lower()
+    if not any(marker in lowered for marker in BUILD_CS_CLAIM_MARKERS):
+        return False
+    return any(marker in lowered for marker in BUILD_CS_ACTION_MARKERS)
+
+
+def bundle_includes_build_cs(bundle: dict[str, Any]) -> bool:
+    paths: list[str] = []
+    for item in bundle.get("files") or []:
+        paths.append(str(item.get("path") or ""))
+    for item in bundle.get("patches") or []:
+        paths.append(str(item.get("path") or ""))
+    return any(path.lower().endswith(".build.cs") for path in paths if path)
+
+
+BUILD_CS_RETRY_FEEDBACK = (
+    "If the error is caused by a missing Unreal module dependency, you must edit the relevant .Build.cs file. "
+    "Do not only explain the required dependency. You must produce a concrete file write/patch for the Build.cs file. "
+    "The task is not complete until the Build.cs file has been modified.\n"
+    "If code includes FGameplayTag, FGameplayTagContainer, UGameplayTagsManager, or GameplayTag-related headers, "
+    'check whether "GameplayTags" exists in PublicDependencyModuleNames or PrivateDependencyModuleNames. '
+    'If it is missing, modify the module Build.cs file and add "GameplayTags".'
+)
+
+
+def hallucination_blockers(
+    request: str,
+    answer: str,
+    bundle: dict[str, Any],
+    root: Path,
+    *,
+    before: dict[str, str] | None = None,
+    after: dict[str, str] | None = None,
+) -> list[str]:
+    issues: list[str] = []
+    uses_gameplay_tags = source_uses_gameplay_tags(root)
+    needs_build_cs = (
+        request_mentions_any(
+            request,
+            ("build.cs", "publicdependencymodulenames", "module dependency", "gameplaytags", "gameplaytag"),
+        )
+        or uses_gameplay_tags
+        or answer_claims_build_cs_edit(answer)
+    )
+    if not needs_build_cs:
+        return issues
+    changed_build = False
+    if before is not None and after is not None:
+        changed_build = any(
+            path.lower().endswith(".build.cs")
+            for path in changed_paths_between(before, after)
+        )
+    in_bundle = bundle_includes_build_cs(bundle)
+    if (answer_claims_build_cs_edit(answer) or (needs_build_cs and not answer_claims_no_changes(answer))) and not in_bundle and not changed_build:
+        issues.append(
+            "You claimed or implied a Build.cs / module-dependency fix, but the response did not include any "
+            "*.Build.cs file in files[] or patches[]. Return the updated Build.cs content."
+        )
+    return issues
 
 
 def source_uses_gameplay_tags(root: Path, *, public_only: bool = False) -> bool:
@@ -2148,7 +2271,11 @@ def mode_directive(mode: str) -> str:
         ),
         "module_fix": (
             "Mode directive: module_fix. Inspect the actual *.Build.cs before answering. "
-            "If a public header exposes another module type, add the dependency to PublicDependencyModuleNames."
+            "If a public header exposes another module type, add the dependency to PublicDependencyModuleNames. "
+            "If the error is caused by a missing Unreal module dependency, you must edit the relevant .Build.cs file. "
+            "Do not only explain the required dependency; produce a concrete file write/patch for the Build.cs file. "
+            "The task is not complete until the Build.cs file has been modified. "
+            'If code uses FGameplayTag or GameplayTagContainer.h, ensure "GameplayTags" is in PublicDependencyModuleNames.'
         ),
         "reflection_fix": (
             "Mode directive: reflection_fix. For reflected headers, ensure the matching *.generated.h exists exactly once "
@@ -2488,6 +2615,14 @@ def run(args: argparse.Namespace) -> int:
             continue
 
         last_answer = str(bundle.get("answer") or "")
+        hall_blockers = hallucination_blockers(request, last_answer, bundle, project_root)
+        if hall_blockers:
+            previous_feedback = (
+                BUILD_CS_RETRY_FEEDBACK + "\n"
+                + "\n".join(f"- {issue}" for issue in hall_blockers)
+            )
+            write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+            continue
         has_edits = bool(bundle["files"]) or bool(bundle.get("patches"))
         if not has_edits:
             if not args.allow_empty_files and not answer_claims_no_changes(last_answer):
@@ -2504,7 +2639,8 @@ def run(args: argparse.Namespace) -> int:
             blockers = no_change_blockers(request, project_root, last_findings)
             if blockers and not args.allow_empty_files:
                 previous_feedback = (
-                    "No-change response rejected because the request is not satisfied:\n"
+                    BUILD_CS_RETRY_FEEDBACK + "\n"
+                    + "No-change response rejected because the request is not satisfied:\n"
                     + "\n".join(f"- {issue}" for issue in blockers)
                     + "\nInspect the authoritative project state and return the smallest required file change."
                 )
@@ -2551,8 +2687,10 @@ def run(args: argparse.Namespace) -> int:
             if scope_blockers:
                 restore_changed_paths(project_root, before_apply, changed_paths_between(before_apply, after_apply))
                 last_written = []
+                retry_tail = BUILD_CS_RETRY_FEEDBACK if any("Build.cs" in issue for issue in scope_blockers) else ""
                 previous_feedback = (
-                    "Edit rejected because it does not match the requested compile-fix scope:\n"
+                    (retry_tail + "\n" if retry_tail else "")
+                    + "Edit rejected because it does not match the requested compile-fix scope:\n"
                     + "\n".join(f"- {issue}" for issue in scope_blockers)
                     + "\nUse the current project state as authoritative and change the specific file(s) needed."
                 )

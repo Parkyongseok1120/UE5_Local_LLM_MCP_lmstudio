@@ -39,6 +39,19 @@ def main() -> int:
 
     mcp = Path.home() / ".lmstudio" / "mcp.json"
     results.append(check("mcp_json", mcp.is_file(), str(mcp)))
+    essential_tools = False
+    if mcp.is_file():
+        try:
+            payload = json.loads(mcp.read_text(encoding="utf-8-sig"))
+            servers = payload.get("mcpServers") or {}
+            for entry in servers.values():
+                env = entry.get("env") or {}
+                if str(env.get("MCP_ESSENTIAL_TOOLS") or "").strip() in {"1", "true", "yes", "on"}:
+                    essential_tools = True
+                    break
+        except (OSError, json.JSONDecodeError):
+            essential_tools = False
+    results.append(check("mcp_essential_tools", essential_tools, "MCP_ESSENTIAL_TOOLS=1 in mcp.json"))
 
     proc = subprocess.run(
         [py, str(SCRIPTS / "rag_doctor.py")],

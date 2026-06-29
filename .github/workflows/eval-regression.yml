@@ -13,8 +13,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run Tier-A eval regression
+      - name: Run Tier-A eval regression (CI-safe)
         shell: pwsh
         run: |
-          python scripts/run_eval_regression.py --skip-pytest
+          python scripts/run_eval_regression.py --ci --skip-pytest
         continue-on-error: false
+
+  unit-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run pytest suite
+        shell: pwsh
+        run: |
+          python -m pytest tests/ -q
