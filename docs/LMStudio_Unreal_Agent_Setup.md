@@ -17,8 +17,16 @@ Both should PASS. Engine default: **UE 5.8**.
 File: `$HOME\.lmstudio\mcp.json`
 
 Required servers:
-- `unreal-rag` — search, health, compile loop
+- `unreal-rag` — search, health, agent plan
 - `unreal-agent` — read/write files, UBT build
+
+**LM Studio chat (weak models):** set on **both** servers:
+
+```json
+"MCP_ESSENTIAL_TOOLS": "1"
+```
+
+Installer and `scripts/patch_mcp_config.py` enable this by default. See [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
 
 After path changes:
 
@@ -30,14 +38,29 @@ Restart LM Studio so MCP servers reload.
 
 ## 3. System prompt
 
-Paste [`prompts/lmstudio_unreal_agent_system.md`](../prompts/lmstudio_unreal_agent_system.md) into LM Studio **System Prompt**.
+Base rules: [`prompts/lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_base.md)
+
+| Model | System prompt |
+|-------|---------------|
+| **Gemma4 v2 Agentic** (primary) | [`lmstudio_gemma4_compact_system.md`](../prompts/lmstudio_gemma4_compact_system.md) + [Gemma4_Llama_Server.md](Gemma4_Llama_Server.md) |
+| Gemma 26B / QAT | [`lmstudio_gemma4_compact_system.md`](../prompts/lmstudio_gemma4_compact_system.md) |
+| GPT OSS | [`lmstudio_gpt_oss_compact_system.md`](../prompts/lmstudio_gpt_oss_compact_system.md) |
+| Qwen 3.5 9B / 8B | [`lmstudio_qwen35_9b_compact_system.md`](../prompts/lmstudio_qwen35_9b_compact_system.md) |
+| Qwen 27B | [`lmstudio_unreal_agent_system.md`](../prompts/lmstudio_unreal_agent_system.md) |
+
+Paste the matching file into LM Studio **System Prompt**.
 
 ## 4. Session start (every chat)
+
+Paste [`prompts/lmstudio_session_bootstrap.md`](../prompts/lmstudio_session_bootstrap.md) as the **first user message**, or manually:
 
 1. `unreal_get_active_project`
 2. If wrong project: `unreal_set_active_project` or `unreal_open_project_picker`
 3. `unreal_rag_health` once
-4. For implementation: `unreal_rag_search` **before** `write_file`
+4. `get_workspace_info` (unreal-agent)
+5. For implementation: `unreal_agent_plan` then `unreal_rag_search` **before** `write_file`
+
+Task templates: [`lmstudio_user_compile_fix.md`](../prompts/lmstudio_user_compile_fix.md), [`lmstudio_user_agent_edit.md`](../prompts/lmstudio_user_agent_edit.md)
 
 ## 5. Standard loop
 
@@ -93,10 +116,13 @@ Sampling presets: [`config/lmstudio_sampling.json`](../config/lmstudio_sampling.
 
 | Profile | Use |
 |---------|-----|
-| `qwen3_6_27b` | Main local track; broader retrieval and 5-attempt compile loop |
-| `gpt_oss_20b` | Compact 20B track; strict JSON and two-file patch cap |
-| `gpt_oss_small` | GPT OSS below 20B; one-file patch cap |
-| `qwen3_8b` | Small Qwen track; two-turn shortcut |
+| `gemma4_12b_v2_agentic` | **Primary MCP chat** — v2 Agentic, hybrid thinking, llama-server |
+| `qwen3_6_27b` | Main wrapper track; 2-file cap, 5-attempt compile loop |
+| `qwen3_5_9b` | Compact MCP alternative; ctx 24576 |
+| `gpt_oss_20b` | Experimental — ctx 32768, 2-file cap; prefer Gemma v2 / Qwen 9B |
+| `gpt_oss_small` | GPT OSS below 20B; ctx 32768 |
+| `qwen3_8b` | Small Qwen; ctx 24576 |
+| `gemma_4_26b_a4b_it_q4_k_m` | Gemma 26B; hybrid thinking — [Gemma4_Model_Profile.md](Gemma4_Model_Profile.md) |
 
 N-turn prompts:
 - [`prompts/lmstudio_reasoning_turn1_plan.md`](../prompts/lmstudio_reasoning_turn1_plan.md)

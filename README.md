@@ -56,7 +56,7 @@ RAG-only Q&A is lighter. Agent file-write + UBT compile loop needs UE installed 
 | | Minimum | Recommended |
 |---|---|---|
 | Size | 7-9B instruct/coding model | 20-27B coding/reasoning model |
-| Examples | Qwen3-8B, Qwen 3.5 9B | GPT OSS 20B, Qwen 3.6 27B |
+| Examples | Qwen3-8B, Qwen 3.5 9B | Qwen 3.6 27B (GPT OSS 20B: optional, variable MCP stability) |
 | Context | 8k | 16k-32k+ |
 | Quant | Q4 acceptable | Q4_K_M / Q5_K_M |
 
@@ -75,6 +75,15 @@ cd UE5_Local_LLM_MCP_lmstudio
 .\rag.ps1 doctor
 ```
 
+To install and build the RAG index in one step, run one of:
+
+```powershell
+.\installer\INSTALL-SAFE-MODE-BUILD-RAG.bat
+.\installer\INSTALL-AGENT-MODE-BUILD-RAG.bat
+```
+
+Use safe mode first unless you intentionally want MCP file writes, commands, and Unreal builds enabled.
+
 Then in LM Studio:
 
 1. Load your local model and start Local Server.
@@ -83,6 +92,73 @@ Then in LM Studio:
 4. Restart LM Studio if paths do not refresh.
 
 `INSTALL-SAFE-MODE.bat` patches `%USERPROFILE%\.lmstudio\mcp.json` with full paths to Python/Node.
+
+## PowerShell `rag.ps1` Setup
+
+If PowerShell blocks `.\rag.ps1` with an execution policy error, keep the system policy unchanged and run it with a per-command bypass:
+
+```powershell
+cd "$env:USERPROFILE\Documents\Git\UE5_Local_LLM_MCP_lmstudio"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 doctor
+```
+
+Build a useful local RAG index for your active Unreal project:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-projects -CopyProjectText
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-symbols
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-module-graph
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 doctor
+```
+
+For a minimal guideline-only index, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
+```
+
+When writing docs, issues, or logs, avoid hard-coding a personal Windows username such as `C:\Users\<name>\...`. Prefer:
+
+```powershell
+$env:USERPROFILE\Documents\Git\UE5_Local_LLM_MCP_lmstudio
+%USERPROFILE%\Documents\Git\UE5_Local_LLM_MCP_lmstudio
+C:\Path\To\YourProject
+```
+
+After rebuilding the index, restart LM Studio MCP servers or restart LM Studio so `unreal-rag` reloads the new `rag.sqlite`.
+
+### Shader / Material / Blueprint Knowledge
+
+Project text indexing already includes `.usf` and `.ush` shader files:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-projects -CopyProjectText
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 query -Mode shader -Question "USF USH GlobalShader RenderCore RHI plugin setup"
+```
+
+For Material and Blueprint graph analysis, export metadata from Unreal Editor first, then ingest it:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-material-metadata -Question C:\Path\To\materials.jsonl -ProjectName MyGame
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-blueprint-metadata -Question C:\Path\To\blueprints.jsonl -ProjectName MyGame
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
+```
+
+Use `-Mode material_analysis` for material node screenshots/parameter inventory and `-Mode blueprint_analysis` for Blueprint variables, functions, nodes, and pins. Screenshot answers must separate visible facts from guesses.
+
+If you prefer double-click / one-command setup, use:
+
+```powershell
+.\installer\INSTALL-SAFE-MODE-BUILD-RAG.bat
+```
+
+For trusted projects where the agent may write files and run UBT builds:
+
+```powershell
+.\installer\INSTALL-AGENT-MODE-BUILD-RAG.bat
+```
 
 ## Safe vs Agent Mode
 
@@ -165,6 +241,7 @@ Maintainers: run `.\installer\Verify-Oss-Ready.ps1` before publishing a fork.
 | Real project validation | [docs/Real_Project_Validation_Plan.md](docs/Real_Project_Validation_Plan.md) |
 | Sonnet 4.5 target plan | [docs/Sonnet45_Target_Plan.md](docs/Sonnet45_Target_Plan.md) |
 | Model profiles | [docs/Model_Profiles.md](docs/Model_Profiles.md) |
+| Gemma 4 26B profile | [docs/Gemma4_Model_Profile.md](docs/Gemma4_Model_Profile.md) |
 | Small models | [docs/Small_Model_Shortcut.md](docs/Small_Model_Shortcut.md) |
 | Community fine-tune optimization | [docs/Community_Finetune_Model_Optimization.md](docs/Community_Finetune_Model_Optimization.md) |
 | Troubleshooting | [docs/Troubleshooting.md](docs/Troubleshooting.md) |

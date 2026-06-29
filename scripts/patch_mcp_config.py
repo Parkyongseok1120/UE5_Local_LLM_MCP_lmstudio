@@ -92,6 +92,7 @@ def patch_unreal_rag(entry: dict[str, Any], workspace: Path, python_exe: Path) -
     env["UNREAL58_ROOT"] = str(workspace)
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+    env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
     entry["env"] = env
     return entry
 
@@ -117,6 +118,7 @@ def patch_unreal_agent(entry: dict[str, Any], workspace: Path, node_exe: Path) -
     env["AGENT_MCP_CONFIG"] = str(agent_root / "config" / "agent-mcp.json")
     env["SHARED_UNREAL_CONFIG"] = str(SHARED_CONFIG)
     env["UNREAL58_ROOT"] = str(workspace)
+    env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
     entry["env"] = env
     return entry
 

@@ -13,7 +13,8 @@
         "ALLOW_UNREAL_BUILD": "1",
         "MAX_READ_BYTES": "524288",
         "MAX_OUTPUT_BYTES": "262144",
-        "COMMAND_TIMEOUT_MS": "600000"
+        "COMMAND_TIMEOUT_MS": "600000",
+        "MCP_ESSENTIAL_TOOLS": "1"
       }
     }
   }

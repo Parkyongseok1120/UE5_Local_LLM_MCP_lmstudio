@@ -50,32 +50,43 @@ def test_active_project_names_from_shared_config(tmp_path, monkeypatch):
 
 
 def test_index_health_if_present():
-    import sqlite3
-
     index = resolve_index_path(WORKSPACE)
     if not index.exists():
         return
-    try:
-        health = index_health(index)
-    except sqlite3.OperationalError as exc:
-        if "locked" in str(exc).lower():
-            return
-        raise
+    health = index_health(index)
     assert health["indexExists"] is True
+    if not health.get("indexReadable", True):
+        assert health.get("indexError")
+        return
     assert health["chunkCount"] > 0
 
 
 def test_rebuild_status_if_present():
-    import sqlite3
-
     index = resolve_index_path(WORKSPACE)
     if not index.exists():
         return
-    try:
-        status = rebuild_status(index)
-    except sqlite3.OperationalError as exc:
-        if "locked" in str(exc).lower():
-            return
-        raise
+    status = rebuild_status(index)
     assert "needsRebuild" in status
     assert "rawInputs" in status
+    if not status.get("indexReadable", True):
+        assert status["needsRebuild"] is True
+        assert status["reason"] == "index-unreadable"
+
+
+def test_index_health_handles_missing_chunks_table(tmp_path):
+    import sqlite3
+
+    index = tmp_path / "rag.sqlite"
+    sqlite3.connect(index).close()
+    health = index_health(index)
+    assert health["indexExists"] is True
+    assert health["indexReadable"] is False
+    assert health["okForChat"] is False
+    assert health["chatAction"] == "stop_and_report_rag_rebuild_required"
+    assert "no such table" in health["indexError"].lower()
+
+    status = rebuild_status(index)
+    assert status["needsRebuild"] is True
+    assert status["reason"] == "index-unreadable"
+    assert status["chatAction"] == "stop_and_report_rag_rebuild_required"
+    assert status["recommendedDoctorCommand"] == ".\\rag.ps1 doctor"

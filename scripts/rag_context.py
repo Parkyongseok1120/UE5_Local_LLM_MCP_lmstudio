@@ -67,6 +67,9 @@ SECTION_LABELS = [
     "Runtime-Debug Context Order",
     "API-Lookup Context Order",
     "Agent-Edit Context Order",
+    "Shader Context Order",
+    "Material Graph Analysis Order",
+    "Blueprint Graph Analysis Order",
     "Feedback Loop",
     "Required Edit Discipline",
     "Global File Edit Rules",
@@ -78,6 +81,11 @@ SECTION_LABELS = [
     "Critical Rule: Label Code Accuracy",
     "Critical Response Rules",
     "Critical Review Gates",
+    "Diagram Response Rules",
+    "When To Include A Diagram",
+    "Diagram Type Selection",
+    "Mermaid Safety Rules",
+    "Response Contract",
     "Critical AI Anti-Patterns",
     "Process Ownership Rules",
     "Default: Performer-Owned Process",
@@ -100,6 +108,9 @@ BUDGET_MODE_ALIASES: dict[str, str] = {
     "runtime_debug": "compile_fix",
     "agent_edit": "execute",
     "codegen": "codegen",
+    "shader": "codegen",
+    "material_analysis": "review",
+    "blueprint_analysis": "review",
     "prototype_component": "codegen",
     "prototype_subsystem": "codegen",
     "api_lookup": "api_lookup",
@@ -131,6 +142,29 @@ MODE_BUCKETS = {
         ("project_examples", "5. Local project examples"),
         ("playbooks", "6. Codegen recipes and likely-failure playbooks"),
         ("other", "7. Other retrieved evidence"),
+    ],
+    "shader": [
+        ("playbooks", "1. Shader and render pipeline rules"),
+        ("project_examples", "2. Local .usf/.ush/plugin/module files"),
+        ("target_symbols", "3. Shader/rendering symbols"),
+        ("module_evidence", "4. Render module evidence"),
+        ("include_evidence", "5. Include evidence"),
+        ("build_errors", "6. Shader/C++ build feedback"),
+        ("other", "7. Other retrieved evidence"),
+    ],
+    "material_analysis": [
+        ("asset_metadata", "1. Material metadata and parameter inventory"),
+        ("playbooks", "2. Material graph analysis rules"),
+        ("project_examples", "3. Local material/shader code references"),
+        ("target_symbols", "4. Related APIs"),
+        ("other", "5. Other retrieved evidence"),
+    ],
+    "blueprint_analysis": [
+        ("asset_metadata", "1. Blueprint graph, variable, and function-call metadata"),
+        ("playbooks", "2. Blueprint analysis rules"),
+        ("project_examples", "3. Local C++/BP-adjacent references"),
+        ("target_symbols", "4. Related C++ APIs"),
+        ("other", "5. Other retrieved evidence"),
     ],
     "compile_fix": [
         ("build_errors", "1. Build/UHT/linker error records"),
@@ -299,6 +333,19 @@ def bucket_for_row(row: dict[str, Any]) -> str:
         return "build_errors"
     if source == "project_profile":
         return "project_profile"
+    if source in {
+        "unreal_blueprint_metadata",
+        "unreal_material_metadata",
+        "unreal_animation_metadata",
+        "unreal_skeletal_mesh_metadata",
+        "unreal_anim_blueprint_metadata",
+        "unreal_anim_montage_metadata",
+        "unreal_sequencer_metadata",
+        "unreal_asset_registry",
+        "unreal_project_settings",
+        "unreal_level_metadata",
+    }:
+        return "asset_metadata"
     if source == "module_graph":
         if symbol_kind in {"include_owner", "include_edge"} or "include" in title:
             return "include_evidence"
@@ -407,6 +454,22 @@ def assembly_instructions(mode: str) -> str:
             "project profile/example, then recipe/playbook. Output files changed, code, "
             "Build.cs notes, and validation steps."
         )
+    if mode == "shader":
+        return (
+            "Use shader rules first, then local .usf/.ush/plugin files, render symbols, "
+            "and module evidence. Do not invent shader parameter bindings or Build.cs modules; "
+            "cite the exact file, symbol, or compile error."
+        )
+    if mode == "material_analysis":
+        return (
+            "Use material metadata first. For screenshots, separate visible facts from guesses, "
+            "list scalar/vector/texture/static switch parameters, texture assets, and unknown nodes."
+        )
+    if mode == "blueprint_analysis":
+        return (
+            "Use Blueprint metadata first. List variables, functions, node titles, pins, and "
+            "function-call candidates. Do not claim an asset was changed without Editor-side proof."
+        )
     if mode == "compile_fix":
         return (
             "Classify the error first. Prefer exact build-log evidence, then symbol and "
@@ -441,6 +504,14 @@ PROJECT_SOURCES = frozenset({
     "project_guideline",
     "unreal_blueprint_metadata",
     "unreal_material_metadata",
+    "unreal_animation_metadata",
+    "unreal_skeletal_mesh_metadata",
+    "unreal_anim_blueprint_metadata",
+    "unreal_anim_montage_metadata",
+    "unreal_sequencer_metadata",
+    "unreal_asset_registry",
+    "unreal_project_settings",
+    "unreal_level_metadata",
 })
 ENGINE_SOURCES = frozenset({
     "unreal_source",

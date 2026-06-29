@@ -49,3 +49,40 @@ def test_verify_edit_blocked_on_inspect():
 def test_tool_policy_nonempty():
     plan = build_agent_plan("Implement dodge component", "agent_edit")
     assert len(plan.tool_policy) >= 3
+
+
+def test_plan_includes_small_model_execution_contract():
+    plan = build_agent_plan("Fix C1083 missing include in MyActor.h", "compile_fix")
+    payload = plan.to_dict()
+    assert payload["writeGate"]["writesAllowed"] is True
+    assert payload["writeGate"]["mustReadBeforeWrite"] is True
+    assert payload["writeGate"]["mustBuildAfterWrite"] is True
+    assert payload["checkpoints"]
+    assert payload["stopConditions"]
+    assert payload["retryPolicy"]
+
+
+def test_runtime_debug_write_gate_blocks_edits():
+    plan = build_agent_plan("Read PIE crash logs and diagnose input mapping", "runtime_debug")
+    assert plan.write_gate["writesAllowed"] is False
+    result = verify_edit_allowed(plan, files_count=0, patches_count=1)
+    assert result["ok"] is False
+    assert any("Write gate" in issue for issue in result["issues"])
+
+
+def test_shader_material_blueprint_analysis_blocks_edits():
+    for mode in ("shader", "material_analysis", "blueprint_analysis"):
+        plan = build_agent_plan("Analyze graph and parameters", mode)
+        assert plan.task_kind == "inspect_only"
+        assert plan.edit_strategy == "no_edit"
+        assert plan.write_gate["writesAllowed"] is False
+        assert mode in plan.evidence.rag_modes
+
+
+def test_verify_edit_limit_from_profile():
+    plan = build_agent_plan("Implement dodge component", "agent_edit")
+    max_files = int(plan.write_gate["maxFilesPerEdit"])
+    assert max_files > 0
+    result = verify_edit_allowed(plan, files_count=max_files + 1, patches_count=0)
+    assert result["ok"] is False
+    assert any("maxFilesPerEdit" in issue for issue in result["issues"])

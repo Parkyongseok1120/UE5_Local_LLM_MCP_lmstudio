@@ -33,6 +33,10 @@ COMPILE_MARKERS = (
 REFACTOR_MARKERS = ("refactor", "r0", "r1", "r2", "r3", "r4", "move class", "extract")
 RUNTIME_MARKERS = ("pie", "runtime", "gamemode", "input mapping", "crash", "assert", "log")
 REVIEW_MARKERS = ("review", "inventory", "audit", "findings", "architecture review")
+ASSET_ANALYSIS_MARKERS = (
+    "shader", "usf", "ush", "hlsl", "material", "material node",
+    "material graph", "blueprint graph", "function call", "variable", "screenshot",
+)
 API_MARKERS = ("what is", "how does", "api", "lookup", "documentation", "explain")
 
 
@@ -58,6 +62,10 @@ class AgentPlan:
     evidence: EvidencePlan
     edit_strategy: EditStrategy
     tool_policy: list[str] = field(default_factory=list)
+    write_gate: dict[str, Any] = field(default_factory=dict)
+    checkpoints: list[str] = field(default_factory=list)
+    stop_conditions: list[str] = field(default_factory=list)
+    retry_policy: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -67,6 +75,10 @@ class AgentPlan:
             "evidencePlan": self.evidence.to_dict(),
             "editStrategy": self.edit_strategy,
             "toolPolicy": self.tool_policy,
+            "writeGate": self.write_gate,
+            "checkpoints": self.checkpoints,
+            "stopConditions": self.stop_conditions,
+            "retryPolicy": self.retry_policy,
             "notes": self.notes,
         }
 
@@ -77,6 +89,8 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "refactor"
     if mode in {"compile_fix", "module_fix", "reflection_fix"}:
         return "compile_fix"
+    if mode in {"shader", "material_analysis", "blueprint_analysis"}:
+        return "inspect_only"
     if mode == "runtime_debug":
         return "runtime_debug"
     if mode in {"review", "planning"}:
@@ -89,6 +103,10 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "refactor"
     if any(m in text for m in RUNTIME_MARKERS):
         return "runtime_debug"
+    if any(m in text for m in ASSET_ANALYSIS_MARKERS) and not any(
+        w in text for w in ("fix", "patch", "implement", "add class", "create", "write")
+    ):
+        return "inspect_only"
     if any(m in text for m in REVIEW_MARKERS):
         return "inspect_only"
     if any(m in text for m in API_MARKERS) and not any(
@@ -122,7 +140,10 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.writes_allowed = False
         plan.confidence = 0.8
     elif task_kind == "inspect_only":
-        plan.rag_modes = ["review", "planning"]
+        if mode in {"shader", "material_analysis", "blueprint_analysis"}:
+            plan.rag_modes = [mode, "review"]
+        else:
+            plan.rag_modes = ["review", "planning"]
         plan.gates = ["unreal_project_architecture", "unreal_review_claim_validate"]
         plan.writes_allowed = False
         plan.confidence = 0.75
@@ -162,6 +183,68 @@ def _extract_symbols(request: str, plan: EvidencePlan) -> None:
             plan.symbols_to_scan.append(sym)
 
 
+def build_write_gate(task_kind: TaskKind, evidence: EvidencePlan, policy: dict[str, Any]) -> dict[str, Any]:
+    max_files = int(policy.get("maxFilesPerEdit") or 0)
+    return {
+        "writesAllowed": bool(evidence.writes_allowed),
+        "maxFilesPerEdit": max_files,
+        "preferPatch": bool(policy.get("preferPatch", True)),
+        "mustReadBeforeWrite": bool(evidence.writes_allowed),
+        "mustBuildAfterWrite": task_kind in {"edit", "compile_fix", "refactor"},
+        "forbiddenWhen": [
+            "taskKind is answer_only, inspect_only, or runtime_debug",
+            "editStrategy is no_edit",
+            "target file was not read in this session",
+        ],
+    }
+
+
+def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan) -> list[str]:
+    common = [
+        "Confirm activeProject before using project-relative paths.",
+        "Call unreal_agent_plan before edits and follow toolPolicy in order.",
+        "Use RAG evidence before making Unreal API or Build.cs claims.",
+    ]
+    if task_kind == "answer_only":
+        return common + ["Answer only after symbol/RAG evidence; do not write files."]
+    if task_kind == "inspect_only":
+        return common + ["Read target files before findings; do not write files."]
+    if task_kind == "runtime_debug":
+        return common + ["Read logs/config before diagnosis; do not write files by default."]
+    edit_steps = [
+        "Read each target file before replace_in_file or write_file.",
+        "Prefer replace_in_file with expectedOccurrences=1 for existing files.",
+    ]
+    if "ubt_build" in evidence.gates or task_kind in {"edit", "compile_fix", "refactor"}:
+        edit_steps.append("Run build_unreal_project after C++ or Build.cs changes.")
+    return common + edit_steps
+
+
+def build_stop_conditions(task_kind: TaskKind) -> list[str]:
+    if task_kind in {"answer_only", "inspect_only", "runtime_debug"}:
+        return [
+            "Stop after evidence-backed answer or findings.",
+            "If evidence is missing, report the exact missing file/log/index instead of guessing.",
+        ]
+    return [
+        "Stop when build_unreal_project succeeds.",
+        "If build fails, report the first actionable error line and retry with compile_fix RAG.",
+        "If required file or activeProject is missing, stop and report the blocker.",
+    ]
+
+
+def build_retry_policy(task_kind: TaskKind, policy: dict[str, Any]) -> list[str]:
+    attempts = int(policy.get("compileFixMaxAttempts") or 3)
+    delta_top_k = int(policy.get("deltaTopK") or 3)
+    if task_kind not in {"edit", "compile_fix", "refactor"}:
+        return ["Do not retry with writes for non-edit tasks."]
+    return [
+        f"Use at most {attempts} compile-fix attempts for this profile.",
+        f"On failure, search only the current error context with delta top_k={delta_top_k}.",
+        "Do not repeat a no-op edit; inspect the current file state before the next patch.",
+    ]
+
+
 def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int = 0) -> AgentPlan:
     from load_sampling_preset import profile_agent_policy
     from tool_policy import tool_sequence_for_task
@@ -190,12 +273,17 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         strategy = "no_edit"
         evidence.writes_allowed = False
         notes.append("Refactor modes disabled for active model profile.")
+    write_gate = build_write_gate(task_kind, evidence, policy)
     return AgentPlan(
         request=request,
         task_kind=task_kind,
         evidence=evidence,
         edit_strategy=strategy,
         tool_policy=tool_policy,
+        write_gate=write_gate,
+        checkpoints=build_checkpoints(task_kind, evidence),
+        stop_conditions=build_stop_conditions(task_kind),
+        retry_policy=build_retry_policy(task_kind, policy),
         notes=notes,
     )
 
@@ -215,6 +303,11 @@ def format_plan_for_prompt(plan: AgentPlan) -> str:
         f"RAG modes: {', '.join(plan.evidence.rag_modes)}\n"
         f"Gates: {', '.join(plan.evidence.gates) or 'none'}\n"
         f"Tool policy: {' -> '.join(plan.tool_policy)}\n"
+        f"Write gate: writesAllowed={plan.write_gate.get('writesAllowed')}, "
+        f"maxFilesPerEdit={plan.write_gate.get('maxFilesPerEdit')}\n"
+        + ("Checkpoints: " + "; ".join(plan.checkpoints) + "\n" if plan.checkpoints else "")
+        + ("Stop conditions: " + "; ".join(plan.stop_conditions) + "\n" if plan.stop_conditions else "")
+        + ("Retry policy: " + "; ".join(plan.retry_policy) + "\n" if plan.retry_policy else "")
         + ("Notes: " + "; ".join(plan.notes) + "\n" if plan.notes else "")
     )
 
@@ -225,6 +318,12 @@ def verify_edit_allowed(plan: AgentPlan, *, files_count: int, patches_count: int
         issues.append("Plan forbids edits but bundle contains file changes.")
     if plan.task_kind == "inspect_only" and (files_count or patches_count):
         issues.append("Inspect-only task must not write files.")
+    if not plan.write_gate.get("writesAllowed", plan.evidence.writes_allowed) and (files_count or patches_count):
+        issues.append("Write gate forbids edits for this task.")
+    max_files = int(plan.write_gate.get("maxFilesPerEdit") or 0)
+    total = files_count + patches_count
+    if max_files > 0 and total > max_files:
+        issues.append(f"Edit bundle exceeds maxFilesPerEdit={max_files}.")
     return {"ok": len(issues) == 0, "issues": issues}
 
 

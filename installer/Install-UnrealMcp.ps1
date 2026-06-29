@@ -211,6 +211,7 @@ foreach ($mcpPath in $mcpPaths) {
             UNREAL58_PORTABLE_ROOT = $root
             PYTHONUTF8           = "1"
             PYTHONIOENCODING     = "utf-8"
+            MCP_ESSENTIAL_TOOLS  = "1"
         }
     })
 
@@ -232,6 +233,7 @@ foreach ($mcpPath in $mcpPaths) {
             MAX_READ_BYTES       = "524288"
             MAX_OUTPUT_BYTES     = "262144"
             COMMAND_TIMEOUT_MS   = "600000"
+            MCP_ESSENTIAL_TOOLS  = "1"
         }
     })
 

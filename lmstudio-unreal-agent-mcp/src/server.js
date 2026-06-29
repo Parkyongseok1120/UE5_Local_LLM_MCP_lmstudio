@@ -64,6 +64,21 @@ const MAX_READ_BYTES = Number(process.env.MAX_READ_BYTES || 64 * 1024);
 const MAX_OUTPUT_BYTES = Number(process.env.MAX_OUTPUT_BYTES || 1024 * 256);
 const COMMAND_TIMEOUT_MS = Number(process.env.COMMAND_TIMEOUT_MS || 1000 * 60 * 10);
 const SEARCH_MAX_FILES = Number(process.env.SEARCH_MAX_FILES || 5000);
+const MCP_ESSENTIAL_TOOLS = ["1", "true", "yes", "on"].includes(
+  String(process.env.MCP_ESSENTIAL_TOOLS || "").trim().toLowerCase()
+);
+const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
+  "get_workspace_info",
+  "get_active_project",
+  "list_directory",
+  "read_file",
+  "read_file_range",
+  "replace_in_file",
+  "write_file",
+  "search_files",
+  "build_unreal_project",
+  "read_unreal_logs"
+]);
 
 const server = new Server(
   {
@@ -277,9 +292,8 @@ async function buildWorkspaceInfo() {
   };
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
+function allAgentTools() {
+  return [
       {
         name: "get_workspace_info",
         description: "Show workspace root, safety flags, configured search roots, and recently discovered Unreal projects.",
@@ -294,7 +308,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_active_project",
-        description: "Return the currently selected active Unreal project from config/agent-mcp.json.",
+        description: "Return the selected active Unreal project and projectDir. Use this instead of listing WORKSPACE_ROOT when activeProject is already set.",
         inputSchema: makeJsonSchema({})
       },
       {
@@ -348,7 +362,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "list_directory",
-        description: "List files/directories under WORKSPACE_ROOT. Path must stay inside workspace.",
+        description: "List files/directories under WORKSPACE_ROOT. When activeProject is set, prefer its projectDir-relative path such as Git/Project_MJS/Source instead of broad root browsing.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace, e.g. '.', 'Source'." },
           maxEntries: { type: "number", description: "Max entries to show. Default 200." }
@@ -356,7 +370,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "read_file",
-        description: "Read a UTF-8 text file inside WORKSPACE_ROOT. Default cap 64 KiB; use read_file_range for partial reads.",
+        description: "Read a UTF-8 text file inside WORKSPACE_ROOT. Required before any write to that file. Default cap 64 KiB; use read_file_range for partial reads.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           maxBytes: { type: "number", description: "Optional max bytes. Default 64 KiB." }
@@ -373,7 +387,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "write_file",
-        description: "Write a UTF-8 file inside WORKSPACE_ROOT. Requires ALLOW_WRITE=1. Does not delete files.",
+        description: "Write a UTF-8 file inside WORKSPACE_ROOT. Requires ALLOW_WRITE=1. Use mainly for new or small files after reading current state. Does not delete files.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           content: { type: "string", description: "Full file content to write." },
@@ -382,7 +396,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "replace_in_file",
-        description: "Safely replace exact text in a file. Requires ALLOW_WRITE=1. Good for minimal patches.",
+        description: "Safely replace exact text in a file. Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           oldText: { type: "string", description: "Exact text to replace." },
@@ -392,7 +406,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "search_files",
-        description: "Search text files by regex or plain text under WORKSPACE_ROOT. Returns matching lines; skips binary/build dirs. Files larger than read cap are skipped.",
+        description: "Search text files by regex or plain text under WORKSPACE_ROOT. Scope path to the active project whenever possible; do not search repo infrastructure to explain Unreal build failures.",
         inputSchema: makeJsonSchema({
           query: { type: "string", description: "Regex or plain text to search." },
           path: { type: "string", description: "Relative directory/file to search. Default '.'." },
@@ -411,7 +425,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "build_unreal_project",
-        description: "Run Unreal Build.bat for a .uproject. Requires ALLOW_UNREAL_BUILD=1. If project/engineRoot/target are omitted, auto-detects from workspace search roots and Target.cs files.",
+        description: "Run Unreal Build.bat for the active .uproject after C++ or Build.cs edits. Requires ALLOW_UNREAL_BUILD=1. Use likelyErrors/build output as compile evidence; do not patch MCP tooling based on discovery or permission errors.",
         inputSchema: makeJsonSchema({
           hint: { type: "string", description: "Optional project folder or .uproject name fragment for auto-detection." },
           engineRoot: { type: "string", description: "Optional UE engine root. Auto-detected from EngineAssociation when omitted." },
@@ -422,7 +436,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           allowAbsoluteProject: { type: "boolean", description: "Allow absolute .uproject path outside workspace. Default false." }
         })
       }
-    ]
+  ];
+}
+
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const tools = allAgentTools();
+  return {
+    tools: MCP_ESSENTIAL_TOOLS
+      ? tools.filter((tool) => ESSENTIAL_AGENT_TOOL_NAMES.has(tool.name))
+      : tools
   };
 });
 

@@ -29,7 +29,7 @@ param(
     [int]$MaxAttempts = 4,
     [int]$BuildTimeout = 1200,
     [int]$TopK = 8,
-    [ValidateSet("auto", "planning", "design", "implementation", "review", "agent_edit", "codegen", "compile_fix", "runtime_debug", "api_lookup", "module_fix", "reflection_fix", "prototype_component", "prototype_subsystem", "refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4")]
+    [ValidateSet("auto", "planning", "design", "implementation", "review", "agent_edit", "codegen", "shader", "material_analysis", "blueprint_analysis", "compile_fix", "runtime_debug", "api_lookup", "module_fix", "reflection_fix", "prototype_component", "prototype_subsystem", "refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4")]
     [string]$Mode = "auto",
     [ValidateSet("shooter", "action_combat", "platformer")]
     [string]$ScaffoldGenre = "shooter",
@@ -243,7 +243,7 @@ switch ($Command) {
             throw "collect-blueprint-metadata requires -Question pointing to Editor-export JSONL"
         }
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
-        & $py scripts\collect_blueprint_metadata.py --in $Question --out data\unreal58\raw_blueprint_metadata.jsonl --project $proj
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:blueprint"
     }
     "collect-material-metadata" {
         if (-not $Question) {

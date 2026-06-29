@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from build_rag_index import infer_doc_type, infer_layer  # noqa: E402
 from collect_editor_metadata import parse_export_spec, row_to_chunk, source_for_row  # noqa: E402
+from rag_search import resolve_mode  # noqa: E402
 
 
 def test_parse_export_spec_keeps_windows_drive_colon():
@@ -29,6 +30,7 @@ def test_material_row_to_chunk_includes_parent_and_parameters():
             "parent_material": "M_MasterCharacter",
             "scalar_parameters": ["Roughness"],
             "texture_parameters": ["BaseColorMap"],
+            "texture_parameter_values": [{"name": "BaseColorMap", "value": "/Game/T_Player_D"}],
         },
         "DemoProject",
     )
@@ -37,6 +39,7 @@ def test_material_row_to_chunk_includes_parent_and_parameters():
     assert chunk["metadata"]["extension"] == ".uasset"
     assert "M_MasterCharacter" in chunk["text"]
     assert "BaseColorMap" in chunk["text"]
+    assert "/Game/T_Player_D" in chunk["text"]
 
 
 def test_blueprint_row_to_chunk_keeps_uasset_extension():
@@ -82,3 +85,9 @@ def test_anim_montage_row_to_chunk_includes_sections_and_notifies():
     assert infer_doc_type("unreal_anim_montage_metadata", chunk["metadata"]) == "anim_montage_metadata"
     assert infer_layer("unreal_anim_montage_metadata", "M_Attack", chunk["metadata"]) == "project_architecture"
     assert "AnimNotify_HitWindow" in chunk["text"]
+
+
+def test_rendering_analysis_modes_resolve_from_query():
+    assert resolve_mode("USF USH GlobalShader RenderCore plugin setup", "auto") == "shader"
+    assert resolve_mode("material screenshot texture parameter static switch", "auto") == "material_analysis"
+    assert resolve_mode("Blueprint graph variable function call pins", "auto") == "blueprint_analysis"

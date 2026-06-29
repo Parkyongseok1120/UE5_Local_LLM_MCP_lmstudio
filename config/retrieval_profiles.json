@@ -20,6 +20,15 @@
     "agent_edit": {
       "layer_order": ["code_semantic", "asset_metadata", "exact_symbol", "module_graph", "playbook", "design_semantic"]
     },
+    "shader": {
+      "layer_order": ["playbook", "code_semantic", "exact_symbol", "module_graph", "build_log"]
+    },
+    "material_analysis": {
+      "layer_order": ["asset_metadata", "playbook", "code_semantic", "exact_symbol"]
+    },
+    "blueprint_analysis": {
+      "layer_order": ["asset_metadata", "playbook", "code_semantic", "exact_symbol"]
+    },
     "module_fix": {
       "layer_order": ["module_graph", "exact_symbol", "build_log", "playbook"]
     },

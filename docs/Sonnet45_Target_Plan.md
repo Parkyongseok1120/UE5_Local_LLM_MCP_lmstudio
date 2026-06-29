@@ -24,8 +24,8 @@ It does not mean a local model is globally Sonnet 4.5-grade.
 | Main local track | `qwen3_6_27b` | broader retrieval, 5-attempt compile loop, strict patch discipline |
 | Compact Qwen 9B track | `qwen3_5_9b` | strict compact context, top_k 5, two-file cap, 4-attempt compile loop |
 | Community Qwen 9B flash track | `qwen3_5_9b_deepseek_v4_flash` | flash reasoning-style compact patch loop, top_k 6 |
-| Compact 20B track | `gpt_oss_20b` | strict JSON, top_k 7, two-file cap, 4-attempt compile loop |
-| Community GPT OSS 20B reasoning track | `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | low-temp strict patch/verify loop, top_k 8, 5-attempt compile loop |
+| Compact 20B track | `gpt_oss_20b` | **experimental** — one-file cap, minimal schema; variable MCP/JSON stability |
+| Community GPT OSS 20B reasoning track | `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | low-temp patch loop; may beat base 20B but still below Qwen 27B for agent work |
 | Compact below-20B track | `gpt_oss_small` | top_k 4, one-file cap, minimal retry context |
 | Small Qwen track | `qwen3_8b` | top_k 5, two-file cap, no broad refactor modes |
 

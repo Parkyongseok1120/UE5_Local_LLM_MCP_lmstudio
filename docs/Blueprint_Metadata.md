@@ -38,6 +38,8 @@ Blueprint export records best-effort graph, node, and pin summaries:
 - variables, functions, implemented interfaces
 - Ubergraph/function/macro/delegate graphs
 - node class/title/name and pin direction/type/link count
+- pin default values/default objects when the Editor API exposes them
+- function, variable, event, and delegate references when the node exposes them
 - asset dependencies
 
 ## Material graph coverage
@@ -49,7 +51,34 @@ Material export records best-effort expression and parameter summaries:
 - blend mode and shading model when exposed by the Editor API
 - material expressions
 - scalar/vector/texture/static switch parameter names
+- scalar/vector/texture/static switch parameter values when the Editor API exposes them
 - asset dependencies
+
+## Shader and screenshot analysis
+
+Project text collection already includes `.usf` and `.ush` files. Use:
+
+```powershell
+.\rag.ps1 collect-projects -CopyProjectText
+.\rag.ps1 build-incremental
+.\rag.ps1 query -Mode shader -Question "GlobalShader usf ush RenderCore RHI plugin setup"
+```
+
+For material screenshots, first run the material metadata export when possible, then ask the model to compare the visible screenshot facts with `unreal_material_metadata`:
+
+```powershell
+.\rag.ps1 collect-material-metadata -Question C:\export\materials.jsonl -ProjectName MyGame
+.\rag.ps1 build-incremental
+.\rag.ps1 query -Mode material_analysis -Question "MI_Player material parameters textures static switch"
+```
+
+For Blueprint function/variable call analysis:
+
+```powershell
+.\rag.ps1 collect-blueprint-metadata -Question C:\export\blueprints.jsonl -ProjectName MyGame
+.\rag.ps1 build-incremental
+.\rag.ps1 query -Mode blueprint_analysis -Question "BP_Player variables function calls EventGraph pins"
+```
 
 ## Animation and Sequencer coverage
 

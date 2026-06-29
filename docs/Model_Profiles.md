@@ -31,24 +31,38 @@ The project target is now a **Sonnet 4.5-oriented workflow track**. This is a ta
 | candidateLimitScale | Search candidate multiplier |
 | targetTier | Internal quality target label |
 | promptContract | Short prompt contract injected into wrapper runs |
+| mcpEssentialTools | Recommend Essential Tools mode for LM Studio chat |
+| recommendedSystemPrompt | Path to compact system prompt |
+| mcpToolDiscipline | e.g. `one_tool_per_turn` |
 
 ## Profiles
 
 | Profile | Use case |
 |---------|----------|
-| `qwen3_6_27b` | Main Sonnet 4.5-oriented local track; deeper retrieval, 5-attempt compile loop, 3-file patch cap |
-| `qwen3_5_9b` | Qwen 3.5 9B compact track; top_k 5, two-file cap, strict patch loop |
-| `qwen3_5_9b_deepseek_v4_flash` | Community Qwen3.5-9B-DeepSeek-V4-Flash GGUF track; top_k 6, flash reasoning-style compact patch loop |
-| `gpt_oss_20b` | Compact Sonnet 4.5-oriented track; strict JSON, smaller patches, 4-attempt compile loop |
-| `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | Community GPT OSS 20B Claude/Opus/Sonnet reasoning i1 GGUF track; stricter low-temp 5-attempt loop |
-| `gpt_oss_small` | GPT OSS below 20B; one-file patch cap, minimal context, strict schema |
-| `qwen3_8b` | Small 2-turn shortcut; two-file cap, no refactor modes |
-| `gpt_oss_120b` | Large model track; deeper context, 4-file cap |
-| `qwen_coder_large` | Codegen-heavy profile |
-| `conservative_compile_fix` | Low-temperature compile-fix fallback |
-| `review_only` | Inspect-only profile; maxFilesPerEdit=0 |
+| `gemma4_12b_v2_agentic` | **Primary MCP track** — v2 Agentic, thinking hybrid, llama-server Q6_K+MTP |
+| `qwen3_6_27b` | Main Sonnet 4.5-oriented local track; 2-file cap, 5-attempt compile loop |
+| `qwen3_5_9b` | Qwen 3.5 9B compact MCP; ctx 24576, Essential Tools |
+| `qwen3_5_9b_deepseek_v4_flash` | Community flash GGUF; compact MCP |
+| `gpt_oss_20b` | **Variable stability** — ctx 32768, 2-file cap; prefer Qwen/Gemma v2 for MCP |
+| `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | Community GPT OSS 20B reasoning i1; ctx 32768 |
+| `gpt_oss_small` | GPT OSS below 20B; ctx 32768, 2-file cap |
+| `qwen3_8b` | Small compact; ctx 24576, 2-file cap |
+| `gemma_4_26b_a4b_it_q4_k_m` | Gemma 26B A4B; thinking hybrid — [Gemma4_Model_Profile.md](Gemma4_Model_Profile.md) |
+| `gemma_4_12b_qat` | Google QAT 12B optional fallback |
+| `gpt_oss_120b` | Large GPT OSS; ctx 32768, 2-file cap |
+| `qwen_coder_large` | Codegen-heavy; 2-file cap |
+| `conservative_compile_fix` | Low-temperature compile-fix fallback; ctx 24576 |
+| `review_only` | Inspect-only; maxFilesPerEdit=0, ctx 24576 |
+
+**Context rules:** minimum **24576** for all profiles; **`gpt_oss_*`** at **32768**.
 
 ## Practical Tuning Direction
+
+**Recommended MCP chat track:** `gemma4_12b_v2_agentic` + Essential Tools + session bootstrap — see [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
+
+**Compact alternative:** `qwen3_5_9b` — generally more stable than GPT OSS 20B.
+
+**Main local track (wrapper):** `qwen3_6_27b` when VRAM allows.
 
 Small and 20B-class models improve most from:
 
@@ -75,6 +89,7 @@ python scripts/load_sampling_preset.py --show-profile
 python scripts/load_sampling_preset.py --sampling-profile gpt_oss_20b --show-profile
 python scripts/load_sampling_preset.py --sampling-profile qwen3_5_9b_deepseek_v4_flash --show-profile
 python scripts/load_sampling_preset.py --sampling-profile gpt_oss_20b_claude_opus_sonnet_reasoning_i1 --show-profile
+python scripts/load_sampling_preset.py --sampling-profile gemma_4_26b_a4b_it_q4_k_m --show-profile
 python scripts/load_sampling_preset.py --sampling-profile qwen3_6_27b --mode compile_fix
 ```
 

@@ -24,6 +24,8 @@ Never greenfield 8+ classes in one turn. Use slices.
 8. `build_unreal_project` — after every C++/Build.cs change
 9. `unreal_runtime_config_check` — after UBT pass (GameMode, Input mappings)
 10. On UBT fail: `unreal_rag_search mode=compile_fix` → patch → rebuild (max 4 attempts)
+11. For shader/material/Blueprint analysis, use `mode=shader`, `mode=material_analysis`, or `mode=blueprint_analysis` and keep writes off unless the user explicitly asks for an implementation.
+12. For structure/dependency/ownership/call-flow analysis, include a compact Mermaid diagram (`flowchart TD`, `sequenceDiagram`, `classDiagram`, or `stateDiagram-v2`) plus an immediate plain ASCII/text fallback using arrows (`->`) in the visible answer.
 11. On runtime fail: `read_unreal_logs` → `mode=runtime_debug`
 
 ## MCP servers

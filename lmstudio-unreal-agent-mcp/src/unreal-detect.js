@@ -16,6 +16,8 @@ const IGNORE_DIRS = new Set([
   "node_modules",
   ".gradle",
   ".cache",
+  ".pytest_cache",
+  ".pytest_tmp",
   "wrapper_runs"
 ]);
 
@@ -355,15 +357,25 @@ async function findTargetNames(projectDir, projectName) {
   };
 }
 
+function shouldIgnoreDirName(name) {
+  const lower = String(name || "").toLowerCase();
+  return IGNORE_DIRS.has(name) || lower.startsWith("pytest-") || lower.startsWith("pytest-of-");
+}
+
 async function walkForUProjects(root, maxDepth, depth = 0, results = []) {
   if (depth > maxDepth || results.length >= 200) return results;
   const st = await statSafe(root);
   if (!st || !st.isDirectory()) return results;
 
   const base = path.basename(root);
-  if (depth > 0 && IGNORE_DIRS.has(base)) return results;
+  if (depth > 0 && shouldIgnoreDirName(base)) return results;
 
-  const entries = await fsp.readdir(root, { withFileTypes: true });
+  let entries = [];
+  try {
+    entries = await fsp.readdir(root, { withFileTypes: true });
+  } catch {
+    return results;
+  }
   for (const entry of entries) {
     const full = path.join(root, entry.name);
     if (entry.isFile() && entry.name.toLowerCase().endsWith(".uproject")) {
@@ -371,6 +383,7 @@ async function walkForUProjects(root, maxDepth, depth = 0, results = []) {
       continue;
     }
     if (entry.isDirectory()) {
+      if (shouldIgnoreDirName(entry.name)) continue;
       await walkForUProjects(full, maxDepth, depth + 1, results);
     }
   }
@@ -446,21 +459,36 @@ async function discoverProjects(workspaceRoot, configPath, options = {}) {
 
 async function resolveProjectSelection(workspaceRoot, configPath, options = {}) {
   const hint = options.hint || options.project || "";
-  const { config, roots, projects } = await discoverProjects(workspaceRoot, configPath, options);
+  const { config, roots } = resolveSearchRoots(workspaceRoot, configPath);
 
   if (config.activeProject) {
     const activePath = path.resolve(config.activeProject);
-    const active = projects.find((p) => p.projectPath.toLowerCase() === activePath.toLowerCase());
-    if (active) {
+    if (await exists(activePath)) {
+      try {
+        const info = await readUProject(activePath);
+        const targets = await findTargetNames(info.projectDir, info.projectName);
+        const st = await statSafe(info.projectPath);
+        const active = {
+          ...info,
+          ...targets,
+          modifiedAt: st ? st.mtime.toISOString() : null,
+          score: 1000
+        };
       return {
         config,
         roots,
-        projects,
+          projects: [active],
         selected: active,
         selectionReason: "config.activeProject"
       };
+      } catch {
+        // Fall through to discovery if the configured active project is unreadable.
+      }
     }
   }
+
+  const discovery = await discoverProjects(workspaceRoot, configPath, options);
+  const projects = discovery.projects;
 
   if (projects.length === 0) {
     return {

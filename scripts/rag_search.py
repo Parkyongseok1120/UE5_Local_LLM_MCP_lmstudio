@@ -123,6 +123,9 @@ VALID_MODES = {
     "review",
     "agent_edit",
     "codegen",
+    "shader",
+    "material_analysis",
+    "blueprint_analysis",
     "compile_fix",
     "runtime_debug",
     "api_lookup",
@@ -176,6 +179,7 @@ MODE_SOURCE_BIAS = {
         "unreal_project_text": -5.0,
         "unreal_symbol": -5.0,
         "unreal_source": -4.0,
+        "project_profile": -5.0,
         "game_design_doc": -2.0,
         "epic_docs": -2.0,
         "project_guideline": -1.0,
@@ -211,6 +215,32 @@ MODE_SOURCE_BIAS = {
         "game_design_doc": -1.0,
         "build_log": 2.0,
         "unreal_project_asset_path": 3.0,
+    },
+    "shader": {
+        "project_guideline": -10.0,
+        "unreal_project_text": -9.0,
+        "unreal_source": -7.0,
+        "unreal_symbol": -5.0,
+        "module_graph": -5.0,
+        "project_profile": -4.0,
+        "epic_docs": -2.0,
+        "build_log": -2.0,
+    },
+    "material_analysis": {
+        "unreal_material_metadata": -12.0,
+        "project_guideline": -9.0,
+        "unreal_project_text": -6.0,
+        "unreal_project_asset_path": -4.0,
+        "unreal_symbol": -2.0,
+        "epic_docs": -1.0,
+    },
+    "blueprint_analysis": {
+        "unreal_blueprint_metadata": -12.0,
+        "project_guideline": -9.0,
+        "unreal_project_text": -6.0,
+        "unreal_project_asset_path": -4.0,
+        "unreal_symbol": -3.0,
+        "epic_docs": -1.0,
     },
     "compile_fix": {
         "build_log": -10.0,
@@ -394,6 +424,31 @@ MODE_LAYER_BIAS = {
         "project_text": -4.0,
         "unreal_domain": -2.0,
         "core_architecture": -1.0,
+    },
+    "shader": {
+        "unreal_domain": -10.0,
+        "project_text": -9.0,
+        "unreal_source": -7.0,
+        "type_symbol": -5.0,
+        "function_symbol": -5.0,
+        "module_symbol": -5.0,
+        "module_graph": -5.0,
+        "build_error": -2.0,
+    },
+    "material_analysis": {
+        "project_architecture": -10.0,
+        "project_text": -6.0,
+        "project_asset_path": -5.0,
+        "unreal_domain": -5.0,
+        "type_symbol": -2.0,
+    },
+    "blueprint_analysis": {
+        "project_architecture": -10.0,
+        "project_text": -6.0,
+        "project_asset_path": -5.0,
+        "unreal_domain": -5.0,
+        "type_symbol": -3.0,
+        "function_symbol": -3.0,
     },
     "compile_fix": {
         "compile_fix": -9.0,
@@ -601,6 +656,51 @@ ASSET_METADATA_HINTS = {
 }
 
 
+SHADER_HINTS = {
+    "shader",
+    "usf",
+    "ush",
+    "hlsl",
+    "globalshader",
+    "materialshader",
+    "shaderparameter",
+    "rdg",
+    "rendergraph",
+    "rendercore",
+    "shadercore",
+    "rhi",
+    "vertexfactory",
+    "shadercompile",
+    "virtual shader path",
+}
+MATERIAL_ANALYSIS_HINTS = {
+    "material",
+    "materialinstance",
+    "material expression",
+    "material node",
+    "parameter",
+    "texture parameter",
+    "scalar parameter",
+    "vector parameter",
+    "static switch",
+    "shading model",
+    "blend mode",
+}
+BLUEPRINT_ANALYSIS_HINTS = {
+    "blueprint graph",
+    "blueprint variable",
+    "blueprint function",
+    "bp_",
+    "widget blueprint",
+    "event graph",
+    "construction script",
+    "function call",
+    "call function",
+    "pin",
+    "node graph",
+}
+
+
 @dataclass
 class SearchOptions:
     mode: str = "auto"
@@ -680,6 +780,12 @@ def resolve_mode(query: str, mode: str) -> str:
         return "runtime_debug"
     if has_hint(terms, raw, COMPILE_FIX_HINTS):
         return "compile_fix"
+    if has_hint(terms, raw, SHADER_HINTS):
+        return "shader"
+    if has_hint(terms, raw, MATERIAL_ANALYSIS_HINTS):
+        return "material_analysis"
+    if has_hint(terms, raw, BLUEPRINT_ANALYSIS_HINTS):
+        return "blueprint_analysis"
     if has_hint(terms, raw, API_LOOKUP_HINTS):
         return "api_lookup"
     if has_hint(terms, raw, AGENT_EDIT_HINTS):
@@ -807,8 +913,27 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
         score -= 5.0
     if "module" in query_lower and symbol_kind == "module" and mode == "module_fix":
         score -= 22.0
-    if source == "project_guideline" and "compile error triage" in identity_lower and mode == "module_fix":
+    if source == "project_guideline" and "compile error triage" in identity_lower and mode in {"module_fix", "reflection_fix"}:
         score -= 18.0
+    if mode == "module_fix" and source == "project_guideline" and "unreal error fix playbook" in identity_lower:
+        if "c1083" in query_lower or "cannot open include" in query_lower:
+            score -= 18.0
+    if mode == "runtime_debug" and source == "project_guideline" and "runtime debugging playbook" in identity_lower:
+        score -= 20.0
+    if mode == "codegen" and source == "project_guideline" and "codegen recipes" in identity_lower:
+        score -= 10.0
+        if any(marker in query_lower for marker in ("aactor", "actor", "uobject", "uactorcomponent", "subsystem", "gameinstancesubsystem", "worldsubsystem")):
+            if "core types" in identity_lower:
+                score -= 18.0
+        if any(marker in query_lower for marker in ("enhanced input", "inputaction", "bindaction", "replication", "rpc", "doreplifetime", "gameplaytag")):
+            if "gameplay systems" in identity_lower:
+                score -= 18.0
+    if source == "project_guideline" and "diagram response rules" in identity_lower:
+        if mode in {"planning", "design", "review", "agent_edit", "material_analysis", "blueprint_analysis", "shader"} or any(
+            marker in query_lower
+            for marker in ("diagram", "mermaid", "ascii", "fallback", "structure", "architecture", "dependency", "ownership", "graph", "flow", "node")
+        ):
+            score -= 16.0
     if mode == "codegen" and any(
         marker in query_lower for marker in ("delegate", "multicast", "blueprintassignable", "broadcast")
     ):
@@ -820,6 +945,8 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
         score -= 8.0
     if module_name and module_name.lower() in query_lower:
         score -= 4.0
+    if mode == "implementation" and source == "project_profile":
+        score -= 10.0
     if mode == "agent_edit":
         if source == "project_guideline" and any(
             marker in text or marker in identity_lower
@@ -877,6 +1004,24 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
         if source == "unreal_project_asset_path":
             score -= 2.0
 
+    if mode == "shader":
+        if extension in {".usf", ".ush"}:
+            score -= 18.0
+        if source == "project_guideline" and any(marker in identity_lower or marker in text for marker in ("shader", "usf", "ush", "rdg", "rendercore")):
+            score -= 12.0
+        if ".build.cs" in identity_lower and any(marker in query_lower for marker in ("module", "rendercore", "rhi", "shadercore", "plugin")):
+            score -= 6.0
+    if mode == "material_analysis":
+        if source == "unreal_material_metadata":
+            score -= 18.0
+        if source == "project_guideline" and any(marker in identity_lower or marker in text for marker in ("material graph", "material screenshot", "material expression", "parameter inventory")):
+            score -= 12.0
+    if mode == "blueprint_analysis":
+        if source == "unreal_blueprint_metadata":
+            score -= 18.0
+        if source == "project_guideline" and any(marker in identity_lower or marker in text for marker in ("blueprint graph", "function call", "variable inventory", "pin")):
+            score -= 12.0
+
     if str(row.get("path_only") or "") == "1" and mode in {"planning", "design", "implementation", "agent_edit", "codegen"}:
         score += 2.0
 
@@ -904,6 +1049,24 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
             query
             + " agent_edit agentic current file current diff duplicate edit no-op "
             + "Global File Edit Rules Agentic Unreal Edit Operating Protocol"
+        )
+    if mode == "shader":
+        effective_query = (
+            query
+            + " usf ush HLSL shader plugin RenderCore RHI ShaderCore GlobalShader RDG "
+            + "virtual shader path Build.cs shader compile"
+        )
+    if mode == "material_analysis":
+        effective_query = (
+            query
+            + " material material instance material expression scalar vector texture parameter "
+            + "static switch blend mode shading model screenshot graph analysis"
+        )
+    if mode == "blueprint_analysis":
+        effective_query = (
+            query
+            + " blueprint graph variable function call node pin event graph construction script "
+            + "generated class parent class metadata"
         )
     sources = normalize_values(options.sources)
     projects = normalize_values(options.projects)

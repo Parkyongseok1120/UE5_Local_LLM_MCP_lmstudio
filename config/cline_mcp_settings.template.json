@@ -11,7 +11,8 @@
         "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
         "UNREAL58_ROOT": "{REPO_ROOT}",
         "PYTHONUTF8": "1",
-        "PYTHONIOENCODING": "utf-8"
+        "PYTHONIOENCODING": "utf-8",
+        "MCP_ESSENTIAL_TOOLS": "1"
       }
     },
     "unreal-agent": {
@@ -23,7 +24,8 @@
         "WORKSPACE_ROOT": "{USER_DOCUMENTS}",
         "AGENT_MCP_CONFIG": "{AGENT_MCP_ROOT}/config/agent-mcp.json",
         "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
-        "UNREAL58_ROOT": "{REPO_ROOT}"
+        "UNREAL58_ROOT": "{REPO_ROOT}",
+        "MCP_ESSENTIAL_TOOLS": "1"
       }
     }
   }

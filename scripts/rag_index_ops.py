@@ -69,11 +69,32 @@ def index_health(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
                 "select layer, count(*) from chunks where layer != '' group by layer order by count(*) desc limit 20"
             ):
                 info["layerBreakdown"][str(row[0])] = int(row[1])
+        except sqlite3.DatabaseError as exc:
+            info["indexError"] = str(exc)
+            info["indexReadable"] = False
         finally:
             conn.close()
     else:
         info["indexFile"] = _file_info(index)
 
+    info.setdefault("indexReadable", bool(index.exists()))
+    if info.get("indexError"):
+        info["okForChat"] = False
+        info["chatAction"] = "stop_and_report_rag_rebuild_required"
+        info["chatMessage"] = (
+            "RAG index is present but unreadable. Do not search project files for RAG repair scripts from MCP chat; "
+            "tell the user to run .\\rag.ps1 build or .\\rag.ps1 doctor from the RAG workspace."
+        )
+    elif index.exists() and int(info.get("chunkCount") or 0) > 0:
+        info["okForChat"] = True
+        info["chatAction"] = "continue"
+    else:
+        info["okForChat"] = False
+        info["chatAction"] = "stop_and_report_rag_rebuild_required"
+        info["chatMessage"] = (
+            "RAG index is missing or empty. Do not continue with RAG-dependent coding claims; "
+            "tell the user to run .\\rag.ps1 build or .\\rag.ps1 doctor from the RAG workspace."
+        )
     return info
 
 
@@ -101,6 +122,9 @@ def rebuild_status(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
     if not index.exists():
         stale = True
         reason = "index-missing"
+    elif health.get("indexError"):
+        stale = True
+        reason = "index-unreadable"
     elif newest_input_mtime is not None and (index_mtime is None or newest_input_mtime > index_mtime):
         stale = True
         reason = f"input-newer-than-index ({newest_input_name})"
@@ -121,6 +145,9 @@ def rebuild_status(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
         "rawInputs": inputs,
         "buildManifest": _file_info(data_dir / "build_manifest.json"),
         "recommendedCommand": ".\\rag.ps1 build",
+        "recommendedDoctorCommand": ".\\rag.ps1 doctor",
+        "chatAction": health.get("chatAction", "continue"),
+        "chatMessage": health.get("chatMessage", ""),
         "collectHints": [
             ".\\rag.ps1 collect-guidelines",
             ".\\rag.ps1 collect-projects -CopyProjectText",

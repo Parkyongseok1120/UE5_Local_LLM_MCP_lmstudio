@@ -34,6 +34,18 @@ def _safe_prop(obj, prop: str, default=None):
         return default
 
 
+def _value_to_text(value) -> str:
+    if value is None:
+        return ""
+    for attr in ("get_path_name", "get_name"):
+        try:
+            if hasattr(value, attr):
+                return str(getattr(value, attr)())
+        except Exception:
+            pass
+    return str(value)
+
+
 def _collect_parameter_names(unreal, material, kind: str) -> list[str]:
     library = getattr(unreal, "MaterialEditingLibrary", None)
     if not library:
@@ -50,6 +62,29 @@ def _collect_parameter_names(unreal, material, kind: str) -> list[str]:
         return [str(value) for value in getattr(library, function_name)(material)]
     except Exception:
         return []
+
+
+def _collect_parameter_values(unreal, material, names: list[str], kind: str) -> list[dict]:
+    library = getattr(unreal, "MaterialEditingLibrary", None)
+    if not library:
+        return []
+    function_name = {
+        "scalar": "get_material_instance_scalar_parameter_value",
+        "vector": "get_material_instance_vector_parameter_value",
+        "texture": "get_material_instance_texture_parameter_value",
+        "static_switch": "get_material_instance_static_switch_parameter_value",
+    }.get(kind)
+    if not function_name or not hasattr(library, function_name):
+        return []
+
+    rows = []
+    for name in names[:80]:
+        try:
+            value = getattr(library, function_name)(material, name)
+        except Exception:
+            continue
+        rows.append({"name": str(name), "value": _value_to_text(value)})
+    return rows
 
 
 def _collect_material_expressions(material) -> list[dict]:
@@ -117,6 +152,18 @@ def export_material_metadata(content_path: str, out_path: str) -> None:
                     row["texture_parameters"] = texture_params
                 if switch_params:
                     row["static_switch_parameters"] = switch_params
+                scalar_values = _collect_parameter_values(unreal, material, scalar_params, "scalar")
+                vector_values = _collect_parameter_values(unreal, material, vector_params, "vector")
+                texture_values = _collect_parameter_values(unreal, material, texture_params, "texture")
+                switch_values = _collect_parameter_values(unreal, material, switch_params, "static_switch")
+                if scalar_values:
+                    row["scalar_parameter_values"] = scalar_values
+                if vector_values:
+                    row["vector_parameter_values"] = vector_values
+                if texture_values:
+                    row["texture_parameter_values"] = texture_values
+                if switch_values:
+                    row["static_switch_parameter_values"] = switch_values
                 dependencies = registry.get_dependencies(asset.package_name)
                 if dependencies:
                     row["dependencies"] = [str(dep) for dep in dependencies[:40]]

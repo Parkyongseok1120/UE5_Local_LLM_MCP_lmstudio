@@ -37,16 +37,34 @@ def _safe_text(value) -> str:
         return ""
 
 
+def _member_reference_summary(value) -> dict:
+    if not value:
+        return {}
+    row = {}
+    for prop in ("member_name", "member_parent", "member_guid"):
+        prop_value = _safe_prop(value, prop, None)
+        if prop_value:
+            row[prop] = _safe_text(prop_value)
+    return row
+
+
 def _pin_summary(pin) -> dict:
     linked_to = _safe_prop(pin, "linked_to", []) or []
     pin_type = _safe_prop(pin, "pin_type", None)
     direction = _safe_prop(pin, "direction", "")
-    return {
+    row = {
         "name": _safe_text(_safe_prop(pin, "pin_name", "")),
         "direction": _safe_text(direction),
         "type": _safe_text(pin_type),
         "linked_to_count": len(linked_to) if hasattr(linked_to, "__len__") else 0,
     }
+    default_value = _safe_prop(pin, "default_value", None)
+    default_object = _safe_prop(pin, "default_object", None)
+    if default_value not in (None, ""):
+        row["default_value"] = _safe_text(default_value)
+    if default_object:
+        row["default_object"] = _safe_name(default_object)
+    return row
 
 
 def _node_summary(node) -> dict:
@@ -56,12 +74,21 @@ def _node_summary(node) -> dict:
     except Exception:
         title = _safe_text(_safe_prop(node, "node_title", ""))
     pins = _safe_prop(node, "pins", []) or []
-    return {
+    row = {
         "name": _safe_name(node),
         "class": node.__class__.__name__,
         "title": title or _safe_name(node),
         "pins": [_pin_summary(pin) for pin in list(pins)[:MAX_PINS_PER_NODE]],
     }
+    for prop in ("function_reference", "variable_reference"):
+        summary = _member_reference_summary(_safe_prop(node, prop, None))
+        if summary:
+            row[prop] = summary
+    for prop in ("event_reference", "delegate_reference", "custom_function_name"):
+        value = _safe_prop(node, prop, None)
+        if value:
+            row[prop] = _safe_text(value)
+    return row
 
 
 def _graph_summary(graph) -> dict:

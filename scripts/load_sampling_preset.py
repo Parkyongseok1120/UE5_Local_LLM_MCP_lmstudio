@@ -171,6 +171,16 @@ def profile_edit_limits(profile: str = "") -> dict[str, Any]:
         "candidateLimitScale": int(policy.get("candidateLimitScale") or active.get("candidateLimitScale") or 20),
         "targetTier": str(policy.get("targetTier") or active.get("targetTier") or ""),
         "promptContract": str(policy.get("promptContract") or active.get("promptContract") or ""),
+        "contextLength": int(active.get("contextLength") or 0) or None,
+        "mcpEssentialTools": bool(
+            policy.get("mcpEssentialTools") if "mcpEssentialTools" in policy else active.get("mcpEssentialTools", False)
+        ),
+        "recommendedSystemPrompt": str(
+            policy.get("recommendedSystemPrompt") or active.get("recommendedSystemPrompt") or ""
+        ),
+        "mcpToolDiscipline": str(
+            policy.get("mcpToolDiscipline") or active.get("mcpToolDiscipline") or ""
+        ),
     }
 
 

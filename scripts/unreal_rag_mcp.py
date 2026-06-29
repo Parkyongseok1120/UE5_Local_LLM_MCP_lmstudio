@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,24 @@ from wrapper_job_manager import job_status, list_jobs, start_job
 from mcp_stdio import configure_stdio_utf8, write_json_line, write_utf8_line
 
 configure_stdio_utf8()
+
+ESSENTIAL_TOOL_NAMES = frozenset(
+    {
+        "unreal_get_active_project",
+        "unreal_set_active_project",
+        "unreal_rag_health",
+        "unreal_agent_plan",
+        "unreal_rag_search",
+        "unreal_symbol_lookup",
+        "unreal_agent_session",
+        "unreal_rag_capabilities",
+    }
+)
+
+
+def essential_tools_enabled() -> bool:
+    value = os.environ.get("MCP_ESSENTIAL_TOOLS", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def load_project_architecture(workspace: Path, index_dir: Path) -> dict[str, Any]:
@@ -144,13 +163,19 @@ class McpServer:
         }
 
     def all_tool_definitions(self) -> list[dict[str, Any]]:
+        tools = self._all_tool_definitions_unfiltered()
+        if essential_tools_enabled():
+            return [tool for tool in tools if tool["name"] in ESSENTIAL_TOOL_NAMES]
+        return tools
+
+    def _all_tool_definitions_unfiltered(self) -> list[dict[str, Any]]:
         return [
             {
                 "name": "unreal_rag_search",
                 "title": "Search Unreal RAG",
                 "description": (
                     "Hybrid FTS + symbol retrieval over the local Unreal RAG index. "
-                    "Use before answering Unreal C++, Lyra, module, or project questions."
+                    "Use before answering Unreal C++, Lyra, module, project, shader, material, or Blueprint questions."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -160,7 +185,7 @@ class McpServer:
                             "type": "string",
                             "enum": [
                                 "auto", "planning", "design", "implementation", "review",
-                                "agent_edit", "codegen", "compile_fix", "runtime_debug",
+                                "agent_edit", "codegen", "shader", "material_analysis", "blueprint_analysis", "compile_fix", "runtime_debug",
                                 "api_lookup", "module_fix", "reflection_fix",
                                 "prototype_component", "prototype_subsystem",
                                 "refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4",
@@ -287,7 +312,7 @@ class McpServer:
                         "mode": {
                             "type": "string",
                             "enum": [
-                                "agent_edit", "codegen", "compile_fix", "runtime_debug",
+                                "agent_edit", "codegen", "shader", "material_analysis", "blueprint_analysis", "compile_fix", "runtime_debug",
                                 "api_lookup", "module_fix", "reflection_fix",
                                 "prototype_component", "prototype_subsystem",
                                 "refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4",
@@ -404,7 +429,8 @@ class McpServer:
                 "title": "Start Unreal Agent Session (genre + RAG + next steps)",
                 "description": (
                     "Resolve genre adapters, run RAG search, and return context plus the standard "
-                    "tool workflow for LM Studio chat (activeProject -> read -> write -> build)."
+                    "tool workflow for LM Studio chat. For edits, still follow unreal_agent_plan "
+                    "writeGate/checkpoints before writing."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -478,7 +504,12 @@ class McpServer:
             {
                 "name": "unreal_agent_plan",
                 "title": "Build agent task plan (read-only)",
-                "description": "Classify task, evidence plan, edit strategy, and tool policy before edits.",
+                "description": (
+                    "Classify task and return evidencePlan, toolPolicy, writeGate, checkpoints, "
+                    "stopConditions, and retryPolicy before edits. "
+                    "LM Studio chat: call this FIRST after unreal_get_active_project. "
+                    "Never write when writeGate.writesAllowed is false."
+                ),
                 "inputSchema": self._schema(
                     {
                         "request": {"type": "string"},
@@ -877,8 +908,9 @@ class McpServer:
             "matchCount": len(rows),
             "nextSteps": [
                 "unreal_get_active_project",
-                "read_file (unreal-agent)",
-                "write_file (unreal-agent)",
+                "unreal_agent_plan (follow writeGate/checkpoints)",
+                "read_file or read_file_range (unreal-agent)",
+                "replace_in_file preferred; write_file only for new/small files",
                 "build_unreal_project (unreal-agent)",
             ],
             "context": context,

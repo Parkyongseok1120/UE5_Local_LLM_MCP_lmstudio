@@ -263,14 +263,14 @@
       ]
     },
     {
-      "id": "lyra_project_profile",
-      "query": "LyraStarterGame project profile modules plugins Build.cs Target.cs Config",
+      "id": "active_project_profile",
+      "query": "Project_MJS project profile modules plugins Build.cs Target.cs Config TrueSyncEndfieldShading",
       "options": {
         "mode": "implementation"
       },
       "expected": [
         {
-          "title_contains": "LyraStarterGame project profile",
+          "title_contains": "Project_MJS project profile",
           "source": "project_profile",
           "doc_type": "project_profile",
           "max_rank": 5
@@ -301,6 +301,51 @@
       "expected": [
         {
           "title_contains": "Agentic Unreal Edit Operating Protocol",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "shader_usf_ush_plugin_workflow",
+      "query": "USF USH shader plugin GlobalShader RenderCore RHI virtual shader path Build.cs",
+      "options": {
+        "mode": "shader"
+      },
+      "expected": [
+        {
+          "title_contains": "Shader, Material, and Blueprint Analysis Workflow",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "material_screenshot_parameter_inventory",
+      "query": "material screenshot graph scalar vector texture parameters static switch unknown nodes",
+      "options": {
+        "mode": "material_analysis"
+      },
+      "expected": [
+        {
+          "title_contains": "Shader, Material, and Blueprint Analysis Workflow",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
+    },
+    {
+      "id": "blueprint_variable_function_call_analysis",
+      "query": "Blueprint graph variables function calls node pins EventGraph generated class",
+      "options": {
+        "mode": "blueprint_analysis"
+      },
+      "expected": [
+        {
+          "title_contains": "Shader, Material, and Blueprint Analysis Workflow",
           "source": "project_guideline",
           "layer": "unreal_domain",
           "max_rank": 5
