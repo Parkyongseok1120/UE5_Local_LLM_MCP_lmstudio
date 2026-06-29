@@ -1,0 +1,130 @@
+{
+  "description": "Ceiling Pass@K — log-only requests (no solution hints): reflection/compile-fix families plus 10 module-dependency cases. Core gate remains rag_eval_pass_at_k_cases.json.",
+  "engineVersion": "5.8",
+  "tier": "ceiling",
+  "defaults": {
+    "maxAttempts": 4,
+    "minPassRate": 0.4,
+    "reportPassAt1": true,
+    "ubtTimeout": 900
+  },
+  "cases": [
+    {
+      "id": "missing_generated_h_log_only",
+      "fixtureDir": "tests/fixtures/compile_fix/missing_generated_h",
+      "projectFile": "CompileFixGenH.uproject",
+      "target": "CompileFixGenHEditor",
+      "mode": "reflection_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "No explicit generated.h instruction — UBT log only"
+    },
+    {
+      "id": "cpp_header_signature_log_only",
+      "fixtureDir": "tests/fixtures/compile_fix/cpp_header_signature_mismatch",
+      "projectFile": "CompileFixSig.uproject",
+      "target": "CompileFixSigEditor",
+      "mode": "compile_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "No header/cpp authority hint"
+    },
+    {
+      "id": "editor_only_include_runtime",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/editor_only_include_runtime",
+      "projectFile": "CompileFixEd.uproject",
+      "target": "CompileFixEdEditor",
+      "mode": "compile_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "Runtime module includes EditorUtilityWidget.h"
+    },
+    {
+      "id": "missing_gameplaytags_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_gameplaytags_dep",
+      "projectFile": "CompileFixTags.uproject",
+      "target": "CompileFixTagsEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "GameplayTags module missing from Build.cs"
+    },
+    {
+      "id": "missing_enhancedinput_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_enhancedinput_dep",
+      "projectFile": "CompileFixEI.uproject",
+      "target": "CompileFixEIEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "EnhancedInput module missing from Build.cs"
+    },
+    {
+      "id": "missing_aimodule_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_aimodule_dep",
+      "projectFile": "CompileFixAI.uproject",
+      "target": "CompileFixAIEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "AIModule missing from Build.cs"
+    },
+    {
+      "id": "missing_umg_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_umg_dep",
+      "projectFile": "CompileFixUMG.uproject",
+      "target": "CompileFixUMGEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "UMG module missing from Build.cs"
+    },
+    {
+      "id": "missing_niagara_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_niagara_dep",
+      "projectFile": "CompileFixNiagara.uproject",
+      "target": "CompileFixNiagaraEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "Niagara module missing from Build.cs"
+    },
+    {
+      "id": "missing_navigation_system_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_navigation_system_dep",
+      "projectFile": "CompileFixNav.uproject",
+      "target": "CompileFixNavEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "NavigationSystem module missing from Build.cs"
+    },
+    {
+      "id": "missing_inputcore_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_inputcore_dep",
+      "projectFile": "CompileFixIC.uproject",
+      "target": "CompileFixICEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "InputCore module missing from Build.cs"
+    },
+    {
+      "id": "missing_slate_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_slate_dep",
+      "projectFile": "CompileFixSlate.uproject",
+      "target": "CompileFixSlateEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "Slate module missing from Build.cs"
+    },
+    {
+      "id": "missing_movie_scene_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_movie_scene_dep",
+      "projectFile": "CompileFixMS.uproject",
+      "target": "CompileFixMSEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "MovieScene module missing from Build.cs"
+    },
+    {
+      "id": "missing_levelsequence_dep",
+      "fixtureDir": "tests/fixtures/compile_fix_ceiling/missing_levelsequence_dep",
+      "projectFile": "CompileFixLS.uproject",
+      "target": "CompileFixLSEditor",
+      "mode": "module_fix",
+      "requestFile": "request_log_only.txt",
+      "notes": "LevelSequence module missing from Build.cs"
+    }
+  ]
+}

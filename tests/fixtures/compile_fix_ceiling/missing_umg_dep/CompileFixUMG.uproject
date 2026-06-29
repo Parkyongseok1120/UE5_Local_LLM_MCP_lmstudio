@@ -1,0 +1,13 @@
+﻿{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Ceiling eval - missing_umg_dep",
+	"Modules": [
+		{
+			"Name": "CompileFixUMG",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

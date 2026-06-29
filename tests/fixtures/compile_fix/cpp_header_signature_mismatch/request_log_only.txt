@@ -1,0 +1,9 @@
+UBT compile failed. Diagnose from the log and apply the smallest fix.
+
+Log excerpt:
+  error C2511: 'void UHackComponent::DoWork(void)': overloaded member function not found in 'UHackComponent'
+    Source/CompileFixSig/Private/HackComponent.cpp(3)
+  note: see declaration of 'UHackComponent::DoWork'
+    Source/CompileFixSig/Public/HackComponent.h(8)
+
+Do not explain only — return the patched file(s).

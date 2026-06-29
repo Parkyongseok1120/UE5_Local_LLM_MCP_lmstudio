@@ -1,0 +1,13 @@
+﻿{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Ceiling eval - missing_movie_scene_dep",
+	"Modules": [
+		{
+			"Name": "CompileFixMS",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

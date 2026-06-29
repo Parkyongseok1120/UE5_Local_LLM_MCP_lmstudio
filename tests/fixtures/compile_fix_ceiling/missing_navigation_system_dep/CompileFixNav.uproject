@@ -1,0 +1,13 @@
+﻿{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Ceiling eval - missing_navigation_system_dep",
+	"Modules": [
+		{
+			"Name": "CompileFixNav",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

@@ -1,0 +1,7 @@
+UBT compile failed. Diagnose from the log and apply the smallest fix.
+
+Log excerpt:
+  error C1083: Cannot open include file: 'EnhancedInputComponent.h'
+    Source/CompileFixEI/Private/EIInputComponent.cpp(2)
+
+Do not explain only — return the patched file(s).

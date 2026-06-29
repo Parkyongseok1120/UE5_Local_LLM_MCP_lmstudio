@@ -1,0 +1,14 @@
+[
+  {
+    "id": "multi_step_read_before_plan",
+    "user": "Find the active Unreal project, then call unreal_agent_plan for a compile_fix on a missing generated.h error. Do not write files yet.",
+    "expect_tools": ["unreal_get_active_project", "unreal_agent_plan"],
+    "notes": "Two-turn discipline; single-turn probe should fail"
+  },
+  {
+    "id": "no_tool_name_in_user_message",
+    "user": "What is the active Unreal project root path? Use MCP tools only.",
+    "expect_tool": "unreal_get_active_project",
+    "notes": "Model must choose tool without explicit tool name"
+  }
+]

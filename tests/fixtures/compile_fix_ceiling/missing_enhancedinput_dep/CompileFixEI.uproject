@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Ceiling eval — missing EnhancedInput module",
+	"Modules": [
+		{
+			"Name": "CompileFixEI",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

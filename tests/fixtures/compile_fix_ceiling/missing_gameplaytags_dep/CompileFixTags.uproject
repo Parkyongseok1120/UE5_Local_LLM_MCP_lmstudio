@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Compile fix eval — missing GameplayTags dep",
+	"Modules": [
+		{
+			"Name": "CompileFixTags",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

@@ -1,0 +1,13 @@
+﻿{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Ceiling eval - missing_levelsequence_dep",
+	"Modules": [
+		{
+			"Name": "CompileFixLS",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

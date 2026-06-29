@@ -1,0 +1,7 @@
+﻿UBT compile failed. Diagnose from the log and apply the smallest fix.
+
+Log excerpt:
+  error C1083: Cannot open include file: 'NavigationSystem.h'
+  error C2653: 'UNavigationSystemV1': is not a class or namespace name
+
+Do not explain only — return the patched file(s).

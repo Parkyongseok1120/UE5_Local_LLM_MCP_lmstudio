@@ -1,0 +1,13 @@
+﻿{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Ceiling eval - missing_niagara_dep",
+	"Modules": [
+		{
+			"Name": "CompileFixNiagara",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

@@ -1,0 +1,59 @@
+{
+  "description": "Ceiling project review — vague prompts, partial snippets, stricter mustDetect.",
+  "defaults": {
+    "minRecall": 0.85,
+    "requireCitation": true
+  },
+  "cases": [
+    {
+      "id": "ceiling_partial_cinematic_context",
+      "prompt": "시네마틱 관련 입력 처리 구조를 리뷰해줘. 새 서브시스템이나 컴포넌트를 새로 만들지 말고 기존 코드 기준으로만 말해줘.",
+      "snippets": [
+        {
+          "path": "Source/ProjectMJS/Public/Cinematic/CinematicParticipantComponent.h",
+          "content": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"Components/ActorComponent.h\"\n#include \"CinematicParticipantComponent.generated.h\"\n\nUCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))\nclass PROJECTMJS_API UCinematicParticipantComponent : public UActorComponent\n{\n    GENERATED_BODY()\npublic:\n    UPROPERTY(EditAnywhere)\n    bool bParticipatesInCinematic = false;\n};\n"
+        }
+      ],
+      "mustDetect": [
+        "CinematicInputLockSubsystem",
+        "CinematicParticipantComponent",
+        "bParticipatesInCinematic"
+      ],
+      "mustNotSuggest": [
+        "new\\s+InputLock\\s+Subsystem",
+        "새.*Subsystem",
+        "신규.*Subsystem"
+      ],
+      "forbiddenClaims": [
+        "InputLock Subsystem이 없음",
+        "missing InputLock subsystem",
+        "subsystem does not exist"
+      ],
+      "badAnswerFixture": "InputLock Subsystem이 없으므로 새 UCinematicInputLockSubsystem을 만들어야 합니다."
+    },
+    {
+      "id": "ceiling_dodge_without_cpp_snippet",
+      "prompt": "회피 시스템에서 백스텝 몽타주가 실제로 쓰이는지, 애니메이션 자산 연결 관점에서 리뷰해줘.",
+      "snippets": [
+        {
+          "path": "Source/ProjectMJS/Public/Combat/DodgeComponent.h",
+          "content": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"Components/ActorComponent.h\"\n#include \"DodgeComponent.generated.h\"\n\nclass UAnimMontage;\n\nUCLASS()\nclass PROJECTMJS_API UDodgeComponent : public UActorComponent\n{\n    GENERATED_BODY()\npublic:\n    UPROPERTY(EditAnywhere, Category=\"Combat\")\n    UAnimMontage* BackStepDodgeMontage;\n};\n"
+        }
+      ],
+      "mustDetect": [
+        "BackStepDodgeMontage",
+        "DodgeComponent",
+        "PlayAnimMontage"
+      ],
+      "mustNotSuggest": [
+        "몽타주가 없으니 새로 만드",
+        "create new montage asset"
+      ],
+      "forbiddenClaims": [
+        "BackStepDodgeMontage가 없음",
+        "no montage assigned"
+      ],
+      "badAnswerFixture": "BackStepDodgeMontage가 없으니 새 AnimMontage 에셋을 만들어야 합니다."
+    }
+  ]
+}

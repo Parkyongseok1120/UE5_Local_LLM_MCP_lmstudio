@@ -57,7 +57,7 @@ def run_wrapper_live(
     url: str,
     model: str,
     ubt_path: Path,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, int]:
     run_dir = work_dir / "wrapper_run"
     run_dir.mkdir(parents=True, exist_ok=True)
     request_path = run_dir / "request.txt"
@@ -85,7 +85,14 @@ def run_wrapper_live(
         cmd.extend(["--model", model])
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     tail = (proc.stdout or proc.stderr or "")[-1500:]
-    return proc.returncode == 0, tail
+    attempts = count_wrapper_attempts(run_dir)
+    return proc.returncode == 0, tail, attempts
+
+
+def count_wrapper_attempts(run_dir: Path) -> int:
+    if not run_dir.is_dir():
+        return 0
+    return sum(1 for path in run_dir.iterdir() if path.is_dir() and path.name.startswith("attempt_"))
 
 
 def run_case(
@@ -121,9 +128,11 @@ def run_case(
                 "mode": "dry-run",
                 "goldenFiles": applied,
                 "detail": detail[:800],
+                "attempts": 1 if ok else 0,
+                "passAt1": ok,
             }
 
-        ok, detail = run_wrapper_live(
+        ok, detail, attempts = run_wrapper_live(
             work_dir,
             project_file,
             request_text,
@@ -133,7 +142,14 @@ def run_case(
             model,
             ubt_path,
         )
-        return {"id": case_id, "pass": ok, "mode": "live", "detail": detail[:800]}
+        return {
+            "id": case_id,
+            "pass": ok,
+            "mode": "live",
+            "detail": detail[:800],
+            "attempts": attempts,
+            "passAt1": ok and attempts <= 1,
+        }
 
 
 def main() -> int:
@@ -145,11 +161,12 @@ def main() -> int:
     parser.add_argument("--url", default="http://localhost:1234/v1")
     parser.add_argument("--model", default="")
     parser.add_argument("--ubt-path", type=Path, default=DEFAULT_UBT)
+    parser.add_argument("--max-attempts", type=int, default=0, help="Override config maxAttempts (e.g. 1 for Pass@1)")
     args = parser.parse_args()
 
     config = json.loads((ROOT / args.config).read_text(encoding="utf-8-sig"))
     defaults = config.get("defaults") or {}
-    max_attempts = int(defaults.get("maxAttempts") or 4)
+    max_attempts = int(args.max_attempts or defaults.get("maxAttempts") or 4)
     min_pass_rate = float(defaults.get("minPassRate") or 0.67)
     ubt_timeout = int(defaults.get("ubtTimeout") or 900)
 
@@ -183,25 +200,37 @@ def main() -> int:
     passed = sum(1 for r in results if r.get("pass"))
     total = len(results)
     pass_rate = passed / total if total else 0.0
+    pass_at_1 = sum(1 for r in results if r.get("passAt1"))
+    pass_at_1_rate = pass_at_1 / total if total else 0.0
 
     for row in results:
         status = "PASS" if row.get("pass") else "FAIL"
-        print(f"[{status}] {row['id']} ({row.get('mode')})")
+        attempts = row.get("attempts")
+        attempt_note = f", attempts={attempts}" if attempts is not None else ""
+        p1 = " pass@1" if row.get("passAt1") else ""
+        print(f"[{status}] {row['id']} ({row.get('mode')}){attempt_note}{p1}")
 
     print(f"\nPass@K summary: {passed}/{total} ({pass_rate:.0%}), min {min_pass_rate:.0%}")
+    if defaults.get("reportPassAt1") or config.get("tier") == "ceiling":
+        print(f"Pass@1 summary: {pass_at_1}/{total} ({pass_at_1_rate:.0%})")
 
     kpi = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "mode": "dry-run" if dry_run else "live",
+        "tier": config.get("tier") or "core",
+        "config": args.config,
         "maxAttempts": max_attempts,
         "passCount": passed,
         "total": total,
         "passRate": round(pass_rate, 3),
+        "passAt1Count": pass_at_1,
+        "passAt1Rate": round(pass_at_1_rate, 3),
         "minPassRate": min_pass_rate,
         "pass": pass_rate >= min_pass_rate,
         "results": results,
     }
-    out = ROOT / "data" / "baseline" / "pass-at-k-kpi.json"
+    out_name = "pass-at-k-ceiling-kpi.json" if config.get("tier") == "ceiling" else "pass-at-k-kpi.json"
+    out = ROOT / "data" / "baseline" / out_name
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(kpi, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote {out}")

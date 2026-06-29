@@ -1,0 +1,8 @@
+UBT compile failed. Diagnose from the log and apply the smallest fix.
+
+Log excerpt:
+  error : The last '#include' in 'BadComponent.h' must be 'BadComponent.generated.h'
+  error C1083: Cannot open include file: 'BadComponent.generated.h': No such file or directory
+    Source/CompileFixGenH/Private/BadComponent.cpp(1)
+
+Do not explain only — return the patched file(s).

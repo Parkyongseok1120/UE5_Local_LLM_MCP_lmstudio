@@ -1,0 +1,7 @@
+﻿UBT compile failed. Diagnose from the log and apply the smallest fix.
+
+Log excerpt:
+  error C1083: Cannot open include file: 'InputCoreTypes.h'
+  error C2079: 'UInputProbe::ActionKey' uses undefined struct 'FKey'
+
+Do not explain only — return the patched file(s).

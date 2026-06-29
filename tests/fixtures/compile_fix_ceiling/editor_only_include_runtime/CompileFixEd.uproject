@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Ceiling eval — editor-only include in runtime module",
+	"Modules": [
+		{
+			"Name": "CompileFixEd",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

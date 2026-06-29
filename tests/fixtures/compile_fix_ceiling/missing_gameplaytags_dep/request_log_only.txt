@@ -1,0 +1,8 @@
+UBT compile failed. Diagnose from the log and apply the smallest fix.
+
+Log excerpt:
+  error C2065: 'FGameplayTagContainer': undeclared identifier
+    Source/CompileFixTags/Public/TaggedActorComponent.h(15)
+  error C2923: 'TSubclassOf': 'FGameplayTagContainer' is not a valid template type argument
+
+Do not explain only — return the patched file(s).
