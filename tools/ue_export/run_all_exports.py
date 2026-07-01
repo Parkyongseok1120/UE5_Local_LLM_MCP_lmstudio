@@ -44,6 +44,10 @@ def _load_module(script_name: str, tools_dir: str = ""):
     root = _tools_dir(tools_dir)
     if not root:
         raise RuntimeError("tools_dir is required when run_all_exports.py is exec()'d without __file__")
+    import sys
+
+    if root not in sys.path:
+        sys.path.insert(0, root)
     script_path = os.path.join(root, script_name)
     namespace = {}
     with open(script_path, encoding="utf-8") as handle:
