@@ -4,7 +4,8 @@ param(
     [string]$DocumentsRoot = "",
     [switch]$SkipNpm,
     [switch]$SkipPythonDeps,
-    [switch]$EnableAgentMode
+    [switch]$EnableAgentMode,
+    [switch]$SkipProjectSetup
 )
 
 $ErrorActionPreference = "Stop"
@@ -166,21 +167,8 @@ if (-not (Test-Path $sharedConfigPath)) {
     Write-Host "Created $sharedConfigPath"
 }
 
-# agent config
+# agent config — rewritten on every install from detected local paths
 $agentConfigPath = Join-Path $agentRoot "config\agent-mcp.json"
-$agentConfig = Read-JsonObject $agentConfigPath
-if ($null -eq $agentConfig) {
-    $agentConfig = [ordered]@{}
-}
-$agentConfig.projectSearchRoots = @(
-    (Join-Path $docsRoot "Git"),
-    (Join-Path $docsRoot "Unreal Projects"),
-    (Join-Path $ragRoot "data")
-)
-$agentConfig.defaultEngineRoot = "C:\Program Files\Epic Games\UE_5.8"
-$agentConfig.defaultPlatform = "Win64"
-$agentConfig.defaultConfiguration = "Development"
-Write-JsonUtf8 $agentConfigPath $agentConfig
 
 $ragServer = Join-Path $ragRoot "scripts\unreal_rag_mcp.py"
 $ragIndex = Join-Path $ragRoot "data\unreal58\rag.sqlite"
@@ -273,10 +261,28 @@ Set-Content -LiteralPath $markerPath -Encoding UTF8 -Value @(
     "Node=$node"
 )
 
+if (-not $SkipProjectSetup) {
+    Write-Host ""
+    & (Join-Path $PSScriptRoot "Configure-ProjectIndexing.ps1") -SharedConfigPath $sharedConfigPath
+}
+
+. (Join-Path $PSScriptRoot "Install-PathHelpers.ps1")
+$pathSync = Sync-InstallMachinePaths `
+    -RagRoot $ragRoot `
+    -AgentRoot $agentRoot `
+    -DocumentsRoot $docsRoot `
+    -SharedConfigPath $sharedConfigPath
+Write-Host "Machine-local paths synced (engine: $($pathSync.EngineRoot))."
+
 Write-Host ""
 Write-Host "=== Install complete ==="
 Write-Host "1. Restart LM Studio"
 Write-Host "2. Enable MCP: unreal-rag, unreal-agent, current-datetime"
-Write-Host "3. cd `"$ragRoot`""
-Write-Host "   .\rag.ps1 pick-project"
-Write-Host "4. Optional verify: .\installer\Verify-UnrealMcp.ps1"
+if ($SkipProjectSetup) {
+    Write-Host "3. cd `"$ragRoot`""
+    Write-Host "   .\rag.ps1 pick-project"
+    Write-Host "4. Optional verify: .\installer\Verify-UnrealMcp.ps1"
+}
+else {
+    Write-Host "3. Optional verify: .\installer\Verify-UnrealMcp.ps1"
+}

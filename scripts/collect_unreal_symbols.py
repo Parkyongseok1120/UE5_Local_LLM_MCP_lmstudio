@@ -41,6 +41,15 @@ DEFINITION_RE = re.compile(
     r"(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<name>~?[A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
 
+_SYMBOL_SCOPE = "engine"
+_SYMBOL_PROJECT = ""
+
+
+def set_symbol_context(*, scope: str = "engine", project_name: str = "") -> None:
+    global _SYMBOL_SCOPE, _SYMBOL_PROJECT
+    _SYMBOL_SCOPE = scope
+    _SYMBOL_PROJECT = project_name
+
 
 def stable_id(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()
@@ -141,7 +150,11 @@ def make_item(
     symbol_kind: str,
     module_name: str,
     extra: dict | None = None,
+    scope: str | None = None,
+    project_name: str | None = None,
 ) -> dict:
+    resolved_scope = scope or _SYMBOL_SCOPE
+    resolved_project = project_name if project_name is not None else _SYMBOL_PROJECT
     metadata = {
         "root": str(root),
         "relative_path": relative_path(root, path),
@@ -149,7 +162,10 @@ def make_item(
         "symbol_name": symbol_name,
         "symbol_kind": symbol_kind,
         "module_name": module_name,
+        "scope": resolved_scope,
     }
+    if resolved_project:
+        metadata["project"] = resolved_project
     if extra:
         metadata.update(extra)
     return {
@@ -422,10 +438,12 @@ def collect(args: argparse.Namespace) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sidecar_path = Path(args.sidecar_out) if args.sidecar_out else out_path.parent / "sidecar_symbols_meta.jsonl"
     sidecar_items: list[dict] = []
+    set_symbol_context(scope=args.scope, project_name=args.project_name)
 
     written = 0
     scanned = 0
-    with out_path.open("w", encoding="utf-8") as handle:
+    open_mode = "a" if args.append else "w"
+    with out_path.open(open_mode, encoding="utf-8") as handle:
         for root in roots:
             if not root.exists():
                 print(f"[skip] missing root: {root}")
@@ -446,15 +464,21 @@ def collect(args: argparse.Namespace) -> None:
                 if scanned % 1000 == 0:
                     print(f"[{scanned}] scanned, wrote {written} symbols")
 
-    if args.tier == "public" and sidecar_items:
+    if args.tier == "public" and sidecar_items and not args.append:
         sidecar_path.parent.mkdir(parents=True, exist_ok=True)
         with sidecar_path.open("w", encoding="utf-8") as sidecar_handle:
             for item in sidecar_items:
                 sidecar_handle.write(json.dumps(item, ensure_ascii=False) + "\n")
         print(f"sidecar: wrote {len(sidecar_items)} path-only include_map records to {sidecar_path}")
+    elif args.tier == "public" and sidecar_items and args.append:
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        with sidecar_path.open("a", encoding="utf-8") as sidecar_handle:
+            for item in sidecar_items:
+                sidecar_handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+        print(f"sidecar: appended {len(sidecar_items)} include_map records to {sidecar_path}")
 
     print(
-        f"done: tier={args.tier}, scanned {scanned} files and wrote {written} symbol records to {out_path}"
+        f"done: scope={args.scope}, tier={args.tier}, scanned {scanned} files and wrote {written} symbol records to {out_path}"
     )
 
 
@@ -486,6 +510,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--include-definitions", action="store_true")
     parser.add_argument("--max-definitions-per-file", type=int, default=25)
+    parser.add_argument("--scope", choices=("engine", "project"), default="engine")
+    parser.add_argument("--project-name", default="")
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="Append symbol records to --out instead of overwriting.",
+    )
     return parser.parse_args()
 
 

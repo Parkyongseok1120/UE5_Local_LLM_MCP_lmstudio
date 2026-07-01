@@ -37,7 +37,9 @@ Blueprint export records best-effort graph, node, and pin summaries:
 - parent/generated class
 - variables, functions, implemented interfaces
 - Ubergraph/function/macro/delegate graphs
-- node class/title/name and pin direction/type/link count
+- node class/title/name and pin direction/type
+- pin **links** with target **node** and **pin** names
+- flat **graph_links** list (`from_node.from_pin -> to_node.to_pin`)
 - pin default values/default objects when the Editor API exposes them
 - function, variable, event, and delegate references when the node exposes them
 - asset dependencies
@@ -49,10 +51,13 @@ Material export records best-effort expression and parameter summaries:
 - material/material instance class
 - parent material
 - blend mode and shading model when exposed by the Editor API
-- material expressions
-- scalar/vector/texture/static switch parameter names
-- scalar/vector/texture/static switch parameter values when the Editor API exposes them
+- material expressions with **input_wires** (source expression per input socket)
+- **graph_edges** flat wire list (`from -> to.input`)
+- **root_outputs** (BaseColor, EmissiveColor, Opacity, etc.)
+- scalar/vector/texture/static switch parameter names and values
 - asset dependencies
+
+Material instances inherit the parent material graph when they have no local expressions.
 
 ## Shader and screenshot analysis
 

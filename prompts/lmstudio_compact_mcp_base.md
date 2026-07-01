@@ -37,6 +37,14 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 - Blueprint wiring verification: search `mode=blueprint_verification`; separate exported facts, confirmed pin links, assumptions, missing exports, and Editor checks.
 - Post-process shader to Material Graph conversion: search `mode=material_porting`; classify effects as directly portable, approximate, or post-process only.
 - After drafting a Material Graph porting plan, call unreal_material_porting_plan_validate before presenting it as safe.
+- **Automated metadata workflow (any material or blueprint, not one asset):**
+  1. `unreal_editor_metadata_status` — check freshness vs project `.uasset` files and export dir.
+  2. `unreal_sync_editor_metadata` with `autoExport=true` (default) or `refresh=true` — launches Editor export automatically, then ingests + rebuilds index.
+  3. `unreal_asset_graph_lookup` with `/Game/...` path or short asset name — read graph_edges / graph_links before summarizing.
+  4. For concrete wire/pin claims: `unreal_material_claim_validate` or `unreal_blueprint_claim_validate`.
+- One-shot local command: `.\rag.ps1 export-editor-metadata` (export + ingest + rebuild).
+- Do not describe one material's graph from memory; always lookup or validate against exported metadata first.
+- Before stating material node/wire facts, call unreal_editor_metadata_status; if metadata exists, call unreal_material_claim_validate for concrete material graph claims.
 - Before verifying Blueprint wiring, call unreal_editor_metadata_status; if metadata exists, call unreal_blueprint_claim_validate for concrete BP claims.
 - Do not claim `.uasset` changes are complete unless an Editor-side command saved and validation proof is available.
 - Report proof level when edits or asset verification are discussed: Proposed, Patched, StaticChecked, Built, ShaderCompiled, EditorVerified, or PIEVerified.

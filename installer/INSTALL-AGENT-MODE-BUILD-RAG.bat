@@ -9,25 +9,19 @@ cd /d "%REPO_ROOT%"
 echo Unreal58-RAG Portable MCP Installer (Agent Mode + RAG Index)
 echo.
 echo Agent mode: file writes, commands, and Unreal builds are ENABLED.
-echo This will install MCP settings, collect RAG inputs, build rag.sqlite, and run doctor.
+echo This will install MCP settings, configure project paths, run the full indexing pipeline, and run doctor.
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALLER_DIR%Install-UnrealMcp.ps1" -EnableAgentMode
 if errorlevel 1 goto :fail_install
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALLER_DIR%Configure-Knowledge.ps1" -NonInteractive -SkipBuild
+powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALLER_DIR%Configure-Knowledge.ps1" -NonInteractive -SkipBuild -WorkspaceRoot "%REPO_ROOT%"
 if errorlevel 1 goto :fail_config
 
-call :RunRag collect-projects -CopyProjectText
-if errorlevel 1 goto :fail_rag
+powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALLER_DIR%Sync-InstallMachinePaths.ps1" -PortableRoot "%REPO_ROOT%"
+if errorlevel 1 goto :fail_config
 
-call :RunRag collect-symbols
-if errorlevel 1 goto :fail_rag
-
-call :RunRag collect-module-graph
-if errorlevel 1 goto :fail_rag
-
-call :RunRag build
+powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\run_index_pipeline.ps1" -WorkspaceRoot "%REPO_ROOT%"
 if errorlevel 1 goto :fail_rag
 
 call :RunRag doctor
@@ -36,6 +30,9 @@ if errorlevel 1 goto :fail_doctor
 echo.
 echo Done. Agent mode is ON and the RAG index was rebuilt.
 echo Restart LM Studio and reconnect MCP servers.
+echo.
+echo Editor metadata: exported automatically during indexing when autoEditorExport is enabled.
+echo If export failed, run: .\rag.ps1 export-editor-metadata
 pause
 exit /b 0
 
@@ -59,7 +56,7 @@ exit /b 1
 
 :fail_rag
 echo.
-echo RAG setup failed while running rag.ps1. See messages above.
+echo RAG indexing pipeline failed. See messages above.
 pause
 exit /b 1
 

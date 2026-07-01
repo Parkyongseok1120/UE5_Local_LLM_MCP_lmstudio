@@ -25,6 +25,25 @@
 - 번들 루트: `%UNREAL58_PORTABLE_ROOT%` (설치 시 설정)
 - LM Studio 설정: `%USERPROFILE%\.lmstudio\mcp.json`
 - 공유 워크스페이스: `%USERPROFILE%\.lmstudio\config\unreal-workspace.json`
+- RAG 워크스페이스: `config\workspace.json`의 `rootPath` (설치 시 자동 기록)
+- Editor export: `{ActiveProject}/Saved/LmStudioMetadataExports` (프로젝트별 자동)
+
+사용자 이름·PC 이름·`C:\Users\sster\...` 같은 고정 경로는 저장소에 넣지 않습니다.  
+`INSTALL-*-BUILD-RAG.bat` 또는 `installer\Sync-InstallMachinePaths.ps1`가 현재 PC 기준으로 경로를 다시 씁니다.
+
+## BUILD-RAG 설치 (인덱스 + Editor export)
+
+```bat
+installer\INSTALL-SAFE-MODE-BUILD-RAG.bat
+```
+
+순서: MCP 설치 → 프로젝트 선택 → 엔진/경로 동기화 → 인덱싱(+자동 Editor export) → doctor
+
+경로만 다시 맞추려면:
+
+```powershell
+.\installer\Sync-InstallMachinePaths.ps1
+```
 
 ## 첫 실행 체크
 

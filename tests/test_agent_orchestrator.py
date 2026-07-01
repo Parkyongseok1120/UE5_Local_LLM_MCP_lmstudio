@@ -79,6 +79,13 @@ def test_shader_material_blueprint_analysis_blocks_edits():
         assert mode in plan.evidence.rag_modes
 
 
+def test_asset_metadata_modes_use_metadata_tool_policy():
+    plan = build_agent_plan("Analyze M_Blackhole_Core material graph wires", "material_analysis")
+    assert "unreal_editor_metadata_status" in plan.tool_policy
+    assert "unreal_run_editor_export" in plan.tool_policy
+    assert "unreal_asset_graph_lookup" in plan.tool_policy
+
+
 def test_verify_edit_limit_from_profile():
     plan = build_agent_plan("Implement dodge component", "agent_edit")
     max_files = int(plan.write_gate["maxFilesPerEdit"])

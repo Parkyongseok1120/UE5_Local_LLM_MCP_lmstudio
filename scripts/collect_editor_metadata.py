@@ -9,6 +9,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from material_graph_format import append_material_graph_text_parts
+from blueprint_graph_format import append_blueprint_graph_text_parts
+
 
 SOURCE_MAP = {
     "blueprint": "unreal_blueprint_metadata",
@@ -100,18 +103,19 @@ def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, An
         "graphs",
         "nodes",
         "pins",
-        "expressions",
         "materials",
         "notifies",
-        "notify_tracks",
         "montage_sections",
         "slots",
         "bindings",
         "tracks",
         "dependencies",
+        "graph_source",
     ):
         if row.get(key):
             text_parts.append(f"{key}: {row[key]}")
+    append_material_graph_text_parts(row, text_parts)
+    append_blueprint_graph_text_parts(row, text_parts)
     text = "\n".join(text_parts)
     chunk_id = hashlib.sha1(f"{source}|{path}|{title}".encode()).hexdigest()
     return {
@@ -124,18 +128,82 @@ def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, An
     }
 
 
-def ingest_export(export_path: Path, source_key: str, project: str, out_handle) -> int:
-    count = 0
+def _chunk_asset_key(chunk: dict[str, Any]) -> str:
+    meta = chunk.get("metadata")
+    if isinstance(meta, dict):
+        path = str(meta.get("asset_path") or chunk.get("path") or "")
+        if path:
+            return path.lower()
+    return str(chunk.get("id") or chunk.get("path") or chunk.get("title") or "")
+
+
+def _load_existing_chunks(out_path: Path) -> dict[str, dict[str, Any]]:
+    existing: dict[str, dict[str, Any]] = {}
+    if not out_path.is_file():
+        return existing
+    for line in out_path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            chunk = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        key = _chunk_asset_key(chunk)
+        if key:
+            existing[key] = chunk
+    return existing
+
+
+def ingest_export(export_path: Path, source_key: str, project: str) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
     for line in export_path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         line = line.strip()
         if not line:
             continue
         row = json.loads(line)
         source = source_for_row(source_key, row)
-        chunk = row_to_chunk(source, row, project)
-        out_handle.write(json.dumps(chunk, ensure_ascii=False) + "\n")
-        count += 1
-    return count
+        chunks.append(row_to_chunk(source, row, project))
+    return chunks
+
+
+def merge_export_into_raw(
+    export_path: Path,
+    source_key: str,
+    project: str,
+    out_path: Path,
+    *,
+    replace_project: bool = True,
+) -> tuple[int, int]:
+    incoming = ingest_export(export_path, source_key, project)
+    existing = _load_existing_chunks(out_path) if replace_project else {}
+    if replace_project:
+        project_keys = {
+            key
+            for key, chunk in existing.items()
+            if str((chunk.get("metadata") or {}).get("project") or chunk.get("project") or "") in {"", project}
+        }
+        kept = {
+            key: chunk
+            for key, chunk in existing.items()
+            if key not in project_keys
+        }
+    else:
+        kept = dict(existing)
+        project_keys = set()
+
+    replaced = 0
+    for chunk in incoming:
+        key = _chunk_asset_key(chunk)
+        if key in project_keys:
+            replaced += 1
+        kept[key or str(chunk.get("id"))] = chunk
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as handle:
+        for chunk in kept.values():
+            handle.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+    return len(incoming), replaced
 
 
 def main() -> int:
@@ -143,6 +211,12 @@ def main() -> int:
     parser.add_argument("--export", action="append", default=[], help="path:type e.g. C:/x/bp.jsonl:blueprint")
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--out-dir", default="data/unreal58")
+    parser.add_argument(
+        "--replace-project",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Replace rows for the same project/asset_path instead of appending duplicates.",
+    )
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent.parent
@@ -163,10 +237,15 @@ def main() -> int:
         if kind == "level":
             out_name = "raw_level_metadata.jsonl"
         out_path = out_dir / out_name
-        with out_path.open("a", encoding="utf-8") as handle:
-            n = ingest_export(path, kind, args.project_name, handle)
-        totals[kind] = totals.get(kind, 0) + n
-        print(f"Ingested {n} rows -> {out_path}")
+        ingested, replaced = merge_export_into_raw(
+            path,
+            kind,
+            args.project_name,
+            out_path,
+            replace_project=args.replace_project,
+        )
+        totals[kind] = totals.get(kind, 0) + ingested
+        print(f"Ingested {ingested} rows ({replaced} replaced) -> {out_path}")
     print(json.dumps(totals, indent=2))
     return 0
 

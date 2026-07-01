@@ -16,6 +16,7 @@ RAW_INPUT_FILES = (
     "raw_guidelines.jsonl",
     "raw_game_design.jsonl",
     "raw_symbols.jsonl",
+    "raw_project_symbols.jsonl",
     "raw_module_graph.jsonl",
     "raw_project_profiles.jsonl",
     "raw_project_architecture.jsonl",

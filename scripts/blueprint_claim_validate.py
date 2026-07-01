@@ -9,10 +9,16 @@ import re
 from pathlib import Path
 from typing import Any
 
+from blueprint_graph_format import blueprint_row_search_text, iter_pin_links
 from workspace_paths import load_shared_config
 
-IDENT_RE = re.compile(r"\b(?:BP_[A-Za-z0-9_]+|WBP_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9_]*(?:Blueprint|Widget|Component|Actor|Character|Controller|GameMode)?|IA_[A-Za-z0-9_]+)\b")
-LINK_WORD_RE = re.compile(r"\b(pin|link|linked|connect|connected|wiring|calls?|bound|binding|event)\b|핀|연결|바인딩|호출", re.IGNORECASE)
+IDENT_RE = re.compile(
+    r"\b(?:BP_[A-Za-z0-9_]+|WBP_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9_]*(?:Blueprint|Widget|Component|Actor|Character|Controller|GameMode)?|IA_[A-Za-z0-9_]+)\b"
+)
+LINK_WORD_RE = re.compile(
+    r"\b(pin|link|linked|connect|connected|wiring|calls?|bound|binding|event)\b|핀|연결|바인딩|호출",
+    re.IGNORECASE,
+)
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -35,11 +41,6 @@ def _row_metadata(row: dict[str, Any]) -> dict[str, Any]:
     return meta if isinstance(meta, dict) else row
 
 
-def _row_text(row: dict[str, Any]) -> str:
-    meta = _row_metadata(row)
-    return json.dumps(meta, ensure_ascii=False, default=str) + "\n" + str(row.get("text") or "")
-
-
 def _asset_label(row: dict[str, Any]) -> str:
     meta = _row_metadata(row)
     return str(meta.get("asset_path") or row.get("path") or row.get("title") or "")
@@ -59,6 +60,20 @@ def _active_project_name() -> str:
     return path.stem if path.suffix.lower() == ".uproject" else path.name
 
 
+def _matching_rows(rows: list[dict[str, Any]], identifiers: list[str]) -> list[dict[str, Any]]:
+    matches = []
+    for row in rows:
+        meta = _row_metadata(row)
+        haystack = blueprint_row_search_text(meta)
+        label = _asset_label(row).lower()
+        if identifiers and not any(
+            identifier.lower() in haystack or identifier.lower() in label for identifier in identifiers
+        ):
+            continue
+        matches.append(row)
+    return matches
+
+
 def validate_blueprint_claims(
     claims: list[str],
     index_dir: str | Path | None = None,
@@ -76,36 +91,32 @@ def validate_blueprint_claims(
         if not text:
             continue
         identifiers = list(dict.fromkeys(IDENT_RE.findall(text)))
-        matching_assets = []
-        matching_nodes = []
-        matching_pins = []
-        matching_functions = []
-        for row in rows:
-            meta = _row_metadata(row)
-            haystack = _row_text(row).lower()
-            label = _asset_label(row)
-            if identifiers and not any(identifier.lower() in haystack or identifier.lower() in label.lower() for identifier in identifiers):
-                continue
-            matching_assets.append(label)
-            for key, sink in (("nodes", matching_nodes), ("pins", matching_pins), ("functions", matching_functions)):
-                value = meta.get(key)
-                if value and any(identifier.lower() in json.dumps(value, ensure_ascii=False, default=str).lower() for identifier in identifiers):
-                    sink.append({"asset": label, key: value})
-
+        matches = _matching_rows(rows, identifiers)
         wants_link = bool(LINK_WORD_RE.search(text))
-        pin_link_evidence = []
-        for item in matching_pins:
-            pins = item.get("pins")
-            pin_text = json.dumps(pins, ensure_ascii=False, default=str).lower()
-            if any(marker in pin_text for marker in ("linked", "link", "connected", "links", "to_pin", "to_node")):
-                pin_link_evidence.append(item)
+
+        matching_assets = [_asset_label(row) for row in matches]
+        graph_link_evidence = []
+        node_evidence = []
+        for row in matches:
+            meta = _row_metadata(row)
+            links = iter_pin_links(meta)
+            if links:
+                graph_link_evidence.append({"asset": _asset_label(row), "graph_links": links[:24]})
+            for graph in meta.get("graphs") or []:
+                if not isinstance(graph, dict):
+                    continue
+                for node in graph.get("nodes") or []:
+                    if isinstance(node, dict) and identifiers:
+                        node_blob = json.dumps(node, ensure_ascii=False, default=str).lower()
+                        if any(identifier.lower() in node_blob for identifier in identifiers):
+                            node_evidence.append({"asset": _asset_label(row), "node": node})
 
         if not rows:
             verdict = "no_metadata"
-        elif wants_link and not pin_link_evidence:
+        elif wants_link and not graph_link_evidence:
             verdict = "unsupported"
-        elif matching_assets or matching_nodes or matching_functions or matching_pins:
-            verdict = "supported_partial" if wants_link and pin_link_evidence else "supported"
+        elif matching_assets or node_evidence or graph_link_evidence:
+            verdict = "supported_partial" if wants_link and graph_link_evidence else "supported"
         else:
             verdict = "unsupported"
 
@@ -115,16 +126,12 @@ def validate_blueprint_claims(
                 "verdict": verdict,
                 "identifiers": identifiers,
                 "assetExists": bool(matching_assets),
-                "nodeEvidenceCount": len(matching_nodes),
-                "pinEvidenceCount": len(matching_pins),
-                "pinLinkEvidenceCount": len(pin_link_evidence),
-                "functionEvidenceCount": len(matching_functions),
+                "nodeEvidenceCount": len(node_evidence),
+                "pinLinkEvidenceCount": len(graph_link_evidence),
                 "matchingAssets": list(dict.fromkeys(matching_assets))[:8],
                 "evidence": {
-                    "nodes": matching_nodes[:3],
-                    "pins": matching_pins[:3],
-                    "pinLinks": pin_link_evidence[:3],
-                    "functions": matching_functions[:3],
+                    "nodes": node_evidence[:3],
+                    "pinLinks": graph_link_evidence[:3],
                 },
                 "notes": [] if rows else ["No raw_blueprint_metadata.jsonl found. Run Editor metadata export before verifying Blueprint wiring."],
             }

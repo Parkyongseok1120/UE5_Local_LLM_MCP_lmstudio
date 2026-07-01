@@ -75,27 +75,28 @@ def recommended_dependency(consumer_visibility: str) -> str:
     return "PrivateDependencyModuleNames"
 
 
-def load_symbols(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, list[str]]]]:
+def load_symbols(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, list[str]]]]:
     include_maps: list[dict[str, Any]] = []
     headers: list[dict[str, Any]] = []
     module_deps: dict[str, dict[str, list[str]]] = {}
 
-    for item in read_jsonl(path) or []:
-        metadata = item.get("metadata") or {}
-        kind = str(metadata.get("symbol_kind") or "")
-        module_name = str(metadata.get("module_name") or "")
-        relative_path = str(metadata.get("relative_path") or "")
-        extension = str(metadata.get("extension") or "").lower()
+    for path in paths:
+        for item in read_jsonl(path) or []:
+            metadata = item.get("metadata") or {}
+            kind = str(metadata.get("symbol_kind") or "")
+            module_name = str(metadata.get("module_name") or "")
+            relative_path = str(metadata.get("relative_path") or "")
+            extension = str(metadata.get("extension") or "").lower()
 
-        if kind == "module":
-            raw_deps = metadata.get("dependencies") or {}
-            module_deps[module_name] = {str(key): [str(v) for v in values] for key, values in raw_deps.items()}
-        elif kind == "include_map":
-            include_maps.append(item)
-            if extension in {".h", ".hpp", ".hh"}:
+            if kind == "module":
+                raw_deps = metadata.get("dependencies") or {}
+                module_deps[module_name] = {str(key): [str(v) for v in values] for key, values in raw_deps.items()}
+            elif kind == "include_map":
+                include_maps.append(item)
+                if extension in {".h", ".hpp", ".hh"}:
+                    headers.append(item)
+            elif relative_path and extension in {".h", ".hpp", ".hh"} and module_name:
                 headers.append(item)
-        elif relative_path and extension in {".h", ".hpp", ".hh"} and module_name:
-            headers.append(item)
 
     return include_maps, headers, module_deps
 
@@ -266,7 +267,7 @@ def edge_docs(
                     docs.append(
                         make_doc(
                             source_path=symbols_path,
-                            title=f"{consumer_module} includes unresolved {include}",
+                            title=f"{consumer_module} ({relative_path}) includes unresolved {include}",
                             text="\n".join(
                                 [
                                     f"Unreal include dependency edge: {consumer_module} includes {include}",
@@ -316,7 +317,7 @@ def edge_docs(
             docs.append(
                 make_doc(
                     source_path=symbols_path,
-                    title=f"{consumer_module} -> {include} include edge",
+                    title=f"{consumer_module} ({relative_path}) -> {include} include edge",
                     text="\n".join(lines),
                     symbol_name=include,
                     symbol_kind="include_edge",
@@ -369,15 +370,18 @@ def write_report(path: Path, docs_count: int, unresolved: Counter[str], missing:
 
 
 def build(args: argparse.Namespace) -> None:
-    symbols_path = Path(args.symbols)
-    include_maps, headers, module_deps = load_symbols(symbols_path)
+    symbol_paths = [Path(value) for value in args.symbols]
+    if not symbol_paths:
+        symbol_paths = [Path("data/unreal58/raw_symbols.jsonl")]
+    include_maps, headers, module_deps = load_symbols(symbol_paths)
     owners = build_owner_index(headers)
+    primary_symbols = symbol_paths[0]
 
     docs: list[dict[str, Any]] = []
-    docs.extend(module_docs(symbols_path, module_deps))
-    docs.extend(owner_docs(symbols_path, owners))
+    docs.extend(module_docs(primary_symbols, module_deps))
+    docs.extend(owner_docs(primary_symbols, owners))
     edge_records, unresolved, missing = edge_docs(
-        symbols_path,
+        primary_symbols,
         include_maps,
         owners,
         module_deps,
@@ -385,18 +389,30 @@ def build(args: argparse.Namespace) -> None:
     )
     docs.extend(edge_records)
 
+    deduped: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for doc in docs:
+        doc_id = str(doc.get("id") or "")
+        if doc_id and doc_id in seen_ids:
+            continue
+        if doc_id:
+            seen_ids.add(doc_id)
+        deduped.append(doc)
+    if len(deduped) != len(docs):
+        print(f"dedupe: removed {len(docs) - len(deduped)} duplicate module graph records")
+
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as handle:
-        for doc in docs:
+        for doc in deduped:
             handle.write(json.dumps(doc, ensure_ascii=False) + "\n")
 
     if args.report:
-        write_report(Path(args.report), len(docs), unresolved, missing)
+        write_report(Path(args.report), len(deduped), unresolved, missing)
 
     print(
         "done: wrote "
-        f"{len(docs)} module/include graph records "
+        f"{len(deduped)} module/include graph records "
         f"({len(module_deps)} modules, {len(owners)} include owners, {len(edge_records)} include edges) "
         f"to {out_path}"
     )
@@ -406,7 +422,7 @@ def build(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build Unreal module/include graph RAG records from raw symbols.")
-    parser.add_argument("--symbols", default="data/unreal58/raw_symbols.jsonl")
+    parser.add_argument("--symbols", action="append", default=[], help="Raw symbol JSONL input(s). Repeat for multiple files.")
     parser.add_argument("--out", default="data/unreal58/raw_module_graph.jsonl")
     parser.add_argument("--report", default="Reports/unreal_module_include_graph.md")
     parser.add_argument("--max-edges", type=int, default=12000)

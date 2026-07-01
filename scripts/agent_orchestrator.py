@@ -37,6 +37,19 @@ ASSET_ANALYSIS_MARKERS = (
     "shader", "usf", "ush", "hlsl", "material", "material node",
     "material graph", "material porting", "blueprint graph", "blueprint verification", "function call", "variable", "pin link", "screenshot",
 )
+ASSET_METADATA_MODES = frozenset(
+    {"shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification"}
+)
+
+ASSET_METADATA_TOOL_POLICY = [
+    "unreal_editor_metadata_status",
+    "unreal_run_editor_export",
+    "unreal_sync_editor_metadata",
+    "unreal_asset_graph_lookup",
+    "unreal_rag_search",
+    "unreal_material_claim_validate",
+    "unreal_blueprint_claim_validate",
+]
 API_MARKERS = ("what is", "how does", "api", "lookup", "documentation", "explain")
 
 
@@ -140,11 +153,18 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.writes_allowed = False
         plan.confidence = 0.8
     elif task_kind == "inspect_only":
-        if mode in {"shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification"}:
+        if mode in ASSET_METADATA_MODES:
             plan.rag_modes = [mode, "review"]
+            plan.gates = [
+                "unreal_editor_metadata_status",
+                "unreal_sync_editor_metadata",
+                "unreal_asset_graph_lookup",
+                "unreal_material_claim_validate",
+                "unreal_blueprint_claim_validate",
+            ]
         else:
             plan.rag_modes = ["review", "planning"]
-        plan.gates = ["unreal_project_architecture", "unreal_review_claim_validate"]
+            plan.gates = ["unreal_project_architecture", "unreal_review_claim_validate"]
         plan.writes_allowed = False
         plan.confidence = 0.75
     elif task_kind == "compile_fix":
@@ -201,7 +221,7 @@ def build_write_gate(task_kind: TaskKind, evidence: EvidencePlan, policy: dict[s
     }
 
 
-def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan) -> list[str]:
+def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "auto") -> list[str]:
     common = [
         "Confirm activeProject before using project-relative paths.",
         "Call unreal_agent_plan before edits and follow toolPolicy in order.",
@@ -210,6 +230,14 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan) -> list[str]:
     if task_kind == "answer_only":
         return common + ["Answer only after symbol/RAG evidence; do not write files."]
     if task_kind == "inspect_only":
+        asset_steps = [
+            "Call unreal_editor_metadata_status before material/blueprint wire claims.",
+            "If export dir has JSONL newer than index, call unreal_sync_editor_metadata.",
+            "Use unreal_asset_graph_lookup for the target /Game/... asset before summarizing graph facts.",
+            "Validate concrete claims with unreal_material_claim_validate or unreal_blueprint_claim_validate.",
+        ]
+        if mode in ASSET_METADATA_MODES:
+            return common + asset_steps + ["Read target files before findings; do not write files."]
         return common + ["Read target files before findings; do not write files."]
     if task_kind == "runtime_debug":
         return common + ["Read logs/config before diagnosis; do not write files by default."]
@@ -258,6 +286,8 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     if not evidence.writes_allowed:
         strategy = "no_edit"
     tool_policy = tool_sequence_for_task(task_kind)
+    if task_kind == "inspect_only" and mode in ASSET_METADATA_MODES:
+        tool_policy = list(ASSET_METADATA_TOOL_POLICY)
     notes: list[str] = []
     if evidence.confidence < 0.65:
         notes.append("Low confidence: prefer inspect-only before edits.")
@@ -283,7 +313,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         edit_strategy=strategy,
         tool_policy=tool_policy,
         write_gate=write_gate,
-        checkpoints=build_checkpoints(task_kind, evidence),
+        checkpoints=build_checkpoints(task_kind, evidence, mode),
         stop_conditions=build_stop_conditions(task_kind),
         retry_policy=build_retry_policy(task_kind, policy),
         notes=notes,

@@ -1,15 +1,71 @@
 # Run inside Unreal Editor (Python) or as Editor Utility.
-# Exports Material and Material Instance metadata, including best-effort graph
-# expression summaries, to JSONL for RAG indexing.
+# Exports Material and Material Instance metadata, including material expression
+# nodes and best-effort input/output wire summaries, to JSONL for RAG indexing.
 #
 # Usage (Editor Python console):
-#   exec(open(r'path/to/tools/ue_export/export_material_metadata.py').read())
+#   exec(open(r'path/to/tools/ue_export/export_material_metadata.py', encoding='utf-8').read())
 #   export_material_metadata('/Game', r'C:\export\materials.jsonl')
 
 import json
 
 
 MAX_EXPRESSIONS = 320
+MAX_GRAPH_EDGES = 800
+
+COMMON_EXPRESSION_INPUTS = (
+    "A",
+    "B",
+    "C",
+    "D",
+    "Input",
+    "Input1",
+    "Input2",
+    "Input3",
+    "Coordinates",
+    "Texture",
+    "TextureObject",
+    "WorldPosition",
+    "ViewProperty",
+    "Alpha",
+    "Mask",
+    "Distance",
+    "Position",
+    "Specular",
+    "Roughness",
+    "Metallic",
+    "Normal",
+    "Color",
+    "Top",
+    "Bottom",
+    "Left",
+    "Right",
+    "True",
+    "False",
+    "Then",
+    "Else",
+    "Value",
+    "XY",
+    "XYZ",
+    "RGB",
+    "R",
+    "G",
+    "B",
+)
+
+MATERIAL_OUTPUT_PROPERTIES = (
+    ("base_color", "BaseColor"),
+    ("emissive_color", "EmissiveColor"),
+    ("opacity", "Opacity"),
+    ("opacity_mask", "OpacityMask"),
+    ("normal", "Normal"),
+    ("metallic", "Metallic"),
+    ("specular", "Specular"),
+    ("roughness", "Roughness"),
+    ("ambient_occlusion", "AmbientOcclusion"),
+    ("world_position_offset", "WorldPositionOffset"),
+    ("subsurface_color", "SubsurfaceColor"),
+    ("refraction", "Refraction"),
+)
 
 
 def _asset_class_name(asset) -> str:
@@ -44,6 +100,113 @@ def _value_to_text(value) -> str:
         except Exception:
             pass
     return str(value)
+
+
+def _is_material_expression(value) -> bool:
+    try:
+        return value.__class__.__name__.startswith("MaterialExpression")
+    except Exception:
+        return False
+
+
+def _expression_key(expression) -> str:
+    return _safe_name(expression)
+
+
+def _resolve_expression_reference(value):
+    if value is None:
+        return None
+    if _is_material_expression(value):
+        return _expression_key(value)
+    inner = _safe_prop(value, "expression", None) or _safe_prop(value, "Expression", None)
+    if inner and _is_material_expression(inner):
+        return _expression_key(inner)
+    if hasattr(value, "__iter__"):
+        try:
+            refs = [_resolve_expression_reference(item) for item in list(value)[:8]]
+        except TypeError:
+            refs = []
+        refs = [item for item in refs if item]
+        if not refs:
+            return None
+        if len(refs) == 1:
+            return refs[0]
+        return refs
+    return None
+
+
+def _collect_expression_input_wires(expression) -> dict:
+    wires = {}
+    for prop in COMMON_EXPRESSION_INPUTS:
+        ref = _resolve_expression_reference(_safe_prop(expression, prop, None))
+        if ref:
+            wires[prop] = ref
+    return wires
+
+
+def _collect_material_root_outputs(material) -> list[dict]:
+    outputs = []
+    for snake, pascal in MATERIAL_OUTPUT_PROPERTIES:
+        value = _safe_prop(material, snake, None)
+        if value is None:
+            value = _safe_prop(material, pascal, None)
+        ref = _resolve_expression_reference(value)
+        if ref:
+            outputs.append({"output": pascal, "expression": ref if isinstance(ref, str) else str(ref)})
+    return outputs
+
+
+def _append_graph_edge(graph_edges: list[dict], source, target: str, target_input: str) -> None:
+    if len(graph_edges) >= MAX_GRAPH_EDGES:
+        return
+    if isinstance(source, list):
+        for idx, item in enumerate(source):
+            if not item:
+                continue
+            suffix = target_input if len(source) == 1 else f"{target_input}[{idx}]"
+            graph_edges.append({"from": str(item), "to": target, "to_input": suffix})
+        return
+    if source:
+        graph_edges.append({"from": str(source), "to": target, "to_input": target_input})
+
+
+def _collect_material_graph(material) -> tuple[list[dict], list[dict], list[dict]]:
+    expressions = list(_safe_prop(material, "expressions", []) or [])[:MAX_EXPRESSIONS]
+    expression_rows = []
+    graph_edges = []
+
+    for expression in expressions:
+        name = _expression_key(expression)
+        input_wires = _collect_expression_input_wires(expression)
+        row = {
+            "name": name,
+            "class": expression.__class__.__name__,
+            "desc": str(_safe_prop(expression, "desc", "") or ""),
+            "input_wires": input_wires,
+        }
+        if input_wires:
+            row["inputs"] = list(input_wires.keys())
+        expression_rows.append(row)
+        for input_name, source in input_wires.items():
+            _append_graph_edge(graph_edges, source, name, input_name)
+
+    root_outputs = _collect_material_root_outputs(material)
+    for item in root_outputs:
+        _append_graph_edge(graph_edges, item.get("expression"), "MaterialOutput", str(item.get("output") or ""))
+
+    return expression_rows, graph_edges, root_outputs
+
+
+def _graph_source_material(material, asset_class: str):
+    expressions = _safe_prop(material, "expressions", []) or []
+    if expressions:
+        return material, None
+    if "MaterialInstance" not in asset_class:
+        return material, None
+    parent = _safe_prop(material, "parent", None)
+    if not parent:
+        return material, None
+    return parent, _value_to_text(parent)
 
 
 def _collect_parameter_names(unreal, material, kind: str) -> list[str]:
@@ -87,26 +250,6 @@ def _collect_parameter_values(unreal, material, names: list[str], kind: str) -> 
     return rows
 
 
-def _collect_material_expressions(material) -> list[dict]:
-    expressions = _safe_prop(material, "expressions", []) or []
-    rows = []
-    for expression in list(expressions)[:MAX_EXPRESSIONS]:
-        inputs = []
-        for prop in ("inputs", "material_expression_editor_x", "material_expression_editor_y"):
-            value = _safe_prop(expression, prop, None)
-            if prop == "inputs" and value:
-                inputs = [_safe_name(item) for item in list(value)[:32]]
-        rows.append(
-            {
-                "name": _safe_name(expression),
-                "class": expression.__class__.__name__,
-                "desc": str(_safe_prop(expression, "desc", "") or ""),
-                "inputs": [item for item in inputs if item],
-            }
-        )
-    return rows
-
-
 def export_material_metadata(content_path: str, out_path: str) -> None:
     import unreal
 
@@ -137,9 +280,18 @@ def export_material_metadata(content_path: str, out_path: str) -> None:
                         row["blend_mode"] = str(blend_mode)
                     if shading_model:
                         row["shading_model"] = str(shading_model)
-                expressions = _collect_material_expressions(material)
+
+                graph_material, graph_source = _graph_source_material(material, cls)
+                if graph_source:
+                    row["graph_source"] = graph_source
+                expressions, graph_edges, root_outputs = _collect_material_graph(graph_material)
                 if expressions:
                     row["expressions"] = expressions
+                if graph_edges:
+                    row["graph_edges"] = graph_edges
+                if root_outputs:
+                    row["root_outputs"] = root_outputs
+
                 scalar_params = _collect_parameter_names(unreal, material, "scalar")
                 vector_params = _collect_parameter_names(unreal, material, "vector")
                 texture_params = _collect_parameter_names(unreal, material, "texture")

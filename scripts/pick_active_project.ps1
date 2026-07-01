@@ -6,34 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Read-SharedConfig {
-    param([string]$Path)
-    if (-not (Test-Path $Path)) {
-        return [ordered]@{
-            activeProject        = $null
-            projectSearchRoots   = @(
-                (Join-Path $HOME "Documents\Git"),
-                (Join-Path $HOME "Documents\Unreal Projects")
-            )
-            defaultEngineRoot    = "C:\Program Files\Epic Games\UE_5.8"
-            defaultPlatform      = "Win64"
-            defaultConfiguration = "Development"
-        }
-    }
-    return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
-}
-
-function Save-SharedConfig {
-    param([string]$Path, $Config)
-    $directory = Split-Path -Parent $Path
-    if (-not (Test-Path $directory)) {
-        New-Item -ItemType Directory -Force -Path $directory | Out-Null
-    }
-    $Config.updatedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    $json = $Config | ConvertTo-Json -Depth 10
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $utf8NoBom)
-}
+. (Join-Path $PSScriptRoot "unreal_workspace_config.ps1")
 
 function Get-EngineAssociation {
     param([string]$ProjectPath)
@@ -77,36 +50,32 @@ function Set-ActiveProjectPath {
     param([string]$Path, $Config, [string]$SharedConfigPath)
     $resolved = (Resolve-Path -LiteralPath $Path).Path
     if ($resolved -notlike "*.uproject") {
-        throw "선택한 파일이 .uproject 가 아닙니다: $resolved"
+        throw "Selected file is not a .uproject: $resolved"
     }
     $Config.activeProject = $resolved
+    Ensure-ProjectSearchRootForPath -Config $Config -ProjectPath $resolved
     Save-SharedConfig -Path $SharedConfigPath -Config $Config
     Write-Host ""
-    Write-Host "Active project 설정 완료:"
+    Write-Host "Active project set:"
     Write-Host "  $resolved"
     return $resolved
 }
 
 $config = Read-SharedConfig -Path $SharedConfig
-$roots = @($config.projectSearchRoots | Where-Object { $_ -and ($_ -notlike "*\Unreal58-RAG\data") })
-if ($roots.Count -eq 0) {
-    $roots = @(
-        (Join-Path $HOME "Documents\Git"),
-        (Join-Path $HOME "Documents\Unreal Projects")
-    )
-}
+Sync-SharedConfigSearchRoots -Config $config -SharedConfigPath $SharedConfig
+$roots = @($config.projectSearchRoots)
 
 if ($Clear) {
     $config.activeProject = $null
     Save-SharedConfig -Path $SharedConfig -Config $config
-    Write-Host "Active project 를 해제했습니다."
+    Write-Host "Active project cleared."
     exit 0
 }
 
 if ($Explorer) {
     Add-Type -AssemblyName System.Windows.Forms
     $dialog = New-Object System.Windows.Forms.OpenFileDialog
-    $dialog.Title = "Unreal 프로젝트 (.uproject) 선택"
+    $dialog.Title = "Select Unreal project (.uproject)"
     $dialog.Filter = "Unreal Project (*.uproject)|*.uproject"
     $dialog.CheckFileExists = $true
     $dialog.Multiselect = $false
@@ -118,7 +87,7 @@ if ($Explorer) {
     }
 
     if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
-        Write-Host "선택이 취소되었습니다."
+        Write-Host "Selection cancelled."
         exit 0
     }
 
@@ -126,15 +95,29 @@ if ($Explorer) {
     exit 0
 }
 
-$projects = Find-UnrealProjects -Roots $roots
-if (-not $projects -or $projects.Count -eq 0) {
-    Write-Host "검색 경로에서 .uproject 를 찾지 못했습니다."
-    Write-Host "파일 탐색기로 선택하려면:"
+$projects = @(Find-UnrealProjects -Roots $roots)
+$activePath = [string]$config.activeProject
+if ($activePath -and (Test-Path -LiteralPath $activePath)) {
+    $activeFile = Get-Item -LiteralPath $activePath
+    $alreadyListed = $false
+    foreach ($project in $projects) {
+        if ($project.FullName -eq $activeFile.FullName) {
+            $alreadyListed = $true
+            break
+        }
+    }
+    if (-not $alreadyListed) {
+        $projects = @($activeFile) + $projects
+    }
+}
+
+if ($projects.Count -eq 0) {
+    Write-Host "No .uproject files found under configured search roots."
+    Write-Host "To pick via file explorer, run:"
     Write-Host "  .\rag.ps1 pick-project -Explorer"
     exit 1
 }
 
-$activePath = [string]$config.activeProject
 $rows = foreach ($project in $projects) {
     $engine = Get-EngineAssociation -ProjectPath $project.FullName
     $isActive = ($activePath -and ($project.FullName -eq $activePath))
@@ -148,12 +131,12 @@ $rows = foreach ($project in $projects) {
     }
 }
 
-$title = "Unreal Active Project 선택 (행 하나 클릭 후 OK)"
+$title = "Select Unreal Active Project (click one row, then OK)"
 $selected = $rows | Out-GridView -Title $title -OutputMode Single
 
 if (-not $selected) {
-    Write-Host "선택이 취소되었습니다."
-    Write-Host "파일 탐색기로 고르려면: .\rag.ps1 pick-project -Explorer"
+    Write-Host "Selection cancelled."
+    Write-Host "To pick via file explorer, run: .\rag.ps1 pick-project -Explorer"
     exit 0
 }
 

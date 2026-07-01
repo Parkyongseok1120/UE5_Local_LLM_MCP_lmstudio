@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from workspace_paths import load_shared_config
+from workspace_paths import editor_export_dir, load_shared_config
 
 METADATA_FILES = {
     "blueprint": "raw_blueprint_metadata.jsonl",
@@ -93,6 +93,30 @@ def editor_metadata_status(
         files[kind] = row
 
     needs_export = bool(missing or stale)
+    export_dir = editor_export_dir()
+    export_dir_info: dict[str, Any] = {"configured": bool(export_dir), "path": str(export_dir or "")}
+    if export_dir:
+        try:
+            export_files = sorted(export_dir.glob("*.jsonl"))
+            export_dir_info["fileCount"] = len(export_files)
+            export_dir_info["newestMtime"] = max((p.stat().st_mtime for p in export_files), default=None)
+        except OSError:
+            export_dir_info["fileCount"] = 0
+            export_dir_info["newestMtime"] = None
+
+    recommended = []
+    if needs_export:
+        recommended = [
+            "Call unreal_sync_editor_metadata with autoExport=true (or refresh=true).",
+            "Or run .\\rag.ps1 export-editor-metadata locally.",
+            "If Editor is already open, register LM Studio menu once so the export watcher is active.",
+        ]
+        if export_dir:
+            recommended.insert(
+                1,
+                f"Export dir: {export_dir}. Run installer\\Export-EditorMetadata.ps1 -PrintCommandsOnly for copy/paste commands.",
+            )
+
     return {
         "ok": not needs_export,
         "activeProject": active_project,
@@ -102,11 +126,13 @@ def editor_metadata_status(
         "missingKinds": missing,
         "staleKinds": stale,
         "needsEditorExport": needs_export,
+        "exportDir": export_dir_info,
+        "recommendedActions": recommended,
         "recommendedCommands": [
-            ".\\rag.ps1 collect-blueprint-metadata -Question <export.jsonl>",
-            ".\\rag.ps1 collect-material-metadata -Question <export.jsonl>",
-            ".\\rag.ps1 build",
-        ] if needs_export else [],
+            "unreal_sync_editor_metadata (autoExport=true)",
+            ".\\rag.ps1 export-editor-metadata",
+            "unreal_asset_graph_lookup",
+        ] if needs_export else ["unreal_asset_graph_lookup"],
         "files": files,
     }
 

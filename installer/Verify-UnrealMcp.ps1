@@ -5,6 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Resolve-StackLayout.ps1")
+. (Join-Path $PSScriptRoot "Install-PathHelpers.ps1")
 
 $layout = Resolve-StackLayout $PortableRoot
 $root = $layout.Root
@@ -17,7 +18,6 @@ $py = & {
     if ($c -and $c.Source -notlike "*\WindowsApps\*") { return $c.Source }
     throw "python not found"
 }
-$ubt58 = "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
 
 $fail = 0
 function Check([string]$Label, [scriptblock]$Test) {
@@ -35,9 +35,37 @@ function Warn([string]$Message) {
     Write-Host "[WARN] $Message" -ForegroundColor Yellow
 }
 
+$engineRoot = Get-WorkspaceEngineRootPath -RagRoot $ragRoot
+$ubtPath = Get-WorkspaceUbtPath -RagRoot $ragRoot
+
 Check "Portable root" { if (-not (Test-Path $root)) { throw "missing $root" } }
 Check "Unreal58-RAG" { if (-not (Test-Path (Join-Path $ragRoot "rag.ps1"))) { throw "missing rag.ps1" } }
 Check "RAG index" { if (-not (Test-Path (Join-Path $ragRoot "data\unreal58\rag.sqlite"))) { throw "missing rag.sqlite" } }
+Check "workspace.json rootPath" {
+    $cfg = Read-JsonObject (Join-Path $ragRoot "config\workspace.json")
+    if (-not $cfg -or [string]::IsNullOrWhiteSpace([string]$cfg.rootPath)) {
+        throw "rootPath empty — run installer or Sync-InstallMachinePaths.ps1"
+    }
+    if ([string]$cfg.rootPath -like "*\\Users\\*\\Users\\*") {
+        throw "rootPath looks malformed: $($cfg.rootPath)"
+    }
+    $resolvedRoot = (Resolve-Path -LiteralPath $ragRoot).Path
+    if ((Resolve-Path -LiteralPath ([string]$cfg.rootPath)).Path -ne $resolvedRoot) {
+        Warn "workspace.json rootPath differs from repo root; run Sync-InstallMachinePaths.ps1"
+    }
+}
+Check "agent-mcp.json search roots" {
+    $agentCfg = Read-JsonObject (Join-Path $agentRoot "config\agent-mcp.json")
+    if (-not $agentCfg -or -not $agentCfg.projectSearchRoots -or $agentCfg.projectSearchRoots.Count -eq 0) {
+        throw "projectSearchRoots missing — run INSTALL-*.bat"
+    }
+    foreach ($searchRoot in @($agentCfg.projectSearchRoots)) {
+        $text = [string]$searchRoot
+        if ($text -match '\\Users\\' -and -not $text.StartsWith($HOME, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "agent-mcp.json contains another machine/user path: $searchRoot"
+        }
+    }
+}
 Check "unreal_rag_mcp.py compile" {
     Push-Location (Join-Path $ragRoot "scripts")
     try { & $py -m py_compile unreal_rag_mcp.py rag_search.py workspace_paths.py }
@@ -48,7 +76,15 @@ Check "python version" {
     $out = & $py --version 2>&1 | Out-String
     if ($out -notmatch "Python") { throw $out.Trim() }
 }
-Check "UE 5.8 UBT" { if (-not (Test-Path $ubt58)) { throw "missing $ubt58" } }
+Check "Unreal Engine install" {
+    if (-not (Test-Path -LiteralPath $engineRoot)) {
+        Warn "Engine root not found: $engineRoot. Install UE or rerun Sync-InstallMachinePaths.ps1 after installing Epic Launcher."
+        return
+    }
+    if (-not (Test-Path -LiteralPath $ubtPath)) {
+        Warn "UBT not found: $ubtPath"
+    }
+}
 Check "mcp.json unreal-rag python" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
     if (-not (Test-Path $mcp)) { throw "mcp.json missing — run INSTALL-SAFE-MODE.bat" }

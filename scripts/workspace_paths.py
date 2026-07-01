@@ -212,6 +212,105 @@ def resolve_engine_source_root(start: Path | None = None) -> Path:
     return resolve_engine_root(start) / "Engine" / "Source"
 
 
+def resolve_active_project_path(start: Path | None = None) -> Path | None:
+    config = load_shared_config()
+    active = str(config.get("activeProject") or "").strip()
+    if not active:
+        return None
+    path = Path(active).expanduser()
+    if not path.is_absolute():
+        path = Path(active)
+    if path.exists():
+        return path.resolve()
+    return None
+
+
+def resolve_active_project_root(start: Path | None = None) -> Path | None:
+    active = resolve_active_project_path(start)
+    if not active:
+        return None
+    if active.suffix.lower() == ".uproject":
+        return active.parent.resolve()
+    return active.resolve()
+
+
+def resolve_active_project_source_root(start: Path | None = None) -> Path | None:
+    root = resolve_active_project_root(start)
+    if not root:
+        return None
+    source = root / "Source"
+    if source.is_dir():
+        return source.resolve()
+    plugins = root / "Plugins"
+    if plugins.is_dir():
+        return root.resolve()
+    return root.resolve()
+
+
+def indexing_tier(start: Path | None = None) -> str:
+    config = load_shared_config()
+    tier = str(config.get("indexingTier") or "standard").strip().lower()
+    if tier in {"lite", "standard", "full"}:
+        return tier
+    return "standard"
+
+
+def default_editor_export_dir(start: Path | None = None) -> Path:
+    root = resolve_active_project_root(start)
+    if root:
+        return (root / "Saved" / "LmStudioMetadataExports").resolve()
+    local_app = os.environ.get("LOCALAPPDATA", "").strip()
+    base = Path(local_app) if local_app else Path.home() / "AppData" / "Local"
+    return (base / "LmStudio" / "UnrealMetadataExports").resolve()
+
+
+def normalize_editor_export_dir(
+    configured: str | Path | None,
+    start: Path | None = None,
+) -> Path:
+    project_root = resolve_active_project_root(start)
+    default = default_editor_export_dir(start)
+    raw = str(configured or "").strip()
+    if not raw:
+        return default
+    path = Path(os.path.expandvars(raw.replace("/", "\\"))).expanduser()
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    if project_root:
+        try:
+            if resolved == project_root.resolve():
+                return default
+        except OSError:
+            pass
+        if resolved.name.lower() == project_root.name.lower() and resolved.parent == project_root.parent:
+            return default
+    return resolved if str(resolved) else default
+
+
+def editor_export_dir(start: Path | None = None) -> Path | None:
+    config = load_shared_config()
+    raw = str(config.get("editorExportDir") or "").strip()
+    if not raw:
+        return default_editor_export_dir(start)
+    return normalize_editor_export_dir(raw, start)
+
+
+def auto_editor_export_enabled(start: Path | None = None) -> bool:
+    config = load_shared_config()
+    value = config.get("autoEditorExport", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
+
+
+def editor_export_content_path(start: Path | None = None) -> str:
+    config = load_shared_config()
+    raw = str(config.get("editorExportContentPath") or "/Game").strip()
+    return raw or "/Game"
+
+
 def normalize_locator(locator: str, workspace_root: Path | None = None) -> str:
     physical_root = (workspace_root or find_workspace_root()).resolve()
     workspace_root = canonical_workspace_root(workspace_root)

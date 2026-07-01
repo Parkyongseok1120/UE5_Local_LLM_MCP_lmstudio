@@ -28,6 +28,11 @@ def infer_doc_type(source: str, metadata: dict) -> str:
     if source == "game_design_doc":
         return "game_design"
     if source == "unreal_symbol":
+        if str(metadata.get("scope") or "") == "project":
+            symbol_kind = str(metadata.get("symbol_kind") or "")
+            if symbol_kind == "module":
+                return "project_module_symbol"
+            return "project_symbol"
         symbol_kind = str(metadata.get("symbol_kind") or "")
         if symbol_kind == "module":
             return "module_symbol"
@@ -356,7 +361,7 @@ def ingest_module_graph(conn: sqlite3.Connection, doc: dict) -> None:
         owner_modules = metadata.get("owner_modules") or []
         conn.execute(
             """
-            insert into include_owners(
+            insert or replace into include_owners(
                 owner_id,
                 document_id,
                 include_path,
@@ -388,7 +393,7 @@ def ingest_module_graph(conn: sqlite3.Connection, doc: dict) -> None:
         primary_owner = owner_modules[0] if owner_modules else ""
         conn.execute(
             """
-            insert into module_edges(
+            insert or replace into module_edges(
                 edge_id,
                 document_id,
                 edge_kind,
@@ -425,7 +430,7 @@ def ingest_module_graph(conn: sqlite3.Connection, doc: dict) -> None:
         module_name = str(metadata.get("module_name") or metadata.get("symbol_name") or "")
         conn.execute(
             """
-            insert into module_edges(
+            insert or replace into module_edges(
                 edge_id,
                 document_id,
                 edge_kind,
@@ -460,7 +465,7 @@ def ingest_module_graph(conn: sqlite3.Connection, doc: dict) -> None:
 
     conn.execute(
         """
-        insert into module_edges(
+        insert or replace into module_edges(
             edge_id,
             document_id,
             edge_kind,

@@ -1,5 +1,7 @@
 {
   "projectSearchRoots": [
+    "%USERPROFILE%\\Documents\\Github",
+    "%USERPROFILE%\\Documents\\GitHub",
     "%USERPROFILE%\\Documents\\Git",
     "%USERPROFILE%\\Documents\\Unreal Projects"
   ],

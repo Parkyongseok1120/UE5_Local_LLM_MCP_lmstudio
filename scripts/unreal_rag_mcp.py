@@ -32,6 +32,10 @@ from review_claim_validate import validate_claims
 from material_porting_validate import validate_material_porting_plan
 from editor_metadata_status import editor_metadata_status
 from blueprint_claim_validate import validate_blueprint_claims
+from material_claim_validate import validate_material_claims
+from asset_graph_lookup import lookup_asset_graph, search_asset_graphs
+from sync_editor_metadata import refresh_editor_metadata, sync_editor_metadata
+from editor_export_runner import run_editor_export
 from runtime_config_checklist import check_runtime_config
 from wrapper_job_manager import job_status, list_jobs, start_job
 from mcp_stdio import configure_stdio_utf8, write_json_line, write_utf8_line
@@ -50,7 +54,11 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_rag_capabilities",
         "unreal_material_porting_plan_validate",
         "unreal_editor_metadata_status",
+        "unreal_run_editor_export",
+        "unreal_sync_editor_metadata",
+        "unreal_asset_graph_lookup",
         "unreal_blueprint_claim_validate",
+        "unreal_material_claim_validate",
     }
 )
 
@@ -504,6 +512,86 @@ class McpServer:
                 ),
             },
             {
+                "name": "unreal_run_editor_export",
+                "title": "Run Unreal Editor Metadata Export",
+                "description": (
+                    "Automatically export Blueprint/Material metadata JSONL from the active project. "
+                    "Uses headless Editor when closed, or export request watcher when Editor is already open."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "exportDir": {"type": "string"},
+                        "contentPath": {"type": "string", "description": "Defaults to editorExportContentPath (/Game)."},
+                        "mapsPath": {"type": "string"},
+                        "scope": {
+                            "type": "string",
+                            "enum": ["all", "materials", "blueprints"],
+                            "default": "all",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["auto", "headless", "request"],
+                            "default": "auto",
+                        },
+                        "projectFile": {"type": "string", "description": "Optional .uproject override."},
+                        "timeoutSec": {"type": "integer", "minimum": 120, "maximum": 7200},
+                    },
+                ),
+            },
+            {
+                "name": "unreal_sync_editor_metadata",
+                "title": "Sync Editor Metadata Exports Into RAG",
+                "description": (
+                    "Optionally auto-export from Unreal Editor, ingest JSONL from editorExportDir, "
+                    "rebuild the index, and return next actions for the agent."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "exportDir": {"type": "string", "description": "Override editorExportDir from shared config."},
+                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "projectName": {"type": "string"},
+                        "rebuildIndex": {"type": "boolean", "default": True},
+                        "forceIngest": {"type": "boolean", "default": False},
+                        "autoExport": {
+                            "type": "boolean",
+                            "default": True,
+                            "description": "If metadata is stale/missing, launch automatic Editor export first.",
+                        },
+                        "refresh": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Always export + ingest + rebuild in one call.",
+                        },
+                        "contentPath": {"type": "string"},
+                        "scope": {"type": "string", "enum": ["all", "materials", "blueprints"]},
+                        "mode": {"type": "string", "enum": ["auto", "headless", "request"], "default": "auto"},
+                    },
+                ),
+            },
+            {
+                "name": "unreal_asset_graph_lookup",
+                "title": "Lookup Material/Blueprint Graph Metadata",
+                "description": (
+                    "Return exported graph metadata for any material or blueprint by /Game/... path or short asset name. "
+                    "Use before making wire/pin claims."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "assetPath": {"type": "string", "description": "Asset path or short name, e.g. /Game/Materials/M_Core or M_Blackhole_Core"},
+                        "search": {"type": "string", "description": "Optional substring search when assetPath is empty."},
+                        "assetKind": {
+                            "type": "string",
+                            "enum": ["auto", "material", "blueprint"],
+                            "default": "auto",
+                        },
+                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "projectName": {"type": "string"},
+                        "includeFullGraph": {"type": "boolean", "default": False},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 32, "default": 12},
+                    },
+                ),
+            },
+            {
                 "name": "unreal_blueprint_claim_validate",
                 "title": "Validate Blueprint Claims Against Metadata",
                 "description": (
@@ -519,6 +607,22 @@ class McpServer:
                     ["claims"],
                 ),
             },            {
+                "name": "unreal_material_claim_validate",
+                "title": "Validate Material Graph Claims Against Metadata",
+                "description": (
+                    "Validate material asset/expression/wire claims against raw_material_metadata.jsonl. "
+                    "Requires Editor material export with graph_edges."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "claims": {"type": "array", "items": {"type": "string"}},
+                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "projectName": {"type": "string"},
+                    },
+                    ["claims"],
+                ),
+            },
+            {
                 "name": "unreal_review_claim_validate",
                 "title": "Validate Review Claims (grep + PAB)",
                 "description": (
@@ -859,8 +963,68 @@ class McpServer:
                     float(arguments.get("staleAfterHours") or 24.0),
                 )
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_run_editor_export":
+                payload = run_editor_export(
+                    export_dir=str(arguments.get("exportDir") or "").strip() or None,
+                    content_path=str(arguments.get("contentPath") or "").strip() or None,
+                    maps_path=str(arguments.get("mapsPath") or "").strip() or None,
+                    scope=str(arguments.get("scope") or "all"),  # type: ignore[arg-type]
+                    mode=str(arguments.get("mode") or "auto"),  # type: ignore[arg-type]
+                    uproject=str(arguments.get("projectFile") or "").strip() or None,
+                    timeout_sec=int(arguments.get("timeoutSec") or 0) or None,
+                )
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_sync_editor_metadata":
+                common = {
+                    "export_dir": str(arguments.get("exportDir") or "").strip() or None,
+                    "index_dir": arguments.get("indexDir") or "data/unreal58",
+                    "project_name": str(arguments.get("projectName") or "").strip() or None,
+                    "rebuild_index": arguments.get("rebuildIndex", True) is not False,
+                    "content_path": str(arguments.get("contentPath") or "").strip() or None,
+                    "export_scope": str(arguments.get("scope") or "").strip() or None,
+                    "export_mode": str(arguments.get("mode") or "auto"),
+                }
+                if bool(arguments.get("refresh")):
+                    payload = refresh_editor_metadata(**common, force=bool(arguments.get("forceIngest")))
+                else:
+                    payload = sync_editor_metadata(
+                        **common,
+                        force_ingest=bool(arguments.get("forceIngest")),
+                        auto_export=arguments.get("autoExport", True) is not False,
+                    )
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_asset_graph_lookup":
+                search = str(arguments.get("search") or "").strip()
+                if search:
+                    payload = search_asset_graphs(
+                        search,
+                        asset_kind=str(arguments.get("assetKind") or "auto"),  # type: ignore[arg-type]
+                        index_dir=arguments.get("indexDir") or "data/unreal58",
+                        project_name=str(arguments.get("projectName") or "").strip() or None,
+                        limit=int(arguments.get("limit") or 12),
+                    )
+                else:
+                    asset_path = str(arguments.get("assetPath") or "").strip()
+                    if not asset_path:
+                        self.tool_result(message_id, "Provide assetPath or search.", is_error=True)
+                        return
+                    payload = lookup_asset_graph(
+                        asset_path,
+                        asset_kind=str(arguments.get("assetKind") or "auto"),  # type: ignore[arg-type]
+                        index_dir=arguments.get("indexDir") or "data/unreal58",
+                        project_name=str(arguments.get("projectName") or "").strip() or None,
+                        include_full_graph=bool(arguments.get("includeFullGraph")),
+                    )
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_blueprint_claim_validate":
                 payload = validate_blueprint_claims(
+                    list(arguments.get("claims") or []),
+                    arguments.get("indexDir") or "data/unreal58",
+                    str(arguments.get("projectName") or "").strip() or None,
+                )
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_material_claim_validate":
+                payload = validate_material_claims(
                     list(arguments.get("claims") or []),
                     arguments.get("indexDir") or "data/unreal58",
                     str(arguments.get("projectName") or "").strip() or None,

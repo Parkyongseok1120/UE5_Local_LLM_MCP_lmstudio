@@ -1,6 +1,6 @@
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-blueprint-metadata", "collect-material-metadata", "collect-animation-metadata", "collect-skeletal-mesh-metadata", "collect-anim-blueprint-metadata", "collect-anim-montage-metadata", "collect-sequencer-metadata", "collect-editor-metadata", "collect-failure-memory", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "eval-pass-at-k", "eval-harness", "eval-regression", "summarize-real-project-eval", "preflight-lmstudio", "report-tier-kpi", "sonnet-tier-gate", "verify-release", "build-project-graph", "agent-plan", "reject-failure-memory", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
+    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-blueprint-metadata", "collect-material-metadata", "collect-animation-metadata", "collect-skeletal-mesh-metadata", "collect-anim-blueprint-metadata", "collect-anim-montage-metadata", "collect-sequencer-metadata", "collect-editor-metadata", "collect-failure-memory", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "sync-editor-metadata", "export-editor-metadata", "index-full", "ingest-editor-exports", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "eval-pass-at-k", "eval-harness", "eval-regression", "summarize-real-project-eval", "preflight-lmstudio", "report-tier-kpi", "sonnet-tier-gate", "verify-release", "build-project-graph", "agent-plan", "reject-failure-memory", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
     [string]$Command,
 
     [string]$IndexNamespace = "",
@@ -41,7 +41,9 @@ param(
     [string[]]$Extension = @(),
     [string[]]$RequiredTerm = @(),
     [int]$MaxPages = 50,
-    [switch]$IncludeThirdParty,
+    [switch]$IncludeProjectSymbols,
+    [switch]$EngineOnlySymbols,
+    [switch]$SkipEditorIngest,
     [switch]$IncludeSymbolDefinitions,
     [switch]$CopyProjectText,
     [switch]$SkipAssetPaths,
@@ -131,6 +133,33 @@ function Get-WorkspaceEngineRoot {
     return $Fallback
 }
 
+function Get-SharedActiveProjectInfo {
+    $sharedConfig = Join-Path $HOME ".lmstudio\config\unreal-workspace.json"
+    if (-not (Test-Path $sharedConfig)) { return $null }
+    try {
+        $shared = Get-Content -LiteralPath $sharedConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+        $active = [string]$shared.activeProject
+        if ([string]::IsNullOrWhiteSpace($active) -or -not (Test-Path -LiteralPath $active)) {
+            return $null
+        }
+        $resolved = (Resolve-Path -LiteralPath $active).Path
+        $projectRoot = Split-Path -Parent $resolved
+        $sourceRoot = Join-Path $projectRoot "Source"
+        if (-not (Test-Path -LiteralPath $sourceRoot)) {
+            $sourceRoot = $projectRoot
+        }
+        return [ordered]@{
+            UprojectPath = $resolved
+            ProjectRoot  = $projectRoot
+            ProjectName  = [System.IO.Path]::GetFileNameWithoutExtension($resolved)
+            SourceRoot   = $sourceRoot
+        }
+    }
+    catch {
+        return $null
+    }
+}
+
 $resolvedNamespace = Get-WorkspaceIndexNamespace -Override $IndexNamespace
 $dataDir = Join-Path $PSScriptRoot ("data\" + $resolvedNamespace)
 $indexPath = Join-Path $dataDir "rag.sqlite"
@@ -196,28 +225,62 @@ switch ($Command) {
         & $py scripts\collect_game_design_docs.py --root $GameDesignRoot --out data\unreal58\raw_game_design.jsonl
     }
     "collect-symbols" {
-        $symbolArgs = @(
-            "scripts\collect_unreal_symbols.py",
-            "--root", $SourceRoot,
-            "--out", "data\unreal58\raw_symbols.jsonl",
-            "--sidecar-out", "data\unreal58\sidecar_symbols_meta.jsonl",
-            "--tier", "public"
-        )
-        if ($IncludeThirdParty) {
-            $symbolArgs += "--include-third-party"
+        $symbolsOut = Join-Path $dataDir "raw_symbols.jsonl"
+        $sidecarOut = Join-Path $dataDir "sidecar_symbols_meta.jsonl"
+        $projectInfo = Get-SharedActiveProjectInfo
+        $collectProject = ($IncludeProjectSymbols -or (-not $EngineOnlySymbols)) -and $null -ne $projectInfo
+
+        if (-not $EngineOnlySymbols) {
+            if (Test-Path $symbolsOut) { Remove-Item -LiteralPath $symbolsOut -Force }
+            if (Test-Path $sidecarOut) { Remove-Item -LiteralPath $sidecarOut -Force }
+            $symbolArgs = @(
+                "scripts\collect_unreal_symbols.py",
+                "--root", $SourceRoot,
+                "--out", $symbolsOut,
+                "--sidecar-out", $sidecarOut,
+                "--tier", "public",
+                "--scope", "engine"
+            )
+            if ($IncludeThirdParty) { $symbolArgs += "--include-third-party" }
+            if ($IncludeSymbolDefinitions) {
+                $symbolArgs += @("--include-definitions", "--tier", "full")
+            }
+            & $py @symbolArgs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
-        if ($IncludeSymbolDefinitions) {
-            $symbolArgs += "--include-definitions"
-            $symbolArgs += "--tier"
-            $symbolArgs += "full"
+
+        if ($collectProject) {
+            $projectSymbolsOut = Join-Path $dataDir "raw_project_symbols.jsonl"
+            if (Test-Path $projectSymbolsOut) { Remove-Item -LiteralPath $projectSymbolsOut -Force }
+            $projectArgs = @(
+                "scripts\collect_unreal_symbols.py",
+                "--root", $projectInfo.SourceRoot,
+                "--out", $projectSymbolsOut,
+                "--tier", "full",
+                "--scope", "project",
+                "--project-name", $projectInfo.ProjectName
+            )
+            if ($IncludeSymbolDefinitions) { $projectArgs += "--include-definitions" }
+            & $py @projectArgs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
-        & $py @symbolArgs
     }
     "collect-module-graph" {
-        if (-not (Test-Path "data\unreal58\raw_symbols.jsonl")) {
-            throw "Run collect-symbols first so data\unreal58\raw_symbols.jsonl exists."
+        $symbolsPath = Join-Path $dataDir "raw_symbols.jsonl"
+        if (-not (Test-Path $symbolsPath)) {
+            throw "Run collect-symbols first so $symbolsPath exists."
         }
-        & $py scripts\build_unreal_module_graph.py --symbols data\unreal58\raw_symbols.jsonl --out data\unreal58\raw_module_graph.jsonl --report Reports\unreal_module_include_graph.md
+        $graphArgs = @(
+            "scripts\build_unreal_module_graph.py",
+            "--symbols", $symbolsPath,
+            "--out", $moduleGraphPath,
+            "--report", "Reports\unreal_module_include_graph.md"
+        )
+        $projectSymbolsPath = Join-Path $dataDir "raw_project_symbols.jsonl"
+        if (Test-Path $projectSymbolsPath) {
+            $graphArgs += @("--symbols", $projectSymbolsPath)
+        }
+        & $py @graphArgs
     }
     "collect-project-profile" {
         $profileRoot = if ($ProjectFile) { $ProjectFile } else { $ProjectsRoot }
@@ -378,6 +441,69 @@ switch ($Command) {
     }
     "sync-active-project" {
         powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "scripts\sync_active_project.ps1")
+    }
+    "sync-editor-metadata" {
+        $syncArgs = @(
+            "scripts\sync_editor_metadata.py",
+            "--index-dir", ("data\" + $resolvedNamespace),
+            "--auto-export"
+        )
+        if ($ProjectsRoot -and $ProjectsRoot -ne "data") {
+            $syncArgs += @("--export-dir", $ProjectsRoot)
+        }
+        if ($ProjectName -and $ProjectName -ne "ScratchPrototype") {
+            $syncArgs += @("--project-name", $ProjectName)
+        }
+        if ($SkipBuild) { $syncArgs += "--no-rebuild" }
+        & $py @syncArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    "export-editor-metadata" {
+        $refreshArgs = @(
+            "scripts\sync_editor_metadata.py",
+            "--refresh",
+            "--index-dir", ("data\" + $resolvedNamespace)
+        )
+        if ($ProjectsRoot -and $ProjectsRoot -ne "data") {
+            $refreshArgs += @("--export-dir", $ProjectsRoot)
+        }
+        if ($ProjectName -and $ProjectName -ne "ScratchPrototype") {
+            $refreshArgs += @("--project-name", $ProjectName)
+        }
+        if ($Question -and $Question -like "/Game*") {
+            $refreshArgs += @("--content-path", $Question)
+        }
+        if ($SkipBuild) { $refreshArgs += "--no-rebuild" }
+        & $py @refreshArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    "index-full" {
+        $pipelineArgs = @(
+            "-File", (Join-Path $PSScriptRoot "scripts\run_index_pipeline.ps1"),
+            "-WorkspaceRoot", $PSScriptRoot
+        )
+        if ($SkipEditorIngest) { $pipelineArgs += "-SkipEditorIngest" }
+        if ($SkipBuild) { $pipelineArgs += "-SkipBuild" }
+        powershell -NoProfile -ExecutionPolicy Bypass @pipelineArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    "ingest-editor-exports" {
+        if (-not $ProjectsRoot -or $ProjectsRoot -eq "data") {
+            throw "ingest-editor-exports requires -ProjectsRoot pointing to Editor export JSONL directory"
+        }
+        $ingestArgs = @(
+            "scripts\ingest_editor_exports.py",
+            "--export-dir", $ProjectsRoot,
+            "--out-dir", ("data\" + $resolvedNamespace)
+        )
+        if ($ProjectName -and $ProjectName -ne "ScratchPrototype") {
+            $ingestArgs += @("--project-name", $ProjectName)
+        }
+        & $py @ingestArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        if (-not $SkipBuild) {
+            & $py scripts\incremental_build.py --out-dir ("data\" + $resolvedNamespace) --force
+        }
     }
     "warm-cache" {
         & $py scripts\warm_symbol_cache.py

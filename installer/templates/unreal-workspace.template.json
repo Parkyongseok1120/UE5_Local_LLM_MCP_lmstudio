@@ -1,10 +1,19 @@
 {
   "activeProject": null,
   "projectSearchRoots": [
+    "%USERPROFILE%\\Documents\\Github",
+    "%USERPROFILE%\\Documents\\GitHub",
     "%USERPROFILE%\\Documents\\Git",
     "%USERPROFILE%\\Documents\\Unreal Projects"
   ],
   "defaultEngineRoot": "C:\\Program Files\\Epic Games\\UE_5.8",
   "defaultPlatform": "Win64",
-  "defaultConfiguration": "Development"
+  "defaultConfiguration": "Development",
+  "indexingTier": "standard",
+  "editorExportDir": null,
+  "editorExportContentPath": "/Game",
+  "editorExportMapsPath": null,
+  "editorExportScope": "all",
+  "editorExportTimeoutSec": 1800,
+  "autoEditorExport": true
 }
