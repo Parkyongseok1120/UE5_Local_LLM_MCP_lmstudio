@@ -7,6 +7,7 @@
 #   export_blueprint_metadata('/Game', r'C:\export\blueprints.jsonl')
 
 import json
+import os
 
 
 MAX_GRAPHS = 24
@@ -14,6 +15,38 @@ MAX_NODES_PER_GRAPH = 160
 MAX_PINS_PER_NODE = 24
 MAX_LINKS_PER_PIN = 16
 MAX_GRAPH_LINKS = 1200
+
+
+def _try_cpp_blueprint_export(content_path: str, out_path: str) -> bool:
+    try:
+        import unreal
+    except Exception:
+        return False
+    library = getattr(unreal, "LmStudioGraphExporterLibrary", None)
+    if not library:
+        return False
+    export_fn = getattr(library, "export_blueprint_metadata", None)
+    if not export_fn:
+        return False
+    try:
+        result_text = export_fn(content_path, out_path)
+        result = json.loads(str(result_text or "{}"))
+        if result.get("ok") and os.path.isfile(out_path):
+            unreal.log(
+                f"Exported Blueprint metadata via LM Studio C++ graph exporter: {out_path}"
+            )
+            return True
+        unreal.log_warning(
+            f"LM Studio C++ graph exporter did not complete; falling back to Python exporter: {result_text}"
+        )
+    except Exception as exc:
+        try:
+            unreal.log_warning(
+                f"LM Studio C++ graph exporter failed; falling back to Python exporter: {exc}"
+            )
+        except Exception:
+            pass
+    return False
 
 
 def _safe_name(value) -> str:
@@ -37,6 +70,44 @@ def _safe_text(value) -> str:
         return str(value)
     except Exception:
         return ""
+
+
+def _safe_call(value, default=None):
+    if not callable(value):
+        return value
+    try:
+        return value()
+    except TypeError:
+        return default
+    except Exception:
+        return default
+
+
+def _blueprint_editor_library():
+    try:
+        import unreal
+
+        return getattr(unreal, "BlueprintEditorLibrary", None)
+    except Exception:
+        return None
+
+
+def _call_blueprint_editor(bp, method_name: str, default=None):
+    library = _blueprint_editor_library()
+    method = getattr(library, method_name, None) if library else None
+    if not method:
+        return default
+    try:
+        return method(bp)
+    except Exception:
+        return default
+
+
+def _member_name(value) -> str:
+    text = _safe_text(value)
+    if "." in text:
+        return text.rsplit(".", 1)[-1]
+    return text
 
 
 def _member_reference_summary(value) -> dict:
@@ -147,15 +218,23 @@ def _node_summary(node, graph_name: str, graph_links: list[dict]) -> dict:
 def _graph_summary(graph, graph_links: list[dict]) -> dict:
     graph_name = _safe_name(graph)
     nodes = _safe_prop(graph, "nodes", []) or []
+    node_access_note = ""
+    if not nodes:
+        protected = _safe_prop(graph, "Nodes", None)
+        if protected is None:
+            node_access_note = "nodes unavailable through UE Python protected EdGraph.Nodes"
     node_rows = [
         _node_summary(node, graph_name, graph_links)
         for node in list(nodes)[:MAX_NODES_PER_GRAPH]
     ]
-    return {
+    row = {
         "name": graph_name,
         "node_count": len(nodes) if hasattr(nodes, "__len__") else len(node_rows),
         "nodes": node_rows,
     }
+    if node_access_note:
+        row["node_access"] = node_access_note
+    return row
 
 
 def _collect_graphs(bp) -> tuple[list[dict], list[dict]]:
@@ -171,6 +250,22 @@ def _collect_graphs(bp) -> tuple[list[dict], list[dict]]:
             if len(graphs) >= MAX_GRAPHS:
                 return graphs, graph_links
             graphs.append(_graph_summary(graph, graph_links))
+    if not graphs:
+        editor_graphs = _call_blueprint_editor(bp, "list_graphs", []) or []
+        for graph in list(editor_graphs)[:MAX_GRAPHS]:
+            graphs.append(_graph_summary(graph, graph_links))
+        if graphs:
+            return graphs, graph_links
+        graph_names = _call_blueprint_editor(bp, "list_graph_names", []) or []
+        for name in list(graph_names)[:MAX_GRAPHS]:
+            graphs.append(
+                {
+                    "name": _safe_text(name),
+                    "node_count": 0,
+                    "nodes": [],
+                    "node_access": "graph nodes unavailable through UE Python; exported graph name only",
+                }
+            )
     return graphs, graph_links
 
 
@@ -182,8 +277,28 @@ def _collect_names(bp, prop: str) -> list[str]:
     return [name for name in names if name]
 
 
+def _collect_blueprint_variables(bp) -> list[str]:
+    names = [_member_name(value) for value in list(_call_blueprint_editor(bp, "list_member_variable_names", []) or [])[:160]]
+    names = [name for name in names if name]
+    if names:
+        return names
+    return _collect_names(bp, "new_variables")
+
+
+def _collect_blueprint_function_names(bp, graphs: list[dict]) -> list[str]:
+    graph_names = [str(graph.get("name") or "") for graph in graphs if isinstance(graph, dict)]
+    excluded = {"EventGraph", "UserConstructionScript", "ConstructionScript"}
+    names = [name for name in graph_names if name and name not in excluded]
+    if names:
+        return names[:80]
+    return _collect_names(bp, "function_graphs")
+
+
 def export_blueprint_metadata(content_path: str, out_path: str) -> None:
     import unreal
+
+    if _try_cpp_blueprint_export(content_path, out_path):
+        return
 
     asset_registry = unreal.AssetRegistryHelpers.get_asset_registry()
     assets = asset_registry.get_assets_by_path(content_path, recursive=True)
@@ -203,35 +318,39 @@ def export_blueprint_metadata(content_path: str, out_path: str) -> None:
             if bp:
                 gen_class = None
                 parent = None
-                if hasattr(bp, "generated_class"):
-                    gen_class = bp.generated_class
-                elif hasattr(bp, "get_editor_property"):
-                    gen_class = bp.get_editor_property("generated_class")
+                if hasattr(bp, "get_editor_property"):
+                    gen_class = _safe_prop(bp, "generated_class", None)
+                if gen_class is None and hasattr(bp, "generated_class"):
+                    gen_class = _safe_call(getattr(bp, "generated_class"), None)
                 if gen_class:
                     row["generated_class"] = _safe_name(gen_class)
                     if hasattr(gen_class, "get_super_class"):
                         parent = gen_class.get_super_class()
+                if not parent:
+                    parent = _call_blueprint_editor(bp, "get_blueprint_parent_class", None)
+                if not parent:
+                    parent = _safe_prop(bp, "parent_class", None)
                 if not parent and hasattr(bp, "parent_class"):
-                    parent = bp.parent_class
-                if not parent and hasattr(bp, "get_editor_property"):
-                    try:
-                        parent = bp.get_editor_property("parent_class")
-                    except Exception:
-                        parent = None
+                    parent = _safe_call(getattr(bp, "parent_class"), None)
                 if parent:
                     row["parent_class"] = _safe_name(parent)
-                variables = _collect_names(bp, "new_variables")
+                graphs, graph_links = _collect_graphs(bp)
+                variables = _collect_blueprint_variables(bp)
                 if variables:
                     row["variables"] = variables
-                functions = _collect_names(bp, "function_graphs")
+                functions = _collect_blueprint_function_names(bp, graphs)
                 if functions:
                     row["functions"] = functions
                 interfaces = _collect_names(bp, "implemented_interfaces")
                 if interfaces:
                     row["interfaces"] = interfaces
-                graphs, graph_links = _collect_graphs(bp)
                 if graphs:
                     row["graphs"] = graphs
+                    if any((graph.get("node_access") if isinstance(graph, dict) else "") for graph in graphs):
+                        row["graph_access"] = (
+                            "Blueprint graph names exported via BlueprintEditorLibrary; "
+                            "node/pin links require a C++ editor extension because EdGraph.Nodes is protected in UE Python."
+                        )
                 if graph_links:
                     row["graph_links"] = graph_links
                 dependencies = asset_registry.get_dependencies(asset.package_name)

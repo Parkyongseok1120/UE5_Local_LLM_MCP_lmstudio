@@ -1,6 +1,6 @@
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-blueprint-metadata", "collect-material-metadata", "collect-animation-metadata", "collect-skeletal-mesh-metadata", "collect-anim-blueprint-metadata", "collect-anim-montage-metadata", "collect-sequencer-metadata", "collect-editor-metadata", "collect-failure-memory", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "sync-editor-metadata", "export-editor-metadata", "index-full", "ingest-editor-exports", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "eval-pass-at-k", "eval-harness", "eval-regression", "summarize-real-project-eval", "preflight-lmstudio", "report-tier-kpi", "sonnet-tier-gate", "verify-release", "build-project-graph", "agent-plan", "reject-failure-memory", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
+    [ValidateSet("collect-docs", "collect-source", "collect-projects", "collect-guidelines", "collect-game-design", "collect-symbols", "collect-module-graph", "collect-project-profile", "collect-project-architecture", "collect-blueprint-metadata", "collect-material-metadata", "collect-animation-metadata", "collect-skeletal-mesh-metadata", "collect-anim-blueprint-metadata", "collect-anim-montage-metadata", "collect-sequencer-metadata", "collect-editor-metadata", "collect-failure-memory", "collect-build-logs", "build", "build-incremental", "build-embeddings", "build-embeddings-full", "sync-active-project", "sync-editor-metadata", "export-editor-metadata", "install-editor-graph-plugin", "watch-active-project", "index-full", "ingest-editor-exports", "warm-cache", "phase3-finish", "pick-project", "promote-index", "query", "ask", "eval-game-design", "eval-unreal-programming", "eval-prototype", "eval-refactor", "eval-refactor-rag", "eval-unreal-review", "eval-debug", "eval-genre", "eval-e2e-compile", "eval-reasoning", "eval-agent-harness", "eval-project-review", "eval-soulslike-live", "eval-pass-at-k", "eval-harness", "eval-regression", "summarize-real-project-eval", "preflight-lmstudio", "report-tier-kpi", "sonnet-tier-gate", "verify-release", "build-project-graph", "agent-plan", "reject-failure-memory", "knowledge-audit", "test-build-logs", "test-unreal-readiness", "ubt-feedback", "wrapper", "review-project", "lmstudio-models", "doctor", "bench-mcp", "bench-token-budget", "scaffold-prototype", "agent-session", "update-engine", "update-project", "update-guidelines", "validate-index")]
     [string]$Command,
 
     [string]$IndexNamespace = "",
@@ -53,6 +53,7 @@ param(
     [switch]$AllowEmptyFiles,
     [switch]$AllowDirectProjectWrite,
     [switch]$DryRun,
+    [switch]$Force,
     [switch]$Live,
     [switch]$PrintPrompts,
     [switch]$Explorer,
@@ -477,6 +478,30 @@ switch ($Command) {
         & $py @refreshArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
+    "install-editor-graph-plugin" {
+        $pluginArgs = @(
+            "scripts\install_editor_graph_plugin.py",
+            "--workspace", $PSScriptRoot
+        )
+        if ($ProjectFile) {
+            $pluginArgs += @("--project", $ProjectFile)
+        }
+        if (-not $Force) { $pluginArgs += "--update" }
+        if ($Force) { $pluginArgs += "--force" }
+        if (-not $SkipBuild) { $pluginArgs += "--build" }
+        if ($DryRun) { $pluginArgs += "--dry-run" }
+        & $py @pluginArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    "watch-active-project" {
+        $watchArgs = @("scripts\watch_active_project.py")
+        if ($ProjectFile) {
+            $watchArgs += @("--project", $ProjectFile)
+        }
+        if ($DryRun) { $watchArgs += "--dry-run" }
+        & $py @watchArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
     "index-full" {
         $pipelineArgs = @(
             "-File", (Join-Path $PSScriptRoot "scripts\run_index_pipeline.ps1"),
@@ -524,7 +549,13 @@ switch ($Command) {
         if (-not $Question) {
             throw "Pass a value with -Question."
         }
-        $queryArgs = @("scripts\query_rag.py", "--index", "data\unreal58\rag.sqlite", "--mode", $Mode, "--top-k", $TopK)
+        $queryArgs = @("scripts\query_rag.py", "--index", "data\unreal58\rag.sqlite", "--mode", $Mode)
+        if ($PSBoundParameters.ContainsKey("TopK")) {
+            $queryArgs += @("--top-k", $TopK)
+        }
+        if ($PrintPrompts) {
+            $queryArgs += "--print-prompt"
+        }
         foreach ($value in $Source) { $queryArgs += @("--source", $value) }
         foreach ($value in $Project) { $queryArgs += @("--project", $value) }
         foreach ($value in $Layer) { $queryArgs += @("--layer", $value) }
@@ -539,7 +570,10 @@ switch ($Command) {
         if (-not $Question) {
             throw "Pass a value with -Question."
         }
-        $askArgs = @("scripts\query_rag.py", "--index", "data\unreal58\rag.sqlite", "--ask-lmstudio", "--mode", $Mode, "--top-k", $TopK)
+        $askArgs = @("scripts\query_rag.py", "--index", "data\unreal58\rag.sqlite", "--ask-lmstudio", "--mode", $Mode)
+        if ($PSBoundParameters.ContainsKey("TopK")) {
+            $askArgs += @("--top-k", $TopK)
+        }
         if ($Model) {
             $askArgs += @("--model", $Model)
         }

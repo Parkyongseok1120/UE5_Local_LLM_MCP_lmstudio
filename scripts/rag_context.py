@@ -432,8 +432,153 @@ def metadata_line(row: dict[str, Any]) -> str:
     )
 
 
+ASSET_METADATA_SOURCES = frozenset({
+    "unreal_blueprint_metadata",
+    "unreal_material_metadata",
+    "unreal_animation_metadata",
+    "unreal_skeletal_mesh_metadata",
+    "unreal_anim_blueprint_metadata",
+    "unreal_anim_montage_metadata",
+    "unreal_sequencer_metadata",
+})
+
+METADATA_SECTION_LIMITS = {
+    "parameters": 36,
+    "scalar_parameters": 18,
+    "vector_parameters": 18,
+    "texture_parameters": 18,
+    "static_switch_parameters": 18,
+    "root_outputs": 24,
+    "graph_edges": 80,
+    "expressions": 60,
+    "graphs": 24,
+    "nodes": 60,
+    "pins": 72,
+    "variables": 36,
+    "functions": 36,
+    "dependencies": 24,
+}
+
+
+def _metadata_section_name(line: str) -> str:
+    stripped = line.strip().lower()
+    if not stripped.endswith(":"):
+        return ""
+    name = stripped[:-1].replace(" ", "_")
+    return name if name in METADATA_SECTION_LIMITS else ""
+
+
+def _compact_metadata_line(line: str, max_line_chars: int = 360) -> str:
+    if len(line) <= max_line_chars:
+        return line
+    return line[: max_line_chars - 18].rstrip() + " ...[line cut]"
+
+
+def _metadata_text_lines(text: str) -> list[str]:
+    lines = text.splitlines()
+    if len(lines) > 1:
+        return lines
+
+    normalized = text
+    normalized = re.sub(
+        r"\s+(asset_type:|parent_material:|graph_source:|blend_mode:|shading_model:|"
+        r"generated_class:|parent_class:|scalar_parameters:|vector_parameters:|"
+        r"texture_parameters:|static_switch_parameters:|parameters:|root_outputs:|"
+        r"graph_edges:|expressions:|graphs:|nodes:|pins:|variables:|functions:|dependencies:)",
+        r"\n\1",
+        normalized,
+    )
+    normalized = re.sub(r"\s+-\s+", "\n- ", normalized)
+    return normalized.splitlines()
+
+
+def compact_asset_metadata_text(source: str, text: str, max_chars: int) -> str:
+    if source not in ASSET_METADATA_SOURCES or len(text) <= max_chars:
+        return text
+
+    lines = _metadata_text_lines(text)
+    kept: list[str] = []
+    seen = set()
+    active_section = ""
+    section_counts: dict[str, int] = {}
+
+    def add(line: str) -> None:
+        normalized = line.strip()
+        key = normalized[:420]
+        if not normalized or key in seen:
+            return
+        seen.add(key)
+        kept.append(_compact_metadata_line(line))
+
+    for line in lines[:16]:
+        stripped = line.strip().lower()
+        if _metadata_section_name(line):
+            break
+        if (
+            not stripped
+            or stripped.startswith(("metadata:", "tags:"))
+            or len("\n".join(kept)) >= max_chars // 3
+        ):
+            continue
+        add(line)
+
+    for line in lines:
+        section = _metadata_section_name(line)
+        if section:
+            active_section = section
+            section_counts.setdefault(section, 0)
+            add(line)
+            continue
+
+        stripped = line.strip()
+        lower = stripped.lower()
+        if active_section:
+            if not stripped:
+                active_section = ""
+                continue
+            if not stripped.startswith(("-", "*")) and ":" in stripped and not lower.startswith(("details:", "wires:")):
+                active_section = ""
+            else:
+                limit = METADATA_SECTION_LIMITS.get(active_section, 24)
+                if section_counts.get(active_section, 0) < limit:
+                    add(line)
+                    section_counts[active_section] = section_counts.get(active_section, 0) + 1
+                continue
+
+        if any(
+            marker in lower
+            for marker in (
+                "asset_type:",
+                "parent_material:",
+                "graph_source:",
+                "blend_mode:",
+                "shading_model:",
+                "scalar_parameters:",
+                "vector_parameters:",
+                "texture_parameters:",
+                "static_switch_parameters:",
+                "generated_class:",
+                "parent_class:",
+                "parameter_name=",
+                "function_reference",
+                "variable_reference",
+            )
+        ):
+            add(line)
+
+    compacted = "\n".join(kept).strip()
+    if not compacted:
+        compacted = text[:max_chars].rstrip()
+    note = "\n...[asset metadata compacted for token budget]"
+    max_body_chars = max(0, max_chars - len(note))
+    if len(compacted) > max_body_chars:
+        compacted = compacted[:max_body_chars].rstrip()
+    return compacted + note
+
+
 def format_row(row: dict[str, Any], index: int, max_chars: int, *, compact: bool = True) -> str:
     text = str(row.get("text") or "")
+    text = compact_asset_metadata_text(str(row.get("source") or ""), text, max_chars)
     if len(text) > max_chars:
         text = text[:max_chars].rstrip() + "\n...[truncated]"
     if compact:
@@ -475,9 +620,10 @@ def assembly_instructions(mode: str) -> str:
         )
     if mode == "codegen":
         return (
-            "Use the context in this order: target symbol, include, module dependency, "
-            "project profile/example, then recipe/playbook. Output files changed, code, "
-            "Build.cs notes, and validation steps."
+            "Generate the smallest compile-ready Unreal slice. Use target symbol, include, "
+            "module dependency, project examples, then recipe/playbook. Check reflection "
+            "macros, direct base-class include, generated.h last include, constructor/API "
+            "signatures, and Build.cs modules before proposing files."
         )
     if mode == "shader":
         return (
@@ -510,24 +656,35 @@ def assembly_instructions(mode: str) -> str:
         )
     if mode == "compile_fix":
         return (
-            "Classify the error first. Prefer exact build-log evidence, then symbol and "
-            "module evidence. Suggest the smallest fix and the next file/log to inspect."
+            "Classify the first actionable build error as UHT/reflection, include/module, "
+            "linker, API signature, generated.h order, or syntax. Use exact build-log "
+            "evidence first, then the failing file, Build.cs, include owner, and symbol "
+            "evidence. Patch one root cause at a time."
         )
     if mode == "reflection_fix":
         return (
-            "Prioritize UHT/generated.h evidence, reflected macros, include order, and "
-            "Build.cs modules. Remember that UHT may need full definitions where C++ "
-            "forward declarations compile."
+            "Prioritize UHT/generated.h evidence, reflected macros, include order, direct "
+            "base-class headers, and Build.cs modules. generated.h must be last in reflected "
+            "headers. UHT may need full definitions where C++ forward declarations compile."
         )
     if mode == "module_fix":
         return (
-            "Resolve include owner module first. Public header exposure usually needs "
-            "PublicDependencyModuleNames; private .cpp use usually needs PrivateDependencyModuleNames."
+            "Resolve the include owner module first, then read the project's actual Build.cs. "
+            "Public header exposure usually needs PublicDependencyModuleNames; private .cpp "
+            "use usually needs PrivateDependencyModuleNames. Do not add modules without "
+            "include-owner or build-log evidence."
         )
     if mode == "runtime_debug":
         return (
             "Cite the log/callstack first, then connect it to lifecycle, ownership, GC, "
             "replication, or threading evidence."
+        )
+    if mode == "review":
+        return (
+            "Review only from local project evidence first. Lead with concrete findings, "
+            "then architecture/ownership risks, shader/rendering risks when present, "
+            "asset metadata gaps, and prioritized improvements. Keep each claim tied to "
+            "a file, exported asset row, build/log record, or project architecture summary."
         )
     if mode == "api_lookup":
         return "Prefer exact symbol, signature, include path, and owning module over memory."

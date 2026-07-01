@@ -32,7 +32,17 @@ See [Asset_Automation_Roadmap.md](Asset_Automation_Roadmap.md) for the staged pa
 
 ## Blueprint graph coverage
 
-Blueprint export records best-effort graph, node, and pin summaries:
+Blueprint export records best-effort graph, node, and pin summaries. On UE 5.8, full node/pin coverage requires the `LmStudioGraphExporter` C++ editor plugin because Python cannot read protected `EdGraph.Nodes` directly.
+
+Install it once per project:
+
+```powershell
+.\rag.ps1 install-editor-graph-plugin
+```
+
+The command copies the plugin into the active project's `Plugins` folder, enables it in the `.uproject`, and runs UnrealBuildTool when the module needs compiling. The interactive installer asks for Y/N confirmation; choosing `N` leaves the project untouched and uses the Python fallback.
+
+With the plugin installed, Blueprint export records:
 
 - parent/generated class
 - variables, functions, implemented interfaces
@@ -43,6 +53,8 @@ Blueprint export records best-effort graph, node, and pin summaries:
 - pin default values/default objects when the Editor API exposes them
 - function, variable, event, and delegate references when the node exposes them
 - asset dependencies
+
+Without the plugin, the Python fallback still records graph names, parent class, variables, functions, and dependencies where Unreal exposes them, but node/pin links may be absent.
 
 ## Material graph coverage
 

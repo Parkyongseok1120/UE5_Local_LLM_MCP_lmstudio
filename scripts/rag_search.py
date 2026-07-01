@@ -597,6 +597,28 @@ PLANNING_HINTS = {
     "loop",
 }
 DESIGN_HINTS = {"설계", "구조", "책임", "검토", "리뷰", "위험", "review", "architecture", "risk"}
+REVIEW_HINTS = {
+    "review",
+    "audit",
+    "findings",
+    "code review",
+    "project review",
+    "architecture review",
+    "리뷰",
+    "코드리뷰",
+    "코드 리뷰",
+    "프로젝트 리뷰",
+    "구조 리뷰",
+    "전체 프로젝트",
+    "전체 구조",
+    "개선사항",
+    "개선할",
+    "부족한",
+    "문제점",
+    "위험",
+}
+DESIGN_HINTS.update({"설계", "구조", "책임", "검토", "위험"})
+
 IMPLEMENTATION_HINTS = {
     "구현",
     "코드",
@@ -617,6 +639,13 @@ CODEGEN_HINTS = {
     "new",
     "create",
     "codegen",
+    "code generation",
+    "generate code",
+    "코드 생성",
+    "코드생성",
+    "클래스 생성",
+    "컴포넌트 생성",
+    "서브시스템 생성",
     "component",
     "delegate",
     "multicast",
@@ -647,11 +676,55 @@ AGENT_EDIT_HINTS = {
     "현재",
     "파일",
 }
-COMPILE_FIX_HINTS = {"error", "에러", "오류", "compile", "compiler", "빌드", "build", "failed", "C1083", "LNK2019"}
+COMPILE_FIX_HINTS = {
+    "error",
+    "에러",
+    "오류",
+    "compile",
+    "compiler",
+    "빌드",
+    "빌드오류",
+    "빌드 오류",
+    "컴파일",
+    "컴파일오류",
+    "컴파일 오류",
+    "build",
+    "failed",
+    "failure",
+    "ubt",
+    "unrealbuildtool",
+    "C1083",
+    "LNK2019",
+}
 RUNTIME_DEBUG_HINTS = {"crash", "assert", "ensure", "debug", "디버깅", "크래시", "런타임", "log"}
 API_LOOKUP_HINTS = {"api", "signature", "시그니처", "사용법", "lookup"}
-MODULE_FIX_HINTS = {"Build.cs", "module", "dependency", "include", "C1083", "모듈", "의존성"}
-REFLECTION_FIX_HINTS = {"generated.h", "UHT", "UnrealHeaderTool", "UCLASS", "USTRUCT", "UFUNCTION", "UPROPERTY", "reflection"}
+MODULE_FIX_HINTS = {
+    "Build.cs",
+    "module",
+    "dependency",
+    "include",
+    "C1083",
+    "모듈",
+    "의존성",
+    "인클루드",
+    "헤더를 열 수",
+    "cannot open include",
+    "missing module",
+}
+REFLECTION_FIX_HINTS = {
+    "generated.h",
+    "UHT",
+    "UnrealHeaderTool",
+    "UCLASS",
+    "USTRUCT",
+    "UFUNCTION",
+    "UPROPERTY",
+    "reflection",
+    "리플렉션",
+    "generated",
+    "헤더툴",
+    "언리얼헤더툴",
+}
 ASSET_METADATA_HINTS = {
     "blueprint",
     "bp_",
@@ -684,6 +757,10 @@ ASSET_METADATA_HINTS = {
 
 SHADER_HINTS = {
     "shader",
+    "셰이더",
+    "쉐이더",
+    "렌더",
+    "렌더링",
     "usf",
     "ush",
     "hlsl",
@@ -713,19 +790,34 @@ MATERIAL_PORTING_HINTS = {
     "material function",
     "material parameter collection",
     "mpc",
+    "머티리얼 변환",
+    "머티리얼 포팅",
+    "포스트프로세스 머티리얼",
 }
 MATERIAL_ANALYSIS_HINTS = {
     "material",
+    "머티리얼",
+    "메테리얼",
+    "매테리얼",
     "materialinstance",
     "material expression",
     "material node",
+    "머티리얼 노드",
+    "노드 분석",
     "parameter",
+    "파라미터",
     "texture parameter",
+    "텍스처",
     "scalar parameter",
+    "스칼라",
     "vector parameter",
+    "벡터",
     "static switch",
+    "스태틱 스위치",
     "shading model",
+    "셰이딩 모델",
     "blend mode",
+    "블렌드 모드",
 }
 BLUEPRINT_VERIFICATION_HINTS = {
     "verify blueprint",
@@ -758,6 +850,24 @@ BLUEPRINT_ANALYSIS_HINTS = {
     "pin",
     "node graph",
 }
+BLUEPRINT_VERIFICATION_HINTS.update({
+    "블루프린트 검증",
+    "블루프린트 확인",
+    "핀 연결",
+    "노드 연결",
+    "그래프 연결",
+})
+BLUEPRINT_ANALYSIS_HINTS.update({
+    "블루프린트",
+    "블루프린트 그래프",
+    "블루프린트 구조",
+    "블루프린트 변수",
+    "블루프린트 함수",
+    "이벤트 그래프",
+    "컨스트럭션 스크립트",
+    "핀",
+    "노드",
+})
 
 
 @dataclass
@@ -813,6 +923,10 @@ def has_hint(terms: set[str], raw: str, hints: set[str]) -> bool:
     return any(hint.lower() in terms or hint.lower() in raw for hint in hints)
 
 
+def has_any_raw(raw: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in raw for marker in markers)
+
+
 def resolve_mode(query: str, mode: str) -> str:
     if mode not in VALID_MODES:
         mode = "auto"
@@ -821,6 +935,24 @@ def resolve_mode(query: str, mode: str) -> str:
 
     terms = {term.lower() for term in tokenize(query)}
     raw = query.lower()
+    material_raw = has_any_raw(raw, ("\uba38\ud2f0\ub9ac\uc5bc", "\uba54\ud14c\ub9ac\uc5bc", "\ub9e4\ud14c\ub9ac\uc5bc"))
+    blueprint_raw = "\ube14\ub8e8\ud504\ub9b0\ud2b8" in raw or bool(re.search(r"\bbp[_-]", raw))
+    shader_raw = has_any_raw(raw, ("shader", "\uc170\uc774\ub354", "\uc250\uc774\ub354", "\ub80c\ub354", "\ub80c\ub354\ub9c1"))
+    porting_raw = has_any_raw(
+        raw,
+        ("porting", "convert", "conversion", "\ubcc0\ud658", "\ud3ec\ud305", "post process", "post-process", "\ud3ec\uc2a4\ud2b8\ud504\ub85c\uc138\uc2a4"),
+    )
+    if material_raw and porting_raw:
+        return "material_porting"
+    if shader_raw:
+        return "shader"
+    if blueprint_raw:
+        if has_any_raw(raw, ("\uc5f0\uacb0", "\ud655\uc778", "\uac80\uc99d", "pin link", "node link", "graph link")):
+            return "blueprint_verification"
+        return "blueprint_analysis"
+    if material_raw:
+        return "material_analysis"
+
     if has_hint(terms, raw, REFACTOR_R0_HINTS):
         return "refactor_r0"
     if has_hint(terms, raw, SUBSYSTEM_PROTOTYPE_HINTS):
@@ -839,6 +971,27 @@ def resolve_mode(query: str, mode: str) -> str:
         return "runtime_debug"
     if has_hint(terms, raw, COMPILE_FIX_HINTS):
         return "compile_fix"
+    if has_hint(terms, raw, SHADER_HINTS):
+        return "shader"
+    material_requested = has_hint(terms, raw, MATERIAL_ANALYSIS_HINTS) or has_any_raw(
+        raw, ("머티리얼", "메테리얼", "매테리얼")
+    )
+    material_porting_requested = has_hint(terms, raw, MATERIAL_PORTING_HINTS) and has_any_raw(
+        raw, ("porting", "convert", "conversion", "변환", "포팅", "post process", "post-process", "포스트프로세스")
+    )
+    if material_porting_requested:
+        return "material_porting"
+    blueprint_requested = has_hint(terms, raw, BLUEPRINT_ANALYSIS_HINTS) or "블루프린트" in raw
+    blueprint_verify_requested = blueprint_requested and (
+        has_hint(terms, raw, BLUEPRINT_VERIFICATION_HINTS) or
+        blueprint_requested and has_any_raw(raw, ("연결", "확인", "검증", "pin link", "node link", "graph link"))
+    )
+    if blueprint_verify_requested:
+        return "blueprint_verification"
+    if blueprint_requested:
+        return "blueprint_analysis"
+    if material_requested:
+        return "material_analysis"
     if has_hint(terms, raw, MATERIAL_PORTING_HINTS) or any(
         marker in raw
         for marker in ("post process to material", "convert to material", "material graph conversion")
@@ -855,6 +1008,8 @@ def resolve_mode(query: str, mode: str) -> str:
         return "material_analysis"
     if has_hint(terms, raw, BLUEPRINT_ANALYSIS_HINTS):
         return "blueprint_analysis"
+    if has_hint(terms, raw, REVIEW_HINTS):
+        return "review"
     if has_hint(terms, raw, API_LOOKUP_HINTS):
         return "api_lookup"
     if has_hint(terms, raw, AGENT_EDIT_HINTS):
@@ -910,6 +1065,31 @@ def row_matches_required(row: dict[str, Any], required_terms: list[str]) -> bool
     return all(term.lower() in haystack for term in required_terms)
 
 
+ASSET_EXACT_SOURCES = (
+    "unreal_blueprint_metadata",
+    "unreal_material_metadata",
+    "unreal_animation_metadata",
+    "unreal_skeletal_mesh_metadata",
+    "unreal_anim_blueprint_metadata",
+    "unreal_anim_montage_metadata",
+    "unreal_sequencer_metadata",
+    "unreal_asset_registry",
+    "unreal_project_asset_path",
+    "unreal_level_metadata",
+)
+
+
+def asset_identity_terms(query: str) -> list[str]:
+    terms: list[str] = []
+    for term in tokenize(query):
+        lower = term.lower()
+        if "_" in term or lower.startswith(("m_", "mi_", "bp_", "abp_", "wbp_", "sk_", "t_")):
+            terms.append(term)
+    for match in re.findall(r"/Game/[A-Za-z0-9_./-]+", query):
+        terms.append(match.rsplit("/", 1)[-1] or match)
+    return list(dict.fromkeys(terms))
+
+
 def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[str, Any]:
     score = float(row.get("score") or 0.0)
     source = str(row.get("source") or "")
@@ -945,7 +1125,10 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
     matched_terms = 0
     for term in query_terms:
         term_lower = term.lower()
-        if term_lower in identity_terms:
+        if term_lower in identity_lower and (source.endswith("_metadata") or "_" in term_lower or "/" in identity_lower):
+            score -= 8.0
+            matched_terms += 1
+        elif term_lower in identity_terms:
             score -= 0.55
             matched_terms += 1
         elif term_lower in text:
@@ -971,6 +1154,13 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
         score -= 0.5
     if "generated" in query_lower and "generated.h" in text:
         score -= 4.0
+    if mode in {"material_analysis", "material_porting"}:
+        if "materialinstancedynamic_" in identity_lower and "materialinstancedynamic" not in query_lower:
+            score += 10.0
+        if source == "unreal_material_metadata" and any(
+            marker in identity_lower for marker in ("m_", "mi_", "/game/")
+        ):
+            score -= 2.0
     if "uht" in query_lower or "unrealheadertool" in query_lower:
         if error_code.upper() == "UHT" or "unrealheadertool" in text:
             score -= 6.0
@@ -1199,6 +1389,33 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
         """,
         params,
     ).fetchall()
+
+    exact_rows: list[sqlite3.Row] = []
+    exact_terms = asset_identity_terms(query)
+    if exact_terms:
+        exact_select_columns = [
+            item.replace("bm25(chunks_fts) as score", "-10000.0 as score").replace("chunks.", "")
+            for item in select_columns
+        ]
+        source_placeholders = ",".join("?" for _ in ASSET_EXACT_SOURCES)
+        for term in exact_terms[:6]:
+            pattern = f"%{term.lower()}%"
+            exact_params: list[Any] = [*ASSET_EXACT_SOURCES, pattern, pattern, 20]
+            exact_rows.extend(
+                conn.execute(
+                    f"""
+                    select
+                        {", ".join(exact_select_columns)}
+                    from chunks
+                    where source in ({source_placeholders})
+                      and (lower(title) like ? or lower(locator) like ?)
+                    limit ?
+                    """,
+                    exact_params,
+                ).fetchall()
+            )
+    if exact_rows:
+        rows = list(rows) + exact_rows
 
     query_terms = expand_query_terms(tokenize(effective_query))
     ranked = [

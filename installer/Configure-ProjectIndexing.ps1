@@ -206,6 +206,8 @@ function Show-ConfiguredProjectSummary {
 
     Write-Host "Auto Editor export: $($Config.autoEditorExport)"
 
+    Write-Host "Editor graph plugin: $($Config.installEditorGraphPlugin)"
+
     if ($Config.editorExportDir) {
 
         Write-Host "Editor export dir:"
@@ -221,6 +223,38 @@ function Show-ConfiguredProjectSummary {
         Write-Host "  $($Config.editorExportContentPath)"
 
     }
+
+}
+
+
+
+function Invoke-EditorGraphPluginInstall {
+
+    param([string]$ProjectFile)
+
+
+
+    $workspaceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+
+    $installer = Join-Path $workspaceRoot "installer\Install-EditorGraphPlugin.ps1"
+
+    Write-Host ""
+
+    Write-Host "Installing Blueprint graph exporter plugin..."
+
+    Write-Host "  Project: $ProjectFile"
+
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $installer -ProjectFile $ProjectFile -WorkspaceRoot $workspaceRoot
+
+    if ($LASTEXITCODE -ne 0) {
+
+        Write-Warning "Editor graph plugin install/build failed. Setup will continue; rerun .\rag.ps1 install-editor-graph-plugin after fixing UBT/build prerequisites."
+
+        return $false
+
+    }
+
+    return $true
 
 }
 
@@ -245,6 +279,12 @@ if ($NonInteractive) {
     if ($config.activeProject) {
 
         Initialize-EditorExportSettings -Config $config -EnableAutoExport:([bool]($config.autoEditorExport -ne $false)) | Out-Null
+
+        if ([bool]$config.installEditorGraphPlugin) {
+
+            Invoke-EditorGraphPluginInstall -ProjectFile ([string]$config.activeProject) | Out-Null
+
+        }
 
     }
 
@@ -395,6 +435,41 @@ if ($config.activeProject) {
 else {
 
     $config.autoEditorExport = $false
+    $config.installEditorGraphPlugin = $false
+
+}
+
+
+
+if ($config.activeProject) {
+
+    Write-Host ""
+
+    Write-Host "Blueprint graph exporter plugin (recommended):"
+
+    Write-Host "  - Exports Blueprint nodes, pins, and graph links on UE versions where Python cannot read every graph node."
+
+    Write-Host "  - Improves Blueprint/AnimBlueprint analysis, claim validation, and local-model answers about actual asset wiring."
+
+    Write-Host "  - Copies LmStudioGraphExporter into the project's Plugins folder, enables it in the .uproject, and builds it with UBT when needed."
+
+    Write-Host "  - It does not modify the Unreal Engine install."
+
+    $installGraphPlugin = Read-YesNo -Prompt "Install Blueprint graph exporter plugin into this active project?" -DefaultYes $true
+
+    $config.installEditorGraphPlugin = [bool]$installGraphPlugin
+
+    if ($installGraphPlugin) {
+
+        Invoke-EditorGraphPluginInstall -ProjectFile ([string]$config.activeProject) | Out-Null
+
+    }
+
+    else {
+
+        Write-Host "Skipping editor graph plugin install. Blueprint export will use the limited Python fallback."
+
+    }
 
 }
 

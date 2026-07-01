@@ -33,6 +33,7 @@ def bench_mode(mode: str, kpi: dict) -> dict:
     }
     cap = limits.get(mode, 12000)
     pab_max = int(budget.get("pabSummaryMaxChars") or kpi.get("pabSummaryMaxChars") or 2000)
+    history_summary_max = int(budget.get("historySummaryMaxChars") or 0)
 
     return {
         "mode": mode,
@@ -43,6 +44,7 @@ def bench_mode(mode: str, kpi: dict) -> dict:
         "inputTokenCap": cap,
         "passInputCap": est_input_tokens <= cap,
         "readFileMaxBytes": int(budget.get("readFileMaxBytes") or 65536),
+        "historySummaryMaxChars": history_summary_max,
         "pabSummaryMaxChars": pab_max,
     }
 
@@ -63,7 +65,8 @@ def main() -> int:
         status = "PASS" if row["passInputCap"] else "FAIL"
         print(
             f"[{status}] {row['mode']}: est input {row['estimatedInputTokens']} tok "
-            f"(cap {row['inputTokenCap']}), ragAssemblyChars={row['ragAssemblyChars']}"
+            f"(cap {row['inputTokenCap']}), ragAssemblyChars={row['ragAssemblyChars']}, "
+            f"historySummaryMaxChars={row['historySummaryMaxChars']}"
         )
 
     payload = {

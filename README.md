@@ -158,6 +158,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
 
 Use `-Mode material_analysis` for material node screenshots/parameter inventory and `-Mode blueprint_analysis` for Blueprint variables, functions, nodes, and pins. Screenshot answers must separate visible facts from guesses.
 
+For reliable Blueprint node/pin/link analysis, install the editor graph exporter plugin into each Unreal project you want to inspect:
+
+```powershell
+.\rag.ps1 pick-project
+.\rag.ps1 install-editor-graph-plugin
+```
+
+During `INSTALL-SAFE-MODE-BUILD-RAG.bat` and `INSTALL-AGENT-MODE-BUILD-RAG.bat`, the setup asks:
+
+```text
+Install Blueprint graph exporter plugin into this active project? [Y/n]
+```
+
+Choose `Y` to copy `tools\ue_plugins\LmStudioGraphExporter` into `<YourProject>\Plugins\LmStudioGraphExporter`, enable it in the project's `.uproject`, and build the editor module with UnrealBuildTool when needed. Existing project copies are hash-checked against this repo's plugin source; stale copies are updated automatically by the installer. Choose `N` to skip installation; metadata export will still run, but Blueprint graph details can fall back to the limited Python exporter on UE versions where Editor Python cannot read every graph node.
+
+What improves after installing the plugin:
+
+- Blueprint and AnimBlueprint exports include real graph nodes, pins, and links.
+- Local-model answers can verify actual asset wiring instead of guessing from names only.
+- Claim validation and `blueprint_analysis` become much better at finding missing events, disconnected pins, and parameter usage.
+- The install is per project and portable: it does not modify the Unreal Engine installation, and project paths are resolved from the active `.uproject` instead of a hard-coded user folder.
+
 If you prefer double-click / one-command setup, use:
 
 ```powershell
@@ -189,6 +211,10 @@ See [docs/Safe_Agent_Mode.md](docs/Safe_Agent_Mode.md) and [docs/ARCHITECTURE.md
 .\rag.ps1 build
 .\rag.ps1 query -Question "How do I create a UActorComponent in C++?"
 ```
+
+`query` hides the full system prompt by default to keep compact-model and console output small. Use `-PrintPrompts` when you need to debug the exact assembled prompt.
+If `-Project` is omitted, `query` uses the active `.uproject` from the shared workspace config so mixed-project indexes do not bleed into compact-model answers.
+Long LM Studio wrapper retry loops compact old chat turns into a deterministic `Conversation compact summary`; this project-side history compaction is independent from Codex `.codex/config.toml`.
 
 With LM Studio Local Server running:
 

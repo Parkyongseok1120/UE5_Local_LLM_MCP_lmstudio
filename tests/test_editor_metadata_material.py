@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tools" / "ue_export"))
 
 from blueprint_claim_validate import validate_blueprint_claims  # noqa: E402
 from blueprint_graph_format import format_pin_link  # noqa: E402
@@ -18,6 +19,8 @@ from material_claim_validate import validate_material_claims  # noqa: E402
 from material_graph_format import format_graph_edge  # noqa: E402
 from rag_search import resolve_mode  # noqa: E402
 from asset_graph_lookup import lookup_asset_graph, search_asset_graphs  # noqa: E402
+import export_blueprint_metadata as blueprint_export  # noqa: E402
+from export_material_metadata import _collect_material_graph, _graph_source_material  # noqa: E402
 
 
 def test_parse_export_spec_keeps_windows_drive_colon():
@@ -52,6 +55,34 @@ def test_material_row_to_chunk_includes_graph_wires():
     assert "graph_edges:" in chunk["text"]
     assert "Tex_1 -> Multiply_1.A" in chunk["text"]
     assert "EmissiveColor <= Multiply_1" in chunk["text"]
+
+
+def test_blueprint_export_uses_editor_library_fallback(monkeypatch):
+    class FakeGraph:
+        def get_name(self):
+            return "EventGraph"
+
+        def get_editor_property(self, _name):
+            raise RuntimeError("EdGraph.Nodes is protected")
+
+    class FakeBlueprintLibrary:
+        @staticmethod
+        def list_graphs(_bp):
+            return [FakeGraph()]
+
+        @staticmethod
+        def list_member_variable_names(_bp):
+            return ["/Script/Demo.Player.Health"]
+
+    monkeypatch.setattr(blueprint_export, "_blueprint_editor_library", lambda: FakeBlueprintLibrary)
+
+    graphs, graph_links = blueprint_export._collect_graphs(object())
+    variables = blueprint_export._collect_blueprint_variables(object())
+
+    assert graph_links == []
+    assert graphs[0]["name"] == "EventGraph"
+    assert "protected EdGraph.Nodes" in graphs[0]["node_access"]
+    assert variables == ["Health"]
 
 
 def test_material_claim_validate_supports_wire_evidence():
@@ -314,3 +345,68 @@ def test_asset_graph_search_finds_materials(tmp_path):
 
     assert payload["ok"] is True
     assert payload["results"][0]["name"] == "MI_Armor"
+
+
+class FakeInput:
+    def __init__(self, expression):
+        self.expression = expression
+
+
+class MaterialExpressionScalarParameter:
+    def __init__(self, name):
+        self._name = name
+
+    def get_name(self):
+        return self._name
+
+
+class MaterialExpressionMultiply:
+    def __init__(self, name, a):
+        self._name = name
+        self.A = FakeInput(a)
+
+    def get_name(self):
+        return self._name
+
+
+class FakeEditorObject:
+    def __init__(self, **properties):
+        self._properties = properties
+
+    def get_editor_property(self, name):
+        if name not in self._properties:
+            raise AttributeError(name)
+        return self._properties[name]
+
+
+def test_material_export_reads_ue5_editor_only_expression_collection():
+    scalar = MaterialExpressionScalarParameter("GlowIntensity")
+    multiply = MaterialExpressionMultiply("GlowMultiply", scalar)
+    expression_collection = FakeEditorObject(expressions=[scalar, multiply])
+    editor_only_data = FakeEditorObject(
+        expression_collection=expression_collection,
+        emissive_color=FakeInput(multiply),
+    )
+    material = FakeEditorObject(editor_only_data=editor_only_data)
+
+    expressions, graph_edges, root_outputs = _collect_material_graph(material)
+
+    assert [item["name"] for item in expressions] == ["GlowIntensity", "GlowMultiply"]
+    assert {"from": "GlowIntensity", "to": "GlowMultiply", "to_input": "A"} in graph_edges
+    assert {"from": "GlowMultiply", "to": "MaterialOutput", "to_input": "EmissiveColor"} in graph_edges
+    assert root_outputs == [{"output": "EmissiveColor", "expression": "GlowMultiply"}]
+
+
+def test_material_instance_graph_source_uses_parent_editor_only_graph():
+    parent_expression = MaterialExpressionScalarParameter("ParentGlow")
+    parent = FakeEditorObject(
+        editor_only_data=FakeEditorObject(
+            expression_collection=FakeEditorObject(expressions=[parent_expression])
+        )
+    )
+    material_instance = FakeEditorObject(parent=parent)
+
+    graph_material, graph_source = _graph_source_material(material_instance, "MaterialInstanceConstant")
+
+    assert graph_material is parent
+    assert graph_source == str(parent)

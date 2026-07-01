@@ -12,13 +12,16 @@
   },
   "profiles": {
     "compile_fix": {
-      "layer_order": ["build_log", "exact_symbol", "module_graph", "fts_bm25", "code_semantic", "playbook"]
+      "layer_order": ["build_log", "code_semantic", "exact_symbol", "module_graph", "fts_bm25", "playbook"]
     },
     "api_lookup": {
       "layer_order": ["exact_symbol", "module_graph", "fts_bm25", "code_semantic"]
     },
     "agent_edit": {
       "layer_order": ["code_semantic", "asset_metadata", "exact_symbol", "module_graph", "playbook", "design_semantic"]
+    },
+    "codegen": {
+      "layer_order": ["exact_symbol", "module_graph", "code_semantic", "build_log", "playbook"]
     },
     "shader": {
       "layer_order": ["playbook", "code_semantic", "exact_symbol", "module_graph", "build_log"]
@@ -35,11 +38,14 @@
     "blueprint_verification": {
       "layer_order": ["asset_metadata", "playbook", "build_log", "code_semantic", "exact_symbol"]
     },
+    "review": {
+      "layer_order": ["code_semantic", "asset_metadata", "design_semantic", "exact_symbol", "module_graph", "build_log", "playbook"]
+    },
     "module_fix": {
-      "layer_order": ["module_graph", "exact_symbol", "build_log", "playbook"]
+      "layer_order": ["build_log", "module_graph", "code_semantic", "exact_symbol", "playbook"]
     },
     "reflection_fix": {
-      "layer_order": ["playbook", "exact_symbol", "build_log", "code_semantic"]
+      "layer_order": ["build_log", "code_semantic", "playbook", "exact_symbol", "module_graph"]
     },
     "planning": {
       "layer_order": ["design_semantic", "asset_metadata", "code_semantic", "playbook"]

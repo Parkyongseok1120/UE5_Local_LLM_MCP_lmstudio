@@ -24,6 +24,12 @@ from workspace_paths import (
 )
 
 PRIORITY_KINDS = ("material", "blueprint", "animation")
+EXPORT_KIND_TO_RAW_KIND = {
+    "skeletal_mesh": "animation",
+    "anim_blueprint": "animation",
+    "anim_montage": "animation",
+    "sequencer": "animation",
+}
 
 
 def _resolve_export_dir(explicit: str | None) -> Path:
@@ -82,6 +88,32 @@ def _raw_newest_mtime(index_dir: Path, kinds: tuple[str, ...] = PRIORITY_KINDS) 
     return newest
 
 
+def _raw_mtime_for_export_kind(index_dir: Path, kind: str) -> float | None:
+    raw_kind = EXPORT_KIND_TO_RAW_KIND.get(kind, kind)
+    filename = METADATA_FILES.get(raw_kind)
+    if not filename:
+        return None
+    path = index_dir / filename
+    if not path.is_file():
+        return None
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _exports_newer_than_raw(index_dir: Path, export_summary: dict[str, Any]) -> bool:
+    for row in export_summary.get("files") or []:
+        kind = str(row.get("kind") or "")
+        export_mtime = row.get("mtime")
+        if not export_mtime:
+            continue
+        raw_mtime = _raw_mtime_for_export_kind(index_dir, kind)
+        if raw_mtime is None or float(export_mtime) > raw_mtime:
+            return True
+    return False
+
+
 def _needs_export_or_sync(
     status: dict[str, Any],
     export_summary: dict[str, Any],
@@ -95,10 +127,7 @@ def _needs_export_or_sync(
         return True
     if not export_summary.get("files"):
         return True
-    export_mtime = export_summary.get("newestMtime")
     if raw_mtime is None:
-        return True
-    if export_mtime and export_mtime < (status.get("latestProjectUAssetMtime") or 0):
         return True
     return False
 
@@ -150,7 +179,7 @@ def sync_editor_metadata(
         if raw_mtime is None:
             should_ingest = True
             ingest_reason = "no_raw_metadata"
-        elif export_mtime and export_mtime > raw_mtime:
+        elif _exports_newer_than_raw(idx, export_summary):
             should_ingest = True
             ingest_reason = "export_dir_newer_than_index"
         elif status.get("needsEditorExport"):

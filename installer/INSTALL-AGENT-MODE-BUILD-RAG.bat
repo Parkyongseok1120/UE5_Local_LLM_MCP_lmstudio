@@ -10,6 +10,7 @@ echo Unreal58-RAG Portable MCP Installer (Agent Mode + RAG Index)
 echo.
 echo Agent mode: file writes, commands, and Unreal builds are ENABLED.
 echo This will install MCP settings, configure project paths, run the full indexing pipeline, and run doctor.
+echo Project setup may ask whether to install the Blueprint graph exporter plugin.
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALLER_DIR%Install-UnrealMcp.ps1" -EnableAgentMode
@@ -32,6 +33,7 @@ echo Done. Agent mode is ON and the RAG index was rebuilt.
 echo Restart LM Studio and reconnect MCP servers.
 echo.
 echo Editor metadata: exported automatically during indexing when autoEditorExport is enabled.
+echo Blueprint graph plugin: installed only if you answered Y during project setup.
 echo If export failed, run: .\rag.ps1 export-editor-metadata
 pause
 exit /b 0

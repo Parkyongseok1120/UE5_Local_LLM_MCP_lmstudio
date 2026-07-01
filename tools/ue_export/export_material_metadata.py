@@ -67,6 +67,44 @@ MATERIAL_OUTPUT_PROPERTIES = (
     ("refraction", "Refraction"),
 )
 
+MATERIAL_PROPERTY_OUTPUTS = (
+    ("MP_BASE_COLOR", "BaseColor"),
+    ("MP_EMISSIVE_COLOR", "EmissiveColor"),
+    ("MP_OPACITY", "Opacity"),
+    ("MP_OPACITY_MASK", "OpacityMask"),
+    ("MP_NORMAL", "Normal"),
+    ("MP_METALLIC", "Metallic"),
+    ("MP_SPECULAR", "Specular"),
+    ("MP_ROUGHNESS", "Roughness"),
+    ("MP_AMBIENT_OCCLUSION", "AmbientOcclusion"),
+    ("MP_WORLD_POSITION_OFFSET", "WorldPositionOffset"),
+    ("MP_SUBSURFACE_COLOR", "SubsurfaceColor"),
+    ("MP_REFRACTION", "Refraction"),
+)
+
+EXPRESSION_DETAIL_PROPERTIES = (
+    ("parameter_name", "parameter_name"),
+    ("ParameterName", "parameter_name"),
+    ("default_value", "default_value"),
+    ("DefaultValue", "default_value"),
+    ("const_a", "const_a"),
+    ("ConstA", "const_a"),
+    ("const_b", "const_b"),
+    ("ConstB", "const_b"),
+    ("const_base", "const_base"),
+    ("ConstBase", "const_base"),
+    ("const_exponent", "const_exponent"),
+    ("ConstExponent", "const_exponent"),
+    ("r", "r"),
+    ("R", "r"),
+    ("g", "g"),
+    ("G", "g"),
+    ("b", "b"),
+    ("B", "b"),
+    ("a", "a"),
+    ("A", "a"),
+)
+
 
 def _asset_class_name(asset) -> str:
     if hasattr(asset, "asset_class_path"):
@@ -88,6 +126,17 @@ def _safe_prop(obj, prop: str, default=None):
         return getattr(obj, prop, default)
     except Exception:
         return default
+
+
+def _append_unique_object(items: list, value) -> None:
+    if value is None:
+        return
+    try:
+        if any(item is value for item in items):
+            return
+    except Exception:
+        pass
+    items.append(value)
 
 
 def _value_to_text(value) -> str:
@@ -135,23 +184,161 @@ def _resolve_expression_reference(value):
     return None
 
 
-def _collect_expression_input_wires(expression) -> dict:
+def _material_graph_sources(material) -> list:
+    sources = []
+    _append_unique_object(sources, material)
+    for prop in (
+        "editor_only_data",
+        "EditorOnlyData",
+        "material_editor_only_data",
+        "MaterialEditorOnlyData",
+    ):
+        _append_unique_object(sources, _safe_prop(material, prop, None))
+
+    for source in list(sources):
+        for prop in (
+            "expression_collection",
+            "ExpressionCollection",
+            "material_expression_collection",
+            "MaterialExpressionCollection",
+        ):
+            _append_unique_object(sources, _safe_prop(source, prop, None))
+    return sources
+
+
+def _coerce_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        return []
+    try:
+        return list(value)
+    except TypeError:
+        return []
+
+
+def _material_editing_library(unreal_module):
+    if unreal_module is None:
+        return None
+    return getattr(unreal_module, "MaterialEditingLibrary", None)
+
+
+def _collect_material_expressions(material, unreal_module=None) -> list:
+    expressions = []
+    seen = set()
+    library = _material_editing_library(unreal_module)
+    if library and hasattr(library, "get_material_expressions"):
+        try:
+            for expression in list(library.get_material_expressions(material)):
+                if not _is_material_expression(expression):
+                    continue
+                key = id(expression)
+                if key in seen:
+                    continue
+                seen.add(key)
+                expressions.append(expression)
+                if len(expressions) >= MAX_EXPRESSIONS:
+                    return expressions
+        except Exception:
+            pass
+
+    for source in _material_graph_sources(material):
+        for prop in (
+            "expressions",
+            "Expressions",
+            "material_expressions",
+            "MaterialExpressions",
+        ):
+            for expression in _coerce_list(_safe_prop(source, prop, None)):
+                if not _is_material_expression(expression):
+                    continue
+                key = id(expression)
+                if key in seen:
+                    continue
+                seen.add(key)
+                expressions.append(expression)
+                if len(expressions) >= MAX_EXPRESSIONS:
+                    return expressions
+    return expressions
+
+
+def _collect_expression_input_wires(expression, material=None, unreal_module=None) -> dict:
     wires = {}
+    library = _material_editing_library(unreal_module)
+    if material is not None and library and hasattr(library, "get_inputs_for_material_expression"):
+        try:
+            input_names = []
+            if hasattr(library, "get_material_expression_input_names"):
+                input_names = [str(item) for item in library.get_material_expression_input_names(expression)]
+            inputs = list(library.get_inputs_for_material_expression(material, expression))
+            for index, source in enumerate(inputs):
+                ref = _resolve_expression_reference(source)
+                if not ref:
+                    continue
+                input_name = input_names[index] if index < len(input_names) and input_names[index] else f"Input{index}"
+                wires[input_name] = ref
+        except Exception:
+            pass
+
     for prop in COMMON_EXPRESSION_INPUTS:
+        if prop in wires:
+            continue
         ref = _resolve_expression_reference(_safe_prop(expression, prop, None))
         if ref:
             wires[prop] = ref
     return wires
 
 
-def _collect_material_root_outputs(material) -> list[dict]:
+def _collect_expression_details(expression) -> dict:
+    details = {}
+    seen = set()
+    for prop, key in EXPRESSION_DETAIL_PROPERTIES:
+        if key in seen:
+            continue
+        value = _safe_prop(expression, prop, None)
+        if value in (None, ""):
+            continue
+        text = _value_to_text(value)
+        if text:
+            seen.add(key)
+            details[key] = text
+    return details
+
+
+def _collect_material_root_outputs(material, unreal_module=None) -> list[dict]:
     outputs = []
-    for snake, pascal in MATERIAL_OUTPUT_PROPERTIES:
-        value = _safe_prop(material, snake, None)
-        if value is None:
-            value = _safe_prop(material, pascal, None)
-        ref = _resolve_expression_reference(value)
-        if ref:
+    seen = set()
+    library = _material_editing_library(unreal_module)
+    material_property = getattr(unreal_module, "MaterialProperty", None) if unreal_module else None
+    if library and material_property and hasattr(library, "get_material_property_input_node"):
+        for enum_name, output_name in MATERIAL_PROPERTY_OUTPUTS:
+            prop = getattr(material_property, enum_name, None)
+            if prop is None:
+                continue
+            try:
+                ref = _resolve_expression_reference(library.get_material_property_input_node(material, prop))
+            except Exception:
+                ref = None
+            if not ref:
+                continue
+            key = (output_name, str(ref))
+            if key in seen:
+                continue
+            seen.add(key)
+            outputs.append({"output": output_name, "expression": ref if isinstance(ref, str) else str(ref)})
+
+    for source in _material_graph_sources(material):
+        for snake, pascal in MATERIAL_OUTPUT_PROPERTIES:
+            value = _safe_prop(source, snake, None)
+            if value is None:
+                value = _safe_prop(source, pascal, None)
+            ref = _resolve_expression_reference(value)
+            if not ref:
+                continue
+            key = (pascal, str(ref))
+            if key in seen:
+                continue
+            seen.add(key)
             outputs.append({"output": pascal, "expression": ref if isinstance(ref, str) else str(ref)})
     return outputs
 
@@ -170,35 +357,38 @@ def _append_graph_edge(graph_edges: list[dict], source, target: str, target_inpu
         graph_edges.append({"from": str(source), "to": target, "to_input": target_input})
 
 
-def _collect_material_graph(material) -> tuple[list[dict], list[dict], list[dict]]:
-    expressions = list(_safe_prop(material, "expressions", []) or [])[:MAX_EXPRESSIONS]
+def _collect_material_graph(material, unreal_module=None) -> tuple[list[dict], list[dict], list[dict]]:
+    expressions = _collect_material_expressions(material, unreal_module)[:MAX_EXPRESSIONS]
     expression_rows = []
     graph_edges = []
 
     for expression in expressions:
         name = _expression_key(expression)
-        input_wires = _collect_expression_input_wires(expression)
+        input_wires = _collect_expression_input_wires(expression, material, unreal_module)
         row = {
             "name": name,
             "class": expression.__class__.__name__,
             "desc": str(_safe_prop(expression, "desc", "") or ""),
             "input_wires": input_wires,
         }
+        details = _collect_expression_details(expression)
+        if details:
+            row["details"] = details
         if input_wires:
             row["inputs"] = list(input_wires.keys())
         expression_rows.append(row)
         for input_name, source in input_wires.items():
             _append_graph_edge(graph_edges, source, name, input_name)
 
-    root_outputs = _collect_material_root_outputs(material)
+    root_outputs = _collect_material_root_outputs(material, unreal_module)
     for item in root_outputs:
         _append_graph_edge(graph_edges, item.get("expression"), "MaterialOutput", str(item.get("output") or ""))
 
     return expression_rows, graph_edges, root_outputs
 
 
-def _graph_source_material(material, asset_class: str):
-    expressions = _safe_prop(material, "expressions", []) or []
+def _graph_source_material(material, asset_class: str, unreal_module=None):
+    expressions = _collect_material_expressions(material, unreal_module)
     if expressions:
         return material, None
     if "MaterialInstance" not in asset_class:
@@ -281,10 +471,10 @@ def export_material_metadata(content_path: str, out_path: str) -> None:
                     if shading_model:
                         row["shading_model"] = str(shading_model)
 
-                graph_material, graph_source = _graph_source_material(material, cls)
+                graph_material, graph_source = _graph_source_material(material, cls, unreal)
                 if graph_source:
                     row["graph_source"] = graph_source
-                expressions, graph_edges, root_outputs = _collect_material_graph(graph_material)
+                expressions, graph_edges, root_outputs = _collect_material_graph(graph_material, unreal)
                 if expressions:
                     row["expressions"] = expressions
                 if graph_edges:

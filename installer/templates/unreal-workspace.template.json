@@ -15,5 +15,6 @@
   "editorExportMapsPath": null,
   "editorExportScope": "all",
   "editorExportTimeoutSec": 1800,
-  "autoEditorExport": true
+  "autoEditorExport": true,
+  "installEditorGraphPlugin": false
 }

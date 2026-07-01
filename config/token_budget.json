@@ -7,7 +7,8 @@
       "maxOutputTokens": 6144,
       "feedbackTailChars": 12000,
       "historyAttempts": 2,
-      "maxHistoryMessages": 6
+      "maxHistoryMessages": 6,
+      "historySummaryMaxChars": 2200
     },
     "critique": {
       "ragAssemblyChars": 6000,
@@ -15,7 +16,8 @@
       "maxOutputTokens": 6144,
       "feedbackTailChars": 12000,
       "historyAttempts": 2,
-      "maxHistoryMessages": 6
+      "maxHistoryMessages": 6,
+      "historySummaryMaxChars": 2200
     },
     "execute": {
       "ragAssemblyChars": 10000,
@@ -23,7 +25,8 @@
       "maxOutputTokens": 4096,
       "feedbackTailChars": 12000,
       "historyAttempts": 2,
-      "maxHistoryMessages": 8
+      "maxHistoryMessages": 8,
+      "historySummaryMaxChars": 2600
     },
     "compile_fix": {
       "ragAssemblyChars": 8000,
@@ -32,6 +35,7 @@
       "feedbackTailChars": 12000,
       "historyAttempts": 2,
       "maxHistoryMessages": 8,
+      "historySummaryMaxChars": 2800,
       "compileFixEngineSourceMax": 2
     },
     "review": {
@@ -41,6 +45,7 @@
       "feedbackTailChars": 8000,
       "historyAttempts": 1,
       "maxHistoryMessages": 6,
+      "historySummaryMaxChars": 2000,
       "pabSummaryMaxChars": 2000
     },
     "codegen": {
@@ -49,7 +54,8 @@
       "maxOutputTokens": 4096,
       "feedbackTailChars": 12000,
       "historyAttempts": 2,
-      "maxHistoryMessages": 8
+      "maxHistoryMessages": 8,
+      "historySummaryMaxChars": 2600
     },
     "api_lookup": {
       "ragAssemblyChars": 6000,
@@ -57,7 +63,8 @@
       "maxOutputTokens": 2048,
       "feedbackTailChars": 4000,
       "historyAttempts": 1,
-      "maxHistoryMessages": 4
+      "maxHistoryMessages": 4,
+      "historySummaryMaxChars": 1600
     }
   },
   "session": {

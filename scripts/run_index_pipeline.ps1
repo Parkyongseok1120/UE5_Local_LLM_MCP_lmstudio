@@ -198,8 +198,24 @@ try {
         if ($null -ne $shared.autoEditorExport) {
             $autoExport = [bool]$shared.autoEditorExport
         }
+        $installGraphPlugin = $false
+        if ($null -ne $shared.installEditorGraphPlugin) {
+            $installGraphPlugin = [bool]$shared.installEditorGraphPlugin
+        }
         $exportDir = Resolve-EditorExportDir -Config $shared
         $projName = if ($projectInfo) { $projectInfo.ProjectName } else { "" }
+
+        if ($installGraphPlugin -and $projectInfo) {
+            Write-Host "[editor] ensure Blueprint graph exporter plugin"
+            & $py scripts\install_editor_graph_plugin.py `
+                --workspace $workspace `
+                --project $projectInfo.UprojectPath `
+                --update `
+                --build
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Editor graph plugin install/build failed. Automatic export will continue with the Python fallback if possible."
+            }
+        }
 
         if (-not $SkipEditorExport -and $autoExport -and $projectInfo) {
             Write-Host "[editor] automatic export + ingest (active project)"

@@ -8,8 +8,9 @@ cd /d "%REPO_ROOT%"
 
 echo Unreal58-RAG Portable MCP Installer (Safe Mode + RAG Index)
 echo.
-echo Safe mode: MCP file writes, commands, and Unreal builds are DISABLED.
+echo Safe mode: MCP file writes, commands, and MCP-triggered Unreal builds are DISABLED.
 echo This will install MCP settings, configure project paths, run the full indexing pipeline, and run doctor.
+echo Project setup may ask whether to install the Blueprint graph exporter plugin.
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALLER_DIR%Install-UnrealMcp.ps1"
@@ -32,6 +33,7 @@ echo Done. Safe mode is ON and the RAG index was rebuilt.
 echo Restart LM Studio and reconnect MCP servers.
 echo.
 echo Editor metadata: exported automatically during indexing when autoEditorExport is enabled.
+echo Blueprint graph plugin: installed only if you answered Y during project setup.
 echo If export failed, run: .\rag.ps1 export-editor-metadata
 pause
 exit /b 0

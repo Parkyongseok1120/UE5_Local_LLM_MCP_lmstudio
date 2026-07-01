@@ -29,13 +29,24 @@ EditStrategy = Literal[
 COMPILE_MARKERS = (
     "c1083", "lnk2019", "uht", "generated.h", "build.cs", "compile error",
     "undefined", "unresolved", "missing module",
+    "빌드 오류", "빌드오류", "컴파일 오류", "컴파일오류", "에러", "오류",
 )
 REFACTOR_MARKERS = ("refactor", "r0", "r1", "r2", "r3", "r4", "move class", "extract")
 RUNTIME_MARKERS = ("pie", "runtime", "gamemode", "input mapping", "crash", "assert", "log")
-REVIEW_MARKERS = ("review", "inventory", "audit", "findings", "architecture review")
+REVIEW_MARKERS = (
+    "review", "inventory", "audit", "findings", "architecture review",
+    "리뷰", "코드리뷰", "코드 리뷰", "프로젝트 리뷰", "구조 리뷰",
+    "전체 프로젝트", "전체 구조", "개선사항", "부족한", "문제점",
+)
 ASSET_ANALYSIS_MARKERS = (
     "shader", "usf", "ush", "hlsl", "material", "material node",
     "material graph", "material porting", "blueprint graph", "blueprint verification", "function call", "variable", "pin link", "screenshot",
+    "셰이더", "쉐이더", "머티리얼", "머티리얼 노드", "머티리얼 그래프",
+    "블루프린트", "블루프린트 그래프", "블루프린트 검증", "핀 연결", "노드 연결",
+)
+CODEGEN_MARKERS = (
+    "codegen", "code generation", "generate code",
+    "코드 생성", "코드생성", "클래스 생성", "컴포넌트 생성", "서브시스템 생성",
 )
 ASSET_METADATA_MODES = frozenset(
     {"shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification"}
@@ -126,6 +137,8 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         w in text for w in ("fix", "patch", "implement", "add class", "create")
     ):
         return "answer_only"
+    if any(m in text for m in CODEGEN_MARKERS):
+        return "edit"
     if any(w in text for w in ("implement", "add ", "create ", "patch", "fix ", "write ")):
         return "edit"
     return "edit"
@@ -147,6 +160,12 @@ def choose_edit_strategy(task_kind: TaskKind, request: str, *, file_count_hint: 
 
 def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -> EvidencePlan:
     plan = EvidencePlan(task_kind=task_kind, queries=[request.strip()])
+    try:
+        from rag_search import resolve_mode
+
+        resolved_mode = resolve_mode(request, mode)
+    except Exception:
+        resolved_mode = mode
     if task_kind == "answer_only":
         plan.rag_modes = ["api_lookup", "auto"]
         plan.gates = []
@@ -168,11 +187,16 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.writes_allowed = False
         plan.confidence = 0.75
     elif task_kind == "compile_fix":
-        plan.rag_modes = ["compile_fix", "module_fix", "reflection_fix"]
+        if resolved_mode == "reflection_fix":
+            plan.rag_modes = ["reflection_fix", "compile_fix", "module_fix"]
+        elif resolved_mode == "module_fix":
+            plan.rag_modes = ["module_fix", "compile_fix", "reflection_fix"]
+        else:
+            plan.rag_modes = ["compile_fix", "module_fix", "reflection_fix"]
         plan.gates = ["static_validate", "ubt_build"]
         plan.writes_allowed = True
         plan.confidence = 0.7
-        if mode == "module_fix" or "build.cs" in request.lower() or "gameplaytag" in request.lower():
+        if resolved_mode == "module_fix" or "build.cs" in request.lower() or "gameplaytag" in request.lower():
             plan.files_to_read.append("Source/**/*.Build.cs")
     elif task_kind == "refactor":
         plan.rag_modes = [mode if mode.startswith("refactor_") else "refactor_r0", "planning"]
@@ -187,10 +211,10 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.writes_allowed = False
         plan.confidence = 0.7
     else:
-        plan.rag_modes = [mode if mode != "auto" else "agent_edit"]
-        plan.gates = ["static_validate"]
+        plan.rag_modes = [resolved_mode if resolved_mode != "auto" else "agent_edit", "codegen", "compile_fix"]
+        plan.gates = ["static_validate", "ubt_build"]
         plan.writes_allowed = True
-        plan.confidence = 0.6
+        plan.confidence = 0.72 if resolved_mode in {"codegen", "prototype_component", "prototype_subsystem"} else 0.6
 
     _extract_symbols(request, plan)
     return plan
@@ -277,15 +301,24 @@ def build_retry_policy(task_kind: TaskKind, policy: dict[str, Any]) -> list[str]
 
 def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int = 0) -> AgentPlan:
     from load_sampling_preset import profile_agent_policy
+    from rag_search import resolve_mode
     from tool_policy import tool_sequence_for_task
 
     policy = profile_agent_policy()
+    resolved_mode = resolve_mode(request, mode)
     task_kind = classify_task(request, mode)
     evidence = build_evidence_plan(request, task_kind, mode)
     strategy = choose_edit_strategy(task_kind, request, file_count_hint=file_count_hint)
     if not evidence.writes_allowed:
         strategy = "no_edit"
-    tool_policy = tool_sequence_for_task(task_kind)
+    tool_policy_key = (
+        "codegen"
+        if resolved_mode in {"codegen", "prototype_component", "prototype_subsystem"}
+        else resolved_mode
+        if resolved_mode in {"module_fix", "reflection_fix"}
+        else task_kind
+    )
+    tool_policy = tool_sequence_for_task(tool_policy_key) or tool_sequence_for_task(task_kind)
     if task_kind == "inspect_only" and mode in ASSET_METADATA_MODES:
         tool_policy = list(ASSET_METADATA_TOOL_POLICY)
     notes: list[str] = []

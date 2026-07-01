@@ -28,6 +28,7 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 6. `replace_in_file` preferred with `expectedOccurrences=1`; use `write_file` only for new or small files
 7. `build_unreal_project` after C++ / Build.cs changes
 8. On UBT failure: `unreal_rag_search` `mode=compile_fix` with only the current error context, then patch and rebuild
+9. For UHT/generated.h/include/module errors, read the failing file and the actual `*.Build.cs` before editing. Patch one root cause per build loop.
 
 ## Shader / Material / Blueprint analysis
 
@@ -62,6 +63,8 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 - If `build_unreal_project` fails from project discovery, permissions, locked temp folders, or MCP infrastructure, report the blocker. Do not patch MCP/server files from LM Studio chat.
 - If `likelyErrors` is empty, do not invent missing modules or dependencies.
 - Only change `Build.cs` when a real compiler/UHT/linker error or requested task points to a missing module.
+- UHT/reflection fixes: direct base-class header in reflected headers, matching `.generated.h` last, no duplicate generated include, and no reflected type guesses without UHT evidence.
+- Codegen fixes: smallest compile-ready slice, existing project naming/module style, no broad manager architecture unless requested.
 
 ## MCP servers
 

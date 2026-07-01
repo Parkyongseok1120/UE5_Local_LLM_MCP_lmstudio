@@ -40,6 +40,32 @@ python scripts/load_sampling_preset.py --show-profile
 
 Skip broad critique turns unless the model has enough context. Compact models degrade when the prompt contains unrelated docs, old errors, or repeated already-applied changes.
 
+## Review And Asset Questions
+
+For Qwen 3.5 9B, prefer short review prompts with one intent:
+
+```powershell
+.\rag.ps1 query -Mode auto -Question "프로젝트 코드리뷰 추가 개선사항 알려줘"
+.\rag.ps1 query -Mode auto -Question "전체 프로젝트 구조 리뷰 해줘"
+.\rag.ps1 query -Mode auto -Question "셰이더 관련 리뷰 해줘"
+.\rag.ps1 query -Mode auto -Question "M_Blackhole_Core 머티리얼 노드 연결 파라미터 분석"
+.\rag.ps1 query -Mode auto -Question "BP_PlayerController 블루프린트 구조 노드 핀 연결 확인"
+```
+
+The router maps these to `review`, `shader`, `material_analysis`, or `blueprint_verification`. Asset-like names such as `M_`, `MI_`, `BP_`, `ABP_`, and `/Game/...` get an exact metadata lookup boost before general FTS ranking.
+
+`rag.ps1 query` prints compact retrieved context by default and hides the full system prompt to keep console output small. Add `-PrintPrompts` only when debugging prompt construction.
+When `-Project` is omitted, query mode filters to the active `.uproject` from shared workspace config. Pass `-Project SomeProject` to inspect a different project inside the same index.
+
+The LM Studio wrapper also compacts long retry history. When old chat turns exceed the profile history budget, it replaces dropped turns with a deterministic `Conversation compact summary` system message that keeps prior requests, validation/build failures, and touched file paths. This is project-side compaction and does not depend on Codex `.codex/config.toml`.
+
+For Material or Blueprint graph claims, make sure the editor graph exporter plugin is installed and metadata is fresh:
+
+```powershell
+.\rag.ps1 install-editor-graph-plugin
+.\rag.ps1 export-editor-metadata
+```
+
 ## Rules
 
 - Use Essential Tools mode for LM Studio chat.
@@ -51,6 +77,8 @@ Skip broad critique turns unless the model has enough context. Compact models de
 - Use FTS/default search first; use hybrid only for larger/deep-search profiles.
 - Treat a pass without UBT/Editor validation as proposed, not proven.
 - On a failed build, patch the first actionable error surface only.
+- For UHT/UBT fixes, classify the first actionable error before editing: `UHT/reflection`, `include/module`, `linker`, `API signature`, `generated.h order`, or `syntax`.
+- For code generation, keep the slice compile-ready and small: direct base-class header, `.generated.h` last, existing module style, and no new Build.cs dependency without evidence.
 
 ## Profile Reference
 

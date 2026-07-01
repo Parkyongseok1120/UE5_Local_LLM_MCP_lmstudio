@@ -1,0 +1,19 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "1.0.0",
+  "FriendlyName": "LM Studio Graph Exporter",
+  "Description": "Exports Unreal Editor Blueprint graph nodes and pin links for LM Studio RAG metadata.",
+  "Category": "Editor",
+  "CreatedBy": "LM Studio Unreal Agent",
+  "CanContainContent": false,
+  "IsBetaVersion": false,
+  "Installed": false,
+  "Modules": [
+    {
+      "Name": "LmStudioGraphExporter",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
+    }
+  ]
+}

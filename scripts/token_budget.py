@@ -14,13 +14,13 @@ from workspace_paths import find_workspace_root
 DEFAULT_BUDGET_PATH = "config/token_budget.json"
 
 MODE_DEFAULTS: dict[str, dict[str, Any]] = {
-    "plan": {"ragAssemblyChars": 6000, "readFileMaxBytes": 65536, "maxOutputTokens": 6144, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 6},
-    "critique": {"ragAssemblyChars": 6000, "readFileMaxBytes": 65536, "maxOutputTokens": 6144, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 6},
-    "execute": {"ragAssemblyChars": 10000, "readFileMaxBytes": 65536, "maxOutputTokens": 4096, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 8, "projectSummaryMaxFiles": 30, "projectSummaryMaxChars": 8000},
-    "compile_fix": {"ragAssemblyChars": 8000, "readFileMaxBytes": 65536, "maxOutputTokens": 4096, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 8, "compileFixEngineSourceMax": 2, "projectSummaryMaxFiles": 30, "projectSummaryMaxChars": 8000},
-    "review": {"ragAssemblyChars": 8000, "readFileMaxBytes": 32768, "maxOutputTokens": 4096, "feedbackTailChars": 8000, "historyAttempts": 1, "maxHistoryMessages": 6, "pabSummaryMaxChars": 2000},
-    "codegen": {"ragAssemblyChars": 10000, "readFileMaxBytes": 65536, "maxOutputTokens": 4096, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 8},
-    "api_lookup": {"ragAssemblyChars": 6000, "readFileMaxBytes": 32768, "maxOutputTokens": 2048, "feedbackTailChars": 4000, "historyAttempts": 1, "maxHistoryMessages": 4},
+    "plan": {"ragAssemblyChars": 6000, "readFileMaxBytes": 65536, "maxOutputTokens": 6144, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 6, "historySummaryMaxChars": 2200},
+    "critique": {"ragAssemblyChars": 6000, "readFileMaxBytes": 65536, "maxOutputTokens": 6144, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 6, "historySummaryMaxChars": 2200},
+    "execute": {"ragAssemblyChars": 10000, "readFileMaxBytes": 65536, "maxOutputTokens": 4096, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 8, "historySummaryMaxChars": 2600, "projectSummaryMaxFiles": 30, "projectSummaryMaxChars": 8000},
+    "compile_fix": {"ragAssemblyChars": 8000, "readFileMaxBytes": 65536, "maxOutputTokens": 4096, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 8, "historySummaryMaxChars": 2800, "compileFixEngineSourceMax": 2, "projectSummaryMaxFiles": 30, "projectSummaryMaxChars": 8000},
+    "review": {"ragAssemblyChars": 8000, "readFileMaxBytes": 32768, "maxOutputTokens": 4096, "feedbackTailChars": 8000, "historyAttempts": 1, "maxHistoryMessages": 6, "historySummaryMaxChars": 2000, "pabSummaryMaxChars": 2000},
+    "codegen": {"ragAssemblyChars": 10000, "readFileMaxBytes": 65536, "maxOutputTokens": 4096, "feedbackTailChars": 12000, "historyAttempts": 2, "maxHistoryMessages": 8, "historySummaryMaxChars": 2600},
+    "api_lookup": {"ragAssemblyChars": 6000, "readFileMaxBytes": 32768, "maxOutputTokens": 2048, "feedbackTailChars": 4000, "historyAttempts": 1, "maxHistoryMessages": 4, "historySummaryMaxChars": 1600},
 }
 
 SESSION_DEFAULTS = {

@@ -15,6 +15,8 @@ DEFAULT_SHARED_CONFIG: dict = {
     "activeProject": None,
     "projectSearchRoots": [],
     "defaultEngineRoot": "",
+    "autoEditorExport": True,
+    "installEditorGraphPlugin": False,
 }
 
 WORKSPACE_DIR_NAMES = ("UE5_Local_LLM_MCP_lmstudio", "Unreal58-RAG", "Gemma4 LORA", "UnrealEngine57Dev_RAG")

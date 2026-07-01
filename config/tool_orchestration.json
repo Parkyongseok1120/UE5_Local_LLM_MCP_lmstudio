@@ -18,6 +18,25 @@
       ],
       "writesAllowed": false
     },
+    "project_review": {
+      "sequence": [
+        "unreal_get_active_project",
+        "unreal_project_architecture",
+        "unreal_editor_metadata_status",
+        "unreal_rag_search",
+        "unreal_review_claim_validate"
+      ],
+      "writesAllowed": false
+    },
+    "shader_review": {
+      "sequence": [
+        "unreal_get_active_project",
+        "unreal_rag_search",
+        "read_file",
+        "unreal_review_claim_validate"
+      ],
+      "writesAllowed": false
+    },
     "asset_metadata_inspect": {
       "sequence": [
         "unreal_editor_metadata_status",
@@ -40,6 +59,18 @@
       ],
       "writesAllowed": true
     },
+    "codegen": {
+      "sequence": [
+        "unreal_get_active_project",
+        "unreal_agent_plan",
+        "unreal_rag_search",
+        "unreal_symbol_lookup",
+        "read_file",
+        "replace_in_file",
+        "build_unreal_project"
+      ],
+      "writesAllowed": true
+    },
     "compile_fix": {
       "sequence": [
         "parse_build_log",
@@ -47,6 +78,27 @@
         "read_file",
         "replace_in_file",
         "static_validate",
+        "build_unreal_project"
+      ],
+      "writesAllowed": true
+    },
+    "reflection_fix": {
+      "sequence": [
+        "parse_build_log",
+        "unreal_rag_search",
+        "read_file",
+        "read_file_range",
+        "replace_in_file",
+        "build_unreal_project"
+      ],
+      "writesAllowed": true
+    },
+    "module_fix": {
+      "sequence": [
+        "parse_build_log",
+        "unreal_rag_search",
+        "read_file",
+        "replace_in_file",
         "build_unreal_project"
       ],
       "writesAllowed": true

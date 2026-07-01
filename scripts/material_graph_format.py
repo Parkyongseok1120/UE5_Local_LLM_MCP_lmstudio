@@ -43,6 +43,10 @@ def append_material_graph_text_parts(row: dict[str, Any], text_parts: list[str])
             name = expression.get("name") or "?"
             cls = expression.get("class") or "?"
             line = f"- {name} ({cls})"
+            details = expression.get("details") or {}
+            if isinstance(details, dict) and details:
+                detail_bits = [f"{key}={value}" for key, value in list(details.items())[:8]]
+                line += " details: " + ", ".join(detail_bits)
             wires = expression.get("input_wires") or {}
             if isinstance(wires, dict) and wires:
                 wire_bits = [f"{key}<={value}" for key, value in list(wires.items())[:16]]

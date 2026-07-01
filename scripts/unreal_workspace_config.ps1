@@ -47,6 +47,7 @@ function Read-SharedConfig {
             editorExportScope       = "all"
             editorExportTimeoutSec  = 1800
             autoEditorExport        = $true
+            installEditorGraphPlugin = $false
         }
     }
     $parsed = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json

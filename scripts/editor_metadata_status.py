@@ -23,6 +23,19 @@ METADATA_FILES = {
     "level": "raw_level_metadata.jsonl",
 }
 
+KIND_ASSET_TYPES = {
+    "blueprint": {"Blueprint", "WidgetBlueprint", "AnimBlueprint"},
+    "material": {"Material", "MaterialInstance", "MaterialInstanceConstant"},
+    "animation": {"SkeletalMesh", "AnimBlueprint", "AnimSequence", "AnimMontage", "AnimNotify", "AnimNotifyState", "LevelSequence"},
+    "skeletal_mesh": {"SkeletalMesh"},
+    "anim_blueprint": {"AnimBlueprint"},
+    "anim_montage": {"AnimMontage"},
+    "sequencer": {"LevelSequence"},
+    "level": {"World", "Level"},
+}
+
+AGGREGATE_ANIMATION_KINDS = {"skeletal_mesh", "anim_blueprint", "anim_montage", "sequencer"}
+
 
 def _line_count(path: Path) -> int:
     try:
@@ -31,12 +44,90 @@ def _line_count(path: Path) -> int:
         return 0
 
 
-def _latest_project_asset_mtime(project_root: Path) -> float | None:
+def _load_jsonl_metadata(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.is_file():
+        return rows
+    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        meta = row.get("metadata") if isinstance(row, dict) else None
+        rows.append(meta if isinstance(meta, dict) else row)
+    return rows
+
+
+def _latest_project_asset_mtime(project_root: Path, asset_paths: set[str] | None = None) -> float | None:
     content = project_root / "Content"
     if not content.is_dir():
         return None
     latest: float | None = None
     for path in content.rglob("*.uasset"):
+        if asset_paths is not None:
+            try:
+                rel = path.relative_to(content).with_suffix("")
+            except ValueError:
+                continue
+            game_path = "/Game/" + str(rel).replace("\\", "/")
+            if game_path not in asset_paths:
+                continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        latest = mtime if latest is None else max(latest, mtime)
+    return latest
+
+
+def _asset_paths_for_kind(index_dir: Path, kind: str) -> set[str] | None:
+    wanted = KIND_ASSET_TYPES.get(kind)
+    if not wanted:
+        return None
+    paths: set[str] = set()
+    for meta in _load_jsonl_metadata(index_dir / "raw_asset_registry.jsonl"):
+        asset_type = str(meta.get("asset_type") or "")
+        asset_path = str(meta.get("asset_path") or "")
+        if asset_type in wanted and asset_path.startswith("/Game/"):
+            paths.add(asset_path)
+    return paths
+
+
+def _aggregate_animation_rows(index_dir: Path, asset_type: str) -> int:
+    count = 0
+    for meta in _load_jsonl_metadata(index_dir / "raw_animation_metadata.jsonl"):
+        if str(meta.get("asset_type") or "") == asset_type:
+            count += 1
+    return count
+
+
+def _metadata_file_info(index_dir: Path, kind: str) -> tuple[Path, bool, int]:
+    path = index_dir / METADATA_FILES[kind]
+    if path.is_file():
+        return path, True, _line_count(path)
+    aggregate_type = {
+        "skeletal_mesh": "SkeletalMesh",
+        "anim_blueprint": "AnimBlueprint",
+        "anim_montage": "AnimMontage",
+        "sequencer": "LevelSequence",
+    }.get(kind)
+    if aggregate_type:
+        aggregate = index_dir / "raw_animation_metadata.jsonl"
+        count = _aggregate_animation_rows(index_dir, aggregate_type)
+        if count:
+            return aggregate, True, count
+    return path, False, 0
+
+
+def _latest_config_mtime(project_root: Path) -> float | None:
+    config_dir = project_root / "Config"
+    if not config_dir.is_dir():
+        return None
+    latest: float | None = None
+    for path in config_dir.rglob("*.ini"):
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -66,14 +157,22 @@ def editor_metadata_status(
         root = root.parent
 
     latest_asset_mtime = _latest_project_asset_mtime(root) if root and root.exists() else None
+    latest_config_mtime = _latest_config_mtime(root) if root and root.exists() else None
     now = __import__("time").time()
     files: dict[str, Any] = {}
     missing: list[str] = []
     stale: list[str] = []
     for kind, filename in METADATA_FILES.items():
-        path = idx / filename
-        exists = path.is_file()
-        row: dict[str, Any] = {"path": str(path), "exists": exists, "rowCount": 0}
+        path, exists, row_count = _metadata_file_info(idx, kind)
+        row: dict[str, Any] = {"path": str(path), "exists": exists, "rowCount": row_count}
+        relevant_mtime = latest_asset_mtime
+        if kind == "project_settings":
+            relevant_mtime = latest_config_mtime
+        elif kind not in {"asset_registry", "project_settings"}:
+            asset_paths = _asset_paths_for_kind(idx, kind)
+            kind_mtime = _latest_project_asset_mtime(root, asset_paths) if root and root.exists() and asset_paths else None
+            if kind_mtime is not None:
+                relevant_mtime = kind_mtime
         if exists:
             stat = path.stat()
             age_hours = (now - stat.st_mtime) / 3600.0
@@ -83,10 +182,13 @@ def editor_metadata_status(
                     "mtime": stat.st_mtime,
                     "ageHours": round(age_hours, 2),
                     "rowCount": _line_count(path),
-                    "olderThanLatestUAsset": bool(latest_asset_mtime and stat.st_mtime < latest_asset_mtime),
+                    "olderThanRelevantSource": bool(relevant_mtime and stat.st_mtime < relevant_mtime),
                 }
             )
-            if age_hours > stale_after_hours or row.get("olderThanLatestUAsset"):
+            if kind in AGGREGATE_ANIMATION_KINDS:
+                row["rowCount"] = row_count
+                row["aggregateSource"] = "raw_animation_metadata.jsonl"
+            if age_hours > stale_after_hours or row.get("olderThanRelevantSource"):
                 stale.append(kind)
         else:
             missing.append(kind)

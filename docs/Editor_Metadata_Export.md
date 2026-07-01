@@ -38,9 +38,33 @@ Export paths are resolved automatically from the active `.uproject`:
 - Fallback (no active project): `%LOCALAPPDATA%/LmStudio/UnrealMetadataExports`
 - Content path: `editorExportContentPath` in `unreal-workspace.json` (default `/Game`)
 
+### Blueprint node/pin exporter plugin
+
+UE 5.8 protects `EdGraph.Nodes` from Python, so full Blueprint node and pin links require the C++ editor plugin. Install it once per project:
+
+```powershell
+.\rag.ps1 install-editor-graph-plugin
+```
+
+Or install for an explicit project:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\Install-EditorGraphPlugin.ps1 -ProjectFile C:\Path\Game.uproject
+```
+
+The installer copies `tools\ue_plugins\LmStudioGraphExporter` into `<ProjectRoot>\Plugins`, enables it in the `.uproject`, hash-checks existing project plugin copies, updates stale copies, and runs UnrealBuildTool when the module needs compiling. Close Unreal Editor before installing. Then run:
+
+```powershell
+.\rag.ps1 export-editor-metadata
+```
+
+When the plugin is present, `export_blueprint_metadata.py` uses it automatically and exports Blueprint `graphs`, `nodes`, `pins`, and `graph_links`. Without the plugin, the Python fallback still exports parent class, graph names, variables, and dependencies where UE exposes them.
+
 ### Install / indexing (automatic)
 
-During `INSTALL-*-BUILD-RAG.bat`, after you pick a project, the installer asks whether to enable automatic Editor export. If yes, the indexing pipeline runs:
+During `INSTALL-*-BUILD-RAG.bat`, after you pick a project, the installer asks whether to enable automatic Editor export and then asks whether to install the Blueprint graph exporter plugin. If you answer `N`, plugin installation is skipped and Blueprint export uses the limited Python fallback.
+
+If automatic export is enabled, the indexing pipeline runs:
 
 1. Unreal Editor export (headless or live Editor watcher)
 2. JSONL ingest
@@ -62,6 +86,12 @@ Sync only (auto-export when stale):
 
 ```powershell
 .\rag.ps1 sync-editor-metadata
+```
+
+Watch the active project and refresh after source/config or Content asset changes:
+
+```powershell
+.\rag.ps1 watch-active-project
 ```
 
 Legacy manual Editor Python (optional):

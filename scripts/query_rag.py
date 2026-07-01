@@ -11,8 +11,10 @@ import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from load_sampling_preset import profile_agent_policy
 from rag_context import assemble_context
 from rag_search import SearchOptions, search as search_index
+from workspace_paths import active_project_names
 
 
 SOURCE_TYPE_LABELS = {
@@ -153,6 +155,11 @@ SECTION_LABELS = [
 DEFAULT_SYSTEM_PROMPT = """You are an Unreal Engine 5.7 C++ assistant.
 Use the provided context first. If context is insufficient, say what is missing.
 Answer in Korean by default. Include C++ examples when useful and cite sources."""
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 TERM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[가-힣]+")
 
 
@@ -162,7 +169,12 @@ def load_prompt(path: str | None) -> str:
     prompt_path = Path(path)
     if not prompt_path.exists():
         return DEFAULT_SYSTEM_PROMPT
-    return prompt_path.read_text(encoding="utf-8").strip()
+    text = prompt_path.read_text(encoding="utf-8").strip()
+    if "compact_system" in prompt_path.name:
+        base = prompt_path.parent / "lmstudio_compact_mcp_base.md"
+        if base.is_file():
+            return base.read_text(encoding="utf-8").strip() + "\n\n---\n\n" + text
+    return text
 
 
 def make_fts_query(query: str) -> str:
@@ -323,6 +335,15 @@ def main(args: argparse.Namespace) -> None:
     if not index.exists():
         raise SystemExit(f"index does not exist: {index}")
 
+    policy = profile_agent_policy(args.sampling_profile)
+    if args.top_k <= 0:
+        args.top_k = int(policy.get("defaultTopK") or 6)
+    if args.candidate_limit <= 0:
+        scale = int(policy.get("candidateLimitScale") or 20)
+        args.candidate_limit = max(40, args.top_k * scale)
+
+    projects = args.project or active_project_names()
+
     rows = search_index(
         index,
         args.query,
@@ -330,7 +351,7 @@ def main(args: argparse.Namespace) -> None:
         SearchOptions(
             mode=args.mode,
             sources=args.source,
-            projects=args.project,
+            projects=projects,
             layers=args.layer,
             doc_types=args.doc_type,
             genres=args.genre,
@@ -343,8 +364,12 @@ def main(args: argparse.Namespace) -> None:
         print("No matching chunks found.")
         return
 
-    system_prompt = load_prompt(args.system_prompt)
-    context = assemble_context(rows, args.query, args.mode)
+    system_prompt_path = args.system_prompt
+    if system_prompt_path == "auto":
+        system_prompt_path = str(policy.get("recommendedSystemPrompt") or "prompts/unreal_cpp_assistant.md")
+    system_prompt = load_prompt(system_prompt_path)
+    resolved_mode = str(rows[0].get("resolved_mode") or args.mode)
+    context = assemble_context(rows, args.query, resolved_mode)
 
     if args.ask_lmstudio:
         print(ask_lmstudio(args, system_prompt, context))
@@ -353,7 +378,10 @@ def main(args: argparse.Namespace) -> None:
     print("## Retrieved Context\n")
     print(context)
     print("\n## Prompt For LM Studio\n")
-    print(system_prompt)
+    if args.print_prompt:
+        print(system_prompt)
+    else:
+        print(f"System prompt: {system_prompt_path} ({len(system_prompt)} chars; pass --print-prompt to print it)")
     print("\nUser question:")
     print(args.query)
 
@@ -362,7 +390,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Search the RAG index and optionally call LM Studio.")
     parser.add_argument("query")
     parser.add_argument("--index", default="data/unreal58/rag.sqlite")
-    parser.add_argument("--top-k", type=int, default=6)
+    parser.add_argument("--top-k", type=int, default=0, help="Defaults to the active model profile.")
     parser.add_argument(
         "--mode",
         choices=[
@@ -394,8 +422,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--genre", action="append", default=[], help="Filter inferred game genre.")
     parser.add_argument("--extension", action="append", default=[], help="Filter file extension such as .h, .cpp, .md.")
     parser.add_argument("--required-term", action="append", default=[], help="Require a literal term in the returned row.")
-    parser.add_argument("--candidate-limit", type=int, default=120, help="Number of FTS candidates to rerank.")
-    parser.add_argument("--system-prompt", default="prompts/unreal_cpp_assistant.md")
+    parser.add_argument("--candidate-limit", type=int, default=0, help="Defaults to top_k * active profile scale.")
+    parser.add_argument("--system-prompt", default="auto")
+    parser.add_argument("--sampling-profile", default="", help="Override UNREAL_RAG_MODEL_PROFILE for this query.")
+    parser.add_argument("--print-prompt", action="store_true", help="Print the full system prompt in query mode.")
     parser.add_argument("--ask-lmstudio", action="store_true")
     parser.add_argument("--lmstudio-url", default="http://localhost:1234/v1")
     parser.add_argument("--model")

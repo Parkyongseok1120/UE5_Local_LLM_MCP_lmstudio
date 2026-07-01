@@ -85,3 +85,18 @@ Rider = Unreal C++ 주력 IDE. Cline = MCP agent. 규칙: `.clinerules`
 ## 업데이트
 
 새 ZIP으로 덮어쓴 뒤 `INSTALL.bat` 다시 실행하면 `mcp.json` 경로가 갱신됩니다.
+# Portable Notes
+
+This package is path-portable. Install scripts rewrite machine-specific paths from the current PC and should not require paths such as `C:\Users\sster\...`.
+
+Common commands after install:
+
+```powershell
+cd Unreal58-RAG
+.\rag.ps1 pick-project
+.\rag.ps1 install-editor-graph-plugin
+.\rag.ps1 export-editor-metadata
+.\rag.ps1 watch-active-project
+```
+
+`install-editor-graph-plugin` copies `tools\ue_plugins\LmStudioGraphExporter` into the active Unreal project's `Plugins` folder, enables it in the `.uproject`, hash-checks existing project plugin copies, updates stale copies, and runs UnrealBuildTool when the module needs compiling. Close Unreal Editor before installing. During the interactive build installer, answer `Y` to install/update it or `N` to skip it. Without the plugin, Blueprint export still works, but full node/pin links may be unavailable on UE 5.8.
