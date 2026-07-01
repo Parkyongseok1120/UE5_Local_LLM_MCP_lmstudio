@@ -20,7 +20,11 @@ from material_graph_format import format_graph_edge  # noqa: E402
 from rag_search import resolve_mode  # noqa: E402
 from asset_graph_lookup import lookup_asset_graph, search_asset_graphs  # noqa: E402
 import export_blueprint_metadata as blueprint_export  # noqa: E402
-from export_material_metadata import _collect_material_graph, _graph_source_material  # noqa: E402
+from export_material_metadata import (
+    _collect_material_graph,
+    _graph_source_material,
+    _is_material_function_class,
+)  # noqa: E402
 
 
 def test_parse_export_spec_keeps_windows_drive_colon():
@@ -85,8 +89,8 @@ def test_blueprint_export_uses_editor_library_fallback(monkeypatch):
     assert variables == ["Health"]
 
 
-def test_material_claim_validate_supports_wire_evidence():
-    idx = ROOT / "data" / "unreal58"
+def test_material_claim_validate_supports_wire_evidence(tmp_path):
+    idx = tmp_path / "unreal58"
     idx.mkdir(parents=True, exist_ok=True)
     row = row_to_chunk(
         "unreal_material_metadata",
@@ -179,8 +183,8 @@ def test_blueprint_row_to_chunk_includes_pin_links():
     assert "K2Node_Event_0.then -> K2Node_CallFunction_1.execute" in chunk["text"]
 
 
-def test_blueprint_claim_validate_supports_pin_links():
-    idx = ROOT / "data" / "unreal58"
+def test_blueprint_claim_validate_supports_pin_links(tmp_path):
+    idx = tmp_path / "unreal58"
     idx.mkdir(parents=True, exist_ok=True)
     row = row_to_chunk(
         "unreal_blueprint_metadata",
@@ -410,3 +414,126 @@ def test_material_instance_graph_source_uses_parent_editor_only_graph():
 
     assert graph_material is parent
     assert graph_source == str(parent)
+
+
+class MaterialExpressionFunctionOutput:
+    def __init__(self, name, output_name, source):
+        self._name = name
+        self.output_name = output_name
+        self.Input = FakeInput(source)
+
+    def get_name(self):
+        return self._name
+
+
+class FakeMaterialEditingLibrary:
+    @staticmethod
+    def get_material_expression_input_names(expression):
+        if isinstance(expression, MaterialExpressionFunctionOutput):
+            return ["Input"]
+        if isinstance(expression, MaterialExpressionMultiply):
+            return ["A"]
+        return []
+
+    @staticmethod
+    def get_material_function_expressions(material_function):
+        return list(getattr(material_function, "_expressions", []))
+
+    @staticmethod
+    def get_inputs_for_material_function_expression(_material_function, expression):
+        if isinstance(expression, MaterialExpressionMultiply):
+            return [expression.A]
+        if isinstance(expression, MaterialExpressionFunctionOutput):
+            return [expression.Input]
+        return []
+
+
+class FakeUnrealModule:
+    MaterialEditingLibrary = FakeMaterialEditingLibrary
+
+
+class FakeMaterialFunction:
+    def __init__(self, expressions):
+        self._expressions = expressions
+
+
+def test_material_function_layer_uses_function_expression_api():
+    scalar = MaterialExpressionScalarParameter("BaseTex")
+    multiply = MaterialExpressionMultiply("Tint", scalar)
+    layer_output = MaterialExpressionFunctionOutput("LayerOut_BaseColor", "BaseColor", multiply)
+    material_layer = FakeMaterialFunction([scalar, multiply, layer_output])
+
+    expressions, graph_edges, root_outputs = _collect_material_graph(
+        material_layer,
+        FakeUnrealModule(),
+        "MaterialFunctionMaterialLayer",
+    )
+
+    assert [item["name"] for item in expressions] == ["BaseTex", "Tint", "LayerOut_BaseColor"]
+    assert {"from": "BaseTex", "to": "Tint", "to_input": "A"} in graph_edges
+    assert {"from": "Tint", "to": "LayerOut_BaseColor", "to_input": "Input"} in graph_edges
+    assert {"from": "LayerOut_BaseColor", "to": "FunctionOutput", "to_input": "BaseColor"} in graph_edges
+    assert root_outputs[0]["output"] == "BaseColor"
+    assert root_outputs[0]["kind"] == "function_output"
+
+
+def test_is_material_function_class_includes_layer_blend():
+    assert _is_material_function_class("MaterialFunctionMaterialLayer")
+    assert _is_material_function_class("MaterialFunctionMaterialLayerBlend")
+    assert _is_material_function_class("MaterialFunction")
+    assert not _is_material_function_class("Material")
+
+
+def test_material_layer_row_ingest_and_lookup(tmp_path):
+    export_row = {
+        "asset_path": "/Game/01_Character/98_Shading/M_Layer/ML_BaseColor",
+        "asset_type": "MaterialFunctionMaterialLayer",
+        "name": "ML_BaseColor",
+        "description": "Base color layer",
+        "expressions": [
+            {
+                "name": "Tex_Base",
+                "class": "MaterialExpressionTextureSampleParameter2D",
+                "input_wires": {},
+            },
+            {
+                "name": "LayerOut_BaseColor",
+                "class": "MaterialExpressionMaterialLayerOutput",
+                "input_wires": {"Input": "Tex_Base"},
+            },
+        ],
+        "graph_edges": [
+            {"from": "Tex_Base", "to": "LayerOut_BaseColor", "to_input": "Input"},
+            {"from": "LayerOut_BaseColor", "to": "FunctionOutput", "to_input": "BaseColor"},
+        ],
+        "root_outputs": [
+            {
+                "output": "BaseColor",
+                "expression": "Tex_Base",
+                "kind": "function_output",
+                "node": "LayerOut_BaseColor",
+            }
+        ],
+    }
+    export_file = tmp_path / "materials.jsonl"
+    export_file.write_text(json.dumps(export_row, ensure_ascii=False) + "\n", encoding="utf-8")
+    raw_path = tmp_path / "raw_material_metadata.jsonl"
+
+    ingested, replaced = merge_export_into_raw(export_file, "material", "Project_MJS", raw_path)
+    chunk = row_to_chunk("unreal_material_metadata", export_row, "Project_MJS")
+
+    assert ingested == 1
+    assert "graph_edges:" in chunk["text"]
+    assert "Tex_Base -> LayerOut_BaseColor.Input" in chunk["text"]
+
+    payload = lookup_asset_graph(
+        "ML_BaseColor",
+        asset_kind="material",
+        index_dir=tmp_path,
+        project_name="Project_MJS",
+    )
+
+    assert payload["ok"] is True
+    assert payload["primary"]["graphEdgeCount"] == 2
+    assert payload["primary"]["expressionCount"] == 2
+    assert payload["primary"]["assetPath"].endswith("ML_BaseColor")

@@ -163,6 +163,6 @@ Not every Unreal asset type is exported with full graph metadata. Use the produc
 | `registry` | `unreal_asset_registry` | Path + class + taxonomy tags (e.g. Material Function, Material Layer, MPC) |
 | `path_only` | `unreal_project_asset_path` | Path string only |
 
-`unreal_asset_registry` rows now include taxonomy lines (`taxonomy_item`, `rag_coverage`, `work_domain`) from `collect_editor_metadata.py`. When `unreal_asset_graph_lookup` misses graph data, it returns taxonomy guidance (for example `MaterialFunctionMaterialLayer` → registry-only until material export is extended).
+`unreal_asset_registry` rows now include taxonomy lines (`taxonomy_item`, `rag_coverage`, `work_domain`) from `collect_editor_metadata.py`. When `unreal_asset_graph_lookup` misses graph data, it returns taxonomy guidance and `stopRetryingLookup` hints. Material Layer / Material Function graphs require a fresh `export-editor-metadata` run after the exporter update.
 
 Graph builder and project-aware behavior consume summarized nodes. Direct `.uasset` graph mutation still belongs in Unreal Editor automation, but these exports give the agent the asset map required before making those Editor-side changes.

@@ -106,7 +106,14 @@ def _matches_query(row: dict[str, Any], query: str) -> bool:
     title = str(row.get("title") or meta.get("generated_class") or "").lower()
     if q.startswith("/game/"):
         return path == q or path.endswith("/" + q.rsplit("/", 1)[-1])
-    return q in path or q == name or q in title
+    if q == name:
+        return True
+    if path.endswith("/" + q):
+        return True
+    if q in {seg for seg in path.split("/") if seg}:
+        return True
+    title_name = title.rsplit("/", 1)[-1]
+    return q == title_name
 
 
 def _filter_project(rows: list[dict[str, Any]], project_name: str | None) -> list[dict[str, Any]]:
@@ -122,8 +129,10 @@ def _filter_project(rows: list[dict[str, Any]], project_name: str | None) -> lis
     return filtered
 
 
-def _summarize_material(row: dict[str, Any]) -> dict[str, Any]:
+def _summarize_material(row: dict[str, Any], *, compact: bool = False) -> dict[str, Any]:
     meta = _row_metadata(row)
+    expr_limit = 8 if compact else 40
+    edge_limit = 12 if compact else 80
     return {
         "assetPath": _asset_path(row) or None,
         "assetType": meta.get("asset_type"),
@@ -132,13 +141,13 @@ def _summarize_material(row: dict[str, Any]) -> dict[str, Any]:
         "graphSource": meta.get("graph_source"),
         "expressionCount": len(meta.get("expressions") or []),
         "graphEdgeCount": len(meta.get("graph_edges") or []),
-        "rootOutputs": meta.get("root_outputs") or [],
-        "expressions": (meta.get("expressions") or [])[:40],
-        "graphEdges": (meta.get("graph_edges") or [])[:80],
-        "scalarParameters": meta.get("scalar_parameters") or [],
-        "vectorParameters": meta.get("vector_parameters") or [],
-        "textureParameters": meta.get("texture_parameters") or [],
-        "staticSwitchParameters": meta.get("static_switch_parameters") or [],
+        "rootOutputs": (meta.get("root_outputs") or [])[:6 if compact else None],
+        "expressions": (meta.get("expressions") or [])[:expr_limit],
+        "graphEdges": (meta.get("graph_edges") or [])[:edge_limit],
+        "scalarParameters": (meta.get("scalar_parameters") or [])[:12 if compact else None],
+        "vectorParameters": (meta.get("vector_parameters") or [])[:12 if compact else None],
+        "textureParameters": (meta.get("texture_parameters") or [])[:12 if compact else None],
+        "staticSwitchParameters": (meta.get("static_switch_parameters") or [])[:12 if compact else None],
     }
 
 
@@ -235,9 +244,42 @@ def _summarize_generic(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _summarize_row(kind: str, row: dict[str, Any]) -> dict[str, Any]:
+def _annotate_graph_coverage(summary: dict[str, Any]) -> dict[str, Any]:
+    asset_type = str(summary.get("assetType") or "")
+    expression_count = int(summary.get("expressionCount") or 0)
+    edge_count = int(summary.get("graphEdgeCount") or 0)
+    has_graph = expression_count > 0 or edge_count > 0
+    summary["graphExported"] = has_graph
+    if has_graph:
+        return summary
+
+    summary["stopRetryingLookup"] = True
+    summary["coverageNote"] = (
+        "Indexed asset exists but graph/parameters were not exported. "
+        "Do not call unreal_asset_graph_lookup again for the same path in this session."
+    )
+    actions = graph_lookup_guidance(asset_class=asset_type, asset_path=str(summary.get("assetPath") or ""))
+    if asset_type in {"MaterialFunctionMaterialLayer", "MaterialFunctionMaterialLayerBlend"}:
+        actions.insert(
+            0,
+            "Material Layer assets need a fresh Editor export (materials.jsonl) after fixing headless export; "
+            "open the layer in Material Editor if the graph is still empty.",
+        )
+    summary["nextActions"] = actions[:6]
+    taxonomy = classify_ue_asset_class(asset_type)
+    if taxonomy:
+        summary["taxonomy"] = {
+            "item": taxonomy.get("item_name"),
+            "ragCoverage": taxonomy.get("rag_coverage"),
+            "workDomain": taxonomy.get("work_domain"),
+        }
+    return summary
+
+
+def _summarize_row(kind: str, row: dict[str, Any], *, compact: bool = False) -> dict[str, Any]:
     if kind == "material":
-        return _summarize_material(row)
+        summary = _summarize_material(row, compact=compact)
+        return _annotate_graph_coverage(summary)
     if kind == "blueprint":
         return _summarize_blueprint(row)
     if kind == "structured":
@@ -281,6 +323,7 @@ def lookup_asset_graph(
     index_dir: str | Path | None = None,
     project_name: str | None = None,
     include_full_graph: bool = False,
+    compact: bool = False,
 ) -> dict[str, Any]:
     idx = _resolve_index_dir(index_dir)
     query = str(asset_path or "").strip()
@@ -340,7 +383,7 @@ def lookup_asset_graph(
     summaries = []
     for item in matches[:8]:
         row = item["row"]
-        summary = _summarize_row(item["kind"], row)
+        summary = _summarize_row(item["kind"], row, compact=compact)
         summary["kind"] = item["kind"]
         if include_full_graph:
             summary["rawMetadata"] = _row_metadata(row)

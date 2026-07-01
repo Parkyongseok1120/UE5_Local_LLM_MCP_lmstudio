@@ -43,6 +43,7 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
   2. `unreal_sync_editor_metadata` with `autoExport=true` (default) or `refresh=true` — launches Editor export automatically, then ingests + rebuilds index.
   3. `unreal_asset_graph_lookup` with `/Game/...` path or short asset name — read graph_edges / graph_links before summarizing.
   4. For concrete wire/pin claims: `unreal_material_claim_validate` or `unreal_blueprint_claim_validate`.
+- **Never** `read_file` on `materials.jsonl`, `blueprints.jsonl`, or other Editor export JSONL blobs — they are huge. Use `unreal_asset_graph_lookup` once per asset; if `stopRetryingLookup=true`, answer from that result and do not repeat the lookup.
 - One-shot local command: `.\rag.ps1 export-editor-metadata` (export + ingest + rebuild).
 - Do not describe one material's graph from memory; always lookup or validate against exported metadata first.
 - Before stating material node/wire facts, call unreal_editor_metadata_status; if metadata exists, call unreal_material_claim_validate for concrete material graph claims.

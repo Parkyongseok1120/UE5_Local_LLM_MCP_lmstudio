@@ -19,7 +19,13 @@ from workspace_paths import (
     save_shared_config,
     shared_config_path,
 )
-from project_routing import resolve_project_filters
+from mcp_tool_compact import (
+    compact_asset_graph_payload,
+    compact_export_payload,
+    compact_json_text,
+    compact_metadata_status_payload,
+    compact_sync_metadata_payload,
+)
 from rag_context import assemble_context, assemble_context_mixed
 from rag_embeddings import embedding_status
 from rag_index_ops import capabilities_summary, index_health, rebuild_status
@@ -126,8 +132,10 @@ class McpServer:
         self.send({"jsonrpc": "2.0", "id": message_id, "error": {"code": code, "message": message}})
 
     def tool_result(self, message_id: Any, text: str, structured: dict[str, Any] | None = None, is_error: bool = False) -> None:
+        from mcp_tool_compact import truncate_text
+
         payload: dict[str, Any] = {
-            "content": [{"type": "text", "text": text}],
+            "content": [{"type": "text", "text": truncate_text(text)}],
             "isError": is_error,
         }
         if structured is not None:
@@ -976,7 +984,8 @@ class McpServer:
                     str(arguments.get("projectRoot") or "").strip() or None,
                     float(arguments.get("staleAfterHours") or 24.0),
                 )
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                compact = compact_metadata_status_payload(payload)
+                self.tool_result(message_id, compact_json_text(compact), structured=compact)
             elif name == "unreal_run_editor_export":
                 payload = run_editor_export(
                     export_dir=str(arguments.get("exportDir") or "").strip() or None,
@@ -987,7 +996,8 @@ class McpServer:
                     uproject=str(arguments.get("projectFile") or "").strip() or None,
                     timeout_sec=int(arguments.get("timeoutSec") or 0) or None,
                 )
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                compact = compact_export_payload(payload)
+                self.tool_result(message_id, compact_json_text(compact), structured=compact)
             elif name == "unreal_sync_editor_metadata":
                 common = {
                     "export_dir": str(arguments.get("exportDir") or "").strip() or None,
@@ -1006,7 +1016,8 @@ class McpServer:
                         force_ingest=bool(arguments.get("forceIngest")),
                         auto_export=arguments.get("autoExport", True) is not False,
                     )
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                compact = compact_sync_metadata_payload(payload)
+                self.tool_result(message_id, compact_json_text(compact), structured=compact)
             elif name == "unreal_asset_graph_lookup":
                 search = str(arguments.get("search") or "").strip()
                 if search:
@@ -1028,8 +1039,10 @@ class McpServer:
                         index_dir=arguments.get("indexDir") or "data/unreal58",
                         project_name=str(arguments.get("projectName") or "").strip() or None,
                         include_full_graph=bool(arguments.get("includeFullGraph")),
+                        compact=True,
                     )
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                compact = compact_asset_graph_payload(payload)
+                self.tool_result(message_id, compact_json_text(compact), structured=compact)
             elif name == "unreal_blueprint_claim_validate":
                 payload = validate_blueprint_claims(
                     list(arguments.get("claims") or []),

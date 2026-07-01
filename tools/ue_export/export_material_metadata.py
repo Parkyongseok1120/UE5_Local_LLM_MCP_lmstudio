@@ -128,6 +128,14 @@ MATERIAL_GRAPH_CLASSES = frozenset(
     }
 )
 
+MATERIAL_FUNCTION_CLASSES = frozenset(
+    {
+        "MaterialFunction",
+        "MaterialFunctionMaterialLayer",
+        "MaterialFunctionMaterialLayerBlend",
+    }
+)
+
 
 def _asset_class_name(asset) -> str:
     if hasattr(asset, "asset_class_path"):
@@ -211,6 +219,13 @@ def _material_graph_sources(material) -> list:
     sources = []
     _append_unique_object(sources, material)
     for prop in (
+        "expression_collection",
+        "ExpressionCollection",
+        "material_expression_collection",
+        "MaterialExpressionCollection",
+    ):
+        _append_unique_object(sources, _safe_prop(material, prop, None))
+    for prop in (
         "editor_only_data",
         "EditorOnlyData",
         "material_editor_only_data",
@@ -246,21 +261,41 @@ def _material_editing_library(unreal_module):
     return getattr(unreal_module, "MaterialEditingLibrary", None)
 
 
-def _collect_material_expressions(material, unreal_module=None) -> list:
+def _is_material_function_class(cls: str) -> bool:
+    return cls in MATERIAL_FUNCTION_CLASSES or (
+        bool(cls) and cls.startswith("MaterialFunction") and cls not in {"MaterialFunctionInterface"}
+    )
+
+
+def _append_expression(expressions: list, seen: set, expression) -> bool:
+    if not _is_material_expression(expression):
+        return False
+    key = id(expression)
+    if key in seen:
+        return False
+    seen.add(key)
+    expressions.append(expression)
+    return len(expressions) >= MAX_EXPRESSIONS
+
+
+def _collect_material_expressions(material, unreal_module=None, asset_class: str = "") -> list:
     expressions = []
     seen = set()
     library = _material_editing_library(unreal_module)
-    if library and hasattr(library, "get_material_expressions"):
+    is_function = _is_material_function_class(asset_class)
+
+    if library and is_function and hasattr(library, "get_material_function_expressions"):
+        try:
+            for expression in list(library.get_material_function_expressions(material)):
+                if _append_expression(expressions, seen, expression):
+                    return expressions
+        except Exception:
+            pass
+
+    if library and not is_function and hasattr(library, "get_material_expressions"):
         try:
             for expression in list(library.get_material_expressions(material)):
-                if not _is_material_expression(expression):
-                    continue
-                key = id(expression)
-                if key in seen:
-                    continue
-                seen.add(key)
-                expressions.append(expression)
-                if len(expressions) >= MAX_EXPRESSIONS:
+                if _append_expression(expressions, seen, expression):
                     return expressions
         except Exception:
             pass
@@ -273,21 +308,38 @@ def _collect_material_expressions(material, unreal_module=None) -> list:
             "MaterialExpressions",
         ):
             for expression in _coerce_list(_safe_prop(source, prop, None)):
-                if not _is_material_expression(expression):
-                    continue
-                key = id(expression)
-                if key in seen:
-                    continue
-                seen.add(key)
-                expressions.append(expression)
-                if len(expressions) >= MAX_EXPRESSIONS:
+                if _append_expression(expressions, seen, expression):
                     return expressions
     return expressions
 
 
-def _collect_expression_input_wires(expression, material=None, unreal_module=None) -> dict:
+def _collect_expression_input_wires(
+    expression,
+    material=None,
+    unreal_module=None,
+    material_function=None,
+) -> dict:
     wires = {}
     library = _material_editing_library(unreal_module)
+    if (
+        material_function is not None
+        and library
+        and hasattr(library, "get_inputs_for_material_function_expression")
+    ):
+        try:
+            input_names = []
+            if hasattr(library, "get_material_expression_input_names"):
+                input_names = [str(item) for item in library.get_material_expression_input_names(expression)]
+            inputs = list(library.get_inputs_for_material_function_expression(material_function, expression))
+            for index, source in enumerate(inputs):
+                ref = _resolve_expression_reference(source)
+                if not ref:
+                    continue
+                input_name = input_names[index] if index < len(input_names) and input_names[index] else f"Input{index}"
+                wires[input_name] = ref
+        except Exception:
+            pass
+
     if material is not None and library and hasattr(library, "get_inputs_for_material_expression"):
         try:
             input_names = []
@@ -328,9 +380,71 @@ def _collect_expression_details(expression) -> dict:
     return details
 
 
-def _collect_material_root_outputs(material, unreal_module=None) -> list[dict]:
+def _collect_function_outputs(expressions) -> list[dict]:
     outputs = []
     seen = set()
+    for expression in expressions:
+        cls_name = expression.__class__.__name__
+        if "FunctionOutput" not in cls_name and "MaterialLayerOutput" not in cls_name:
+            continue
+        output_name = (
+            _safe_prop(expression, "output_name", None)
+            or _safe_prop(expression, "OutputName", None)
+            or _expression_key(expression)
+        )
+        ref = None
+        for prop in ("input", "Input", "A", "Coordinates", "Texture"):
+            ref = _resolve_expression_reference(_safe_prop(expression, prop, None))
+            if ref:
+                break
+        key = (str(output_name), str(ref or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        outputs.append(
+            {
+                "output": str(output_name),
+                "expression": ref if isinstance(ref, str) else (str(ref) if ref else ""),
+                "kind": "function_output",
+                "node": _expression_key(expression),
+            }
+        )
+    return outputs
+
+
+def _collect_material_function_metadata(material) -> dict:
+    row = {}
+    for prop, key in (
+        ("description", "description"),
+        ("Description", "description"),
+        ("user_exposed_caption", "user_exposed_caption"),
+        ("UserExposedCaption", "user_exposed_caption"),
+        ("expose_to_library", "expose_to_library"),
+        ("bExposeToLibrary", "expose_to_library"),
+    ):
+        if key in row:
+            continue
+        value = _safe_prop(material, prop, None)
+        if value not in (None, ""):
+            row[key] = _value_to_text(value)
+    return row
+
+
+def _collect_material_root_outputs(
+    material,
+    unreal_module=None,
+    asset_class: str = "",
+    expressions=None,
+) -> list[dict]:
+    outputs = []
+    seen = set()
+    if _is_material_function_class(asset_class) and expressions:
+        for item in _collect_function_outputs(expressions):
+            if item.get("expression") or item.get("node"):
+                outputs.append(item)
+        if outputs:
+            return outputs
+
     library = _material_editing_library(unreal_module)
     material_property = getattr(unreal_module, "MaterialProperty", None) if unreal_module else None
     if library and material_property and hasattr(library, "get_material_property_input_node"):
@@ -380,14 +494,24 @@ def _append_graph_edge(graph_edges: list[dict], source, target: str, target_inpu
         graph_edges.append({"from": str(source), "to": target, "to_input": target_input})
 
 
-def _collect_material_graph(material, unreal_module=None) -> tuple[list[dict], list[dict], list[dict]]:
-    expressions = _collect_material_expressions(material, unreal_module)[:MAX_EXPRESSIONS]
+def _collect_material_graph(
+    material,
+    unreal_module=None,
+    asset_class: str = "",
+) -> tuple[list[dict], list[dict], list[dict]]:
+    is_function = _is_material_function_class(asset_class)
+    expressions = _collect_material_expressions(material, unreal_module, asset_class)[:MAX_EXPRESSIONS]
     expression_rows = []
     graph_edges = []
 
     for expression in expressions:
         name = _expression_key(expression)
-        input_wires = _collect_expression_input_wires(expression, material, unreal_module)
+        input_wires = _collect_expression_input_wires(
+            expression,
+            material=None if is_function else material,
+            unreal_module=unreal_module,
+            material_function=material if is_function else None,
+        )
         row = {
             "name": name,
             "class": expression.__class__.__name__,
@@ -403,15 +527,26 @@ def _collect_material_graph(material, unreal_module=None) -> tuple[list[dict], l
         for input_name, source in input_wires.items():
             _append_graph_edge(graph_edges, source, name, input_name)
 
-    root_outputs = _collect_material_root_outputs(material, unreal_module)
+    root_outputs = _collect_material_root_outputs(
+        material,
+        unreal_module,
+        asset_class=asset_class,
+        expressions=expressions,
+    )
     for item in root_outputs:
+        if item.get("kind") == "function_output":
+            target = str(item.get("node") or item.get("output") or "FunctionOutput")
+            if item.get("expression"):
+                _append_graph_edge(graph_edges, item.get("expression"), target, "Input")
+            _append_graph_edge(graph_edges, target, "FunctionOutput", str(item.get("output") or ""))
+            continue
         _append_graph_edge(graph_edges, item.get("expression"), "MaterialOutput", str(item.get("output") or ""))
 
     return expression_rows, graph_edges, root_outputs
 
 
 def _graph_source_material(material, asset_class: str, unreal_module=None):
-    expressions = _collect_material_expressions(material, unreal_module)
+    expressions = _collect_material_expressions(material, unreal_module, asset_class)
     if expressions:
         return material, None
     if "MaterialInstance" not in asset_class:
@@ -517,17 +652,22 @@ def _export_material_row(registry, asset, cls: str, path: str) -> dict:
         if shading_model:
             row["shading_model"] = str(shading_model)
 
+        if _is_material_function_class(cls):
+            row.update(_collect_material_function_metadata(material))
+
         if cls in MATERIAL_GRAPH_CLASSES:
             graph_material, graph_source = _graph_source_material(material, cls, unreal)
             if graph_source:
                 row["graph_source"] = graph_source
-            expressions, graph_edges, root_outputs = _collect_material_graph(graph_material, unreal)
+            expressions, graph_edges, root_outputs = _collect_material_graph(graph_material, unreal, cls)
             if expressions:
                 row["expressions"] = expressions
             if graph_edges:
                 row["graph_edges"] = graph_edges
             if root_outputs:
                 row["root_outputs"] = root_outputs
+            if not expressions and not graph_edges:
+                row["graph_export_note"] = "no_expressions_collected"
 
         if "MaterialInstance" in cls:
             scalar_params = _collect_parameter_names(unreal, material, "scalar")

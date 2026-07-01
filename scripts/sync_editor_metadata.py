@@ -140,6 +140,7 @@ def sync_editor_metadata(
     rebuild_index: bool = True,
     force_ingest: bool = False,
     auto_export: bool = False,
+    force_export: bool = False,
     content_path: str | None = None,
     export_scope: str | None = None,
     export_mode: str = "auto",
@@ -158,7 +159,7 @@ def sync_editor_metadata(
 
     export_result: dict[str, Any] | None = None
     needs_work = _needs_export_or_sync(status, export_summary, raw_mtime, force=force_ingest)
-    if auto_export and needs_work:
+    if auto_export and (needs_work or force_export):
         from editor_export_runner import run_editor_export
 
         export_result = run_editor_export(
@@ -298,6 +299,7 @@ def refresh_editor_metadata(
         rebuild_index=rebuild_index,
         force_ingest=force,
         auto_export=True,
+        force_export=True,
         content_path=content_path,
         export_scope=export_scope,
         export_mode=export_mode,
