@@ -115,6 +115,122 @@ def fetch_module_graph_sidecar(
     return results[:limit]
 
 
+GUIDELINE_SIDECAR_TITLE_PATTERNS: dict[str, list[str]] = {
+    "module_fix": [
+        "%unreal error fix playbook%",
+        "%unreal compile error triage%",
+    ],
+    "compile_fix": [
+        "%unreal error fix playbook%",
+        "%unreal compile error triage%",
+    ],
+    "reflection_fix": [
+        "%unreal error fix playbook%",
+        "%unreal compile error triage%",
+    ],
+    "blueprint_analysis": [
+        "%shader, material, and blueprint analysis workflow%",
+    ],
+}
+
+
+def fetch_guideline_sidecar(
+    conn: sqlite3.Connection,
+    mode: str,
+    query: str,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Pull high-value guideline/profile chunks that FTS often misses behind symbol noise."""
+    available_columns = table_columns(conn, "chunks")
+    if not available_columns:
+        return []
+
+    meta_columns = (
+        "project",
+        "relative_path",
+        "extension",
+        "layer",
+        "doc_type",
+        "genre",
+        "symbol_name",
+        "symbol_kind",
+        "module_name",
+        "error_code",
+        "error_file",
+        "path_only",
+    )
+    select_columns = [
+        "chunks.chunk_id",
+        "chunks.source",
+        "chunks.title",
+        "chunks.locator",
+        "chunks.chunk_index",
+        "chunks.text",
+        "-8000.0 as score",
+    ]
+    for column in meta_columns:
+        if column in available_columns:
+            select_columns.append(f"chunks.{column}")
+        else:
+            select_columns.append(f"'' as {column}")
+
+    requests: list[tuple[str, str]] = []
+    for pattern in GUIDELINE_SIDECAR_TITLE_PATTERNS.get(mode, []):
+        requests.append(("project_guideline", pattern))
+
+    query_lower = query.lower()
+    if mode == "implementation" and "project profile" in query_lower:
+        requests.append(("project_profile", "%project profile%"))
+        for term in tokenize(query):
+            if "_" in term and term.lower() not in {"build.cs", "target.cs"}:
+                requests.append(("project_profile", f"%{term.lower()}%project profile%"))
+                break
+
+    seen: set[str] = set()
+    results: list[dict[str, Any]] = []
+    for source, pattern in requests:
+        rows = conn.execute(
+            f"""
+            select
+                {", ".join(select_columns)}
+            from chunks
+            where source = ?
+              and lower(title) like ?
+            limit ?
+            """,
+            (source, pattern.lower(), limit),
+        ).fetchall()
+        for row in rows:
+            chunk_id = str(row["chunk_id"])
+            if chunk_id in seen:
+                continue
+            seen.add(chunk_id)
+            results.append(dict(row))
+    return results[:limit]
+
+
+def merge_ranked_sidecar(
+    ranked: list[dict[str, Any]],
+    sidecar: list[dict[str, Any]],
+    query_terms: list[str],
+    mode: str,
+    *,
+    extra_boost: float = 0.0,
+) -> list[dict[str, Any]]:
+    if not sidecar:
+        return ranked
+    sidecar_ranked = [rerank_row(dict(row), query_terms, mode) for row in sidecar]
+    for row in sidecar_ranked:
+        row["rank_score"] = float(row.get("rank_score") or 0.0) - extra_boost
+    merged_map: dict[str, dict[str, Any]] = {str(r["chunk_id"]): r for r in ranked}
+    for row in sidecar_ranked:
+        merged_map[str(row["chunk_id"])] = row
+    return sorted(
+        merged_map.values(),
+        key=lambda row: (float(row.get("rank_score") or 0.0), float(row.get("score") or 0.0)),
+    )
+
+
 VALID_MODES = {
     "auto",
     "planning",
@@ -1204,6 +1320,14 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
         score -= 8.0
     if module_name and module_name.lower() in query_lower:
         score -= 4.0
+    if mode == "implementation" and "project profile" in query_lower and source == "unreal_project_asset_path":
+        score += 45.0
+    if mode in {"module_fix", "compile_fix"} and symbol_kind == "module" and "module dependencies" in identity_lower:
+        if any(
+            marker in query_lower
+            for marker in ("c1083", "cannot open include", "missing module", "build.cs", "gameplaytags")
+        ):
+            score += 35.0
     if mode == "implementation" and source == "project_profile":
         score -= 10.0
     if mode == "agent_edit":
@@ -1392,6 +1516,8 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
 
     exact_rows: list[sqlite3.Row] = []
     exact_terms = asset_identity_terms(query)
+    if mode == "implementation" and "project profile" in query.lower():
+        exact_terms = []
     if exact_terms:
         exact_select_columns = [
             item.replace("bm25(chunks_fts) as score", "-10000.0 as score").replace("chunks.", "")
@@ -1424,6 +1550,19 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
         if row_matches_required(dict(row), required_terms)
     ]
     ranked.sort(key=lambda row: (float(row.get("rank_score") or 0.0), float(row.get("score") or 0.0)))
+
+    if mode in {"module_fix", "compile_fix", "reflection_fix", "blueprint_analysis"} or (
+        mode == "implementation" and "project profile" in query.lower()
+    ):
+        guideline_sidecar = fetch_guideline_sidecar(conn, mode, query, limit=max(8, top_k))
+        profile_boost = 200.0 if mode == "implementation" else 120.0
+        ranked = merge_ranked_sidecar(
+            ranked,
+            guideline_sidecar,
+            query_terms,
+            mode,
+            extra_boost=profile_boost,
+        )
 
     if mode == "module_fix":
         sidecar = fetch_module_graph_sidecar(conn, effective_query, limit=max(12, top_k * 2))

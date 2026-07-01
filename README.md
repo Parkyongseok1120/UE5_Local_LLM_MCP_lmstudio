@@ -13,8 +13,8 @@ Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x
 
 This repo targets a **Sonnet 4.5-oriented Unreal C++ agent workflow**, not a claim that any local model matches cloud Sonnet quality.
 
-- **Pass@K live compile-fix** is the primary agent KPI (currently validate on **Qwen 3.6 27B**).
-- Single-file C++ fixes score well; **module `Build.cs` dependency fixes remain unreliable** until Pass@K reaches 3/3.
+- **Pass@K live compile-fix** is the primary agent KPI (core gate **3/3** on **Qwen 3.6 27B**; ceiling suite **13-case dry-run** includes 10 `module_fix` families).
+- Single-file C++ fixes score well; **module `Build.cs` fixes are harder** — track with ceiling Pass@K live, not chat-only runs.
 - **LM Studio MCP chat** is experimental: enable Essential Tools, session bootstrap, and compact system prompts. Verify with `python scripts/bench_lmstudio_mcp.py`.
 - Do not treat chat-only runs as production automation.
 
