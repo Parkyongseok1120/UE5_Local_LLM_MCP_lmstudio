@@ -61,6 +61,23 @@ const ALLOW_WRITE = process.env.ALLOW_WRITE === "1" || process.env.ALLOW_WRITE =
 const ALLOW_COMMANDS = process.env.ALLOW_COMMANDS === "1" || process.env.ALLOW_COMMANDS === "true";
 const ALLOW_UNREAL_BUILD = process.env.ALLOW_UNREAL_BUILD === "1" || process.env.ALLOW_UNREAL_BUILD === "true";
 const MAX_READ_BYTES = Number(process.env.MAX_READ_BYTES || 64 * 1024);
+const CODE_DETAIL_READ_BYTES = {
+  compact: 16 * 1024,
+  medium: 32 * 1024,
+  large: MAX_READ_BYTES,
+  full: MAX_READ_BYTES
+};
+const CODE_DETAIL_LINE_CAP = {
+  compact: 150,
+  medium: 400,
+  large: 1200,
+  full: 2000
+};
+
+function resolveCodeDetail(raw) {
+  const key = String(raw || "compact").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(CODE_DETAIL_READ_BYTES, key) ? key : "compact";
+}
 const MAX_OUTPUT_BYTES = Number(process.env.MAX_OUTPUT_BYTES || 1024 * 256);
 const COMMAND_TIMEOUT_MS = Number(process.env.COMMAND_TIMEOUT_MS || 1000 * 60 * 10);
 const SEARCH_MAX_FILES = Number(process.env.SEARCH_MAX_FILES || 5000);
@@ -370,19 +387,29 @@ function allAgentTools() {
       },
       {
         name: "read_file",
-        description: "Read a UTF-8 text file inside WORKSPACE_ROOT. Required before any write to that file. Default cap 64 KiB; use read_file_range for partial reads.",
+        description: "Read a UTF-8 text file inside WORKSPACE_ROOT. Required before any write to that file. Use detailLevel compact/medium/large/full (default compact ~16 KiB) or maxBytes override.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
-          maxBytes: { type: "number", description: "Optional max bytes. Default 64 KiB." }
+          maxBytes: { type: "number", description: "Optional max bytes. Capped by detailLevel tier." },
+          detailLevel: {
+            type: "string",
+            enum: ["compact", "medium", "large", "full"],
+            description: "Read size tier: compact ~16 KiB, medium ~32 KiB, large/full up to 64 KiB."
+          }
         }, ["path"])
       },
       {
         name: "read_file_range",
-        description: "Read a line range from a UTF-8 text file inside WORKSPACE_ROOT. Prefer this over read_file for large sources.",
+        description: "Read a line range from a UTF-8 text file inside WORKSPACE_ROOT. Prefer this over read_file for large sources. Line span capped by detailLevel.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           startLine: { type: "number", description: "1-based start line (inclusive)." },
-          endLine: { type: "number", description: "1-based end line (inclusive)." }
+          endLine: { type: "number", description: "1-based end line (inclusive)." },
+          detailLevel: {
+            type: "string",
+            enum: ["compact", "medium", "large", "full"],
+            description: "Max lines per request: compact 150, medium 400, large 1200, full 2000."
+          }
         }, ["path", "startLine", "endLine"])
       },
       {
@@ -621,7 +648,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!s) return fail(`not found: ${args.path}`);
       if (!s.isFile()) return fail(`not a file: ${args.path}`);
 
-      const maxBytes = Math.max(1, Math.min(Number(args.maxBytes || MAX_READ_BYTES), MAX_READ_BYTES));
+      const detail = resolveCodeDetail(args.detailLevel);
+      const tierCap = CODE_DETAIL_READ_BYTES[detail];
+      const maxBytes = Math.max(
+        1,
+        Math.min(Number(args.maxBytes || tierCap), tierCap, MAX_READ_BYTES)
+      );
       const fd = await fsp.open(target, "r");
       try {
         const buffer = Buffer.alloc(Math.min(maxBytes, s.size));
@@ -629,7 +661,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!isTextLikely(buffer)) return fail(`file appears binary: ${args.path}`);
         let out = buffer.toString("utf8");
         if (s.size > buffer.length) {
-          out += `\n\n[TRUNCATED: file size ${s.size} bytes, read ${buffer.length} bytes. Use read_file_range for partial reads.]`;
+          const nextDetail = detail === "compact" ? "medium" : detail === "medium" ? "large" : null;
+          out += `\n\n[TRUNCATED: file size ${s.size} bytes, read ${buffer.length} bytes at detailLevel=${detail}.`;
+          if (nextDetail) {
+            out += ` Escalate once with detailLevel=${nextDetail} or use read_file_range.]`;
+          } else {
+            out += ` Use read_file_range for partial reads.]`;
+          }
         }
         return text(out);
       } finally {
@@ -643,10 +681,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!s) return fail(`not found: ${args.path}`);
       if (!s.isFile()) return fail(`not a file: ${args.path}`);
 
+      const detail = resolveCodeDetail(args.detailLevel);
+      const lineCap = CODE_DETAIL_LINE_CAP[detail];
       const startLine = Math.max(1, Number(args.startLine || 1));
-      const endLine = Math.max(startLine, Number(args.endLine || startLine));
+      let endLine = Math.max(startLine, Number(args.endLine || startLine));
       if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) {
         return fail("startLine and endLine must be numbers");
+      }
+      if (endLine - startLine + 1 > lineCap) {
+        endLine = startLine + lineCap - 1;
       }
       if (endLine - startLine > 2000) {
         return fail("line range too large (max 2000 lines per request)");

@@ -23,8 +23,8 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 1. `unreal_get_active_project`
 2. `unreal_agent_plan` and follow `toolPolicy`, `writeGate`, `checkpoints`, and `stopConditions`
 3. If `writeGate.writesAllowed=false`, do not call write tools; answer or report findings only
-4. `unreal_rag_search` (`hybrid=false`, `top_k` 4-6) before edits
-5. `read_file` / `read_file_range` on every target file before writing
+4. `unreal_rag_search` (`hybrid=false`, `top_k` 4-6, `detailLevel=compact`) before edits; escalate to `medium`/`large` once if assembly note says truncated.
+5. `read_file` / `read_file_range` on every target file before writing — default `detailLevel=compact`; escalate once for large `.cpp`/`.h` if truncated.
 6. `replace_in_file` preferred with `expectedOccurrences=1`; use `write_file` only for new or small files
 7. `build_unreal_project` after C++ / Build.cs changes
 8. On UBT failure: `unreal_rag_search` `mode=compile_fix` with only the current error context, then patch and rebuild
@@ -41,9 +41,20 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 - **Automated metadata workflow (any material or blueprint, not one asset):**
   1. `unreal_editor_metadata_status` — check freshness vs project `.uasset` files and export dir.
   2. `unreal_sync_editor_metadata` with `autoExport=true` (default) or `refresh=true` — launches Editor export automatically, then ingests + rebuilds index.
-  3. `unreal_asset_graph_lookup` with `/Game/...` path or short asset name — read graph_edges / graph_links before summarizing.
+  3. `unreal_asset_graph_lookup` with `/Game/...` path or short asset name — start `graphDetail=compact`; if `nextDetailLevel` is set, escalate **once** (compact→medium→large→full). Never repeat the same `graphDetail`.
   4. For concrete wire/pin claims: `unreal_material_claim_validate` or `unreal_blueprint_claim_validate`.
-- **Never** `read_file` on `materials.jsonl`, `blueprints.jsonl`, or other Editor export JSONL blobs — they are huge. Use `unreal_asset_graph_lookup` once per asset; if `stopRetryingLookup=true`, answer from that result and do not repeat the lookup.
+- **Never** `read_file` on `materials.jsonl`, `blueprints.jsonl`, or other Editor export JSONL blobs — they are huge.
+- **graphDetail tiers:** `compact` (~12 expr), `medium` (~36), `large` (~96), `full` (all exported). Default `compact`.
+- If lookup returns `graphSampled=true` and `nextDetailLevel`, escalate with that detail **once** — do not loop lookup↔rag_search.
+- If `stopRetryingLookup=true` (empty graph or max detail), answer from the last lookup — do not repeat.
+- If `unreal_rag_search` errors, report it and continue from the last lookup; do not alternate tools in a loop.
+
+## C++ / source detail tiers
+
+- **RAG evidence** (`unreal_rag_search`, `unreal_symbol_lookup`): `detailLevel` compact (~10k assembly), medium (~18k), large (~40k), full (~80k). Default `compact`. If assembly note says truncated, escalate **once** via `nextDetailLevel` in structured output.
+- **File reads** (`read_file`, `read_file_range` on unreal-agent): same `detailLevel` names — compact ~16 KiB / 150 lines, medium ~32 KiB / 400 lines, large/full up to 64 KiB / 1200–2000 lines.
+- Do not repeat the same `detailLevel`; do not paste full sources in chat when read tools exist.
+
 - One-shot local command: `.\rag.ps1 export-editor-metadata` (export + ingest + rebuild).
 - Do not describe one material's graph from memory; always lookup or validate against exported metadata first.
 - Before stating material node/wire facts, call unreal_editor_metadata_status; if metadata exists, call unreal_material_claim_validate for concrete material graph claims.

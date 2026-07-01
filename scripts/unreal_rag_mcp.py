@@ -39,7 +39,7 @@ from material_porting_validate import validate_material_porting_plan
 from editor_metadata_status import editor_metadata_status
 from blueprint_claim_validate import validate_blueprint_claims
 from material_claim_validate import validate_material_claims
-from asset_graph_lookup import lookup_asset_graph, search_asset_graphs
+from asset_graph_lookup import graph_detail_limits, lookup_asset_graph, search_asset_graphs
 from sync_editor_metadata import refresh_editor_metadata, sync_editor_metadata
 from editor_export_runner import run_editor_export
 from runtime_config_checklist import check_runtime_config
@@ -131,11 +131,20 @@ class McpServer:
     def error(self, message_id: Any, code: int, message: str) -> None:
         self.send({"jsonrpc": "2.0", "id": message_id, "error": {"code": code, "message": message}})
 
-    def tool_result(self, message_id: Any, text: str, structured: dict[str, Any] | None = None, is_error: bool = False) -> None:
-        from mcp_tool_compact import truncate_text
+    def tool_result(
+        self,
+        message_id: Any,
+        text: str,
+        structured: dict[str, Any] | None = None,
+        is_error: bool = False,
+        *,
+        char_limit: int | None = None,
+    ) -> None:
+        from mcp_tool_compact import max_tool_result_chars, truncate_text
 
+        limit = char_limit if char_limit is not None else max_tool_result_chars()
         payload: dict[str, Any] = {
-            "content": [{"type": "text", "text": truncate_text(text)}],
+            "content": [{"type": "text", "text": truncate_text(text, limit)}],
             "isError": is_error,
         }
         if structured is not None:
@@ -237,6 +246,15 @@ class McpServer:
                             "default": True,
                             "description": "When false, never apply activeProject filter.",
                         },
+                        "detailLevel": {
+                            "type": "string",
+                            "enum": ["compact", "medium", "large", "full"],
+                            "default": "compact",
+                            "description": (
+                                "Evidence size tier for C++ / doc chunks: compact (~10k assembly), "
+                                "medium (~18k), large (~40k), full (~80k). Escalate once if evidence is truncated."
+                            ),
+                        },
                     },
                     ["query"],
                 ),
@@ -257,6 +275,12 @@ class McpServer:
                             "description": "Optional filter: class, struct, interface, enum, function, module.",
                         },
                         "project": {"type": "array", "items": {"type": "string"}},
+                        "detailLevel": {
+                            "type": "string",
+                            "enum": ["compact", "medium", "large", "full"],
+                            "default": "compact",
+                            "description": "Symbol lookup evidence tier (same as unreal_rag_search detailLevel).",
+                        },
                     },
                     ["query"],
                 ),
@@ -581,7 +605,8 @@ class McpServer:
                 "title": "Lookup Material/Blueprint Graph Metadata",
                 "description": (
                     "Return exported graph metadata for any material or blueprint by /Game/... path or short asset name. "
-                    "Use before making wire/pin claims."
+                    "Use graphDetail: compact (default), medium, large, or full. When graphSampled=true, escalate one "
+                    "level via nextDetailLevel — do not repeat the same graphDetail or alternate with rag_search."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -592,9 +617,19 @@ class McpServer:
                             "enum": ["auto", "material", "blueprint"],
                             "default": "auto",
                         },
+                        "graphDetail": {
+                            "type": "string",
+                            "enum": ["compact", "medium", "large", "full"],
+                            "default": "compact",
+                            "description": "Graph payload size: compact (~12 nodes), medium (~36), large (~96), full (all exported).",
+                        },
                         "indexDir": {"type": "string", "default": "data/unreal58"},
                         "projectName": {"type": "string"},
-                        "includeFullGraph": {"type": "boolean", "default": False},
+                        "includeFullGraph": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Deprecated alias for graphDetail=full.",
+                        },
                         "limit": {"type": "integer", "minimum": 1, "maximum": 32, "default": 12},
                     },
                 ),
@@ -755,8 +790,17 @@ class McpServer:
         top_k: int,
         arguments: dict[str, Any],
         use_hybrid: bool,
-    ) -> tuple[list[dict[str, Any]], str, str]:
+    ) -> tuple[list[dict[str, Any]], str, str, str]:
+        from token_budget import code_detail_limits, resolve_code_detail
+
         mode = str(arguments.get("mode") or "auto")
+        detail = resolve_code_detail(str(arguments.get("detailLevel") or "compact"))
+        limits = code_detail_limits(detail)
+        top_k = min(top_k, int(limits["top_k"]))
+        assembly_kwargs = {
+            "max_assembly_chars": int(limits["assembly_chars"]),
+            "max_chars_per_row": int(limits["row_chars"]),
+        }
         arguments = dict(arguments)
         arguments["query"] = query
         options, resolved_scope = self.search_options_from_args(arguments, top_k)
@@ -786,14 +830,14 @@ class McpServer:
                 if cid not in seen:
                     merged.append(row)
                     seen.add(cid)
-            context = assemble_context_mixed(local_rows, engine_rows, query, mode)
-            return merged, context, resolved_scope
+            context = assemble_context_mixed(local_rows, engine_rows, query, mode, **assembly_kwargs)
+            return merged, context, resolved_scope, detail
 
         rows = search_hybrid(self.index, query, top_k, options) if use_hybrid else search(
             self.index, query, top_k, options
         )
-        context = assemble_context(rows, query, mode)
-        return rows, context, resolved_scope
+        context = assemble_context(rows, query, mode, **assembly_kwargs)
+        return rows, context, resolved_scope, detail
 
     def launch_project_picker(self, explorer: bool = False) -> dict[str, Any]:
         script = self.workspace / "scripts" / "pick_active_project.ps1"
@@ -1020,6 +1064,7 @@ class McpServer:
                 self.tool_result(message_id, compact_json_text(compact), structured=compact)
             elif name == "unreal_asset_graph_lookup":
                 search = str(arguments.get("search") or "").strip()
+                graph_detail = str(arguments.get("graphDetail") or "compact").strip().lower()
                 if search:
                     payload = search_asset_graphs(
                         search,
@@ -1033,16 +1078,25 @@ class McpServer:
                     if not asset_path:
                         self.tool_result(message_id, "Provide assetPath or search.", is_error=True)
                         return
+                    include_full = bool(arguments.get("includeFullGraph"))
+                    graph_detail = str(arguments.get("graphDetail") or "compact").strip().lower()
                     payload = lookup_asset_graph(
                         asset_path,
                         asset_kind=str(arguments.get("assetKind") or "auto"),  # type: ignore[arg-type]
                         index_dir=arguments.get("indexDir") or "data/unreal58",
                         project_name=str(arguments.get("projectName") or "").strip() or None,
-                        include_full_graph=bool(arguments.get("includeFullGraph")),
-                        compact=True,
+                        include_full_graph=include_full,
+                        detail=graph_detail,
                     )
-                compact = compact_asset_graph_payload(payload)
-                self.tool_result(message_id, compact_json_text(compact), structured=compact)
+                compact_payload = compact_asset_graph_payload(payload)
+                detail_key = str(payload.get("detailLevel") or graph_detail or "compact")
+                char_limit = int(graph_detail_limits(detail_key).get("max_tool_chars") or 10_000)
+                self.tool_result(
+                    message_id,
+                    compact_json_text(compact_payload, limit=char_limit),
+                    structured=compact_payload,
+                    char_limit=char_limit,
+                )
             elif name == "unreal_blueprint_claim_validate":
                 payload = validate_blueprint_claims(
                     list(arguments.get("claims") or []),
@@ -1151,7 +1205,10 @@ class McpServer:
         arguments["mode"] = mode
         arguments["genre"] = genres
 
-        rows, context, resolved_scope = self.run_search(request, top_k, arguments, use_hybrid)
+        rows, context, resolved_scope, detail = self.run_search(request, top_k, arguments, use_hybrid)
+        from token_budget import code_detail_limits
+
+        char_limit = int(code_detail_limits(detail)["max_tool_chars"])
         config = load_shared_config()
         payload = {
             "ok": True,
@@ -1160,6 +1217,7 @@ class McpServer:
             "mode": mode,
             "scope": resolved_scope,
             "hybrid": use_hybrid,
+            "detailLevel": detail,
             "matchCount": len(rows),
             "nextSteps": [
                 "unreal_get_active_project",
@@ -1171,7 +1229,12 @@ class McpServer:
             "context": context,
             "matches": rows,
         }
-        self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+        self.tool_result(
+            message_id,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            structured=payload,
+            char_limit=char_limit,
+        )
 
     def handle_project_architecture(self, message_id: Any, arguments: dict[str, Any]) -> None:
         index_dir = self.index.parent
@@ -1230,12 +1293,23 @@ class McpServer:
             self.tool_result(message_id, f"RAG index does not exist: {self.index}", is_error=True)
             return
 
-        options = self.search_options_from_args(arguments, top_k)
-        rows, context, resolved_scope = self.run_search(query, top_k, arguments, use_hybrid)
+        rows, context, resolved_scope, detail = self.run_search(query, top_k, arguments, use_hybrid)
+        from token_budget import code_detail_limits, next_code_detail
+
+        char_limit = int(code_detail_limits(detail)["max_tool_chars"])
+        truncated = "assembly budget truncated" in context
+        next_detail = next_code_detail(detail) if truncated else None
         self.tool_result(
             message_id,
             context,
-            structured={"matches": rows, "hybrid": use_hybrid, "scope": resolved_scope},
+            structured={
+                "matches": rows,
+                "hybrid": use_hybrid,
+                "scope": resolved_scope,
+                "detailLevel": detail,
+                "nextDetailLevel": next_detail,
+            },
+            char_limit=char_limit,
         )
 
     def handle_symbol_lookup(self, message_id: Any, arguments: dict[str, Any]) -> None:
@@ -1248,6 +1322,11 @@ class McpServer:
             self.tool_result(message_id, f"RAG index does not exist: {self.index}", is_error=True)
             return
 
+        from token_budget import code_detail_limits, next_code_detail, resolve_code_detail
+
+        detail = resolve_code_detail(str(arguments.get("detailLevel") or "compact"))
+        limits = code_detail_limits(detail)
+        top_k = min(top_k, int(limits["top_k"]))
         rows = symbol_lookup(
             self.index,
             query,
@@ -1255,10 +1334,20 @@ class McpServer:
             symbol_kind=str(arguments.get("symbol_kind") or ""),
             project=list(arguments.get("project") or []),
         )
+        context = assemble_context(
+            rows,
+            query,
+            "api_lookup",
+            max_assembly_chars=int(limits["assembly_chars"]),
+            max_chars_per_row=int(limits["row_chars"]),
+        )
+        truncated = "assembly budget truncated" in context
+        next_detail = next_code_detail(detail) if truncated else None
         self.tool_result(
             message_id,
-            assemble_context(rows, query, "api_lookup"),
-            structured={"matches": rows},
+            context,
+            structured={"matches": rows, "detailLevel": detail, "nextDetailLevel": next_detail},
+            char_limit=int(limits["max_tool_chars"]),
         )
 
     def handle_start_compile_loop(self, message_id: Any, arguments: dict[str, Any]) -> None:

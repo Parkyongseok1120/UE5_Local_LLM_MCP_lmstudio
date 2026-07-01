@@ -13,6 +13,16 @@ from workspace_paths import load_shared_config, resolve_index_dir
 from asset_taxonomy import classify_ue_asset_class, graph_lookup_guidance
 
 AssetKind = Literal["auto", "material", "blueprint", "animation"]
+GraphDetail = Literal["compact", "medium", "large", "full"]
+
+GRAPH_DETAIL_ORDER: tuple[GraphDetail, ...] = ("compact", "medium", "large", "full")
+
+GRAPH_DETAIL_LIMITS: dict[str, dict[str, int]] = {
+    "compact": {"expressions": 12, "edges": 20, "max_tool_chars": 10_000},
+    "medium": {"expressions": 36, "edges": 64, "max_tool_chars": 18_000},
+    "large": {"expressions": 96, "edges": 160, "max_tool_chars": 40_000},
+    "full": {"expressions": 320, "edges": 800, "max_tool_chars": 80_000},
+}
 
 KIND_FILES: dict[str, str] = {
     "material": "raw_material_metadata.jsonl",
@@ -129,25 +139,93 @@ def _filter_project(rows: list[dict[str, Any]], project_name: str | None) -> lis
     return filtered
 
 
-def _summarize_material(row: dict[str, Any], *, compact: bool = False) -> dict[str, Any]:
+def _prioritize_material_expressions(expressions: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    if len(expressions) <= limit:
+        return expressions
+
+    priority_markers = (
+        "Parameter",
+        "FunctionOutput",
+        "MaterialLayerOutput",
+        "FunctionCall",
+        "TextureSample",
+        "SetMaterialAttributes",
+    )
+
+    def rank(expression: dict[str, Any]) -> tuple[int, str]:
+        cls = str(expression.get("class") or "")
+        for index, marker in enumerate(priority_markers):
+            if marker in cls:
+                return index, str(expression.get("name") or "")
+        return len(priority_markers), str(expression.get("name") or "")
+
+    return sorted(expressions, key=rank)[:limit]
+
+
+def resolve_graph_detail(
+    *,
+    detail: str | None = None,
+    compact: bool | None = None,
+    include_full_graph: bool = False,
+) -> GraphDetail:
+    if include_full_graph:
+        return "full"
+    if detail:
+        normalized = str(detail).strip().lower()
+        if normalized in GRAPH_DETAIL_LIMITS:
+            return normalized  # type: ignore[return-value]
+    if compact is False:
+        return "medium"
+    return "compact"
+
+
+def graph_detail_limits(detail: str) -> dict[str, int]:
+    return dict(GRAPH_DETAIL_LIMITS.get(detail) or GRAPH_DETAIL_LIMITS["compact"])
+
+
+def _next_graph_detail(detail: str) -> GraphDetail | None:
+    try:
+        index = GRAPH_DETAIL_ORDER.index(detail)  # type: ignore[arg-type]
+    except ValueError:
+        return None
+    if index + 1 >= len(GRAPH_DETAIL_ORDER):
+        return None
+    return GRAPH_DETAIL_ORDER[index + 1]
+
+
+def _summarize_material(row: dict[str, Any], *, detail: GraphDetail = "compact") -> dict[str, Any]:
     meta = _row_metadata(row)
-    expr_limit = 8 if compact else 40
-    edge_limit = 12 if compact else 80
+    limits = graph_detail_limits(detail)
+    expr_limit = int(limits["expressions"])
+    edge_limit = int(limits["edges"])
+    all_expressions = list(meta.get("expressions") or [])
+    all_edges = list(meta.get("graph_edges") or [])
+    if detail in {"compact", "medium"}:
+        expression_rows = _prioritize_material_expressions(all_expressions, expr_limit)
+    else:
+        expression_rows = all_expressions[:expr_limit]
+    param_limit = 12 if detail == "compact" else (24 if detail == "medium" else None)
+    root_limit = 6 if detail == "compact" else (12 if detail == "medium" else None)
     return {
         "assetPath": _asset_path(row) or None,
         "assetType": meta.get("asset_type"),
         "name": _asset_name(row) or None,
         "parentMaterial": meta.get("parent_material"),
         "graphSource": meta.get("graph_source"),
-        "expressionCount": len(meta.get("expressions") or []),
-        "graphEdgeCount": len(meta.get("graph_edges") or []),
-        "rootOutputs": (meta.get("root_outputs") or [])[:6 if compact else None],
-        "expressions": (meta.get("expressions") or [])[:expr_limit],
-        "graphEdges": (meta.get("graph_edges") or [])[:edge_limit],
-        "scalarParameters": (meta.get("scalar_parameters") or [])[:12 if compact else None],
-        "vectorParameters": (meta.get("vector_parameters") or [])[:12 if compact else None],
-        "textureParameters": (meta.get("texture_parameters") or [])[:12 if compact else None],
-        "staticSwitchParameters": (meta.get("static_switch_parameters") or [])[:12 if compact else None],
+        "detailLevel": detail,
+        "expressionCount": len(all_expressions),
+        "graphEdgeCount": len(all_edges),
+        "expressionsReturned": len(expression_rows),
+        "graphEdgesReturned": min(edge_limit, len(all_edges)),
+        "rootOutputs": (meta.get("root_outputs") or [])[:root_limit],
+        "expressions": expression_rows,
+        "graphEdges": all_edges[:edge_limit],
+        "scalarParameters": (meta.get("scalar_parameters") or [])[:param_limit],
+        "vectorParameters": (meta.get("vector_parameters") or [])[:param_limit],
+        "textureParameters": (meta.get("texture_parameters") or [])[:param_limit],
+        "staticSwitchParameters": (meta.get("static_switch_parameters") or [])[:param_limit],
+        "description": meta.get("description"),
+        "user_exposed_caption": meta.get("user_exposed_caption"),
     }
 
 
@@ -244,42 +322,73 @@ def _summarize_generic(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _annotate_graph_coverage(summary: dict[str, Any]) -> dict[str, Any]:
+def _annotate_graph_coverage(summary: dict[str, Any], *, detail: GraphDetail = "compact") -> dict[str, Any]:
     asset_type = str(summary.get("assetType") or "")
     expression_count = int(summary.get("expressionCount") or 0)
     edge_count = int(summary.get("graphEdgeCount") or 0)
+    expressions_returned = int(summary.get("expressionsReturned") or len(summary.get("expressions") or []))
+    edges_returned = int(summary.get("graphEdgesReturned") or len(summary.get("graphEdges") or []))
     has_graph = expression_count > 0 or edge_count > 0
     summary["graphExported"] = has_graph
-    if has_graph:
+    summary["detailLevel"] = detail
+    if not has_graph:
+        summary["stopRetryingLookup"] = True
+        summary["coverageNote"] = (
+            "Indexed asset exists but graph/parameters were not exported. "
+            "Do not call unreal_asset_graph_lookup again for the same path in this session."
+        )
+        actions = graph_lookup_guidance(asset_class=asset_type, asset_path=str(summary.get("assetPath") or ""))
+        if asset_type in {"MaterialFunctionMaterialLayer", "MaterialFunctionMaterialLayerBlend"}:
+            actions.insert(
+                0,
+                "Run export-editor-metadata if this layer should have a graph, then retry lookup once.",
+            )
+        summary["nextActions"] = actions[:6]
+        taxonomy = classify_ue_asset_class(asset_type)
+        if taxonomy:
+            summary["taxonomy"] = {
+                "item": taxonomy.get("item_name"),
+                "ragCoverage": taxonomy.get("rag_coverage"),
+                "workDomain": taxonomy.get("work_domain"),
+            }
         return summary
 
-    summary["stopRetryingLookup"] = True
-    summary["coverageNote"] = (
-        "Indexed asset exists but graph/parameters were not exported. "
-        "Do not call unreal_asset_graph_lookup again for the same path in this session."
-    )
-    actions = graph_lookup_guidance(asset_class=asset_type, asset_path=str(summary.get("assetPath") or ""))
-    if asset_type in {"MaterialFunctionMaterialLayer", "MaterialFunctionMaterialLayerBlend"}:
-        actions.insert(
-            0,
-            "Material Layer assets need a fresh Editor export (materials.jsonl) after fixing headless export; "
-            "open the layer in Material Editor if the graph is still empty.",
+    graph_sampled = expressions_returned < expression_count or edges_returned < edge_count
+    if graph_sampled:
+        summary["graphSampled"] = True
+        next_detail = _next_graph_detail(detail)
+        if next_detail:
+            summary["nextDetailLevel"] = next_detail
+            summary["coverageNote"] = (
+                f"Graph exported ({expression_count} expressions, {edge_count} edges). "
+                f"Current detailLevel={detail} returned {expressions_returned} expressions and "
+                f"{edges_returned} edges. Do not repeat the same detailLevel. "
+                f"If more node detail is required, call unreal_asset_graph_lookup once with "
+                f"graphDetail={next_detail} for the same asset."
+            )
+            summary["nextActions"] = [
+                f"Prefer answering from this {detail} sample plus parameters unless a specific node is missing.",
+                f"Escalate at most one level: graphDetail={next_detail}.",
+                "For one wire claim, use unreal_material_claim_validate instead of another lookup.",
+            ]
+        else:
+            summary["stopRetryingLookup"] = True
+            summary["coverageNote"] = (
+                f"Graph exported at maximum detailLevel={detail} "
+                f"({expressions_returned}/{expression_count} expressions returned)."
+            )
+    else:
+        summary["stopRetryingLookup"] = True
+        summary["coverageNote"] = (
+            f"Full graph returned at detailLevel={detail} ({expression_count} expressions)."
         )
-    summary["nextActions"] = actions[:6]
-    taxonomy = classify_ue_asset_class(asset_type)
-    if taxonomy:
-        summary["taxonomy"] = {
-            "item": taxonomy.get("item_name"),
-            "ragCoverage": taxonomy.get("rag_coverage"),
-            "workDomain": taxonomy.get("work_domain"),
-        }
     return summary
 
 
-def _summarize_row(kind: str, row: dict[str, Any], *, compact: bool = False) -> dict[str, Any]:
+def _summarize_row(kind: str, row: dict[str, Any], *, detail: GraphDetail = "compact") -> dict[str, Any]:
     if kind == "material":
-        summary = _summarize_material(row, compact=compact)
-        return _annotate_graph_coverage(summary)
+        summary = _summarize_material(row, detail=detail)
+        return _annotate_graph_coverage(summary, detail=detail)
     if kind == "blueprint":
         return _summarize_blueprint(row)
     if kind == "structured":
@@ -323,8 +432,14 @@ def lookup_asset_graph(
     index_dir: str | Path | None = None,
     project_name: str | None = None,
     include_full_graph: bool = False,
-    compact: bool = False,
+    compact: bool | None = None,
+    detail: str | None = None,
 ) -> dict[str, Any]:
+    resolved_detail = resolve_graph_detail(
+        detail=detail,
+        compact=compact,
+        include_full_graph=include_full_graph,
+    )
     idx = _resolve_index_dir(index_dir)
     query = str(asset_path or "").strip()
     if not query:
@@ -383,9 +498,9 @@ def lookup_asset_graph(
     summaries = []
     for item in matches[:8]:
         row = item["row"]
-        summary = _summarize_row(item["kind"], row, compact=compact)
+        summary = _summarize_row(item["kind"], row, detail=resolved_detail)
         summary["kind"] = item["kind"]
-        if include_full_graph:
+        if include_full_graph or resolved_detail == "full":
             summary["rawMetadata"] = _row_metadata(row)
         summaries.append(summary)
 
@@ -395,6 +510,7 @@ def lookup_asset_graph(
         "query": query,
         "assetKind": primary["kind"],
         "matchCount": len(summaries),
+        "detailLevel": resolved_detail,
         "indexDir": str(idx),
         "projectName": project_name or _active_project_name(),
         "primary": primary,

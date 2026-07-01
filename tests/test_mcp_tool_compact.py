@@ -10,13 +10,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from asset_graph_lookup import lookup_asset_graph  # noqa: E402
+from asset_graph_lookup import graph_detail_limits, lookup_asset_graph  # noqa: E402
 from mcp_tool_compact import (  # noqa: E402
     compact_asset_graph_payload,
     compact_json_text,
     compact_sync_metadata_payload,
+    max_tool_result_chars,
     truncate_text,
 )
+from token_budget import code_detail_limits, resolve_code_detail  # noqa: E402
+
+
+def test_default_tool_result_ceiling_is_high():
+    assert max_tool_result_chars() >= 80_000
+
+
+def test_code_detail_limits_tiers():
+    compact = code_detail_limits("compact")
+    medium = code_detail_limits("medium")
+    assert compact["assembly_chars"] < medium["assembly_chars"]
+    assert compact["read_bytes"] < medium["read_bytes"]
+    assert resolve_code_detail("bogus") == "compact"
 
 
 def test_truncate_text():
@@ -145,11 +159,43 @@ def test_compact_lookup_large_graph_stays_under_tool_budget(tmp_path: Path):
         asset_kind="material",
         index_dir=index_dir,
         project_name="Demo",
-        compact=True,
+        detail="compact",
     )
     compact = compact_asset_graph_payload(payload)
-    text = compact_json_text(compact)
+    text = compact_json_text(compact, limit=graph_detail_limits("compact")["max_tool_chars"])
     assert payload["primary"]["expressionCount"] == 200
-    assert len(payload["primary"]["expressions"]) == 8
-    assert len(payload["primary"]["graphEdges"]) == 12
+    assert len(payload["primary"]["expressions"]) == 12
+    assert len(payload["primary"]["graphEdges"]) == 20
+    assert payload["primary"]["graphSampled"] is True
+    assert payload["primary"]["nextDetailLevel"] == "medium"
+    assert compact["nextDetailLevel"] == "medium"
     assert len(text) <= 10_000
+
+
+def test_lookup_medium_detail_returns_more_nodes(tmp_path: Path):
+    index_dir = tmp_path / "data"
+    index_dir.mkdir()
+    expressions = [
+        {"name": f"Node_{index}", "class": "MaterialExpressionMultiply", "input_wires": {}}
+        for index in range(80)
+    ]
+    row = {
+        "metadata": {
+            "asset_path": "/Game/Materials/M_Mid",
+            "asset_type": "Material",
+            "project": "Demo",
+            "expressions": expressions,
+            "graph_edges": [],
+        }
+    }
+    (index_dir / "raw_material_metadata.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+    payload = lookup_asset_graph(
+        "M_Mid",
+        asset_kind="material",
+        index_dir=index_dir,
+        project_name="Demo",
+        detail="medium",
+    )
+    assert payload["detailLevel"] == "medium"
+    assert len(payload["primary"]["expressions"]) == 36
+    assert payload["primary"]["nextDetailLevel"] == "large"

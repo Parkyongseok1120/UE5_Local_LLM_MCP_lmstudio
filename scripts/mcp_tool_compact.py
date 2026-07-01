@@ -7,7 +7,8 @@ import json
 import os
 from typing import Any
 
-DEFAULT_MAX_TOOL_CHARS = 10_000
+# Safety ceiling only — each tool compacts/sizes its own payload (graphDetail, detailLevel, etc.).
+DEFAULT_MAX_TOOL_CHARS = 80_000
 
 
 def max_tool_result_chars() -> int:
@@ -136,6 +137,7 @@ def compact_asset_graph_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "query": payload.get("query"),
         "assetKind": payload.get("assetKind"),
         "matchCount": match_count,
+        "detailLevel": payload.get("detailLevel") or primary.get("detailLevel"),
         "primary": primary,
         "projectName": payload.get("projectName"),
     }
@@ -152,4 +154,9 @@ def compact_asset_graph_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if primary.get("stopRetryingLookup"):
         compact["stopRetryingLookup"] = True
         compact["nextActions"] = (primary.get("nextActions") or [])[:5]
+    if primary.get("graphSampled"):
+        compact["graphSampled"] = True
+        compact["coverageNote"] = primary.get("coverageNote")
+    if primary.get("nextDetailLevel"):
+        compact["nextDetailLevel"] = primary.get("nextDetailLevel")
     return compact

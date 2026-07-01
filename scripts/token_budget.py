@@ -37,6 +37,65 @@ ROW_CHARS_DEFAULTS = {
     "default": 5000,
 }
 
+CODE_DETAIL_ORDER: tuple[str, ...] = ("compact", "medium", "large", "full")
+
+CODE_DETAIL_LIMITS: dict[str, dict[str, int]] = {
+    "compact": {
+        "assembly_chars": 10_000,
+        "row_chars": 3_000,
+        "top_k": 6,
+        "read_bytes": 16_384,
+        "read_line_cap": 150,
+        "max_tool_chars": 10_000,
+    },
+    "medium": {
+        "assembly_chars": 18_000,
+        "row_chars": 5_000,
+        "top_k": 8,
+        "read_bytes": 32_768,
+        "read_line_cap": 400,
+        "max_tool_chars": 18_000,
+    },
+    "large": {
+        "assembly_chars": 40_000,
+        "row_chars": 8_000,
+        "top_k": 12,
+        "read_bytes": 65_536,
+        "read_line_cap": 1200,
+        "max_tool_chars": 40_000,
+    },
+    "full": {
+        "assembly_chars": 80_000,
+        "row_chars": 12_000,
+        "top_k": 16,
+        "read_bytes": 65_536,
+        "read_line_cap": 2000,
+        "max_tool_chars": 80_000,
+    },
+}
+
+
+def resolve_code_detail(raw: str | None = None, *, legacy_compact: bool | None = None) -> str:
+    normalized = str(raw or "compact").strip().lower()
+    if legacy_compact is True and normalized == "compact":
+        return "compact"
+    if normalized in CODE_DETAIL_LIMITS:
+        return normalized
+    return "compact"
+
+
+def code_detail_limits(detail: str | None = None) -> dict[str, int]:
+    key = resolve_code_detail(detail)
+    return dict(CODE_DETAIL_LIMITS[key])
+
+
+def next_code_detail(detail: str) -> str | None:
+    key = resolve_code_detail(detail)
+    index = CODE_DETAIL_ORDER.index(key)
+    if index + 1 >= len(CODE_DETAIL_ORDER):
+        return None
+    return CODE_DETAIL_ORDER[index + 1]
+
 
 @lru_cache(maxsize=1)
 def load_token_budget_file() -> dict[str, Any]:
