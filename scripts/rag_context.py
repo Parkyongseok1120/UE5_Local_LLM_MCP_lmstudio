@@ -69,6 +69,13 @@ SECTION_LABELS = [
     "Agent-Edit Context Order",
     "Shader Context Order",
     "Material Graph Analysis Order",
+    "Material Graph Porting Workflow",
+    "Post Process To Material Boundary",
+    "Material Porting Response Contract",
+    "Unreal API Hallucination Blocklist",
+    "Edit Verification Proof Levels",
+    "Proof Levels",
+    "Asset Mutation Boundary",
     "Blueprint Graph Analysis Order",
     "Feedback Loop",
     "Required Edit Discipline",
@@ -110,7 +117,9 @@ BUDGET_MODE_ALIASES: dict[str, str] = {
     "codegen": "codegen",
     "shader": "codegen",
     "material_analysis": "review",
+    "material_porting": "review",
     "blueprint_analysis": "review",
+    "blueprint_verification": "review",
     "prototype_component": "codegen",
     "prototype_subsystem": "codegen",
     "api_lookup": "api_lookup",
@@ -159,12 +168,28 @@ MODE_BUCKETS = {
         ("target_symbols", "4. Related APIs"),
         ("other", "5. Other retrieved evidence"),
     ],
+    "material_porting": [
+        ("playbooks", "1. Material graph porting rules and Unreal constraints"),
+        ("project_examples", "2. Local shader/material helper code"),
+        ("asset_metadata", "3. Material metadata and parameter inventory"),
+        ("target_symbols", "4. Related engine APIs and symbols"),
+        ("module_evidence", "5. Module / shader integration evidence"),
+        ("other", "6. Other retrieved evidence"),
+    ],
     "blueprint_analysis": [
         ("asset_metadata", "1. Blueprint graph, variable, and function-call metadata"),
         ("playbooks", "2. Blueprint analysis rules"),
         ("project_examples", "3. Local C++/BP-adjacent references"),
         ("target_symbols", "4. Related C++ APIs"),
         ("other", "5. Other retrieved evidence"),
+    ],
+    "blueprint_verification": [
+        ("asset_metadata", "1. Blueprint exported facts and graph/pin metadata"),
+        ("playbooks", "2. Blueprint verification and proof-level rules"),
+        ("project_examples", "3. Local C++/BP-adjacent references"),
+        ("target_symbols", "4. Related C++ APIs"),
+        ("build_errors", "5. Editor/runtime logs when available"),
+        ("other", "6. Other retrieved evidence"),
     ],
     "compile_fix": [
         ("build_errors", "1. Build/UHT/linker error records"),
@@ -465,10 +490,23 @@ def assembly_instructions(mode: str) -> str:
             "Use material metadata first. For screenshots, separate visible facts from guesses, "
             "list scalar/vector/texture/static switch parameters, texture assets, and unknown nodes."
         )
+    if mode == "material_porting":
+        return (
+            "Classify post-process shader features as directly portable, approximate in material, "
+            "or post-process only. Do not invent SceneColor, PreExposure, GBuffer, CustomStencil, "
+            "or directional-light access in surface materials; prefer Material Functions, Material "
+            "Instances, and Material Parameter Collections with exact project helper files cited."
+        )
     if mode == "blueprint_analysis":
         return (
             "Use Blueprint metadata first. List variables, functions, node titles, pins, and "
             "function-call candidates. Do not claim an asset was changed without Editor-side proof."
+        )
+    if mode == "blueprint_verification":
+        return (
+            "Verify Blueprint claims from exported metadata first: separate exported facts, "
+            "confirmed graph links/pins, assumptions, missing exports, and Editor checks. "
+            "Do not infer execution wiring from asset names or variable names alone. Report proof level."
         )
     if mode == "compile_fix":
         return (

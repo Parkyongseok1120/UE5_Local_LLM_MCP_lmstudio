@@ -26,8 +26,14 @@
     "material_analysis": {
       "layer_order": ["asset_metadata", "playbook", "code_semantic", "exact_symbol"]
     },
+    "material_porting": {
+      "layer_order": ["playbook", "code_semantic", "asset_metadata", "exact_symbol", "module_graph"]
+    },
     "blueprint_analysis": {
       "layer_order": ["asset_metadata", "playbook", "code_semantic", "exact_symbol"]
+    },
+    "blueprint_verification": {
+      "layer_order": ["asset_metadata", "playbook", "build_log", "code_semantic", "exact_symbol"]
     },
     "module_fix": {
       "layer_order": ["module_graph", "exact_symbol", "build_log", "playbook"]

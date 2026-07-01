@@ -71,7 +71,7 @@ def test_runtime_debug_write_gate_blocks_edits():
 
 
 def test_shader_material_blueprint_analysis_blocks_edits():
-    for mode in ("shader", "material_analysis", "blueprint_analysis"):
+    for mode in ("shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification"):
         plan = build_agent_plan("Analyze graph and parameters", mode)
         assert plan.task_kind == "inspect_only"
         assert plan.edit_strategy == "no_edit"

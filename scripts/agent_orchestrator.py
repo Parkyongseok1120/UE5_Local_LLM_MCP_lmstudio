@@ -35,7 +35,7 @@ RUNTIME_MARKERS = ("pie", "runtime", "gamemode", "input mapping", "crash", "asse
 REVIEW_MARKERS = ("review", "inventory", "audit", "findings", "architecture review")
 ASSET_ANALYSIS_MARKERS = (
     "shader", "usf", "ush", "hlsl", "material", "material node",
-    "material graph", "blueprint graph", "function call", "variable", "screenshot",
+    "material graph", "material porting", "blueprint graph", "blueprint verification", "function call", "variable", "pin link", "screenshot",
 )
 API_MARKERS = ("what is", "how does", "api", "lookup", "documentation", "explain")
 
@@ -89,7 +89,7 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "refactor"
     if mode in {"compile_fix", "module_fix", "reflection_fix"}:
         return "compile_fix"
-    if mode in {"shader", "material_analysis", "blueprint_analysis"}:
+    if mode in {"shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification"}:
         return "inspect_only"
     if mode == "runtime_debug":
         return "runtime_debug"
@@ -140,7 +140,7 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.writes_allowed = False
         plan.confidence = 0.8
     elif task_kind == "inspect_only":
-        if mode in {"shader", "material_analysis", "blueprint_analysis"}:
+        if mode in {"shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification"}:
             plan.rag_modes = [mode, "review"]
         else:
             plan.rag_modes = ["review", "planning"]

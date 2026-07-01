@@ -125,7 +125,9 @@ VALID_MODES = {
     "codegen",
     "shader",
     "material_analysis",
+    "material_porting",
     "blueprint_analysis",
+    "blueprint_verification",
     "compile_fix",
     "runtime_debug",
     "api_lookup",
@@ -234,7 +236,15 @@ MODE_SOURCE_BIAS = {
         "unreal_symbol": -2.0,
         "epic_docs": -1.0,
     },
-    "blueprint_analysis": {
+    "material_porting": {
+        "project_guideline": -12.0,
+        "unreal_project_text": -9.0,
+        "unreal_material_metadata": -7.0,
+        "unreal_project_asset_path": -4.0,
+        "unreal_symbol": -3.0,
+        "module_graph": -2.0,
+        "epic_docs": -1.0,
+    },    "blueprint_analysis": {
         "unreal_blueprint_metadata": -12.0,
         "project_guideline": -9.0,
         "unreal_project_text": -6.0,
@@ -242,7 +252,15 @@ MODE_SOURCE_BIAS = {
         "unreal_symbol": -3.0,
         "epic_docs": -1.0,
     },
-    "compile_fix": {
+    "blueprint_verification": {
+        "unreal_blueprint_metadata": -14.0,
+        "project_guideline": -11.0,
+        "build_log": -4.0,
+        "unreal_project_text": -6.0,
+        "unreal_project_asset_path": -4.0,
+        "unreal_symbol": -3.0,
+        "epic_docs": -1.0,
+    },    "compile_fix": {
         "build_log": -10.0,
         "module_graph": -7.0,
         "project_profile": -5.0,
@@ -450,7 +468,15 @@ MODE_LAYER_BIAS = {
         "type_symbol": -3.0,
         "function_symbol": -3.0,
     },
-    "compile_fix": {
+    "blueprint_verification": {
+        "project_architecture": -12.0,
+        "project_text": -6.0,
+        "project_asset_path": -5.0,
+        "unreal_domain": -7.0,
+        "type_symbol": -3.0,
+        "function_symbol": -4.0,
+        "build_error": -3.0,
+    },    "compile_fix": {
         "compile_fix": -9.0,
         "module_fix": -8.0,
         "reflection_fix": -8.0,
@@ -673,6 +699,21 @@ SHADER_HINTS = {
     "shadercompile",
     "virtual shader path",
 }
+MATERIAL_PORTING_HINTS = {
+    "porting",
+    "convert to material",
+    "material graph conversion",
+    "material graph로",
+    "material node로",
+    "머티리얼 노드",
+    "머티리얼 그래프",
+    "플러그인 말고",
+    "post process to material",
+    "surface material",
+    "material function",
+    "material parameter collection",
+    "mpc",
+}
 MATERIAL_ANALYSIS_HINTS = {
     "material",
     "materialinstance",
@@ -685,6 +726,24 @@ MATERIAL_ANALYSIS_HINTS = {
     "static switch",
     "shading model",
     "blend mode",
+}
+BLUEPRINT_VERIFICATION_HINTS = {
+    "verify blueprint",
+    "blueprint verification",
+    "bp verification",
+    "pin link",
+    "pin links",
+    "node link",
+    "node links",
+    "graph links",
+    "connected pins",
+    "editor export",
+    "metadata export",
+    "bp 확인",
+    "블루프린트 확인",
+    "핀 연결",
+    "노드 연결",
+    "그래프 연결",
 }
 BLUEPRINT_ANALYSIS_HINTS = {
     "blueprint graph",
@@ -780,6 +839,16 @@ def resolve_mode(query: str, mode: str) -> str:
         return "runtime_debug"
     if has_hint(terms, raw, COMPILE_FIX_HINTS):
         return "compile_fix"
+    if has_hint(terms, raw, MATERIAL_PORTING_HINTS) or any(
+        marker in raw
+        for marker in ("post process to material", "convert to material", "material graph conversion")
+    ):
+        return "material_porting"
+    if has_hint(terms, raw, BLUEPRINT_VERIFICATION_HINTS) or any(
+        marker in raw
+        for marker in ("verify blueprint", "pin links", "node links", "editor export", "metadata export")
+    ):
+        return "blueprint_verification"
     if has_hint(terms, raw, SHADER_HINTS):
         return "shader"
     if has_hint(terms, raw, MATERIAL_ANALYSIS_HINTS):
@@ -929,7 +998,7 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
             if "gameplay systems" in identity_lower:
                 score -= 18.0
     if source == "project_guideline" and "diagram response rules" in identity_lower:
-        if mode in {"planning", "design", "review", "agent_edit", "material_analysis", "blueprint_analysis", "shader"} or any(
+        if mode in {"planning", "design", "review", "agent_edit", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification", "shader"} or any(
             marker in query_lower
             for marker in ("diagram", "mermaid", "ascii", "fallback", "structure", "architecture", "dependency", "ownership", "graph", "flow", "node")
         ):
@@ -1016,12 +1085,25 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
             score -= 18.0
         if source == "project_guideline" and any(marker in identity_lower or marker in text for marker in ("material graph", "material screenshot", "material expression", "parameter inventory")):
             score -= 12.0
+    if mode == "material_porting":
+        if extension in {".usf", ".ush"} or "materialgraphcommon" in identity_lower or "tse_mg_" in text:
+            score -= 18.0
+        if source == "project_guideline" and any(marker in identity_lower or marker in text for marker in ("material graph porting", "post process to material", "hallucination blocklist", "proof levels")):
+            score -= 14.0
+        if source == "unreal_material_metadata":
+            score -= 8.0
     if mode == "blueprint_analysis":
         if source == "unreal_blueprint_metadata":
             score -= 18.0
         if source == "project_guideline" and any(marker in identity_lower or marker in text for marker in ("blueprint graph", "function call", "variable inventory", "pin")):
             score -= 12.0
-
+    if mode == "blueprint_verification":
+        if source == "unreal_blueprint_metadata":
+            score -= 22.0
+        if source == "project_guideline" and any(marker in identity_lower or marker in text for marker in ("blueprint verification", "proof levels", "asset mutation boundary", "pin")):
+            score -= 16.0
+        if source == "build_log":
+            score -= 4.0
     if str(row.get("path_only") or "") == "1" and mode in {"planning", "design", "implementation", "agent_edit", "codegen"}:
         score += 2.0
 

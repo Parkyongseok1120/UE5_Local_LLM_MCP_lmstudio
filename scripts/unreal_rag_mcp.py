@@ -29,6 +29,9 @@ from refactor_plan import scan_symbol_impact, validate_refactor_plan
 from resolve_genre_adapters import resolve_genre_adapters
 from genre_scope_validate import validate_genre_scope
 from review_claim_validate import validate_claims
+from material_porting_validate import validate_material_porting_plan
+from editor_metadata_status import editor_metadata_status
+from blueprint_claim_validate import validate_blueprint_claims
 from runtime_config_checklist import check_runtime_config
 from wrapper_job_manager import job_status, list_jobs, start_job
 from mcp_stdio import configure_stdio_utf8, write_json_line, write_utf8_line
@@ -45,6 +48,9 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_symbol_lookup",
         "unreal_agent_session",
         "unreal_rag_capabilities",
+        "unreal_material_porting_plan_validate",
+        "unreal_editor_metadata_status",
+        "unreal_blueprint_claim_validate",
     }
 )
 
@@ -185,7 +191,7 @@ class McpServer:
                             "type": "string",
                             "enum": [
                                 "auto", "planning", "design", "implementation", "review",
-                                "agent_edit", "codegen", "shader", "material_analysis", "blueprint_analysis", "compile_fix", "runtime_debug",
+                                "agent_edit", "codegen", "shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification", "compile_fix", "runtime_debug",
                                 "api_lookup", "module_fix", "reflection_fix",
                                 "prototype_component", "prototype_subsystem",
                                 "refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4",
@@ -312,7 +318,7 @@ class McpServer:
                         "mode": {
                             "type": "string",
                             "enum": [
-                                "agent_edit", "codegen", "shader", "material_analysis", "blueprint_analysis", "compile_fix", "runtime_debug",
+                                "agent_edit", "codegen", "shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification", "compile_fix", "runtime_debug",
                                 "api_lookup", "module_fix", "reflection_fix",
                                 "prototype_component", "prototype_subsystem",
                                 "refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4",
@@ -472,6 +478,47 @@ class McpServer:
                 ),
             },
             {
+                "name": "unreal_material_porting_plan_validate",
+                "title": "Validate Material Graph Porting Plan",
+                "description": (
+                    "Validate a post-process/global-shader to Material Graph porting plan. "
+                    "Rejects common Unreal hallucinations around SceneColor, PreExposure, GBuffer, CustomStencil, WorldPosition.Z, and light direction access."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "planText": {"type": "string", "description": "Material porting plan text to validate."},
+                    },
+                    ["planText"],
+                ),
+            },
+            {
+                "name": "unreal_editor_metadata_status",
+                "title": "Editor Metadata Freshness Status",
+                "description": "Report whether Blueprint/Material/asset metadata exports exist and appear stale for the active project.",
+                "inputSchema": self._schema(
+                    {
+                        "projectRoot": {"type": "string", "description": "Optional .uproject or project root. Defaults to activeProject."},
+                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "staleAfterHours": {"type": "number", "default": 24.0},
+                    },
+                ),
+            },
+            {
+                "name": "unreal_blueprint_claim_validate",
+                "title": "Validate Blueprint Claims Against Metadata",
+                "description": (
+                    "Validate Blueprint asset/node/pin/function claims against raw_blueprint_metadata.jsonl. "
+                    "Separates asset existence from node evidence and pin-link evidence."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "claims": {"type": "array", "items": {"type": "string"}},
+                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "projectName": {"type": "string"},
+                    },
+                    ["claims"],
+                ),
+            },            {
                 "name": "unreal_review_claim_validate",
                 "title": "Validate Review Claims (grep + PAB)",
                 "description": (
@@ -802,6 +849,23 @@ class McpServer:
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_project_architecture":
                 self.handle_project_architecture(message_id, arguments)
+            elif name == "unreal_material_porting_plan_validate":
+                payload = validate_material_porting_plan(str(arguments.get("planText") or ""))
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_editor_metadata_status":
+                payload = editor_metadata_status(
+                    arguments.get("indexDir") or "data/unreal58",
+                    str(arguments.get("projectRoot") or "").strip() or None,
+                    float(arguments.get("staleAfterHours") or 24.0),
+                )
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_blueprint_claim_validate":
+                payload = validate_blueprint_claims(
+                    list(arguments.get("claims") or []),
+                    arguments.get("indexDir") or "data/unreal58",
+                    str(arguments.get("projectName") or "").strip() or None,
+                )
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_review_claim_validate":
                 claims = list(arguments.get("claims") or [])
                 project_root = str(arguments.get("projectRoot") or "").strip() or None

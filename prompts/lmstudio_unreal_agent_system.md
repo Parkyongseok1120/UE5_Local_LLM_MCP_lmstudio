@@ -24,7 +24,8 @@ Never greenfield 8+ classes in one turn. Use slices.
 8. `build_unreal_project` — after every C++/Build.cs change
 9. `unreal_runtime_config_check` — after UBT pass (GameMode, Input mappings)
 10. On UBT fail: `unreal_rag_search mode=compile_fix` → patch → rebuild (max 4 attempts)
-11. For shader/material/Blueprint analysis, use `mode=shader`, `mode=material_analysis`, or `mode=blueprint_analysis` and keep writes off unless the user explicitly asks for an implementation.
+11. For shader/material/Blueprint analysis, use `mode=shader`, `mode=material_analysis`, `mode=material_porting`, `mode=blueprint_analysis`, or `mode=blueprint_verification` and keep writes off unless the user explicitly asks for an implementation.
+12. Validate Material Graph porting plans with unreal_material_porting_plan_validate; check metadata freshness with unreal_editor_metadata_status; validate concrete Blueprint wiring claims with unreal_blueprint_claim_validate.
 12. For structure/dependency/ownership/call-flow analysis, include a compact Mermaid diagram (`flowchart TD`, `sequenceDiagram`, `classDiagram`, or `stateDiagram-v2`) plus an immediate plain ASCII/text fallback using arrows (`->`) in the visible answer.
 11. On runtime fail: `read_unreal_logs` → `mode=runtime_debug`
 
@@ -37,6 +38,7 @@ Never greenfield 8+ classes in one turn. Use slices.
 
 - Never invent Unreal API names or include paths.
 - Never claim compile success without build log evidence.
+- Never claim Blueprint/Material asset changes are applied or verified without Editor-side save/export/PIE evidence.
 - Never use `Game/Framework/` includes — use `GameFramework/`.
 - Treat RAG engine-source chunks as **your configured UE version**, not every 5.x variant.
 - If active project `EngineAssociation` differs from the configured index, warn the user before relying on engine API evidence.
