@@ -1,0 +1,2300 @@
+{
+  "version": 1,
+  "work_domains": [
+    {
+      "id": "rendering",
+      "label_ko": "렌더링",
+      "label_en": "Rendering"
+    },
+    {
+      "id": "world_level",
+      "label_ko": "월드·레벨",
+      "label_en": "World & Level"
+    },
+    {
+      "id": "character_animation",
+      "label_ko": "캐릭터·애니메이션",
+      "label_en": "Character & Animation"
+    },
+    {
+      "id": "gameplay_logic",
+      "label_ko": "게임플레이·로직",
+      "label_en": "Gameplay & Logic"
+    },
+    {
+      "id": "ui",
+      "label_ko": "UI",
+      "label_en": "UI"
+    },
+    {
+      "id": "sound",
+      "label_ko": "사운드",
+      "label_en": "Sound"
+    },
+    {
+      "id": "vfx",
+      "label_ko": "VFX",
+      "label_en": "VFX"
+    },
+    {
+      "id": "ai",
+      "label_ko": "AI",
+      "label_en": "AI"
+    },
+    {
+      "id": "data_balance",
+      "label_ko": "데이터·밸런스",
+      "label_en": "Data & Balance"
+    },
+    {
+      "id": "editor_build",
+      "label_ko": "에디터·빌드",
+      "label_en": "Editor & Build"
+    }
+  ],
+  "rag_coverage_levels": {
+    "path_only": "unreal_project_asset_path 소스만 인덱싱. .uasset 경로·파일명 수준의 최소 커버리지.",
+    "registry": "unreal_asset_registry 소스. AssetClassPath·PackagePath 등 레지스트리 메타데이터(자산 타입 + 경로).",
+    "graph_material": "unreal_material_metadata 소스. Material·MI·MaterialFunction·MaterialLayer·MPC 그래프/파라미터 익스포트.",
+    "graph_blueprint": "unreal_blueprint_metadata 소스. Blueprint 클래스·변수·함수·그래프/노드/핀 요약.",
+    "graph_animation": "unreal_animation_metadata 및 관련 소스. AnimSequence·AnimMontage·AnimBlueprint·SkeletalMesh·LevelSequence 등 애니/시퀀서 익스포트. PoseAsset·BlendSpace·Skeleton·PhysicsAsset·ControlRig·IK 포함.",
+    "source_code": "unreal_source 소스. .usf·.ush·프로젝트 C++/H 등 텍스트 기반 엔진/프로젝트 코드.",
+    "guidelines": "project_guideline 문서만. RAG_Project_Guidelines 등 작성 가이드라인 전용.",
+    "not_exported_yet": "파이프라인에 아직 익스포터/인제스트가 없는 알려진 공백.",
+    "structured_metadata": "unreal_structured_metadata 소스. DataTable·Curve·Niagara·AI·SoundCue·Input·PhysicalMaterial 등 구조화 메타데이터 익스포트.",
+    "texture_metadata": "unreal_texture_metadata 소스. Texture2D/Cube/RenderTarget 해상도·압축·sRGB 등.",
+    "mesh_metadata": "unreal_mesh_metadata 소스. StaticMesh/GeometryCollection 슬롯·LOD·Nanite·콜리전.",
+    "world_look_metadata": "unreal_world_look_metadata 소스. PostProcess·Sky·Fog·DataLayer.",
+    "fmod_metadata": "unreal_fmod_metadata 소스. FMOD Event/Bank 메타데이터."
+  },
+  "sections": [
+    {
+      "id": "mesh_geometry",
+      "number": 1,
+      "title_ko": "메시·지오메트리",
+      "work_domain": "rendering",
+      "items": [
+        {
+          "name": "Static Mesh",
+          "description_ko": "정적 3D 메시. 콜리전·LOD·나나이트 설정을 포함하는 비스켈레탈 지오메트리 자산.",
+          "examples": [
+            "/Game/Environment/SM_Wall",
+            "/Game/Props/SM_Crate"
+          ],
+          "ue_asset_classes": [
+            "StaticMesh"
+          ],
+          "rag_coverage": "mesh_metadata"
+        },
+        {
+          "name": "Skeletal Mesh",
+          "description_ko": "스켈레톤에 바인딩된 변형 가능 메시. 캐릭터·무기 등 애니메이션 대상.",
+          "examples": [
+            "/Game/Characters/SK_Hero",
+            "/Game/Weapons/SK_Rifle"
+          ],
+          "ue_asset_classes": [
+            "SkeletalMesh"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Geometry Collection",
+          "description_ko": "Chaos 파괴 시뮬레이션용 프랙처 지오메트리 컬렉션.",
+          "examples": [
+            "/Game/Destruction/GC_Wall"
+          ],
+          "ue_asset_classes": [
+            "GeometryCollection"
+          ],
+          "rag_coverage": "mesh_metadata"
+        },
+        {
+          "name": "Nanite Mesh",
+          "description_ko": "나나이트가 활성화된 Static Mesh. 고밀도 지오메트리 가상화 렌더링.",
+          "examples": [
+            "/Game/Environment/SM_Rock_Nanite"
+          ],
+          "ue_asset_classes": [
+            "StaticMesh"
+          ],
+          "rag_coverage": "mesh_metadata"
+        },
+        {
+          "name": "Groom Asset",
+          "description_ko": "머리카락·털·수염 등 그룸(Hair) 시뮬레이션/렌더링 자산.",
+          "examples": [
+            "/Game/Characters/Groom_Hair"
+          ],
+          "ue_asset_classes": [
+            "GroomAsset",
+            "Groom"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Spline Mesh",
+          "description_ko": "스플라인을 따라 배치·변형되는 메시 컴포넌트용 메시(도로·파이프 등).",
+          "examples": [
+            "/Game/Environment/SM_Road_Spline"
+          ],
+          "ue_asset_classes": [
+            "StaticMesh"
+          ],
+          "rag_coverage": "mesh_metadata"
+        },
+        {
+          "name": "Landscape",
+          "description_ko": "대규모 지형. 높이맵·레이어·스컬프트 페인트 기반 월드 지형.",
+          "examples": [
+            "/Game/Maps/Landscape_Main"
+          ],
+          "ue_asset_classes": [
+            "Landscape"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Landscape Layer",
+          "description_ko": "랜드스케이프 페인트 레이어 정의. 머티리얼 블렌드·텍스처 가중치.",
+          "examples": [
+            "Layer_Grass",
+            "Layer_Rock"
+          ],
+          "ue_asset_classes": [
+            "LandscapeLayerInfoObject"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Foliage Type",
+          "description_ko": "폴리지 인스턴싱 타입. 잔디·나무 등 반복 배치 규칙.",
+          "examples": [
+            "/Game/Foliage/FT_Grass"
+          ],
+          "ue_asset_classes": [
+            "FoliageType_InstancedStaticMesh"
+          ],
+          "rag_coverage": "mesh_metadata"
+        },
+        {
+          "name": "Packed Level Actor",
+          "description_ko": "레벨 인스턴스/패킹된 액터 블루프린트. 반복 월드 청크 배치.",
+          "examples": [
+            "/Game/World/Packed/BP_BuildingCluster"
+          ],
+          "ue_asset_classes": [
+            "PackedLevelActor",
+            "PackedLevelActorBlueprint"
+          ],
+          "rag_coverage": "registry"
+        }
+      ]
+    },
+    {
+      "id": "material_shader",
+      "number": 2,
+      "title_ko": "머티리얼·셰이더",
+      "work_domain": "rendering",
+      "items": [
+        {
+          "name": "Material",
+          "description_ko": "마스터 머티리얼. 셰이더 그래프·머티리얼 도메인·출력 정의.",
+          "examples": [
+            "/Game/Materials/M_Master",
+            "/Game/Characters/M_Character"
+          ],
+          "ue_asset_classes": [
+            "Material"
+          ],
+          "rag_coverage": "graph_material",
+          "npr_relevant": true
+        },
+        {
+          "name": "Material Instance",
+          "description_ko": "마스터 머티리얼 인스턴스. 파라미터 오버라이드만 적용하는 MI.",
+          "examples": [
+            "/Game/Materials/MI_Wood",
+            "/Game/Characters/MI_Skin"
+          ],
+          "ue_asset_classes": [
+            "MaterialInstanceConstant",
+            "MaterialInstance"
+          ],
+          "rag_coverage": "graph_material",
+          "npr_relevant": true
+        },
+        {
+          "name": "Material Function",
+          "description_ko": "재사용 가능한 머티리얼 함수 노드 그래프.",
+          "examples": [
+            "/Game/Materials/Functions/MF_UVNoise"
+          ],
+          "ue_asset_classes": [
+            "MaterialFunction"
+          ],
+          "rag_coverage": "graph_material",
+          "npr_relevant": true
+        },
+        {
+          "name": "Material Layer",
+          "description_ko": "레이어드 머티리얼용 단일 레이어 정의.",
+          "examples": [
+            "/Game/Materials/Layers/ML_Base"
+          ],
+          "ue_asset_classes": [
+            "MaterialFunctionMaterialLayer"
+          ],
+          "rag_coverage": "graph_material"
+        },
+        {
+          "name": "Material Layer Blend",
+          "description_ko": "머티리얼 레이어 블렌드 함수.",
+          "examples": [
+            "/Game/Materials/Layers/MLB_Blend"
+          ],
+          "ue_asset_classes": [
+            "MaterialFunctionMaterialLayerBlend"
+          ],
+          "rag_coverage": "graph_material"
+        },
+        {
+          "name": "Material Parameter Collection",
+          "description_ko": "전역 스칼라/벡터 머티리얼 파라미터 컬렉션(MPC).",
+          "examples": [
+            "/Game/Materials/MPC_Global"
+          ],
+          "ue_asset_classes": [
+            "MaterialParameterCollection"
+          ],
+          "rag_coverage": "graph_material",
+          "npr_relevant": true
+        },
+        {
+          "name": "Substrate Material",
+          "description_ko": "Substrate 기반 머티리얼/슬랩. UE5 고급 머티리얼 시스템.",
+          "examples": [
+            "/Game/Materials/M_Substrate"
+          ],
+          "ue_asset_classes": [
+            "Material"
+          ],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Decal Material",
+          "description_ko": "데칼 도메인 머티리얼. 벽면 스티커·손상·투사 텍스처.",
+          "examples": [
+            "/Game/Decals/M_Decal_BulletHole"
+          ],
+          "ue_asset_classes": [
+            "Material",
+            "MaterialInstanceConstant"
+          ],
+          "rag_coverage": "graph_material"
+        },
+        {
+          "name": "Post Process Material",
+          "description_ko": "포스트 프로세스용 머티리얼. 블룸·컬러 그레이딩·스타일라이즈 효과.",
+          "examples": [
+            "/Game/PostProcess/PP_Outline",
+            "/Game/PostProcess/PP_CelShade"
+          ],
+          "ue_asset_classes": [
+            "Material",
+            "MaterialInstanceConstant"
+          ],
+          "rag_coverage": "graph_material",
+          "npr_relevant": true
+        }
+      ]
+    },
+    {
+      "id": "texture",
+      "number": 3,
+      "title_ko": "텍스처",
+      "work_domain": "rendering",
+      "items": [
+        {
+          "name": "Texture 2D",
+          "description_ko": "기본 2D 텍스처. 알베도·디퓨즈 등 범용 이미지.",
+          "examples": [
+            "/Game/Textures/T_Albedo",
+            "/Game/Textures/T_Diffuse"
+          ],
+          "ue_asset_classes": [
+            "Texture2D"
+          ],
+          "rag_coverage": "texture_metadata",
+          "npr_relevant": true
+        },
+        {
+          "name": "Normal Map",
+          "description_ko": "노멀 맵 텍스처. 표면 디테일 법선 정보.",
+          "examples": [
+            "/Game/Textures/T_Normal"
+          ],
+          "ue_asset_classes": [
+            "Texture2D"
+          ],
+          "rag_coverage": "texture_metadata",
+          "npr_relevant": true
+        },
+        {
+          "name": "ORM Texture",
+          "description_ko": "Occlusion·Roughness·Metallic 패킹 텍스처.",
+          "examples": [
+            "/Game/Textures/T_ORM"
+          ],
+          "ue_asset_classes": [
+            "Texture2D"
+          ],
+          "rag_coverage": "texture_metadata"
+        },
+        {
+          "name": "Mask Texture",
+          "description_ko": "마스크/채널 분리용 텍스처. R/G/B/A 각 용도 분리.",
+          "examples": [
+            "/Game/Textures/T_Mask"
+          ],
+          "ue_asset_classes": [
+            "Texture2D"
+          ],
+          "rag_coverage": "texture_metadata",
+          "npr_relevant": true
+        },
+        {
+          "name": "Emissive Texture",
+          "description_ko": "이미시브(발광) 텍스처. 네온·스크린 발광.",
+          "examples": [
+            "/Game/Textures/T_Emissive"
+          ],
+          "ue_asset_classes": [
+            "Texture2D"
+          ],
+          "rag_coverage": "texture_metadata",
+          "npr_relevant": true
+        },
+        {
+          "name": "Texture Cube",
+          "description_ko": "큐브맵 텍스처. 스카이·반사·IBL.",
+          "examples": [
+            "/Game/Textures/T_SkyCubemap"
+          ],
+          "ue_asset_classes": [
+            "TextureCube"
+          ],
+          "rag_coverage": "texture_metadata"
+        },
+        {
+          "name": "Render Target",
+          "description_ko": "런타임/에디터 렌더 타겟. 오프스크린 렌더 결과.",
+          "examples": [
+            "/Game/RenderTargets/RT_SceneCapture"
+          ],
+          "ue_asset_classes": [
+            "TextureRenderTarget2D",
+            "TextureRenderTarget"
+          ],
+          "rag_coverage": "texture_metadata"
+        },
+        {
+          "name": "Virtual Texture",
+          "description_ko": "런타임 가상 텍스처(RVT 소스 또는 VT 볼륨).",
+          "examples": [
+            "/Game/VT/VT_Landscape"
+          ],
+          "ue_asset_classes": [
+            "RuntimeVirtualTexture",
+            "VirtualTextureBuilder"
+          ],
+          "rag_coverage": "texture_metadata"
+        },
+        {
+          "name": "Runtime Virtual Texture",
+          "description_ko": "런타임 가상 텍스처 볼륨·머티리얼 출력.",
+          "examples": [
+            "/Game/VT/RVT_Ground"
+          ],
+          "ue_asset_classes": [
+            "RuntimeVirtualTexture"
+          ],
+          "rag_coverage": "texture_metadata"
+        },
+        {
+          "name": "Texture Light Profile",
+          "description_ko": "IES 라이트 프로파일 텍스처.",
+          "examples": [
+            "/Game/Lighting/T_IES_Profile"
+          ],
+          "ue_asset_classes": [
+            "TextureLightProfile"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Media Texture",
+          "description_ko": "미디어 플레이어 출력 텍스처.",
+          "examples": [
+            "/Game/Media/MT_VideoScreen"
+          ],
+          "ue_asset_classes": [
+            "MediaTexture"
+          ],
+          "rag_coverage": "texture_metadata"
+        }
+      ]
+    },
+    {
+      "id": "lighting_rendering",
+      "number": 4,
+      "title_ko": "라이팅·렌더링",
+      "work_domain": "rendering",
+      "items": [
+        {
+          "name": "Light Function Material",
+          "description_ko": "라이트 함수 머티리얼. 조명 패턴·깜빡임·고스트 효과.",
+          "examples": [
+            "/Game/Lighting/M_LightFunction"
+          ],
+          "ue_asset_classes": [
+            "Material",
+            "MaterialInstanceConstant"
+          ],
+          "rag_coverage": "graph_material"
+        },
+        {
+          "name": "IES Profile",
+          "description_ko": "IES 조명 분포 프로파일.",
+          "examples": [
+            "/Game/Lighting/IES_Spot"
+          ],
+          "ue_asset_classes": [
+            "TextureLightProfile"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Sky Atmosphere",
+          "description_ko": "대기 산란 기반 스카이·태양·안개 색.",
+          "examples": [
+            "SkyAtmosphere in level"
+          ],
+          "ue_asset_classes": [
+            "SkyAtmosphere"
+          ],
+          "rag_coverage": "world_look_metadata"
+        },
+        {
+          "name": "Volumetric Cloud",
+          "description_ko": "볼류메트릭 클라우드 액터/설정.",
+          "examples": [
+            "VolumetricCloud in level"
+          ],
+          "ue_asset_classes": [
+            "VolumetricCloud"
+          ],
+          "rag_coverage": "world_look_metadata"
+        },
+        {
+          "name": "Exponential Height Fog",
+          "description_ko": "지수 높이 안개. 거리·높이 기반 포그.",
+          "examples": [
+            "ExponentialHeightFog in level"
+          ],
+          "ue_asset_classes": [
+            "ExponentialHeightFog"
+          ],
+          "rag_coverage": "world_look_metadata"
+        },
+        {
+          "name": "Post Process Volume",
+          "description_ko": "포스트 프로세스 볼륨. 노출·블룸·모션 블러·LUT 적용.",
+          "examples": [
+            "/Game/Maps/PPV_Main"
+          ],
+          "ue_asset_classes": [
+            "PostProcessVolume"
+          ],
+          "rag_coverage": "world_look_metadata"
+        },
+        {
+          "name": "Color Grading LUT",
+          "description_ko": "컬러 그레이딩 LUT 텍스처.",
+          "examples": [
+            "/Game/PostProcess/T_LUT_Cinematic"
+          ],
+          "ue_asset_classes": [
+            "Texture2D"
+          ],
+          "rag_coverage": "texture_metadata"
+        },
+        {
+          "name": "Reflection Capture",
+          "description_ko": "스피어/박스 리플렉션 캡처. 로컬 반사.",
+          "examples": [
+            "SphereReflectionCapture in level"
+          ],
+          "ue_asset_classes": [
+            "SphereReflectionCapture",
+            "BoxReflectionCapture"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Lightmass Importance Volume",
+          "description_ko": "라이트매스 베이크 중요도 볼륨.",
+          "examples": [
+            "LightmassImportanceVolume in level"
+          ],
+          "ue_asset_classes": [
+            "LightmassImportanceVolume"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Lighting Build Data",
+          "description_ko": "라이트매스/라이팅 빌드 데이터 맵 에셋.",
+          "examples": [
+            "/Game/Maps/LightingBuildData"
+          ],
+          "ue_asset_classes": [
+            "MapBuildDataRegistry"
+          ],
+          "rag_coverage": "registry"
+        }
+      ]
+    },
+    {
+      "id": "animation",
+      "number": 5,
+      "title_ko": "애니메이션",
+      "work_domain": "character_animation",
+      "items": [
+        {
+          "name": "Skeleton",
+          "description_ko": "본 계층·소켓 정의. 스켈레탈 메시·애니 공통 골격.",
+          "examples": [
+            "/Game/Characters/SKEL_Hero"
+          ],
+          "ue_asset_classes": [
+            "Skeleton"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Skeletal Mesh",
+          "description_ko": "애니메이션 섹션의 스켈레탈 메시. 본·모프·LOD 메타 포함.",
+          "examples": [
+            "/Game/Characters/SK_Hero"
+          ],
+          "ue_asset_classes": [
+            "SkeletalMesh"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Animation Sequence",
+          "description_ko": "키프레임 애니메이션 시퀀스.",
+          "examples": [
+            "/Game/Animations/AS_Idle",
+            "/Game/Animations/AS_Run"
+          ],
+          "ue_asset_classes": [
+            "AnimSequence"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Animation Montage",
+          "description_ko": "몽타주. 섹션·노티파이·블렌드가 있는 복합 재생 단위.",
+          "examples": [
+            "/Game/Animations/AM_Attack"
+          ],
+          "ue_asset_classes": [
+            "AnimMontage"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Blend Space",
+          "description_ko": "1D/2D 블렌드 스페이스. 속도·방향 등에 따른 애니 블렌드.",
+          "examples": [
+            "/Game/Animations/BS_Locomotion"
+          ],
+          "ue_asset_classes": [
+            "BlendSpace",
+            "BlendSpace1D"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Aim Offset",
+          "description_ko": "에임 오프셋 블렌드 스페이스. 상하좌우 조준.",
+          "examples": [
+            "/Game/Animations/AO_Rifle"
+          ],
+          "ue_asset_classes": [
+            "AimOffsetBlendSpace",
+            "BlendSpace"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Anim Blueprint",
+          "description_ko": "애니메이션 블루프린트. 애니 그래프·상태 머신.",
+          "examples": [
+            "/Game/Characters/ABP_Hero"
+          ],
+          "ue_asset_classes": [
+            "AnimBlueprint"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Linked Anim Graph",
+          "description_ko": "링크드 애니 그래프. 모듈형 애니BP 서브그래프.",
+          "examples": [
+            "/Game/Characters/Linked_ABP_UpperBody"
+          ],
+          "ue_asset_classes": [
+            "AnimBlueprint"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Control Rig",
+          "description_ko": "컨트롤 릭. 프로시저럴 리깅·IK.",
+          "examples": [
+            "/Game/Characters/CR_Hero"
+          ],
+          "ue_asset_classes": [
+            "ControlRigBlueprint"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "IK Rig",
+          "description_ko": "IK 리그 정의. 풀바디 IK 체인.",
+          "examples": [
+            "/Game/Characters/IKR_Hero"
+          ],
+          "ue_asset_classes": [
+            "IKRigDefinition"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "IK Retargeter",
+          "description_ko": "스켈레톤 간 IK 리타겟 자산.",
+          "examples": [
+            "/Game/Characters/IKRT_HeroToMannequin"
+          ],
+          "ue_asset_classes": [
+            "IKRetargeter"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Pose Asset",
+          "description_ko": "포즈 에셋. 정적/커브 포즈 스냅샷.",
+          "examples": [
+            "/Game/Animations/PA_HandPoses"
+          ],
+          "ue_asset_classes": [
+            "PoseAsset"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Physics Asset",
+          "description_ko": "물리 애셋. 라그돌·콜리전 바디·제약.",
+          "examples": [
+            "/Game/Characters/PHYS_Hero"
+          ],
+          "ue_asset_classes": [
+            "PhysicsAsset"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Cloth Asset",
+          "description_ko": "Chaos/클로스 시뮬레이션 설정 자산.",
+          "examples": [
+            "/Game/Characters/Cloth_Cape"
+          ],
+          "ue_asset_classes": [
+            "ChaosClothConfig",
+            "ClothingSimulationFactory"
+          ],
+          "rag_coverage": "not_exported_yet"
+        }
+      ]
+    },
+    {
+      "id": "blueprint_logic",
+      "number": 6,
+      "title_ko": "블루프린트·로직",
+      "work_domain": "gameplay_logic",
+      "items": [
+        {
+          "name": "Blueprint Class",
+          "description_ko": "일반 블루프린트 클래스. AActor/UObject 파생.",
+          "examples": [
+            "/Game/Blueprints/BP_Item"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Actor Blueprint",
+          "description_ko": "액터 블루프린트. 월드에 배치 가능한 로직.",
+          "examples": [
+            "/Game/Blueprints/BP_Door"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Pawn Blueprint",
+          "description_ko": "폰 블루프린트. 플레이어/AI 조종 대상.",
+          "examples": [
+            "/Game/Blueprints/BP_Vehicle"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Character Blueprint",
+          "description_ko": "캐릭터 블루프린트. 캐릭터 무브먼트·메시 포함.",
+          "examples": [
+            "/Game/Characters/BP_Hero"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Player Controller",
+          "description_ko": "플레이어 컨트롤러 BP. 입력·HUD·카메라.",
+          "examples": [
+            "/Game/Blueprints/BP_PlayerController"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "GameMode",
+          "description_ko": "게임 모드 BP. 규칙·스폰·매치 흐름.",
+          "examples": [
+            "/Game/Blueprints/BP_GameMode"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "GameState",
+          "description_ko": "게임 스테이트 BP. 매치 전역 상태.",
+          "examples": [
+            "/Game/Blueprints/BP_GameState"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "PlayerState",
+          "description_ko": "플레이어 스테이트 BP. 점수·팀·개인 상태.",
+          "examples": [
+            "/Game/Blueprints/BP_PlayerState"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Actor Component",
+          "description_ko": "액터 컴포넌트 BP. 재사용 로직 모듈.",
+          "examples": [
+            "/Game/Components/BP_HealthComponent"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Scene Component",
+          "description_ko": "씬 컴포넌트 BP. 트랜스폼 계층용.",
+          "examples": [
+            "/Game/Components/BP_SceneRoot"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Blueprint Interface",
+          "description_ko": "블루프린트 인터페이스. 다형 계약.",
+          "examples": [
+            "/Game/Interfaces/BPI_Interactable"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Blueprint Function Library",
+          "description_ko": "블루프린트 함수 라이브러리. 정적 유틸 함수.",
+          "examples": [
+            "/Game/Blueprints/BFL_Gameplay"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Macro Library",
+          "description_ko": "매크로 라이브러리. 재사용 매크로 노드.",
+          "examples": [
+            "/Game/Blueprints/BPML_Common"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Editor Utility Blueprint",
+          "description_ko": "에디터 유틸리티 블루프린트. 에디터 자동화.",
+          "examples": [
+            "/Game/Editor/EUBP_AssetTools"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Editor Utility Widget",
+          "description_ko": "에디터 유틸리티 위젯. 에디터 UI 패널.",
+          "examples": [
+            "/Game/Editor/EUW_Pipeline"
+          ],
+          "ue_asset_classes": [
+            "WidgetBlueprint",
+            "EditorUtilityWidgetBlueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        }
+      ]
+    },
+    {
+      "id": "level_world",
+      "number": 7,
+      "title_ko": "레벨·월드",
+      "work_domain": "world_level",
+      "items": [
+        {
+          "name": "Level",
+          "description_ko": "맵/레벨 .umap 자산.",
+          "examples": [
+            "/Game/Maps/L_Main",
+            "/Game/Maps/L_Menu"
+          ],
+          "ue_asset_classes": [
+            "World",
+            "Level"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "World",
+          "description_ko": "월드 에셋. 레벨 컬렉션 루트.",
+          "examples": [
+            "/Game/Maps/L_Main"
+          ],
+          "ue_asset_classes": [
+            "World"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Persistent Level",
+          "description_ko": "월드의 퍼시스턴트 레벨. 항상 로드되는 기본 레벨.",
+          "examples": [
+            "Persistent level in L_Main"
+          ],
+          "ue_asset_classes": [
+            "World",
+            "Level"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Sub Level",
+          "description_ko": "서브 레벨. 스트리밍/레벨 스트리밍 단위.",
+          "examples": [
+            "/Game/Maps/Sub/L_City_Block"
+          ],
+          "ue_asset_classes": [
+            "World",
+            "Level"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Level Instance",
+          "description_ko": "레벨 인스턴스. 재사용 맵 청크의 인스턴스 배치.",
+          "examples": [
+            "/Game/World/LevelInstances/LI_Building"
+          ],
+          "ue_asset_classes": [
+            "World",
+            "LevelInstance"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Packed Level Blueprint",
+          "description_ko": "패킹된 레벨 블루프린트. 대량 인스턴싱용.",
+          "examples": [
+            "/Game/World/BP_PackedDistrict"
+          ],
+          "ue_asset_classes": [
+            "PackedLevelActorBlueprint",
+            "Blueprint"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "World Partition",
+          "description_ko": "월드 파티션. 대형 오픈 월드 스트리밍 그리드.",
+          "examples": [
+            "World Partition in L_OpenWorld"
+          ],
+          "ue_asset_classes": [
+            "WorldPartition"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Data Layer",
+          "description_ko": "데이터 레이어. 런타임/에디터 레이어 가시성·로드.",
+          "examples": [
+            "DL_Gameplay",
+            "DL_Cinematic"
+          ],
+          "ue_asset_classes": [
+            "DataLayerAsset"
+          ],
+          "rag_coverage": "world_look_metadata"
+        },
+        {
+          "name": "HLOD",
+          "description_ko": "계층적 LOD. 원거리 합성 메시/액터.",
+          "examples": [
+            "/Game/Maps/HLOD/HLOD0_Streaming"
+          ],
+          "ue_asset_classes": [
+            "HLODLayer",
+            "WorldPartitionHLOD"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Map Build Data Registry",
+          "description_ko": "맵 빌드 데이터 레지스트리. 라이팅·나비 빌드 결과.",
+          "examples": [
+            "/Game/Maps/L_Main_BuiltData"
+          ],
+          "ue_asset_classes": [
+            "MapBuildDataRegistry"
+          ],
+          "rag_coverage": "registry"
+        }
+      ]
+    },
+    {
+      "id": "data_balance",
+      "number": 8,
+      "title_ko": "데이터·밸런스",
+      "work_domain": "data_balance",
+      "items": [
+        {
+          "name": "Data Asset",
+          "description_ko": "일반 데이터 에셋. 구조화된 디자인 데이터.",
+          "examples": [
+            "/Game/Data/DA_WeaponConfig"
+          ],
+          "ue_asset_classes": [
+            "DataAsset"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Primary Data Asset",
+          "description_ko": "프라이머리 데이터 에셋. 에셋 매니저 ID 기반.",
+          "examples": [
+            "/Game/Data/PDA_Item"
+          ],
+          "ue_asset_classes": [
+            "PrimaryDataAsset"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Data Table",
+          "description_ko": "데이터 테이블. 행 기반 CSV형 밸런스.",
+          "examples": [
+            "/Game/Data/DT_Weapons"
+          ],
+          "ue_asset_classes": [
+            "DataTable"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Curve Float",
+          "description_ko": "스칼라 커브. 시간/레벨 대비 float.",
+          "examples": [
+            "/Game/Data/Curve_DamageFalloff"
+          ],
+          "ue_asset_classes": [
+            "CurveFloat"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Curve Vector",
+          "description_ko": "벡터 커브. 3축 값 곡선.",
+          "examples": [
+            "/Game/Data/Curve_Movement"
+          ],
+          "ue_asset_classes": [
+            "CurveVector"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Curve Linear Color",
+          "description_ko": "선형 컬러 커브. 색/그라데이션 키.",
+          "examples": [
+            "/Game/Data/Curve_SkyTint"
+          ],
+          "ue_asset_classes": [
+            "CurveLinearColor"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Curve Table",
+          "description_ko": "커브 테이블. 행별 커브 참조.",
+          "examples": [
+            "/Game/Data/CT_LevelScaling"
+          ],
+          "ue_asset_classes": [
+            "CurveTable"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "String Table",
+          "description_ko": "문자열 테이블. 로컬라이제이션 키·텍스트.",
+          "examples": [
+            "/Game/Localization/ST_UI"
+          ],
+          "ue_asset_classes": [
+            "StringTable"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Gameplay Tags",
+          "description_ko": "게임플레이 태그. 계층적 상태/분류 태그.",
+          "examples": [
+            "Ability.Attack.Melee",
+            "State.Dead"
+          ],
+          "ue_asset_classes": [
+            "GameplayTagsManager"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Gameplay Tag Table",
+          "description_ko": "게임플레이 태그 테이블/INI 기반 태그 정의.",
+          "examples": [
+            "DefaultGameplayTags.ini"
+          ],
+          "ue_asset_classes": [
+            "DataTable"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Data Registry",
+          "description_ko": "데이터 레지스트리. 런타임 조회 가능 데이터 소스.",
+          "examples": [
+            "/Game/Data/DR_Items"
+          ],
+          "ue_asset_classes": [
+            "DataRegistry"
+          ],
+          "rag_coverage": "structured_metadata"
+        }
+      ]
+    },
+    {
+      "id": "gas",
+      "number": 9,
+      "title_ko": "GAS (Gameplay Ability System)",
+      "work_domain": "gameplay_logic",
+      "items": [
+        {
+          "name": "Gameplay Ability",
+          "description_ko": "게임플레이 어빌리티. 스킬·액션 로직.",
+          "examples": [
+            "/Game/Abilities/GA_Fireball"
+          ],
+          "ue_asset_classes": [
+            "Blueprint",
+            "GameplayAbility"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Gameplay Effect",
+          "description_ko": "게임플레이 이펙트. 버프/디버프·속성 수정.",
+          "examples": [
+            "/Game/Abilities/GE_Burn"
+          ],
+          "ue_asset_classes": [
+            "Blueprint",
+            "GameplayEffect"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Attribute Set",
+          "description_ko": "속성 세트. Health·Mana 등 GAS 속성.",
+          "examples": [
+            "/Game/Abilities/AS_HeroAttributes"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Gameplay Cue",
+          "description_ko": "게임플레이 큐. VFX/SFX/카메라 등 이펙트 트리거.",
+          "examples": [
+            "/Game/Abilities/GC_HitImpact"
+          ],
+          "ue_asset_classes": [
+            "Blueprint",
+            "GameplayCueNotify_Static"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Gameplay Tag",
+          "description_ko": "GAS 컨텍스트용 게임플레이 태그 참조.",
+          "examples": [
+            "Ability.Cooldown.Fireball"
+          ],
+          "ue_asset_classes": [
+            "GameplayTagsManager"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Ability Task",
+          "description_ko": "어빌리티 태스크. 비동기 어빌리티 노드(대기·타겟팅 등).",
+          "examples": [
+            "AbilityTask_WaitDelay",
+            "AbilityTask_PlayMontageAndWait"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        }
+      ]
+    },
+    {
+      "id": "ai",
+      "number": 10,
+      "title_ko": "AI",
+      "work_domain": "ai",
+      "items": [
+        {
+          "name": "AI Controller",
+          "description_ko": "AI 컨트롤러 BP. BT 실행·퍼셉션.",
+          "examples": [
+            "/Game/AI/BP_AIController"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Behavior Tree",
+          "description_ko": "비헤이비어 트리. AI 의사결정 트리.",
+          "examples": [
+            "/Game/AI/BT_Enemy"
+          ],
+          "ue_asset_classes": [
+            "BehaviorTree"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Blackboard",
+          "description_ko": "블랙보드. BT 키·메모리.",
+          "examples": [
+            "/Game/AI/BB_Enemy"
+          ],
+          "ue_asset_classes": [
+            "BlackboardData"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "EQS Query",
+          "description_ko": "환경 쿼리 시스템. 위치/타겟 스코어링.",
+          "examples": [
+            "/Game/AI/EQS_FindCover"
+          ],
+          "ue_asset_classes": [
+            "EnvQuery"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "NavMesh",
+          "description_ko": "내비게이션 메시 빌드 데이터.",
+          "examples": [
+            "NavMesh in L_Main"
+          ],
+          "ue_asset_classes": [
+            "NavigationData",
+            "RecastNavMesh"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Nav Modifier Volume",
+          "description_ko": "내비 수정 볼륨. 영역별 이동 비용·차단.",
+          "examples": [
+            "NavModifierVolume in level"
+          ],
+          "ue_asset_classes": [
+            "NavModifierVolume"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Smart Object",
+          "description_ko": "스마트 오브젝트 정의. 상호작용 슬롯 AI.",
+          "examples": [
+            "/Game/AI/SO_Bench"
+          ],
+          "ue_asset_classes": [
+            "SmartObjectDefinition"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Perception Component",
+          "description_ko": "AI 퍼셉션 컴포넌트. 시야·청각 감지.",
+          "examples": [
+            "AIPerceptionComponent on BP_AIController"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        }
+      ]
+    },
+    {
+      "id": "sound",
+      "number": 11,
+      "title_ko": "사운드",
+      "work_domain": "sound",
+      "items": [
+        {
+          "name": "Sound Wave",
+          "description_ko": "원시 사운드 웨이브. WAV 등 오디오 소스.",
+          "examples": [
+            "/Game/Audio/SW_Footstep"
+          ],
+          "ue_asset_classes": [
+            "SoundWave"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Sound Cue",
+          "description_ko": "사운드 큐. 노드 그래프 기반 사운드 믹스.",
+          "examples": [
+            "/Game/Audio/SC_Gunshot"
+          ],
+          "ue_asset_classes": [
+            "SoundCue"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "MetaSound Source",
+          "description_ko": "MetaSound 소스. 프로시저럴 오디오 그래프.",
+          "examples": [
+            "/Game/Audio/MS_Engine"
+          ],
+          "ue_asset_classes": [
+            "MetaSoundSource"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "MetaSound Patch",
+          "description_ko": "MetaSound 패치. 재사용 오디오 서브그래프.",
+          "examples": [
+            "/Game/Audio/MP_Filter"
+          ],
+          "ue_asset_classes": [
+            "MetaSoundPatch"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Sound Attenuation",
+          "description_ko": "감쇠 설정. 거리·공간화.",
+          "examples": [
+            "/Game/Audio/ATT_Default"
+          ],
+          "ue_asset_classes": [
+            "SoundAttenuation"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Sound Concurrency",
+          "description_ko": "동시 재생 제한 규칙.",
+          "examples": [
+            "/Game/Audio/CONC_Gunshots"
+          ],
+          "ue_asset_classes": [
+            "SoundConcurrency"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Sound Class",
+          "description_ko": "사운드 클래스. 믹스 계층·볼륨 그룹.",
+          "examples": [
+            "/Game/Audio/SC_Master"
+          ],
+          "ue_asset_classes": [
+            "SoundClass"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Sound Mix",
+          "description_ko": "사운드 믹스. 클래스별 EQ/볼륨 오버라이드.",
+          "examples": [
+            "/Game/Audio/SM_Combat"
+          ],
+          "ue_asset_classes": [
+            "SoundMix"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Reverb Effect",
+          "description_ko": "리버브 이펙트 프리셋.",
+          "examples": [
+            "/Game/Audio/REVERB_Cave"
+          ],
+          "ue_asset_classes": [
+            "ReverbEffect"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Dialogue Wave",
+          "description_ko": "대화 웨이브. 보이스 라인·자막 연동.",
+          "examples": [
+            "/Game/Audio/DLG_Intro"
+          ],
+          "ue_asset_classes": [
+            "DialogueWave"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Media Sound Component",
+          "description_ko": "미디어 사운드 컴포넌트. 비디오 오디오 출력.",
+          "examples": [
+            "MediaSoundComponent on BP_VideoScreen"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        }
+      ]
+    },
+    {
+      "id": "vfx",
+      "number": 12,
+      "title_ko": "VFX",
+      "work_domain": "vfx",
+      "items": [
+        {
+          "name": "Niagara System",
+          "description_ko": "나이아가라 시스템. 파티클/VFX 메인 에셋.",
+          "examples": [
+            "/Game/VFX/NS_Explosion",
+            "/Game/VFX/NS_MagicTrail"
+          ],
+          "ue_asset_classes": [
+            "NiagaraSystem"
+          ],
+          "rag_coverage": "structured_metadata",
+          "npr_relevant": true
+        },
+        {
+          "name": "Niagara Emitter",
+          "description_ko": "나이아가라 이미터. 서브 이펙트 모듈.",
+          "examples": [
+            "/Game/VFX/NE_Sparks"
+          ],
+          "ue_asset_classes": [
+            "NiagaraEmitter"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Niagara Module Script",
+          "description_ko": "나이아가라 모듈 스크립트. 커스텀 HLSL/노드.",
+          "examples": [
+            "/Game/VFX/NMS_CustomForce"
+          ],
+          "ue_asset_classes": [
+            "NiagaraScript"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Niagara Parameter Collection",
+          "description_ko": "나이아가라 파라미터 컬렉션. 전역 VFX 파라미터.",
+          "examples": [
+            "/Game/VFX/NPC_Global"
+          ],
+          "ue_asset_classes": [
+            "NiagaraParameterCollection"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Niagara Data Interface",
+          "description_ko": "나이아가라 데이터 인터페이스. 메시/스플라인 등 샘플링.",
+          "examples": [
+            "/Game/VFX/NDI_SkeletalMesh"
+          ],
+          "ue_asset_classes": [
+            "NiagaraDataInterface"
+          ],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Cascade Particle System",
+          "description_ko": "레거시 캐스케이드 파티클.",
+          "examples": [
+            "/Game/VFX/PS_LegacySmoke"
+          ],
+          "ue_asset_classes": [
+            "ParticleSystem"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Material-based VFX",
+          "description_ko": "머티리얼 기반 VFX. 메시/데칼/포스트 머티리얼 이펙트.",
+          "examples": [
+            "/Game/VFX/M_Dissolve",
+            "/Game/VFX/MI_Shield"
+          ],
+          "ue_asset_classes": [
+            "Material",
+            "MaterialInstanceConstant"
+          ],
+          "rag_coverage": "graph_material"
+        }
+      ]
+    },
+    {
+      "id": "ui",
+      "number": 13,
+      "title_ko": "UI",
+      "work_domain": "ui",
+      "items": [
+        {
+          "name": "Widget Blueprint",
+          "description_ko": "위젯 블루프린트. UMG UI 레이아웃·로직.",
+          "examples": [
+            "/Game/UI/WBP_HUD",
+            "/Game/UI/WBP_Inventory"
+          ],
+          "ue_asset_classes": [
+            "WidgetBlueprint"
+          ],
+          "rag_coverage": "graph_blueprint",
+          "npr_relevant": true
+        },
+        {
+          "name": "User Widget",
+          "description_ko": "유저 위젯 클래스. WBP가 생성하는 런타임 위젯.",
+          "examples": [
+            "UUserWidget subclass from WBP_HUD"
+          ],
+          "ue_asset_classes": [
+            "WidgetBlueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Font",
+          "description_ko": "폰트 에셋. UMG/Slate 텍스트.",
+          "examples": [
+            "/Game/UI/Font_Noto"
+          ],
+          "ue_asset_classes": [
+            "Font",
+            "FontFace"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Slate Brush",
+          "description_ko": "슬레이트 브러시. UI 이미지·타일·테두리.",
+          "examples": [
+            "/Game/UI/Brush_Button"
+          ],
+          "ue_asset_classes": [
+            "SlateBrushAsset"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Texture Atlas",
+          "description_ko": "UI 텍스처 아틀라스. 스프라이트 시트.",
+          "examples": [
+            "/Game/UI/Atlas_Icons"
+          ],
+          "ue_asset_classes": [
+            "Texture2D"
+          ],
+          "rag_coverage": "texture_metadata"
+        },
+        {
+          "name": "Common UI Asset",
+          "description_ko": "Common UI 스타일/입력 데이터.",
+          "examples": [
+            "/Game/UI/CommonUI/Style_Default"
+          ],
+          "ue_asset_classes": [
+            "CommonUIVisibilitySubsystem"
+          ],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Input Action Icon Data",
+          "description_ko": "입력 액션 아이콘 매핑 데이터.",
+          "examples": [
+            "/Game/UI/InputIcons/IA_Icons"
+          ],
+          "ue_asset_classes": [
+            "DataAsset"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "UI Material",
+          "description_ko": "UI 머티리얼 도메인. UMG 머티리얼 브러시용.",
+          "examples": [
+            "/Game/UI/M_UI_Gradient"
+          ],
+          "ue_asset_classes": [
+            "Material",
+            "MaterialInstanceConstant"
+          ],
+          "rag_coverage": "graph_material"
+        },
+        {
+          "name": "Widget Animation",
+          "description_ko": "위젯 애니메이션. UMG 타임라인.",
+          "examples": [
+            "FadeIn animation in WBP_HUD"
+          ],
+          "ue_asset_classes": [
+            "WidgetBlueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        }
+      ]
+    },
+    {
+      "id": "input",
+      "number": 14,
+      "title_ko": "입력",
+      "work_domain": "gameplay_logic",
+      "items": [
+        {
+          "name": "Input Action",
+          "description_ko": "Enhanced Input 액션.",
+          "examples": [
+            "/Game/Input/IA_Jump",
+            "/Game/Input/IA_Fire"
+          ],
+          "ue_asset_classes": [
+            "InputAction"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Input Mapping Context",
+          "description_ko": "입력 매핑 컨텍스트. 액션·키 바인딩 묶음.",
+          "examples": [
+            "/Game/Input/IMC_Default"
+          ],
+          "ue_asset_classes": [
+            "InputMappingContext"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Input Modifier",
+          "description_ko": "입력 수정자. 스케일·데드존·스와즐.",
+          "examples": [
+            "InputModifierDeadZone"
+          ],
+          "ue_asset_classes": [
+            "InputModifier"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Input Trigger",
+          "description_ko": "입력 트리거. Pressed/Released/Hold 등.",
+          "examples": [
+            "InputTriggerPressed"
+          ],
+          "ue_asset_classes": [
+            "InputTrigger"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Force Feedback Effect",
+          "description_ko": "패드 포스 피드백 이펙트.",
+          "examples": [
+            "/Game/Input/FFE_Rumble"
+          ],
+          "ue_asset_classes": [
+            "ForceFeedbackEffect"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Haptic Feedback Effect",
+          "description_ko": "햅틱 피드백 이펙트(모바일/패드).",
+          "examples": [
+            "/Game/Input/HFE_Tap"
+          ],
+          "ue_asset_classes": [
+            "HapticFeedbackEffect"
+          ],
+          "rag_coverage": "registry"
+        }
+      ]
+    },
+    {
+      "id": "physics",
+      "number": 15,
+      "title_ko": "물리",
+      "work_domain": "gameplay_logic",
+      "items": [
+        {
+          "name": "Physics Asset",
+          "description_ko": "물리 섹션의 Physics Asset. 충돌·라그돌.",
+          "examples": [
+            "/Game/Characters/PHYS_Hero"
+          ],
+          "ue_asset_classes": [
+            "PhysicsAsset"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Physical Material",
+          "description_ko": "피지컬 머티리얼. 마찰·반발·사운드 서피스.",
+          "examples": [
+            "/Game/Physics/PM_Concrete"
+          ],
+          "ue_asset_classes": [
+            "PhysicalMaterial"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Collision Preset",
+          "description_ko": "콜리전 프리셋. 프로젝트/에디터 설정.",
+          "examples": [
+            "BlockAll",
+            "Pawn"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "guidelines"
+        },
+        {
+          "name": "Destructible/Geometry Collection",
+          "description_ko": "파괴 가능 오브젝트. Geometry Collection 기반.",
+          "examples": [
+            "/Game/Destruction/GC_Wall"
+          ],
+          "ue_asset_classes": [
+            "GeometryCollection"
+          ],
+          "rag_coverage": "mesh_metadata"
+        },
+        {
+          "name": "Chaos Cloth Config",
+          "description_ko": "Chaos 클로스 설정.",
+          "examples": [
+            "/Game/Physics/CC_Cloth"
+          ],
+          "ue_asset_classes": [
+            "ChaosClothConfig"
+          ],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Constraint Setup",
+          "description_ko": "물리 제약 설정. 힌지·볼 등.",
+          "examples": [
+            "PhysicsConstraint in BP_Door"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Cable Component",
+          "description_ko": "케이블 컴포넌트. 물리 시뮬 로프.",
+          "examples": [
+            "CableComponent on BP_Crane"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        }
+      ]
+    },
+    {
+      "id": "cinematic",
+      "number": 16,
+      "title_ko": "시네마틱",
+      "work_domain": "character_animation",
+      "items": [
+        {
+          "name": "Level Sequence",
+          "description_ko": "레벨 시퀀스. 시퀀서 메인 타임라인.",
+          "examples": [
+            "/Game/Cinematics/LS_Intro"
+          ],
+          "ue_asset_classes": [
+            "LevelSequence"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Sub Sequence",
+          "description_ko": "서브 시퀀스. 중첩 시퀀서 샷.",
+          "examples": [
+            "/Game/Cinematics/Sub/LS_Shot01"
+          ],
+          "ue_asset_classes": [
+            "LevelSequence"
+          ],
+          "rag_coverage": "graph_animation"
+        },
+        {
+          "name": "Camera Animation Sequence",
+          "description_ko": "카메라 애니메이션 시퀀스.",
+          "examples": [
+            "/Game/Cinematics/Camera/CA_Shake"
+          ],
+          "ue_asset_classes": [
+            "CameraAnim"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Cine Camera Actor",
+          "description_ko": "시네 카메라 액터. 렌즈·필름백 설정.",
+          "examples": [
+            "CineCameraActor in LS_Intro"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Movie Render Queue Preset",
+          "description_ko": "무비 렌더 큐 프리셋. 고품질 시퀀스 렌더.",
+          "examples": [
+            "/Game/Cinematics/MRQ_4K"
+          ],
+          "ue_asset_classes": [
+            "MoviePipelineQueue"
+          ],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Take Recorder Data",
+          "description_ko": "테이크 리코더 데이터. 모션캡처/라이브 테이크.",
+          "examples": [
+            "/Game/Cinematics/Takes/Take_001"
+          ],
+          "ue_asset_classes": [
+            "TakeRecorderSources"
+          ],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Control Rig Sequence",
+          "description_ko": "컨트롤 릭 시퀀스. 시퀀서 내 릭 애니.",
+          "examples": [
+            "/Game/Cinematics/CR_Seq_Hero"
+          ],
+          "ue_asset_classes": [
+            "ControlRigSequence"
+          ],
+          "rag_coverage": "not_exported_yet"
+        }
+      ]
+    },
+    {
+      "id": "media",
+      "number": 17,
+      "title_ko": "미디어",
+      "work_domain": "sound",
+      "items": [
+        {
+          "name": "Media Player",
+          "description_ko": "미디어 플레이어. 비디오 재생 제어.",
+          "examples": [
+            "/Game/Media/MP_Main"
+          ],
+          "ue_asset_classes": [
+            "MediaPlayer"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Media Source",
+          "description_ko": "미디어 소스 추상 베이스.",
+          "examples": [
+            "/Game/Media/MS_Trailer"
+          ],
+          "ue_asset_classes": [
+            "MediaSource"
+          ],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "File Media Source",
+          "description_ko": "파일 미디어 소스. 로컬 비디오 파일.",
+          "examples": [
+            "/Game/Media/File/MS_VideoFile"
+          ],
+          "ue_asset_classes": [
+            "FileMediaSource"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Img Media Source",
+          "description_ko": "이미지 시퀀스 미디어 소스.",
+          "examples": [
+            "/Game/Media/Img/MS_ImageSequence"
+          ],
+          "ue_asset_classes": [
+            "ImgMediaSource"
+          ],
+          "rag_coverage": "structured_metadata"
+        },
+        {
+          "name": "Media Texture",
+          "description_ko": "미디어 텍스처. 비디오 프레임 출력.",
+          "examples": [
+            "/Game/Media/MT_Screen"
+          ],
+          "ue_asset_classes": [
+            "MediaTexture"
+          ],
+          "rag_coverage": "texture_metadata"
+        },
+        {
+          "name": "Media Sound Component",
+          "description_ko": "미디어 사운드. 비디오 오디오 트랙.",
+          "examples": [
+            "MediaSoundComponent on BP_VideoScreen"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        }
+      ]
+    },
+    {
+      "id": "editor_automation",
+      "number": 18,
+      "title_ko": "에디터 자동화",
+      "work_domain": "editor_build",
+      "items": [
+        {
+          "name": "Editor Utility Widget",
+          "description_ko": "에디터 유틸리티 위젯. 커스텀 에디터 패널.",
+          "examples": [
+            "/Game/Editor/EUW_ExportTools"
+          ],
+          "ue_asset_classes": [
+            "EditorUtilityWidgetBlueprint",
+            "WidgetBlueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Editor Utility Blueprint",
+          "description_ko": "에디터 유틸리티 BP. 에디터 스크립트 액션.",
+          "examples": [
+            "/Game/Editor/EUBP_BatchRename"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Blutility",
+          "description_ko": "블루프린트 유틸리티(Blutility) 레거시 명칭.",
+          "examples": [
+            "/Game/Editor/Blutility_Tools"
+          ],
+          "ue_asset_classes": [
+            "Blueprint"
+          ],
+          "rag_coverage": "graph_blueprint"
+        },
+        {
+          "name": "Python Script",
+          "description_ko": "UE Editor Python 스크립트. tools/ue_export 등.",
+          "examples": [
+            "tools/ue_export/export_material_metadata.py"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "source_code"
+        },
+        {
+          "name": "Data Validation Rule",
+          "description_ko": "데이터 검증 규칙. 에셋 품질 검사.",
+          "examples": [
+            "/Game/Editor/DVR_CheckTextures"
+          ],
+          "ue_asset_classes": [
+            "EditorValidatorBase"
+          ],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Asset Action Utility",
+          "description_ko": "에셋 액션 유틸리티. 콘텐츠 브라우저 우클릭 메뉴.",
+          "examples": [
+            "/Game/Editor/AAU_ExportMetadata"
+          ],
+          "ue_asset_classes": [
+            "AssetActionUtility"
+          ],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Commandlet",
+          "description_ko": "커맨들릿. 헤드리스 에디터 배치 작업.",
+          "examples": [
+            "UAssetRegistryExportCommandlet"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "source_code"
+        }
+      ]
+    },
+    {
+      "id": "asset_registry_metadata",
+      "number": 19,
+      "title_ko": "에셋 레지스트리 메타데이터",
+      "work_domain": "editor_build",
+      "items": [
+        {
+          "name": "AssetName",
+          "description_ko": "에셋 짧은 이름(패키지 내 오브젝트명).",
+          "examples": [
+            "M_Hero",
+            "BP_Player"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "PackageName",
+          "description_ko": "패키지 전체 이름(/Game/... 경로).",
+          "examples": [
+            "/Game/Materials/M_Hero"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "PackagePath",
+          "description_ko": "패키지 디렉터리 경로.",
+          "examples": [
+            "/Game/Materials"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "ObjectPath",
+          "description_ko": "오브젝트 전체 경로(패키지.오브젝트).",
+          "examples": [
+            "/Game/Materials/M_Hero.M_Hero"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "AssetClassPath",
+          "description_ko": "에셋 클래스 경로(모듈·클래스명).",
+          "examples": [
+            "/Script/Engine.Material",
+            "/Script/Engine.Blueprint"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "TagsAndValues",
+          "description_ko": "에셋 레지스트리 태그·값 딕셔너리.",
+          "examples": [
+            "{\"SkeletalMesh\": \"SK_Hero\"}"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "ChunkIDs",
+          "description_ko": "패키징 청크 ID 목록.",
+          "examples": [
+            "[0]",
+            "[1, 2]"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "PackageFlags",
+          "description_ko": "패키지 플래그 비트마스크.",
+          "examples": [
+            "PKG_FilterEditorOnly"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "SoftObjectPath",
+          "description_ko": "소프트 오브젝트 경로 문자열.",
+          "examples": [
+            "/Game/Materials/M_Hero.M_Hero"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        }
+      ]
+    },
+    {
+      "id": "references",
+      "number": 20,
+      "title_ko": "참조",
+      "work_domain": "editor_build",
+      "items": [
+        {
+          "name": "Hard Reference",
+          "description_ko": "하드 참조. 로드 시 의존 에셋 강제 로드.",
+          "examples": [
+            "Static mesh reference on BP_Prop"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Soft Reference",
+          "description_ko": "소프트 참조. TSoftObjectPtr 등 지연 로드.",
+          "examples": [
+            "TSoftObjectPtr<UTexture2D>"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Soft Object Path",
+          "description_ko": "FSoftObjectPath 문자열 경로.",
+          "examples": [
+            "/Game/Textures/T_Icon.T_Icon"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Soft Class Reference",
+          "description_ko": "TSoftClassPtr 클래스 소프트 참조.",
+          "examples": [
+            "TSoftClassPtr<AActor>"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Primary Asset ID",
+          "description_ko": "FPrimaryAssetId. 에셋 매니저 식별자.",
+          "examples": [
+            "Item:Weapon_Sword"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Asset Bundle",
+          "description_ko": "에셋 번들. 청크/스테이징 묶음.",
+          "examples": [
+            "Game",
+            "Menu",
+            "Maps"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        }
+      ]
+    },
+    {
+      "id": "packaging",
+      "number": 21,
+      "title_ko": "패키징",
+      "work_domain": "editor_build",
+      "items": [
+        {
+          "name": "Cooked Asset",
+          "description_ko": "쿡된 플랫폼별 에셋. Staging/Saved/Cooked.",
+          "examples": [
+            "Saved/Cooked/Windows/..."
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "path_only"
+        },
+        {
+          "name": "Derived Data Cache",
+          "description_ko": "DDC. 셰이더·메시·텍스처 파생 캐시.",
+          "examples": [
+            "DerivedDataCache/..."
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Shader Cache",
+          "description_ko": "셰이더 파이프라인 캐시.",
+          "examples": [
+            "PipelineCaches/..."
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "not_exported_yet"
+        },
+        {
+          "name": "Asset Registry.bin",
+          "description_ko": "쿡된 에셋 레지스트리 바이너리.",
+          "examples": [
+            "Metadata/DevelopmentAssetRegistry.bin"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Pak/IoStore",
+          "description_ko": "Pak 또는 IoStore 컨테이너.",
+          "examples": [
+            "Content/Paks/game.pak",
+            "*.utoc/*.ucas"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "path_only"
+        },
+        {
+          "name": "Chunk Data",
+          "description_ko": "패키징 청크별 에셋 묶음.",
+          "examples": [
+            "Chunk 0: core",
+            "Chunk 1: maps"
+          ],
+          "ue_asset_classes": [],
+          "rag_coverage": "registry"
+        },
+        {
+          "name": "Redirector",
+          "description_ko": "오브젝트 리다이렉터. 이동/리네임 추적.",
+          "examples": [
+            "/Game/Old/M_Redirector"
+          ],
+          "ue_asset_classes": [
+            "ObjectRedirector"
+          ],
+          "rag_coverage": "registry"
+        }
+      ]
+    }
+  ]
+}

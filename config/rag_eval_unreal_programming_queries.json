@@ -351,6 +351,21 @@
           "max_rank": 5
         }
       ]
+    },
+    {
+      "id": "unreal_asset_taxonomy_production_work",
+      "query": "Unreal asset taxonomy Material Layer Material Function work domain NPR RAG coverage",
+      "options": {
+        "mode": "material_analysis"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Asset Taxonomy For Production Work",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 5
+        }
+      ]
     }
   ]
 }

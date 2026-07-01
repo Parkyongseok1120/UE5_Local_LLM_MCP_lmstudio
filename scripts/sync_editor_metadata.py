@@ -23,7 +23,7 @@ from workspace_paths import (
     resolve_index_dir,
 )
 
-PRIORITY_KINDS = ("material", "blueprint", "animation")
+PRIORITY_KINDS = ("material", "texture", "mesh", "blueprint", "structured", "animation", "world_look", "fmod")
 EXPORT_KIND_TO_RAW_KIND = {
     "skeletal_mesh": "animation",
     "anim_blueprint": "animation",

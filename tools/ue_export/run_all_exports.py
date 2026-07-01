@@ -13,7 +13,12 @@ import os
 DEFAULT_EXPORTS = (
     ("export_blueprint_metadata.py", "export_blueprint_metadata", "blueprints.jsonl"),
     ("export_material_metadata.py", "export_material_metadata", "materials.jsonl"),
+    ("export_texture_metadata.py", "export_texture_metadata", "textures.jsonl"),
+    ("export_mesh_metadata.py", "export_mesh_metadata", "meshes.jsonl"),
+    ("export_world_look_metadata.py", "export_world_look_metadata", "world_look.jsonl"),
+    ("export_structured_asset_metadata.py", "export_structured_asset_metadata", "structured.jsonl"),
     ("export_animation_metadata.py", "export_animation_metadata", "animation.jsonl"),
+    ("export_fmod_metadata.py", "export_fmod_metadata", "fmod.jsonl"),
     ("export_asset_registry.py", "export_asset_registry", "asset_registry.jsonl"),
     ("export_project_settings.py", "export_project_settings", "project_settings.jsonl"),
     ("export_level_metadata.py", "export_level_metadata", "level.jsonl"),

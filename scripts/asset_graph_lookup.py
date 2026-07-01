@@ -10,13 +10,31 @@ from pathlib import Path
 from typing import Any, Literal
 
 from workspace_paths import load_shared_config, resolve_index_dir
+from asset_taxonomy import classify_ue_asset_class, graph_lookup_guidance
 
 AssetKind = Literal["auto", "material", "blueprint", "animation"]
 
 KIND_FILES: dict[str, str] = {
     "material": "raw_material_metadata.jsonl",
     "blueprint": "raw_blueprint_metadata.jsonl",
+    "structured": "raw_structured_metadata.jsonl",
+    "texture": "raw_texture_metadata.jsonl",
+    "mesh": "raw_mesh_metadata.jsonl",
+    "world_look": "raw_world_look_metadata.jsonl",
+    "fmod": "raw_fmod_metadata.jsonl",
+    "animation": "raw_animation_metadata.jsonl",
 }
+
+AUTO_SEARCH_KINDS = (
+    "material",
+    "blueprint",
+    "structured",
+    "texture",
+    "mesh",
+    "world_look",
+    "fmod",
+    "animation",
+)
 
 ASSET_PATH_RE = re.compile(r"/Game/[A-Za-z0-9_/]+", re.IGNORECASE)
 
@@ -149,14 +167,109 @@ def _summarize_blueprint(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _summarize_structured(row: dict[str, Any]) -> dict[str, Any]:
+    meta = _row_metadata(row)
+    return {
+        "assetPath": _asset_path(row) or None,
+        "assetType": meta.get("asset_type"),
+        "name": _asset_name(row) or None,
+        "rowStruct": meta.get("row_struct"),
+        "columns": meta.get("columns") or [],
+        "rowNames": (meta.get("row_names") or [])[:40],
+        "blackboardKeys": meta.get("blackboard_keys") or [],
+        "emitters": meta.get("emitters") or [],
+        "userParameters": meta.get("user_parameters") or [],
+        "inputMappings": meta.get("input_mappings") or [],
+        "dependencies": meta.get("dependencies") or [],
+    }
+
+
+def _summarize_texture(row: dict[str, Any]) -> dict[str, Any]:
+    meta = _row_metadata(row)
+    return {
+        "assetPath": _asset_path(row) or None,
+        "assetType": meta.get("asset_type"),
+        "name": _asset_name(row) or None,
+        "width": meta.get("width"),
+        "height": meta.get("height"),
+        "srgb": meta.get("srgb"),
+        "compression": meta.get("compression"),
+    }
+
+
+def _summarize_mesh(row: dict[str, Any]) -> dict[str, Any]:
+    meta = _row_metadata(row)
+    return {
+        "assetPath": _asset_path(row) or None,
+        "assetType": meta.get("asset_type"),
+        "name": _asset_name(row) or None,
+        "materialSlots": meta.get("material_slots") or [],
+        "lodCount": meta.get("lod_count"),
+        "naniteEnabled": meta.get("nanite_enabled"),
+        "collisionProfile": meta.get("collision_profile"),
+    }
+
+
+def _summarize_animation(row: dict[str, Any]) -> dict[str, Any]:
+    meta = _row_metadata(row)
+    return {
+        "assetPath": _asset_path(row) or None,
+        "assetType": meta.get("asset_type"),
+        "name": _asset_name(row) or None,
+        "skeleton": meta.get("skeleton"),
+        "poses": (meta.get("poses") or [])[:40],
+        "blendSamples": (meta.get("blend_samples") or [])[:40],
+        "bones": (meta.get("bones") or [])[:40],
+        "sockets": (meta.get("sockets") or [])[:40],
+    }
+
+
+def _summarize_generic(row: dict[str, Any]) -> dict[str, Any]:
+    meta = _row_metadata(row)
+    return {
+        "assetPath": _asset_path(row) or None,
+        "assetType": meta.get("asset_type"),
+        "name": _asset_name(row) or None,
+        "properties": meta.get("properties") or meta.get("post_process_settings"),
+        "dependencies": meta.get("dependencies") or [],
+    }
+
+
+def _summarize_row(kind: str, row: dict[str, Any]) -> dict[str, Any]:
+    if kind == "material":
+        return _summarize_material(row)
+    if kind == "blueprint":
+        return _summarize_blueprint(row)
+    if kind == "structured":
+        return _summarize_structured(row)
+    if kind == "texture":
+        return _summarize_texture(row)
+    if kind == "mesh":
+        return _summarize_mesh(row)
+    if kind == "animation":
+        return _summarize_animation(row)
+    return _summarize_generic(row)
+
+
 def _detect_kind(query: str, explicit: AssetKind) -> AssetKind:
     if explicit != "auto":
         return explicit
     if query.startswith("/Game/"):
         return "auto"
-    if query.lower().startswith(("m_", "mi_", "material")):
+    q = query.lower()
+    if q.startswith(("t_", "tex_")):
+        return "texture"  # type: ignore[return-value]
+    if q.startswith(("sm_", "sk_", "gc_")):
+        return "mesh"  # type: ignore[return-value]
+    if q.startswith(("pp_", "sky_", "fog_")):
+        return "world_look"  # type: ignore[return-value]
+    if q.startswith(("pose_", "bs_", "cr_", "ikr_", "ikrt_")):
+        return "animation"  # type: ignore[return-value]
+    if q.startswith(("dt_", "da_", "pda_", "npc_", "ns_", "bt_", "bb_", "eqs_", "sc_", "ia_", "imc_")):
+        return "structured"  # type: ignore[return-value]
+    if q.startswith(("m_", "mi_", "mf_", "ml_", "mlb_", "mpc_", "material")):
         return "material"
-    if query.lower().startswith(("bp_", "wbp_", "abp_")) or "blueprint" in query.lower():
+    if q.startswith(("bp_", "wbp_", "abp_")) or "blueprint" in q:
         return "blueprint"
     return "auto"
 
@@ -177,21 +290,40 @@ def lookup_asset_graph(
     kind = _detect_kind(query, asset_kind)
     kinds_to_search: list[str]
     if kind == "auto":
-        kinds_to_search = ["material", "blueprint"]
+        kinds_to_search = list(AUTO_SEARCH_KINDS)
     else:
         kinds_to_search = [kind]
 
     matches: list[dict[str, Any]] = []
     searched: list[str] = []
     for search_kind in kinds_to_search:
-        raw_path = idx / KIND_FILES[search_kind]
+        filename = KIND_FILES.get(search_kind)
+        if not filename:
+            continue
+        raw_path = idx / filename
         searched.append(str(raw_path))
+        if not raw_path.is_file():
+            continue
         rows = _filter_project(_load_jsonl(raw_path), project_name)
         for row in rows:
             if _matches_query(row, query):
                 matches.append({"kind": search_kind, "row": row})
 
     if not matches:
+        asset_class = ""
+        registry_path = idx / "raw_asset_registry.jsonl"
+        if registry_path.is_file():
+            for row in _load_jsonl(registry_path):
+                if _matches_query(row, query):
+                    meta = _row_metadata(row)
+                    asset_class = str(meta.get("asset_type") or row.get("asset_type") or "")
+                    break
+        next_actions = [
+            "Call unreal_editor_metadata_status to check export freshness.",
+            "If stale or missing, run Editor export then unreal_sync_editor_metadata.",
+            "Retry unreal_asset_graph_lookup with full /Game/... path.",
+        ]
+        next_actions.extend(graph_lookup_guidance(asset_class=asset_class, asset_path=query))
         return {
             "ok": False,
             "query": query,
@@ -200,20 +332,15 @@ def lookup_asset_graph(
             "projectName": project_name or _active_project_name(),
             "searchedFiles": searched,
             "matches": [],
-            "nextActions": [
-                "Call unreal_editor_metadata_status to check export freshness.",
-                "If stale or missing, run Editor export then unreal_sync_editor_metadata.",
-                "Retry unreal_asset_graph_lookup with full /Game/... path.",
-            ],
+            "assetClass": asset_class or None,
+            "taxonomy": classify_ue_asset_class(asset_class) if asset_class else None,
+            "nextActions": next_actions,
         }
 
     summaries = []
     for item in matches[:8]:
         row = item["row"]
-        if item["kind"] == "material":
-            summary = _summarize_material(row)
-        else:
-            summary = _summarize_blueprint(row)
+        summary = _summarize_row(item["kind"], row)
         summary["kind"] = item["kind"]
         if include_full_graph:
             summary["rawMetadata"] = _row_metadata(row)
@@ -243,11 +370,16 @@ def search_asset_graphs(
     idx = _resolve_index_dir(index_dir)
     q = str(query or "").strip().lower()
     kind = _detect_kind(query, asset_kind)
-    kinds = ["material", "blueprint"] if kind == "auto" else [kind]
+    kinds = list(AUTO_SEARCH_KINDS) if kind == "auto" else [kind]
 
     hits: list[dict[str, Any]] = []
     for search_kind in kinds:
-        raw_path = idx / KIND_FILES[search_kind]
+        filename = KIND_FILES.get(search_kind)
+        if not filename:
+            continue
+        raw_path = idx / filename
+        if not raw_path.is_file():
+            continue
         rows = _filter_project(_load_jsonl(raw_path), project_name)
         for row in rows:
             path = _asset_path(row).lower()

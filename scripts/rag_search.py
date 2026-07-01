@@ -133,6 +133,23 @@ GUIDELINE_SIDECAR_TITLE_PATTERNS: dict[str, list[str]] = {
     ],
 }
 
+TAXONOMY_QUERY_HINTS = (
+    "taxonomy",
+    "work domain",
+    "에셋 종류",
+    "rag coverage",
+    "asset type",
+    "material layer",
+    "material function",
+)
+
+
+def query_wants_taxonomy_sidecar(query: str, mode: str) -> bool:
+    if mode == "api_lookup":
+        return True
+    raw = query.lower()
+    return any(hint in raw for hint in TAXONOMY_QUERY_HINTS)
+
 
 def fetch_guideline_sidecar(
     conn: sqlite3.Connection,
@@ -185,6 +202,9 @@ def fetch_guideline_sidecar(
             if "_" in term and term.lower() not in {"build.cs", "target.cs"}:
                 requests.append(("project_profile", f"%{term.lower()}%project profile%"))
                 break
+
+    if query_wants_taxonomy_sidecar(query, mode):
+        requests.append(("project_guideline", "%unreal asset taxonomy for production work%"))
 
     seen: set[str] = set()
     results: list[dict[str, Any]] = []
@@ -1553,7 +1573,7 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
 
     if mode in {"module_fix", "compile_fix", "reflection_fix", "blueprint_analysis"} or (
         mode == "implementation" and "project profile" in query.lower()
-    ):
+    ) or query_wants_taxonomy_sidecar(query, mode):
         guideline_sidecar = fetch_guideline_sidecar(conn, mode, query, limit=max(8, top_k))
         profile_boost = 200.0 if mode == "implementation" else 120.0
         ranked = merge_ranked_sidecar(

@@ -10,10 +10,15 @@ Run these scripts in UE Editor Python or an Editor Utility:
 
 | Script | Output type |
 |--------|-------------|
-| `tools/ue_export/export_blueprint_metadata.py` | Blueprint class, variables, functions, graph/node/pin summary, dependencies |
-| `tools/ue_export/export_material_metadata.py` | Material/Material Instance parent, expressions, parameters, dependencies |
-| `tools/ue_export/export_animation_metadata.py` | SkeletalMesh, AnimBlueprint, AnimSequence, AnimMontage, Notify, LevelSequence metadata |
-| `tools/ue_export/export_asset_registry.py` | Asset registry summary |
+| `export_blueprint_metadata.py` | Blueprint graph/variables/functions |
+| `export_material_metadata.py` | Material/MI/MF/ML/MPC |
+| `export_texture_metadata.py` | Texture2D/Cube/RenderTarget settings |
+| `export_mesh_metadata.py` | StaticMesh/GeometryCollection slots & LOD |
+| `export_world_look_metadata.py` | PostProcess/Sky/Fog/DataLayer |
+| `export_structured_asset_metadata.py` | DataTable, Niagara, AI, Audio, Input, UI, GAS |
+| `export_animation_metadata.py` | Anim + PoseAsset/Skeleton/PhysicsAsset/ControlRig/IK |
+| `export_fmod_metadata.py` | FMOD Event/Bank (when plugin present) |
+| `export_asset_registry.py` | Asset registry summary |
 | `tools/ue_export/export_project_settings.py` | DefaultGame/Engine/Input.ini keys |
 | `tools/ue_export/export_level_metadata.py` | Map assets |
 
@@ -131,6 +136,7 @@ Convenience commands:
 
 - `unreal_blueprint_metadata`
 - `unreal_material_metadata`
+- `unreal_structured_metadata`
 - `unreal_animation_metadata`
 - `unreal_skeletal_mesh_metadata`
 - `unreal_anim_blueprint_metadata`
@@ -139,5 +145,24 @@ Convenience commands:
 - `unreal_asset_registry`
 - `unreal_project_settings`
 - `unreal_level_metadata`
+
+## Asset taxonomy and RAG coverage
+
+Not every Unreal asset type is exported with full graph metadata. Use the production taxonomy to see what is indexed at each tier:
+
+- **Guideline:** `RAG_Project_Guidelines/Unreal_Programming/22_Unreal_Asset_Taxonomy_For_Production_Work.md`
+- **Machine-readable map:** `config/unreal_asset_taxonomy.json`
+- **Runtime helper:** `scripts/asset_taxonomy.py` (`classify_ue_asset_class`, `graph_lookup_guidance`)
+
+| RAG tier | Typical sources | Graph export today |
+|----------|-----------------|-------------------|
+| `graph_material` | `unreal_material_metadata` | Material, MI, MaterialFunction, MaterialLayer, MPC |
+| `structured_metadata` | `unreal_structured_metadata` | DataTable, Curve, Niagara, AI, SoundCue, Input, PhysicalMaterial |
+| `graph_blueprint` | `unreal_blueprint_metadata` | Blueprint classes |
+| `graph_animation` | `unreal_animation_metadata` | Skeletal mesh, AnimBP, montage |
+| `registry` | `unreal_asset_registry` | Path + class + taxonomy tags (e.g. Material Function, Material Layer, MPC) |
+| `path_only` | `unreal_project_asset_path` | Path string only |
+
+`unreal_asset_registry` rows now include taxonomy lines (`taxonomy_item`, `rag_coverage`, `work_domain`) from `collect_editor_metadata.py`. When `unreal_asset_graph_lookup` misses graph data, it returns taxonomy guidance (for example `MaterialFunctionMaterialLayer` → registry-only until material export is extended).
 
 Graph builder and project-aware behavior consume summarized nodes. Direct `.uasset` graph mutation still belongs in Unreal Editor automation, but these exports give the agent the asset map required before making those Editor-side changes.

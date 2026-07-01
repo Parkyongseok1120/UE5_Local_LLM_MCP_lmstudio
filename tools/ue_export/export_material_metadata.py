@@ -105,6 +105,29 @@ EXPRESSION_DETAIL_PROPERTIES = (
     ("A", "a"),
 )
 
+MATERIAL_EXPORT_CLASSES = frozenset(
+    {
+        "Material",
+        "MaterialInstanceConstant",
+        "MaterialInstance",
+        "MaterialFunction",
+        "MaterialFunctionMaterialLayer",
+        "MaterialFunctionMaterialLayerBlend",
+        "MaterialParameterCollection",
+    }
+)
+
+MATERIAL_GRAPH_CLASSES = frozenset(
+    {
+        "Material",
+        "MaterialInstanceConstant",
+        "MaterialInstance",
+        "MaterialFunction",
+        "MaterialFunctionMaterialLayer",
+        "MaterialFunctionMaterialLayerBlend",
+    }
+)
+
 
 def _asset_class_name(asset) -> str:
     if hasattr(asset, "asset_class_path"):
@@ -440,6 +463,106 @@ def _collect_parameter_values(unreal, material, names: list[str], kind: str) -> 
     return rows
 
 
+def _collect_mpc_parameters(mpc) -> dict:
+    row: dict = {}
+    scalar_rows = []
+    vector_rows = []
+    for prop in ("scalar_parameters", "ScalarParameters"):
+        for item in list(_safe_prop(mpc, prop, []) or [])[:80]:
+            name = _safe_prop(item, "parameter_name", None) or _safe_prop(item, "ParameterName", None)
+            default = _safe_prop(item, "default_value", None) or _safe_prop(item, "DefaultValue", None)
+            if name:
+                scalar_rows.append({"name": str(name), "default": _value_to_text(default)})
+    for prop in ("vector_parameters", "VectorParameters"):
+        for item in list(_safe_prop(mpc, prop, []) or [])[:80]:
+            name = _safe_prop(item, "parameter_name", None) or _safe_prop(item, "ParameterName", None)
+            default = _safe_prop(item, "default_value", None) or _safe_prop(item, "DefaultValue", None)
+            if name:
+                vector_rows.append({"name": str(name), "default": _value_to_text(default)})
+    if scalar_rows:
+        row["scalar_parameters"] = scalar_rows
+    if vector_rows:
+        row["vector_parameters"] = vector_rows
+    return row
+
+
+def _export_material_row(registry, asset, cls: str, path: str) -> dict:
+    import unreal
+
+    row = {
+        "asset_path": path,
+        "asset_type": cls,
+        "name": path.rsplit("/", 1)[-1],
+    }
+    try:
+        material = unreal.load_asset(path)
+        if not material:
+            return row
+
+        if cls == "MaterialParameterCollection":
+            row.update(_collect_mpc_parameters(material))
+            dependencies = registry.get_dependencies(asset.package_name)
+            if dependencies:
+                row["dependencies"] = [str(dep) for dep in dependencies[:40]]
+            return row
+
+        if "MaterialInstance" in cls:
+            parent = _safe_prop(material, "parent", None)
+            if parent:
+                row["parent_material"] = _safe_name(parent)
+        blend_mode = _safe_prop(material, "blend_mode", None)
+        shading_model = _safe_prop(material, "shading_model", None)
+        if blend_mode:
+            row["blend_mode"] = str(blend_mode)
+        if shading_model:
+            row["shading_model"] = str(shading_model)
+
+        if cls in MATERIAL_GRAPH_CLASSES:
+            graph_material, graph_source = _graph_source_material(material, cls, unreal)
+            if graph_source:
+                row["graph_source"] = graph_source
+            expressions, graph_edges, root_outputs = _collect_material_graph(graph_material, unreal)
+            if expressions:
+                row["expressions"] = expressions
+            if graph_edges:
+                row["graph_edges"] = graph_edges
+            if root_outputs:
+                row["root_outputs"] = root_outputs
+
+        if "MaterialInstance" in cls:
+            scalar_params = _collect_parameter_names(unreal, material, "scalar")
+            vector_params = _collect_parameter_names(unreal, material, "vector")
+            texture_params = _collect_parameter_names(unreal, material, "texture")
+            switch_params = _collect_parameter_names(unreal, material, "static_switch")
+            if scalar_params:
+                row["scalar_parameters"] = scalar_params
+            if vector_params:
+                row["vector_parameters"] = vector_params
+            if texture_params:
+                row["texture_parameters"] = texture_params
+            if switch_params:
+                row["static_switch_parameters"] = switch_params
+            scalar_values = _collect_parameter_values(unreal, material, scalar_params, "scalar")
+            vector_values = _collect_parameter_values(unreal, material, vector_params, "vector")
+            texture_values = _collect_parameter_values(unreal, material, texture_params, "texture")
+            switch_values = _collect_parameter_values(unreal, material, switch_params, "static_switch")
+            if scalar_values:
+                row["scalar_parameter_values"] = scalar_values
+            if vector_values:
+                row["vector_parameter_values"] = vector_values
+            if texture_values:
+                row["texture_parameter_values"] = texture_values
+            if switch_values:
+                row["static_switch_parameter_values"] = switch_values
+
+        dependencies = registry.get_dependencies(asset.package_name)
+        if dependencies:
+            row["dependencies"] = [str(dep) for dep in dependencies[:40]]
+    except Exception:
+        pass
+    return row
+
+
 def export_material_metadata(content_path: str, out_path: str) -> None:
     import unreal
 
@@ -448,70 +571,10 @@ def export_material_metadata(content_path: str, out_path: str) -> None:
     rows = []
     for asset in assets:
         cls = _asset_class_name(asset)
-        if cls not in {"Material", "MaterialInstanceConstant", "MaterialInstance"}:
+        if cls not in MATERIAL_EXPORT_CLASSES:
             continue
-
         path = str(asset.package_name)
-        row = {
-            "asset_path": path,
-            "asset_type": cls,
-            "name": path.rsplit("/", 1)[-1],
-        }
-        try:
-            material = unreal.load_asset(path)
-            if material:
-                if hasattr(material, "get_editor_property"):
-                    parent = material.get_editor_property("parent") if "MaterialInstance" in cls else None
-                    if parent:
-                        row["parent_material"] = _safe_name(parent)
-                    blend_mode = _safe_prop(material, "blend_mode", None)
-                    shading_model = _safe_prop(material, "shading_model", None)
-                    if blend_mode:
-                        row["blend_mode"] = str(blend_mode)
-                    if shading_model:
-                        row["shading_model"] = str(shading_model)
-
-                graph_material, graph_source = _graph_source_material(material, cls, unreal)
-                if graph_source:
-                    row["graph_source"] = graph_source
-                expressions, graph_edges, root_outputs = _collect_material_graph(graph_material, unreal)
-                if expressions:
-                    row["expressions"] = expressions
-                if graph_edges:
-                    row["graph_edges"] = graph_edges
-                if root_outputs:
-                    row["root_outputs"] = root_outputs
-
-                scalar_params = _collect_parameter_names(unreal, material, "scalar")
-                vector_params = _collect_parameter_names(unreal, material, "vector")
-                texture_params = _collect_parameter_names(unreal, material, "texture")
-                switch_params = _collect_parameter_names(unreal, material, "static_switch")
-                if scalar_params:
-                    row["scalar_parameters"] = scalar_params
-                if vector_params:
-                    row["vector_parameters"] = vector_params
-                if texture_params:
-                    row["texture_parameters"] = texture_params
-                if switch_params:
-                    row["static_switch_parameters"] = switch_params
-                scalar_values = _collect_parameter_values(unreal, material, scalar_params, "scalar")
-                vector_values = _collect_parameter_values(unreal, material, vector_params, "vector")
-                texture_values = _collect_parameter_values(unreal, material, texture_params, "texture")
-                switch_values = _collect_parameter_values(unreal, material, switch_params, "static_switch")
-                if scalar_values:
-                    row["scalar_parameter_values"] = scalar_values
-                if vector_values:
-                    row["vector_parameter_values"] = vector_values
-                if texture_values:
-                    row["texture_parameter_values"] = texture_values
-                if switch_values:
-                    row["static_switch_parameter_values"] = switch_values
-                dependencies = registry.get_dependencies(asset.package_name)
-                if dependencies:
-                    row["dependencies"] = [str(dep) for dep in dependencies[:40]]
-        except Exception:
-            pass
-        rows.append(row)
+        rows.append(_export_material_row(registry, asset, cls, path))
 
     with open(out_path, "w", encoding="utf-8") as handle:
         for row in rows:

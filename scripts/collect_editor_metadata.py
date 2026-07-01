@@ -11,12 +11,19 @@ from typing import Any
 
 from material_graph_format import append_material_graph_text_parts
 from blueprint_graph_format import append_blueprint_graph_text_parts
+from structured_metadata_format import append_structured_metadata_text_parts
+from asset_taxonomy import taxonomy_text_lines
 
 
 SOURCE_MAP = {
     "blueprint": "unreal_blueprint_metadata",
     "material": "unreal_material_metadata",
     "animation": "unreal_animation_metadata",
+    "structured": "unreal_structured_metadata",
+    "texture": "unreal_texture_metadata",
+    "mesh": "unreal_mesh_metadata",
+    "world_look": "unreal_world_look_metadata",
+    "fmod": "unreal_fmod_metadata",
     "skeletal_mesh": "unreal_skeletal_mesh_metadata",
     "anim_blueprint": "unreal_anim_blueprint_metadata",
     "anim_montage": "unreal_anim_montage_metadata",
@@ -31,6 +38,11 @@ UASSET_SOURCES = {
     "unreal_blueprint_metadata",
     "unreal_material_metadata",
     "unreal_animation_metadata",
+    "unreal_structured_metadata",
+    "unreal_texture_metadata",
+    "unreal_mesh_metadata",
+    "unreal_world_look_metadata",
+    "unreal_fmod_metadata",
     "unreal_skeletal_mesh_metadata",
     "unreal_anim_blueprint_metadata",
     "unreal_anim_montage_metadata",
@@ -45,6 +57,15 @@ ANIMATION_ASSET_SOURCE_MAP = {
     "AnimBlueprint": "unreal_anim_blueprint_metadata",
     "AnimMontage": "unreal_anim_montage_metadata",
     "LevelSequence": "unreal_sequencer_metadata",
+    "PoseAsset": "unreal_animation_metadata",
+    "BlendSpace": "unreal_animation_metadata",
+    "BlendSpace1D": "unreal_animation_metadata",
+    "AimOffsetBlendSpace": "unreal_animation_metadata",
+    "Skeleton": "unreal_animation_metadata",
+    "PhysicsAsset": "unreal_animation_metadata",
+    "ControlRigBlueprint": "unreal_animation_metadata",
+    "IKRigDefinition": "unreal_animation_metadata",
+    "IKRetargeter": "unreal_animation_metadata",
 }
 
 
@@ -87,6 +108,8 @@ def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, An
     ):
         if row.get(key):
             text_parts.append(f"{key}: {row[key]}")
+    if source == "unreal_asset_registry" and row.get("asset_type"):
+        text_parts.extend(taxonomy_text_lines(str(row["asset_type"])))
     for key in (
         "components",
         "variables",
@@ -110,12 +133,19 @@ def row_to_chunk(source: str, row: dict[str, Any], project: str) -> dict[str, An
         "bindings",
         "tracks",
         "dependencies",
+        "poses",
+        "blend_samples",
+        "bones",
+        "sockets",
+        "physics_bodies",
+        "constraints",
         "graph_source",
     ):
         if row.get(key):
             text_parts.append(f"{key}: {row[key]}")
     append_material_graph_text_parts(row, text_parts)
     append_blueprint_graph_text_parts(row, text_parts)
+    append_structured_metadata_text_parts(row, text_parts)
     text = "\n".join(text_parts)
     chunk_id = hashlib.sha1(f"{source}|{path}|{title}".encode()).hexdigest()
     return {
