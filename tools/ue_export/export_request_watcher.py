@@ -40,18 +40,19 @@ def _process_request(export_dir: Path, tools_dir: Path) -> None:
     run_all_path = tools_dir / "run_all_exports.py"
     namespace: dict = {}
     with open(run_all_path, encoding="utf-8") as handle:
-        exec(handle.read(), namespace)
+        source = handle.read()
+    exec(f"_TOOLS_DIR = {str(tools_dir)!r}\n" + source, namespace)
 
     if scope in {"material", "materials"}:
-        manifest = namespace["export_materials_only"](str(export_dir), content_path=content_path, tools_dir=str(tools_path))
+        manifest = namespace["export_materials_only"](str(export_dir), content_path=content_path, tools_dir=str(tools_dir))
     elif scope in {"blueprint", "blueprints", "bp"}:
-        manifest = namespace["export_blueprints_only"](str(export_dir), content_path=content_path, tools_dir=str(tools_path))
+        manifest = namespace["export_blueprints_only"](str(export_dir), content_path=content_path, tools_dir=str(tools_dir))
     else:
         manifest = namespace["run_all_metadata_exports"](
             str(export_dir),
             content_path=content_path,
             maps_path=maps_path,
-            tools_dir=str(tools_path),
+            tools_dir=str(tools_dir),
         )
 
     request_path.unlink(missing_ok=True)

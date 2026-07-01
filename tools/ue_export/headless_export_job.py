@@ -35,7 +35,8 @@ def run_headless_export_job() -> None:
     run_all_path = os.path.join(tools_dir, "run_all_exports.py")
     namespace: dict = {}
     with open(run_all_path, encoding="utf-8") as handle:
-        exec(handle.read(), namespace)
+        source = handle.read()
+    exec(f"_TOOLS_DIR = {tools_dir!r}\n" + source, namespace)
 
     if scope in {"material", "materials"}:
         manifest = namespace["export_materials_only"](export_dir, content_path=content_path, tools_dir=tools_dir)

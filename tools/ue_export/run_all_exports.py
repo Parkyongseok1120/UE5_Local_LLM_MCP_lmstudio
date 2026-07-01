@@ -19,7 +19,10 @@ DEFAULT_EXPORTS = (
     ("export_level_metadata.py", "export_level_metadata", "level.jsonl"),
 )
 
-_TOOLS_DIR = ""
+try:
+    _TOOLS_DIR
+except NameError:
+    _TOOLS_DIR = ""
 
 
 def _tools_dir(explicit: str = "") -> str:
@@ -27,10 +30,9 @@ def _tools_dir(explicit: str = "") -> str:
         return explicit
     if _TOOLS_DIR:
         return _TOOLS_DIR
-    try:
-        return os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        return ""
+    raise RuntimeError(
+        "tools_dir is required when run_all_exports.py is exec()'d in Unreal Editor Python"
+    )
 
 
 def _load_module(script_name: str, tools_dir: str = ""):
