@@ -52,13 +52,53 @@ function Set-ActiveProjectPath {
     if ($resolved -notlike "*.uproject") {
         throw "Selected file is not a .uproject: $resolved"
     }
+    $previous = [string]$Config.activeProject
     $Config.activeProject = $resolved
     Ensure-ProjectSearchRootForPath -Config $Config -ProjectPath $resolved
     Save-SharedConfig -Path $SharedConfigPath -Config $Config
     Write-Host ""
     Write-Host "Active project set:"
     Write-Host "  $resolved"
+    Invoke-ActiveProjectSetup -ProjectPath $resolved -SharedConfigPath $SharedConfigPath -PreviousProjectPath $previous
     return $resolved
+}
+
+function Invoke-ActiveProjectSetup {
+    param(
+        [string]$ProjectPath,
+        [string]$SharedConfigPath,
+        [string]$PreviousProjectPath = ""
+    )
+
+    $cfg = Read-SharedConfig -Path $SharedConfigPath
+    $autoSetup = $true
+    if ($null -ne $cfg.autoSetupOnProjectSwitch) {
+        $autoSetup = [bool]$cfg.autoSetupOnProjectSwitch
+    }
+    if (-not $autoSetup) {
+        Write-Host "Auto setup on project switch is disabled (autoSetupOnProjectSwitch=false)."
+        return
+    }
+
+    $py = & {
+        $bundled = Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+        if (Test-Path $bundled) { return $bundled }
+        $python = Get-Command python -ErrorAction SilentlyContinue
+        if ($python -and $python.Source -notlike "*\WindowsApps\*") { return $python.Source }
+        throw "Python not found"
+    }
+
+    $script = Join-Path $PSScriptRoot "on_active_project_changed.py"
+    Write-Host ""
+    Write-Host "Checking plugin install and project index for active project..."
+    $args = @($script, "--project", $ProjectPath)
+    if ($PreviousProjectPath -and ($PreviousProjectPath -eq $ProjectPath)) {
+        $args += @("--previous-project", $PreviousProjectPath)
+    }
+    & $py @args
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Auto setup reported issues. Run .\rag.ps1 sync-active-project manually if needed."
+    }
 }
 
 $config = Read-SharedConfig -Path $SharedConfig

@@ -81,6 +81,45 @@ def resolve_project(explicit: str) -> Path:
     return project
 
 
+def is_plugin_enabled(uproject: Path) -> bool:
+    data = _load_json(uproject)
+    plugins = data.get("Plugins")
+    if not isinstance(plugins, list):
+        return False
+    for item in plugins:
+        if isinstance(item, dict) and item.get("Name") == PLUGIN_NAME:
+            return item.get("Enabled") is True
+    return False
+
+
+def plugin_binary_path(project: Path) -> Path:
+    project_root = project.parent.resolve()
+    return project_root / "Plugins" / PLUGIN_NAME / "Binaries" / "Win64" / f"UnrealEditor-{PLUGIN_NAME}.dll"
+
+
+def plugin_needs_setup(project: Path, workspace: Path) -> tuple[bool, str]:
+    source = workspace / "tools" / "ue_plugins" / PLUGIN_NAME
+    if not source.is_dir():
+        return True, "plugin_source_missing"
+
+    destination = project.parent.resolve() / "Plugins" / PLUGIN_NAME
+    if not destination.is_dir():
+        return True, "plugin_missing"
+
+    source_hash = _plugin_tree_hash(source)
+    destination_hash = _plugin_tree_hash(destination)
+    if source_hash and destination_hash and source_hash != destination_hash:
+        return True, "plugin_out_of_date"
+
+    if not plugin_binary_path(project).is_file():
+        return True, "plugin_not_compiled"
+
+    if not is_plugin_enabled(project):
+        return True, "plugin_not_enabled"
+
+    return False, "ready"
+
+
 def enable_plugin(uproject: Path, *, dry_run: bool = False) -> bool:
     data = _load_json(uproject)
     plugins = data.get("Plugins")

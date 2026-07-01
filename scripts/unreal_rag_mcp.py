@@ -855,8 +855,21 @@ class McpServer:
             return
 
         config = load_shared_config()
+        previous = str(config.get("activeProject") or "").strip()
         config["activeProject"] = str(resolved)
         save_shared_config(config)
+
+        setup_payload: dict[str, Any] | None = None
+        try:
+            from on_active_project_changed import ensure_active_project_ready
+
+            setup_payload = ensure_active_project_ready(
+                resolved,
+                previous_project=previous or None,
+            )
+        except Exception as exc:
+            setup_payload = {"ok": False, "error": str(exc)}
+
         self.tool_result(
             message_id,
             json.dumps(
@@ -865,6 +878,7 @@ class McpServer:
                     "activeProject": str(resolved),
                     "activeProjectNames": active_project_names(),
                     "message": f"Active project set to {resolved.name}",
+                    "autoSetup": setup_payload,
                 },
                 ensure_ascii=False,
                 indent=2,
