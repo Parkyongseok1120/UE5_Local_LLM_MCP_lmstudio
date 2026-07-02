@@ -27,7 +27,8 @@ DEFAULT_BASELINE = ROOT / "data" / "baseline" / "mcp-tool-call-kpi.json"
 
 TOOL_PROBE_SYSTEM = """You are an Unreal MCP agent. Rules:
 - Call exactly one MCP tool before answering.
-- First turn must call unreal_get_active_project (or the tool named in the user message).
+- If the user explicitly names a tool, call that named tool.
+- If the user does not name a tool, first turn must call unreal_get_active_project.
 - Do not answer from memory.
 - The functions are attached as API tools. Use the function-calling API only.
 - Never write tool calls as plain text, JSON, XML, markdown, or <tool_call> tags.
@@ -189,6 +190,17 @@ def run_scenario(base_url: str, model: str, scenario: dict[str, Any]) -> dict[st
     }
 
 
+def should_write_output(path: Path, model: str) -> bool:
+    if is_embedding_model(model) and path.resolve() == DEFAULT_BASELINE.resolve():
+        return False
+    return True
+
+
+def write_payload(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bench LM Studio MCP tool-call KPI.")
     parser.add_argument("--url", default="http://localhost:1234/v1")
@@ -197,6 +209,23 @@ def main() -> int:
     args = parser.parse_args()
 
     model = resolve_loaded_chat_model(args.url, args.model)
+    if not model or is_embedding_model(model):
+        payload = {
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "model": model,
+            "url": args.url,
+            "passCount": 0,
+            "total": len(SCENARIOS),
+            "passRate": 0.0,
+            "thinkingLeakCount": 0,
+            "error": "No loaded chat model found in LM Studio; refusing to benchmark embedding model.",
+            "results": [],
+        }
+        if should_write_output(args.out, model):
+            write_payload(args.out, payload)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 1
+
     results = [run_scenario(args.url, model, scenario) for scenario in SCENARIOS]
     passed = sum(1 for row in results if row.get("pass"))
     payload = {
@@ -209,8 +238,7 @@ def main() -> int:
         "thinkingLeakCount": sum(1 for row in results if row.get("thinkingLeak")),
         "results": results,
     }
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_payload(args.out, payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if passed >= 1 else 1
 

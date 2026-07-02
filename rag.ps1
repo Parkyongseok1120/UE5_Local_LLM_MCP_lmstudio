@@ -7,7 +7,7 @@ param(
 
     [string]$Question = "",
     [string]$RequestFile = "",
-    [string]$SourceRoot = "C:\Program Files\Epic Games\UE_5.8\Engine\Source",
+    [string]$SourceRoot = "",
     [string]$ProjectsRoot = "data",
     [string]$ProjectFile = "",
     [string]$GuidelinesRoot = "RAG_Project_Guidelines",
@@ -22,7 +22,7 @@ param(
     [string]$UbtTarget = "",
     [string]$UbtPlatform = "Win64",
     [string]$UbtConfiguration = "Development",
-    [string]$UbtPath = "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe",
+    [string]$UbtPath = "",
     [string]$ModuleGraph = "data\unreal58\raw_module_graph.jsonl",
     [string]$ProjectName = "ScratchPrototype",
     [string]$ScratchRoot = "data\wrapper_runs",
@@ -166,12 +166,12 @@ $dataDir = Join-Path $PSScriptRoot ("data\" + $resolvedNamespace)
 $indexPath = Join-Path $dataDir "rag.sqlite"
 $moduleGraphPath = Join-Path $dataDir "raw_module_graph.jsonl"
 
-if (-not $SourceRoot -or $SourceRoot -eq "C:\Program Files\Epic Games\UE_5.8\Engine\Source") {
+if (-not $SourceRoot) {
     $engineRoot = Get-WorkspaceEngineRoot -Fallback "C:\Program Files\Epic Games\UE_5.8"
     $SourceRoot = Join-Path $engineRoot "Engine\Source"
 }
 
-if (-not $UbtPath -or $UbtPath -eq "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe") {
+if (-not $UbtPath) {
     $engineRoot = Get-WorkspaceEngineRoot -Fallback "C:\Program Files\Epic Games\UE_5.8"
     $UbtPath = Join-Path $engineRoot "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
 }

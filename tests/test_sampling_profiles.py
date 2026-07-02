@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import load_sampling_preset as sampling  # noqa: E402
+import query_rag  # noqa: E402
 
 SAMPLING_PATH = ROOT / "config" / "lmstudio_sampling.json"
 
@@ -92,3 +93,24 @@ def test_model_alias_does_not_override_env_profile(monkeypatch):
 
     assert selected == ""
     assert sampling.resolve_profile_name() == "conservative_compile_fix"
+
+
+def test_query_rag_ask_lmstudio_selects_loaded_model_profile(monkeypatch):
+    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
+    sampling.set_sampling_profile("")
+    args = type(
+        "Args",
+        (),
+        {
+            "ask_lmstudio": True,
+            "sampling_profile": "",
+            "model": "",
+        },
+    )()
+    monkeypatch.setattr(query_rag, "resolve_model", lambda _args: "qwen3.5-9b-deepseek-v4-flash")
+
+    selected = query_rag.apply_model_profile_from_args(args)
+
+    assert selected == "qwen3_5_9b_deepseek_v4_flash"
+    assert args.model == "qwen3.5-9b-deepseek-v4-flash"
+    assert sampling.resolve_profile_name() == "qwen3_5_9b_deepseek_v4_flash"

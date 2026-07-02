@@ -26,6 +26,14 @@ Confirm:
 python scripts/load_sampling_preset.py --show-profile
 ```
 
+For 9B-focused RAG rebuilds, use compact chunk defaults:
+
+```powershell
+python scripts/build_rag_index.py --input data/unreal58/raw/*.jsonl --out-dir data/unreal58 --compact-profile
+```
+
+`--compact-profile` scales normal text chunks to `720/96` tokens while keeping symbol rows at `300/60` and module graph rows unchunked. Override with `--chunk-tokens`, `--overlap-tokens`, or `--compact-profile-scale` when benchmarking.
+
 ## Compact Contract
 
 | Step | Role | Writes | Retrieval | Gate |

@@ -16,7 +16,7 @@ function Resolve-WorkspaceRoot {
     if (Test-Path (Join-Path $here "rag.ps1")) {
         return $here
     }
-    throw "Unreal58-RAG root not found. Pass -WorkspaceRoot."
+    throw "UE5_Local_LLM_MCP_lmstudio root not found (rag.ps1 missing). Pass -WorkspaceRoot."
 }
 
 function Find-Python {
@@ -69,7 +69,7 @@ $py = Find-Python
 $configPath = Join-Path $ragRoot "config\workspace.json"
 $templatePath = Join-Path $ragRoot "config\workspace.json.template"
 
-Write-Host "Configure Knowledge — Unreal58-RAG"
+Write-Host "Configure Knowledge — UE5 Local LLM MCP"
 Write-Host "Workspace: $ragRoot"
 Write-Host ""
 

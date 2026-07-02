@@ -1,12 +1,12 @@
 {
-  "description": "Grounded project review fixtures (MJS-style). Uses snippet text, not absolute paths.",
+  "description": "Grounded project review fixtures (inline snippets). Uses snippet text, not absolute paths.",
   "defaults": {
     "minRecall": 0.8,
     "requireCitation": false
   },
   "cases": [
     {
-      "id": "project_mjs_cinematic",
+      "id": "project_example_cinematic",
       "prompt": "시네마틱 입력 잠금과 참가자 컴포넌트 관점에서 다음 코드를 리뷰하고 기존 시스템을 인식한 개선안을 말해줘.",
       "snippets": [
         {
@@ -35,7 +35,7 @@
       "badAnswerFixture": "InputLock Subsystem이 없으므로 새 UCinematicInputLockSubsystem을 Subsystem으로 분리해야 합니다."
     },
     {
-      "id": "project_mjs_dodge",
+      "id": "project_example_dodge",
       "prompt": "회피 컴포넌트에서 BackStepDodgeMontage 사용 여부를 리뷰해줘.",
       "snippets": [
         {
@@ -64,7 +64,7 @@
       "badAnswerFixture": "BackStepDodgeMontage는 선택 로직이 없고 미사용입니다."
     },
     {
-      "id": "project_mjs_attack",
+      "id": "project_example_attack",
       "prompt": "공격 데이터 구조와 콤보 공격 DataAsset 사용을 리뷰해줘.",
       "snippets": [
         {

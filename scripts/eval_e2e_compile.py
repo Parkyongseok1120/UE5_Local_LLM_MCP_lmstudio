@@ -11,10 +11,9 @@ from glob import glob
 from pathlib import Path
 
 from lmstudio_unreal_wrapper import has_static_errors, validate_unreal_readiness
+from workspace_paths import resolve_ubt_path
 
-DEFAULT_UBT = Path(
-    r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
-)
+DEFAULT_UBT = resolve_ubt_path()
 
 
 def latest_glob(root: Path, pattern: str) -> Path | None:

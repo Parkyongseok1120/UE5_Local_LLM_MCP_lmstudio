@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from load_sampling_preset import profile_agent_policy
+from load_sampling_preset import profile_agent_policy, set_sampling_profile_for_model
 from rag_context import assemble_context
 from rag_search import SearchOptions, search as search_index
 from workspace_paths import active_project_names
@@ -330,11 +330,21 @@ Question:
     return result["choices"][0]["message"]["content"]
 
 
+def apply_model_profile_from_args(args: argparse.Namespace) -> str:
+    """Select a sampling profile from the loaded LM Studio model before sizing retrieval."""
+    if not getattr(args, "ask_lmstudio", False) or getattr(args, "sampling_profile", ""):
+        return ""
+    model = resolve_model(args)
+    args.model = model
+    return set_sampling_profile_for_model(model)
+
+
 def main(args: argparse.Namespace) -> None:
     index = Path(args.index)
     if not index.exists():
         raise SystemExit(f"index does not exist: {index}")
 
+    apply_model_profile_from_args(args)
     policy = profile_agent_policy(args.sampling_profile)
     if args.top_k <= 0:
         args.top_k = int(policy.get("defaultTopK") or 6)

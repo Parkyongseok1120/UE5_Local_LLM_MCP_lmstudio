@@ -264,13 +264,12 @@
     },
     {
       "id": "active_project_profile",
-      "query": "Project_MJS project profile modules plugins Build.cs Target.cs Config TrueSyncEndfieldShading",
+      "query": "active project profile modules plugins Build.cs Target.cs Config custom rendering shading",
       "options": {
         "mode": "implementation"
       },
       "expected": [
         {
-          "title_contains": "Project_MJS project profile",
           "source": "project_profile",
           "doc_type": "project_profile",
           "max_rank": 5

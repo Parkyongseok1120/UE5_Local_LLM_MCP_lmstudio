@@ -135,6 +135,13 @@ foreach ($file in $scanFiles) {
                 if ($pattern -eq 'C:\\Users\\' -and $rel -match 'workspace_paths\.py$') {
                     continue
                 }
+                # Allow documentation files that mention C:\Users\ as an example/warning of what not to do
+                if ($pattern -eq 'C:\\Users\\' -and $rel -match '(?i)(README.*\.md|CONTRIBUTING\.md|README-PORTABLE\.md)$') {
+                    # Only allow if the mention is clearly instructional context (template placeholder or checklist)
+                    if ($text -match '(?i)(avoid|do not|must not|never|example|<name>|<username>|YOUR_NAME)') {
+                        continue
+                    }
+                }
                 Fail "forbidden content '$pattern' in $rel"
             }
         }

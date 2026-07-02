@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Shared pytest fixtures for multi-project tests (no Project_MJS disk dependency)."""
+"""Shared pytest fixtures for multi-project tests (no local UE project disk dependency)."""
 
 from __future__ import annotations
 
@@ -82,4 +82,4 @@ def lyra_style_project(tmp_path, shared_config_path):
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "smoke: optional local-disk regression against Project_MJS")
+    config.addinivalue_line("markers", "smoke: optional local-disk regression tests that require a real UE project on disk")

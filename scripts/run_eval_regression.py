@@ -17,6 +17,9 @@ HISTORY_DIR = EVAL_DIR / "history"
 DELTA_DIR = EVAL_DIR / "deltas"
 FAILURES_DIR = EVAL_DIR / "failures"
 
+# Default per-step timeout in seconds. Override via --step-timeout.
+DEFAULT_STEP_TIMEOUT = 600
+
 
 def load_json(path: Path) -> dict | None:
     if not path.is_file():
@@ -27,10 +30,16 @@ def load_json(path: Path) -> dict | None:
         return None
 
 
-def run_cmd(label: str, cmd: list[str], *, ci: bool = False) -> dict:
+def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int = DEFAULT_STEP_TIMEOUT) -> dict:
     if ci:
         index = ROOT / "data" / "unreal58" / "rag.sqlite"
-        ubt = Path(r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe")
+        # Resolve UBT path dynamically instead of hardcoding version
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            from workspace_paths import resolve_ubt_path
+            ubt = resolve_ubt_path()
+        except Exception:
+            ubt = Path(r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe")
         if label in {"retrieval_unreal_programming", "bench_mcp", "eval_reasoning"} and not index.is_file():
             return {
                 "label": label,
@@ -51,14 +60,31 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False) -> dict:
                 "stdoutTail": "",
                 "stderrTail": "",
             }
-    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
-    return {
-        "label": label,
-        "exitCode": proc.returncode,
-        "pass": proc.returncode == 0,
-        "stdoutTail": (proc.stdout or "")[-3000:],
-        "stderrTail": (proc.stderr or "")[-1500:],
-    }
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=step_timeout,
+        )
+        return {
+            "label": label,
+            "exitCode": proc.returncode,
+            "pass": proc.returncode == 0,
+            "stdoutTail": (proc.stdout or "")[-3000:],
+            "stderrTail": (proc.stderr or "")[-1500:],
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "label": label,
+            "exitCode": -1,
+            "pass": False,
+            "timedOut": True,
+            "reason": f"step timed out after {step_timeout}s",
+            "stdoutTail": "",
+            "stderrTail": "",
+        }
 
 
 def collect_kpi_metrics() -> dict:
@@ -119,6 +145,8 @@ def main() -> int:
     parser.add_argument("--skip-pytest", action="store_true")
     parser.add_argument("--ci", action="store_true", help="Skip index/UBT-dependent steps when prerequisites are missing")
     parser.add_argument("--live", action="store_true", help="Include Tier-B live steps")
+    parser.add_argument("--step-timeout", type=int, default=DEFAULT_STEP_TIMEOUT,
+                        help=f"Per-step subprocess timeout in seconds (default: {DEFAULT_STEP_TIMEOUT})")
     args = parser.parse_args()
 
     EVAL_DIR.mkdir(parents=True, exist_ok=True)
@@ -156,13 +184,15 @@ def main() -> int:
         "steps": [],
     }
     for label, cmd in steps_spec:
-        row = run_cmd(label, cmd, ci=args.ci)
+        row = run_cmd(label, cmd, ci=args.ci, step_timeout=args.step_timeout)
         report["steps"].append(row)
         if not row["pass"]:
             fail_dir = FAILURES_DIR / label / stamp
             fail_dir.mkdir(parents=True, exist_ok=True)
             (fail_dir / "stdout.txt").write_text(row.get("stdoutTail") or "", encoding="utf-8")
             (fail_dir / "stderr.txt").write_text(row.get("stderrTail") or "", encoding="utf-8")
+            if row.get("timedOut"):
+                (fail_dir / "timeout.txt").write_text(row.get("reason") or "", encoding="utf-8")
 
     report["passCount"] = sum(1 for s in report["steps"] if s["pass"])
     report["total"] = len(report["steps"])

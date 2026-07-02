@@ -111,6 +111,13 @@ const server = new Server(
 );
 
 function launchProjectPicker(explorer = false) {
+  if (process.platform !== "win32") {
+    return {
+      ok: false,
+      error: "project_picker_windows_only",
+      message: "The project picker requires Windows (PowerShell). Use rag.ps1 pick-project manually or set activeProject in the shared config."
+    };
+  }
   const ragRoot = process.env.UNREAL58_ROOT
     ? path.resolve(process.env.UNREAL58_ROOT)
     : path.join(os.homedir(), ".lmstudio", "Unreal58-RAG");
@@ -146,10 +153,12 @@ function normalizeRelPath(p) {
   if (!p || typeof p !== "string") {
     throw new Error("path must be a non-empty string");
   }
-  const resolved = path.resolve(WORKSPACE_ROOT, p);
-  const relative = path.relative(WORKSPACE_ROOT, resolved);
+  const workspace = path.resolve(WORKSPACE_ROOT);
+  const resolved = path.resolve(workspace, p);
 
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  // Primary check: resolved path must start with workspace + separator (or equal workspace).
+  // This is more robust than relative().startsWith("..") on Windows with symlinks.
+  if (resolved !== workspace && !resolved.startsWith(workspace + path.sep)) {
     throw new Error(`path escapes WORKSPACE_ROOT: ${p}`);
   }
 

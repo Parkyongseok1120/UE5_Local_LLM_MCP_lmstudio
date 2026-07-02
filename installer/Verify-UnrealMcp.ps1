@@ -39,7 +39,7 @@ $engineRoot = Get-WorkspaceEngineRootPath -RagRoot $ragRoot
 $ubtPath = Get-WorkspaceUbtPath -RagRoot $ragRoot
 
 Check "Portable root" { if (-not (Test-Path $root)) { throw "missing $root" } }
-Check "Unreal58-RAG" { if (-not (Test-Path (Join-Path $ragRoot "rag.ps1"))) { throw "missing rag.ps1" } }
+Check "RAG workspace" { if (-not (Test-Path (Join-Path $ragRoot "rag.ps1"))) { throw "missing rag.ps1" } }
 Check "RAG index" { if (-not (Test-Path (Join-Path $ragRoot "data\unreal58\rag.sqlite"))) { throw "missing rag.sqlite" } }
 Check "workspace.json rootPath" {
     $cfg = Read-JsonObject (Join-Path $ragRoot "config\workspace.json")
@@ -75,6 +75,12 @@ Check "agent server.js" { if (-not (Test-Path (Join-Path $agentRoot "src\server.
 Check "python version" {
     $out = & $py --version 2>&1 | Out-String
     if ($out -notmatch "Python") { throw $out.Trim() }
+    if ($out -match "Python (\d+)\.(\d+)") {
+        $major = [int]$Matches[1]; $minor = [int]$Matches[2]
+        if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 10)) {
+            throw "Python 3.10+ required, found: $($out.Trim())"
+        }
+    }
 }
 Check "Unreal Engine install" {
     if (-not (Test-Path -LiteralPath $engineRoot)) {
@@ -95,6 +101,21 @@ Check "mcp.json unreal-rag python" {
     if (-not (Test-Path $cmd)) { throw "python command missing: $cmd" }
     $ver = & $cmd --version 2>&1 | Out-String
     if ($ver -notmatch "Python") { throw "bad python: $ver" }
+    if ($ver -match "Python (\d+)\.(\d+)") {
+        $major = [int]$Matches[1]; $minor = [int]$Matches[2]
+        if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 10)) {
+            throw "Python 3.10+ required in mcp.json, found: $($ver.Trim())"
+        }
+    }
+}
+Check "node.js version" {
+    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $nodeCmd) { throw "node.exe not found in PATH. Install Node.js 20+ from https://nodejs.org/" }
+    $nodeVer = & node --version 2>&1 | Out-String
+    if ($nodeVer -match "v(\d+)\.") {
+        $major = [int]$Matches[1]
+        if ($major -lt 20) { throw "Node.js 20+ required, found: $($nodeVer.Trim())" }
+    }
 }
 Check "mcp.json unreal-rag entry" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"

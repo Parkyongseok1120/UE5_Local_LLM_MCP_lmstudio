@@ -28,7 +28,7 @@
 - RAG 워크스페이스: `config\workspace.json`의 `rootPath` (설치 시 자동 기록)
 - Editor export: `{ActiveProject}/Saved/LmStudioMetadataExports` (프로젝트별 자동)
 
-사용자 이름·PC 이름·`C:\Users\sster\...` 같은 고정 경로는 저장소에 넣지 않습니다.  
+사용자 이름·PC 이름·`C:\Users\<username>\...` 같은 고정 경로는 저장소에 넣지 않습니다.  
 `INSTALL-*-BUILD-RAG.bat` 또는 `installer\Sync-InstallMachinePaths.ps1`가 현재 PC 기준으로 경로를 다시 씁니다.
 
 ## BUILD-RAG 설치 (인덱스 + Editor export)
@@ -87,7 +87,7 @@ Rider = Unreal C++ 주력 IDE. Cline = MCP agent. 규칙: `.clinerules`
 새 ZIP으로 덮어쓴 뒤 `INSTALL.bat` 다시 실행하면 `mcp.json` 경로가 갱신됩니다.
 # Portable Notes
 
-This package is path-portable. Install scripts rewrite machine-specific paths from the current PC and should not require paths such as `C:\Users\sster\...`.
+This package is path-portable. Install scripts rewrite machine-specific paths from the current PC and should not require paths such as `%USERPROFILE%\...`.
 
 Common commands after install:
 

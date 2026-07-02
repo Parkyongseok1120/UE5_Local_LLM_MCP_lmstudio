@@ -17,6 +17,7 @@ GAME_MODE_RE = re.compile(
 )
 ENHANCED_INPUT_CPP_RE = re.compile(r"EnhancedInputComponent|UEnhancedInput", re.IGNORECASE)
 LEGACY_BIND_RE = re.compile(r"BindAction\s*\(|BindAxis\s*\(", re.MULTILINE)
+CUSTOM_GAME_MODE_RE = re.compile(r"\bA\w*GameMode(?:Base)?\b|AGameModeBase|AGameMode", re.IGNORECASE)
 
 
 def _read_text(path: Path) -> str:
@@ -52,6 +53,21 @@ def _ini_mappings(config_dir: Path) -> tuple[set[str], set[str], str]:
     return actions, axes, text
 
 
+def _has_custom_game_mode(source_root: Path) -> bool:
+    if not source_root.is_dir():
+        return False
+    for path in source_root.rglob("*"):
+        if path.suffix.lower() not in {".h", ".cpp"}:
+            continue
+        if "Intermediate" in path.parts or "Binaries" in path.parts:
+            continue
+        if "gamemode" in path.name.lower():
+            return True
+        if CUSTOM_GAME_MODE_RE.search(_read_text(path)):
+            return True
+    return False
+
+
 def check_runtime_config(project_root: Path | str) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
     if root.suffix.lower() == ".uproject":
@@ -72,6 +88,8 @@ def check_runtime_config(project_root: Path | str) -> dict[str, Any]:
     details["cppAxes"] = sorted(cpp_axes)
     details["iniActions"] = sorted(ini_actions)
     details["iniAxes"] = sorted(ini_axes)
+    custom_game_mode = _has_custom_game_mode(root / "Source")
+    details["customGameModeDetected"] = custom_game_mode
 
     game_mode_found = False
     for ini_path in (game_ini, engine_ini):
@@ -82,10 +100,16 @@ def check_runtime_config(project_root: Path | str) -> dict[str, Any]:
                 passed.append(f"GameMode configured in {ini_path.name}: {gm.group(1).strip()}")
                 break
     if not game_mode_found:
-        issues.append(
+        message = (
             "No GlobalDefaultGameMode/GameModeMap in DefaultGame.ini or DefaultEngine.ini - "
             "custom GameMode BeginPlay (e.g. SpawnEntities) may not run in PIE."
         )
+        if custom_game_mode:
+            issues.append(message)
+        else:
+            warnings.append(
+                "No default GameMode configured; set one if runtime bootstrap depends on GameMode."
+            )
 
     missing_actions = cpp_actions - ini_actions
     missing_axes = cpp_axes - ini_axes
@@ -121,7 +145,7 @@ def check_runtime_config(project_root: Path | str) -> dict[str, Any]:
         passed.append("Enhanced Input: ini default matches EnhancedInput includes.")
 
     if not (root / "Content").is_dir():
-        warnings.append("Content/ folder missing — C++-only prototype (no assets).")
+        warnings.append("Content/ folder missing - C++-only prototype (no assets).")
 
     ok = len(issues) == 0
     return {

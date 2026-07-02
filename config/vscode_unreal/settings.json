@@ -1,5 +1,6 @@
 {
-  "C_Cpp.default.compilerPath": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+  "_comment": "Copy this to your .vscode/settings.json in the Unreal project root. Adjust compilerPath to match your MSVC version (auto-detected by VS installer; remove if IntelliSense works without it).",
+  "C_Cpp.default.compilerPath": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\{VERSION}\\bin\\Hostx64\\x64\\cl.exe",
   "C_Cpp.default.cppStandard": "c++20",
   "C_Cpp.default.cStandard": "c17",
   "C_Cpp.default.intelliSenseMode": "msvc-x64",

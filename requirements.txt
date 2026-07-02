@@ -1,0 +1,8 @@
+# Core runtime dependencies
+# All scripts use Python standard library only.
+# No third-party packages are required for basic RAG indexing and MCP operation.
+
+# Optional: hybrid embedding search (fastembed-based vector similarity)
+# Uncomment or install separately to enable hybrid search:
+#   pip install fastembed
+# fastembed

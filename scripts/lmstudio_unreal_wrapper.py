@@ -21,7 +21,7 @@ from load_sampling_preset import preset_for_wrapper, profile_edit_limits, set_sa
 from preflight_lmstudio import extract_assistant_text
 from rag_search import SearchOptions, search as search_index
 import token_budget
-from workspace_paths import resolve_active_project_path
+from workspace_paths import resolve_active_project_path, resolve_ubt_path
 
 try:
     from collect_build_logs import extract_error
@@ -30,7 +30,7 @@ except Exception:
 
 
 DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1"
-DEFAULT_UBT_PATH = r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
+DEFAULT_UBT_PATH = str(resolve_ubt_path())
 WRAPPER_RULES_PATH = Path("RAG_Project_Guidelines/Unreal_Programming/07_Wrapper_Mandatory_Rules.md")
 PROMPT_PATH = Path("prompts/unreal_cpp_assistant.md")
 ALLOWED_SUFFIXES = {

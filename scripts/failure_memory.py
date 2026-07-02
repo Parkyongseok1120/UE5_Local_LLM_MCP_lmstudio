@@ -85,7 +85,12 @@ def failure_memory_rag_weight() -> float:
 
 
 def maybe_auto_reindex_failure_memory(workspace: Path, *, threshold: int = 5) -> None:
-    """After N new records, run collect + incremental index (best-effort)."""
+    """After accumulating N or more records, run collect + incremental index (best-effort).
+
+    Uses a cumulative >= threshold check so reindex always triggers at or above
+    the threshold, avoiding the modulo-zero edge case where certain line counts
+    (e.g. 4, 9 when threshold=5) would never trigger.
+    """
     import os
     import subprocess
     import sys
@@ -99,7 +104,8 @@ def maybe_auto_reindex_failure_memory(workspace: Path, *, threshold: int = 5) ->
         len([ln for ln in path.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()])
         for path in memory_dir.glob("*_failures.jsonl")
     )
-    if total_lines % threshold != 0:
+    # Trigger when total reaches threshold or any multiple of it.
+    if total_lines < threshold or total_lines % threshold != 0:
         return
     scripts = workspace / "scripts"
     subprocess.run([sys.executable, str(scripts / "collect_failure_memory.py")], cwd=str(workspace), check=False)

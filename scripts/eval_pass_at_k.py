@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Pass@K compile-fix eval — golden dry-run (Tier A) or wrapper+LM Studio (Tier B)."""
+"""Pass@K compile-fix eval - golden dry-run (Tier A) or wrapper+LM Studio (Tier B)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,12 @@ sys.path.insert(0, str(SCRIPTS))
 
 from eval_e2e_compile import DEFAULT_UBT, run_ubt  # noqa: E402
 from preflight_lmstudio import check_lmstudio  # noqa: E402
+
+
+def count_wrapper_attempts(run_dir: Path) -> int:
+    if not run_dir.is_dir():
+        return 0
+    return sum(1 for path in run_dir.iterdir() if path.is_dir() and path.name.startswith("attempt_"))
 
 
 def copy_fixture(fixture_dir: Path, work_dir: Path) -> None:
@@ -57,6 +63,7 @@ def run_wrapper_live(
     url: str,
     model: str,
     ubt_path: Path,
+    wrapper_timeout: int = 0,
 ) -> tuple[bool, str, int]:
     run_dir = work_dir / "wrapper_run"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -83,24 +90,24 @@ def run_wrapper_live(
     ]
     if model:
         cmd.extend(["--model", model])
-    proc = subprocess.run(
-        cmd,
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    tail = (proc.stdout or proc.stderr or "")[-1500:]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=wrapper_timeout if wrapper_timeout > 0 else None,
+        )
+        tail = (proc.stdout or proc.stderr or "")[-1500:]
+        ok = proc.returncode == 0
+    except subprocess.TimeoutExpired:
+        tail = f"[TIMEOUT] wrapper killed after {wrapper_timeout}s"
+        ok = False
     attempts = count_wrapper_attempts(run_dir)
-    return proc.returncode == 0, tail, attempts
-
-
-def count_wrapper_attempts(run_dir: Path) -> int:
-    if not run_dir.is_dir():
-        return 0
-    return sum(1 for path in run_dir.iterdir() if path.is_dir() and path.name.startswith("attempt_"))
+    return ok, tail, attempts
 
 
 def run_case(
@@ -112,6 +119,7 @@ def run_case(
     max_attempts: int,
     url: str,
     model: str,
+    wrapper_timeout: int = 0,
 ) -> dict:
     case_id = case["id"]
     fixture_dir = (ROOT / case["fixtureDir"]).resolve()
@@ -149,6 +157,7 @@ def run_case(
             url,
             model,
             ubt_path,
+            wrapper_timeout=wrapper_timeout,
         )
         return {
             "id": case_id,
@@ -170,6 +179,10 @@ def main() -> int:
     parser.add_argument("--model", default="")
     parser.add_argument("--ubt-path", type=Path, default=DEFAULT_UBT)
     parser.add_argument("--max-attempts", type=int, default=0, help="Override config maxAttempts (e.g. 1 for Pass@1)")
+    parser.add_argument("--early-exit", action="store_true",
+                        help="Stop after min_pass_rate is met (saves time on passing runs)")
+    parser.add_argument("--wrapper-timeout", type=int, default=0,
+                        help="Per-case wrapper subprocess timeout in seconds (0 = no limit)")
     args = parser.parse_args()
 
     config = json.loads((ROOT / args.config).read_text(encoding="utf-8-sig"))
@@ -192,8 +205,11 @@ def main() -> int:
             resolved_model = str(preflight.get("resolvedModel") or args.model)
             print(f"Using LM Studio model: {resolved_model}")
 
-    results = [
-        run_case(
+    # Run cases sequentially; use --early-exit to stop once min_pass_rate is met.
+    cases = config.get("cases") or []
+    results: list[dict] = []
+    for case in cases:
+        result = run_case(
             case,
             dry_run=dry_run,
             ubt_path=args.ubt_path,
@@ -201,9 +217,17 @@ def main() -> int:
             max_attempts=max_attempts,
             url=args.url,
             model=resolved_model,
+            wrapper_timeout=args.wrapper_timeout,
         )
-        for case in config.get("cases") or []
-    ]
+        results.append(result)
+        if args.early_exit:
+            done = len(results)
+            passed_so_far = sum(1 for r in results if r.get("pass"))
+            if done > 0 and passed_so_far / done >= min_pass_rate and done >= min(3, len(cases)):
+                remaining = len(cases) - done
+                if remaining > 0:
+                    print(f"[early-exit] {passed_so_far}/{done} passed ({passed_so_far/done:.0%} >= {min_pass_rate:.0%}), skipping {remaining} remaining cases")
+                    break
 
     passed = sum(1 for r in results if r.get("pass"))
     total = len(results)

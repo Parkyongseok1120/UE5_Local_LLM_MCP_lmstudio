@@ -214,6 +214,30 @@ def main() -> int:
                 include_owner_count = int(
                     conn.execute("select count(*) from include_owners").fetchone()[0]
                 )
+
+            # Verify that expected search indexes exist. Missing indexes degrade
+            # sidecar query performance silently (rebuild index to add them).
+            EXPECTED_INDEXES = {
+                "chunks_source_idx",
+                "chunks_source_title_idx",
+                "chunks_title_idx",
+                "chunks_symbol_name_idx",
+            }
+            existing_indexes = {
+                str(row[0])
+                for row in conn.execute("select name from sqlite_master where type='index'")
+            }
+            missing_indexes = EXPECTED_INDEXES - existing_indexes
+            if missing_indexes:
+                checks.append(
+                    warn(
+                        "rag_index_indexes",
+                        f"missing indexes {sorted(missing_indexes)} — rebuild index: .\\rag.ps1 build",
+                    )
+                )
+            else:
+                checks.append(check("rag_index_indexes", True, f"{len(existing_indexes)} indexes present"))
+
             conn.close()
         except sqlite3.Error:
             include_owner_count = -1

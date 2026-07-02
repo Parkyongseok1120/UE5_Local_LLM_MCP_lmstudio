@@ -31,6 +31,17 @@ function Find-PythonExe {
     throw "Python 3.10+ not found. Install from https://www.python.org/downloads/"
 }
 
+function Assert-PythonVersion([string]$PythonExe) {
+    $ver = & $PythonExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Cannot run Python at: $PythonExe" }
+    $parts = $ver.Trim().Split(".")
+    $major = [int]$parts[0]; $minor = [int]$parts[1]
+    if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 10)) {
+        throw "Python 3.10+ required (found $ver). Install from https://www.python.org/downloads/"
+    }
+    Write-Host "Python version: $ver OK"
+}
+
 function Find-NodeExe {
     $found = [System.Collections.Generic.List[string]]::new()
     foreach ($path in @(
@@ -46,6 +57,17 @@ function Find-NodeExe {
         throw "Node.js 20+ not found. Install from https://nodejs.org/"
     }
     return $found[0]
+}
+
+function Assert-NodeVersion([string]$NodeExe) {
+    $ver = & $NodeExe --version 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Cannot run Node.js at: $NodeExe" }
+    $clean = $ver.Trim().TrimStart("v")
+    $major = [int]($clean.Split(".")[0])
+    if ($major -lt 20) {
+        throw "Node.js 20+ required (found v$clean). Install from https://nodejs.org/"
+    }
+    Write-Host "Node.js version: v$clean OK"
 }
 
 function Expand-TemplateValue($Value) {
@@ -111,7 +133,7 @@ $agentRoot = $layout.AgentRoot
 $mcpToolsRoot = $layout.McpToolsRoot
 
 if (-not (Test-Path (Join-Path $ragRoot "rag.ps1"))) {
-    throw "Unreal58-RAG not found under: $root"
+    throw "UE5_Local_LLM_MCP_lmstudio not found under: $root"
 }
 if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) {
     throw "lmstudio-unreal-agent-mcp not found under: $root"
@@ -119,6 +141,8 @@ if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) {
 
 $python = Find-PythonExe
 $node = Find-NodeExe
+Assert-PythonVersion $python
+Assert-NodeVersion $node
 $lmHome = if ($LmStudioHome) { (Resolve-Path $LmStudioHome).Path } else { Join-Path $HOME ".lmstudio" }
 $docsRoot = if ($DocumentsRoot) { $DocumentsRoot } else { Join-Path $HOME "Documents" }
 
@@ -153,6 +177,11 @@ if (-not $SkipNpm) {
 if (-not $SkipPythonDeps) {
     Write-Host "Installing fastembed (optional hybrid search)..."
     cmd /c "`"$python`" -m pip install fastembed --quiet 2>&1"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "fastembed install failed (optional — hybrid search will be unavailable). Run: pip install fastembed"
+    } else {
+        Write-Host "fastembed installed OK."
+    }
 }
 
 # shared workspace config

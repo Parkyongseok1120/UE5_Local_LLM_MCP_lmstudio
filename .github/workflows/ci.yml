@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  python-tests:
+    name: Python tests (pytest)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests (non-smoke, non-slow)
+        run: pytest --tb=short -q
+        working-directory: ${{ github.workspace }}
+
+  python-lint:
+    name: Python lint (ruff)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint scripts/ and tests/
+        run: ruff check scripts/ tests/ --select=E,F,W --ignore=E501,E402,F401,W503 --exit-zero
+        # --exit-zero: warn-only for now; change to failing once baseline is clean
+
+  node-install:
+    name: Node.js npm install
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: npm install (lmstudio-unreal-agent-mcp)
+        run: npm install --no-fund --no-audit
+        working-directory: lmstudio-unreal-agent-mcp
+
+  oss-ready:
+    name: OSS readiness check
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify no personal paths or forbidden content
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Verify-Oss-Ready.ps1

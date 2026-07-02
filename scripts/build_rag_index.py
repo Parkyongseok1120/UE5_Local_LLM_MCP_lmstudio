@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -308,6 +309,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
         create index chunks_module_name_idx on chunks(module_name);
         create index chunks_error_code_idx on chunks(error_code);
         create index chunks_error_file_idx on chunks(error_file);
+        create index chunks_source_title_idx on chunks(source, title);
+        create index chunks_title_idx on chunks(title);
 
         create table module_edges (
             edge_id text primary key,
@@ -528,6 +531,24 @@ def build(args: argparse.Namespace) -> None:
     module_edge_count = 0
     include_owner_count = 0
     document_id_counts: dict[str, int] = {}
+    _INSERT_BATCH_SIZE = 500
+    _insert_batch: list[tuple] = []
+
+    def _flush_batch() -> None:
+        if not _insert_batch:
+            return
+        conn.executemany(
+            """
+            insert into chunks(
+                chunk_id, document_id, source, title, locator, project, relative_path, extension,
+                layer, doc_type, genre, symbol_name, symbol_kind, module_name, error_code, error_file,
+                path_only, chunk_index, text, metadata_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            _insert_batch,
+        )
+        _insert_batch.clear()
+
     with chunks_path.open("w", encoding="utf-8") as chunks_file:
         for _, _, doc in read_jsonl(input_paths):
             source = str(doc.get("source") or "unknown")
@@ -583,56 +604,33 @@ def build(args: argparse.Namespace) -> None:
                     **fields,
                 }
                 chunks_file.write(json.dumps(item, ensure_ascii=False) + "\n")
-                conn.execute(
-                    """
-                    insert into chunks(
-                        chunk_id,
-                        document_id,
-                        source,
-                        title,
-                        locator,
-                        project,
-                        relative_path,
-                        extension,
-                        layer,
-                        doc_type,
-                        genre,
-                        symbol_name,
-                        symbol_kind,
-                        module_name,
-                        error_code,
-                        error_file,
-                        path_only,
-                        chunk_index,
-                        text,
-                        metadata_json
-                    )
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        chunk_id,
-                        document_id,
-                        source,
-                        title,
-                        locator,
-                        fields["project"],
-                        fields["relative_path"],
-                        fields["extension"],
-                        fields["layer"],
-                        fields["doc_type"],
-                        fields["genre"],
-                        fields["symbol_name"],
-                        fields["symbol_kind"],
-                        fields["module_name"],
-                        fields["error_code"],
-                        fields["error_file"],
-                        int(fields["path_only"]),
-                        index,
-                        chunk,
-                        json.dumps(metadata, ensure_ascii=False),
-                    ),
-                )
+                _insert_batch.append((
+                    chunk_id,
+                    document_id,
+                    source,
+                    title,
+                    locator,
+                    fields["project"],
+                    fields["relative_path"],
+                    fields["extension"],
+                    fields["layer"],
+                    fields["doc_type"],
+                    fields["genre"],
+                    fields["symbol_name"],
+                    fields["symbol_kind"],
+                    fields["module_name"],
+                    fields["error_code"],
+                    fields["error_file"],
+                    int(fields["path_only"]),
+                    index,
+                    chunk,
+                    json.dumps(metadata, ensure_ascii=False),
+                ))
+                if len(_insert_batch) >= _INSERT_BATCH_SIZE:
+                    _flush_batch()
                 total_chunks += 1
+
+    _flush_batch()
 
     conn.commit()
     conn.close()
@@ -672,15 +670,58 @@ def build(args: argparse.Namespace) -> None:
     print(f"sqlite: {sqlite_path}")
 
 
-def parse_args() -> argparse.Namespace:
+def _explicit_option_names(argv: list[str]) -> set[str]:
+    return {
+        arg.split("=", 1)[0].lstrip("-").replace("-", "_")
+        for arg in argv
+        if arg.startswith("-")
+    }
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description="Build SQLite RAG index from JSONL docs.")
     parser.add_argument("--input", nargs="+", required=True)
     parser.add_argument("--out-dir", default="data/unreal58")
     parser.add_argument("--workspace-root", default="", help="Normalize legacy locators to this workspace root.")
     parser.add_argument("--chunk-tokens", type=int, default=900)
     parser.add_argument("--overlap-tokens", type=int, default=120)
-    return parser.parse_args()
+    parser.add_argument(
+        "--compact-profile-scale",
+        type=float,
+        default=0.80,
+        help="Scale applied by --compact-profile when chunk/overlap sizes are not explicitly set.",
+    )
+    parser.add_argument(
+        "--compact-profile",
+        action="store_true",
+        help=(
+            "Reduce chunk size to 80%% of default for compact (9B-class) model profiles. "
+            "Produces more, smaller chunks that fit within tight context windows. "
+            "Equivalent to --chunk-tokens 720 --overlap-tokens 96 unless overridden."
+        ),
+    )
+    args = parser.parse_args(raw_args)
+    args._explicit_args = _explicit_option_names(raw_args)
+    return args
+
+
+def apply_compact_profile_defaults(args: argparse.Namespace) -> None:
+    """Scale down chunk/overlap tokens for compact model profiles unless explicitly set."""
+    if not getattr(args, "compact_profile", False):
+        return
+    explicit = set(getattr(args, "_explicit_args", set()))
+    scale = float(getattr(args, "compact_profile_scale", 0.80) or 0.80)
+    if "chunk_tokens" not in explicit:
+        args.chunk_tokens = max(1, int(args.chunk_tokens * scale))
+    if "overlap_tokens" not in explicit:
+        args.overlap_tokens = max(0, int(args.overlap_tokens * scale))
+    if args.overlap_tokens >= args.chunk_tokens:
+        args.overlap_tokens = max(0, args.chunk_tokens // 8)
+    print(f"[compact-profile] chunk_tokens={args.chunk_tokens} overlap_tokens={args.overlap_tokens}")
 
 
 if __name__ == "__main__":
-    build(parse_args())
+    _args = parse_args()
+    apply_compact_profile_defaults(_args)
+    build(_args)

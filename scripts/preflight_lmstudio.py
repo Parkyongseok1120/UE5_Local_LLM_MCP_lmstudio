@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -12,8 +13,18 @@ from urllib.request import Request, urlopen
 AUTO_MODEL_ALIASES = {"", "local-model", "local", "default"}
 EMBED_MARKERS = ("embed", "embedding", "nomic", "bge", "e5-")
 
+# Allow overriding the default preflight timeout via environment variable.
+# Useful on slow networks or remote LM Studio setups.
+_DEFAULT_PREFLIGHT_TIMEOUT = 5.0
+try:
+    PREFLIGHT_TIMEOUT = float(os.environ.get("LMSTUDIO_PREFLIGHT_TIMEOUT") or _DEFAULT_PREFLIGHT_TIMEOUT)
+except (TypeError, ValueError):
+    PREFLIGHT_TIMEOUT = _DEFAULT_PREFLIGHT_TIMEOUT
 
-def fetch_lmstudio_model_ids(url: str, timeout: float = 5.0) -> list[str]:
+
+def fetch_lmstudio_model_ids(url: str, timeout: float | None = None) -> list[str]:
+    if timeout is None:
+        timeout = PREFLIGHT_TIMEOUT
     base = url.rstrip("/")
     req = Request(f"{base}/models", method="GET")
     with urlopen(req, timeout=timeout) as resp:
@@ -29,7 +40,7 @@ def is_embedding_model(model_id: str) -> bool:
     return any(marker in lower for marker in EMBED_MARKERS)
 
 
-def resolve_lmstudio_model(url: str, requested: str = "", timeout: float = 5.0) -> str:
+def resolve_lmstudio_model(url: str, requested: str = "", timeout: float | None = None) -> str:
     """Map local-model/default to the first loaded chat model on the server."""
     if requested and requested not in AUTO_MODEL_ALIASES:
         return requested
@@ -43,14 +54,15 @@ def resolve_lmstudio_model(url: str, requested: str = "", timeout: float = 5.0) 
     return ids[0] if ids else (requested or "local-model")
 
 
-def resolve_loaded_chat_model(url: str, requested: str = "", timeout: float = 5.0) -> str:
+def resolve_loaded_chat_model(url: str, requested: str = "", timeout: float | None = None) -> str:
     """Prefer a model with state=loaded from LM Studio v0 API, else /v1/models."""
     if requested and requested not in AUTO_MODEL_ALIASES:
         return requested
+    _timeout = timeout if timeout is not None else PREFLIGHT_TIMEOUT
     base = url.rstrip("/").removesuffix("/v1")
     try:
         req = Request(f"{base}/api/v0/models", method="GET")
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=_timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         models = payload.get("models") or payload.get("data") or []
         if isinstance(models, list):

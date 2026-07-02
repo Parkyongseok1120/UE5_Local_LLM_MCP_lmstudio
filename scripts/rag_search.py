@@ -1544,22 +1544,30 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
             for item in select_columns
         ]
         source_placeholders = ",".join("?" for _ in ASSET_EXACT_SOURCES)
-        for term in exact_terms[:6]:
-            pattern = f"%{term.lower()}%"
-            exact_params: list[Any] = [*ASSET_EXACT_SOURCES, pattern, pattern, 20]
-            exact_rows.extend(
-                conn.execute(
-                    f"""
-                    select
-                        {", ".join(exact_select_columns)}
-                    from chunks
-                    where source in ({source_placeholders})
-                      and (lower(title) like ? or lower(locator) like ?)
-                    limit ?
-                    """,
-                    exact_params,
-                ).fetchall()
-            )
+        # Merge all exact-term searches into a single query with OR conditions
+        # instead of issuing one query per term (N+1 anti-pattern).
+        terms_to_match = exact_terms[:6]
+        or_clauses = " or ".join(
+            "(lower(title) like ? or lower(locator) like ?)" for _ in terms_to_match
+        )
+        patterns: list[str] = []
+        for term in terms_to_match:
+            p = f"%{term.lower()}%"
+            patterns.extend([p, p])
+        exact_params_batch: list[Any] = [*ASSET_EXACT_SOURCES, *patterns, 20 * len(terms_to_match)]
+        exact_rows = list(
+            conn.execute(
+                f"""
+                select
+                    {", ".join(exact_select_columns)}
+                from chunks
+                where source in ({source_placeholders})
+                  and ({or_clauses})
+                limit ?
+                """,
+                exact_params_batch,
+            ).fetchall()
+        )
     if exact_rows:
         rows = list(rows) + exact_rows
 

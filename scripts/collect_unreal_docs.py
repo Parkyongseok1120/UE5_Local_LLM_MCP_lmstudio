@@ -3,6 +3,13 @@
 
 This crawler is intentionally conservative: it stays on Epic's documentation
 domain, keeps the Unreal documentation path, and limits page count by default.
+
+IMPORTANT — TERMS OF SERVICE:
+  Before running this script, check Epic Games' Terms of Service and
+  https://dev.epicgames.com/robots.txt to verify crawling is permitted.
+  This script respects the Crawl-Delay directive when present.
+  Do NOT commit the collected output (data/*/raw_docs.jsonl) to any public
+  repository — see EPIC_NOTICE.md.
 """
 
 from __future__ import annotations
@@ -22,7 +29,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 
-USER_AGENT = "CodexUnrealRagStarter/0.1 (+local personal RAG index)"
+USER_AGENT = "UE5-Local-LLM-MCP/0.1 (+https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio; local RAG index build)"
 BLOCK_TAGS = {
     "address",
     "article",
@@ -175,6 +182,26 @@ def fetch(url: str, timeout: int) -> str:
         return response.read().decode(charset, errors="replace")
 
 
+def fetch_crawl_delay(base_url: str, timeout: int = 10) -> float:
+    """Fetch robots.txt and return Crawl-Delay for our user agent (0.0 if not set)."""
+    try:
+        parsed = urlparse(base_url)
+        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+        req = Request(robots_url, headers={"User-Agent": USER_AGENT})
+        with urlopen(req, timeout=timeout) as resp:
+            robots_text = resp.read().decode("utf-8", errors="replace")
+        for line in robots_text.splitlines():
+            line = line.strip()
+            if line.lower().startswith("crawl-delay:"):
+                try:
+                    return float(line.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+    return 0.0
+
+
 def parse_page(url: str, html_text: str) -> tuple[str, str, list[str]]:
     parser = PageParser()
     parser.feed(html_text)
@@ -203,6 +230,15 @@ def crawl(args: argparse.Namespace) -> None:
     queue = deque(url for url in seeds if url)
     seen = set(iter_existing_urls(Path(args.out))) if args.resume else set()
     queued = set(queue)
+
+    # Respect Crawl-Delay from robots.txt if larger than the user-specified delay.
+    if seeds:
+        robots_delay = fetch_crawl_delay(seeds[0], timeout=args.timeout)
+        effective_delay = max(args.delay, robots_delay)
+        if robots_delay > 0 and robots_delay > args.delay:
+            print(f"[robots.txt] Crawl-Delay={robots_delay}s detected; using {effective_delay}s between requests.")
+    else:
+        effective_delay = args.delay
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -247,8 +283,8 @@ def crawl(args: argparse.Namespace) -> None:
                     queue.append(normalized)
                     queued.add(normalized)
 
-            if args.delay > 0:
-                time.sleep(args.delay)
+            if effective_delay > 0:
+                time.sleep(effective_delay)
 
     print(f"done: wrote {written} pages to {out_path}")
 
