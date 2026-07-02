@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from workspace_paths import load_shared_config, resolve_index_dir
+from project_context import active_project_name as context_active_project_name
+from project_row_filter import filter_rows_by_project
 from asset_taxonomy import classify_ue_asset_class, graph_lookup_guidance
 
 AssetKind = Literal["auto", "material", "blueprint", "animation"]
@@ -58,6 +60,9 @@ def _resolve_index_dir(index_dir: str | Path | None) -> Path:
 
 
 def _active_project_name() -> str:
+    name = context_active_project_name()
+    if name:
+        return name
     active = str(load_shared_config().get("activeProject") or "")
     if not active:
         return ""
@@ -127,16 +132,7 @@ def _matches_query(row: dict[str, Any], query: str) -> bool:
 
 
 def _filter_project(rows: list[dict[str, Any]], project_name: str | None) -> list[dict[str, Any]]:
-    active = project_name or _active_project_name()
-    if not active:
-        return rows
-    filtered = []
-    for row in rows:
-        meta = _row_metadata(row)
-        project = str(meta.get("project") or row.get("project") or "")
-        if project in {"", active}:
-            filtered.append(row)
-    return filtered
+    return filter_rows_by_project(rows, project_name)
 
 
 def _prioritize_material_expressions(expressions: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -565,8 +561,92 @@ def search_asset_graphs(
         "query": query,
         "assetKind": kind,
         "indexDir": str(idx),
+        "projectName": project_name or _active_project_name(),
         "count": len(hits),
         "results": hits,
+    }
+
+
+def analyze_asset_folder(
+    folder_hint: str,
+    *,
+    asset_kind: AssetKind = "auto",
+    index_dir: str | Path | None = None,
+    project_name: str | None = None,
+    limit: int = 24,
+    graph_detail: GraphDetail | str = "compact",
+) -> dict[str, Any]:
+    from asset_hint_resolver import resolve_asset_folder_hint
+    from project_context import resolve_active_project_context
+
+    ctx = resolve_active_project_context()
+    if not ctx.get("ok"):
+        return {
+            "ok": False,
+            "error": ctx.get("error"),
+            "suggestedToolCalls": ctx.get("suggestedToolCalls") or [],
+        }
+
+    hint_payload = resolve_asset_folder_hint(folder_hint, ctx)
+    active_name = project_name or str(ctx["projectName"])
+    token = str(hint_payload.get("searchToken") or folder_hint).strip()
+    segment = str(hint_payload.get("folderSegment") or token).strip()
+
+    search_result = search_asset_graphs(
+        segment,
+        asset_kind=asset_kind,
+        index_dir=index_dir,
+        project_name=active_name,
+        limit=max(limit, 12),
+    )
+
+    matches: list[dict[str, Any]] = []
+    resolved_detail = resolve_graph_detail(detail=str(graph_detail))
+    for hit in search_result.get("results") or []:
+        asset_path = str(hit.get("assetPath") or "")
+        if not asset_path:
+            continue
+        path_lower = asset_path.lower()
+        if segment.lower() not in path_lower and segment.lower() not in str(hit.get("name") or "").lower():
+            continue
+        lookup = lookup_asset_graph(
+            asset_path,
+            asset_kind=str(hit.get("kind") or asset_kind),  # type: ignore[arg-type]
+            index_dir=index_dir,
+            project_name=active_name,
+            detail=resolved_detail,
+        )
+        if lookup.get("ok"):
+            matches.append(lookup.get("primary") or lookup)
+
+    suggested = [
+        {"tool": "unreal_get_active_project", "args": {}},
+        {
+            "tool": "unreal_asset_graph_lookup",
+            "args": {
+                "search": segment,
+                "assetKind": asset_kind,
+                "projectName": active_name,
+                "graphDetail": resolved_detail,
+            },
+        },
+    ]
+
+    return {
+        "ok": bool(matches),
+        "folderHint": folder_hint,
+        "projectName": active_name,
+        "searchToken": token,
+        "folderSegment": segment,
+        "hint": hint_payload,
+        "matchCount": len(matches),
+        "matches": matches[:limit],
+        "indexDir": search_result.get("indexDir"),
+        "suggestedToolCalls": suggested,
+        "nextActions": [] if matches else [
+            "Call unreal_editor_metadata_status and unreal_sync_editor_metadata if exports are stale.",
+            f"Retry unreal_asset_graph_lookup with search={segment!r} and projectName={active_name!r}.",
+        ],
     }
 
 

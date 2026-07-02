@@ -41,7 +41,8 @@ const {
   defaultPlatform,
   getActiveProject,
   setActiveProject,
-  listUnrealProjects
+  listUnrealProjects,
+  buildProjectBrowsePaths
 } = require("./unreal-detect.js");
 const {
   scanSymbolImpact,
@@ -284,10 +285,26 @@ function makeJsonSchema(properties, required = []) {
 async function buildWorkspaceInfo() {
   const engines = await findEngineInstalls();
   const discovery = await discoverProjects(WORKSPACE_ROOT, CONFIG_PATH);
+  const activeProject = getActiveProject(CONFIG_PATH);
+  let projectContext = null;
+  if (activeProject) {
+    projectContext = {
+      ok: true,
+      ...buildProjectBrowsePaths(activeProject, WORKSPACE_ROOT)
+    };
+  } else {
+    projectContext = {
+      ok: false,
+      error: "activeProject is not set. Call set_active_project first.",
+      browseAvailable: false,
+      suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+    };
+  }
   return {
     workspaceRoot: WORKSPACE_ROOT,
     configPath: CONFIG_PATH,
-    activeProject: getActiveProject(CONFIG_PATH),
+    activeProject,
+    projectContext,
     allowWrite: ALLOW_WRITE,
     allowCommands: ALLOW_COMMANDS,
     allowUnrealBuild: ALLOW_UNREAL_BUILD,
@@ -379,7 +396,7 @@ function allAgentTools() {
       },
       {
         name: "list_directory",
-        description: "List files/directories under WORKSPACE_ROOT. When activeProject is set, prefer its projectDir-relative path such as Git/Project_MJS/Source instead of broad root browsing.",
+        description: "List files/directories under WORKSPACE_ROOT. When activeProject is set, prefer projectContext.sourceBrowsePath from get_active_project instead of broad root browsing.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace, e.g. '.', 'Source'." },
           maxEntries: { type: "number", description: "Max entries to show. Default 200." }
@@ -494,13 +511,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "get_active_project") {
       const activeProject = getActiveProject(CONFIG_PATH);
       let details = null;
+      let projectContext = null;
       if (activeProject) {
         const selection = await resolveProjectSelection(WORKSPACE_ROOT, CONFIG_PATH, {
           hint: activeProject
         });
         details = selection.selected;
+        projectContext = {
+          ok: true,
+          ...buildProjectBrowsePaths(activeProject, WORKSPACE_ROOT)
+        };
+      } else {
+        projectContext = {
+          ok: false,
+          error: "activeProject is not set. Call set_active_project first.",
+          browseAvailable: false,
+          suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+        };
       }
-      return text(JSON.stringify({ activeProject, details }, null, 2));
+      return text(JSON.stringify({ activeProject, details, projectContext }, null, 2));
     }
 
     if (name === "set_active_project") {

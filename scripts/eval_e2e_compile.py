@@ -53,6 +53,8 @@ def run_ubt(project_file: Path, target: str, ubt_path: Path, timeout: int) -> tu
             cwd=str(project_file.parent),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -96,12 +98,26 @@ def main() -> int:
                 ok, detail = run_static(root, expect, forbid_errors=True)
         elif case_type == "readiness_fixture":
             script = rag_root / "scripts" / "test_unreal_readiness_fixture.py"
-            proc = subprocess.run([sys.executable, str(script)], cwd=str(rag_root), capture_output=True, text=True)
+            proc = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=str(rag_root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
             ok = proc.returncode == 0
             detail = proc.stdout[-500:] or proc.stderr[-500:]
         elif case_type == "pass_at_k":
             cmd = [sys.executable, str(rag_root / "scripts" / "eval_pass_at_k.py"), "--dry-run"]
-            proc = subprocess.run(cmd, cwd=str(rag_root), capture_output=True, text=True)
+            proc = subprocess.run(
+                cmd,
+                cwd=str(rag_root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
             ok = proc.returncode == 0
             detail = (proc.stdout or proc.stderr or "")[-800:]
         elif case_type == "ubt_build":

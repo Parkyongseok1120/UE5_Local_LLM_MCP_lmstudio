@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from material_graph_format import material_row_search_text
+from project_row_filter import filter_rows_by_project
 from workspace_paths import load_shared_config
 
 MATERIAL_IDENT_RE = re.compile(
@@ -85,11 +86,7 @@ def validate_material_claims(
     rows = _load_jsonl(idx / "raw_material_metadata.jsonl")
     active_name = project_name or _active_project_name()
     if active_name:
-        rows = [
-            row
-            for row in rows
-            if str(_row_metadata(row).get("project") or row.get("project") or "") in {"", active_name}
-        ]
+        rows = filter_rows_by_project(rows, active_name)
 
     results: list[dict[str, Any]] = []
     for claim in claims:

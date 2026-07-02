@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from blueprint_graph_format import blueprint_row_search_text, iter_pin_links
+from project_row_filter import filter_rows_by_project
 from workspace_paths import load_shared_config
 
 IDENT_RE = re.compile(
@@ -83,7 +84,7 @@ def validate_blueprint_claims(
     rows = _load_jsonl(idx / "raw_blueprint_metadata.jsonl")
     active_name = project_name or _active_project_name()
     if active_name:
-        rows = [r for r in rows if str(_row_metadata(r).get("project") or r.get("project") or "") in {"", active_name}]
+        rows = filter_rows_by_project(rows, active_name)
 
     results: list[dict[str, Any]] = []
     for claim in claims:

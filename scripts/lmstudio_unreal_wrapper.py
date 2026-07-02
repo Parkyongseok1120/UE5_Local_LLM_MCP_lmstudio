@@ -21,6 +21,7 @@ from load_sampling_preset import preset_for_wrapper, profile_edit_limits, set_sa
 from preflight_lmstudio import extract_assistant_text
 from rag_search import SearchOptions, search as search_index
 import token_budget
+from workspace_paths import resolve_active_project_path
 
 try:
     from collect_build_logs import extract_error
@@ -794,7 +795,7 @@ def no_change_blockers(request: str, root: Path, findings: list[Finding]) -> lis
         signature_findings = [
             finding
             for finding in findings
-            if finding.code in {"CPP_FUNCTION_NOT_DECLARED_IN_HEADER"}
+            if finding.code in {"CPP_FUNCTION_NOT_DECLARED_IN_HEADER", "CPP_FUNCTION_SIGNATURE_MISMATCH"}
         ]
         if signature_findings:
             issues.append(
@@ -1012,6 +1013,28 @@ def validate_reflected_namespace(path: Path, text: str, root: Path) -> list[Find
         while namespace_depths and brace_depth < namespace_depths[-1]:
             namespace_depths.pop()
     return findings
+
+
+def apply_generated_h_missing_autofix(root: Path, findings: list[Finding]) -> list[Path]:
+    written: list[Path] = []
+    for finding in findings:
+        if finding.code != "GENERATED_H_MISSING":
+            continue
+        target = (root / finding.path).resolve()
+        if not target.is_file() or target.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        text = read_text(target)
+        include_name = f'{target.stem}.generated.h'
+        if include_name in text:
+            continue
+        lines = text.splitlines()
+        include_indexes = [index for index, line in enumerate(lines) if line.strip().startswith("#include ")]
+        insert_at = (include_indexes[-1] + 1) if include_indexes else 1
+        lines.insert(insert_at, f'#include "{include_name}"')
+        updated = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+        write_file(target, updated)
+        written.append(target)
+    return written
 
 
 def validate_blueprint_native_event_declarations(path: Path, text: str, root: Path) -> list[Finding]:
@@ -1492,16 +1515,34 @@ def class_headers(root: Path) -> dict[str, str]:
     return headers
 
 
+def _normalize_signature_params(params: str) -> str:
+    value = re.sub(r"\s+", " ", str(params or "").strip())
+    if not value or value == "void":
+        return ""
+    value = re.sub(r"=\s*[^,]+", "", value)
+    return value.replace(" const", "").strip()
+
+
+def _header_has_matching_signature(header: str, func_name: str, params: str) -> bool:
+    wanted = _normalize_signature_params(params)
+    declaration_re = re.compile(rf"\b{re.escape(func_name)}\s*\((?P<params>[^)]*)\)")
+    for declaration in declaration_re.finditer(header):
+        if _normalize_signature_params(declaration.group("params")) == wanted:
+            return True
+    return False
+
+
 def validate_cpp_declarations(path: Path, text: str, root: Path, headers: dict[str, str]) -> list[Finding]:
     findings: list[Finding] = []
     rel = str(path.relative_to(root))
     definition_re = re.compile(
-        r"^[\w:<>,~*&\s]+\b(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<func>~?[A-Za-z_][A-Za-z0-9_]*)\s*\(",
+        r"^[\w:<>,~*&\s]+\b(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<func>~?[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)",
         flags=re.MULTILINE,
     )
     for match in definition_re.finditer(text):
         class_name = match.group("class")
         func_name = match.group("func")
+        params = match.group("params")
         header = headers.get(class_name)
         if not header:
             continue
@@ -1512,7 +1553,18 @@ def validate_cpp_declarations(path: Path, text: str, root: Path, headers: dict[s
             base_name = re.sub(r"_(?:Implementation|Validate)$", "", func_name)
             if re.search(rf"\b{re.escape(base_name)}\s*\(", header):
                 continue
+        if _header_has_matching_signature(header, func_name, params):
+            continue
         if re.search(rf"\b{re.escape(func_name)}\s*\(", header):
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, match.start()),
+                    "CPP_FUNCTION_SIGNATURE_MISMATCH",
+                    f"{class_name}::{func_name} is implemented in .cpp with parameters that do not match the matching header declaration.",
+                )
+            )
             continue
         findings.append(
             Finding(
@@ -2197,6 +2249,8 @@ def run_ubt(
         command,
         cwd=str(project_file.parent),
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         timeout=timeout,
@@ -2350,7 +2404,7 @@ Mandatory wrapper rules:
 
 The JSON object must match this schema:
 {{
-  "answer": "short Korean summary for the user",
+  "answer": "short ASCII English summary for logs",
   "files": [
     {{
       "path": "relative/path/from/project/root",
@@ -2375,6 +2429,7 @@ Maximum edits per response: {max_files} (files + patches combined).
 Omit unchanged files. patches and files may both be empty if no edit is needed.
 Every files[] entry must contain complete final content. patches require exact match.
 Use compile-ready Unreal C++ only when creating code. generated.h must be the last include in headers.
+For the JSON answer field, use ASCII English only. Do not use Korean or non-ASCII text inside JSON strings.
 """
 
 
@@ -2403,7 +2458,8 @@ def mode_directive(mode: str) -> str:
         ),
         "reflection_fix": (
             "Mode directive: reflection_fix. For reflected headers, ensure the matching *.generated.h exists exactly once "
-            "and is the final include before UCLASS/USTRUCT/UINTERFACE declarations."
+            "and is the final include before UCLASS/USTRUCT/UINTERFACE declarations. "
+            "If static validation reports GENERATED_H_MISSING, return a concrete files[] or patches[] edit for that header."
         ),
         "refactor_r0": (
             "Mode directive: refactor_r0. Discover only — SSOT table, impact files, risks. No code edits."
@@ -2585,6 +2641,15 @@ def apply_profile_defaults(
     return preset, policy
 
 
+def should_inject_orchestrator(args: argparse.Namespace, project_file: Path) -> bool:
+    if not bool(getattr(args, "orchestrate", False)):
+        return False
+    active_project = resolve_active_project_path()
+    if active_project and active_project.resolve() != project_file.resolve():
+        return False
+    return True
+
+
 def run(args: argparse.Namespace) -> int:
     temperature_was_default = float(getattr(args, "temperature", 0.1)) == 0.1
     max_tokens_was_default = int(getattr(args, "max_tokens", 0) or 0) == 0
@@ -2627,7 +2692,9 @@ def run(args: argparse.Namespace) -> int:
 
     agent_plan_block = ""
     agent_plan = None
-    if getattr(args, "orchestrate", False) or __import__("agent_orchestrator").orchestrator_enabled():
+    if __import__("agent_orchestrator").orchestrator_enabled() and not getattr(args, "no_orchestrate", False):
+        args.orchestrate = True
+    if should_inject_orchestrator(args, project_file):
         from agent_orchestrator import build_agent_plan, format_plan_for_prompt
 
         plan = build_agent_plan(request, args.mode)
@@ -2636,8 +2703,11 @@ def run(args: argparse.Namespace) -> int:
         write_file(run_dir / "agent_plan.json", json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
 
     rag_context = collect_rag_context(args, request)
-    previous_feedback = ""
+    initial_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
+    initial_static_report = format_findings(initial_findings)
+    previous_feedback = "" if not initial_findings else "Initial static validation:\n" + initial_static_report
     last_build_records: list[dict[str, Any]] = []
+    last_findings: list[Finding] = list(initial_findings)
     original_mode = args.mode
 
     initial_prompt = agent_plan_block + user_prompt(
@@ -2655,11 +2725,53 @@ def run(args: argparse.Namespace) -> int:
         print(f"dry run complete: {run_dir}")
         return 0
 
+    static_autofix_written: list[Path] = []
+    if args.mode in {"reflection_fix", "compile_fix"}:
+        static_autofix_written = apply_generated_h_missing_autofix(project_root, initial_findings)
+    if static_autofix_written:
+        last_written = static_autofix_written
+        last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
+        static_report = format_findings(last_findings)
+        write_file(run_dir / "static_autofix.txt", static_report + "\n")
+        write_file(final_diff_path, diff_snapshots(baseline_snapshot, snapshot_project_files(project_root)) + "\n")
+        if not has_static_errors(last_findings) and not args.skip_build:
+            last_build = run_ubt(
+                Path(args.ubt_path),
+                project_file,
+                target,
+                args.platform,
+                args.configuration,
+                run_dir / "static_autofix_build.log",
+                args.build_timeout,
+            )
+            if last_build.ok:
+                summary = final_summary(
+                    status="BUILD_OK",
+                    run_dir=run_dir,
+                    project_file=project_file,
+                    source_project_file=prepared.source_project_file,
+                    direct_project_write=prepared.direct_project_write,
+                    target=target,
+                    answer="Applied safe static generated.h autofix.",
+                    written=last_written,
+                    build_result=last_build,
+                    findings=last_findings,
+                    final_diff_path=final_diff_path,
+                )
+                write_file(run_dir / "final_answer.md", summary)
+                print(summary)
+                return 0
+            previous_feedback = "Safe static generated.h autofix was applied, but UBT still failed:\n" + tail_text(
+                last_build.output,
+                token_budget.feedback_tail_chars("compile_fix"),
+            )
+        else:
+            previous_feedback = "Safe static generated.h autofix was applied, but static validation still reports issues:\n" + static_report
+
     edit_limits = profile_edit_limits()
     messages = [{"role": "system", "content": system_prompt(rules_text, edit_limits)}]
     last_answer = ""
     last_written: list[Path] = []
-    last_findings: list[Finding] = []
     last_build: BuildResult | None = None
 
     for attempt in range(1, args.max_attempts + 1):
@@ -2750,10 +2862,15 @@ def run(args: argparse.Namespace) -> int:
         has_edits = bool(bundle["files"]) or bool(bundle.get("patches"))
         if not has_edits:
             if not args.allow_empty_files and not answer_claims_no_changes(last_answer):
+                last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
+                static_report = format_findings(last_findings)
+                blockers = no_change_blockers(request, project_root, last_findings)
                 previous_feedback = (
                     "Model returned no files without clearly saying the current files already satisfy the request. "
                     "Inspect the current project state and either return the smallest changed file bundle, or return "
-                    "an empty files array with explicit evidence that no new edit is needed."
+                    "an empty files array with explicit evidence that no new edit is needed.\n"
+                    + static_report
+                    + ("\nNo-change blockers:\n" + "\n".join(f"- {issue}" for issue in blockers) if blockers else "")
                 )
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
                 continue

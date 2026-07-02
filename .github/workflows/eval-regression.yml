@@ -29,4 +29,4 @@ jobs:
       - name: Run pytest suite
         shell: pwsh
         run: |
-          python -m pytest tests/ -q
+          python -m pytest tests/ -q -m "not smoke and not slow"

@@ -29,7 +29,10 @@ TOOL_PROBE_SYSTEM = """You are an Unreal MCP agent. Rules:
 - Call exactly one MCP tool before answering.
 - First turn must call unreal_get_active_project (or the tool named in the user message).
 - Do not answer from memory.
-- Visible reply: one short English sentence only; no thinking process text.
+- The functions are attached as API tools. Use the function-calling API only.
+- Never write tool calls as plain text, JSON, XML, markdown, or <tool_call> tags.
+- When calling a tool, assistant message content must be empty. Do not narrate why you are calling it.
+- After the tool returns, visible reply: one short English sentence only; no thinking process text.
 """
 
 SCENARIOS = (
@@ -139,6 +142,11 @@ def thinking_leak_rate(text: str) -> bool:
         "here is a thinking process",
         "thinking process:",
         "let me think step",
+        "the user wants me",
+        "i need to make",
+        "i should do",
+        "let me make this function call",
+        "they explicitly want",
     )
     return any(marker in lowered for marker in markers)
 
@@ -169,12 +177,14 @@ def run_scenario(base_url: str, model: str, scenario: dict[str, Any]) -> dict[st
     ]
     expected = scenario.get("expect_tool", "")
     ok = bool(tool_calls) and (not expected or expected in names)
+    content_with_tool_call = bool(tool_calls) and bool(visible.strip())
     return {
         "id": scenario["id"],
         "pass": ok,
         "toolCalls": len(tool_calls),
         "toolNames": names,
-        "thinkingLeak": thinking_leak_rate(visible),
+        "thinkingLeak": thinking_leak_rate(visible) or content_with_tool_call,
+        "contentWithToolCall": content_with_tool_call,
         "visibleTail": visible[:240],
     }
 

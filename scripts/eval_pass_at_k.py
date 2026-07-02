@@ -83,7 +83,15 @@ def run_wrapper_live(
     ]
     if model:
         cmd.extend(["--model", model])
-    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
     tail = (proc.stdout or proc.stderr or "")[-1500:]
     attempts = count_wrapper_attempts(run_dir)
     return proc.returncode == 0, tail, attempts

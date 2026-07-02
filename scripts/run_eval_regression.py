@@ -31,7 +31,7 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False) -> dict:
     if ci:
         index = ROOT / "data" / "unreal58" / "rag.sqlite"
         ubt = Path(r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe")
-        if label in {"retrieval_unreal_programming", "bench_mcp"} and not index.is_file():
+        if label in {"retrieval_unreal_programming", "bench_mcp", "eval_reasoning"} and not index.is_file():
             return {
                 "label": label,
                 "exitCode": 0,

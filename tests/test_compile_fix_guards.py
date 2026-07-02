@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from lmstudio_unreal_wrapper import (  # noqa: E402
-    Finding,
     answer_claims_build_cs_edit,
     bundle_includes_build_cs,
     edit_scope_blockers,
@@ -63,18 +62,11 @@ def test_header_only_edit_rejected_for_cpp_signature_request():
 def test_no_change_rejected_when_signature_finding_remains():
     fixture = ROOT / "tests" / "fixtures" / "compile_fix" / "cpp_header_signature_mismatch"
     request = (fixture / "request.txt").read_text(encoding="utf-8-sig")
-    findings = [
-        Finding(
-            "warning",
-            "Source/CompileFixSig/Private/HackComponent.cpp",
-            3,
-            "CPP_FUNCTION_NOT_DECLARED_IN_HEADER",
-            "UHackComponent::DoWork is implemented in .cpp but was not found in the matching header.",
-        )
-    ]
+    findings = validate_unreal_readiness(fixture, None)
 
     issues = no_change_blockers(request, fixture, findings)
 
+    assert any(finding.code == "CPP_FUNCTION_SIGNATURE_MISMATCH" for finding in findings)
     assert any(".cpp/header mismatch" in issue for issue in issues)
 
 

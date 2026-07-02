@@ -1,1 +1,1 @@
-Public header가 GameplayTagContainer.h를 노출합니다. CompileFixTags.Build.cs에 GameplayTags PublicDependencyModuleNames를 추가해 주세요.
+The public header includes GameplayTagContainer.h. Add GameplayTags to PublicDependencyModuleNames in CompileFixTags.Build.cs.

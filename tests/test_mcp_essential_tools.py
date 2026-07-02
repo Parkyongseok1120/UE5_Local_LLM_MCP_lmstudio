@@ -21,6 +21,13 @@ RAG_ESSENTIAL = {
     "unreal_symbol_lookup",
     "unreal_agent_session",
     "unreal_rag_capabilities",
+    "unreal_material_porting_plan_validate",
+    "unreal_editor_metadata_status",
+    "unreal_run_editor_export",
+    "unreal_sync_editor_metadata",
+    "unreal_asset_graph_lookup",
+    "unreal_blueprint_claim_validate",
+    "unreal_material_claim_validate",
 }
 
 AGENT_ESSENTIAL = {
@@ -60,6 +67,7 @@ def test_essential_tools_enabled_filters_rag_tools(monkeypatch, tmp_path):
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")
     names = {tool["name"] for tool in server.all_tool_definitions()}
+    assert names == set(mod.ESSENTIAL_TOOL_NAMES)
     assert names == RAG_ESSENTIAL
 
 

@@ -39,7 +39,8 @@ from material_porting_validate import validate_material_porting_plan
 from editor_metadata_status import editor_metadata_status
 from blueprint_claim_validate import validate_blueprint_claims
 from material_claim_validate import validate_material_claims
-from asset_graph_lookup import graph_detail_limits, lookup_asset_graph, search_asset_graphs
+from asset_graph_lookup import analyze_asset_folder, graph_detail_limits, lookup_asset_graph, search_asset_graphs
+from project_context import resolve_active_project_context
 from sync_editor_metadata import refresh_editor_metadata, sync_editor_metadata
 from editor_export_runner import run_editor_export
 from runtime_config_checklist import check_runtime_config
@@ -625,6 +626,10 @@ class McpServer:
                         },
                         "indexDir": {"type": "string", "default": "data/unreal58"},
                         "projectName": {"type": "string"},
+                        "folderHint": {
+                            "type": "string",
+                            "description": "Folder name or Content path segment to batch-analyze materials/blueprints in active project.",
+                        },
                         "includeFullGraph": {
                             "type": "boolean",
                             "default": False,
@@ -700,9 +705,10 @@ class McpServer:
                 "title": "Build agent task plan (read-only)",
                 "description": (
                     "Classify task and return evidencePlan, toolPolicy, writeGate, checkpoints, "
-                    "stopConditions, and retryPolicy before edits. "
+                    "stopConditions, retryPolicy, projectContext, and suggestedToolCalls before edits. "
                     "LM Studio chat: call this FIRST after unreal_get_active_project. "
-                    "Never write when writeGate.writesAllowed is false."
+                    "Copy suggestedToolCalls args exactly, including projectName/folderHint, and never write "
+                    "when writeGate.writesAllowed is false."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -836,6 +842,35 @@ class McpServer:
         rows = search_hybrid(self.index, query, top_k, options) if use_hybrid else search(
             self.index, query, top_k, options
         )
+        if not rows and options.projects:
+            fallback_opts = SearchOptions(
+                mode=options.mode,
+                sources=options.sources,
+                projects=[],
+                layers=options.layers,
+                doc_types=options.doc_types,
+                genres=options.genres,
+                extensions=options.extensions,
+                required_terms=options.required_terms,
+                candidate_limit=options.candidate_limit,
+            )
+            fallback_rows = search_hybrid(self.index, query, top_k, fallback_opts) if use_hybrid else search(
+                self.index, query, top_k, fallback_opts
+            )
+            if fallback_rows:
+                rows = fallback_rows
+                resolved_scope = "engine_fallback"
+                context = assemble_context(
+                    rows,
+                    query,
+                    mode,
+                    **assembly_kwargs,
+                )
+                context += (
+                    "\n[project scope fallback: active project filter returned 0 rows; "
+                    "showing engine-wide matches. Re-sync metadata for the active project.]\n"
+                )
+                return rows, context, resolved_scope, detail
         context = assemble_context(rows, query, mode, **assembly_kwargs)
         return rows, context, resolved_scope, detail
 
@@ -948,11 +983,15 @@ class McpServer:
                 self.handle_symbol_lookup(message_id, arguments)
             elif name == "unreal_get_active_project":
                 config = load_shared_config()
+                project_context = resolve_active_project_context()
                 payload = {
                     "activeProject": config.get("activeProject"),
                     "activeProjectNames": active_project_names(),
                     "sharedConfigPath": str(shared_config_path()),
+                    "projectContext": project_context,
                 }
+                if not project_context.get("ok"):
+                    payload["suggestedToolCalls"] = project_context.get("suggestedToolCalls") or []
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
             elif name == "unreal_open_project_picker":
                 payload = self.launch_project_picker(arguments.get("explorer") is True)
@@ -1063,9 +1102,19 @@ class McpServer:
                 compact = compact_sync_metadata_payload(payload)
                 self.tool_result(message_id, compact_json_text(compact), structured=compact)
             elif name == "unreal_asset_graph_lookup":
+                folder_hint = str(arguments.get("folderHint") or "").strip()
                 search = str(arguments.get("search") or "").strip()
                 graph_detail = str(arguments.get("graphDetail") or "compact").strip().lower()
-                if search:
+                if folder_hint:
+                    payload = analyze_asset_folder(
+                        folder_hint,
+                        asset_kind=str(arguments.get("assetKind") or "auto"),  # type: ignore[arg-type]
+                        index_dir=arguments.get("indexDir") or "data/unreal58",
+                        project_name=str(arguments.get("projectName") or "").strip() or None,
+                        limit=int(arguments.get("limit") or 24),
+                        graph_detail=graph_detail,
+                    )
+                elif search:
                     payload = search_asset_graphs(
                         search,
                         asset_kind=str(arguments.get("assetKind") or "auto"),  # type: ignore[arg-type]

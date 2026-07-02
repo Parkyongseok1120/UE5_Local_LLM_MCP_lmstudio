@@ -61,6 +61,12 @@ ASSET_METADATA_TOOL_POLICY = [
     "unreal_material_claim_validate",
     "unreal_blueprint_claim_validate",
 ]
+CPP_REVIEW_TOOL_POLICY = [
+    "unreal_get_active_project",
+    "search_files",
+    "read_file",
+    "unreal_rag_search",
+]
 API_MARKERS = ("what is", "how does", "api", "lookup", "documentation", "explain")
 
 
@@ -86,6 +92,8 @@ class AgentPlan:
     evidence: EvidencePlan
     edit_strategy: EditStrategy
     tool_policy: list[str] = field(default_factory=list)
+    suggested_tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    project_context: dict[str, Any] = field(default_factory=dict)
     write_gate: dict[str, Any] = field(default_factory=dict)
     checkpoints: list[str] = field(default_factory=list)
     stop_conditions: list[str] = field(default_factory=list)
@@ -99,6 +107,8 @@ class AgentPlan:
             "evidencePlan": self.evidence.to_dict(),
             "editStrategy": self.edit_strategy,
             "toolPolicy": self.tool_policy,
+            "suggestedToolCalls": self.suggested_tool_calls,
+            "projectContext": self.project_context,
             "writeGate": self.write_gate,
             "checkpoints": self.checkpoints,
             "stopConditions": self.stop_conditions,
@@ -299,12 +309,81 @@ def build_retry_policy(task_kind: TaskKind, policy: dict[str, Any]) -> list[str]
     ]
 
 
+def build_suggested_tool_calls(
+    request: str,
+    task_kind: TaskKind,
+    mode: str,
+    project_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not project_context.get("ok"):
+        return list(project_context.get("suggestedToolCalls") or [{"tool": "unreal_set_active_project", "args": {}}])
+
+    from asset_hint_resolver import resolve_asset_folder_hint
+    from code_hint_resolver import looks_like_cpp_domain_request, resolve_code_domain_hint
+
+    text = str(request or "")
+    lower = text.lower()
+    asset_markers = (
+        "material", "머티리얼", "shader", "folder", "폴더", "/game/", "m_", "mf_",
+        "blueprint", "블루프린트", "asset", "에셋",
+    )
+    asset_like = any(marker in lower for marker in asset_markers)
+    cpp_like = looks_like_cpp_domain_request(text)
+
+    if cpp_like and not asset_like:
+        payload = resolve_code_domain_hint(text, project_context)
+        return list(payload.get("suggestedToolCalls") or [])
+
+    if asset_like or mode in ASSET_METADATA_MODES:
+        hint_payload = resolve_asset_folder_hint(text, project_context)
+        segment = str(hint_payload.get("folderSegment") or hint_payload.get("searchToken") or text).strip()
+        calls: list[dict[str, Any]] = [
+            {"tool": "unreal_get_active_project", "args": {}},
+            {"tool": "unreal_editor_metadata_status", "args": {}},
+        ]
+        if "folder" in lower or "폴더" in lower:
+            calls.append(
+                {
+                    "tool": "unreal_asset_graph_lookup",
+                    "args": {
+                        "folderHint": segment,
+                        "projectName": project_context["projectName"],
+                        "graphDetail": "compact",
+                    },
+                },
+            )
+        else:
+            calls.append(
+                {
+                    "tool": "unreal_asset_graph_lookup",
+                    "args": {
+                        "search": segment,
+                        "projectName": project_context["projectName"],
+                        "graphDetail": "compact",
+                    },
+                },
+            )
+        return calls
+
+    if task_kind == "inspect_only" and any(marker in lower for marker in REVIEW_MARKERS):
+        browse_path = str(project_context.get("sourceBrowsePath") or "")
+        calls = [{"tool": "unreal_get_active_project", "args": {}}]
+        if browse_path:
+            calls.append({"tool": "search_files", "args": {"query": text, "path": browse_path}})
+        calls.append({"tool": "unreal_rag_search", "args": {"query": text, "mode": "review", "hybrid": False, "top_k": 6}})
+        return calls
+
+    return [{"tool": "unreal_get_active_project", "args": {}}]
+
+
 def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int = 0) -> AgentPlan:
     from load_sampling_preset import profile_agent_policy
+    from project_context import resolve_active_project_context
     from rag_search import resolve_mode
     from tool_policy import tool_sequence_for_task
 
     policy = profile_agent_policy()
+    project_context = resolve_active_project_context()
     resolved_mode = resolve_mode(request, mode)
     task_kind = classify_task(request, mode)
     evidence = build_evidence_plan(request, task_kind, mode)
@@ -321,6 +400,11 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     tool_policy = tool_sequence_for_task(tool_policy_key) or tool_sequence_for_task(task_kind)
     if task_kind == "inspect_only" and mode in ASSET_METADATA_MODES:
         tool_policy = list(ASSET_METADATA_TOOL_POLICY)
+    else:
+        from code_hint_resolver import looks_like_cpp_domain_request
+
+        if task_kind == "inspect_only" and looks_like_cpp_domain_request(request):
+            tool_policy = list(CPP_REVIEW_TOOL_POLICY)
     notes: list[str] = []
     if evidence.confidence < 0.65:
         notes.append("Low confidence: prefer inspect-only before edits.")
@@ -339,12 +423,18 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         evidence.writes_allowed = False
         notes.append("Refactor modes disabled for active model profile.")
     write_gate = build_write_gate(task_kind, evidence, policy)
+    suggested = build_suggested_tool_calls(request, task_kind, mode, project_context)
+    if not project_context.get("ok"):
+        notes.append(str(project_context.get("error") or "Set activeProject before browse or asset lookup."))
+    notes.append("Copy suggestedToolCalls args exactly; never hardcode project paths.")
     return AgentPlan(
         request=request,
         task_kind=task_kind,
         evidence=evidence,
         edit_strategy=strategy,
         tool_policy=tool_policy,
+        suggested_tool_calls=suggested,
+        project_context=project_context,
         write_gate=write_gate,
         checkpoints=build_checkpoints(task_kind, evidence, mode),
         stop_conditions=build_stop_conditions(task_kind),
@@ -368,6 +458,8 @@ def format_plan_for_prompt(plan: AgentPlan) -> str:
         f"RAG modes: {', '.join(plan.evidence.rag_modes)}\n"
         f"Gates: {', '.join(plan.evidence.gates) or 'none'}\n"
         f"Tool policy: {' -> '.join(plan.tool_policy)}\n"
+        f"Suggested tool calls: {json.dumps(plan.suggested_tool_calls, ensure_ascii=False)}\n"
+        f"Project: {plan.project_context.get('projectName') or 'unset'}\n"
         f"Write gate: writesAllowed={plan.write_gate.get('writesAllowed')}, "
         f"maxFilesPerEdit={plan.write_gate.get('maxFilesPerEdit')}\n"
         + (

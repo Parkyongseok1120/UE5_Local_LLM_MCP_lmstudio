@@ -10,7 +10,7 @@ Session start. Perform **only** these steps, then reply `ready`:
 2. `unreal_rag_health` (unreal-rag)
 3. `get_workspace_info` (unreal-agent)
 
-If the active project is not **Project_MJS** (or your target `.uproject`), call `unreal_set_active_project` with the correct path.
+If the active project is not your target `.uproject`, call `unreal_set_active_project` with the correct path from `projectContext.uprojectPath`.
 
 If `unreal_rag_health` returns `okForChat=false` or `chatAction=stop_and_report_rag_rebuild_required`, do **not** search project files for RAG repair scripts. Reply `rag_blocked` plus the reported `recommendedCommand` / `recommendedDoctorCommand`.
 

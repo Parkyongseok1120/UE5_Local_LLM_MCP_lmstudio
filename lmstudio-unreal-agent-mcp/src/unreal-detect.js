@@ -634,6 +634,68 @@ function defaultPlatform() {
   return process.platform === "win32" ? "Win64" : "Linux";
 }
 
+function buildProjectBrowsePaths(activeProjectPath, workspaceRoot) {
+  const resolvedProject = path.resolve(activeProjectPath);
+  const projectDir = path.dirname(resolvedProject);
+  const projectName = projectNameFromPath(resolvedProject);
+  const workspace = path.resolve(workspaceRoot || process.cwd());
+  let modules = [];
+  try {
+    const raw = fs.readFileSync(resolvedProject, "utf8");
+    const data = JSON.parse(raw);
+    modules = Array.isArray(data.Modules) ? data.Modules.map((m) => m.Name).filter(Boolean) : [];
+  } catch {
+    modules = [];
+  }
+  const sourceModules = [];
+  const sourceRootDir = path.join(projectDir, "Source");
+  if (fs.existsSync(sourceRootDir)) {
+    for (const entry of fs.readdirSync(sourceRootDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) sourceModules.push(entry.name);
+    }
+  }
+  const primaryModule = modules[0] || sourceModules[0] || projectName;
+  let sourceRoot = path.join(projectDir, "Source", primaryModule);
+  if (!fs.existsSync(sourceRoot) && sourceModules.length) {
+    sourceRoot = path.join(projectDir, "Source", sourceModules[0]);
+  }
+  const contentRoot = path.join(projectDir, "Content");
+  const exportDir = path.join(projectDir, "Saved", "LmStudioMetadataExports");
+  let browseAvailable = false;
+  try {
+    browseAvailable = projectDir.toLowerCase().startsWith(workspace.toLowerCase());
+  } catch {
+    browseAvailable = false;
+  }
+  const rel = (target) => {
+    try {
+      const value = path.relative(workspace, target);
+      if (!value || value.startsWith("..")) return "";
+      return value.split(path.sep).join("/");
+    } catch {
+      return "";
+    }
+  };
+  return {
+    uprojectPath: resolvedProject,
+    projectName,
+    projectDir,
+    modules,
+    primaryModule,
+    sourceRoot,
+    sourceModules,
+    contentRoot,
+    exportDir,
+    workspaceRoot: workspace,
+    browseAvailable,
+    sourceBrowsePath: browseAvailable ? rel(sourceRoot) : "",
+    contentBrowsePath: browseAvailable ? rel(contentRoot) : "",
+    browseNote: browseAvailable
+      ? ""
+      : "Project is outside WORKSPACE_ROOT; search_files/list_directory may be unavailable."
+  };
+}
+
 module.exports = {
   IGNORE_DIRS,
   loadConfig,
@@ -647,5 +709,6 @@ module.exports = {
   resolveProjectSelection,
   resolveBuildPlan,
   defaultPlatform,
-  projectNameFromPath
+  projectNameFromPath,
+  buildProjectBrowsePaths
 };

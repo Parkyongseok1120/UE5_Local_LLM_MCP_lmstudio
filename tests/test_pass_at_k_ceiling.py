@@ -126,6 +126,7 @@ def test_ceiling_golden_fixture_exists(case: dict):
 
 
 @pytest.mark.skipif(not DEFAULT_UBT.is_file(), reason="UBT not installed")
+@pytest.mark.slow
 def test_ceiling_dry_run_golden_ubt():
     proc = subprocess.run(
         [

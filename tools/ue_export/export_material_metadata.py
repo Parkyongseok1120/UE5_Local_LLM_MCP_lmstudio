@@ -85,6 +85,12 @@ MATERIAL_PROPERTY_OUTPUTS = (
 EXPRESSION_DETAIL_PROPERTIES = (
     ("parameter_name", "parameter_name"),
     ("ParameterName", "parameter_name"),
+    ("input_name", "input_name"),
+    ("InputName", "input_name"),
+    ("output_name", "output_name"),
+    ("OutputName", "output_name"),
+    ("function_name", "function_name"),
+    ("FunctionName", "function_name"),
     ("default_value", "default_value"),
     ("DefaultValue", "default_value"),
     ("const_a", "const_a"),
@@ -367,6 +373,7 @@ def _collect_expression_input_wires(
 def _collect_expression_details(expression) -> dict:
     details = {}
     seen = set()
+    cls_name = expression.__class__.__name__
     for prop, key in EXPRESSION_DETAIL_PROPERTIES:
         if key in seen:
             continue
@@ -377,6 +384,27 @@ def _collect_expression_details(expression) -> dict:
         if text:
             seen.add(key)
             details[key] = text
+    if "FunctionInput" in cls_name and "input_name" not in details:
+        for prop in ("InputName", "input_name", "Name", "Desc"):
+            value = _safe_prop(expression, prop, None)
+            text = _value_to_text(value)
+            if text:
+                details["input_name"] = text
+                break
+    if "FunctionOutput" in cls_name and "output_name" not in details:
+        for prop in ("OutputName", "output_name", "Name", "Desc"):
+            value = _safe_prop(expression, prop, None)
+            text = _value_to_text(value)
+            if text:
+                details["output_name"] = text
+                break
+    if "Custom" in cls_name and "code" not in details:
+        for prop in ("Code", "code", "Description"):
+            value = _safe_prop(expression, prop, None)
+            text = _value_to_text(value)
+            if text:
+                details["code"] = text[:4000]
+                break
     return details
 
 
