@@ -71,19 +71,21 @@ function Pass([string]$Message) {
 }
 
 Write-Host "Verify-Oss-Ready: $root"
+$gitAvailable = Test-GitAvailable
 
 $forbiddenPathPatterns = @(
-    '\\data\\',
-    '\\node_modules\\',
-    '\\Reports\\',
-    '\\\.pytest_cache\\',
-    '\\data\\baseline\\',
-    '\\data\\wrapper_runs\\',
-    '\\data\\scaffold_runs\\'
+    '(^|\\)data\\',
+    '(^|\\)node_modules\\',
+    '(^|\\)Reports\\',
+    '(^|\\)\.pytest_cache\\',
+    '(^|\\)data\\baseline\\',
+    '(^|\\)data\\wrapper_runs\\',
+    '(^|\\)data\\scaffold_runs\\'
 )
 
 $ignoredLocalFiles = @(
     'PORTABLE_ROOT.txt',
+    'tests\test_public_path_hygiene.py',
     'lmstudio-unreal-agent-mcp\config\agent-mcp.json',
     'lmstudio-unreal-agent-mcp\config\lmstudio-mcp-unreal-agent.json'
 )
@@ -92,6 +94,8 @@ $forbiddenContentPatterns = @(
     'tvly-',
     'C:\\Users\\',
     'C:/Users/',
+    'C:\\Program Files\\Epic Games\\UE_',
+    'C:/Program Files/Epic Games/UE_',
     'SoulslikePrototype',
     '\\Unreal Projects\\SoulslikePrototype'
 )
@@ -106,17 +110,36 @@ foreach ($file in $scanFiles) {
     if ($ignoredLocalFiles -contains $relNormalized) {
         continue
     }
+    $skipGeneratedPath = $false
     foreach ($pattern in $forbiddenPathPatterns) {
         if ($rel -match $pattern) {
-            Fail "forbidden path in scan set: $rel"
+            if ($gitAvailable) {
+                Fail "forbidden tracked/generated path in scan set: $rel"
+            }
+            $skipGeneratedPath = $true
             break
         }
+    }
+    if ($skipGeneratedPath) {
+        continue
     }
     if ($rel -match '\.sqlite$') {
         Fail "sqlite file in scan set: $rel"
     }
-    if ($rel -eq 'config\workspace.json' -or $rel -eq 'config/agent-mcp.json' -or $rel -match '(?i)^lmstudio-unreal-agent-mcp/config/agent-mcp\.json$') {
-        Fail "live config should not be tracked: $rel"
+    if ($rel -eq 'config\workspace.json' -or $rel -eq 'config/agent-mcp.json') {
+        try {
+            $cfgText = Get-Content -LiteralPath $file -Raw -Encoding UTF8
+            $cfg = $cfgText | ConvertFrom-Json
+            if ($cfg.rootPath -or $cfg.defaultEngineRoot) {
+                Fail "tracked workspace config must not contain machine-specific rootPath/defaultEngineRoot: $rel"
+            }
+        }
+        catch {
+            Fail "tracked workspace config is not valid JSON: $rel"
+        }
+    }
+    if ($rel -match '(?i)^lmstudio-unreal-agent-mcp/config/agent-mcp\.json$') {
+        Fail "live agent config should not be tracked: $rel"
     }
 
     $ext = [System.IO.Path]::GetExtension($file).ToLowerInvariant()

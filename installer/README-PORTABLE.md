@@ -70,7 +70,7 @@ Rider = Unreal C++ 주력 IDE. Cline = MCP agent. 규칙: `.clinerules`
 다른 PC의 UE 소스/프로젝트를 반영하려면:
 
 ```powershell
-.\rag.ps1 collect-source -SourceRoot "C:\Program Files\Epic Games\UE_5.8\Engine\Source"
+.\rag.ps1 collect-source -SourceRoot "$env:UNREAL_ENGINE_ROOT\Engine\Source"
 .\rag.ps1 collect-projects
 .\rag.ps1 build-incremental
 .\rag.ps1 build-embeddings-full

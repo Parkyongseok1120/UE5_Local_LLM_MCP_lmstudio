@@ -38,7 +38,7 @@ function Read-SharedConfig {
                 (Join-Path $HOME "Documents\Git"),
                 (Join-Path $HOME "Documents\Unreal Projects")
             )
-            defaultEngineRoot    = "C:\Program Files\Epic Games\UE_5.8"
+            defaultEngineRoot    = ""
             defaultPlatform      = "Win64"
             defaultConfiguration = "Development"
             indexingTier            = "standard"

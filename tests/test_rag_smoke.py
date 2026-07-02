@@ -15,7 +15,9 @@ from rag_index_ops import index_health, rebuild_status  # noqa: E402
 from workspace_paths import (  # noqa: E402
     active_project_names,
     normalize_locator,
+    resolve_engine_root,
     resolve_index_path,
+    resolve_ubt_path,
 )
 
 
@@ -90,3 +92,23 @@ def test_index_health_handles_missing_chunks_table(tmp_path):
     assert status["reason"] == "index-unreadable"
     assert status["chatAction"] == "stop_and_report_rag_rebuild_required"
     assert status["recommendedDoctorCommand"] == ".\\rag.ps1 doctor"
+
+
+def test_engine_root_has_no_hardcoded_unreal_install_fallback(tmp_path, monkeypatch):
+    workspace = tmp_path / "UE5_Local_LLM_MCP_lmstudio"
+    config_dir = workspace / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.json").write_text(
+        json.dumps({"rootPath": "", "defaultEngineRoot": ""}),
+        encoding="utf-8",
+    )
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(json.dumps({"defaultEngineRoot": ""}), encoding="utf-8")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    monkeypatch.delenv("UNREAL_ENGINE_ROOT", raising=False)
+    monkeypatch.delenv("UNREAL_UBT_PATH", raising=False)
+    monkeypatch.delenv("ProgramFiles", raising=False)
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+
+    assert str(resolve_engine_root(workspace)) in {"", "."}
+    assert resolve_ubt_path(workspace) == Path("UnrealBuildTool.exe")

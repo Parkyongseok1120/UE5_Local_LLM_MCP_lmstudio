@@ -119,6 +119,9 @@ function Get-WorkspaceIndexNamespace {
 
 function Get-WorkspaceEngineRoot {
     param([string]$Fallback)
+    if ($env:UNREAL_ENGINE_ROOT -and (Test-Path -LiteralPath $env:UNREAL_ENGINE_ROOT)) {
+        return (Resolve-Path -LiteralPath $env:UNREAL_ENGINE_ROOT).Path
+    }
     $cfgPath = Join-Path $PSScriptRoot "config\workspace.json"
     if (Test-Path $cfgPath) {
         try {
@@ -129,6 +132,30 @@ function Get-WorkspaceEngineRoot {
         }
         catch {
             Write-Warning "Could not read defaultEngineRoot from $cfgPath"
+        }
+    }
+    $sharedConfig = Join-Path $HOME ".lmstudio\config\unreal-workspace.json"
+    if (Test-Path $sharedConfig) {
+        try {
+            $shared = Get-Content -LiteralPath $sharedConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($shared.defaultEngineRoot) {
+                return [string]$shared.defaultEngineRoot
+            }
+        }
+        catch {
+            Write-Warning "Could not read defaultEngineRoot from $sharedConfig"
+        }
+    }
+    foreach ($envName in @("ProgramFiles", "ProgramFiles(x86)")) {
+        $base = [Environment]::GetEnvironmentVariable($envName)
+        if (-not $base) { continue }
+        $epic = Join-Path $base "Epic Games"
+        if (-not (Test-Path -LiteralPath $epic)) { continue }
+        $engine = Get-ChildItem -LiteralPath $epic -Directory -Filter "UE_5.*" -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            Select-Object -First 1
+        if ($engine) {
+            return $engine.FullName
         }
     }
     return $Fallback
@@ -167,12 +194,18 @@ $indexPath = Join-Path $dataDir "rag.sqlite"
 $moduleGraphPath = Join-Path $dataDir "raw_module_graph.jsonl"
 
 if (-not $SourceRoot) {
-    $engineRoot = Get-WorkspaceEngineRoot -Fallback "C:\Program Files\Epic Games\UE_5.8"
+    $engineRoot = Get-WorkspaceEngineRoot -Fallback ""
+    if (-not $engineRoot) {
+        throw "Unreal Engine root not found. Set UNREAL_ENGINE_ROOT or config/workspace.json defaultEngineRoot."
+    }
     $SourceRoot = Join-Path $engineRoot "Engine\Source"
 }
 
 if (-not $UbtPath) {
-    $engineRoot = Get-WorkspaceEngineRoot -Fallback "C:\Program Files\Epic Games\UE_5.8"
+    $engineRoot = Get-WorkspaceEngineRoot -Fallback ""
+    if (-not $engineRoot) {
+        throw "Unreal Engine root not found. Set UNREAL_ENGINE_ROOT or config/workspace.json defaultEngineRoot."
+    }
     $UbtPath = Join-Path $engineRoot "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
 }
 

@@ -6,7 +6,7 @@
     "%USERPROFILE%\\Documents\\Git",
     "%USERPROFILE%\\Documents\\Unreal Projects"
   ],
-  "defaultEngineRoot": "C:\\Program Files\\Epic Games\\UE_5.8",
+  "defaultEngineRoot": "",
   "defaultPlatform": "Win64",
   "defaultConfiguration": "Development",
   "indexingTier": "standard",

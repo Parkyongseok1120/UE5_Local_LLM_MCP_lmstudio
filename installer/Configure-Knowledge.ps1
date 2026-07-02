@@ -1,6 +1,6 @@
 param(
     [string]$WorkspaceRoot = "",
-    [string]$EpicGamesRoot = "C:\Program Files\Epic Games",
+    [string]$EpicGamesRoot = "",
     [switch]$SkipBuild,
     [switch]$NonInteractive
 )
@@ -73,12 +73,25 @@ Write-Host "Configure Knowledge — UE5 Local LLM MCP"
 Write-Host "Workspace: $ragRoot"
 Write-Host ""
 
-$engines = @(Scan-EngineInstalls $EpicGamesRoot)
+$scanRoot = $EpicGamesRoot
+if (-not $scanRoot) {
+    foreach ($envName in @("ProgramFiles", "ProgramFiles(x86)")) {
+        $base = [Environment]::GetEnvironmentVariable($envName)
+        if (-not $base) { continue }
+        $candidate = Join-Path $base "Epic Games"
+        if (Test-Path -LiteralPath $candidate) {
+            $scanRoot = $candidate
+            break
+        }
+    }
+}
+
+$engines = @(Scan-EngineInstalls $scanRoot)
 if ($engines.Count -eq 0) {
-    Write-Warning "No UE_5.* installs found under: $EpicGamesRoot"
+    Write-Warning "No UE_5.* installs found. Set defaultEngineRoot manually in config\workspace.json or pass -EpicGamesRoot."
     Write-Host "You can set defaultEngineRoot manually in config\workspace.json later."
     $selectedVersion = "5.8"
-    $selectedRoot = Join-Path $EpicGamesRoot "UE_5.8"
+    $selectedRoot = ""
 }
 else {
     Write-Host "Detected engine installs:"

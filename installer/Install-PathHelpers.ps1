@@ -23,7 +23,7 @@ function Get-EpicGamesRoot {
             return (Resolve-Path -LiteralPath $candidate).Path
         }
     }
-    return "C:\Program Files\Epic Games"
+    return ""
 }
 
 function Get-DetectedUnrealEngineInstalls {
@@ -89,11 +89,10 @@ function Resolve-EngineSelection {
 
     $engines = @(Get-DetectedUnrealEngineInstalls -EpicGamesRoot $EpicGamesRoot)
     if ($engines.Count -eq 0) {
-        $epicRoot = Get-EpicGamesRoot -Override $EpicGamesRoot
         return [ordered]@{
             Version = if ($PreferredVersion) { $PreferredVersion } else { "5.8" }
-            Root    = Join-Path $epicRoot "UE_5.8"
-            Source  = "fallback"
+            Root    = ""
+            Source  = "not-found"
         }
     }
 
@@ -323,6 +322,9 @@ function Get-WorkspaceEngineSourcePath {
     )
 
     $engineRoot = Get-WorkspaceEngineRootPath -RagRoot $RagRoot -FallbackEngineRoot $FallbackEngineRoot
+    if (-not $engineRoot) {
+        return ""
+    }
     return Join-Path $engineRoot "Engine\Source"
 }
 
@@ -333,5 +335,8 @@ function Get-WorkspaceUbtPath {
     )
 
     $engineRoot = Get-WorkspaceEngineRootPath -RagRoot $RagRoot -FallbackEngineRoot $FallbackEngineRoot
+    if (-not $engineRoot) {
+        return "UnrealBuildTool.exe"
+    }
     return Join-Path $engineRoot "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
 }

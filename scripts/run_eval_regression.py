@@ -39,7 +39,7 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int =
             from workspace_paths import resolve_ubt_path
             ubt = resolve_ubt_path()
         except Exception:
-            ubt = Path(r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe")
+            ubt = Path("UnrealBuildTool.exe")
         if label in {"retrieval_unreal_programming", "bench_mcp", "eval_reasoning"} and not index.is_file():
             return {
                 "label": label,

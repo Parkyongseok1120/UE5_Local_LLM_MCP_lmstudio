@@ -4,7 +4,7 @@ param(
         (Join-Path $env:USERPROFILE "Documents\Github"),
         (Join-Path $env:USERPROFILE "Documents\Unreal Projects")
     ),
-    [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.7",
+    [string]$EngineRoot = "",
     [switch]$InstallExtensions,
     [switch]$SkipProjectGeneration,
     [switch]$SkipGlobalSettings
@@ -21,6 +21,37 @@ function Get-CodeCli {
     foreach ($candidate in $candidates) {
         if ($candidate -and (Test-Path $candidate)) {
             return $candidate
+        }
+    }
+    return ""
+}
+
+function Resolve-EngineRoot {
+    param([string]$Override)
+    if ($Override) { return $Override }
+    if ($env:UNREAL_ENGINE_ROOT) { return $env:UNREAL_ENGINE_ROOT }
+    $workspace = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+    $workspaceConfig = Join-Path $workspace "config\workspace.json"
+    if (Test-Path -LiteralPath $workspaceConfig) {
+        try {
+            $cfg = Get-Content -LiteralPath $workspaceConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($cfg.defaultEngineRoot) {
+                return [string]$cfg.defaultEngineRoot
+            }
+        }
+        catch {
+        }
+    }
+    foreach ($envName in @("ProgramFiles", "ProgramFiles(x86)")) {
+        $base = [Environment]::GetEnvironmentVariable($envName)
+        if (-not $base) { continue }
+        $epic = Join-Path $base "Epic Games"
+        if (-not (Test-Path -LiteralPath $epic)) { continue }
+        $engine = Get-ChildItem -LiteralPath $epic -Directory -Filter "UE_5.*" -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            Select-Object -First 1
+        if ($engine) {
+            return $engine.FullName
         }
     }
     return ""
@@ -323,6 +354,11 @@ function Find-Projects {
         }
     }
     $paths | Sort-Object -Unique
+}
+
+$EngineRoot = Resolve-EngineRoot -Override $EngineRoot
+if (-not $EngineRoot) {
+    throw "Unreal Engine root not found. Pass -EngineRoot or set UNREAL_ENGINE_ROOT."
 }
 
 $ubt = Join-Path $EngineRoot "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"

@@ -29,8 +29,8 @@
       "id": "runtime_soulslike",
       "type": "runtime_config",
       "projectRoot": "tests/fixtures/projects/soulslike",
-      "expectOk": false,
-      "notes": "Synthetic fixture baseline"
+      "expectOk": true,
+      "notes": "Synthetic fixture baseline; no custom GameMode means missing default GameMode is warning-only"
     },
     {
       "id": "tool_order_plan_turn",

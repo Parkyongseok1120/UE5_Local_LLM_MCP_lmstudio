@@ -1,0 +1,63 @@
+#!/usr/bin/env python
+"""Public release guard for machine-specific paths."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SCAN_DIRS = (
+    ROOT / "scripts",
+    ROOT / "installer",
+    ROOT / "config",
+    ROOT / ".github",
+)
+SKIP_FILES = {
+    ROOT / "installer" / "Verify-Oss-Ready.ps1",
+}
+TEXT_SUFFIXES = {".bat", ".json", ".ps1", ".py", ".txt", ".yml", ".yaml"}
+
+
+def _text_files():
+    for base in SCAN_DIRS:
+        if not base.exists():
+            continue
+        for path in base.rglob("*"):
+            if not path.is_file() or path in SKIP_FILES:
+                continue
+            if path.suffix.lower() in TEXT_SUFFIXES:
+                yield path
+
+
+def test_no_personal_windows_user_paths_in_release_files():
+    forbidden = ("C:" + "\\Users\\", "C:/Users/")
+    violations: list[str] = []
+    for path in _text_files():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for marker in forbidden:
+            if marker in text:
+                violations.append(str(path.relative_to(ROOT)))
+    assert not violations, "Personal Windows paths found:\n" + "\n".join(sorted(violations))
+
+
+def test_no_versioned_unreal_install_path_defaults_in_code_or_config():
+    forbidden = (
+        "C:" + "\\Program Files\\Epic Games\\UE_",
+        "C:/Program Files/Epic Games/UE_",
+    )
+    violations: list[str] = []
+    for path in _text_files():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for marker in forbidden:
+            if marker in text:
+                violations.append(str(path.relative_to(ROOT)))
+    assert not violations, "Hardcoded Unreal install paths found:\n" + "\n".join(sorted(violations))
+
+
+def test_tracked_workspace_config_is_sanitized():
+    path = ROOT / "config" / "workspace.json"
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+
+    assert not data.get("rootPath")
+    assert not data.get("defaultEngineRoot")

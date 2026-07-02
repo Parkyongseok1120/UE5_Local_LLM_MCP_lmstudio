@@ -58,10 +58,15 @@ def main() -> int:
     pass_rate = float(pass_at_k.get("passRate") or 0) if pass_at_k else None
 
     tier_a_ok = gate_pass == gate_total and gate_total >= 12
+    soulslike_pass = soulslike.get("pass") if soulslike else None
+    project_review_live_pass = (
+        project_review.get("pass")
+        if project_review and project_review.get("mode") == "live"
+        else None
+    )
     tier_b_ok = (
-        soulslike.get("pass") is True
-        and project_review.get("mode") == "live"
-        and project_review.get("pass") is True
+        soulslike_pass is True
+        and project_review_live_pass is True
         and (pass_rate is None or pass_rate >= 0.67)
     )
 
@@ -79,8 +84,8 @@ def main() -> int:
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "tierA": {"gatePass": gate_pass, "gateTotal": gate_total, "harnessPass": harness_pass, "harnessTotal": harness_total},
         "tierB": {
-            "soulslikeLive": soulslike.get("pass") if soulslike else None,
-            "projectReviewLive": project_review.get("pass") if project_review and project_review.get("mode") == "live" else None,
+            "soulslikeLive": soulslike_pass,
+            "projectReviewLive": project_review_live_pass,
             "passAtKRate": pass_rate,
         },
         "reasoningScore": reasoning_score,

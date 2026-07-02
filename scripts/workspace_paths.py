@@ -102,7 +102,7 @@ def load_workspace_config(start: Path | None = None) -> dict:
         "engineVersion": DEFAULT_ENGINE_VERSION,
         "indexNamespace": DEFAULT_INDEX_NAMESPACE,
         "indexPath": str(FALLBACK_INDEX_REL).replace("/", "\\"),
-        "defaultEngineRoot": r"C:\Program Files\Epic Games\UE_5.8",
+        "defaultEngineRoot": "",
         "knowledgeRoots": {
             "guidelines": "RAG_Project_Guidelines",
             "gameDesign": "Game_Design_Docs",
@@ -152,6 +152,30 @@ def resolve_engine_version(start: Path | None = None) -> str:
     return DEFAULT_ENGINE_VERSION
 
 
+def _program_files_epic_roots() -> list[Path]:
+    roots: list[Path] = []
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            roots.append(Path(value) / "Epic Games")
+    return roots
+
+
+def _discover_engine_roots() -> list[Path]:
+    candidates: list[Path] = []
+    for epic_root in _program_files_epic_roots():
+        if not epic_root.is_dir():
+            continue
+        candidates.extend(
+            sorted(
+                (path for path in epic_root.glob("UE_5.*") if path.is_dir()),
+                key=lambda path: path.name,
+                reverse=True,
+            )
+        )
+    return candidates
+
+
 def resolve_index_namespace(start: Path | None = None) -> str:
     config = load_workspace_config(start)
     namespace = str(config.get("indexNamespace") or "").strip()
@@ -196,11 +220,18 @@ def resolve_engine_root(start: Path | None = None) -> Path:
     ):
         if source:
             return Path(source).expanduser().resolve()
-    return Path(r"C:\Program Files\Epic Games\UE_5.8").resolve()
+    for candidate in _discover_engine_roots():
+        return candidate.resolve()
+    return Path("")
 
 
 def resolve_ubt_path(start: Path | None = None) -> Path:
+    env_ubt = os.environ.get("UNREAL_UBT_PATH", "").strip()
+    if env_ubt:
+        return Path(env_ubt).expanduser().resolve()
     engine_root = resolve_engine_root(start)
+    if str(engine_root) in {"", "."}:
+        return Path("UnrealBuildTool.exe")
     return (
         engine_root
         / "Engine"

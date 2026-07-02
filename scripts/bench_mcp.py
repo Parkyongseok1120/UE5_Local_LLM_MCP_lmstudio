@@ -17,13 +17,11 @@ from typing import Any
 from rag_embeddings import embedding_status
 from rag_index_ops import index_health
 from rag_search import SearchOptions, search, search_hybrid
-from workspace_paths import resolve_index_path
+from workspace_paths import resolve_index_path, resolve_ubt_path
 
 FALLBACK_INDEX = Path("data/unreal58/rag.sqlite")
 
-DEFAULT_UBT = Path(
-    r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
-)
+DEFAULT_UBT = resolve_ubt_path()
 
 SEARCH_QUERIES = [
     ("codegen_component", "UActorComponent C++ example BeginPlay", "codegen"),
