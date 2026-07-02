@@ -30,6 +30,29 @@ The forward target is now a Sonnet 4.5-oriented local Unreal workflow. This is a
 
 Compact-model optimization tracks include Qwen 3.5 9B, Qwen3.5-9B-DeepSeek-V4-Flash-GGUF, GPT OSS 20B, and gpt-oss-20b-claude-opus-sonnet-reasoning-i1-GGUF community fine-tunes. See [docs/Model_Profiles.md](docs/Model_Profiles.md).
 
+### Observed Local Model Ranking
+
+This ranking is **not a global model benchmark**. It is the observed behavior inside this repository's Unreal-specific loop:
+
+```text
+LM Studio
++ MCP Essential Tools
++ strict project-filtered RAG
++ Unreal symbol / range lookup
++ static validation
++ UBT compile wrapper
+```
+
+Within that loop, the current practical ranking is:
+
+| Model profile | Practical behavior in this project | Claude Sonnet rough equivalent |
+|---|---|---|
+| `qwen3_6_27b` | Best local track for broader Unreal C++ agent work, deeper retrieval, and limited refactor loops. | Upper Sonnet 3.7 to lower Sonnet 4, UE C++ only |
+| `qwen3_5_9b` / `qwen3_5_9b_deepseek_v4_flash` | Usually more reliable than base GPT OSS 20B for MCP tool calls, compact patch loops, and compile-fix workflows. | Upper Sonnet 3.5 to mid Sonnet 3.7, narrow UE tasks |
+| `gpt_oss_20b` | Useful, but more variable in MCP/JSON/tool-call loops; prefer Qwen 9B or Qwen 27B when available. | Around Sonnet 3.5 for this workflow |
+
+In short: **Qwen 3.5 9B can outperform base GPT OSS 20B in this project** because the agent stack favors models that follow tool-call, patch, symbol-lookup, and validation discipline reliably. This does **not** mean Qwen 9B is generally smarter than every 20B model; it means it is a better fit for this Unreal RAG/MCP/UBT automation loop.
+
 Old name: **Unreal58-RAG**. Officially tested on **UE 5.8**. Other 5.x versions can work, but build your own index from **your** licensed UE install (BYOI).
 
 > **BYOI** = Bring Your Own Index. This repo ships **tooling only**: not Epic source, not a pre-built `rag.sqlite`.
