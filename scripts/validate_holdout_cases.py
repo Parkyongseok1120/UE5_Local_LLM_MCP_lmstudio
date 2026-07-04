@@ -56,7 +56,7 @@ def _contains_private_path(value: Any) -> bool:
     return any(pattern.search(text) for pattern in PUBLIC_PATH_PATTERNS)
 
 
-def validate_cases(config: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+def validate_cases(config: dict[str, Any], *, allow_local_paths: bool = False) -> tuple[list[str], dict[str, Any]]:
     errors: list[str] = []
     warnings: list[str] = []
     cases = config.get("cases") if isinstance(config, dict) else None
@@ -82,7 +82,7 @@ def validate_cases(config: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
         categories.add(category)
         if category not in ALLOWED_CATEGORIES:
             errors.append(f"{label}: unsupported category: {category}")
-        if _contains_private_path(case):
+        if not allow_local_paths and _contains_private_path(case):
             errors.append(f"{label}: contains local/private absolute path")
         if not any(case.get(key) for key in ("errorLog", "buildLog", "fixtureDir")):
             errors.append(f"{label}: must include errorLog, buildLog, or fixtureDir")
@@ -126,6 +126,11 @@ def validate_cases(config: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate real-project holdout case config.")
     parser.add_argument("--config", type=Path, default=Path("config/rag_eval_real_project_holdout_cases.json"))
+    parser.add_argument(
+        "--allow-local-paths",
+        action="store_true",
+        help="Allow private local absolute paths for ignored .local.json live baseline configs.",
+    )
     args = parser.parse_args()
 
     try:
@@ -134,7 +139,7 @@ def main() -> int:
         print(f"failed to read {args.config}: {exc}", file=sys.stderr)
         return 1
 
-    errors, summary = validate_cases(config)
+    errors, summary = validate_cases(config, allow_local_paths=args.allow_local_paths)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if errors:
         print("Validation errors:", file=sys.stderr)

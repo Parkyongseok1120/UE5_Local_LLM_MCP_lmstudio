@@ -14,6 +14,7 @@ data/baseline/*
 !data/baseline/live_holdout/
 data/baseline/live_holdout/*
 !data/baseline/live_holdout/.gitkeep
+data/local_holdout_fixtures/
 data/wrapper_runs/
 data/scaffold_runs/
 node_modules/

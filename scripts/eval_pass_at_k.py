@@ -201,6 +201,7 @@ def run_case(
     url: str,
     model: str,
     wrapper_timeout: int = 0,
+    artifact_dir: Path | None = None,
 ) -> dict:
     case_id = case["id"]
     mode_label = "dry-run" if dry_run else "live"
@@ -251,6 +252,16 @@ def run_case(
             ubt_path,
             wrapper_timeout=wrapper_timeout,
         )
+        artifact_run_dir = ""
+        if artifact_dir:
+            src_run_dir = work_dir / "wrapper_run"
+            dest_run_dir = artifact_dir / case_id / "wrapper_run"
+            if src_run_dir.is_dir():
+                if dest_run_dir.exists():
+                    shutil.rmtree(dest_run_dir)
+                dest_run_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(src_run_dir, dest_run_dir)
+                artifact_run_dir = str(dest_run_dir)
         return {
             "id": case_id,
             "pass": ok,
@@ -258,6 +269,7 @@ def run_case(
             "detail": detail[:800],
             "attempts": attempts,
             "passAt1": ok and attempts <= 1,
+            "artifactRunDir": artifact_run_dir,
             **retry_metrics,
         }
 
@@ -280,6 +292,8 @@ def main() -> int:
                         help="Fast KPI aggregation smoke; does not invoke UBT or LM Studio.")
     parser.add_argument("--retry-state-fixture", type=Path, default=None,
                         help="Optional directory containing <case-id>/retry_state.json or <case-id>.json fixtures.")
+    parser.add_argument("--artifact-dir", type=Path, default=None,
+                        help="Optional directory to preserve live wrapper run artifacts per case.")
     args = parser.parse_args()
 
     config = json.loads((ROOT / args.config).read_text(encoding="utf-8-sig"))
@@ -320,6 +334,7 @@ def main() -> int:
                 url=args.url,
                 model=resolved_model,
                 wrapper_timeout=args.wrapper_timeout,
+                artifact_dir=args.artifact_dir,
             )
             results.append(result)
             if args.early_exit:

@@ -20,6 +20,12 @@ config/rag_eval_real_project_holdout_cases.local.json
 
 Start from `config/rag_eval_real_project_holdout_cases.local.example.json`, then replace placeholder `fixtureDir` and `projectFile` values with your own local fixtures. The public holdout config should stay path-free and fixture-style; do not commit private project paths or live project names.
 
+Local configs may contain private absolute paths, so validate them with:
+
+```powershell
+python scripts/validate_holdout_cases.py --config config/rag_eval_real_project_holdout_cases.local.json --allow-local-paths
+```
+
 ## Validation
 
 Run the holdout config validator:
