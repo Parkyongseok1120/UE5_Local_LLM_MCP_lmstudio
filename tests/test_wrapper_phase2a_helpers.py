@@ -44,3 +44,40 @@ def test_optional_symbol_graph_context_missing_graph_is_empty(monkeypatch):
     monkeypatch.setattr(wrapper, "load_symbol_graph", lambda: {"version": 1, "symbols": []})
 
     assert wrapper.optional_symbol_graph_context("ADemoActor C1083") == ""
+
+
+def test_rag_telemetry_summary_counts_sidecars(tmp_path):
+    rows = [
+        {"source": "project_guideline", "layer": "compile_fix", "resolved_mode": "module_fix"},
+        {
+            "source": "rag_sidecar",
+            "sidecarType": "module_resolver",
+            "items": [{"module": "UMG"}],
+            "resolved_mode": "module_fix",
+        },
+        {
+            "source": "rag_sidecar",
+            "sidecarType": "error_route",
+            "items": [{"broadMode": "module_fix", "errorSubkind": "C1083_MISSING_INCLUDE"}],
+            "resolved_mode": "module_fix",
+        },
+    ]
+
+    telemetry = wrapper.summarize_rag_telemetry(
+        query="C1083 UserWidget.h",
+        requested_mode="module_fix",
+        selected_mode="module_fix",
+        rows=rows,
+        context="abc",
+    )
+    wrapper.write_rag_telemetry(tmp_path, telemetry)
+
+    assert telemetry["normalRowCount"] == 1
+    assert telemetry["sidecarRowCount"] == 2
+    assert telemetry["sidecarCountsByType"] == {"module_resolver": 1, "error_route": 1}
+    assert telemetry["suspectedModules"] == ["UMG"]
+    assert (tmp_path / "rag_telemetry.jsonl").is_file()
+
+
+def test_write_rag_telemetry_without_run_dir_is_noop():
+    wrapper.write_rag_telemetry(None, {"query": "noop"})

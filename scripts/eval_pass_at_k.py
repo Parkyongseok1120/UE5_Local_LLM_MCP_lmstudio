@@ -203,9 +203,20 @@ def run_case(
     wrapper_timeout: int = 0,
 ) -> dict:
     case_id = case["id"]
+    mode_label = "dry-run" if dry_run else "live"
+    if not case.get("fixtureDir") or not case.get("projectFile"):
+        return {
+            "id": case_id,
+            "pass": False,
+            "mode": mode_label,
+            "error": "fixture-only holdout case is not live-applicable: missing fixtureDir/projectFile",
+            "detail": "This case can be used for metrics-only validation, taxonomy checks, and module resolver checks. A live UBT run requires a fixtureDir and projectFile.",
+            "attempts": 0,
+            "passAt1": False,
+        }
     fixture_dir = (ROOT / case["fixtureDir"]).resolve()
     if not fixture_dir.is_dir():
-        return {"id": case_id, "pass": False, "error": f"fixture missing: {fixture_dir}"}
+        return {"id": case_id, "pass": False, "mode": mode_label, "error": f"fixture missing: {fixture_dir}"}
 
     with tempfile.TemporaryDirectory(prefix=f"passatk_{case_id}_") as tmp:
         work_dir = Path(tmp)

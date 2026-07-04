@@ -22,4 +22,8 @@ collect_* → raw_*.jsonl → build_rag_index.py → rag.sqlite (FTS)
 
 Phases 14-23: see [Advanced_Architecture.md](Advanced_Architecture.md).
 
+## Optional Retrieval Sidecars
+
+`rag_search.py` can add compact `rag_sidecar` rows for symbol graph hits, module resolver hints, and error-route hints. These sidecars are optional: missing `data/symbol_graph/symbol_graph.json` does not block search, and sidecars never replace normal FTS results.
+
 See [Safe_Agent_Mode.md](Safe_Agent_Mode.md), [Project_Routing.md](Project_Routing.md), [Build_Cs_Parser.md](Build_Cs_Parser.md).

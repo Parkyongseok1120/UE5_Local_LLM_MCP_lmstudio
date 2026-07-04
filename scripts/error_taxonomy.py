@@ -8,8 +8,8 @@ from typing import Any
 
 # Granular subkinds mapped to broad RAG modes
 SUBKIND_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
+    ("GENERATED_H_NOT_LAST", "reflection_fix", re.compile(r"generated\.h.*(?:must be|should always be).*last\s+#?include", re.I)),
     ("GENERATED_H_MISSING", "reflection_fix", re.compile(r"generated\.h.*not found|include.*\.generated\.h", re.I)),
-    ("GENERATED_H_NOT_LAST", "reflection_fix", re.compile(r"generated\.h.*must be the last include", re.I)),
     ("GENERATED_H_DUPLICATE", "reflection_fix", re.compile(r"duplicate.*generated\.h", re.I)),
     ("UHT_REFLECTED_TYPE_IN_NAMESPACE", "reflection_fix", re.compile(r"reflected types cannot be declared in a namespace", re.I)),
     ("UHT_MISSING_BODY_MACRO", "reflection_fix", re.compile(r"GENERATED_BODY|missing.*UCLASS|USTRUCT", re.I)),

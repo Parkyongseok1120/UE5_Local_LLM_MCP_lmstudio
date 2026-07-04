@@ -9,7 +9,10 @@ config/workspace.json
 config/workspace.local.json
 config/lmstudio_mcp_unreal_rag.json
 config/continue_*.config.yaml
-data/baseline/
+data/baseline/*
+!data/baseline/live_holdout/
+data/baseline/live_holdout/*
+!data/baseline/live_holdout/.gitkeep
 data/wrapper_runs/
 data/scaffold_runs/
 node_modules/

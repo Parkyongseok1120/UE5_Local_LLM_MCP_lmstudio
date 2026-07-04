@@ -2170,7 +2170,78 @@ def changed_files_from_feedback(
     return list(dict.fromkeys(paths))
 
 
-def collect_rag_context(args: argparse.Namespace, request: str, *, top_k: int | None = None) -> str:
+def summarize_rag_telemetry(
+    *,
+    query: str,
+    requested_mode: str,
+    selected_mode: str,
+    rows: list[dict[str, Any]],
+    context: str,
+) -> dict[str, Any]:
+    sidecar_rows = [row for row in rows if row.get("source") == "rag_sidecar"]
+    normal_rows = [row for row in rows if row.get("source") != "rag_sidecar"]
+    sidecar_counts: dict[str, int] = {}
+    suspected_modules: list[str] = []
+    error_route: dict[str, Any] = {}
+    for row in sidecar_rows:
+        sidecar_type = str(row.get("sidecarType") or row.get("symbol_kind") or "")
+        sidecar_counts[sidecar_type] = sidecar_counts.get(sidecar_type, 0) + 1
+        for item in row.get("items") or []:
+            if sidecar_type == "module_resolver":
+                module = str(item.get("module") or "")
+                if module and module not in suspected_modules:
+                    suspected_modules.append(module)
+            if sidecar_type == "error_route" and not error_route:
+                error_route = {
+                    "broadMode": item.get("broadMode", ""),
+                    "errorSubkind": item.get("errorSubkind", ""),
+                }
+    sources: dict[str, int] = {}
+    layers: dict[str, int] = {}
+    final_modes: list[str] = []
+    for row in rows:
+        source = str(row.get("source") or "")
+        layer = str(row.get("layer") or "")
+        mode = str(row.get("resolved_mode") or "")
+        if source:
+            sources[source] = sources.get(source, 0) + 1
+        if layer:
+            layers[layer] = layers.get(layer, 0) + 1
+        if mode and mode not in final_modes:
+            final_modes.append(mode)
+    return {
+        "query": query[:1000],
+        "selectedMode": selected_mode,
+        "requestedModes": [requested_mode] if requested_mode else [],
+        "finalModesUsed": final_modes,
+        "normalRowCount": len(normal_rows),
+        "sidecarRowCount": len(sidecar_rows),
+        "sidecarCountsByType": sidecar_counts,
+        "topSources": dict(sorted(sources.items(), key=lambda item: item[1], reverse=True)[:8]),
+        "topLayers": dict(sorted(layers.items(), key=lambda item: item[1], reverse=True)[:8]),
+        "symbolGraphFileExists": (Path(__file__).resolve().parent.parent / "data" / "symbol_graph" / "symbol_graph.json").is_file(),
+        "suspectedModules": suspected_modules[:5],
+        "errorRoute": error_route,
+        "contextCharCount": len(context),
+    }
+
+
+def write_rag_telemetry(run_dir: Path | None, record: dict[str, Any]) -> None:
+    if not run_dir:
+        return
+    path = run_dir / "rag_telemetry.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def collect_rag_context(
+    args: argparse.Namespace,
+    request: str,
+    *,
+    top_k: int | None = None,
+    run_dir: Path | None = None,
+) -> str:
     index = Path(args.index)
     if not index.exists():
         return f"RAG index does not exist: {index}"
@@ -2186,13 +2257,26 @@ def collect_rag_context(args: argparse.Namespace, request: str, *, top_k: int | 
             candidate_limit=max(40, effective_top_k * candidate_scale),
         ),
     )
-    return assemble_context(rows, request, args.mode)
+    context = assemble_context(rows, request, args.mode)
+    write_rag_telemetry(
+        run_dir,
+        summarize_rag_telemetry(
+            query=request,
+            requested_mode=args.mode,
+            selected_mode=args.mode,
+            rows=rows,
+            context=context,
+        ),
+    )
+    return context
 
 
 def collect_delta_rag_context(
     args: argparse.Namespace,
     query_parts: list[str],
     changed_files: list[str],
+    *,
+    run_dir: Path | None = None,
 ) -> str:
     index = Path(args.index)
     if not index.exists():
@@ -2210,7 +2294,18 @@ def collect_delta_rag_context(
         effective_top_k,
         SearchOptions(mode="compile_fix", candidate_limit=max(30, effective_top_k * candidate_scale)),
     )
-    return assemble_context(rows, query, "compile_fix")
+    context = assemble_context(rows, query, "compile_fix")
+    write_rag_telemetry(
+        run_dir,
+        summarize_rag_telemetry(
+            query=query,
+            requested_mode="compile_fix",
+            selected_mode="compile_fix",
+            rows=rows,
+            context=context,
+        ),
+    )
+    return context
 
 
 def format_findings(findings: list[Finding]) -> str:
@@ -2811,7 +2906,7 @@ def run(args: argparse.Namespace) -> int:
         agent_plan_block = format_plan_for_prompt(plan) + "\n\n"
         write_file(run_dir / "agent_plan.json", json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
 
-    rag_context = collect_rag_context(args, request)
+    rag_context = collect_rag_context(args, request, run_dir=run_dir)
     symbol_context = optional_symbol_graph_context(request)
     if symbol_context:
         rag_context = rag_context + "\n\n" + symbol_context
@@ -2900,12 +2995,12 @@ def run(args: argparse.Namespace) -> int:
             query_parts = [request]
             if last_build_records:
                 query_parts.append(build_error_query(last_build_records, last_build.output if last_build else ""))
-            rag_context = collect_delta_rag_context(args, query_parts, changed_files)
+            rag_context = collect_delta_rag_context(args, query_parts, changed_files, run_dir=run_dir)
             symbol_context = optional_symbol_graph_context(" ".join(query_parts))
             if symbol_context:
                 rag_context = rag_context + "\n\n" + symbol_context
         elif attempt == 1:
-            rag_context = collect_rag_context(args, request)
+            rag_context = collect_rag_context(args, request, run_dir=run_dir)
             symbol_context = optional_symbol_graph_context(request)
             if symbol_context:
                 rag_context = rag_context + "\n\n" + symbol_context

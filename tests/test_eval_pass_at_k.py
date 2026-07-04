@@ -82,3 +82,51 @@ def test_metrics_only_cli_does_not_require_ubt(tmp_path):
     assert proc.returncode == 0
     assert "metrics-only" in proc.stdout
     assert "Wrote" in proc.stdout
+
+
+def test_holdout_config_metrics_only_cli_loads_without_ubt(tmp_path):
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "eval_pass_at_k.py"),
+            "--metrics-only",
+            "--config",
+            "config/rag_eval_real_project_holdout_cases.json",
+            "--ubt-path",
+            str(tmp_path / "missing" / "UnrealBuildTool.exe"),
+        ],
+        cwd=str(WORKSPACE),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=20,
+    )
+
+    assert proc.returncode == 0
+    assert "Pass@K summary: 12/12" in proc.stdout
+    assert "holdout_gameplaytags_missing_module" in proc.stdout
+
+
+def test_fixture_only_holdout_case_reports_not_live_applicable(tmp_path):
+    case = {
+        "id": "holdout_fixture_only",
+        "mode": "module_fix",
+        "errorLog": "fatal error C1083: Cannot open include file: 'EnhancedInputComponent.h'",
+    }
+
+    result = __import__("eval_pass_at_k").run_case(
+        case,
+        dry_run=False,
+        ubt_path=tmp_path / "UnrealBuildTool.exe",
+        ubt_timeout=1,
+        max_attempts=1,
+        url="http://localhost:1234/v1",
+        model="",
+        wrapper_timeout=1,
+    )
+
+    assert result["pass"] is False
+    assert result["mode"] == "live"
+    assert "not live-applicable" in result["error"]

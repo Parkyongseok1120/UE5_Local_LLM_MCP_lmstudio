@@ -29,3 +29,17 @@ python scripts/eval_pass_at_k.py --metrics-only --config config/rag_eval_pass_at
 ```
 
 `--metrics-only` does not invoke UBT, does not call LM Studio, and is not a substitute for live or dry-run compile-fix evaluation.
+
+## Telemetry Reports
+
+`rag_telemetry.jsonl` and `retry_state.json` are evidence for how the workflow behaved: which sidecars were used, whether errors repeated, and how many attempts were needed. They are not proof of model improvement by themselves.
+
+Use `scripts/report_eval_kpi.py` to render an observed telemetry report and, when possible, compare against a previous KPI baseline. Add `--suite-name` and `--suite-type` so fixture-only, real-project-holdout, and live-ubt evidence are not mixed.
+
+Example fixture-only holdout report:
+
+```powershell
+python scripts/report_eval_kpi.py data/baseline/pass-at-k-kpi.json --suite-name real-project-holdout-v0 --suite-type fixture-only --out-md data/baseline/holdout-fixture-report.md --out-json data/baseline/holdout-fixture-summary.json
+```
+
+Live eval plus baseline comparison is required before making compile-fix improvement claims. Fixture-only holdout validation is useful coverage, but it is not a substitute for live UBT compile-fix evaluation.

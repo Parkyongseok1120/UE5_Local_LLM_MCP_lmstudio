@@ -36,6 +36,31 @@ Suggested safe wording:
 - Symbol graph hints are optional and compact; existing workflows continue when `data/symbol_graph/symbol_graph.json` is absent.
 - This remains a Sonnet 5 gap-analysis workflow target, not a Sonnet 5 equivalence claim.
 
+## Phase 2B-1 Retrieval Sidecars
+
+- `rag_search.py` now adds optional structured sidecars for compile/module/reflection fixes and refactor modes.
+- Symbol graph sidecars use `data/symbol_graph/symbol_graph.json` when present and silently skip when absent.
+- Module resolver sidecars add suspected Unreal module hints for known headers/types such as Enhanced Input, UMG, Niagara, AI, Navigation, and GameplayTags.
+- Error route sidecars expose taxonomy routing hints and preferred RAG modes without enforcing patch targets.
+- Sidecars are capped and compact; they bias retrieval context but do not replace normal FTS/RAG results.
+- This is still a workflow gap-analysis improvement, not a Sonnet 5 equivalence claim.
+
+## Phase 2B-2 Eval Telemetry
+
+- Wrapper RAG assembly can write compact `rag_telemetry.jsonl` records when a run directory exists.
+- Telemetry records count normal rows, sidecar rows, sidecar types, suspected modules, error routes, top sources/layers, and context size.
+- `report_eval_kpi.py` summarizes KPI JSON, retry state, RAG telemetry, and optional baseline deltas.
+- Telemetry is collected before hard enforcement so sidecar impact can be measured before adding constraints.
+- Live UBT eval is required before claiming compile-fix workflow improvement.
+
+## Phase 2B-3 Holdout Eval Foundation
+
+- `config/rag_eval_real_project_holdout_cases.json` defines a public-safe `real-project-holdout-v0` fixture suite for Unreal compile/module/reflection failure patterns.
+- `validate_holdout_cases.py` checks required fields, duplicate IDs, public path hygiene, taxonomy coverage, and module resolver coverage without requiring Unreal Engine, LM Studio, or network access.
+- Holdout reports can now be labeled with `--suite-name` and `--suite-type` to separate fixture-only evidence from live UBT evidence.
+- This phase improves evaluation credibility before allowedPatchTargets enforcement or stronger stop conditions.
+- Fixture-only holdout success is not a live compile-fix success claim.
+
 ## External Rails
 
 The local Qwen workflow should improve through:
@@ -50,8 +75,6 @@ These rails help approximate long-context agentic coding behavior around a local
 
 ## Deferred Phase 2
 
-- Integrate symbol graph lookup into RAG/tool policy.
 - Enforce taxonomy-driven required reads in the orchestrator.
 - Integrate Build.cs resolver suggestions into `module_fix` prompts and wrapper retry context.
-- Expand real-project holdout evals.
 - Add a `refactor_r0-r4` multi-file eval suite.

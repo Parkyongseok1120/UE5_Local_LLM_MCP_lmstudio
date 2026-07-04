@@ -29,6 +29,7 @@ SOURCE_TYPE_LABELS = {
     "unreal_anim_montage_metadata": "AnimMontage metadata export",
     "unreal_sequencer_metadata": "Sequencer metadata export",
     "unreal_failure_memory": "Prior compile fix memory (hint only)",
+    "rag_sidecar": "Structured retrieval sidecar (hint only)",
 }
 
 SECTION_LABELS = [
@@ -356,6 +357,13 @@ def bucket_for_row(row: dict[str, Any]) -> str:
         return "agent_rules"
     if source == "build_log" or doc_type == "build_error":
         return "build_errors"
+    if source == "rag_sidecar":
+        sidecar_type = str(row.get("sidecarType") or row.get("symbol_kind") or "")
+        if sidecar_type in {"module_resolver", "error_route"}:
+            return "module_evidence"
+        if sidecar_type == "symbol_graph":
+            return "target_symbols"
+        return "other"
     if source == "project_profile":
         return "project_profile"
     if source in {

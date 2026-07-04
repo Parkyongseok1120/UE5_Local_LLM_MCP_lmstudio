@@ -6,6 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import hashlib
+import json
 import re
 import sqlite3
 
@@ -13,6 +15,25 @@ import sqlite3
 TERM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[\uac00-\ud7a3]+")
 
 _conn_cache: dict[str, sqlite3.Connection] = {}
+
+SIDECAR_RAG_MODES = {
+    "compile_fix",
+    "module_fix",
+    "reflection_fix",
+    "refactor_r0",
+    "refactor_r1",
+    "refactor_r2",
+    "refactor_r3",
+    "refactor_r4",
+}
+MODULE_QUERY_MARKERS = (
+    "c1083",
+    "cannot open include",
+    "missing include",
+    "missing module",
+    "module dependency",
+    "build.cs",
+)
 
 
 def get_index_connection(index: Path) -> sqlite3.Connection:
@@ -38,6 +59,164 @@ def _header_basenames_from_query(query: str) -> list[str]:
     """Extract Unreal-style header basenames from a query (e.g. GameplayTagContainer.h)."""
     found = re.findall(r"[A-Za-z_][A-Za-z0-9_]*\.h(?:pp)?", query, flags=re.IGNORECASE)
     return list(dict.fromkeys(b.lower() for b in found))
+
+
+def _sidecar_row(
+    *,
+    sidecar_type: str,
+    title: str,
+    items: list[dict[str, Any]],
+    mode: str,
+    locator: str = "",
+) -> dict[str, Any]:
+    payload = {"sidecarType": sidecar_type, "items": items}
+    digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    return {
+        "chunk_id": f"sidecar:{sidecar_type}:{digest}",
+        "source": "rag_sidecar",
+        "title": title,
+        "locator": locator or sidecar_type,
+        "chunk_index": 0,
+        "text": json.dumps(payload, ensure_ascii=False, indent=2),
+        "symbol_name": "",
+        "symbol_kind": sidecar_type,
+        "module_name": "",
+        "score": -9000.0,
+        "sidecarType": sidecar_type,
+        "items": items,
+        "resolved_mode": mode,
+    }
+
+
+def _symbol_candidates_from_query(query: str) -> list[str]:
+    found: list[str] = []
+    patterns = (
+        r"\b[AUFSI][A-Z][A-Za-z0-9_]{2,}\b",
+        r"\b[A-Z][A-Za-z0-9_]+(?:Component|Subsystem|Character|Actor|GameMode|Widget|Interface)\b",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, query or ""):
+            symbol = match.group(0)
+            if symbol not in found and not symbol.endswith(".h"):
+                found.append(symbol)
+    return found[:12]
+
+
+def fetch_symbol_graph_sidecar(query: str, mode: str, limit: int = 5) -> list[dict[str, Any]]:
+    if mode not in SIDECAR_RAG_MODES:
+        return []
+    try:
+        from symbol_graph import load_symbol_graph, lookup_symbol
+    except Exception:
+        return []
+    graph = load_symbol_graph()
+    if not graph.get("symbols"):
+        return []
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, int]] = set()
+    for symbol in _symbol_candidates_from_query(query):
+        for row in lookup_symbol(symbol, graph, limit=2):
+            key = (
+                str(row.get("symbol_name") or ""),
+                str(row.get("file_path") or ""),
+                int(row.get("line_start") or 0),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(
+                {
+                    "symbol": row.get("symbol_name", ""),
+                    "kind": row.get("symbol_kind", ""),
+                    "file": row.get("file_path", ""),
+                    "lineStart": row.get("line_start", 0),
+                    "lineEnd": row.get("line_end", row.get("line_start", 0)),
+                    "module": row.get("module_name", ""),
+                    "ownerBuildCs": row.get("owner_build_cs", ""),
+                }
+            )
+            if len(items) >= limit:
+                return [_sidecar_row(sidecar_type="symbol_graph", title="Symbol graph sidecar", items=items, mode=mode)]
+    return [_sidecar_row(sidecar_type="symbol_graph", title="Symbol graph sidecar", items=items, mode=mode)] if items else []
+
+
+def query_looks_module_fix(query: str, mode: str) -> bool:
+    raw = query.lower()
+    return mode == "module_fix" or any(marker in raw for marker in MODULE_QUERY_MARKERS)
+
+
+def fetch_module_resolver_sidecar(query: str, mode: str, limit: int = 5) -> list[dict[str, Any]]:
+    if not query_looks_module_fix(query, mode):
+        return []
+    try:
+        from module_resolver import resolve_modules_from_error, resolve_modules_from_text
+    except Exception:
+        return []
+    modules: list[str] = []
+    for module in [*resolve_modules_from_error(query), *resolve_modules_from_text(query)]:
+        if module not in modules:
+            modules.append(module)
+    if not modules:
+        return []
+    items = [
+        {
+            "module": module,
+            "hint": "Read owner Build.cs and include-owner evidence before deciding whether to patch dependency or source include.",
+        }
+        for module in modules[:limit]
+    ]
+    return [
+        _sidecar_row(
+            sidecar_type="module_resolver",
+            title="Module resolver sidecar",
+            items=items,
+            mode=mode,
+            locator="Build.cs/module hint",
+        )
+    ]
+
+
+def fetch_error_route_sidecar(query: str, mode: str, limit: int = 3) -> list[dict[str, Any]]:
+    if mode not in {"compile_fix", "module_fix", "reflection_fix"}:
+        return []
+    try:
+        from error_taxonomy import route_error_action
+    except Exception:
+        return []
+    route = route_error_action(query)
+    if not route:
+        return []
+    items = [
+        {
+            "errorSubkind": route.get("errorSubkind", ""),
+            "broadMode": route.get("broadMode", ""),
+            "preferredRagModes": list(route.get("preferredRagModes") or [])[:limit],
+            "requiredReads": list(route.get("requiredReads") or [])[:limit],
+            "allowedPatchTargets": list(route.get("allowedPatchTargets") or [])[:limit],
+            "forbiddenActions": list(route.get("forbiddenActions") or [])[:limit],
+            "notes": list(route.get("notes") or [])[:limit],
+        }
+    ]
+    return [
+        _sidecar_row(
+            sidecar_type="error_route",
+            title="Error route sidecar",
+            items=items,
+            mode=mode,
+            locator=str(route.get("broadMode") or mode),
+        )
+    ]
+
+
+def preferred_modes_from_error_route(query: str, mode: str) -> list[str]:
+    if mode not in {"compile_fix", "module_fix", "reflection_fix"}:
+        return []
+    try:
+        from error_taxonomy import route_error_action
+    except Exception:
+        return []
+    route = route_error_action(query)
+    return [str(item) for item in route.get("preferredRagModes") or [] if str(item) in VALID_MODES]
 
 
 def fetch_module_graph_sidecar(
@@ -1451,6 +1630,7 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
     options = options or SearchOptions()
     mode = resolve_mode(query, options.mode)
     effective_query = query
+    preferred_modes: list[str] = []
     if mode in {"compile_fix", "module_fix", "reflection_fix"}:
         try:
             from failure_memory_rerank import expand_query_with_memory
@@ -1460,6 +1640,9 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
             effective_query = expand_query_with_memory(query, mem_dir, project=project)
         except Exception:
             effective_query = query
+        preferred_modes = preferred_modes_from_error_route(query, mode)
+        if preferred_modes:
+            effective_query = f"{effective_query} {' '.join(preferred_modes)}"
     if mode == "agent_edit":
         effective_query = (
             query
@@ -1583,6 +1766,9 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
         mode == "implementation" and "project profile" in query.lower()
     ) or query_wants_taxonomy_sidecar(query, mode):
         guideline_sidecar = fetch_guideline_sidecar(conn, mode, query, limit=max(8, top_k))
+        for preferred_mode in preferred_modes_from_error_route(query, mode):
+            if preferred_mode != mode:
+                guideline_sidecar.extend(fetch_guideline_sidecar(conn, preferred_mode, query, limit=4))
         profile_boost = 200.0 if mode == "implementation" else 120.0
         ranked = merge_ranked_sidecar(
             ranked,
@@ -1615,6 +1801,19 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
                 merged_map.values(),
                 key=lambda row: (float(row.get("rank_score") or 0.0), float(row.get("score") or 0.0)),
             )
+
+    structured_sidecars: list[dict[str, Any]] = []
+    structured_sidecars.extend(fetch_error_route_sidecar(query, mode, limit=3))
+    structured_sidecars.extend(fetch_module_resolver_sidecar(effective_query, mode, limit=5))
+    structured_sidecars.extend(fetch_symbol_graph_sidecar(query, mode, limit=5))
+    if structured_sidecars:
+        ranked = merge_ranked_sidecar(
+            ranked,
+            structured_sidecars,
+            query_terms,
+            mode,
+            extra_boost=160.0,
+        )
 
     from retrieval_profiles import apply_retrieval_layer_bonus
 
