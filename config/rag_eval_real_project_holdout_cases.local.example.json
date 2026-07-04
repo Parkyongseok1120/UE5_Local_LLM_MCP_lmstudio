@@ -1,0 +1,89 @@
+{
+  "description": "Public-safe template for a private local live UBT holdout baseline. Copy to config/rag_eval_real_project_holdout_cases.local.json and replace placeholders with your own ignored local fixture paths.",
+  "suite": "real-project-holdout-local-v0",
+  "tier": "real-project-holdout",
+  "defaults": {
+    "maxAttempts": 5,
+    "minPassRate": 0.6,
+    "ubtTimeout": 900,
+    "reportPassAt1": true
+  },
+  "cases": [
+    {
+      "id": "local_gameplaytags_missing_module",
+      "category": "GameplayTags dependency issue",
+      "mode": "module_fix",
+      "fixtureDir": "<ABSOLUTE_OR_RELATIVE_FIXTURE_DIR>/gameplaytags_missing_dependency",
+      "projectFile": "<PATH_TO_PROJECT>.uproject",
+      "target": "<TARGET_NAME>Editor Win64 Development",
+      "requestFile": "request.txt",
+      "errorLog": "fatal error C1083: Cannot open include file: 'GameplayTagContainer.h': No such file or directory",
+      "expectedFilesToRead": ["Source/<Module>/<Module>.Build.cs", "failing source/header"],
+      "expectedPatchTargets": ["owner Build.cs"],
+      "forbiddenPatchTargets": ["unrelated gameplay class"],
+      "expectedModules": ["GameplayTags"],
+      "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
+      "notes": "Replace fixtureDir/projectFile with private local paths before a live UBT baseline."
+    },
+    {
+      "id": "local_enhanced_input_missing_module",
+      "category": "EnhancedInput dependency issue",
+      "mode": "module_fix",
+      "fixtureDir": "<ABSOLUTE_OR_RELATIVE_FIXTURE_DIR>/enhanced_input_missing_dependency",
+      "projectFile": "<PATH_TO_PROJECT>.uproject",
+      "target": "<TARGET_NAME>Editor Win64 Development",
+      "requestFile": "request.txt",
+      "errorLog": "fatal error C1083: Cannot open include file: 'EnhancedInputComponent.h': No such file or directory",
+      "expectedFilesToRead": ["Source/<Module>/<Module>.Build.cs", "failing input source/header"],
+      "expectedPatchTargets": ["owner Build.cs"],
+      "forbiddenPatchTargets": ["unrelated PlayerController rewrite"],
+      "expectedModules": ["EnhancedInput"],
+      "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
+      "notes": "Keep local project names and paths in the ignored .local.json copy only."
+    },
+    {
+      "id": "local_generated_h_not_last",
+      "category": "generated.h / UHT reflection error",
+      "mode": "reflection_fix",
+      "fixtureDir": "<ABSOLUTE_OR_RELATIVE_FIXTURE_DIR>/generated_h_not_last",
+      "projectFile": "<PATH_TO_PROJECT>.uproject",
+      "target": "<TARGET_NAME>Editor Win64 Development",
+      "requestFile": "request.txt",
+      "errorLog": "error: #include found after .generated.h file - the .generated.h file should always be the last #include in a header",
+      "expectedFilesToRead": ["failing reflected header"],
+      "expectedPatchTargets": ["failing header"],
+      "forbiddenPatchTargets": ["unrelated cpp rewrite"],
+      "expectedErrorSubkind": "GENERATED_H_NOT_LAST",
+      "notes": "Use a small fixture that isolates include ordering."
+    },
+    {
+      "id": "local_header_cpp_signature_mismatch",
+      "category": "header/cpp signature mismatch",
+      "mode": "compile_fix",
+      "fixtureDir": "<ABSOLUTE_OR_RELATIVE_FIXTURE_DIR>/header_cpp_signature_mismatch",
+      "projectFile": "<PATH_TO_PROJECT>.uproject",
+      "target": "<TARGET_NAME>Editor Win64 Development",
+      "requestFile": "request.txt",
+      "buildLog": "error C2511: overloaded member function not found in class",
+      "expectedFilesToRead": ["header declaration", "matching cpp file"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Prefer a tiny fixture where the only intended fix is signature alignment."
+    },
+    {
+      "id": "local_lnk2019_missing_cpp_definition",
+      "category": "unresolved external / missing cpp definition",
+      "mode": "compile_fix",
+      "fixtureDir": "<ABSOLUTE_OR_RELATIVE_FIXTURE_DIR>/lnk2019_missing_cpp_definition",
+      "projectFile": "<PATH_TO_PROJECT>.uproject",
+      "target": "<TARGET_NAME>Editor Win64 Development",
+      "requestFile": "request.txt",
+      "errorLog": "error LNK2019: unresolved external symbol \"public: void __cdecl UDemoComponent::StartDash(void)\" referenced in function",
+      "expectedFilesToRead": ["header declaration", "matching cpp file"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "expectedErrorSubkind": "LNK_MISSING_CPP_DEFINITION",
+      "notes": "Use this as one of the first five local live baseline cases."
+    }
+  ]
+}

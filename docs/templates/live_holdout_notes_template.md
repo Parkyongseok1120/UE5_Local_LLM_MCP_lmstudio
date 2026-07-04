@@ -3,11 +3,14 @@
 - Date/time:
 - Model profile:
 - LM Studio model name:
+- Quantization if known:
 - UE version:
 - Project name:
+- Active project:
 - Active project path: `[redacted/public-safe]`
+- UBT path:
 - Symbol graph built: yes/no
-- Eval config: `config/rag_eval_real_project_holdout_cases.json`
+- Eval config used:
 - Command used:
 
 ## Results
@@ -18,11 +21,11 @@
 - Repeated errors:
 - No-op edits:
 - Sidecar usage notes:
+- Known failures:
 
 ## Environment Notes
 
 - Known environment issues:
-- UnrealBuildTool path:
 - LM Studio server status:
 - Wrapper run directory:
 

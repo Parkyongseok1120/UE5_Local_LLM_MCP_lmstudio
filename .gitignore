@@ -7,6 +7,7 @@ __pycache__/
 *.sqlite
 config/workspace.json
 config/workspace.local.json
+config/rag_eval_real_project_holdout_cases.local.json
 config/lmstudio_mcp_unreal_rag.json
 config/continue_*.config.yaml
 data/baseline/*

@@ -46,6 +46,8 @@ These are workflow observations, not model-grade equivalence claims.
 
 Use this flow for a conservative `real-project-holdout-v0` baseline. Do not compare fixture-only results as if they were live UBT results, and do not claim improvement from a single run.
 
+`config/rag_eval_real_project_holdout_cases.json` is public-safe and fixture-style. It is useful for validation, taxonomy coverage, module resolver coverage, and metrics-only smoke, but it is not enough for true live UBT compile-fix claims. For an actual local live baseline, copy `config/rag_eval_real_project_holdout_cases.local.example.json` to the ignored `config/rag_eval_real_project_holdout_cases.local.json` and fill in real private `fixtureDir` and `projectFile` values. Do not commit local project paths.
+
 1. Validate holdout cases:
 
 ```powershell
@@ -94,3 +96,26 @@ python scripts/report_eval_kpi.py <kpi_json_path> --suite-name real-project-hold
 ```
 
 Use `docs/templates/live_holdout_notes_template.md` for the run notes. The claim status should remain: internal baseline only, not a public performance claim.
+
+## First Live Baseline
+
+Start with 5 local cases before expanding the suite:
+
+- GameplayTags Build.cs missing dependency
+- EnhancedInput Build.cs missing dependency
+- `generated.h` not last
+- header/cpp signature mismatch
+- LNK2019 missing cpp definition
+
+Command flow:
+
+```powershell
+python scripts/validate_holdout_cases.py --config config/rag_eval_real_project_holdout_cases.json
+python scripts/validate_holdout_cases.py --config config/rag_eval_real_project_holdout_cases.local.json
+python scripts/build_symbol_graph.py
+python scripts/eval_pass_at_k.py --metrics-only --config config/rag_eval_real_project_holdout_cases.local.json
+python scripts/eval_pass_at_k.py --live --require-live --config config/rag_eval_real_project_holdout_cases.local.json --model <lmstudio_model_name> --ubt-path <UnrealBuildTool.exe> --wrapper-timeout 1800
+python scripts/report_eval_kpi.py <kpi_json_path> --suite-name real-project-holdout-local-v0 --suite-type live-ubt --run-dir <wrapper_run_dir> --out-md <report.md> --out-json <summary.json>
+```
+
+Do not compare fixture-only metrics to live UBT metrics as if they are the same. Save `kpi.json`, `report.md`, `summary.json`, `rag_telemetry.jsonl`, `retry_state.json`, and `notes.md` together under `data/baseline/live_holdout/<timestamp>/`.

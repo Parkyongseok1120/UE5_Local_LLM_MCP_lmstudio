@@ -326,6 +326,10 @@ Maintainers: run `.\installer\Verify-Oss-Ready.ps1` before publishing a fork.
 | Eval risk register | [docs/Evaluation_Risk_Register.md](docs/Evaluation_Risk_Register.md) |
 | Real project validation | [docs/Real_Project_Validation_Plan.md](docs/Real_Project_Validation_Plan.md) |
 | Sonnet 4.5 target plan | [docs/Sonnet45_Target_Plan.md](docs/Sonnet45_Target_Plan.md) |
+| Sonnet 5 gap plan | [docs/Sonnet5_Gap_Plan.md](docs/Sonnet5_Gap_Plan.md) |
+| Eval metrics / telemetry | [docs/Eval_Metrics_Sonnet5_Gap.md](docs/Eval_Metrics_Sonnet5_Gap.md) |
+| Holdout eval guide | [docs/Holdout_Eval_Guide.md](docs/Holdout_Eval_Guide.md) |
+| Live eval checklist | [docs/Live_Eval_Checklist.md](docs/Live_Eval_Checklist.md) |
 | Model profiles | [docs/Model_Profiles.md](docs/Model_Profiles.md) |
 | Small models | [docs/Small_Model_Shortcut.md](docs/Small_Model_Shortcut.md) |
 | Community fine-tune optimization | [docs/Community_Finetune_Model_Optimization.md](docs/Community_Finetune_Model_Optimization.md) |

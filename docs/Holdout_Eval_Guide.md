@@ -12,6 +12,14 @@ Real-project holdouts are public-safe, fixture-style cases derived from common U
 
 `config/rag_eval_real_project_holdout_cases.json` is a fixture-only foundation for `real-project-holdout-v0`. It validates expected files to read, expected patch targets, forbidden patch targets, module hints, and taxonomy coverage. It does not prove a generated patch compiles.
 
+For a true local live UBT baseline, create an ignored private config:
+
+```text
+config/rag_eval_real_project_holdout_cases.local.json
+```
+
+Start from `config/rag_eval_real_project_holdout_cases.local.example.json`, then replace placeholder `fixtureDir` and `projectFile` values with your own local fixtures. The public holdout config should stay path-free and fixture-style; do not commit private project paths or live project names.
+
 ## Validation
 
 Run the holdout config validator:
