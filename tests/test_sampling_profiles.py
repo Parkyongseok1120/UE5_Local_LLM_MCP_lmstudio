@@ -39,6 +39,18 @@ def test_model_alias_resolves_qwen36_heretic_profile(monkeypatch):
     )
 
 
+def test_model_alias_resolves_qwen36_lmstudio_gguf_profile(monkeypatch):
+    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
+    sampling.set_sampling_profile("")
+
+    assert (
+        sampling.resolve_profile_name_for_model(
+            "lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf"
+        )
+        == "qwen3_6_27b"
+    )
+
+
 def test_qwen36_profile_mcp_meta(monkeypatch):
     monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
     limits = sampling.profile_edit_limits("qwen3_6_27b")
@@ -47,6 +59,11 @@ def test_qwen36_profile_mcp_meta(monkeypatch):
     assert limits["mcpEssentialTools"] is True
     assert "lmstudio_qwen36" in limits["recommendedSystemPrompt"]
     assert limits["contextLength"] == 32768
+    assert limits["preferSymbolLookupOverFileRead"] is True
+    assert limits["enforceRangeRead"] is True
+    assert limits["rangeReadContextLines"] == 40
+    assert limits["patchChangedLineLimit"] == 60
+    assert limits["noOpGuard"] is True
 
 
 def test_module_fix_mode_uses_compile_fix_patch_preset(monkeypatch):
@@ -56,7 +73,8 @@ def test_module_fix_mode_uses_compile_fix_patch_preset(monkeypatch):
     preset = sampling.load_sampling_preset(mode="module_fix")
 
     assert preset["thinking"] == "off"
-    assert preset["temperature"] == 0.15
+    assert preset["temperature"] == 0.08
+    assert preset["topP"] == 0.76
 
 
 def test_gpt_oss_compile_fix_analyze_preset_is_low_temperature(monkeypatch):

@@ -61,3 +61,102 @@ def mode_from_error_kind(error_kind: str) -> str:
     if error_kind in BROAD_MODES:
         return error_kind if error_kind != "link_fix" else "compile_fix"
     return "compile_fix"
+
+
+def route_error_action(message: str, error_code: str = "") -> dict[str, Any]:
+    """Return deterministic routing hints for the first actionable build error."""
+    subkind, broad = classify_error_subkind(message, error_code)
+    route: dict[str, Any] = {
+        "errorSubkind": subkind,
+        "broadMode": broad,
+        "requiredReads": [],
+        "preferredRagModes": [],
+        "allowedPatchTargets": [],
+        "forbiddenActions": [],
+        "notes": [],
+    }
+
+    def set_route(
+        *,
+        broad_mode: str | None = None,
+        reads: list[str],
+        rag: list[str],
+        targets: list[str],
+        forbidden: list[str] | None = None,
+        notes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        route["broadMode"] = broad_mode or route["broadMode"]
+        route["requiredReads"] = reads
+        route["preferredRagModes"] = rag
+        route["allowedPatchTargets"] = targets
+        route["forbiddenActions"] = forbidden or []
+        route["notes"] = notes or []
+        return route
+
+    if subkind.startswith("GENERATED_H") or subkind.startswith("UHT_") or subkind == "UHT_GENERIC":
+        return set_route(
+            broad_mode="reflection_fix",
+            reads=["failing header", "owner Build.cs if module ambiguity exists"],
+            rag=["reflection_fix", "compile_fix"],
+            targets=["failing header"],
+            forbidden=["unrelated cpp rewrite", "broad refactor"],
+            notes=["Fix the first UHT/reflection surface before editing implementation files."],
+        )
+
+    if subkind in {"C1083_MISSING_INCLUDE", "MISSING_INCLUDE_OWNER_MODULE", "INCLUDE_GENERIC"}:
+        return set_route(
+            broad_mode="module_fix",
+            reads=["failing source/header", "owner Build.cs", "include owner/module graph"],
+            rag=["module_fix", "compile_fix"],
+            targets=["owner Build.cs", "failing source/header only if include is actually missing"],
+            forbidden=["editing unrelated files", "explaining dependency without Build.cs patch"],
+            notes=["Use module_resolver or symbol graph before adding dependencies."],
+        )
+
+    if subkind == "LNK_MISSING_CPP_DEFINITION":
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["header declaration", "cpp definition file", "owner module Build.cs only if module issue is suspected"],
+            rag=["compile_fix"],
+            targets=["matching cpp/header"],
+            forbidden=["Build.cs-first fix without module evidence"],
+            notes=["Prefer adding the missing definition or correcting signature mismatch."],
+        )
+
+    if subkind == "ENHANCED_INPUT_BINDING_ERROR":
+        return set_route(
+            broad_mode="module_fix",
+            reads=["failing file", "owner Build.cs"],
+            rag=["module_fix", "compile_fix"],
+            targets=["owner Build.cs", "failing file"],
+            forbidden=[],
+            notes=["Enhanced Input errors often require EnhancedInput module evidence."],
+        )
+
+    if subkind == "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE":
+        return set_route(
+            broad_mode="module_fix",
+            reads=["failing file", "module Build.cs"],
+            rag=["module_fix", "compile_fix"],
+            targets=["failing file", "module boundary files"],
+            forbidden=["adding UnrealEd to runtime module as default fix"],
+            notes=["Prefer moving editor-only code behind editor modules or guards."],
+        )
+
+    if broad == "link_fix":
+        return set_route(
+            broad_mode="link_fix",
+            reads=["referenced declaration", "candidate cpp definitions", "owner Build.cs if module evidence exists"],
+            rag=["compile_fix"],
+            targets=["matching cpp/header", "owner Build.cs only with module evidence"],
+            forbidden=["blind Build.cs dependency changes"],
+        )
+
+    return set_route(
+        broad_mode=broad if broad in BROAD_MODES else "compile_fix",
+        reads=["failing file or build log excerpt"],
+        rag=[mode_from_error_kind(broad)],
+        targets=["failing file"],
+        forbidden=["broad refactor"],
+        notes=["Classify a more specific subkind if the next build repeats this error."],
+    )

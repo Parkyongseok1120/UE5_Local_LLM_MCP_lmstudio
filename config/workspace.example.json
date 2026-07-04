@@ -1,0 +1,19 @@
+{
+  "workspaceName": "UE5-Local-LLM-MCP",
+  "displayName": "Unreal Engine Local LLM MCP Stack",
+  "description": "Local Unreal Engine knowledge index, guidelines, and LM Studio MCP tools.",
+  "rootPath": "",
+  "engineVersion": "5.x",
+  "indexNamespace": "unreal5x",
+  "indexPath": "data/unreal5x/rag.sqlite",
+  "embeddingsPath": "data/unreal5x/embeddings",
+  "defaultEngineRoot": "",
+  "knowledgeRoots": {
+    "guidelines": "RAG_Project_Guidelines",
+    "gameDesign": "Game_Design_Docs",
+    "projectSnapshots": "data/unreal_projects/text_snapshot"
+  },
+  "legacyPaths": [],
+  "mcpServerName": "unreal-rag",
+  "pairedAgentMcp": "unreal-agent"
+}

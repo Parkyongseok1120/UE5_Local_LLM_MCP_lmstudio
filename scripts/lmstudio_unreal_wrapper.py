@@ -22,6 +22,10 @@ from preflight_lmstudio import extract_assistant_text
 from rag_search import SearchOptions, search as search_index
 import token_budget
 from workspace_paths import resolve_active_project_path, resolve_ubt_path
+from error_taxonomy import mode_from_error_kind as taxonomy_mode_from_error_kind, route_error_action
+from module_resolver import build_cs_has_module, resolve_modules_from_error, resolve_modules_from_text
+from retry_state import make_attempt_record, recommend_retry_action
+from symbol_graph import load_symbol_graph, lookup_symbol
 
 try:
     from collect_build_logs import extract_error
@@ -2298,9 +2302,6 @@ def parse_build_feedback(log_path: Path, project_root: Path, output: str, contex
     return records[:12]
 
 
-from error_taxonomy import mode_from_error_kind as taxonomy_mode_from_error_kind
-
-
 def mode_from_error_kind(error_kind: str) -> str:
     return taxonomy_mode_from_error_kind(error_kind)
 
@@ -2365,6 +2366,114 @@ def format_build_records(records: list[dict[str, Any]]) -> str:
             )
         )
     return "\n".join(lines)
+
+
+def _record_message(record: dict[str, Any]) -> str:
+    text = str(record.get("text") or "")
+    match = re.search(r"Message:\s*(.+?)(?:\n\n|$)", text, flags=re.DOTALL)
+    return (match.group(1).strip() if match else text.strip())[:2000]
+
+
+def module_resolver_feedback(text: str, build_text_value: str = "") -> str:
+    modules: list[str] = []
+    for module in [*resolve_modules_from_error(text), *resolve_modules_from_text(text)]:
+        if module not in modules:
+            modules.append(module)
+    if not modules:
+        return ""
+    lines = ["Module resolver hints (evidence only; do not force Build.cs edits):"]
+    for module in modules:
+        already = build_cs_has_module(build_text_value, module) if build_text_value else None
+        if already is True:
+            target = "Build.cs already appears to contain this module; inspect source include/signature next."
+        elif already is False:
+            target = "If the error is a missing module dependency, patch the owner Build.cs."
+        else:
+            target = "Read owner Build.cs before deciding whether to patch dependency or source include."
+        lines.append(f"- {module}: buildCsAlreadyContains={already}; {target}")
+    return "\n".join(lines)
+
+
+def _symbol_candidates_from_text(text: str) -> list[str]:
+    found: list[str] = []
+    for pattern in (
+        r"\b[AUFSI][A-Z][A-Za-z0-9_]{2,}\b",
+        r"\b[A-Z][A-Za-z0-9_]+(?:Component|Subsystem|Character|Actor|GameMode|Widget)\b",
+    ):
+        for match in re.finditer(pattern, text or ""):
+            symbol = match.group(0)
+            if symbol not in found:
+                found.append(symbol)
+    return found[:10]
+
+
+def optional_symbol_graph_context(text: str, *, limit: int = 6) -> str:
+    graph = load_symbol_graph()
+    if not graph.get("symbols"):
+        return ""
+    lines = ["Symbol graph hints (optional, compact):"]
+    count = 0
+    for symbol in _symbol_candidates_from_text(text):
+        for row in lookup_symbol(symbol, graph, limit=2):
+            lines.append(
+                "- "
+                + "; ".join(
+                    [
+                        f"symbol={row.get('symbol_name', '')}",
+                        f"kind={row.get('symbol_kind', '')}",
+                        f"file={row.get('file_path', '')}",
+                        f"lines={row.get('line_start', 0)}-{row.get('line_end', row.get('line_start', 0))}",
+                        f"module={row.get('module_name', '')}",
+                        f"ownerBuildCs={row.get('owner_build_cs', '')}",
+                    ]
+                )
+            )
+            count += 1
+            if count >= limit:
+                return "\n".join(lines)
+    return "\n".join(lines) if count else ""
+
+
+def retry_feedback_block(recommendation: dict[str, Any]) -> str:
+    lines: list[str] = []
+    if recommendation.get("sameErrorRepeated"):
+        lines.append(
+            "The previous attempt repeated the same error. Do not repeat the same patch. "
+            "Reclassify the root cause and read the required files from errorRoute before editing."
+        )
+    if recommendation.get("noOpEdit"):
+        lines.append("The previous attempt produced no effective file change. Do not submit the same patch again.")
+    return "\n".join(lines)
+
+
+def build_retry_state_payload(
+    *,
+    previous_record: dict[str, Any] | None,
+    attempt: int,
+    passed: bool,
+    records: list[dict[str, Any]],
+    changed_paths: list[str],
+    build_log_path: str,
+    fallback_message: str,
+) -> dict[str, Any]:
+    first = records[0] if records else {}
+    metadata = first.get("metadata") or {}
+    message = _record_message(first) if first else fallback_message
+    current = make_attempt_record(
+        attempt=attempt,
+        passed=passed,
+        error_message=message,
+        error_code=str(metadata.get("error_code") or ""),
+        error_subkind=str(metadata.get("error_subkind") or metadata.get("error_kind") or ""),
+        changed_paths=changed_paths,
+        build_log_path=build_log_path,
+    )
+    route = route_error_action(message, str(metadata.get("error_code") or ""))
+    recommendation = recommend_retry_action(previous_record, current)
+    current["sameErrorRepeated"] = recommendation["sameErrorRepeated"]
+    current["recommendedAction"] = recommendation
+    current["errorRoute"] = route
+    return {"current": current, "recommendation": recommendation}
 
 
 def system_prompt(rules_text: str, edit_limits: dict[str, Any] | None = None) -> str:
@@ -2703,12 +2812,17 @@ def run(args: argparse.Namespace) -> int:
         write_file(run_dir / "agent_plan.json", json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
 
     rag_context = collect_rag_context(args, request)
+    symbol_context = optional_symbol_graph_context(request)
+    if symbol_context:
+        rag_context = rag_context + "\n\n" + symbol_context
     initial_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
     initial_static_report = format_findings(initial_findings)
     previous_feedback = "" if not initial_findings else "Initial static validation:\n" + initial_static_report
     last_build_records: list[dict[str, Any]] = []
     last_findings: list[Finding] = list(initial_findings)
     original_mode = args.mode
+    retry_records: list[dict[str, Any]] = []
+    previous_retry_record: dict[str, Any] | None = None
 
     initial_prompt = agent_plan_block + user_prompt(
         request=request,
@@ -2787,8 +2901,14 @@ def run(args: argparse.Namespace) -> int:
             if last_build_records:
                 query_parts.append(build_error_query(last_build_records, last_build.output if last_build else ""))
             rag_context = collect_delta_rag_context(args, query_parts, changed_files)
+            symbol_context = optional_symbol_graph_context(" ".join(query_parts))
+            if symbol_context:
+                rag_context = rag_context + "\n\n" + symbol_context
         elif attempt == 1:
             rag_context = collect_rag_context(args, request)
+            symbol_context = optional_symbol_graph_context(request)
+            if symbol_context:
+                rag_context = rag_context + "\n\n" + symbol_context
 
         attempt_dir = run_dir / f"attempt_{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -3033,17 +3153,52 @@ def run(args: argparse.Namespace) -> int:
         write_json(attempt_dir / "structured_errors.json", parsed_feedback.records)
         write_file(attempt_dir / "structured_errors.md", format_build_records(parsed_feedback.records) + "\n")
         write_file(attempt_dir / "failure_rag_context.md", parsed_feedback.rag_context + "\n")
+        changed_paths = []
+        for path in last_written:
+            try:
+                changed_paths.append(str(path.relative_to(project_root)).replace("\\", "/"))
+            except ValueError:
+                changed_paths.append(str(path).replace("\\", "/"))
+        retry_payload = build_retry_state_payload(
+            previous_record=previous_retry_record,
+            attempt=attempt,
+            passed=False,
+            records=parsed_feedback.records,
+            changed_paths=changed_paths,
+            build_log_path=str(last_build.log_path),
+            fallback_message=tail_text(last_build.output, 1000),
+        )
+        retry_records.append(retry_payload["current"])
+        previous_retry_record = retry_payload["current"]
+        retry_state_doc = {
+            "attempts": retry_records,
+            "latest": retry_payload["current"],
+            "sameErrorRepeated": retry_payload["recommendation"].get("sameErrorRepeated", False),
+            "noOpEdit": retry_payload["recommendation"].get("noOpEdit", False),
+            "recommendedAction": retry_payload["recommendation"],
+        }
+        write_json(run_dir / "retry_state.json", retry_state_doc)
+        write_json(attempt_dir / "retry_state.json", retry_state_doc)
+        route_block = "Error route:\n" + json.dumps(retry_payload["current"].get("errorRoute") or {}, ensure_ascii=False, indent=2)
+        module_block = module_resolver_feedback(
+            "\n".join([request, build_error_query(parsed_feedback.records, last_build.output)]),
+            build_cs_text(project_root),
+        )
+        retry_block = retry_feedback_block(retry_payload["recommendation"])
         previous_feedback = "\n\n".join(
-            [
+            [part for part in [
                 static_report,
                 f"UBT failed with return code {last_build.returncode}.",
                 f"Log path: {last_build.log_path}",
                 format_build_records(parsed_feedback.records),
+                route_block,
+                module_block,
+                retry_block,
                 f"Failure-specific RAG mode: {parsed_feedback.mode}",
                 "Failure-specific RAG context:",
                 parsed_feedback.rag_context,
                 tail_text(last_build.output, token_budget.feedback_tail_chars("compile_fix")),
-            ]
+            ] if part]
         )
         write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
 

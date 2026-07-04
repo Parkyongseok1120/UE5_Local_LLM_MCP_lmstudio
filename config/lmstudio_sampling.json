@@ -20,6 +20,12 @@
   "modelAliases": {
     "qwen3.6-27b": "qwen3_6_27b",
     "qwen3.6": "qwen3_6_27b",
+    "qwen3.6-27b-gguf": "qwen3_6_27b",
+    "qwen3.6-27b-q4_k_m": "qwen3_6_27b",
+    "qwen3.6-27b-q5_k_m": "qwen3_6_27b",
+    "qwen3.6-27b-mtp": "qwen3_6_27b",
+    "lmstudio-community/qwen3.6-27b-gguf": "qwen3_6_27b",
+    "unsloth/qwen3.6-27b-gguf": "qwen3_6_27b",
     "qwen3.6-27b-heretic": "qwen3_6_27b",
     "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max": "qwen3_6_27b",
     "qwen3.5-9b": "qwen3_5_9b",
@@ -45,6 +51,8 @@
   "profiles": {
     "qwen3_6_27b": {
       "contextLength": 32768,
+      "_contextNote": "Qwen3.6-27B supports very long native context, but this workflow defaults to 32K for LM Studio stability. If RAM/VRAM is sufficient, A/B test 64K before raising production defaults.",
+      "contextLengthVariant_64k": 65536,
       "assemblyBudgetScale": 1.1,
       "targetTier": "sonnet_4_5_track",
       "promptContract": "evidence_then_patch_strict",
@@ -67,6 +75,11 @@
         "defaultTopK": 10,
         "deltaTopK": 5,
         "candidateLimitScale": 24,
+        "preferSymbolLookupOverFileRead": true,
+        "enforceRangeRead": true,
+        "rangeReadContextLines": 40,
+        "patchChangedLineLimit": 60,
+        "noOpGuard": true,
         "targetTier": "sonnet_4_5_track",
         "promptContract": "evidence_then_patch_strict"
       },
@@ -92,8 +105,8 @@
         },
         "execute": {
           "thinking": "off",
-          "temperature": 0.15,
-          "topP": 0.8,
+          "temperature": 0.12,
+          "topP": 0.78,
           "maxTokens": 4096,
           "notes": "Turn3 patch — max 2 files"
         },
@@ -105,8 +118,8 @@
         },
         "compile_fix_patch": {
           "thinking": "off",
-          "temperature": 0.15,
-          "topP": 0.8,
+          "temperature": 0.08,
+          "topP": 0.76,
           "maxTokens": 4096
         },
         "api_lookup": {

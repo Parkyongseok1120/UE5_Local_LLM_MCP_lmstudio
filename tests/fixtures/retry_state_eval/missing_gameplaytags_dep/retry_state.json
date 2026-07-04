@@ -1,0 +1,20 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "passed": false,
+      "errorSubkind": "C1083_MISSING_INCLUDE",
+      "sameErrorRepeated": false,
+      "noOpEdit": false
+    },
+    {
+      "attempt": 2,
+      "passed": false,
+      "errorSubkind": "C1083_MISSING_INCLUDE",
+      "sameErrorRepeated": true,
+      "noOpEdit": false
+    }
+  ],
+  "sameErrorRepeated": true,
+  "noOpEdit": false
+}

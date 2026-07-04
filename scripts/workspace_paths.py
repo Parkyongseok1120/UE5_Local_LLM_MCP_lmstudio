@@ -45,8 +45,9 @@ def find_workspace_root(start: Path | None = None) -> Path:
 
 def canonical_workspace_root(start: Path | None = None) -> Path:
     root = find_workspace_root(start)
-    config_path = root / "config" / "workspace.json"
-    if config_path.exists():
+    for config_path in (root / "config" / "workspace.local.json", root / "config" / "workspace.json"):
+        if not config_path.exists():
+            continue
         try:
             data = json.loads(config_path.read_text(encoding="utf-8"))
             configured = str(data.get("rootPath") or "").strip()
@@ -97,6 +98,7 @@ def active_project_names() -> list[str]:
 def load_workspace_config(start: Path | None = None) -> dict:
     root = find_workspace_root(start)
     path = root / "config" / "workspace.json"
+    local_path = root / "config" / "workspace.local.json"
     defaults: dict = {
         "rootPath": str(canonical_workspace_root(root)),
         "engineVersion": DEFAULT_ENGINE_VERSION,
@@ -109,14 +111,22 @@ def load_workspace_config(start: Path | None = None) -> dict:
             "projectSnapshots": "data/unreal_projects/text_snapshot",
         },
     }
-    if not path.exists():
-        return defaults
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    if not path.exists() and not local_path.exists():
         return defaults
     merged = dict(defaults)
-    merged.update(data)
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            merged.update(data)
+    try:
+        local_data = json.loads(local_path.read_text(encoding="utf-8")) if local_path.exists() else {}
+    except Exception:
+        local_data = {}
+    if isinstance(local_data, dict):
+        merged.update(local_data)
     if not str(merged.get("indexNamespace") or "").strip():
         merged["indexNamespace"] = index_namespace_from_version(
             str(merged.get("engineVersion") or DEFAULT_ENGINE_VERSION)

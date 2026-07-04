@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 *.sqlite
 config/workspace.json
+config/workspace.local.json
 config/lmstudio_mcp_unreal_rag.json
 config/continue_*.config.yaml
 data/baseline/

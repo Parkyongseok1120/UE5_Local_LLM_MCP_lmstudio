@@ -34,6 +34,7 @@ MCP chat: `MCP_ESSENTIAL_TOOLS=1` + [session bootstrap](../prompts/lmstudio_sess
 - System prompt: [`lmstudio_qwen36_27b_compact_system.md`](../prompts/lmstudio_qwen36_27b_compact_system.md) + compact base
 - Pass@K live compile-fix is the primary agent KPI
 - For `module_fix` / `Build.cs` / `GameplayTags`: patch `*.Build.cs`, not explanation-only replies
+- See [Qwen36_27B_Upgrade_Plan.md](Qwen36_27B_Upgrade_Plan.md) for the 27B-specific upgrade plan, external model signals, and validation gates.
 
 ## Qwen 3.5 9B / DeepSeek V4 Flash
 

@@ -1,0 +1,13 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "passed": false,
+      "errorSubkind": "LNK_MISSING_CPP_DEFINITION",
+      "sameErrorRepeated": false,
+      "noOpEdit": true
+    }
+  ],
+  "sameErrorRepeated": false,
+  "noOpEdit": true
+}

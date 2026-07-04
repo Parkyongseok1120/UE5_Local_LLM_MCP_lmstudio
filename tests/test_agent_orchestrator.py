@@ -40,6 +40,37 @@ def test_compile_fix_patch_strategy():
     assert "compile_fix" in plan.evidence.rag_modes
 
 
+def test_compile_fix_includes_c1083_error_route_and_module_hints():
+    plan = build_agent_plan(
+        "fatal error C1083: Cannot open include file: 'GameplayTagContainer.h': No such file or directory",
+        "compile_fix",
+    )
+    payload = plan.to_dict()
+
+    assert payload["errorRoute"]["broadMode"] == "module_fix"
+    assert "module_fix" in payload["evidencePlan"]["rag_modes"]
+    assert any("Route required read: owner Build.cs" in item for item in payload["checkpoints"])
+    assert any(hint["module"] == "GameplayTags" for hint in payload["moduleHints"])
+
+
+def test_compile_fix_includes_reflection_error_route():
+    plan = build_agent_plan("BadActor.generated.h must be the last include before UCLASS", "reflection_fix")
+    payload = plan.to_dict()
+
+    assert payload["errorRoute"]["broadMode"] == "reflection_fix"
+    assert payload["evidencePlan"]["rag_modes"][0] == "reflection_fix"
+    assert any("Route forbidden action: broad refactor" in item for item in payload["checkpoints"])
+
+
+def test_symbol_graph_hint_missing_graph_does_not_fail(monkeypatch):
+    import agent_orchestrator
+
+    monkeypatch.setattr(agent_orchestrator, "load_symbol_graph", None, raising=False)
+    plan = build_agent_plan("Fix ADemoActor C1083 compile error", "compile_fix")
+
+    assert plan.to_dict().get("symbolGraphHints", []) == []
+
+
 def test_verify_edit_blocked_on_inspect():
     plan = build_agent_plan("Review findings only", "review")
     result = verify_edit_allowed(plan, files_count=1, patches_count=0)

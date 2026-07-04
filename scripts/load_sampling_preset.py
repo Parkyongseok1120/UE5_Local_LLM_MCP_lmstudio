@@ -181,6 +181,11 @@ def profile_edit_limits(profile: str = "") -> dict[str, Any]:
         "mcpToolDiscipline": str(
             policy.get("mcpToolDiscipline") or active.get("mcpToolDiscipline") or ""
         ),
+        "preferSymbolLookupOverFileRead": bool(policy.get("preferSymbolLookupOverFileRead", False)),
+        "enforceRangeRead": bool(policy.get("enforceRangeRead", False)),
+        "rangeReadContextLines": int(policy.get("rangeReadContextLines") or 0),
+        "patchChangedLineLimit": int(policy.get("patchChangedLineLimit") or 0),
+        "noOpGuard": bool(policy.get("noOpGuard", False)),
     }
 
 

@@ -88,7 +88,11 @@ Qwen 3.6 27B improves most from:
 - explicit critique/verification loop
 - more failure-specific retry context
 - strict no-op detection
+- symbol-first and range-first reads before full-file reads
+- low-temperature execute/compile-patch turns
 - real-project Pass@1/Pass@3 measurement
+
+See [Qwen36_27B_Upgrade_Plan.md](Qwen36_27B_Upgrade_Plan.md) for the current upgrade runbook.
 
 ## Resolve Policy
 

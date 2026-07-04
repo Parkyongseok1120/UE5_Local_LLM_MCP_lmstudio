@@ -99,9 +99,12 @@ class AgentPlan:
     stop_conditions: list[str] = field(default_factory=list)
     retry_policy: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    error_route: dict[str, Any] = field(default_factory=dict)
+    module_hints: list[dict[str, Any]] = field(default_factory=list)
+    symbol_graph_hints: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "request": self.request,
             "taskKind": self.task_kind,
             "evidencePlan": self.evidence.to_dict(),
@@ -115,6 +118,13 @@ class AgentPlan:
             "retryPolicy": self.retry_policy,
             "notes": self.notes,
         }
+        if self.error_route:
+            payload["errorRoute"] = self.error_route
+        if self.module_hints:
+            payload["moduleHints"] = self.module_hints
+        if self.symbol_graph_hints:
+            payload["symbolGraphHints"] = self.symbol_graph_hints
+        return payload
 
 
 def classify_task(request: str, mode: str = "auto") -> TaskKind:
@@ -237,6 +247,107 @@ def _extract_symbols(request: str, plan: EvidencePlan) -> None:
         sym = match.group(0)
         if sym not in plan.symbols_to_scan:
             plan.symbols_to_scan.append(sym)
+
+
+def build_error_route(request: str, task_kind: TaskKind, mode: str) -> dict[str, Any]:
+    if task_kind != "compile_fix" and mode not in {"compile_fix", "module_fix", "reflection_fix"}:
+        return {}
+    if not any(marker in f"{mode} {request}".lower() for marker in COMPILE_MARKERS):
+        return {}
+    try:
+        from error_taxonomy import route_error_action
+
+        return route_error_action(request)
+    except Exception:
+        return {}
+
+
+def apply_error_route_to_plan(evidence: EvidencePlan, checkpoints: list[str], route: dict[str, Any]) -> None:
+    preferred = [str(mode) for mode in route.get("preferredRagModes") or [] if str(mode).strip()]
+    if preferred:
+        merged = preferred + [mode for mode in evidence.rag_modes if mode not in preferred]
+        evidence.rag_modes = merged[:4]
+    for read in route.get("requiredReads") or []:
+        item = f"Route required read: {read}"
+        if item not in checkpoints:
+            checkpoints.append(item)
+    for action in route.get("forbiddenActions") or []:
+        item = f"Route forbidden action: {action}"
+        if item not in checkpoints:
+            checkpoints.append(item)
+
+
+def build_module_hints(request: str, project_context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    try:
+        from module_resolver import build_cs_has_module, resolve_modules_from_error, resolve_modules_from_text
+    except Exception:
+        return []
+    modules = []
+    for module in [*resolve_modules_from_error(request), *resolve_modules_from_text(request)]:
+        if module not in modules:
+            modules.append(module)
+    if not modules:
+        return []
+
+    build_cs_text = ""
+    project_dir = Path(str((project_context or {}).get("projectDir") or ""))
+    if project_dir.is_dir():
+        for path in sorted((project_dir / "Source").rglob("*.Build.cs")) if (project_dir / "Source").is_dir() else []:
+            try:
+                build_cs_text += "\n" + path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                continue
+    hints: list[dict[str, Any]] = []
+    for module in modules:
+        already = build_cs_has_module(build_cs_text, module) if build_cs_text else None
+        target = "source include/signature first" if already else "owner Build.cs if missing module evidence is confirmed"
+        hints.append(
+            {
+                "module": module,
+                "buildCsAlreadyContains": already,
+                "suggestedPatchTarget": target,
+                "note": "Hint only; do not force Build.cs edits without evidence.",
+            }
+        )
+    return hints
+
+
+def _symbol_candidates_from_text(text: str) -> list[str]:
+    found: list[str] = []
+    for pattern in (
+        r"\b[AUFSI][A-Z][A-Za-z0-9_]{2,}\b",
+        r"\b[A-Z][A-Za-z0-9_]+(?:Component|Subsystem|Character|Actor|GameMode|Widget)\b",
+    ):
+        for match in re.finditer(pattern, text or ""):
+            symbol = match.group(0)
+            if symbol not in found:
+                found.append(symbol)
+    return found[:12]
+
+
+def build_symbol_graph_hints(request: str) -> list[dict[str, Any]]:
+    try:
+        from symbol_graph import load_symbol_graph, lookup_symbol
+    except Exception:
+        return []
+    graph = load_symbol_graph()
+    hints: list[dict[str, Any]] = []
+    for symbol in _symbol_candidates_from_text(request):
+        for row in lookup_symbol(symbol, graph, limit=2):
+            hints.append(
+                {
+                    "symbol": row.get("symbol_name", ""),
+                    "kind": row.get("symbol_kind", ""),
+                    "file": row.get("file_path", ""),
+                    "lineStart": row.get("line_start", 0),
+                    "lineEnd": row.get("line_end", row.get("line_start", 0)),
+                    "module": row.get("module_name", ""),
+                    "ownerBuildCs": row.get("owner_build_cs", ""),
+                }
+            )
+            if len(hints) >= 6:
+                return hints
+    return hints
 
 
 def build_write_gate(task_kind: TaskKind, evidence: EvidencePlan, policy: dict[str, Any]) -> dict[str, Any]:
@@ -387,6 +498,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     resolved_mode = resolve_mode(request, mode)
     task_kind = classify_task(request, mode)
     evidence = build_evidence_plan(request, task_kind, mode)
+    error_route = build_error_route(request, task_kind, mode)
     strategy = choose_edit_strategy(task_kind, request, file_count_hint=file_count_hint)
     if not evidence.writes_allowed:
         strategy = "no_edit"
@@ -406,6 +518,8 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         if task_kind == "inspect_only" and looks_like_cpp_domain_request(request):
             tool_policy = list(CPP_REVIEW_TOOL_POLICY)
     notes: list[str] = []
+    module_hints = build_module_hints(request, project_context) if task_kind == "compile_fix" else []
+    symbol_graph_hints = build_symbol_graph_hints(request) if task_kind == "compile_fix" else []
     if evidence.confidence < 0.65:
         notes.append("Low confidence: prefer inspect-only before edits.")
     if strategy == "exact_patch":
@@ -424,6 +538,18 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         notes.append("Refactor modes disabled for active model profile.")
     write_gate = build_write_gate(task_kind, evidence, policy)
     suggested = build_suggested_tool_calls(request, task_kind, mode, project_context)
+    checkpoints = build_checkpoints(task_kind, evidence, mode)
+    if error_route:
+        apply_error_route_to_plan(evidence, checkpoints, error_route)
+        allowed = ", ".join(str(item) for item in error_route.get("allowedPatchTargets") or [])
+        if allowed:
+            notes.append(f"Route allowed patch targets hint: {allowed}")
+    for hint in module_hints:
+        notes.append(
+            f"Module hint: {hint['module']} -> {hint['suggestedPatchTarget']}"
+        )
+    if symbol_graph_hints:
+        notes.append(f"Symbol graph hints available: {len(symbol_graph_hints)} compact match(es).")
     if not project_context.get("ok"):
         notes.append(str(project_context.get("error") or "Set activeProject before browse or asset lookup."))
     notes.append("Copy suggestedToolCalls args exactly; never hardcode project paths.")
@@ -436,10 +562,13 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         suggested_tool_calls=suggested,
         project_context=project_context,
         write_gate=write_gate,
-        checkpoints=build_checkpoints(task_kind, evidence, mode),
+        checkpoints=checkpoints,
         stop_conditions=build_stop_conditions(task_kind),
         retry_policy=build_retry_policy(task_kind, policy),
         notes=notes,
+        error_route=error_route,
+        module_hints=module_hints,
+        symbol_graph_hints=symbol_graph_hints,
     )
 
 
@@ -470,6 +599,21 @@ def format_plan_for_prompt(plan: AgentPlan) -> str:
         + ("Checkpoints: " + "; ".join(plan.checkpoints) + "\n" if plan.checkpoints else "")
         + ("Stop conditions: " + "; ".join(plan.stop_conditions) + "\n" if plan.stop_conditions else "")
         + ("Retry policy: " + "; ".join(plan.retry_policy) + "\n" if plan.retry_policy else "")
+        + (
+            "Error route: " + json.dumps(plan.error_route, ensure_ascii=False) + "\n"
+            if plan.error_route
+            else ""
+        )
+        + (
+            "Module hints: " + json.dumps(plan.module_hints, ensure_ascii=False) + "\n"
+            if plan.module_hints
+            else ""
+        )
+        + (
+            "Symbol graph hints: " + json.dumps(plan.symbol_graph_hints, ensure_ascii=False) + "\n"
+            if plan.symbol_graph_hints
+            else ""
+        )
         + ("Notes: " + "; ".join(plan.notes) + "\n" if plan.notes else "")
     )
 

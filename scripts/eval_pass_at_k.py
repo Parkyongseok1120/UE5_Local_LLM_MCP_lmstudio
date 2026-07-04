@@ -26,6 +26,87 @@ def count_wrapper_attempts(run_dir: Path) -> int:
     return sum(1 for path in run_dir.iterdir() if path.is_dir() and path.name.startswith("attempt_"))
 
 
+def read_retry_state_metrics(run_dir: Path) -> dict:
+    path = run_dir / "retry_state.json"
+    return read_retry_state_metrics_file(path)
+
+
+def read_retry_state_metrics_file(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    attempts = data.get("attempts") if isinstance(data, dict) else []
+    return {
+        "sameErrorRepeated": bool(data.get("sameErrorRepeated")),
+        "noOpEdit": bool(data.get("noOpEdit")),
+        "sameErrorRepeatedAttempts": sum(1 for row in attempts or [] if row.get("sameErrorRepeated")),
+        "noOpEditAttempts": sum(1 for row in attempts or [] if row.get("noOpEdit")),
+    }
+
+
+def retry_state_metrics_for_case(case_id: str, fixture_root: Path | None) -> dict:
+    if not fixture_root:
+        return {}
+    candidates = [
+        fixture_root / case_id / "retry_state.json",
+        fixture_root / f"{case_id}.json",
+    ]
+    for candidate in candidates:
+        metrics = read_retry_state_metrics_file(candidate)
+        if metrics:
+            return metrics
+    return {}
+
+
+def build_metrics_only_results(cases: list[dict], retry_state_fixture: Path | None = None) -> list[dict]:
+    """Create fast smoke results that exercise KPI aggregation only.
+
+    This mode intentionally does not call UBT or LM Studio and does not prove
+    compile-fix success.
+    """
+    results: list[dict] = []
+    for case in cases:
+        case_id = str(case.get("id") or "")
+        retry_metrics = retry_state_metrics_for_case(case_id, retry_state_fixture)
+        results.append(
+            {
+                "id": case_id,
+                "pass": True,
+                "mode": "metrics-only",
+                "detail": "KPI aggregation smoke only; UBT and LM Studio were not invoked.",
+                "attempts": 0,
+                "passAt1": False,
+                **retry_metrics,
+            }
+        )
+    return results
+
+
+def calculate_kpi_metrics(results: list[dict]) -> dict:
+    """Calculate extended Pass@K metrics without changing CLI behavior."""
+    total = len(results)
+    attempts_values = [int(row.get("attempts") or 0) for row in results if row.get("attempts") is not None]
+    pass_at_1 = sum(1 for row in results if row.get("passAt1"))
+    histogram: dict[str, int] = {}
+    for attempts in attempts_values:
+        key = str(attempts)
+        histogram[key] = histogram.get(key, 0) + 1
+    return {
+        "passAt1Count": pass_at_1,
+        "passAt1Rate": round(pass_at_1 / total, 3) if total else 0.0,
+        "averageAttempts": round(sum(attempts_values) / len(attempts_values), 3) if attempts_values else 0.0,
+        "failedCaseIds": [str(row.get("id")) for row in results if not row.get("pass")],
+        "attemptHistogram": dict(sorted(histogram.items(), key=lambda item: int(item[0]))),
+        "sameErrorRepeatedCount": sum(1 for row in results if row.get("sameErrorRepeated")),
+        "noOpEditCount": sum(1 for row in results if row.get("noOpEdit")),
+        "repeatedErrorCaseIds": [str(row.get("id")) for row in results if row.get("sameErrorRepeated")],
+        "noOpCaseIds": [str(row.get("id")) for row in results if row.get("noOpEdit")],
+    }
+
+
 def copy_fixture(fixture_dir: Path, work_dir: Path) -> None:
     ignore = shutil.ignore_patterns("golden", "request.txt")
     for item in fixture_dir.iterdir():
@@ -64,7 +145,7 @@ def run_wrapper_live(
     model: str,
     ubt_path: Path,
     wrapper_timeout: int = 0,
-) -> tuple[bool, str, int]:
+) -> tuple[bool, str, int, dict]:
     run_dir = work_dir / "wrapper_run"
     run_dir.mkdir(parents=True, exist_ok=True)
     request_path = run_dir / "request.txt"
@@ -107,7 +188,7 @@ def run_wrapper_live(
         tail = f"[TIMEOUT] wrapper killed after {wrapper_timeout}s"
         ok = False
     attempts = count_wrapper_attempts(run_dir)
-    return ok, tail, attempts
+    return ok, tail, attempts, read_retry_state_metrics(run_dir)
 
 
 def run_case(
@@ -148,7 +229,7 @@ def run_case(
                 "passAt1": ok,
             }
 
-        ok, detail, attempts = run_wrapper_live(
+        ok, detail, attempts, retry_metrics = run_wrapper_live(
             work_dir,
             project_file,
             request_text,
@@ -166,6 +247,7 @@ def run_case(
             "detail": detail[:800],
             "attempts": attempts,
             "passAt1": ok and attempts <= 1,
+            **retry_metrics,
         }
 
 
@@ -183,6 +265,10 @@ def main() -> int:
                         help="Stop after min_pass_rate is met (saves time on passing runs)")
     parser.add_argument("--wrapper-timeout", type=int, default=0,
                         help="Per-case wrapper subprocess timeout in seconds (0 = no limit)")
+    parser.add_argument("--metrics-only", action="store_true",
+                        help="Fast KPI aggregation smoke; does not invoke UBT or LM Studio.")
+    parser.add_argument("--retry-state-fixture", type=Path, default=None,
+                        help="Optional directory containing <case-id>/retry_state.json or <case-id>.json fixtures.")
     args = parser.parse_args()
 
     config = json.loads((ROOT / args.config).read_text(encoding="utf-8-sig"))
@@ -193,7 +279,9 @@ def main() -> int:
 
     dry_run = args.dry_run or not args.live
     resolved_model = args.model
-    if args.live:
+    if args.metrics_only:
+        dry_run = False
+    elif args.live:
         preflight = check_lmstudio(args.url, args.model)
         if not preflight.get("ok"):
             msg = preflight.get("error") or "LM Studio not reachable"
@@ -207,33 +295,37 @@ def main() -> int:
 
     # Run cases sequentially; use --early-exit to stop once min_pass_rate is met.
     cases = config.get("cases") or []
-    results: list[dict] = []
-    for case in cases:
-        result = run_case(
-            case,
-            dry_run=dry_run,
-            ubt_path=args.ubt_path,
-            ubt_timeout=ubt_timeout,
-            max_attempts=max_attempts,
-            url=args.url,
-            model=resolved_model,
-            wrapper_timeout=args.wrapper_timeout,
-        )
-        results.append(result)
-        if args.early_exit:
-            done = len(results)
-            passed_so_far = sum(1 for r in results if r.get("pass"))
-            if done > 0 and passed_so_far / done >= min_pass_rate and done >= min(3, len(cases)):
-                remaining = len(cases) - done
-                if remaining > 0:
-                    print(f"[early-exit] {passed_so_far}/{done} passed ({passed_so_far/done:.0%} >= {min_pass_rate:.0%}), skipping {remaining} remaining cases")
-                    break
+    if args.metrics_only:
+        results = build_metrics_only_results(cases, args.retry_state_fixture)
+    else:
+        results = []
+        for case in cases:
+            result = run_case(
+                case,
+                dry_run=dry_run,
+                ubt_path=args.ubt_path,
+                ubt_timeout=ubt_timeout,
+                max_attempts=max_attempts,
+                url=args.url,
+                model=resolved_model,
+                wrapper_timeout=args.wrapper_timeout,
+            )
+            results.append(result)
+            if args.early_exit:
+                done = len(results)
+                passed_so_far = sum(1 for r in results if r.get("pass"))
+                if done > 0 and passed_so_far / done >= min_pass_rate and done >= min(3, len(cases)):
+                    remaining = len(cases) - done
+                    if remaining > 0:
+                        print(f"[early-exit] {passed_so_far}/{done} passed ({passed_so_far/done:.0%} >= {min_pass_rate:.0%}), skipping {remaining} remaining cases")
+                        break
 
     passed = sum(1 for r in results if r.get("pass"))
     total = len(results)
     pass_rate = passed / total if total else 0.0
-    pass_at_1 = sum(1 for r in results if r.get("passAt1"))
-    pass_at_1_rate = pass_at_1 / total if total else 0.0
+    extended_metrics = calculate_kpi_metrics(results)
+    pass_at_1 = int(extended_metrics["passAt1Count"])
+    pass_at_1_rate = float(extended_metrics["passAt1Rate"])
 
     for row in results:
         status = "PASS" if row.get("pass") else "FAIL"
@@ -248,26 +340,25 @@ def main() -> int:
 
     kpi = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "mode": "dry-run" if dry_run else "live",
+        "mode": "metrics-only" if args.metrics_only else ("dry-run" if dry_run else "live"),
         "tier": config.get("tier") or "core",
         "config": args.config,
         "maxAttempts": max_attempts,
         "passCount": passed,
         "total": total,
         "passRate": round(pass_rate, 3),
-        "passAt1Count": pass_at_1,
-        "passAt1Rate": round(pass_at_1_rate, 3),
         "minPassRate": min_pass_rate,
         "pass": pass_rate >= min_pass_rate,
         "results": results,
     }
+    kpi.update(extended_metrics)
     out_name = "pass-at-k-ceiling-kpi.json" if config.get("tier") == "ceiling" else "pass-at-k-kpi.json"
     out = ROOT / "data" / "baseline" / out_name
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(kpi, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote {out}")
 
-    return 0 if pass_rate >= min_pass_rate else 1
+    return 0 if args.metrics_only or pass_rate >= min_pass_rate else 1
 
 
 if __name__ == "__main__":
