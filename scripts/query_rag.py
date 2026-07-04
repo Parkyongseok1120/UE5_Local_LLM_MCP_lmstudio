@@ -152,7 +152,7 @@ SECTION_LABELS = [
 ]
 
 
-DEFAULT_SYSTEM_PROMPT = """You are an Unreal Engine 5.7 C++ assistant.
+DEFAULT_SYSTEM_PROMPT = """You are an Unreal Engine 5.8 C++ assistant.
 Use the provided context first. If context is insufficient, say what is missing.
 Answer in Korean by default. Include C++ examples when useful and cite sources."""
 

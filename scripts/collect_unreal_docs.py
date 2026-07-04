@@ -151,7 +151,7 @@ def read_seed_urls(path: Path) -> list[str]:
     return urls
 
 
-def normalize_url(url: str, base: str | None = None, version: str = "5.7") -> str | None:
+def normalize_url(url: str, base: str | None = None, version: str = "5.8") -> str | None:
     joined = urljoin(base or "", url)
     parsed = urlparse(joined)
     if parsed.scheme not in {"http", "https"}:
@@ -293,7 +293,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect Unreal Engine docs pages as JSONL.")
     parser.add_argument("--seeds", default="config/unreal_58_seed_urls.txt")
     parser.add_argument("--out", default="data/unreal58/raw_docs.jsonl")
-    parser.add_argument("--version", default="5.7")
+    parser.add_argument("--version", default="5.8")
     parser.add_argument("--max-pages", type=int, default=50)
     parser.add_argument("--min-chars", type=int, default=500)
     parser.add_argument("--delay", type=float, default=0.5)

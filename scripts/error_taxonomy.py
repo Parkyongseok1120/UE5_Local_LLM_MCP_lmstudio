@@ -18,7 +18,25 @@ SUBKIND_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("MISSING_INCLUDE_OWNER_MODULE", "module_fix", re.compile(r"cannot open include|C1083", re.I)),
     ("PUBLIC_HEADER_PRIVATE_MODULE", "module_fix", re.compile(r"PublicDependencyModuleNames|private header.*public", re.I)),
     ("C1083_MISSING_INCLUDE", "module_fix", re.compile(r"C1083.*cannot open include", re.I)),
-    ("LNK_MISSING_CPP_DEFINITION", "link_fix", re.compile(r"LNK2019|unresolved external", re.I)),
+    (
+        "LNK_MISSING_CPP_DEFINITION",
+        "link_fix",
+        re.compile(
+            r"LNK2019|unresolved external|missing cpp definition|missing.*implementation|"
+            r"declared but not defined",
+            re.I,
+        ),
+    ),
+    (
+        "HEADER_CPP_SIGNATURE_MISMATCH",
+        "compile_fix",
+        re.compile(
+            r"header/?cpp.*signature|signature mismatch|CPP_FUNCTION_SIGNATURE_MISMATCH|"
+            r"overloaded member function not found|C2511|declaration.*definition|definition.*declaration|"
+            r"conflicting types|overload mismatch",
+            re.I,
+        ),
+    ),
     ("LNK_MISSING_MODULE", "link_fix", re.compile(r"LNK.*module|undefined reference", re.I)),
     ("RPC_IMPLEMENTATION_MISSING", "compile_fix", re.compile(r"RPC|Server_|Client_|NetMulticast", re.I)),
     ("ENHANCED_INPUT_BINDING_ERROR", "compile_fix", re.compile(r"EnhancedInput|ETriggerEvent|BindAction", re.I)),
@@ -74,6 +92,9 @@ def route_error_action(message: str, error_code: str = "") -> dict[str, Any]:
         "allowedPatchTargets": [],
         "forbiddenActions": [],
         "notes": [],
+        "softSteering": [],
+        "buildCsFirstWarning": "",
+        "routePriorityApplied": "",
     }
 
     def set_route(
@@ -84,6 +105,8 @@ def route_error_action(message: str, error_code: str = "") -> dict[str, Any]:
         targets: list[str],
         forbidden: list[str] | None = None,
         notes: list[str] | None = None,
+        soft: list[str] | None = None,
+        build_cs_warning: str = "",
     ) -> dict[str, Any]:
         route["broadMode"] = broad_mode or route["broadMode"]
         route["requiredReads"] = reads
@@ -91,6 +114,8 @@ def route_error_action(message: str, error_code: str = "") -> dict[str, Any]:
         route["allowedPatchTargets"] = targets
         route["forbiddenActions"] = forbidden or []
         route["notes"] = notes or []
+        route["softSteering"] = soft or []
+        route["buildCsFirstWarning"] = build_cs_warning
         return route
 
     if subkind.startswith("GENERATED_H") or subkind.startswith("UHT_") or subkind == "UHT_GENERIC":
@@ -116,12 +141,42 @@ def route_error_action(message: str, error_code: str = "") -> dict[str, Any]:
     if subkind == "LNK_MISSING_CPP_DEFINITION":
         return set_route(
             broad_mode="compile_fix",
-            reads=["header declaration", "cpp definition file", "owner module Build.cs only if module issue is suspected"],
+            reads=["header declaration", "matching cpp definition or likely cpp owner", "owner module Build.cs only if module issue is suspected"],
             rag=["compile_fix"],
             targets=["matching cpp/header"],
             forbidden=["Build.cs-first fix without module evidence"],
             notes=["Prefer adding the missing definition or correcting signature mismatch."],
-        )
+            soft=[
+                "This looks like a missing cpp definition / unresolved external failure.",
+                "Before editing, read the header declaration and the matching cpp file.",
+                "Do not start with Build.cs unless module evidence exists.",
+                "Prefer adding or correcting the missing implementation in the matching cpp file.",
+            ],
+            build_cs_warning=(
+                "Build.cs-first fix is not supported by current evidence. "
+                "Re-check the root cause and read declaration/definition files before editing Build.cs."
+            ),
+        ) | {"routePriorityApplied": "lnk_missing_definition_before_signature_mismatch"}
+
+    if subkind == "HEADER_CPP_SIGNATURE_MISMATCH":
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["header declaration", "matching cpp definition", "owner module Build.cs only if module evidence exists"],
+            rag=["compile_fix"],
+            targets=["matching cpp/header"],
+            forbidden=["Build.cs-first fix without module evidence"],
+            notes=["Patch the smallest declaration/definition signature mismatch before changing build rules."],
+            soft=[
+                "This looks like a header/cpp signature mismatch.",
+                "Before editing, read both the header declaration and cpp definition.",
+                "Patch the smallest matching signature change.",
+                "Do not edit Build.cs unless module evidence exists.",
+            ],
+            build_cs_warning=(
+                "Build.cs-first fix is not supported by current evidence. "
+                "Re-check the root cause and read declaration/definition files before editing Build.cs."
+            ),
+        ) | {"routePriorityApplied": "signature_mismatch_without_lnk_evidence"}
 
     if subkind == "ENHANCED_INPUT_BINDING_ERROR":
         return set_route(

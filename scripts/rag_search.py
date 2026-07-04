@@ -195,6 +195,9 @@ def fetch_error_route_sidecar(query: str, mode: str, limit: int = 3) -> list[dic
             "allowedPatchTargets": list(route.get("allowedPatchTargets") or [])[:limit],
             "forbiddenActions": list(route.get("forbiddenActions") or [])[:limit],
             "notes": list(route.get("notes") or [])[:limit],
+            "softSteering": list(route.get("softSteering") or [])[:limit + 2],
+            "buildCsFirstWarning": route.get("buildCsFirstWarning", ""),
+            "routePriorityApplied": route.get("routePriorityApplied", ""),
         }
     ]
     return [

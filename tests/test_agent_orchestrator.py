@@ -40,6 +40,24 @@ def test_compile_fix_patch_strategy():
     assert "compile_fix" in plan.evidence.rag_modes
 
 
+def test_compile_fix_link_route_includes_soft_steering_checkpoints():
+    plan = build_agent_plan("Fix LNK2019 unresolved external symbol UHoldoutComponent::StartDash", "compile_fix")
+    payload = plan.to_dict()
+
+    assert payload["errorRoute"]["errorSubkind"] == "LNK_MISSING_CPP_DEFINITION"
+    assert any("Route soft steering:" in item for item in payload["checkpoints"])
+    assert any("Route soft warning:" in item for item in payload["checkpoints"])
+
+
+def test_compile_fix_signature_route_includes_required_reads():
+    plan = build_agent_plan("CPP_FUNCTION_SIGNATURE_MISMATCH header/cpp signature mismatch", "compile_fix")
+    payload = plan.to_dict()
+
+    assert payload["errorRoute"]["errorSubkind"] == "HEADER_CPP_SIGNATURE_MISMATCH"
+    assert any("Route required read: header declaration" in item for item in payload["checkpoints"])
+    assert any("Route forbidden action: Build.cs-first fix without module evidence" in item for item in payload["checkpoints"])
+
+
 def test_compile_fix_includes_c1083_error_route_and_module_hints():
     plan = build_agent_plan(
         "fatal error C1083: Cannot open include file: 'GameplayTagContainer.h': No such file or directory",

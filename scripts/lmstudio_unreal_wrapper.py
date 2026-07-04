@@ -37,6 +37,30 @@ DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1"
 DEFAULT_UBT_PATH = str(resolve_ubt_path())
 WRAPPER_RULES_PATH = Path("RAG_Project_Guidelines/Unreal_Programming/07_Wrapper_Mandatory_Rules.md")
 PROMPT_PATH = Path("prompts/unreal_cpp_assistant.md")
+BUILD_CS_UNSUPPORTED_FOR_ROUTE_WARNING = (
+    "Build.cs edit is not supported by the current route.\n"
+    "This route is declaration/definition or missing implementation related, not module dependency related.\n"
+    "Re-read the header declaration and matching cpp implementation before editing Build.cs.\n"
+    "Prefer patching the matching header/cpp file unless new module evidence appears."
+)
+STATIC_SIGNATURE_RETRY_HINT = (
+    "Static validation still reports CPP_FUNCTION_SIGNATURE_MISMATCH.\n"
+    "The previous patch did not resolve the declaration/definition mismatch.\n"
+    "Read the exact header declaration and cpp definition again.\n"
+    "Patch the smallest signature difference. Do not edit Build.cs unless module evidence exists."
+)
+LNK_MISSING_DEFINITION_RETRY_HINT = (
+    "The unresolved external / missing cpp definition remains.\n"
+    "Add or correct the missing implementation in the matching cpp file.\n"
+    "Do not edit Build.cs unless module evidence exists."
+)
+UNSUPPORTED_BUILD_CS_SOFT_REPLAN = (
+    "Soft replan: the previous Build.cs edit does not match the current root-cause route.\n"
+    "Treat the Build.cs change as unsupported unless new module evidence appears.\n"
+    "Do not expand the Build.cs change on the next attempt.\n"
+    "Re-read the exact header declaration and matching cpp implementation.\n"
+    "Next patch should target the matching header/cpp pair only, unless the build log shows a missing module dependency."
+)
 ALLOWED_SUFFIXES = {
     ".h",
     ".hpp",
@@ -289,16 +313,25 @@ PROJECT_STATE_LINE_PATTERNS = (
     re.compile(r"\b(?:Public|Private)DependencyModuleNames\b|\bExtraModuleNames\b"),
     re.compile(r"\bDECLARE_(?:DYNAMIC_)?(?:MULTICAST_)?DELEGATE\b|\bFTimerHandle\b"),
 )
+HEADER_MEMBER_DECL_RE = re.compile(
+    r"^(?:virtual\s+|static\s+|inline\s+|FORCEINLINE\s+|explicit\s+)*"
+    r"(?:[A-Za-z_][A-Za-z0-9_:<>*&,\s]+\s+)+"
+    r"[~A-Za-z_][A-Za-z0-9_]*\s*\([^;{}]*\)\s*"
+    r"(?:const\s*)?(?:override\s*)?(?:final\s*)?;\s*$"
+)
 
 
-def summarize_interesting_lines(text: str, max_lines: int = 14) -> list[str]:
+def summarize_interesting_lines(text: str, max_lines: int = 14, *, suffix: str = "") -> list[str]:
     results: list[str] = []
     seen: set[str] = set()
+    is_header = suffix.lower() in {".h", ".hpp"}
     for raw_line in text.splitlines():
         line = re.sub(r"\s+", " ", raw_line).strip()
         if not line or len(line) > 220:
             continue
-        if not any(pattern.search(line) for pattern in PROJECT_STATE_LINE_PATTERNS):
+        if not any(pattern.search(line) for pattern in PROJECT_STATE_LINE_PATTERNS) and not (
+            is_header and HEADER_MEMBER_DECL_RE.search(line)
+        ):
             continue
         if line in seen:
             continue
@@ -314,6 +347,7 @@ def summarize_project_state(
     max_files: int | None = None,
     max_chars: int | None = None,
     mode: str = "execute",
+    include_full_build_cs: bool | None = None,
 ) -> str:
     default_files, default_chars = token_budget.project_summary_limits(mode)
     max_files = default_files if max_files is None else max_files
@@ -327,9 +361,10 @@ def summarize_project_state(
         "- Treat these files as already existing. Do not re-add declarations, includes, modules, or bindings that are already present.",
         "- Return complete content only for files that need a new change; omitted files remain unchanged.",
     ]
-    modes_with_full_build_cs = frozenset({"module_fix", "compile_fix"})
+    modes_with_full_build_cs = frozenset({"module_fix"})
+    show_full_build_cs = include_full_build_cs if include_full_build_cs is not None else mode in modes_with_full_build_cs
     included = 0
-    if mode in modes_with_full_build_cs:
+    if show_full_build_cs:
         build_entries = sorted(
             (rel, txt) for rel, txt in snapshot.items() if rel.lower().endswith(".build.cs")
         )
@@ -364,9 +399,9 @@ def summarize_project_state(
         suffix = Path(relative).suffix.lower()
         if suffix not in {".h", ".hpp", ".cpp", ".c", ".cc", ".cs", ".ini", ".json", ".uproject", ".uplugin"}:
             continue
-        if relative.lower().endswith(".build.cs") and mode in modes_with_full_build_cs:
+        if relative.lower().endswith(".build.cs") and show_full_build_cs:
             continue
-        interesting = summarize_interesting_lines(text)
+        interesting = summarize_interesting_lines(text, suffix=suffix)
         included += 1
         line_count = len(text.splitlines())
         lines.append(f"- {relative} ({line_count} lines)")
@@ -377,6 +412,349 @@ def summarize_project_state(
             lines.append("- ... project state summary truncated.")
             break
     return "\n".join(lines)
+
+
+def _candidate_source_paths_from_text(root: Path, text: str) -> list[Path]:
+    candidates: list[Path] = []
+    root_resolved = root.resolve()
+    path_pattern = re.compile(r"(?:[A-Za-z]:[\\/][^\s:'\"]+|Source[\\/][^\s:'\"]+)\.(?:h|hpp|cpp|c|cc)", re.I)
+    for match in path_pattern.finditer(text or ""):
+        raw = match.group(0).strip().strip(".,);]")
+        path = Path(raw)
+        if not path.is_absolute():
+            path = root / raw.replace("\\", "/")
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved.is_file() and root_resolved in resolved.parents:
+            candidates.append(resolved)
+    symbol_matches = re.findall(r"\b([AUFSI][A-Za-z0-9_]{3,})::([~A-Za-z_][A-Za-z0-9_]*)\b", text or "")
+    class_names = {item[0] for item in symbol_matches}
+    func_names = {item[1].lstrip("~") for item in symbol_matches}
+    for match in re.finditer(r"\b([AUFSI][A-Za-z0-9_]{3,})\b", text or ""):
+        class_names.add(match.group(1))
+    if class_names or func_names:
+        for path in iter_source_files(root):
+            if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+                continue
+            content = read_text(path)
+            if any(name in content for name in class_names) or any(f"{name}(" in content for name in func_names):
+                candidates.append(path.resolve())
+    return list(dict.fromkeys(candidates))
+
+
+def _matching_source_pair_paths(root: Path, path: Path) -> list[Path]:
+    results = [path]
+    stem = path.stem
+    suffix = path.suffix.lower()
+    wanted_suffixes = {".h", ".hpp", ".cpp", ".c", ".cc"} - {suffix}
+    for candidate in iter_source_files(root):
+        if candidate.stem == stem and candidate.suffix.lower() in wanted_suffixes:
+            results.append(candidate.resolve())
+    return list(dict.fromkeys(results))
+
+
+def focused_source_pair_context(root: Path, focus_text: str, *, max_files: int = 4, max_chars: int = 7000) -> str:
+    paths: list[Path] = []
+    for candidate in _candidate_source_paths_from_text(root, focus_text):
+        for paired in _matching_source_pair_paths(root, candidate):
+            if paired.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"} and paired not in paths:
+                paths.append(paired)
+    if not paths:
+        return ""
+    lines = [
+        "Focused current source evidence (authoritative; prefer this over generic RAG examples):",
+        "- Compare these matching header/cpp files before editing.",
+        "- Do not copy helper names from generic examples unless they already exist here.",
+    ]
+    root_resolved = root.resolve()
+    for path in paths[:max_files]:
+        try:
+            relative = path.resolve().relative_to(root_resolved).as_posix()
+        except ValueError:
+            continue
+        text = read_text(path)
+        snippet = text.strip()
+        if len(snippet) > 1800:
+            snippet = snippet[:1800].rstrip() + "\n..."
+        lines.append(f"\n## {relative}")
+        lines.append("```")
+        lines.append(snippet)
+        lines.append("```")
+        if len("\n".join(lines)) >= max_chars:
+            lines.append("\n- ... focused evidence truncated.")
+            break
+    return "\n".join(lines)[:max_chars]
+
+
+CLASS_DECL_RE = re.compile(
+    r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?(?P<name>[AUFSI][A-Za-z0-9_]*)\b"
+)
+HEADER_DECL_DETAIL_RE = re.compile(
+    r"^\s*(?:virtual\s+|static\s+|inline\s+|FORCEINLINE\s+|explicit\s+)*"
+    r"(?P<ret>[A-Za-z_][A-Za-z0-9_:<>*&,\s]*?)\s+"
+    r"(?P<name>[~A-Za-z_][A-Za-z0-9_]*)\s*"
+    r"\((?P<args>[^;{}]*)\)\s*"
+    r"(?P<qualifiers>(?:const\s*)?(?:override\s*)?(?:final\s*)?)\s*;\s*$"
+)
+CPP_DEFINITION_DETAIL_RE = re.compile(
+    r"\b(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<name>[~A-Za-z_][A-Za-z0-9_]*)\s*\((?P<args>[^)]*)\)"
+)
+
+
+def _relative_project_path(root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path).replace("\\", "/")
+
+
+def _class_names_from_header(text: str) -> list[str]:
+    names: list[str] = []
+    for match in CLASS_DECL_RE.finditer(text or ""):
+        name = match.group("name")
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _header_member_declarations(text: str) -> list[dict[str, Any]]:
+    classes = _class_names_from_header(text)
+    current_class = classes[0] if classes else ""
+    declarations: list[dict[str, Any]] = []
+    for line_no, raw_line in enumerate(text.splitlines(), start=1):
+        class_match = CLASS_DECL_RE.search(raw_line)
+        if class_match:
+            current_class = class_match.group("name")
+            continue
+        stripped = raw_line.strip()
+        match = HEADER_DECL_DETAIL_RE.match(stripped)
+        if not match:
+            continue
+        name = match.group("name")
+        if not current_class or name == current_class or name == f"~{current_class}":
+            continue
+        declarations.append(
+            {
+                "class": current_class,
+                "name": name,
+                "args": re.sub(r"\s+", " ", match.group("args")).strip(),
+                "raw": stripped,
+                "line": line_no,
+            }
+        )
+    return declarations
+
+
+def _cpp_member_definitions(text: str, class_names: set[str]) -> list[dict[str, Any]]:
+    definitions: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for line_no, raw_line in enumerate(text.splitlines(), start=1):
+        for match in CPP_DEFINITION_DETAIL_RE.finditer(raw_line):
+            cls = match.group("class")
+            if class_names and cls not in class_names:
+                continue
+            name = match.group("name")
+            key = (cls, name, re.sub(r"\s+", " ", match.group("args")).strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            definitions.append(
+                {
+                    "class": cls,
+                    "name": name,
+                    "args": key[2],
+                    "raw": raw_line.strip(),
+                    "line": line_no,
+                }
+            )
+    return definitions
+
+
+def _call_site_count(text: str, function_name: str) -> int:
+    count = 0
+    call_re = re.compile(rf"\b{re.escape(function_name)}\s*\(")
+    definition_re = re.compile(rf"::\s*{re.escape(function_name)}\s*\(")
+    for raw_line in text.splitlines():
+        if definition_re.search(raw_line):
+            continue
+        if call_re.search(raw_line):
+            count += 1
+    return count
+
+
+def missing_definition_call_removal_blockers(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    issues: list[str] = []
+    before_cpp_by_stem = {
+        Path(path).stem: path
+        for path in before
+        if Path(path).suffix.lower() in {".cpp", ".c", ".cc"}
+    }
+    for header_path, header_text in before.items():
+        if Path(header_path).suffix.lower() not in {".h", ".hpp"}:
+            continue
+        cpp_path = before_cpp_by_stem.get(Path(header_path).stem)
+        if not cpp_path:
+            continue
+        before_cpp = before.get(cpp_path, "")
+        after_cpp = after.get(cpp_path, before_cpp)
+        declarations = _header_member_declarations(header_text)
+        class_names = {str(item["class"]) for item in declarations if item.get("class")}
+        before_definitions = {
+            (item["class"], item["name"]) for item in _cpp_member_definitions(before_cpp, class_names)
+        }
+        after_definitions = {
+            (item["class"], item["name"]) for item in _cpp_member_definitions(after_cpp, class_names)
+        }
+        for decl in declarations:
+            key = (decl["class"], decl["name"])
+            if key in before_definitions or key not in after_definitions:
+                continue
+            before_calls = _call_site_count(before_cpp, str(decl["name"]))
+            after_calls = _call_site_count(after_cpp, str(decl["name"]))
+            if before_calls > 0 and after_calls < before_calls:
+                issues.append(
+                    f"The edit added {decl['class']}::{decl['name']} but removed existing call site(s) in {cpp_path}. "
+                    "For missing-definition fixes, add the implementation without deleting existing callers unless the request explicitly asks for removal."
+                )
+    return issues
+
+
+def _matching_header_cpp_pairs(root: Path, focus_text: str, *, fallback: bool) -> list[tuple[Path, Path]]:
+    pairs: list[tuple[Path, Path]] = []
+
+    def add_pair(header: Path, cpp: Path) -> None:
+        pair = (header.resolve(), cpp.resolve())
+        if pair not in pairs:
+            pairs.append(pair)
+
+    for candidate in _candidate_source_paths_from_text(root, focus_text):
+        matched = _matching_source_pair_paths(root, candidate)
+        headers = [path for path in matched if path.suffix.lower() in {".h", ".hpp"}]
+        cpps = [path for path in matched if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+        for header in headers:
+            for cpp in cpps:
+                add_pair(header, cpp)
+
+    if fallback and not pairs:
+        headers = [
+            path
+            for path in iter_source_files(root)
+            if path.suffix.lower() in {".h", ".hpp"} and "Source" in path.parts
+        ]
+        by_stem = {
+            path.stem: path
+            for path in iter_source_files(root)
+            if path.suffix.lower() in {".cpp", ".c", ".cc"} and "Source" in path.parts
+        }
+        for header in headers:
+            cpp = by_stem.get(header.stem)
+            if cpp:
+                add_pair(header, cpp)
+    return pairs
+
+
+def _route_needs_decl_definition_evidence(route: dict[str, Any] | None, focus_text: str) -> bool:
+    subkind = str((route or {}).get("errorSubkind") or "")
+    if subkind in {"LNK_MISSING_CPP_DEFINITION", "HEADER_CPP_SIGNATURE_MISMATCH"}:
+        return True
+    lowered = str(focus_text or "").lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "lnk2019",
+            "unresolved external",
+            "missing cpp definition",
+            "signature mismatch",
+            "declaration",
+            "definition",
+        )
+    )
+
+
+def declaration_definition_evidence(
+    root: Path,
+    focus_text: str,
+    route: dict[str, Any] | None = None,
+    *,
+    max_pairs: int = 3,
+    max_chars: int = 6000,
+) -> str:
+    fallback = _route_needs_decl_definition_evidence(route, focus_text)
+    pairs = _matching_header_cpp_pairs(root, focus_text, fallback=fallback)
+    if not pairs:
+        return ""
+
+    analyzed: list[dict[str, Any]] = []
+    for header, cpp in pairs:
+        header_text = read_text(header)
+        cpp_text = read_text(cpp)
+        declarations = _header_member_declarations(header_text)
+        class_names = {str(item["class"]) for item in declarations if item.get("class")}
+        definitions = _cpp_member_definitions(cpp_text, class_names)
+        definition_names = {(item["class"], item["name"]) for item in definitions}
+        missing = [
+            item
+            for item in declarations
+            if (item["class"], item["name"]) not in definition_names
+            and re.search(rf"\b{re.escape(str(item['name']))}\s*\(", cpp_text)
+        ]
+        analyzed.append(
+            {
+                "header": header,
+                "cpp": cpp,
+                "declarations": declarations,
+                "definitions": definitions,
+                "missing": missing,
+            }
+        )
+
+    analyzed.sort(key=lambda item: (0 if item["missing"] else 1, _relative_project_path(root, item["header"])))
+    if fallback and not any(item["missing"] for item in analyzed):
+        analyzed = [item for item in analyzed if item["declarations"] or item["definitions"]]
+    if not analyzed:
+        return ""
+
+    lines = [
+        "Current declaration/definition evidence (authoritative; prefer this over generic RAG examples):",
+        "- These facts are extracted from the current project files, not from examples.",
+        "- Do not copy function names from generic RAG examples unless they appear below.",
+        "- For missing-definition fixes, add the implementation without deleting existing call sites.",
+    ]
+    for item in analyzed[:max_pairs]:
+        header = item["header"]
+        cpp = item["cpp"]
+        lines.append("")
+        lines.append(f"## {_relative_project_path(root, header)} <-> {_relative_project_path(root, cpp)}")
+        missing = item["missing"]
+        if missing:
+            lines.append("Declared without matching cpp definition and called/needed in cpp:")
+            for decl in missing[:8]:
+                args = f"({decl['args']})"
+                lines.append(f"- {decl['class']}::{decl['name']}{args} from header line {decl['line']}: {decl['raw']}")
+        declarations = item["declarations"]
+        if declarations:
+            lines.append("Header member declarations:")
+            for decl in declarations[:10]:
+                lines.append(f"- line {decl['line']}: {decl['raw']}")
+        definitions = item["definitions"]
+        if definitions:
+            lines.append("Existing cpp member definitions:")
+            for definition in definitions[:10]:
+                lines.append(f"- line {definition['line']}: {definition['raw']}")
+        if len("\n".join(lines)) >= max_chars:
+            lines.append("- ... declaration/definition evidence truncated.")
+            break
+    return "\n".join(lines)[:max_chars]
+
+
+def focused_current_source_evidence(root: Path, focus_text: str, route: dict[str, Any] | None = None) -> str:
+    parts = [
+        declaration_definition_evidence(root, focus_text, route),
+        focused_source_pair_context(root, focus_text),
+    ]
+    return "\n\n".join(part for part in parts if part.strip())
 
 
 def diff_snapshots(before: dict[str, str], after: dict[str, str]) -> str:
@@ -414,7 +792,7 @@ def create_minimal_unreal_project(root: Path, project_name: str) -> Path:
         json.dumps(
             {
                 "FileVersion": 3,
-                "EngineAssociation": "5.7",
+                "EngineAssociation": "5.8",
                 "Category": "",
                 "Description": "Scratch project generated by LM Studio Unreal wrapper.",
                 "Modules": [
@@ -682,6 +1060,79 @@ def request_mentions_any(request: str, needles: tuple[str, ...]) -> bool:
     return any(needle.lower() in lowered for needle in needles)
 
 
+NEGATIVE_BUILD_CS_MARKERS = (
+    "do not",
+    "don't",
+    "without",
+    "unless",
+    "not supported",
+    "forbidden",
+    "avoid",
+    "no build.cs",
+)
+BUILD_CS_SCOPE_MARKERS = (
+    "build.cs",
+    "publicdependencymodulenames",
+    "privatedependencymodulenames",
+    "module dependency",
+    "missing module",
+)
+POSITIVE_BUILD_CS_ACTION_RE = re.compile(
+    r"\b(?:add|insert|modify|update|patch|edit|fix|declare|include)\b"
+    r".{0,90}\b(?:build\.cs|publicdependencymodulenames|privatedependencymodulenames|module dependency|missing module)\b",
+    re.I,
+)
+
+
+def _request_sentences(request: str) -> list[str]:
+    safe = re.sub(r"build\.cs", "build_cs", str(request or ""), flags=re.I)
+    parts = [part.strip().replace("build_cs", "Build.cs") for part in re.split(r"[\n.;]+", safe) if part.strip()]
+    return parts
+
+
+def request_forbids_build_cs_first(request: str) -> bool:
+    for sentence in _request_sentences(request):
+        lowered = sentence.lower()
+        if any(marker in lowered for marker in BUILD_CS_SCOPE_MARKERS) and any(
+            marker in lowered for marker in NEGATIVE_BUILD_CS_MARKERS
+        ):
+            return True
+    return False
+
+
+def _positive_build_cs_request_text(request: str) -> str:
+    kept: list[str] = []
+    for sentence in _request_sentences(request):
+        lowered = sentence.lower()
+        mentions_scope = any(marker in lowered for marker in BUILD_CS_SCOPE_MARKERS)
+        is_negative = mentions_scope and any(marker in lowered for marker in NEGATIVE_BUILD_CS_MARKERS)
+        if not is_negative:
+            kept.append(sentence)
+    return "\n".join(kept)
+
+
+def request_mentions_gameplay_tags(request: str) -> bool:
+    return request_mentions_any(request, ("gameplaytags", "gameplaytag", "GameplayTagContainer.h"))
+
+
+def request_requests_build_cs_fix(request: str) -> bool:
+    text = _positive_build_cs_request_text(request)
+    lowered = text.lower()
+    if not lowered.strip():
+        return False
+    if "publicdependencymodulenames" in lowered or "privatedependencymodulenames" in lowered:
+        return True
+    if request_mentions_gameplay_tags(text):
+        return True
+    if POSITIVE_BUILD_CS_ACTION_RE.search(text):
+        return True
+    if "cannot open include file" in lowered and ("module" in lowered or "build.cs" in lowered):
+        return True
+    if "missing module dependency" in lowered or "module dependency error" in lowered:
+        return True
+    return False
+
+
 BUILD_CS_CLAIM_MARKERS = (
     "build.cs",
     "publicdependencymodulenames",
@@ -716,13 +1167,25 @@ def bundle_includes_build_cs(bundle: dict[str, Any]) -> bool:
     return any(path.lower().endswith(".build.cs") for path in paths if path)
 
 
+def proposed_bundle_paths(bundle: dict[str, Any] | None) -> list[str]:
+    paths: list[str] = []
+    for item in (bundle or {}).get("files") or []:
+        path = str(item.get("path") or "").replace("\\", "/")
+        if path:
+            paths.append(path)
+    for item in (bundle or {}).get("patches") or []:
+        path = str(item.get("path") or "").replace("\\", "/")
+        if path:
+            paths.append(path)
+    return list(dict.fromkeys(paths))
+
+
 BUILD_CS_RETRY_FEEDBACK = (
-    "If the error is caused by a missing Unreal module dependency, you must edit the relevant .Build.cs file. "
-    "Do not only explain the required dependency. You must produce a concrete file write/patch for the Build.cs file. "
-    "The task is not complete until the Build.cs file has been modified.\n"
+    "Build.cs is only the correct target when the current root cause is a missing Unreal module dependency. "
+    "For declaration/definition, signature mismatch, or missing implementation routes, prefer the matching header/cpp files unless module evidence appears.\n"
     "If code includes FGameplayTag, FGameplayTagContainer, UGameplayTagsManager, or GameplayTag-related headers, "
     'check whether "GameplayTags" exists in PublicDependencyModuleNames or PrivateDependencyModuleNames. '
-    'If it is missing, modify the module Build.cs file and add "GameplayTags".'
+    'If it is missing and the error is module-dependency related, modify the module Build.cs file and add "GameplayTags".'
 )
 
 
@@ -738,10 +1201,7 @@ def hallucination_blockers(
     issues: list[str] = []
     uses_gameplay_tags = source_uses_gameplay_tags(root)
     needs_build_cs = (
-        request_mentions_any(
-            request,
-            ("build.cs", "publicdependencymodulenames", "module dependency", "gameplaytags", "gameplaytag"),
-        )
+        request_requests_build_cs_fix(request)
         or uses_gameplay_tags
         or answer_claims_build_cs_edit(answer)
     )
@@ -780,7 +1240,7 @@ def no_change_blockers(request: str, root: Path, findings: list[Finding]) -> lis
     public_modules = public_build_modules(build_text_value)
     uses_gameplay_tags = source_uses_gameplay_tags(root)
     public_uses_gameplay_tags = source_uses_gameplay_tags(root, public_only=True)
-    if request_mentions_any(request, ("gameplaytags", "gameplaytag", "GameplayTagContainer.h", "Build.cs")) or uses_gameplay_tags:
+    if request_mentions_gameplay_tags(request) or uses_gameplay_tags:
         if "GameplayTags" not in declared_modules:
             issues.append(
                 'The request mentions GameplayTags, but the current Build.cs still does not declare "GameplayTags".'
@@ -836,7 +1296,7 @@ def edit_scope_blockers(request: str, before: dict[str, str], after: dict[str, s
     declared_modules = declared_build_modules(build_cs_text(root))
     public_modules = public_build_modules(build_cs_text(root))
 
-    if request_mentions_any(request, ("gameplaytags", "gameplaytag", "GameplayTagContainer.h")) or uses_gameplay_tags:
+    if request_mentions_gameplay_tags(request) or uses_gameplay_tags:
         if "GameplayTags" not in declared_modules:
             issues.append(
                 'GameplayTags is still missing from Build.cs; inspect the actual *.Build.cs and add it to PublicDependencyModuleNames when a public header exposes GameplayTags types.'
@@ -845,7 +1305,7 @@ def edit_scope_blockers(request: str, before: dict[str, str], after: dict[str, s
             issues.append(
                 'GameplayTags is declared outside PublicDependencyModuleNames, but a public header exposes GameplayTags types.'
             )
-    if request_mentions_any(request, ("build.cs", "publicdependencymodulenames", "module dependency")):
+    if request_requests_build_cs_fix(request):
         if not changed_build:
             issues.append(
                 "The request targets Build.cs/module dependencies, but this edit did not change any *.Build.cs file."
@@ -855,6 +1315,8 @@ def edit_scope_blockers(request: str, before: dict[str, str], after: dict[str, s
             issues.append(
                 "The request appears to require matching the .cpp definition to the header declaration; do not change only the header unless the request explicitly asks for that."
             )
+    if request_mentions_any(request, ("lnk2019", "unresolved external", "missing cpp definition", "missing implementation")):
+        issues.extend(missing_definition_call_removal_blockers(before, after))
     return issues
 
 
@@ -2183,6 +2645,11 @@ def summarize_rag_telemetry(
     sidecar_counts: dict[str, int] = {}
     suspected_modules: list[str] = []
     error_route: dict[str, Any] = {}
+    required_read_hints: list[str] = []
+    forbidden_action_hints: list[str] = []
+    allowed_patch_target_hints: list[str] = []
+    build_cs_first_warning = ""
+    route_priority_applied = ""
     for row in sidecar_rows:
         sidecar_type = str(row.get("sidecarType") or row.get("symbol_kind") or "")
         sidecar_counts[sidecar_type] = sidecar_counts.get(sidecar_type, 0) + 1
@@ -2196,6 +2663,23 @@ def summarize_rag_telemetry(
                     "broadMode": item.get("broadMode", ""),
                     "errorSubkind": item.get("errorSubkind", ""),
                 }
+            if sidecar_type == "error_route":
+                for value in item.get("requiredReads") or []:
+                    value = str(value)
+                    if value and value not in required_read_hints:
+                        required_read_hints.append(value)
+                for value in item.get("forbiddenActions") or []:
+                    value = str(value)
+                    if value and value not in forbidden_action_hints:
+                        forbidden_action_hints.append(value)
+                for value in item.get("allowedPatchTargets") or []:
+                    value = str(value)
+                    if value and value not in allowed_patch_target_hints:
+                        allowed_patch_target_hints.append(value)
+                if not build_cs_first_warning:
+                    build_cs_first_warning = str(item.get("buildCsFirstWarning") or "")
+                if not route_priority_applied:
+                    route_priority_applied = str(item.get("routePriorityApplied") or "")
     sources: dict[str, int] = {}
     layers: dict[str, int] = {}
     final_modes: list[str] = []
@@ -2222,6 +2706,13 @@ def summarize_rag_telemetry(
         "symbolGraphFileExists": (Path(__file__).resolve().parent.parent / "data" / "symbol_graph" / "symbol_graph.json").is_file(),
         "suspectedModules": suspected_modules[:5],
         "errorRoute": error_route,
+        "requiredReadHints": required_read_hints[:8],
+        "forbiddenActionHints": forbidden_action_hints[:8],
+        "allowedPatchTargetHints": allowed_patch_target_hints[:8],
+        "buildCsFirstWarningEmitted": bool(build_cs_first_warning and not suspected_modules),
+        "routePriorityApplied": route_priority_applied,
+        "buildCsUnsupportedForRouteWarning": bool(build_cs_first_warning and not suspected_modules),
+        "staticValidationRetryHint": False,
         "contextCharCount": len(context),
     }
 
@@ -2382,6 +2873,49 @@ def fallback_build_error_record(log_path: Path, project_root: Path, output: str)
     }
 
 
+def _record_message_for_priority(record: dict[str, Any]) -> str:
+    text = str(record.get("text") or record.get("title") or "")
+    match = re.search(r"Message:\s*(.+?)(?:\n\n|$)", text, flags=re.DOTALL)
+    return (match.group(1) if match else text).strip()
+
+
+def build_error_record_priority(record: dict[str, Any]) -> tuple[int, str, str]:
+    """Rank actual compile/link/UHT failures above toolchain or API warnings."""
+    metadata = record.get("metadata") or {}
+    severity = str(metadata.get("severity") or "").lower()
+    code = str(metadata.get("error_code") or "").upper()
+    subkind = str(metadata.get("error_subkind") or "")
+    message = _record_message_for_priority(record).lower()
+    low_signal = (
+        "not a preferred version" in message
+        or "please update your code to the new api before upgrading" in message
+        or code in {"C4996"}
+    )
+    if low_signal:
+        return (90, code, message)
+    if code.startswith("LNK") and severity in {"error", "fatal error"}:
+        return (0, code, message)
+    if code in {"C2511", "C2039", "C2065", "C2143", "C2146", "C2182", "C2447"}:
+        return (1, code, message)
+    if subkind and not subkind.endswith("_GENERIC") and severity in {"error", "fatal error"}:
+        return (2, code, message)
+    if "unrealheadertool" in message or "generated.h" in message or code == "UHT":
+        return (3, code, message)
+    if severity in {"error", "fatal error"}:
+        return (10, code, message)
+    if code.startswith("LNK") or re.match(r"C\d{4}", code):
+        return (20, code, message)
+    if severity == "warning":
+        return (80, code, message)
+    return (50, code, message)
+
+
+def prioritize_build_error_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    indexed = list(enumerate(records))
+    indexed.sort(key=lambda item: (*build_error_record_priority(item[1]), item[0]))
+    return [record for _, record in indexed]
+
+
 def parse_build_feedback(log_path: Path, project_root: Path, output: str, context_lines: int = 4) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     if extract_error is not None and log_path.exists():
@@ -2394,7 +2928,7 @@ def parse_build_feedback(log_path: Path, project_root: Path, output: str, contex
                 records.append(item)
     if not records:
         records.append(fallback_build_error_record(log_path, project_root, output))
-    return records[:12]
+    return prioritize_build_error_records(records)[:12]
 
 
 def mode_from_error_kind(error_kind: str) -> str:
@@ -2489,6 +3023,68 @@ def module_resolver_feedback(text: str, build_text_value: str = "") -> str:
     return "\n".join(lines)
 
 
+def soft_route_feedback(route: dict[str, Any], *, module_evidence: bool = False) -> str:
+    """Return warning-only route guidance for retry prompts.
+
+    This is deliberately not a hard patch gate. It nudges declaration/definition
+    and linker failures toward source files before Build.cs changes.
+    """
+    lines: list[str] = []
+    for value in route.get("softSteering") or []:
+        text = str(value).strip()
+        if text and text not in lines:
+            lines.append(text)
+    warning = str(route.get("buildCsFirstWarning") or "").strip()
+    if warning and not module_evidence:
+        lines.append(warning)
+    if not lines:
+        return ""
+    return "Soft route steering (warning only; not a hard block):\n" + "\n".join(f"- {line}" for line in lines)
+
+
+def build_cs_first_soft_warning(route: dict[str, Any], changed_paths: list[str], *, module_evidence: bool = False) -> str:
+    warning = str(route.get("buildCsFirstWarning") or "").strip()
+    if not warning or module_evidence:
+        return ""
+    if any(path.replace("\\", "/").lower().endswith(".build.cs") for path in changed_paths):
+        return warning
+    return ""
+
+
+def build_cs_unsupported_for_route_warning(
+    route: dict[str, Any], changed_paths: list[str], *, module_evidence: bool = False
+) -> str:
+    if module_evidence:
+        return ""
+    if route.get("errorSubkind") not in {"HEADER_CPP_SIGNATURE_MISMATCH", "LNK_MISSING_CPP_DEFINITION"}:
+        return ""
+    if not any(path.replace("\\", "/").lower().endswith(".build.cs") for path in changed_paths):
+        return ""
+    return BUILD_CS_UNSUPPORTED_FOR_ROUTE_WARNING
+
+
+def unsupported_build_cs_soft_replan_feedback(
+    route: dict[str, Any], changed_paths: list[str], *, module_evidence: bool = False
+) -> str:
+    if not build_cs_unsupported_for_route_warning(route, changed_paths, module_evidence=module_evidence):
+        return ""
+    return UNSUPPORTED_BUILD_CS_SOFT_REPLAN
+
+
+def static_validation_retry_feedback(
+    findings: list[Finding] | None,
+    route: dict[str, Any],
+    *,
+    build_output: str = "",
+) -> str:
+    if any(finding.code == "CPP_FUNCTION_SIGNATURE_MISMATCH" for finding in findings or []):
+        return STATIC_SIGNATURE_RETRY_HINT
+    if route.get("errorSubkind") == "LNK_MISSING_CPP_DEFINITION":
+        if re.search(r"\bLNK2019\b|unresolved external|missing cpp definition", build_output or "", re.I):
+            return LNK_MISSING_DEFINITION_RETRY_HINT
+    return ""
+
+
 def _symbol_candidates_from_text(text: str) -> list[str]:
     found: list[str] = []
     for pattern in (
@@ -2541,15 +3137,38 @@ def retry_feedback_block(recommendation: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def is_generic_error_route(route: dict[str, Any] | None) -> bool:
+    if not route:
+        return True
+    subkind = str(route.get("errorSubkind") or "")
+    return not subkind or subkind.endswith("_GENERIC") or subkind == "COMPILE_GENERIC"
+
+
+def preserve_specific_route(
+    current_route: dict[str, Any],
+    previous_route: dict[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    if is_generic_error_route(current_route) and not is_generic_error_route(previous_route):
+        preserved = dict(previous_route or {})
+        preserved["routePreservedFromInitial"] = True
+        return preserved, True
+    out = dict(current_route)
+    out["routePreservedFromInitial"] = False
+    return out, False
+
+
 def build_retry_state_payload(
     *,
     previous_record: dict[str, Any] | None,
+    previous_route: dict[str, Any] | None = None,
     attempt: int,
     passed: bool,
     records: list[dict[str, Any]],
     changed_paths: list[str],
     build_log_path: str,
     fallback_message: str,
+    static_findings: list[Finding] | None = None,
+    build_output: str = "",
 ) -> dict[str, Any]:
     first = records[0] if records else {}
     metadata = first.get("metadata") or {}
@@ -2563,11 +3182,20 @@ def build_retry_state_payload(
         changed_paths=changed_paths,
         build_log_path=build_log_path,
     )
-    route = route_error_action(message, str(metadata.get("error_code") or ""))
+    parsed_route = route_error_action(message, str(metadata.get("error_code") or ""))
+    route, route_preserved = preserve_specific_route(parsed_route, previous_route)
     recommendation = recommend_retry_action(previous_record, current)
+    static_hint = static_validation_retry_feedback(static_findings, route, build_output=build_output)
     current["sameErrorRepeated"] = recommendation["sameErrorRepeated"]
     current["recommendedAction"] = recommendation
     current["errorRoute"] = route
+    current["firstActionableErrorSelected"] = {
+        "errorCode": str(metadata.get("error_code") or ""),
+        "errorSubkind": str(metadata.get("error_subkind") or ""),
+        "message": message[:300],
+    }
+    current["routePreservedFromInitial"] = route_preserved
+    current["staticValidationRetryHint"] = static_hint
     return {"current": current, "recommendation": recommendation}
 
 
@@ -2688,6 +3316,7 @@ def user_prompt(
     *,
     request: str,
     rag_context: str,
+    focused_evidence: str = "",
     project_state: str,
     project_name: str,
     project_file: Path,
@@ -2698,6 +3327,7 @@ def user_prompt(
     feedback = previous_feedback.strip() or "No previous build or validation failures."
     directive = mode_directive(mode)
     directive_block = f"\n{directive}\n" if directive else ""
+    focused_block = f"\nFocused evidence:\n{focused_evidence}\n" if focused_evidence.strip() else ""
     return f"""User request:
 {request}
 {directive_block}
@@ -2718,6 +3348,7 @@ Write files under this scratch project. Prefer paths such as:
 
 If you use Enhanced Input, bind through UEnhancedInputComponent with ETriggerEvent.
 If you create action request APIs, preserve this order: current state check, resource cost check, asset/montage/target check, feasibility check, success confirmation, resource consume, state change, event broadcast.
+{focused_block}
 
 Current project file state:
 {project_state}
@@ -2918,11 +3549,62 @@ def run(args: argparse.Namespace) -> int:
     original_mode = args.mode
     retry_records: list[dict[str, Any]] = []
     previous_retry_record: dict[str, Any] | None = None
+    active_route: dict[str, Any] = route_error_action(request)
+
+    def record_validation_rejection(
+        *,
+        attempt: int,
+        attempt_dir: Path,
+        feedback: str,
+        blockers: list[str] | None = None,
+        bundle: dict[str, Any] | None = None,
+        changed_paths: list[str] | None = None,
+        rejection_kind: str = "pre_apply_validation",
+    ) -> None:
+        nonlocal previous_retry_record
+        proposed_paths = proposed_bundle_paths(bundle)
+        current = make_attempt_record(
+            attempt=attempt,
+            passed=False,
+            error_message=feedback[:500],
+            error_code="VALIDATION_REJECTED",
+            error_subkind=str(active_route.get("errorSubkind") or "PRE_APPLY_VALIDATION"),
+            changed_paths=changed_paths or [],
+            build_log_path="",
+            notes=[rejection_kind],
+        )
+        recommendation = recommend_retry_action(previous_retry_record, current)
+        current["sameErrorRepeated"] = recommendation["sameErrorRepeated"]
+        current["recommendedAction"] = recommendation
+        current["errorRoute"] = active_route
+        current["validationRejected"] = True
+        current["validationRejectionKind"] = rejection_kind
+        current["validationBlockers"] = list(blockers or [])[:12]
+        current["proposedChangedPaths"] = proposed_paths
+        current["appliedChangedPaths"] = list(changed_paths or [])
+        current["noEffectiveEdit"] = not bool(changed_paths)
+        retry_records.append(current)
+        previous_retry_record = current
+        retry_state_doc = {
+            "attempts": retry_records,
+            "latest": current,
+            "sameErrorRepeated": recommendation.get("sameErrorRepeated", False),
+            "noOpEdit": recommendation.get("noOpEdit", False),
+            "validationRejected": True,
+            "recommendedAction": recommendation,
+        }
+        write_json(run_dir / "retry_state.json", retry_state_doc)
+        write_json(attempt_dir / "retry_state.json", retry_state_doc)
 
     initial_prompt = agent_plan_block + user_prompt(
         request=request,
         rag_context=rag_context,
-        project_state=summarize_project_state(project_root, mode=args.mode),
+        focused_evidence=focused_current_source_evidence(project_root, request, active_route),
+        project_state=summarize_project_state(
+            project_root,
+            mode=args.mode,
+            include_full_build_cs=args.mode == "module_fix",
+        ),
         project_name=project_name,
         project_file=project_file,
         target=target,
@@ -3011,10 +3693,22 @@ def run(args: argparse.Namespace) -> int:
             f"Compile loop attempt {attempt}/{args.max_attempts}. "
             "List at most 3 assumptions; apply one minimal diff this turn.\n\n"
         )
-        project_state = summarize_project_state(project_root, mode=budget_mode)
+        focus_text = "\n".join(
+            [
+                request,
+                previous_feedback,
+                build_error_query(last_build_records, last_build.output if last_build else "") if last_build_records else "",
+            ]
+        )
+        project_state = summarize_project_state(
+            project_root,
+            mode=budget_mode,
+            include_full_build_cs=args.mode == "module_fix" or active_route.get("broadMode") == "module_fix",
+        )
         prompt = user_prompt(
             request=request,
             rag_context=rag_context,
+            focused_evidence=focused_current_source_evidence(project_root, focus_text, active_route),
             project_state=project_state,
             project_name=project_name,
             project_file=project_file,
@@ -3058,11 +3752,26 @@ def run(args: argparse.Namespace) -> int:
                 if not gate.get("ok"):
                     previous_feedback = "Orchestrator blocked edit: " + "; ".join(gate.get("issues") or [])
                     write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                    record_validation_rejection(
+                        attempt=attempt,
+                        attempt_dir=attempt_dir,
+                        feedback=previous_feedback,
+                        blockers=list(gate.get("issues") or []),
+                        bundle=bundle,
+                        rejection_kind="orchestrator_gate",
+                    )
                     continue
             write_json(attempt_dir / "model_response.json", bundle)
         except Exception as exc:
             previous_feedback = f"Model response was not valid JSON: {exc}"
             write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+            record_validation_rejection(
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                feedback=previous_feedback,
+                blockers=[str(exc)],
+                rejection_kind="invalid_json",
+            )
             continue
 
         last_answer = str(bundle.get("answer") or "")
@@ -3073,6 +3782,14 @@ def run(args: argparse.Namespace) -> int:
                 + "\n".join(f"- {issue}" for issue in hall_blockers)
             )
             write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+            record_validation_rejection(
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                feedback=previous_feedback,
+                blockers=hall_blockers,
+                bundle=bundle,
+                rejection_kind="hallucination_blocker",
+            )
             continue
         has_edits = bool(bundle["files"]) or bool(bundle.get("patches"))
         if not has_edits:
@@ -3088,6 +3805,14 @@ def run(args: argparse.Namespace) -> int:
                     + ("\nNo-change blockers:\n" + "\n".join(f"- {issue}" for issue in blockers) if blockers else "")
                 )
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                record_validation_rejection(
+                    attempt=attempt,
+                    attempt_dir=attempt_dir,
+                    feedback=previous_feedback,
+                    blockers=blockers,
+                    bundle=bundle,
+                    rejection_kind="empty_files_without_evidence",
+                )
                 continue
             last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
             static_report = format_findings(last_findings)
@@ -3101,10 +3826,25 @@ def run(args: argparse.Namespace) -> int:
                     + "\nInspect the authoritative project state and return the smallest required file change."
                 )
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                record_validation_rejection(
+                    attempt=attempt,
+                    attempt_dir=attempt_dir,
+                    feedback=previous_feedback,
+                    blockers=blockers,
+                    bundle=bundle,
+                    rejection_kind="no_change_blocker",
+                )
                 continue
             if has_static_errors(last_findings) and not args.skip_static_gate:
                 previous_feedback = static_report
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                record_validation_rejection(
+                    attempt=attempt,
+                    attempt_dir=attempt_dir,
+                    feedback=previous_feedback,
+                    bundle=bundle,
+                    rejection_kind="empty_files_static_gate",
+                )
                 continue
             write_file(final_diff_path, diff_snapshots(baseline_snapshot, snapshot_project_files(project_root)) + "\n")
             summary = final_summary(
@@ -3138,10 +3878,18 @@ def run(args: argparse.Namespace) -> int:
                     "files array with evidence. Otherwise inspect the current files and change only the missing part."
                 )
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                record_validation_rejection(
+                    attempt=attempt,
+                    attempt_dir=attempt_dir,
+                    feedback=previous_feedback,
+                    bundle=bundle,
+                    rejection_kind="no_effective_file_change",
+                )
                 continue
             scope_blockers = edit_scope_blockers(request, before_apply, after_apply, project_root)
             if scope_blockers:
-                restore_changed_paths(project_root, before_apply, changed_paths_between(before_apply, after_apply))
+                rejected_changed_paths = changed_paths_between(before_apply, after_apply)
+                restore_changed_paths(project_root, before_apply, rejected_changed_paths)
                 last_written = []
                 retry_tail = BUILD_CS_RETRY_FEEDBACK if any("Build.cs" in issue for issue in scope_blockers) else ""
                 previous_feedback = (
@@ -3151,10 +3899,27 @@ def run(args: argparse.Namespace) -> int:
                     + "\nUse the current project state as authoritative and change the specific file(s) needed."
                 )
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                record_validation_rejection(
+                    attempt=attempt,
+                    attempt_dir=attempt_dir,
+                    feedback=previous_feedback,
+                    blockers=scope_blockers,
+                    bundle=bundle,
+                    changed_paths=[],
+                    rejection_kind="edit_scope_blocker",
+                )
                 continue
         except Exception as exc:
             previous_feedback = f"File application failed: {exc}"
             write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+            record_validation_rejection(
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                feedback=previous_feedback,
+                blockers=[str(exc)],
+                bundle=bundle if "bundle" in locals() else None,
+                rejection_kind="file_application_failed",
+            )
             continue
 
         lightweight_static = only_source_files_changed(before_apply, after_apply)
@@ -3167,6 +3932,14 @@ def run(args: argparse.Namespace) -> int:
         write_file(attempt_dir / "static_validation.txt", static_report + "\n")
         if has_static_errors(last_findings) and not args.skip_static_gate:
             previous_feedback = static_report
+            record_validation_rejection(
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                feedback=previous_feedback,
+                bundle=bundle,
+                changed_paths=changed_paths_between(before_apply, after_apply),
+                rejection_kind="static_gate",
+            )
             continue
 
         if args.skip_build:
@@ -3258,13 +4031,43 @@ def run(args: argparse.Namespace) -> int:
             previous_record=previous_retry_record,
             attempt=attempt,
             passed=False,
+            previous_route=active_route,
             records=parsed_feedback.records,
             changed_paths=changed_paths,
             build_log_path=str(last_build.log_path),
             fallback_message=tail_text(last_build.output, 1000),
+            static_findings=last_findings,
+            build_output=last_build.output,
         )
+        module_block = module_resolver_feedback(
+            "\n".join([request, build_error_query(parsed_feedback.records, last_build.output)]),
+            build_cs_text(project_root),
+        )
+        route_block = "Error route:\n" + json.dumps(retry_payload["current"].get("errorRoute") or {}, ensure_ascii=False, indent=2)
+        route_feedback = soft_route_feedback(
+            retry_payload["current"].get("errorRoute") or {},
+            module_evidence=bool(module_block),
+        )
+        build_cs_warning = build_cs_first_soft_warning(
+            retry_payload["current"].get("errorRoute") or {},
+            changed_paths,
+            module_evidence=bool(module_block),
+        )
+        unsupported_build_cs_warning = build_cs_unsupported_for_route_warning(
+            retry_payload["current"].get("errorRoute") or {},
+            changed_paths,
+            module_evidence=bool(module_block),
+        )
+        soft_replan_feedback = unsupported_build_cs_soft_replan_feedback(
+            retry_payload["current"].get("errorRoute") or {},
+            changed_paths,
+            module_evidence=bool(module_block),
+        )
+        retry_payload["current"]["buildCsUnsupportedForRouteWarning"] = bool(unsupported_build_cs_warning)
+        retry_payload["current"]["softReplanTriggered"] = bool(soft_replan_feedback)
         retry_records.append(retry_payload["current"])
         previous_retry_record = retry_payload["current"]
+        active_route = retry_payload["current"].get("errorRoute") or active_route
         retry_state_doc = {
             "attempts": retry_records,
             "latest": retry_payload["current"],
@@ -3274,11 +4077,7 @@ def run(args: argparse.Namespace) -> int:
         }
         write_json(run_dir / "retry_state.json", retry_state_doc)
         write_json(attempt_dir / "retry_state.json", retry_state_doc)
-        route_block = "Error route:\n" + json.dumps(retry_payload["current"].get("errorRoute") or {}, ensure_ascii=False, indent=2)
-        module_block = module_resolver_feedback(
-            "\n".join([request, build_error_query(parsed_feedback.records, last_build.output)]),
-            build_cs_text(project_root),
-        )
+        static_retry_hint = str(retry_payload["current"].get("staticValidationRetryHint") or "")
         retry_block = retry_feedback_block(retry_payload["recommendation"])
         previous_feedback = "\n\n".join(
             [part for part in [
@@ -3288,6 +4087,11 @@ def run(args: argparse.Namespace) -> int:
                 format_build_records(parsed_feedback.records),
                 route_block,
                 module_block,
+                route_feedback,
+                f"Build.cs-first soft warning: {build_cs_warning}" if build_cs_warning else "",
+                f"Unsupported Build.cs route warning: {unsupported_build_cs_warning}" if unsupported_build_cs_warning else "",
+                f"Unsupported Build.cs soft replan: {soft_replan_feedback}" if soft_replan_feedback else "",
+                f"Static validation retry hint: {static_retry_hint}" if static_retry_hint else "",
                 retry_block,
                 f"Failure-specific RAG mode: {parsed_feedback.mode}",
                 "Failure-specific RAG context:",

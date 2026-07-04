@@ -9,6 +9,8 @@ These metrics compare local Unreal RAG/MCP/UBT workflow behavior against a Sonne
 | Average attempts to green build | Mean attempt count across evaluated cases | Captures retry efficiency, not just eventual success |
 | Same error repeated rate | Fraction of failures where the same error recurs after an edit | Detects poor diagnosis or repeated wrong patches |
 | No-op edit rate | Fraction of attempts where no changed path is recorded | Detects parser/tool drift or identical patch loops |
+| Validation rejected count | Attempts blocked before or during wrapper validation | Detects prompt/guardrail conflicts before UBT runs |
+| Pre-apply no-op count | Validation-rejected attempts with no effective applied edit | Detects blocked loops that would otherwise look invisible in UBT-only metrics |
 | Wrong file edit rate | Fraction of attempts that edit files outside allowed targets | Measures tool-policy and routing discipline |
 | Build.cs false positive rate | Module dependency patches made without module evidence | Detects overfitting to dependency fixes |
 | Rollback count | Number of attempts that must undo or supersede a bad edit | Captures long-running edit safety |
@@ -16,7 +18,7 @@ These metrics compare local Unreal RAG/MCP/UBT workflow behavior against a Sonne
 
 For local Qwen workflows, these metrics matter more than broad chat quality claims. Sonnet 5-style agent behavior is mostly visible in long-context project memory, tool use, retry judgment, and safe convergence under build feedback.
 
-When wrapper runs write `retry_state.json`, `eval_pass_at_k.py` can fold repeated-error and no-op data into KPI JSON as `sameErrorRepeatedCount`, `noOpEditCount`, `repeatedErrorCaseIds`, and `noOpCaseIds`. Missing retry-state data is treated as absent, not as a failure.
+When wrapper runs write `retry_state.json`, `eval_pass_at_k.py` can fold repeated-error, no-op, and validation-rejection data into KPI JSON as `sameErrorRepeatedCount`, `noOpEditCount`, `validationRejectedCount`, `preApplyNoOpCount`, and related case-id lists. Missing retry-state data is treated as absent, not as a failure.
 
 ## Metric-Only Smoke
 
@@ -43,3 +45,14 @@ python scripts/report_eval_kpi.py data/baseline/pass-at-k-kpi.json --suite-name 
 ```
 
 Live eval plus baseline comparison is required before making compile-fix improvement claims. Fixture-only holdout validation is useful coverage, but it is not a substitute for live UBT compile-fix evaluation.
+
+## Phase 2C Soft Steering Metrics
+
+After the first UE 5.8 local live holdout baseline, the immediate failures were declaration/definition style failures rather than Build.cs module dependency failures. Phase 2C therefore tracks whether warning-only steering improves:
+
+- header/cpp signature mismatch handling
+- LNK2019 missing cpp definition handling
+- Build.cs-first edits when module evidence is absent
+- required-read behavior for header declarations and matching cpp definitions
+
+These are soft steering observations only. Do not treat a single post-change run as proof of model improvement.

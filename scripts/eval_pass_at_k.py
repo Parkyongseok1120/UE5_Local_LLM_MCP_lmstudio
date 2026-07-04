@@ -39,11 +39,21 @@ def read_retry_state_metrics_file(path: Path) -> dict:
     except (OSError, json.JSONDecodeError):
         return {}
     attempts = data.get("attempts") if isinstance(data, dict) else []
+    validation_rejected_attempts = sum(1 for row in attempts or [] if row.get("validationRejected"))
+    pre_apply_noop_attempts = sum(
+        1
+        for row in attempts or []
+        if row.get("validationRejected") and (row.get("noOpEdit") or row.get("noEffectiveEdit"))
+    )
     return {
         "sameErrorRepeated": bool(data.get("sameErrorRepeated")),
         "noOpEdit": bool(data.get("noOpEdit")),
+        "validationRejected": bool(data.get("validationRejected")) or validation_rejected_attempts > 0,
+        "preApplyNoOp": pre_apply_noop_attempts > 0,
         "sameErrorRepeatedAttempts": sum(1 for row in attempts or [] if row.get("sameErrorRepeated")),
         "noOpEditAttempts": sum(1 for row in attempts or [] if row.get("noOpEdit")),
+        "validationRejectedAttempts": validation_rejected_attempts,
+        "preApplyNoOpAttempts": pre_apply_noop_attempts,
     }
 
 
@@ -102,8 +112,12 @@ def calculate_kpi_metrics(results: list[dict]) -> dict:
         "attemptHistogram": dict(sorted(histogram.items(), key=lambda item: int(item[0]))),
         "sameErrorRepeatedCount": sum(1 for row in results if row.get("sameErrorRepeated")),
         "noOpEditCount": sum(1 for row in results if row.get("noOpEdit")),
+        "validationRejectedCount": sum(1 for row in results if row.get("validationRejected")),
+        "preApplyNoOpCount": sum(1 for row in results if row.get("preApplyNoOp")),
         "repeatedErrorCaseIds": [str(row.get("id")) for row in results if row.get("sameErrorRepeated")],
         "noOpCaseIds": [str(row.get("id")) for row in results if row.get("noOpEdit")],
+        "validationRejectedCaseIds": [str(row.get("id")) for row in results if row.get("validationRejected")],
+        "preApplyNoOpCaseIds": [str(row.get("id")) for row in results if row.get("preApplyNoOp")],
     }
 
 

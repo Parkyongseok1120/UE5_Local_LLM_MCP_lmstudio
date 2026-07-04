@@ -28,7 +28,8 @@ EditStrategy = Literal[
 
 COMPILE_MARKERS = (
     "c1083", "lnk2019", "uht", "generated.h", "build.cs", "compile error",
-    "undefined", "unresolved", "missing module",
+    "undefined", "unresolved", "missing module", "signature mismatch",
+    "cpp_function_signature_mismatch", "declaration", "definition",
     "빌드 오류", "빌드오류", "컴파일 오류", "컴파일오류", "에러", "오류",
 )
 REFACTOR_MARKERS = ("refactor", "r0", "r1", "r2", "r3", "r4", "move class", "extract")
@@ -273,6 +274,15 @@ def apply_error_route_to_plan(evidence: EvidencePlan, checkpoints: list[str], ro
             checkpoints.append(item)
     for action in route.get("forbiddenActions") or []:
         item = f"Route forbidden action: {action}"
+        if item not in checkpoints:
+            checkpoints.append(item)
+    for steering in route.get("softSteering") or []:
+        item = f"Route soft steering: {steering}"
+        if item not in checkpoints:
+            checkpoints.append(item)
+    build_cs_warning = str(route.get("buildCsFirstWarning") or "").strip()
+    if build_cs_warning:
+        item = f"Route soft warning: {build_cs_warning}"
         if item not in checkpoints:
             checkpoints.append(item)
 

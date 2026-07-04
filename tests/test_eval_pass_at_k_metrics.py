@@ -14,7 +14,15 @@ def test_calculate_kpi_metrics_extended_fields():
         [
             {"id": "a", "pass": True, "passAt1": True, "attempts": 1},
             {"id": "b", "pass": True, "passAt1": False, "attempts": 3, "sameErrorRepeated": True},
-            {"id": "c", "pass": False, "passAt1": False, "attempts": 2, "noOpEdit": True},
+            {
+                "id": "c",
+                "pass": False,
+                "passAt1": False,
+                "attempts": 2,
+                "noOpEdit": True,
+                "validationRejected": True,
+                "preApplyNoOp": True,
+            },
         ]
     )
 
@@ -25,5 +33,9 @@ def test_calculate_kpi_metrics_extended_fields():
     assert metrics["attemptHistogram"] == {"1": 1, "2": 1, "3": 1}
     assert metrics["sameErrorRepeatedCount"] == 1
     assert metrics["noOpEditCount"] == 1
+    assert metrics["validationRejectedCount"] == 1
+    assert metrics["preApplyNoOpCount"] == 1
     assert metrics["repeatedErrorCaseIds"] == ["b"]
     assert metrics["noOpCaseIds"] == ["c"]
+    assert metrics["validationRejectedCaseIds"] == ["c"]
+    assert metrics["preApplyNoOpCaseIds"] == ["c"]

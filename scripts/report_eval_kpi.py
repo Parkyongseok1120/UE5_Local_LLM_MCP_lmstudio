@@ -36,9 +36,43 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 def load_run_telemetry(run_dir: Path | None) -> dict[str, Any]:
     if not run_dir or not run_dir.exists():
         return {"retryState": {}, "ragTelemetry": []}
+    retry_paths: list[Path] = []
+    rag_paths: list[Path] = []
+    direct_retry = run_dir / "retry_state.json"
+    direct_rag = run_dir / "rag_telemetry.jsonl"
+    if direct_retry.is_file():
+        retry_paths.append(direct_retry)
+    if direct_rag.is_file():
+        rag_paths.append(direct_rag)
+    retry_paths.extend(sorted(path for path in run_dir.glob("*/wrapper_run/retry_state.json") if path.is_file()))
+    rag_paths.extend(sorted(path for path in run_dir.glob("*/wrapper_run/rag_telemetry.jsonl") if path.is_file()))
+
+    retry_attempts: list[dict[str, Any]] = []
+    latest: dict[str, Any] = {}
+    same_error_repeated = False
+    no_op_edit = False
+    validation_rejected = False
+    for path in retry_paths:
+        data = load_json(path)
+        attempts = [row for row in data.get("attempts") or [] if isinstance(row, dict)]
+        retry_attempts.extend(attempts)
+        if data.get("latest"):
+            latest = data.get("latest") or latest
+        same_error_repeated = same_error_repeated or bool(data.get("sameErrorRepeated"))
+        no_op_edit = no_op_edit or bool(data.get("noOpEdit"))
+        validation_rejected = validation_rejected or bool(data.get("validationRejected"))
+    rag_rows: list[dict[str, Any]] = []
+    for path in rag_paths:
+        rag_rows.extend(load_jsonl(path))
     return {
-        "retryState": load_json(run_dir / "retry_state.json"),
-        "ragTelemetry": load_jsonl(run_dir / "rag_telemetry.jsonl"),
+        "retryState": {
+            "attempts": retry_attempts,
+            "latest": latest,
+            "sameErrorRepeated": same_error_repeated,
+            "noOpEdit": no_op_edit,
+            "validationRejected": validation_rejected,
+        },
+        "ragTelemetry": rag_rows,
     }
 
 
@@ -86,8 +120,12 @@ def kpi_summary(kpi: dict[str, Any]) -> dict[str, Any]:
         "failedCaseIds": list(kpi.get("failedCaseIds") or []),
         "sameErrorRepeatedCount": int(kpi.get("sameErrorRepeatedCount") or 0),
         "noOpEditCount": int(kpi.get("noOpEditCount") or 0),
+        "validationRejectedCount": int(kpi.get("validationRejectedCount") or 0),
+        "preApplyNoOpCount": int(kpi.get("preApplyNoOpCount") or 0),
         "repeatedErrorCaseIds": list(kpi.get("repeatedErrorCaseIds") or []),
         "noOpCaseIds": list(kpi.get("noOpCaseIds") or []),
+        "validationRejectedCaseIds": list(kpi.get("validationRejectedCaseIds") or []),
+        "preApplyNoOpCaseIds": list(kpi.get("preApplyNoOpCaseIds") or []),
     }
 
 
@@ -100,6 +138,8 @@ def compare_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> dict[
         "averageAttemptsDelta": ("averageAttempts", 0.0),
         "sameErrorRepeatedDelta": ("sameErrorRepeatedCount", 0),
         "noOpEditDelta": ("noOpEditCount", 0),
+        "validationRejectedDelta": ("validationRejectedCount", 0),
+        "preApplyNoOpDelta": ("preApplyNoOpCount", 0),
     }
     out: dict[str, Any] = {}
     for out_key, (field, default) in fields.items():
@@ -137,6 +177,18 @@ def build_summary(
         current["noOpEditCount"] = max(
             current["noOpEditCount"],
             sum(1 for row in retry_state.get("attempts") or [] if row.get("noOpEdit")),
+        )
+        current["validationRejectedCount"] = max(
+            current["validationRejectedCount"],
+            sum(1 for row in retry_state.get("attempts") or [] if row.get("validationRejected")),
+        )
+        current["preApplyNoOpCount"] = max(
+            current["preApplyNoOpCount"],
+            sum(
+                1
+                for row in retry_state.get("attempts") or []
+                if row.get("validationRejected") and (row.get("noOpEdit") or row.get("noEffectiveEdit"))
+            ),
         )
     return {
         "suite": {
@@ -205,8 +257,12 @@ def render_markdown(summary: dict[str, Any], *, kpi_path: Path, run_dir: Path | 
         f"- Failed cases: {', '.join(kpi['failedCaseIds']) or '(none)'}",
         f"- Same error repeated count: {kpi['sameErrorRepeatedCount']}",
         f"- No-op edit count: {kpi['noOpEditCount']}",
+        f"- Validation rejected count: {kpi['validationRejectedCount']}",
+        f"- Pre-apply no-op count: {kpi['preApplyNoOpCount']}",
         f"- Repeated error cases: {', '.join(kpi['repeatedErrorCaseIds']) or '(none)'}",
         f"- No-op cases: {', '.join(kpi['noOpCaseIds']) or '(none)'}",
+        f"- Validation rejected cases: {', '.join(kpi['validationRejectedCaseIds']) or '(none)'}",
+        f"- Pre-apply no-op cases: {', '.join(kpi['preApplyNoOpCaseIds']) or '(none)'}",
         "",
         "## Sidecar Telemetry",
         "",
@@ -230,6 +286,8 @@ def render_markdown(summary: dict[str, Any], *, kpi_path: Path, run_dir: Path | 
                 f"- Average attempts delta: {delta['averageAttemptsDelta']:+.3f}",
                 f"- Same error repeated delta: {delta['sameErrorRepeatedDelta']:+.3f}",
                 f"- No-op edit delta: {delta['noOpEditDelta']:+.3f}",
+                f"- Validation rejected delta: {delta['validationRejectedDelta']:+.3f}",
+                f"- Pre-apply no-op delta: {delta['preApplyNoOpDelta']:+.3f}",
             ]
         )
     lines.extend(

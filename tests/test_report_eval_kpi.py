@@ -93,6 +93,56 @@ def test_report_summary_aggregates_retry_and_rag_telemetry(tmp_path):
     assert summary["baselineDelta"]["passRateDelta"] == 0.167
 
 
+def test_report_summary_recurses_case_wrapper_runs(tmp_path):
+    kpi = {
+        "mode": "live",
+        "passCount": 1,
+        "total": 1,
+        "passRate": 1.0,
+        "passAt1Count": 0,
+        "passAt1Rate": 0.0,
+    }
+    run_dir = tmp_path / "holdout"
+    wrapper_run = run_dir / "case_a" / "wrapper_run"
+    wrapper_run.mkdir(parents=True)
+    (wrapper_run / "retry_state.json").write_text(
+        json.dumps(
+            {
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "sameErrorRepeated": False,
+                        "noOpEdit": True,
+                        "validationRejected": True,
+                        "noEffectiveEdit": True,
+                    }
+                ],
+                "noOpEdit": True,
+                "validationRejected": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (wrapper_run / "rag_telemetry.jsonl").write_text(
+        json.dumps(
+            {
+                "sidecarCountsByType": {"error_route": 1},
+                "topSources": {"rag_sidecar": 1},
+                "contextCharCount": 42,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = report_eval_kpi.build_summary(kpi, report_eval_kpi.load_run_telemetry(run_dir))
+
+    assert summary["telemetry"]["telemetryRecords"] == 1
+    assert summary["telemetry"]["errorRouteHintCount"] == 1
+    assert summary["kpi"]["validationRejectedCount"] == 1
+    assert summary["kpi"]["preApplyNoOpCount"] == 1
+
+
 def test_report_markdown_mentions_observed_telemetry(tmp_path):
     kpi_path, run_dir, baseline_path = _write_fixture(tmp_path)
     summary = report_eval_kpi.build_summary(

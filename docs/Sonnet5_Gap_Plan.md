@@ -61,6 +61,14 @@ Suggested safe wording:
 - This phase improves evaluation credibility before allowedPatchTargets enforcement or stronger stop conditions.
 - Fixture-only holdout success is not a live compile-fix success claim.
 
+## Phase 2C Soft Enforcement
+
+- Phase 2C starts after the first UE 5.8 local live holdout baseline.
+- The first target is declaration/definition discipline for header/cpp signature mismatches and LNK2019 missing cpp definitions.
+- Enforcement is warning/replan only: required-read reminders, forbidden-action hints, and Build.cs-first warnings when module evidence is absent.
+- Module dependency routes still allow Build.cs fixes when include/module evidence exists.
+- Hard `allowedPatchTargets` enforcement and stronger stop conditions remain deferred until another live baseline comparison.
+
 ## External Rails
 
 The local Qwen workflow should improve through:
