@@ -337,7 +337,6 @@ def citation_label(row: dict[str, Any]) -> str:
 
 def bucket_for_row(row: dict[str, Any]) -> str:
     source = str(row.get("source") or "")
-    layer = str(row.get("layer") or "")
     doc_type = str(row.get("doc_type") or "")
     symbol_kind = str(row.get("symbol_kind") or "")
     title = str(row.get("title") or "").lower()

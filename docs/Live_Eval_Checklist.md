@@ -149,5 +149,6 @@ Then run:
 python scripts/validate_holdout_cases.py --config config/rag_eval_real_project_holdout_cases.local.json --allow-local-paths
 python scripts/build_symbol_graph.py
 python scripts/eval_pass_at_k.py --metrics-only --config config/rag_eval_real_project_holdout_cases.local.json
-python scripts/eval_pass_at_k.py --live --require-live --config config/rag_eval_real_project_holdout_cases.local.json --model qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max --ubt-path "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe" --wrapper-timeout 1800
+$ubt = "<UE_5.8_ROOT>\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
+python scripts/eval_pass_at_k.py --live --require-live --config config/rag_eval_real_project_holdout_cases.local.json --model qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max --ubt-path $ubt --wrapper-timeout 1800
 ```

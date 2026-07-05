@@ -42,7 +42,7 @@ jobs:
         run: pip install ruff
 
       - name: Lint scripts/ and tests/
-        run: ruff check scripts/ tests/ --select=E,F,W --ignore=E501,E402,F401,W503 --exit-zero
+        run: ruff check scripts/ tests/ --select=E,F,W --ignore=E501,E402,F401 --exit-zero
         # --exit-zero: warn-only for now; change to failing once baseline is clean
 
   node-install:

@@ -29,7 +29,6 @@ SUBOBJECT_RE = re.compile(
 INTERFACE_RE = re.compile(
     r"\bclass\s+[A-Z0-9_]+_API\s+(?P<iface>I[A-Za-z_][A-Za-z0-9_]*)",
 )
-from parse_build_cs import parse_build_cs_file
 
 DATA_ASSET_RE = re.compile(
     r"\bclass\s+[A-Z0-9_]+_API\s+(?P<name>U[A-Za-z_][A-Za-z0-9_]*DataAsset)\b",

@@ -16,7 +16,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
-from eval_e2e_compile import DEFAULT_UBT, run_ubt  # noqa: E402
+from eval_e2e_compile import DEFAULT_UBT, run_ubt, split_ubt_target_spec  # noqa: E402
 from preflight_lmstudio import check_lmstudio  # noqa: E402
 
 
@@ -154,6 +154,7 @@ def run_wrapper_live(
     project_file: Path,
     request_text: str,
     mode: str,
+    target: str,
     max_attempts: int,
     url: str,
     model: str,
@@ -164,6 +165,7 @@ def run_wrapper_live(
     run_dir.mkdir(parents=True, exist_ok=True)
     request_path = run_dir / "request.txt"
     request_path.write_text(request_text, encoding="utf-8")
+    target_name, platform, configuration = split_ubt_target_spec(target)
     cmd = [
         sys.executable,
         str(SCRIPTS / "lmstudio_unreal_wrapper.py"),
@@ -174,6 +176,12 @@ def run_wrapper_live(
         "--allow-direct-project-write",
         "--mode",
         mode,
+        "--target",
+        target_name,
+        "--platform",
+        platform,
+        "--configuration",
+        configuration,
         "--max-attempts",
         str(max_attempts),
         "--lmstudio-url",
@@ -260,6 +268,7 @@ def run_case(
             project_file,
             request_text,
             mode,
+            target,
             max_attempts,
             url,
             model,

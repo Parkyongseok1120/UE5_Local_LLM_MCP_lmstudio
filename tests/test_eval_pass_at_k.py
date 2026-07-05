@@ -13,6 +13,7 @@ SCRIPTS = WORKSPACE / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from eval_pass_at_k import build_metrics_only_results, calculate_kpi_metrics, count_wrapper_attempts  # noqa: E402
+from eval_e2e_compile import split_ubt_target_spec  # noqa: E402
 
 
 def test_count_wrapper_attempts_handles_missing_dir(tmp_path):
@@ -28,6 +29,15 @@ def test_count_wrapper_attempts_counts_attempt_directories_only(tmp_path):
     (run_dir / "other").mkdir()
 
     assert count_wrapper_attempts(run_dir) == 2
+
+
+def test_split_ubt_target_spec_accepts_bare_and_full_targets():
+    assert split_ubt_target_spec("CompileFixEditor") == ("CompileFixEditor", "Win64", "Development")
+    assert split_ubt_target_spec("HoldoutFixtureEditor Win64 Development") == (
+        "HoldoutFixtureEditor",
+        "Win64",
+        "Development",
+    )
 
 
 def test_metrics_only_results_aggregate_retry_state_fixture():

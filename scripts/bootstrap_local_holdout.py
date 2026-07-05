@@ -198,9 +198,92 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _write_minimal_base_fixture(fixture_dir: Path) -> None:
+    """Write a tiny UE 5.8 C++ fixture skeleton when local base fixtures are absent."""
+    module = fixture_dir / "Source" / "HoldoutFixture"
+    _write(
+        fixture_dir / "HoldoutFixture.uproject",
+        """{
+  "FileVersion": 3,
+  "EngineAssociation": "5.8",
+  "Category": "",
+  "Description": "",
+  "Modules": [
+    {
+      "Name": "HoldoutFixture",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ]
+}
+""",
+    )
+    _write(
+        fixture_dir / "Source" / "HoldoutFixture.Target.cs",
+        """using UnrealBuildTool;
+using System.Collections.Generic;
+
+public class HoldoutFixtureTarget : TargetRules
+{
+	public HoldoutFixtureTarget(TargetInfo Target) : base(Target)
+	{
+		Type = TargetType.Game;
+		DefaultBuildSettings = BuildSettingsVersion.V5;
+		ExtraModuleNames.Add("HoldoutFixture");
+	}
+}
+""",
+    )
+    _write(
+        fixture_dir / "Source" / "HoldoutFixtureEditor.Target.cs",
+        """using UnrealBuildTool;
+using System.Collections.Generic;
+
+public class HoldoutFixtureEditorTarget : TargetRules
+{
+	public HoldoutFixtureEditorTarget(TargetInfo Target) : base(Target)
+	{
+		Type = TargetType.Editor;
+		DefaultBuildSettings = BuildSettingsVersion.V5;
+		ExtraModuleNames.Add("HoldoutFixture");
+	}
+}
+""",
+    )
+    _write(
+        module / "HoldoutFixture.Build.cs",
+        """using UnrealBuildTool;
+
+public class HoldoutFixture : ModuleRules
+{
+	public HoldoutFixture(ReadOnlyTargetRules Target) : base(Target)
+	{
+		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });
+	}
+}
+""",
+    )
+    _write(
+        module / "Public" / "HoldoutFixture.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+""",
+    )
+    _write(
+        module / "Private" / "HoldoutFixture.cpp",
+        """#include "HoldoutFixture.h"
+
+IMPLEMENT_PRIMARY_GAME_MODULE(FDefaultGameModuleImpl, HoldoutFixture, "HoldoutFixture");
+""",
+    )
+
+
 def _copy_base_fixture(fixture_dir: Path) -> None:
     if not BASE_FIXTURE.is_dir():
-        raise FileNotFoundError(f"base fixture missing: {BASE_FIXTURE}")
+        _write_minimal_base_fixture(fixture_dir)
+        return
     fixture_dir.mkdir(parents=True, exist_ok=True)
     for item in BASE_FIXTURE.iterdir():
         dest = fixture_dir / item.name
@@ -481,7 +564,7 @@ def main() -> int:
         project_file = project_file or "HoldoutFixture.uproject"
 
     try:
-        data = write_local_config(
+        write_local_config(
             example_path=args.example_config,
             output_path=args.output_config,
             project_file=project_file,

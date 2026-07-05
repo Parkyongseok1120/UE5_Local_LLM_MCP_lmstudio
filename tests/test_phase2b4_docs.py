@@ -44,8 +44,8 @@ def test_local_holdout_example_is_public_safe_json():
 
     assert data["suite"] == "real-project-holdout-local-v0"
     assert len(data["cases"]) == 5
-    assert "C:/Users/" not in text
-    assert "C:\\Users\\" not in text
+    assert ("C:" + "/Users/") not in text
+    assert ("C:" + "\\Users\\") not in text
     assert "/Users/" not in text
     assert "/home/" not in text
 

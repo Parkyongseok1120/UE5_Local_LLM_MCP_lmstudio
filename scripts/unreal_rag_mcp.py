@@ -41,6 +41,7 @@ from blueprint_claim_validate import validate_blueprint_claims
 from material_claim_validate import validate_material_claims
 from asset_graph_lookup import analyze_asset_folder, graph_detail_limits, lookup_asset_graph, search_asset_graphs
 from project_context import resolve_active_project_context
+from project_routing import resolve_project_filters
 from sync_editor_metadata import refresh_editor_metadata, sync_editor_metadata
 from editor_export_runner import run_editor_export
 from runtime_config_checklist import check_runtime_config
@@ -1329,7 +1330,6 @@ class McpServer:
     def handle_search(self, message_id: Any, arguments: dict[str, Any]) -> None:
         query = str(arguments.get("query") or "").strip()
         top_k = max(1, min(16, int(arguments.get("top_k") or 6)))
-        mode = str(arguments.get("mode") or "auto")
         use_hybrid = arguments.get("hybrid") is True
         profile = str(arguments.get("profile") or "").strip().lower()
         if profile == "deep":

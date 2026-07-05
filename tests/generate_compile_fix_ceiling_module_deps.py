@@ -321,13 +321,12 @@ def generate_case(case: dict) -> None:
     module = case["module"]
     ue_module = case["ue_module"]
     root = CEILING / case_id
-    header_name = case["header"].split(".generated.h")[0].split("/")[-1]
     if "class " in case["header"]:
         for line in case["header"].splitlines():
             if line.strip().startswith("class ") and "API" in line:
                 break
     # derive public header filename from generated include
-    gen_line = next(l for l in case["header"].splitlines() if ".generated.h" in l)
+    gen_line = next(line for line in case["header"].splitlines() if ".generated.h" in line)
     header_file = gen_line.split('"')[1]
 
     (root / f"{module}.uproject").write_text(

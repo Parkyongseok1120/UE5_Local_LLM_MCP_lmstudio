@@ -35,6 +35,9 @@ except Exception:
 
 DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1"
 DEFAULT_UBT_PATH = str(resolve_ubt_path())
+KNOWN_UBT_PLATFORMS = {"Win64", "Win32", "Linux", "LinuxArm64", "Mac", "Android", "IOS", "TVOS"}
+KNOWN_UBT_CONFIGURATIONS = {"Debug", "DebugGame", "Development", "Test", "Shipping"}
+UBT_STABILITY_FLAGS = ["-NoUBA", "-MaxParallelActions=4"]
 WRAPPER_RULES_PATH = Path("RAG_Project_Guidelines/Unreal_Programming/07_Wrapper_Mandatory_Rules.md")
 PROMPT_PATH = Path("prompts/unreal_cpp_assistant.md")
 BUILD_CS_UNSUPPORTED_FOR_ROUTE_WARNING = (
@@ -2813,6 +2816,17 @@ def has_static_errors(findings: list[Finding]) -> bool:
     return any(finding.severity == "error" for finding in findings)
 
 
+def split_ubt_target_spec(
+    target: str,
+    default_platform: str = "Win64",
+    default_configuration: str = "Development",
+) -> tuple[str, str, str]:
+    parts = str(target or "").strip().split()
+    if len(parts) >= 3 and parts[-2] in KNOWN_UBT_PLATFORMS and parts[-1] in KNOWN_UBT_CONFIGURATIONS:
+        return " ".join(parts[:-2]), parts[-2], parts[-1]
+    return str(target or "").strip(), default_platform, default_configuration
+
+
 def run_ubt(
     ubt_path: Path,
     project_file: Path,
@@ -2827,6 +2841,7 @@ def run_ubt(
         write_file(log_path, message + "\n")
         return BuildResult(False, 127, log_path, message)
 
+    target, platform, configuration = split_ubt_target_spec(target, platform, configuration)
     command = [
         str(ubt_path),
         target,
@@ -2834,6 +2849,7 @@ def run_ubt(
         configuration,
         f"-Project={project_file}",
         "-WaitMutex",
+        *UBT_STABILITY_FLAGS,
     ]
     completed = subprocess.run(
         command,
@@ -3383,7 +3399,7 @@ def final_summary(
     final_diff_path: Path | None,
 ) -> str:
     lines = [
-        f"# LM Studio Unreal Wrapper Result",
+        "# LM Studio Unreal Wrapper Result",
         "",
         f"Status: {status}",
         f"Run directory: {run_dir}",

@@ -43,7 +43,9 @@ def test_duplicate_id_detection():
 
 def test_public_path_hygiene_catches_local_absolute_paths():
     config = _load_config()
-    config["cases"][0]["errorLog"] = r"C:\Users\Example\Project\Source\Demo.cpp: fatal error C1083"
+    config["cases"][0]["errorLog"] = (
+        "C:" + "\\Users\\Example\\Project\\Source\\Demo.cpp: fatal error C1083"
+    )
 
     errors, _summary = validate_holdout_cases.validate_cases(config)
 

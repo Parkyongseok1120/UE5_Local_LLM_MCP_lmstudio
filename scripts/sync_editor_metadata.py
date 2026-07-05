@@ -155,7 +155,6 @@ def sync_editor_metadata(
     status = editor_metadata_status(idx, None, 24.0)
     export_summary = _export_dir_summary(resolved_export)
     raw_mtime = _raw_newest_mtime(idx)
-    export_mtime = export_summary.get("newestMtime")
 
     export_result: dict[str, Any] | None = None
     needs_work = _needs_export_or_sync(status, export_summary, raw_mtime, force=force_ingest)
@@ -171,7 +170,6 @@ def sync_editor_metadata(
         if export_result.get("ok"):
             resolved_export = Path(str(export_result.get("exportDir") or resolved_export or ""))
             export_summary = _export_dir_summary(resolved_export)
-            export_mtime = export_summary.get("newestMtime")
         status = editor_metadata_status(idx, None, 24.0)
 
     should_ingest = force_ingest

@@ -199,8 +199,8 @@ def test_tracked_bootstrap_files_do_not_contain_user_paths():
     ]
 
     text = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in paths)
-    assert "C:/Users/" not in text
-    assert "C:\\Users\\" not in text
+    assert ("C:" + "/Users/") not in text
+    assert ("C:" + "\\Users\\") not in text
     assert "/Users/" not in text
     assert "/home/" not in text
 
@@ -218,8 +218,8 @@ def test_local_holdout_paths_are_ignored_by_gitignore():
 
     assert "config/rag_eval_real_project_holdout_cases.local.json" in text
     assert "data/local_holdout_fixtures/" in text
-    assert "data/baseline/live_holdout/*" in text
-    assert "!data/baseline/live_holdout/.gitkeep" in text
+    assert "data/baseline/*" in text
+    assert "!data/baseline/live_holdout/.gitkeep" not in text
 
 
 def test_live_holdout_milestone_has_claim_guardrail():

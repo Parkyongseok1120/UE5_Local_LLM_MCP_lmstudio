@@ -57,6 +57,8 @@ def test_no_versioned_unreal_install_path_defaults_in_code_or_config():
 
 def test_tracked_workspace_config_is_sanitized():
     path = ROOT / "config" / "workspace.json"
+    if not path.is_file():
+        path = ROOT / "config" / "workspace.example.json"
     data = json.loads(path.read_text(encoding="utf-8-sig"))
 
     assert not data.get("rootPath")
