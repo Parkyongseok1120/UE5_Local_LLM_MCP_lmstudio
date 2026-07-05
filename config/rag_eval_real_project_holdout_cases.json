@@ -146,6 +146,129 @@
       "forbiddenPatchTargets": ["adding UnrealEd to runtime module as default fix"],
       "expectedErrorSubkind": "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE",
       "notes": "Should prefer module boundary or editor guards over adding UnrealEd to runtime dependencies."
+    },
+    {
+      "id": "holdout_include_path_wrong_owner",
+      "category": "wrong include owner / missing include path",
+      "mode": "compile_fix",
+      "errorLog": "fatal error C1083: Cannot open include file: 'BoxComponent.h': No such file or directory",
+      "expectedFilesToRead": ["failing header", "include owner evidence"],
+      "expectedPatchTargets": ["failing header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
+      "notes": "Should fix the include owner path without a blind Build.cs edit."
+    },
+    {
+      "id": "holdout_blueprint_implementable_event_native_impl",
+      "category": "BlueprintImplementableEvent signature issue",
+      "mode": "reflection_fix",
+      "errorLog": "error C2039: 'OnHoldoutBlueprintEvent_Implementation': is not a member of UHoldoutImplementableEventComponent",
+      "expectedFilesToRead": ["BlueprintImplementableEvent declaration", "matching cpp file"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should understand BlueprintImplementableEvent differs from BlueprintNativeEvent."
+    },
+    {
+      "id": "holdout_delegate_broadcast_signature_mismatch",
+      "category": "delegate binding signature issue",
+      "mode": "compile_fix",
+      "errorLog": "error C2660: FOnHoldoutScoreChanged::Broadcast: function does not take 0 arguments",
+      "expectedFilesToRead": ["delegate declaration", "broadcast call site"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should align Broadcast arguments with the delegate declaration."
+    },
+    {
+      "id": "holdout_component_registration_missing_include",
+      "category": "component registration issue",
+      "mode": "compile_fix",
+      "errorLog": "error C2027: use of undefined type 'UBoxComponent' while creating a default subobject",
+      "expectedFilesToRead": ["component constructor cpp", "header forward declarations"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should add the concrete component include at the use site."
+    },
+    {
+      "id": "holdout_game_instance_subsystem_missing_include",
+      "category": "subsystem registration issue",
+      "mode": "compile_fix",
+      "errorLog": "error C2504: 'UGameInstanceSubsystem': base class undefined",
+      "expectedFilesToRead": ["subsystem header"],
+      "expectedPatchTargets": ["failing header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should add the subsystem base class include."
+    },
+    {
+      "id": "holdout_plugin_projects_missing_module",
+      "category": "plugin/module dependency issue",
+      "mode": "module_fix",
+      "errorLog": "fatal error C1083: Cannot open include file: 'Interfaces/IPluginManager.h': No such file or directory",
+      "expectedFilesToRead": ["owner Build.cs", "failing plugin manager source"],
+      "expectedPatchTargets": ["owner Build.cs"],
+      "forbiddenPatchTargets": ["unrelated plugin descriptor rewrite"],
+      "expectedModules": ["Projects"],
+      "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
+      "notes": "Should identify Projects as the owner module for IPluginManager."
+    },
+    {
+      "id": "holdout_uobject_lifecycle_missing_include",
+      "category": "UObject lifecycle issue",
+      "mode": "compile_fix",
+      "errorLog": "error C3861: 'NewObject': identifier not found",
+      "expectedFilesToRead": ["UObject allocation source"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should fix UObject creation API usage without module churn."
+    },
+    {
+      "id": "holdout_multifile_method_rename_header_cpp_callsite",
+      "category": "simple multi-file compile refactor",
+      "mode": "compile_fix",
+      "errorLog": "error C2039: 'StartCharge': is not a member of UHoldoutRefactorComponent",
+      "expectedFilesToRead": ["header declaration", "cpp definition", "call site cpp"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should align a renamed method across declaration, definition, and caller."
+    },
+    {
+      "id": "holdout_multifile_delegate_signature_update",
+      "category": "simple multi-file compile refactor",
+      "mode": "compile_fix",
+      "errorLog": "error C2660: UHoldoutDelegateOwner::HandleScoreChanged: function does not take 1 arguments",
+      "expectedFilesToRead": ["delegate owner header", "delegate owner cpp"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should update delegate handler declaration and definition together."
+    },
+    {
+      "id": "holdout_multifile_interface_signature_update",
+      "category": "simple multi-file compile refactor",
+      "mode": "compile_fix",
+      "errorLog": "error C3668: method with override specifier did not override any base class methods",
+      "expectedFilesToRead": ["interface header", "implementer header", "implementer cpp"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should align an interface method signature with its implementer across files."
+    },
+    {
+      "id": "holdout_multifile_component_api_move",
+      "category": "simple multi-file compile refactor",
+      "mode": "compile_fix",
+      "errorLog": "error C2039: 'ApplyMovedValue': is not a member of UHoldoutApiComponent",
+      "expectedFilesToRead": ["component header", "component cpp", "consumer cpp"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should repair a small component API move across declaration, definition, and consumer."
+    },
+    {
+      "id": "holdout_common_const_signature_mismatch",
+      "category": "common compile regression",
+      "mode": "compile_fix",
+      "errorLog": "error C2511: overloaded member function not found in UHoldoutConstComponent",
+      "expectedFilesToRead": ["header declaration", "matching cpp file"],
+      "expectedPatchTargets": ["matching cpp/header"],
+      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "notes": "Should fix a const qualifier mismatch without touching Build.cs."
     }
   ]
 }

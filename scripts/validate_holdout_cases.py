@@ -31,8 +31,16 @@ ALLOWED_CATEGORIES = {
     "LevelSequence dependency issue",
     "wrong include owner / missing include path",
     "BlueprintNativeEvent signature issue",
+    "BlueprintImplementableEvent signature issue",
     "UObject raw pointer / reflection warning",
     "constructor lifecycle misuse",
+    "delegate binding signature issue",
+    "component registration issue",
+    "subsystem registration issue",
+    "plugin/module dependency issue",
+    "UObject lifecycle issue",
+    "simple multi-file compile refactor",
+    "common compile regression",
 }
 REQUIRED_FIELDS = {"id", "category", "mode", "notes"}
 PUBLIC_PATH_PATTERNS = (

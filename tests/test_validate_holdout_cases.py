@@ -25,9 +25,9 @@ def test_real_project_holdout_config_validates():
     errors, summary = validate_holdout_cases.validate_cases(_load_config())
 
     assert errors == []
-    assert summary["caseCount"] == 12
-    assert summary["taxonomyCoveredCases"] >= 8
-    assert summary["moduleResolverCoveredCases"] >= 7
+    assert summary["caseCount"] == 24
+    assert summary["taxonomyCoveredCases"] >= 10
+    assert summary["moduleResolverCoveredCases"] >= 8
 
 
 def test_duplicate_id_detection():
@@ -66,13 +66,14 @@ def test_taxonomy_coverage_for_generated_h_and_c1083():
 
 
 def test_module_resolver_coverage_for_required_holdout_modules():
-    text = "GameplayTagContainer.h EnhancedInputComponent.h Blueprint/UserWidget.h"
+    text = "GameplayTagContainer.h EnhancedInputComponent.h Blueprint/UserWidget.h Interfaces/IPluginManager.h"
 
     modules = module_resolver.resolve_modules_from_text(text)
 
     assert "GameplayTags" in modules
     assert "EnhancedInput" in modules
     assert "UMG" in modules
+    assert "Projects" in modules
 
 
 def test_validate_holdout_cases_cli_success():

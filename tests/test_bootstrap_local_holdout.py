@@ -186,10 +186,49 @@ def test_bootstrap_cli_suite_12_writes_temp_config_and_fixtures(tmp_path):
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert "Prepared 7 local fixture directories" in proc.stdout
+    assert "Prepared 12 local fixture directories" in proc.stdout
     data = json.loads(output.read_text(encoding="utf-8"))
     assert len(data["cases"]) == 12
+    assert (fixture_root / "local_gameplaytags_missing_module" / "HoldoutFixture.uproject").is_file()
     assert (fixture_root / "local_umg_missing_module" / "HoldoutFixture.uproject").is_file()
+
+
+def test_bootstrap_cli_suite_24_writes_expanded_config_and_fixtures(tmp_path):
+    output = tmp_path / "local.json"
+    fixture_root = tmp_path / "fixtures"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "bootstrap_local_holdout.py"),
+            "--suite",
+            "24",
+            "--example-config",
+            str(EXAMPLE),
+            "--output-config",
+            str(output),
+            "--fixture-root",
+            str(fixture_root),
+            "--force",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=20,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "Prepared 24 local fixture directories" in proc.stdout
+    data = json.loads(output.read_text(encoding="utf-8"))
+    ids = {case["id"] for case in data["cases"]}
+    assert len(ids) == 24
+    assert "local_multifile_interface_signature_update" in ids
+    assert "local_plugin_projects_missing_module" in ids
+    assert (fixture_root / "local_multifile_interface_signature_update" / "request.txt").is_file()
+    assert (fixture_root / "local_plugin_projects_missing_module" / "HoldoutFixture.uproject").is_file()
 
 
 def test_tracked_bootstrap_files_do_not_contain_user_paths():

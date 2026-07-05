@@ -30,6 +30,7 @@ MODULE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("SlateCore", ("SlateCore.h",)),
     ("MovieScene", ("MovieScene.h", "UMovieScene")),
     ("LevelSequence", ("LevelSequence.h", "ULevelSequence")),
+    ("Projects", ("Interfaces/IPluginManager.h", "IPluginManager")),
     ("InputCore", ("InputCoreTypes.h", "EKeys")),
 ]
 

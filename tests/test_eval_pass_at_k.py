@@ -12,7 +12,13 @@ WORKSPACE = Path(__file__).resolve().parents[1]
 SCRIPTS = WORKSPACE / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from eval_pass_at_k import build_metrics_only_results, calculate_kpi_metrics, count_wrapper_attempts  # noqa: E402
+from eval_pass_at_k import (  # noqa: E402
+    build_metrics_only_results,
+    calculate_kpi_metrics,
+    changed_files_from_diff,
+    count_wrapper_attempts,
+    patch_target_metrics,
+)
 from eval_e2e_compile import split_ubt_target_spec  # noqa: E402
 
 
@@ -55,6 +61,109 @@ def test_metrics_only_results_aggregate_retry_state_fixture():
     assert metrics["noOpEditCount"] == 1
     assert metrics["repeatedErrorCaseIds"] == ["missing_gameplaytags_dep"]
     assert metrics["noOpCaseIds"] == ["cpp_header_signature_mismatch"]
+
+
+def test_changed_files_from_diff_ignores_wrapper_artifacts():
+    diff = """--- a/Source/HoldoutFixture/HoldoutFixture.Build.cs
++++ b/Source/HoldoutFixture/HoldoutFixture.Build.cs
+--- a/wrapper_run/attempt_1/model_response.json
++++ b/wrapper_run/attempt_1/model_response.json
+--- a/Source/HoldoutFixture/Private/HoldoutDashComponent.cpp
++++ b/Source/HoldoutFixture/Private/HoldoutDashComponent.cpp
+"""
+
+    assert changed_files_from_diff(diff) == [
+        "Source/HoldoutFixture/HoldoutFixture.Build.cs",
+        "Source/HoldoutFixture/Private/HoldoutDashComponent.cpp",
+    ]
+
+
+def test_patch_target_metrics_detect_build_cs_false_positive(tmp_path):
+    run_dir = tmp_path / "wrapper_run"
+    run_dir.mkdir()
+    (run_dir / "final_diff.patch").write_text(
+        """--- a/Source/HoldoutFixture/HoldoutFixture.Build.cs
++++ b/Source/HoldoutFixture/HoldoutFixture.Build.cs
+@@ -1 +1 @@
+-PublicDependencyModuleNames.AddRange(new string[] { "Core" });
++PublicDependencyModuleNames.AddRange(new string[] { "Core", "GameplayTags" });
+""",
+        encoding="utf-8",
+    )
+    case = {
+        "id": "signature_mismatch",
+        "category": "header/cpp signature mismatch",
+        "mode": "compile_fix",
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+    }
+
+    metrics = patch_target_metrics(case, run_dir)
+
+    assert metrics["buildCsTouched"] is True
+    assert metrics["buildCsFalsePositive"] is True
+    assert metrics["wrongFileEdit"] is True
+    assert metrics["forbiddenPatchTargetHits"] == ["Build.cs-first fix without module evidence"]
+
+
+def test_patch_target_metrics_accepts_expected_build_cs_edit(tmp_path):
+    run_dir = tmp_path / "wrapper_run"
+    run_dir.mkdir()
+    (run_dir / "final_diff.patch").write_text(
+        """--- a/Source/HoldoutFixture/HoldoutFixture.Build.cs
++++ b/Source/HoldoutFixture/HoldoutFixture.Build.cs
+@@ -1 +1 @@
+-PublicDependencyModuleNames.AddRange(new string[] { "Core" });
++PublicDependencyModuleNames.AddRange(new string[] { "Core", "GameplayTags" });
+""",
+        encoding="utf-8",
+    )
+    case = {
+        "id": "gameplaytags_missing_module",
+        "category": "GameplayTags dependency issue",
+        "mode": "module_fix",
+        "expectedPatchTargets": ["owner Build.cs"],
+        "forbiddenPatchTargets": ["unrelated gameplay class"],
+        "expectedModules": ["GameplayTags"],
+    }
+
+    metrics = patch_target_metrics(case, run_dir)
+
+    assert metrics["expectedPatchTargetMatched"] is True
+    assert metrics["buildCsTouched"] is True
+    assert metrics["buildCsFalsePositive"] is False
+    assert metrics["wrongFileEdit"] is False
+
+
+def test_metrics_only_can_aggregate_patch_metrics_from_artifact_dir(tmp_path):
+    artifact_run = tmp_path / "artifacts" / "case_module" / "wrapper_run"
+    artifact_run.mkdir(parents=True)
+    (artifact_run / "final_diff.patch").write_text(
+        """--- a/Source/HoldoutFixture/HoldoutFixture.Build.cs
++++ b/Source/HoldoutFixture/HoldoutFixture.Build.cs
+@@ -1 +1 @@
+-PublicDependencyModuleNames.AddRange(new string[] { "Core" });
++PublicDependencyModuleNames.AddRange(new string[] { "Core", "GameplayTags" });
+""",
+        encoding="utf-8",
+    )
+    cases = [
+        {
+            "id": "case_module",
+            "category": "GameplayTags dependency issue",
+            "mode": "module_fix",
+            "expectedPatchTargets": ["owner Build.cs"],
+            "expectedModules": ["GameplayTags"],
+        }
+    ]
+
+    results = build_metrics_only_results(cases, artifact_dir=tmp_path / "artifacts")
+    metrics = calculate_kpi_metrics(results)
+
+    assert results[0]["changedSourceFiles"] == ["Source/HoldoutFixture/HoldoutFixture.Build.cs"]
+    assert metrics["expectedPatchCoverageRate"] == 1.0
+    assert metrics["buildCsTouchedCount"] == 1
+    assert metrics["buildCsFalsePositiveCount"] == 0
 
 
 def test_metrics_only_cli_does_not_require_ubt(tmp_path):
@@ -122,7 +231,7 @@ def test_holdout_config_metrics_only_cli_loads_without_ubt(tmp_path):
     )
 
     assert proc.returncode == 0
-    assert "Pass@K summary: 12/12" in proc.stdout
+    assert "Pass@K summary: 24/24" in proc.stdout
     assert "holdout_gameplaytags_missing_module" in proc.stdout
     assert output_path.is_file()
 

@@ -58,6 +58,124 @@ def read_retry_state_metrics_file(path: Path) -> dict:
     }
 
 
+def normalize_patch_path(path: str) -> str:
+    value = str(path or "").strip().replace("\\", "/")
+    if value.startswith(("a/", "b/")):
+        value = value[2:]
+    return value
+
+
+def changed_files_from_diff(diff_text: str) -> list[str]:
+    changed: list[str] = []
+    seen: set[str] = set()
+    for raw_line in (diff_text or "").splitlines():
+        if not raw_line.startswith(("--- ", "+++ ")):
+            continue
+        value = raw_line[4:].split("\t", 1)[0].strip()
+        if value == "/dev/null":
+            continue
+        path = normalize_patch_path(value)
+        if not path or path.startswith("wrapper_run/"):
+            continue
+        if path not in seen:
+            changed.append(path)
+            seen.add(path)
+    return changed
+
+
+def changed_files_from_run_dir(run_dir: Path) -> list[str]:
+    diff_path = run_dir / "final_diff.patch"
+    if not diff_path.is_file():
+        return []
+    try:
+        return changed_files_from_diff(diff_path.read_text(encoding="utf-8-sig", errors="replace"))
+    except OSError:
+        return []
+
+
+def _source_file(path: str) -> bool:
+    return path.startswith("Source/") and path.endswith((".h", ".hpp", ".cpp", ".cc", ".cxx", ".cs"))
+
+
+def _matches_target_descriptor(path: str, descriptor: str) -> bool:
+    lowered = str(descriptor or "").lower()
+    path_lower = path.lower()
+    if "build.cs" in lowered:
+        return path_lower.endswith(".build.cs")
+    if "cpp/header" in lowered or "source/header" in lowered or "cpp file" in lowered:
+        return _source_file(path) and not path_lower.endswith(".build.cs")
+    if "header" in lowered:
+        return path_lower.endswith((".h", ".hpp"))
+    if "cpp" in lowered or "source" in lowered:
+        return path_lower.endswith((".cpp", ".cc", ".cxx"))
+    if "failing file" in lowered or "module boundary" in lowered:
+        return _source_file(path)
+    return False
+
+
+def _case_expects_build_cs(case: dict) -> bool:
+    text = " ".join(str(item) for item in case.get("expectedPatchTargets") or []).lower()
+    category = str(case.get("category") or "").lower()
+    mode = str(case.get("mode") or "").lower()
+    return "build.cs" in text or bool(case.get("expectedModules")) or "dependency issue" in category or mode == "module_fix"
+
+
+def _forbidden_target_hits(case: dict, changed_files: list[str], diff_text: str = "") -> list[str]:
+    hits: list[str] = []
+    changed_build_cs = any(path.lower().endswith(".build.cs") for path in changed_files)
+    expects_build_cs = _case_expects_build_cs(case)
+    for target in case.get("forbiddenPatchTargets") or []:
+        lowered = str(target or "").lower()
+        hit = False
+        if "build.cs-first" in lowered and changed_build_cs and not expects_build_cs:
+            hit = True
+        elif "adding unrealed" in lowered and changed_build_cs and "UnrealEd" in diff_text:
+            hit = True
+        elif "build.cs" in lowered and changed_build_cs:
+            hit = True
+        elif any(_matches_target_descriptor(path, lowered) for path in changed_files):
+            hit = True
+        if hit:
+            hits.append(str(target))
+    return hits
+
+
+def patch_target_metrics(case: dict, run_dir: Path) -> dict:
+    changed_files = changed_files_from_run_dir(run_dir)
+    diff_text = ""
+    diff_path = run_dir / "final_diff.patch"
+    if diff_path.is_file():
+        try:
+            diff_text = diff_path.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            diff_text = ""
+
+    expected = [str(item) for item in case.get("expectedPatchTargets") or []]
+    expected_matches = [target for target in expected if any(_matches_target_descriptor(path, target) for path in changed_files)]
+    unexpected_files: list[str] = []
+    if expected:
+        for path in changed_files:
+            if not any(_matches_target_descriptor(path, target) for target in expected):
+                unexpected_files.append(path)
+
+    forbidden_hits = _forbidden_target_hits(case, changed_files, diff_text)
+    build_cs_touched = any(path.lower().endswith(".build.cs") for path in changed_files)
+    build_cs_false_positive = build_cs_touched and not _case_expects_build_cs(case)
+    wrong_file_edit = bool(forbidden_hits) or bool(unexpected_files) or (bool(expected) and not expected_matches and bool(changed_files))
+
+    return {
+        "changedSourceFiles": changed_files,
+        "expectedPatchTargets": expected,
+        "expectedPatchTargetMatches": expected_matches,
+        "expectedPatchTargetMatched": (not expected) or bool(expected_matches),
+        "unexpectedPatchTargets": unexpected_files,
+        "forbiddenPatchTargetHits": forbidden_hits,
+        "wrongFileEdit": wrong_file_edit,
+        "buildCsTouched": build_cs_touched,
+        "buildCsFalsePositive": build_cs_false_positive,
+    }
+
+
 def retry_state_metrics_for_case(case_id: str, fixture_root: Path | None) -> dict:
     if not fixture_root:
         return {}
@@ -72,7 +190,11 @@ def retry_state_metrics_for_case(case_id: str, fixture_root: Path | None) -> dic
     return {}
 
 
-def build_metrics_only_results(cases: list[dict], retry_state_fixture: Path | None = None) -> list[dict]:
+def build_metrics_only_results(
+    cases: list[dict],
+    retry_state_fixture: Path | None = None,
+    artifact_dir: Path | None = None,
+) -> list[dict]:
     """Create fast smoke results that exercise KPI aggregation only.
 
     This mode intentionally does not call UBT or LM Studio and does not prove
@@ -82,6 +204,13 @@ def build_metrics_only_results(cases: list[dict], retry_state_fixture: Path | No
     for case in cases:
         case_id = str(case.get("id") or "")
         retry_metrics = retry_state_metrics_for_case(case_id, retry_state_fixture)
+        patch_metrics: dict = {}
+        if artifact_dir:
+            run_dir = artifact_dir / case_id / "wrapper_run"
+            if not retry_metrics:
+                retry_metrics = read_retry_state_metrics(run_dir)
+            if run_dir.is_dir():
+                patch_metrics = patch_target_metrics(case, run_dir)
         results.append(
             {
                 "id": case_id,
@@ -90,6 +219,7 @@ def build_metrics_only_results(cases: list[dict], retry_state_fixture: Path | No
                 "detail": "KPI aggregation smoke only; UBT and LM Studio were not invoked.",
                 "attempts": 0,
                 "passAt1": False,
+                **patch_metrics,
                 **retry_metrics,
             }
         )
@@ -101,6 +231,8 @@ def calculate_kpi_metrics(results: list[dict]) -> dict:
     total = len(results)
     attempts_values = [int(row.get("attempts") or 0) for row in results if row.get("attempts") is not None]
     pass_at_1 = sum(1 for row in results if row.get("passAt1"))
+    patch_metric_rows = [row for row in results if "expectedPatchTargetMatched" in row]
+    expected_patch_covered = sum(1 for row in patch_metric_rows if row.get("expectedPatchTargetMatched"))
     histogram: dict[str, int] = {}
     for attempts in attempts_values:
         key = str(attempts)
@@ -115,10 +247,24 @@ def calculate_kpi_metrics(results: list[dict]) -> dict:
         "noOpEditCount": sum(1 for row in results if row.get("noOpEdit")),
         "validationRejectedCount": sum(1 for row in results if row.get("validationRejected")),
         "preApplyNoOpCount": sum(1 for row in results if row.get("preApplyNoOp")),
+        "wrongFileEditCount": sum(1 for row in results if row.get("wrongFileEdit")),
+        "buildCsTouchedCount": sum(1 for row in results if row.get("buildCsTouched")),
+        "buildCsFalsePositiveCount": sum(1 for row in results if row.get("buildCsFalsePositive")),
+        "forbiddenPatchHitCount": sum(1 for row in results if row.get("forbiddenPatchTargetHits")),
+        "expectedPatchCoverageCount": expected_patch_covered,
+        "expectedPatchCoverageRate": round(
+            expected_patch_covered / len(patch_metric_rows),
+            3,
+        )
+        if patch_metric_rows
+        else 0.0,
         "repeatedErrorCaseIds": [str(row.get("id")) for row in results if row.get("sameErrorRepeated")],
         "noOpCaseIds": [str(row.get("id")) for row in results if row.get("noOpEdit")],
         "validationRejectedCaseIds": [str(row.get("id")) for row in results if row.get("validationRejected")],
         "preApplyNoOpCaseIds": [str(row.get("id")) for row in results if row.get("preApplyNoOp")],
+        "wrongFileCaseIds": [str(row.get("id")) for row in results if row.get("wrongFileEdit")],
+        "buildCsFalsePositiveCaseIds": [str(row.get("id")) for row in results if row.get("buildCsFalsePositive")],
+        "forbiddenPatchCaseIds": [str(row.get("id")) for row in results if row.get("forbiddenPatchTargetHits")],
     }
 
 
@@ -277,6 +423,7 @@ def run_case(
             wrapper_timeout=wrapper_timeout,
         )
         artifact_run_dir = ""
+        patch_metrics = patch_target_metrics(case, work_dir / "wrapper_run")
         if artifact_dir:
             src_run_dir = work_dir / "wrapper_run"
             dest_run_dir = artifact_dir / case_id / "wrapper_run"
@@ -294,6 +441,7 @@ def run_case(
             "attempts": attempts,
             "passAt1": ok and attempts <= 1,
             "artifactRunDir": artifact_run_dir,
+            **patch_metrics,
             **retry_metrics,
         }
 
@@ -347,7 +495,7 @@ def main() -> int:
     # Run cases sequentially; use --early-exit to stop once min_pass_rate is met.
     cases = config.get("cases") or []
     if args.metrics_only:
-        results = build_metrics_only_results(cases, args.retry_state_fixture)
+        results = build_metrics_only_results(cases, args.retry_state_fixture, args.artifact_dir)
     else:
         results = []
         for case in cases:
