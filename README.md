@@ -4,31 +4,65 @@
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
-## Project Status / 프로젝트 상태
+## Project Status
 
-** EN : ** As of June 2026, this project is in active real-world testing and KPI-driven agent improvements, including Pass@K compile-fix, MCP tool-call reliability, and Build.cs write reliability. No further feature updates are expected before the end of August.
+As of 2026-07-06, this project is in active KPI-driven local-agent testing for Unreal Engine 5.8. The current focus is not broad feature expansion, but making the LM Studio + RAG + MCP + UBT loop measurable and stable.
 
-** KR : ** 2026년 6월 기준, 이 프로젝트는 실전 테스트와 KPI 기반 에이전트 개선을 진행 중입니다. 주요 개선 항목은 Pass@K compile-fix, MCP tool-call 안정성, Build.cs write 안정성입니다. 8월 말 전까지는 추가 기능 업데이트가 없을 예정입니다.
+### Latest Internal Live Holdout
 
+The strongest current measured run is the UE 5.8 local 36-case live holdout on:
 
-### Agent trust (internal KPI)
+```text
+qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max
+```
 
-This repo targets a **Sonnet 4.5-oriented Unreal C++ agent workflow**, not a claim that any local model matches cloud Sonnet quality.
+These are internal workflow results, not a public standardized model benchmark.
 
-- **Pass@K live compile-fix** is the primary agent KPI (core gate **3/3** on **Qwen 3.6 27B**; ceiling suite **13-case dry-run** includes 10 `module_fix` families).
-- Single-file C++ fixes score well; **module `Build.cs` fixes are harder** — track with ceiling Pass@K live, not chat-only runs.
+| Metric | Latest 36-case live run |
+|---|---:|
+| Pass@K | 36/36 = 100% |
+| Pass@1 | 29/36 = 80.6% |
+| Average attempts | 1.25 |
+| Attempt histogram | 29 cases at 1 attempt, 5 at 2 attempts, 2 at 3 attempts |
+| Same-error repeated | 0 |
+| no-op edit cases | 4 |
+| wrong-file edit cases | 1 in the full run |
+| Build.cs false positive cases | 1 in the full run |
+
+Post-run stabilization added a route-specific guard for runtime/editor boundary fixes. A targeted recheck of `editor_runtime_boundary` kept Pass@K at 1/1 and reduced that case's wrong-file / Build.cs false-positive metrics to 0. The full 36-case suite should be rerun after any scoring claim that depends on this post-run guard.
+
+### Improvement Snapshot
+
+Compared with the earliest saved 5-case live baseline in this repo:
+
+| Metric | Early 5-case live baseline | Latest 36-case live run | Change |
+|---|---:|---:|---:|
+| Pass@K | 3/5 = 60% | 36/36 = 100% | +40 percentage points |
+| Pass@1 | 3/5 = 60% | 29/36 = 80.6% | +20.6 percentage points |
+| Average attempts | 2.6 | 1.25 | 51.9% lower |
+| Suite size | 5 cases | 36 cases | 7.2x larger |
+
+The biggest remaining weakness is `multifile_refactor`: latest tier result is Pass@1 7/12 = 58.3%, Pass@K 12/12 = 100%, average attempts 1.5. Compile-fix, module dependency, and UHT/reflection cases are much stronger than small multi-file refactor cases.
+
+### Agent Trust
+
+This repo targets a **Sonnet 4.5-oriented Unreal C++ workflow**, but this is a workflow target, not a claim that any local model equals Claude Sonnet. Live UBT validation is the source of truth for compile-fix claims.
+
+- **Pass@K live compile-fix** is the primary agent KPI.
+- **Pass@1** is the quality/stability KPI; it matters more for comparing refactor ability.
+- **Wrong-file edits**, **Build.cs false positives**, **same-error repeats**, and **no-op edits** are tracked because passing eventually is not enough.
 - **LM Studio MCP chat** is experimental: enable Essential Tools, session bootstrap, and compact system prompts. Verify with `python scripts/bench_lmstudio_mcp.py`.
 - Do not treat chat-only runs as production automation.
 
 ## Evaluation Claim Guardrail
 
-Current Tier/KPI numbers are internal UE RAG/MCP/UBT scorecard results, not an external standardized model benchmark. Do not claim that Qwen 27B itself is Sonnet 4-grade.
+Current Tier/KPI numbers are internal UE RAG/MCP/UBT scorecard results, not external standardized model benchmarks. Do not claim that Qwen, GPT OSS, or any other local model is generally Sonnet-grade.
 
-Safer wording: for UE C++ compile-fix/project-review only, the system has shown practical behavior near upper Sonnet 3.7 to lower Sonnet 4 range inside this validation loop. See [docs/Evaluation_Risk_Register.md](docs/Evaluation_Risk_Register.md) and [docs/Real_Project_Validation_Plan.md](docs/Real_Project_Validation_Plan.md).
+Safer wording: inside this Unreal-specific validation loop, Qwen 3.6 27B currently behaves like a strong local compile-fix agent with practical results in the lower-to-mid Sonnet 4 workflow band for narrow UE C++ compile-fix tasks, while still below Sonnet 4.5 expectations for Pass@1 multi-file refactor stability.
 
-The forward target is now a Sonnet 4.5-oriented local Unreal workflow. This is a target, not a current model-grade claim. See [docs/Sonnet45_Target_Plan.md](docs/Sonnet45_Target_Plan.md).
+The forward target remains a Sonnet 4.5-oriented local Unreal workflow. This is a target, not a current model-grade claim. See [docs/Sonnet45_Target_Plan.md](docs/Sonnet45_Target_Plan.md).
 
-Sonnet 5 is tracked only as a gap-analysis target for future workflow improvements around long-context agentic coding, tool use, retry judgment, and project memory. This does not claim model-grade equivalence; see [docs/Sonnet5_Gap_Plan.md](docs/Sonnet5_Gap_Plan.md).
+Sonnet 5 is tracked only as a gap-analysis target for future workflow improvements around long-context agentic coding, tool use, retry judgment, and project memory. This does not claim Sonnet 5 equivalence; see [docs/Sonnet5_Gap_Plan.md](docs/Sonnet5_Gap_Plan.md).
 
 Compact-model optimization tracks include Qwen 3.5 9B, Qwen3.5-9B-DeepSeek-V4-Flash-GGUF, GPT OSS 20B, and gpt-oss-20b-claude-opus-sonnet-reasoning-i1-GGUF community fine-tunes. See [docs/Model_Profiles.md](docs/Model_Profiles.md).
 
@@ -47,13 +81,18 @@ LM Studio
 
 Within that loop, the current practical ranking is:
 
-| Model profile | Practical behavior in this project | Claude Sonnet rough equivalent |
-|---|---|---|
-| `qwen3_6_27b` | Best local track for broader Unreal C++ agent work, deeper retrieval, and limited refactor loops. | Upper Sonnet 3.7 to lower Sonnet 4, UE C++ only |
-| `qwen3_5_9b` / `qwen3_5_9b_deepseek_v4_flash` | Usually more reliable than base GPT OSS 20B for MCP tool calls, compact patch loops, and compile-fix workflows. | Upper Sonnet 3.5 to mid Sonnet 3.7, narrow UE tasks |
-| `gpt_oss_20b` | Useful, but more variable in MCP/JSON/tool-call loops; prefer Qwen 9B or Qwen 27B when available. | Around Sonnet 3.5 for this workflow |
+| Model profile | Evidence level | Practical behavior in this project | Claude Sonnet workflow proxy estimate |
+|---|---|---|---|
+| `qwen3_6_27b` / `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | Measured on 36-case UE 5.8 live holdout | Current primary profile. 36/36 Pass@K, 29/36 Pass@1, avg attempts 1.25. Strong module, UHT, single-file compile-fix behavior. Multi-file refactor still needs retries. | Lower-to-mid Sonnet 4 for narrow UE compile-fix workflow; not Sonnet 4.5 overall because multifile Pass@1 is 58.3%. |
+| `qwen3_5_9b_deepseek_v4_flash` | Profiled/observed, not rerun on latest 36-case live suite | Best compact track when VRAM is limited. Usually follows JSON/tool/patch discipline better than base GPT OSS 20B. | Upper Sonnet 3.7-ish for narrow compile-fix loops; below Sonnet 4 for refactor. Needs fresh 36-case live proof. |
+| `qwen3_5_9b` | Profiled/observed, not rerun on latest 36-case live suite | Stable compact baseline for Essential Tools, small patch loops, and focused compile-fix tasks. | Mid-to-upper Sonnet 3.7 for narrow UE compile-fix; below Sonnet 4 on multi-file refactor. |
+| `qwen3_8b` | Profiled only | Smaller compact fallback. Useful for RAG Q&A and small fixes with strict prompts. | Sonnet 3.5 to lower Sonnet 3.7 for narrow tasks. |
+| `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | Profiled/experimental | Community reasoning fine-tune profile. Better theoretical reasoning budget than base GPT OSS 20B, but still needs stable MCP/JSON verification. | Upper Sonnet 3.7-ish estimate if tool discipline holds; not proven on 36-case live. |
+| `gpt_oss_20b` | Profiled/observed variable stability | Useful, but more variable in MCP/JSON/tool-call loops; prefer Qwen 9B or Qwen 27B when available. | Around Sonnet 3.5 for this workflow. |
+| `gpt_oss_small` | Profiled only | Lightweight fallback for simple inspect/patch tasks. | Below Sonnet 3.5 for this workflow. |
+| `gpt_oss_120b`, `qwen_coder_large`, `generic_large` | Configured, not currently proven in this local 36-case report | Potentially stronger if local hardware can run them well, but this repo has no current 36-case live KPI for them. | Unknown until measured; do not infer quality from parameter count alone. |
 
-In short: **Qwen 3.5 9B can outperform base GPT OSS 20B in this project** because the agent stack favors models that follow tool-call, patch, symbol-lookup, and validation discipline reliably. This does **not** mean Qwen 9B is generally smarter than every 20B model; it means it is a better fit for this Unreal RAG/MCP/UBT automation loop.
+In short: **Qwen 3.6 27B is currently the only profile with a saved 36-case UE 5.8 live holdout result in this README.** Qwen 3.5 9B-family models remain valuable because this agent stack rewards tool-call, patch, symbol-lookup, and validation discipline. This does **not** mean a smaller model is generally smarter than a larger model; it means it may fit this Unreal RAG/MCP/UBT automation loop better.
 
 Old name: **Unreal58-RAG**. Officially tested on **UE 5.8**. Other 5.x versions can work, but build your own index from **your** licensed UE install (BYOI).
 
@@ -343,6 +382,8 @@ Maintainers: run `.\installer\Verify-Oss-Ready.ps1` before publishing a fork.
 
 ## Summary
 
-Still experimental. Structure may change.
+Still experimental, but now measured more tightly.
 
-If you want local LLMs for Unreal C++ with less hallucination, search evidence first, then answer or patch. Improve RAG and validation first; use fine-tuning later only when the workflow is already measured on real project errors.
+For narrow UE 5.8 compile-fix work, the current Qwen 3.6 27B local workflow is strong in live UBT validation. For multi-file refactor and broader engineering judgment, it still needs better Pass@1 stability and repeated 36-case+ live runs before stronger claims.
+
+If you want local LLMs for Unreal C++ with less hallucination, search evidence first, then answer or patch. Improve RAG, routing, validation, and failure analysis first; use fine-tuning later only when the workflow is already measured on real project errors.
