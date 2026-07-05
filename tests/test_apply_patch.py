@@ -21,6 +21,69 @@ def test_apply_single_occurrence(tmp_path: Path) -> None:
     assert "int b = 2" in updated
 
 
+def test_apply_normalizes_leading_whitespace_for_unique_multiline_block(tmp_path: Path) -> None:
+    target = tmp_path / "Source" / "Game" / "DashComponent.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "#include \"DashComponent.h\"\n\n"
+        "void UDashComponent::ApplyDash(int32 Strength)\n"
+        "{\n"
+        "\tCachedStrength = Strength;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    old_text = (
+        "\tvoid UDashComponent::ApplyDash(int32 Strength)\n"
+        "\t{\n"
+        "\t\tCachedStrength = Strength;\n"
+        "\t}"
+    )
+    new_text = (
+        "\tvoid UDashComponent::ApplyDash(float Strength)\n"
+        "\t{\n"
+        "\t\tCachedStrength = FMath::RoundToInt(Strength);\n"
+        "\t}"
+    )
+
+    ok, msg, updated = apply_patch(target, old_text, new_text)
+
+    assert ok, msg
+    assert msg == "ok (leading whitespace normalized)"
+    assert "\nvoid UDashComponent::ApplyDash(float Strength)\n" in updated
+    assert "\n\tvoid UDashComponent::ApplyDash(float Strength)\n" not in updated
+    assert "FMath::RoundToInt" in updated
+
+
+def test_apply_normalized_fallback_requires_unique_block(tmp_path: Path) -> None:
+    target = tmp_path / "Source" / "Game" / "DashComponent.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "void PatchMe()\n"
+        "{\n"
+        "\tValue = 1;\n"
+        "}\n"
+        "\tvoid PatchMe()\n"
+        "\t{\n"
+        "\t\tValue = 1;\n"
+        "\t}\n",
+        encoding="utf-8",
+    )
+
+    old_text = (
+        "    void PatchMe()\n"
+        "    {\n"
+        "        Value = 1;\n"
+        "    }"
+    )
+
+    ok, msg, updated = apply_patch(target, old_text, "void PatchMe() {}")
+
+    assert not ok
+    assert "leading whitespace normalized candidates=2" in msg
+    assert updated == target.read_text(encoding="utf-8")
+
+
 def test_apply_wrong_occurrence_count(tmp_path: Path) -> None:
     target = tmp_path / "Foo.cpp"
     target.write_text("x\nx\n", encoding="utf-8")

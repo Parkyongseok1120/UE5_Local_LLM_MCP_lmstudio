@@ -252,6 +252,128 @@ def test_static_validation_retry_feedback_for_lnk_remaining():
     assert "unresolved external / missing cpp definition remains" in feedback
 
 
+def test_first_attempt_patch_preset_is_limited_to_decl_definition_routes():
+    assert wrapper.should_use_patch_preset_on_first_attempt(
+        {"errorSubkind": "HEADER_CPP_SIGNATURE_MISMATCH"},
+        "compile_fix",
+    )
+    assert wrapper.should_use_patch_preset_on_first_attempt(
+        {"errorSubkind": "LNK_MISSING_CPP_DEFINITION"},
+        "compile_fix",
+    )
+    assert not wrapper.should_use_patch_preset_on_first_attempt(
+        {"errorSubkind": "C1083_MISSING_INCLUDE"},
+        "compile_fix",
+    )
+    assert not wrapper.should_use_patch_preset_on_first_attempt(
+        {"errorSubkind": "LNK_MISSING_CPP_DEFINITION"},
+        "analyze",
+    )
+
+
+def test_missing_definition_full_file_merge_preserves_existing_call_site(tmp_path: Path):
+    source = tmp_path / "Source" / "HoldoutFixture" / "Private"
+    source.mkdir(parents=True)
+    target = source / "HoldoutMissingDefinitionComponent.cpp"
+    target.write_text(
+        "#include \"HoldoutMissingDefinitionComponent.h\"\n\n"
+        "void UHoldoutMissingDefinitionComponent::BeginPlay()\n"
+        "{\n"
+        "\tSuper::BeginPlay();\n"
+        "\tStartDash();\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    bundle = {
+        "answer": "Added missing definition.",
+        "files": [
+            {
+                "path": "Source/HoldoutFixture/Private/HoldoutMissingDefinitionComponent.cpp",
+                "content": (
+                    "#include \"HoldoutMissingDefinitionComponent.h\"\n\n"
+                    "void UHoldoutMissingDefinitionComponent::BeginPlay()\n"
+                    "{\n"
+                    "\tSuper::BeginPlay();\n"
+                    "}\n\n"
+                    "void UHoldoutMissingDefinitionComponent::StartDash()\n"
+                    "{\n"
+                    "\t// TODO: Implement StartDash logic here.\n"
+                    "}\n"
+                ),
+            }
+        ],
+        "patches": [],
+        "notes": [],
+    }
+
+    merged = wrapper.merge_missing_definition_full_file_edits(
+        tmp_path,
+        bundle,
+        {"errorSubkind": "LNK_MISSING_CPP_DEFINITION"},
+    )
+
+    content = merged["files"][0]["content"]
+    assert "\tStartDash();\n" in content
+    assert content.count("UHoldoutMissingDefinitionComponent::StartDash()") == 1
+    assert "append-only cpp preservation" in merged["notes"][0]
+
+
+def test_missing_definition_patch_merge_handles_stale_old_text(tmp_path: Path):
+    source = tmp_path / "Source" / "HoldoutFixture" / "Private"
+    source.mkdir(parents=True)
+    target = source / "HoldoutMissingDefinitionComponent.cpp"
+    target.write_text(
+        "#include \"HoldoutMissingDefinitionComponent.h\"\n\n"
+        "void UHoldoutMissingDefinitionComponent::BeginPlay()\n"
+        "{\n"
+        "\tSuper::BeginPlay();\n"
+        "\tStartDash();\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    bundle = {
+        "answer": "Added missing definition.",
+        "files": [],
+        "patches": [
+            {
+                "path": "Source/HoldoutFixture/Private/HoldoutMissingDefinitionComponent.cpp",
+                "oldText": (
+                    "#include \"HoldoutMissingDefinitionComponent.h\"\n\n"
+                    "void UHoldoutMissingDefinitionComponent::BeginPlay()\n"
+                    "{\n"
+                    "\tSuper::BeginPlay();\n"
+                    "}"
+                ),
+                "newText": (
+                    "#include \"HoldoutMissingDefinitionComponent.h\"\n\n"
+                    "void UHoldoutMissingDefinitionComponent::StartDash()\n"
+                    "{\n"
+                    "\t// TODO: Implement dash logic.\n"
+                    "}\n\n"
+                    "void UHoldoutMissingDefinitionComponent::BeginPlay()\n"
+                    "{\n"
+                    "\tSuper::BeginPlay();\n"
+                    "}"
+                ),
+                "expectedOccurrences": 1,
+            }
+        ],
+        "notes": [],
+    }
+
+    merged = wrapper.merge_missing_definition_full_file_edits(
+        tmp_path,
+        bundle,
+        {"errorSubkind": "LNK_MISSING_CPP_DEFINITION"},
+    )
+
+    assert merged["patches"] == []
+    assert len(merged["files"]) == 1
+    content = merged["files"][0]["content"]
+    assert "\tStartDash();\n" in content
+    assert content.count("UHoldoutMissingDefinitionComponent::StartDash()") == 1
+
+
 def test_build_retry_state_payload_carries_static_validation_hint():
     records = [
         {

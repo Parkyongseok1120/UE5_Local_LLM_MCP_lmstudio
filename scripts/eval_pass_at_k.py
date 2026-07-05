@@ -16,8 +16,9 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
-from eval_e2e_compile import DEFAULT_UBT, run_ubt, split_ubt_target_spec  # noqa: E402
+from eval_e2e_compile import DEFAULT_UBT, run_ubt  # noqa: E402
 from preflight_lmstudio import check_lmstudio  # noqa: E402
+from ubt_utils import split_ubt_target_spec  # noqa: E402
 
 
 def count_wrapper_attempts(run_dir: Path) -> int:
@@ -317,6 +318,8 @@ def main() -> int:
                         help="Optional directory containing <case-id>/retry_state.json or <case-id>.json fixtures.")
     parser.add_argument("--artifact-dir", type=Path, default=None,
                         help="Optional directory to preserve live wrapper run artifacts per case.")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="Optional KPI JSON output path. Defaults to data/baseline/pass-at-k*.json.")
     args = parser.parse_args()
 
     config = json.loads((ROOT / args.config).read_text(encoding="utf-8-sig"))
@@ -402,7 +405,9 @@ def main() -> int:
     }
     kpi.update(extended_metrics)
     out_name = "pass-at-k-ceiling-kpi.json" if config.get("tier") == "ceiling" else "pass-at-k-kpi.json"
-    out = ROOT / "data" / "baseline" / out_name
+    out = args.output or (ROOT / "data" / "baseline" / out_name)
+    if not out.is_absolute():
+        out = (ROOT / out).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(kpi, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote {out}")

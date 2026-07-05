@@ -66,6 +66,7 @@ def test_metrics_only_cli_does_not_require_ubt(tmp_path):
         ],
     }
     config_path = tmp_path / "metrics_only_config.json"
+    output_path = tmp_path / "metrics_only_kpi.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     proc = subprocess.run(
@@ -79,6 +80,8 @@ def test_metrics_only_cli_does_not_require_ubt(tmp_path):
             str(WORKSPACE / "tests" / "fixtures" / "retry_state_eval"),
             "--ubt-path",
             str(tmp_path / "does-not-exist" / "UnrealBuildTool.exe"),
+            "--output",
+            str(output_path),
         ],
         cwd=str(WORKSPACE),
         capture_output=True,
@@ -92,9 +95,11 @@ def test_metrics_only_cli_does_not_require_ubt(tmp_path):
     assert proc.returncode == 0
     assert "metrics-only" in proc.stdout
     assert "Wrote" in proc.stdout
+    assert output_path.is_file()
 
 
 def test_holdout_config_metrics_only_cli_loads_without_ubt(tmp_path):
+    output_path = tmp_path / "holdout_metrics_only_kpi.json"
     proc = subprocess.run(
         [
             sys.executable,
@@ -104,6 +109,8 @@ def test_holdout_config_metrics_only_cli_loads_without_ubt(tmp_path):
             "config/rag_eval_real_project_holdout_cases.json",
             "--ubt-path",
             str(tmp_path / "missing" / "UnrealBuildTool.exe"),
+            "--output",
+            str(output_path),
         ],
         cwd=str(WORKSPACE),
         capture_output=True,
@@ -117,6 +124,7 @@ def test_holdout_config_metrics_only_cli_loads_without_ubt(tmp_path):
     assert proc.returncode == 0
     assert "Pass@K summary: 12/12" in proc.stdout
     assert "holdout_gameplaytags_missing_module" in proc.stdout
+    assert output_path.is_file()
 
 
 def test_fixture_only_holdout_case_reports_not_live_applicable(tmp_path):

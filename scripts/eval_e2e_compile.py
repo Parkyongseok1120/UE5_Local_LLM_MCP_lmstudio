@@ -11,12 +11,10 @@ from glob import glob
 from pathlib import Path
 
 from lmstudio_unreal_wrapper import has_static_errors, validate_unreal_readiness
+from ubt_utils import build_ubt_command, split_ubt_target_spec
 from workspace_paths import resolve_ubt_path
 
 DEFAULT_UBT = resolve_ubt_path()
-KNOWN_UBT_PLATFORMS = {"Win64", "Win32", "Linux", "LinuxArm64", "Mac", "Android", "IOS", "TVOS"}
-KNOWN_UBT_CONFIGURATIONS = {"Debug", "DebugGame", "Development", "Test", "Shipping"}
-UBT_STABILITY_FLAGS = ["-NoUBA", "-MaxParallelActions=4"]
 
 
 def latest_glob(root: Path, pattern: str) -> Path | None:
@@ -36,32 +34,12 @@ def run_static(project_root: Path, expect_codes: list[str], forbid_errors: bool)
     return True, f"findings={len(findings)} codes={sorted(codes)}"
 
 
-def split_ubt_target_spec(
-    target: str,
-    default_platform: str = "Win64",
-    default_configuration: str = "Development",
-) -> tuple[str, str, str]:
-    parts = str(target or "").strip().split()
-    if len(parts) >= 3 and parts[-2] in KNOWN_UBT_PLATFORMS and parts[-1] in KNOWN_UBT_CONFIGURATIONS:
-        return " ".join(parts[:-2]), parts[-2], parts[-1]
-    return str(target or "").strip(), default_platform, default_configuration
-
-
 def run_ubt(project_file: Path, target: str, ubt_path: Path, timeout: int) -> tuple[bool, str]:
     if not ubt_path.is_file():
         return False, f"UBT missing: {ubt_path}"
     if not project_file.is_file():
         return False, f"uproject missing: {project_file}"
-    target_name, platform, configuration = split_ubt_target_spec(target)
-    cmd = [
-        str(ubt_path),
-        target_name,
-        platform,
-        configuration,
-        f"-Project={project_file}",
-        "-WaitMutex",
-        *UBT_STABILITY_FLAGS,
-    ]
+    cmd = build_ubt_command(ubt_path, project_file, target)
     try:
         proc = subprocess.run(
             cmd,

@@ -26,6 +26,7 @@ from error_taxonomy import mode_from_error_kind as taxonomy_mode_from_error_kind
 from module_resolver import build_cs_has_module, resolve_modules_from_error, resolve_modules_from_text
 from retry_state import make_attempt_record, recommend_retry_action
 from symbol_graph import load_symbol_graph, lookup_symbol
+from ubt_utils import build_ubt_command, split_ubt_target_spec
 
 try:
     from collect_build_logs import extract_error
@@ -35,9 +36,6 @@ except Exception:
 
 DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1"
 DEFAULT_UBT_PATH = str(resolve_ubt_path())
-KNOWN_UBT_PLATFORMS = {"Win64", "Win32", "Linux", "LinuxArm64", "Mac", "Android", "IOS", "TVOS"}
-KNOWN_UBT_CONFIGURATIONS = {"Debug", "DebugGame", "Development", "Test", "Shipping"}
-UBT_STABILITY_FLAGS = ["-NoUBA", "-MaxParallelActions=4"]
 WRAPPER_RULES_PATH = Path("RAG_Project_Guidelines/Unreal_Programming/07_Wrapper_Mandatory_Rules.md")
 PROMPT_PATH = Path("prompts/unreal_cpp_assistant.md")
 BUILD_CS_UNSUPPORTED_FOR_ROUTE_WARNING = (
@@ -57,6 +55,10 @@ LNK_MISSING_DEFINITION_RETRY_HINT = (
     "Add or correct the missing implementation in the matching cpp file.\n"
     "Do not edit Build.cs unless module evidence exists."
 )
+FIRST_ATTEMPT_PATCH_ROUTE_SUBKINDS = {
+    "HEADER_CPP_SIGNATURE_MISMATCH",
+    "LNK_MISSING_CPP_DEFINITION",
+}
 UNSUPPORTED_BUILD_CS_SOFT_REPLAN = (
     "Soft replan: the previous Build.cs edit does not match the current root-cause route.\n"
     "Treat the Build.cs change as unsupported unless new module evidence appears.\n"
@@ -982,6 +984,111 @@ def normalize_bundle(data: Any) -> dict[str, Any]:
     if "answer" in data and not isinstance(data["answer"], str):
         data["answer"] = str(data["answer"])
     return data
+
+
+def _extract_cpp_member_function_blocks(text: str) -> list[tuple[str, str]]:
+    pattern = re.compile(
+        r"(?m)^[^\n;{}#]*\b(?P<qualified>[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*)"
+        r"\s*\([^;{}]*\)\s*(?:const\s*)?\{"
+    )
+    blocks: list[tuple[str, str]] = []
+    for match in pattern.finditer(text or ""):
+        brace_start = text.find("{", match.end() - 1)
+        if brace_start < 0:
+            continue
+        depth = 0
+        end = -1
+        for index in range(brace_start, len(text)):
+            char = text[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        if end < 0:
+            continue
+        block = text[match.start():end].strip()
+        if block:
+            blocks.append((match.group("qualified"), block))
+    return blocks
+
+
+def _missing_cpp_definition_blocks(current: str, proposed: str) -> list[str]:
+    current_names = {name for name, _block in _extract_cpp_member_function_blocks(current)}
+    additions: list[str] = []
+    seen: set[str] = set()
+    for name, block in _extract_cpp_member_function_blocks(proposed):
+        if name in current_names or name in seen:
+            continue
+        seen.add(name)
+        additions.append(block)
+    return additions
+
+
+def _set_or_append_file_bundle(bundle: dict[str, Any], rel_path: str, content: str) -> None:
+    for item in bundle.get("files") or []:
+        if str(item.get("path") or "").replace("\\", "/") == rel_path.replace("\\", "/"):
+            item["content"] = content
+            return
+    bundle.setdefault("files", []).append({"path": rel_path, "content": content})
+
+
+def merge_missing_definition_full_file_edits(
+    root: Path,
+    bundle: dict[str, Any],
+    route: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Preserve existing cpp content when a LNK fix is returned as a full-file rewrite."""
+    if str((route or {}).get("errorSubkind") or "") != "LNK_MISSING_CPP_DEFINITION":
+        return bundle
+
+    changed = False
+    merged_by_path: dict[str, str] = {}
+    remaining_patches: list[dict[str, Any]] = []
+    for item in bundle.get("patches") or []:
+        rel_path = str(item.get("path") or "")
+        if not rel_path.replace("\\", "/").lower().endswith((".cpp", ".cc", ".cxx")):
+            remaining_patches.append(item)
+            continue
+        target = safe_output_path(root, rel_path)
+        if not target.is_file():
+            remaining_patches.append(item)
+            continue
+        current = merged_by_path.get(rel_path) or read_text(target)
+        additions = _missing_cpp_definition_blocks(current, str(item.get("newText") or ""))
+        if not additions:
+            remaining_patches.append(item)
+            continue
+        merged_by_path[rel_path] = current.rstrip() + "\n\n" + "\n\n".join(additions) + "\n"
+        changed = True
+    if changed:
+        bundle["patches"] = remaining_patches
+
+    for item in bundle.get("files") or []:
+        rel_path = str(item.get("path") or "")
+        if not rel_path.replace("\\", "/").lower().endswith((".cpp", ".cc", ".cxx")):
+            continue
+        target = safe_output_path(root, rel_path)
+        if not target.is_file():
+            continue
+        current = merged_by_path.get(rel_path) or read_text(target)
+        proposed = str(item.get("content") or "")
+        additions = _missing_cpp_definition_blocks(current, proposed)
+        if not additions:
+            continue
+        merged_by_path[rel_path] = current.rstrip() + "\n\n" + "\n\n".join(additions) + "\n"
+        changed = True
+
+    for rel_path, content in merged_by_path.items():
+        _set_or_append_file_bundle(bundle, rel_path, content)
+
+    if changed:
+        notes = bundle.setdefault("notes", [])
+        if isinstance(notes, list):
+            notes.append("merged missing-definition full-file response as append-only cpp preservation")
+    return bundle
 
 
 def enforce_edit_limits(bundle: dict[str, Any], limits: dict[str, Any]) -> None:
@@ -2816,17 +2923,6 @@ def has_static_errors(findings: list[Finding]) -> bool:
     return any(finding.severity == "error" for finding in findings)
 
 
-def split_ubt_target_spec(
-    target: str,
-    default_platform: str = "Win64",
-    default_configuration: str = "Development",
-) -> tuple[str, str, str]:
-    parts = str(target or "").strip().split()
-    if len(parts) >= 3 and parts[-2] in KNOWN_UBT_PLATFORMS and parts[-1] in KNOWN_UBT_CONFIGURATIONS:
-        return " ".join(parts[:-2]), parts[-2], parts[-1]
-    return str(target or "").strip(), default_platform, default_configuration
-
-
 def run_ubt(
     ubt_path: Path,
     project_file: Path,
@@ -2841,16 +2937,7 @@ def run_ubt(
         write_file(log_path, message + "\n")
         return BuildResult(False, 127, log_path, message)
 
-    target, platform, configuration = split_ubt_target_spec(target, platform, configuration)
-    command = [
-        str(ubt_path),
-        target,
-        platform,
-        configuration,
-        f"-Project={project_file}",
-        "-WaitMutex",
-        *UBT_STABILITY_FLAGS,
-    ]
+    command = build_ubt_command(ubt_path, project_file, target, platform, configuration)
     completed = subprocess.run(
         command,
         cwd=str(project_file.parent),
@@ -3158,6 +3245,13 @@ def is_generic_error_route(route: dict[str, Any] | None) -> bool:
         return True
     subkind = str(route.get("errorSubkind") or "")
     return not subkind or subkind.endswith("_GENERIC") or subkind == "COMPILE_GENERIC"
+
+
+def should_use_patch_preset_on_first_attempt(route: dict[str, Any] | None, mode: str) -> bool:
+    if mode not in {"compile_fix", "module_fix", "reflection_fix"}:
+        return False
+    subkind = str((route or {}).get("errorSubkind") or "")
+    return subkind in FIRST_ATTEMPT_PATCH_ROUTE_SUBKINDS
 
 
 def preserve_specific_route(
@@ -3705,10 +3799,16 @@ def run(args: argparse.Namespace) -> int:
 
         attempt_dir = run_dir / f"attempt_{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
+        first_attempt_patch_route = attempt == 1 and should_use_patch_preset_on_first_attempt(active_route, args.mode)
         attempt_prefix = (
             f"Compile loop attempt {attempt}/{args.max_attempts}. "
             "List at most 3 assumptions; apply one minimal diff this turn.\n\n"
         )
+        if first_attempt_patch_route:
+            attempt_prefix += (
+                "Route-specific first attempt: use the patch sampling profile and patch only the exact "
+                "matching header/cpp evidence unless new module evidence appears.\n\n"
+            )
         focus_text = "\n".join(
             [
                 request,
@@ -3734,7 +3834,8 @@ def run(args: argparse.Namespace) -> int:
         )
         if attempt >= 3:
             messages = cap_message_history(messages, budget_mode)
-        attempt_preset = preset_for_wrapper(args.mode, compile_patch=attempt >= 2)
+        compile_patch_turn = attempt >= 2 or first_attempt_patch_route
+        attempt_preset = preset_for_wrapper(args.mode, compile_patch=compile_patch_turn)
         if float(getattr(args, "temperature", 0.1)) == 0.1 or attempt >= 2:
             args.temperature = float(attempt_preset.get("temperature", args.temperature))
         if attempt_preset.get("maxTokens"):
@@ -3756,6 +3857,7 @@ def run(args: argparse.Namespace) -> int:
 
         try:
             bundle = parse_json_response(raw_response)
+            bundle = merge_missing_definition_full_file_edits(project_root, bundle, active_route)
             enforce_edit_limits(bundle, edit_limits)
             if agent_plan is not None:
                 from agent_orchestrator import verify_edit_allowed
