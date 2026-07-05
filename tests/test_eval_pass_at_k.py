@@ -17,6 +17,7 @@ from eval_pass_at_k import (  # noqa: E402
     calculate_kpi_metrics,
     changed_files_from_diff,
     count_wrapper_attempts,
+    infer_eval_tier,
     patch_target_metrics,
 )
 from eval_e2e_compile import split_ubt_target_spec  # noqa: E402
@@ -61,6 +62,44 @@ def test_metrics_only_results_aggregate_retry_state_fixture():
     assert metrics["noOpEditCount"] == 1
     assert metrics["repeatedErrorCaseIds"] == ["missing_gameplaytags_dep"]
     assert metrics["noOpCaseIds"] == ["cpp_header_signature_mismatch"]
+
+
+def test_calculate_kpi_metrics_includes_tier_breakdown():
+    results = [
+        {
+            "id": "module_case",
+            "category": "GameplayTags dependency issue",
+            "mode": "module_fix",
+            "evalTier": "module_fix",
+            "pass": True,
+            "passAt1": True,
+            "attempts": 1,
+        },
+        {
+            "id": "multifile_case",
+            "category": "simple multi-file compile refactor",
+            "mode": "multifile_refactor",
+            "evalTier": "multifile_refactor",
+            "pass": True,
+            "passAt1": False,
+            "attempts": 3,
+            "wrongFileEdit": True,
+        },
+    ]
+
+    metrics = calculate_kpi_metrics(results)
+
+    assert metrics["overall"]["cases"] == 2
+    assert metrics["overall"]["pass_at_1"] == 1
+    assert metrics["tiers"]["module_fix"]["pass_at_1_rate"] == 1.0
+    assert metrics["tiers"]["multifile_refactor"]["cases"] == 1
+    assert metrics["tiers"]["multifile_refactor"]["max_attempts_used"] == 3
+    assert metrics["tiers"]["multifile_refactor"]["wrong_file_edits"] == 1
+
+
+def test_infer_eval_tier_falls_back_from_mode_and_id():
+    assert infer_eval_tier({"id": "case_multifile_api_move", "mode": "compile_fix"}) == "multifile_refactor"
+    assert infer_eval_tier({"category": "UMG dependency issue", "mode": "module_fix"}) == "module_fix"
 
 
 def test_changed_files_from_diff_ignores_wrapper_artifacts():
@@ -231,7 +270,7 @@ def test_holdout_config_metrics_only_cli_loads_without_ubt(tmp_path):
     )
 
     assert proc.returncode == 0
-    assert "Pass@K summary: 24/24" in proc.stdout
+    assert "Pass@K summary: 36/36" in proc.stdout
     assert "holdout_gameplaytags_missing_module" in proc.stdout
     assert output_path.is_file()
 

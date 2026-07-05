@@ -22,12 +22,15 @@ def _load_config() -> dict:
 
 
 def test_real_project_holdout_config_validates():
-    errors, summary = validate_holdout_cases.validate_cases(_load_config())
+    config = _load_config()
+    errors, summary = validate_holdout_cases.validate_cases(config)
 
     assert errors == []
-    assert summary["caseCount"] == 24
+    assert summary["caseCount"] == 36
     assert summary["taxonomyCoveredCases"] >= 10
     assert summary["moduleResolverCoveredCases"] >= 8
+    assert all(case.get("evalTier") for case in config["cases"])
+    assert sum(1 for case in config["cases"] if case.get("evalTier") == "multifile_refactor") == 12
 
 
 def test_duplicate_id_detection():

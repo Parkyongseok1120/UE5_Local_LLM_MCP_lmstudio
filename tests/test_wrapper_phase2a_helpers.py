@@ -269,6 +269,37 @@ def test_first_attempt_patch_preset_is_limited_to_decl_definition_routes():
         {"errorSubkind": "LNK_MISSING_CPP_DEFINITION"},
         "analyze",
     )
+    assert wrapper.should_use_patch_preset_on_first_attempt(
+        {"errorSubkind": "HEADER_CPP_SIGNATURE_MISMATCH"},
+        "multifile_refactor",
+    )
+
+
+def test_multifile_refactor_mode_directive_names_hidden_file_surfaces():
+    directive = wrapper.mode_directive("multifile_refactor")
+
+    assert "declaration" in directive
+    assert "definition" in directive
+    assert "callsite" in directive
+    assert "binding" in directive
+    assert "override" in directive
+    assert "cpp-only" in directive
+
+
+def test_refactor_r0_directive_requires_scope_and_approval_gates():
+    directive = wrapper.mode_directive("refactor_r0")
+
+    assert "classify scope" in directive
+    assert "approval gates" in directive
+    assert "No code edits" in directive
+
+
+def test_refactor_r2_directive_limits_execution_to_approved_cluster():
+    directive = wrapper.mode_directive("refactor_r2")
+
+    assert "approved implementation cluster" in directive
+    assert "Do not combine API migration" in directive
+    assert "UBT must pass" in directive
 
 
 def test_missing_definition_full_file_merge_preserves_existing_call_site(tmp_path: Path):

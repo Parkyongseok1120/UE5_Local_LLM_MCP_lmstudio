@@ -103,6 +103,7 @@ class AgentPlan:
     error_route: dict[str, Any] = field(default_factory=dict)
     module_hints: list[dict[str, Any]] = field(default_factory=list)
     symbol_graph_hints: list[dict[str, Any]] = field(default_factory=list)
+    refactor_manager: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -125,6 +126,8 @@ class AgentPlan:
             payload["moduleHints"] = self.module_hints
         if self.symbol_graph_hints:
             payload["symbolGraphHints"] = self.symbol_graph_hints
+        if self.refactor_manager:
+            payload["refactorManager"] = self.refactor_manager
         return payload
 
 
@@ -132,7 +135,7 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
     text = f"{mode} {request}".lower()
     if mode in {"refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4"}:
         return "refactor"
-    if mode in {"compile_fix", "module_fix", "reflection_fix"}:
+    if mode in {"compile_fix", "module_fix", "reflection_fix", "multifile_refactor"}:
         return "compile_fix"
     if mode in {"shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification"}:
         return "inspect_only"
@@ -220,9 +223,23 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         if resolved_mode == "module_fix" or "build.cs" in request.lower() or "gameplaytag" in request.lower():
             plan.files_to_read.append("Source/**/*.Build.cs")
     elif task_kind == "refactor":
+        try:
+            from refactor_plan import classify_refactor_scope
+
+            refactor_scope = classify_refactor_scope(request)
+        except Exception:
+            refactor_scope = {"scope": "unknown", "writesAllowedByDefault": False, "requiredGates": []}
         plan.rag_modes = [mode if mode.startswith("refactor_") else "refactor_r0", "planning"]
-        plan.gates = ["unreal_refactor_plan_validate", "unreal_refactor_impact_scan"]
-        plan.writes_allowed = mode not in {"refactor_r0", "refactor_r1", "auto"} or "r0" not in mode
+        plan.gates = [
+            "unreal_refactor_manager_plan",
+            "unreal_refactor_plan_validate",
+            "unreal_refactor_impact_scan",
+            "unreal_project_architecture",
+            *[gate for gate in refactor_scope.get("requiredGates", []) if gate not in {"impact_analysis"}],
+        ]
+        plan.writes_allowed = bool(refactor_scope.get("writesAllowedByDefault")) and (
+            mode not in {"refactor_r0", "refactor_r1", "auto"} or "r0" not in mode
+        )
         if "r0" in mode.lower() or task_kind == "refactor" and "discover" in request.lower():
             plan.writes_allowed = False
         plan.confidence = 0.65
@@ -251,9 +268,9 @@ def _extract_symbols(request: str, plan: EvidencePlan) -> None:
 
 
 def build_error_route(request: str, task_kind: TaskKind, mode: str) -> dict[str, Any]:
-    if task_kind != "compile_fix" and mode not in {"compile_fix", "module_fix", "reflection_fix"}:
+    if task_kind != "compile_fix" and mode not in {"compile_fix", "module_fix", "reflection_fix", "multifile_refactor"}:
         return {}
-    if not any(marker in f"{mode} {request}".lower() for marker in COMPILE_MARKERS):
+    if mode != "multifile_refactor" and not any(marker in f"{mode} {request}".lower() for marker in COMPILE_MARKERS):
         return {}
     try:
         from error_taxonomy import route_error_action
@@ -362,8 +379,10 @@ def build_symbol_graph_hints(request: str) -> list[dict[str, Any]]:
 
 def build_write_gate(task_kind: TaskKind, evidence: EvidencePlan, policy: dict[str, Any]) -> dict[str, Any]:
     max_files = int(policy.get("maxFilesPerEdit") or 0)
+    requires_human_approval = "human_approval_gate" in set(evidence.gates or [])
     return {
-        "writesAllowed": bool(evidence.writes_allowed),
+        "writesAllowed": bool(evidence.writes_allowed) and not requires_human_approval,
+        "requiresHumanApproval": requires_human_approval,
         "maxFilesPerEdit": max_files,
         "preferPatch": bool(policy.get("preferPatch", True)),
         "mustReadBeforeWrite": bool(evidence.writes_allowed),
@@ -372,6 +391,7 @@ def build_write_gate(task_kind: TaskKind, evidence: EvidencePlan, policy: dict[s
             "taskKind is answer_only, inspect_only, or runtime_debug",
             "editStrategy is no_edit",
             "target file was not read in this session",
+            "human_approval_gate is required and has not been satisfied",
         ],
     }
 
@@ -402,6 +422,16 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
     ]
     if "ubt_build" in evidence.gates or task_kind in {"edit", "compile_fix", "refactor"}:
         edit_steps.append("Run build_unreal_project after C++ or Build.cs changes.")
+    if task_kind == "refactor":
+        edit_steps.extend(
+            [
+                "Run unreal_refactor_manager_plan before stage-specific refactor tools.",
+                "Classify refactor scope before writes: small, medium, or large.",
+                "Run unreal_refactor_impact_scan for each public symbol touched.",
+                "Use staged patches; do not mix API boundary, callsite rewiring, and cleanup in one turn.",
+                "For medium/large scope, stop at impact plan until human approval is explicit.",
+            ]
+        )
     return common + edit_steps
 
 
@@ -450,6 +480,22 @@ def build_suggested_tool_calls(
     )
     asset_like = any(marker in lower for marker in asset_markers)
     cpp_like = looks_like_cpp_domain_request(text)
+
+    if task_kind == "refactor":
+        symbols = _symbol_candidates_from_text(text)
+        calls = [{"tool": "unreal_get_active_project", "args": {}}]
+        calls.append(
+            {
+                "tool": "unreal_refactor_manager_plan",
+                "args": {
+                    "request": text,
+                    "symbols": symbols,
+                    "maxFiles": 40,
+                },
+            }
+        )
+        calls.append({"tool": "unreal_project_architecture", "args": {}})
+        return calls
 
     if cpp_like and not asset_like:
         payload = resolve_code_domain_hint(text, project_context)
@@ -530,6 +576,30 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     notes: list[str] = []
     module_hints = build_module_hints(request, project_context) if task_kind == "compile_fix" else []
     symbol_graph_hints = build_symbol_graph_hints(request) if task_kind == "compile_fix" else []
+    refactor_manager: dict[str, Any] = {}
+    if task_kind == "refactor":
+        try:
+            from refactor_plan import build_refactor_manager_plan
+
+            refactor_manager = build_refactor_manager_plan(
+                request,
+                symbols=evidence.symbols_to_scan,
+                max_files=40,
+            )
+            refactor_scope = refactor_manager["scope"]
+            notes.append(
+                "Refactor scope: "
+                f"{refactor_scope['scope']} "
+                f"(requiresHumanApproval={refactor_scope['requiresHumanApproval']})"
+            )
+            notes.append(f"Refactor manager nextAction: {refactor_manager.get('nextAction')}")
+            if refactor_scope.get("requiresHumanApproval"):
+                notes.append("Medium/large refactors require impact plan and explicit approval before code edits.")
+            if not refactor_manager.get("writePolicy", {}).get("writesAllowedNow"):
+                strategy = "no_edit"
+                evidence.writes_allowed = False
+        except Exception:
+            notes.append("Refactor scope unavailable; prefer R0 impact planning before edits.")
     if evidence.confidence < 0.65:
         notes.append("Low confidence: prefer inspect-only before edits.")
     if strategy == "exact_patch":
@@ -579,6 +649,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         error_route=error_route,
         module_hints=module_hints,
         symbol_graph_hints=symbol_graph_hints,
+        refactor_manager=refactor_manager,
     )
 
 
@@ -622,6 +693,21 @@ def format_plan_for_prompt(plan: AgentPlan) -> str:
         + (
             "Symbol graph hints: " + json.dumps(plan.symbol_graph_hints, ensure_ascii=False) + "\n"
             if plan.symbol_graph_hints
+            else ""
+        )
+        + (
+            "Refactor manager: "
+            + json.dumps(
+                {
+                    "scope": plan.refactor_manager.get("scope", {}).get("scope"),
+                    "nextAction": plan.refactor_manager.get("nextAction"),
+                    "writePolicy": plan.refactor_manager.get("writePolicy"),
+                    "missingRequiredRoles": plan.refactor_manager.get("impact", {}).get("missingRequiredRoles", []),
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            if plan.refactor_manager
             else ""
         )
         + ("Notes: " + "; ".join(plan.notes) + "\n" if plan.notes else "")

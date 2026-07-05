@@ -21,6 +21,7 @@ RAG_ESSENTIAL = {
     "unreal_symbol_lookup",
     "unreal_agent_session",
     "unreal_rag_capabilities",
+    "unreal_refactor_manager_plan",
     "unreal_material_porting_plan_validate",
     "unreal_editor_metadata_status",
     "unreal_run_editor_export",

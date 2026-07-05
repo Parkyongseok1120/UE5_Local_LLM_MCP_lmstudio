@@ -3248,7 +3248,7 @@ def is_generic_error_route(route: dict[str, Any] | None) -> bool:
 
 
 def should_use_patch_preset_on_first_attempt(route: dict[str, Any] | None, mode: str) -> bool:
-    if mode not in {"compile_fix", "module_fix", "reflection_fix"}:
+    if mode not in {"compile_fix", "module_fix", "reflection_fix", "multifile_refactor"}:
         return False
     subkind = str((route or {}).get("errorSubkind") or "")
     return subkind in FIRST_ATTEMPT_PATCH_ROUTE_SUBKINDS
@@ -3403,20 +3403,36 @@ def mode_directive(mode: str) -> str:
             "and is the final include before UCLASS/USTRUCT/UINTERFACE declarations. "
             "If static validation reports GENERATED_H_MISSING, return a concrete files[] or patches[] edit for that header."
         ),
+        "multifile_refactor": (
+            "Mode directive: multifile_refactor. Do not stop at the file named in the first compiler error. "
+            "Before editing, inspect the declaration, definition, callsite, binding site, and override/base/interface owner "
+            "for the failing symbol. If you edit a header declaration, verify the matching cpp definition. "
+            "If you edit a cpp definition, verify the matching header declaration. "
+            "For delegates and event bindings, verify the delegate payload and every bound handler signature. "
+            "For interface or override errors, verify both the base/interface declaration and all touched implementer "
+            "declarations/definitions. Return one coherent multi-file patch; avoid cpp-only or header-only partial fixes."
+        ),
         "refactor_r0": (
-            "Mode directive: refactor_r0. Discover only — SSOT table, impact files, risks. No code edits."
+            "Mode directive: refactor_r0. Impact planning only: classify scope as small, medium, or large; "
+            "produce ownership/SSOT, impacted files, symbol references, forbidden files, risks, validation plan, "
+            "and approval gates. No code edits."
         ),
         "refactor_r1": (
-            "Mode directive: refactor_r1. Boundary headers/interfaces only. No large cpp bodies. Max 3 files."
+            "Mode directive: refactor_r1. API boundary planning only unless approval is explicit. "
+            "Name declaration, definition, callsite, binding, override, Blueprint/event, asset, and module impacts. "
+            "No large cpp bodies. Max 3 files if edits are explicitly approved."
         ),
         "refactor_r2": (
-            "Mode directive: refactor_r2. Move one implementation cluster. Max 3 files. UBT must pass or report errors."
+            "Mode directive: refactor_r2. Execute one approved implementation cluster only. "
+            "Do not combine API migration, callsite rewiring, and cleanup. Max 3 files. UBT must pass or report errors."
         ),
         "refactor_r3": (
-            "Mode directive: refactor_r3. Rewire callers/includes only. Max 3 files."
+            "Mode directive: refactor_r3. Rewire approved callers/includes only. "
+            "Verify declaration, definition, callsite, delegate binding, and override surfaces before patching. Max 3 files."
         ),
         "refactor_r4": (
-            "Mode directive: refactor_r4. Cleanup dead code/includes. Max 5 files."
+            "Mode directive: refactor_r4. Cleanup dead code/includes only after R2/R3 builds pass. "
+            "Do not rename public API, assets, Blueprint-facing functions, SaveGame fields, or replicated fields here. Max 5 files."
         ),
     }
     return directives.get(str(mode or "").strip(), "")

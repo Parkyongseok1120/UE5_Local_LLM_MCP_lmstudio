@@ -105,6 +105,7 @@
     },
     "refactor": {
       "sequence": [
+        "unreal_refactor_manager_plan",
         "unreal_refactor_impact_scan",
         "unreal_project_architecture",
         "unreal_refactor_plan_validate",

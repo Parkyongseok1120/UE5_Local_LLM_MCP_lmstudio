@@ -10,7 +10,7 @@ Real-project holdouts are public-safe, fixture-style cases derived from common U
 - `fixture-only`: validation that does not invoke UnrealBuildTool or LM Studio.
 - `live-ubt`: compile-fix evaluation that actually runs UnrealBuildTool.
 
-`config/rag_eval_real_project_holdout_cases.json` is a fixture-only foundation for `real-project-holdout-v0`. It validates expected files to read, expected patch targets, forbidden patch targets, module hints, and taxonomy coverage. It does not prove a generated patch compiles.
+`config/rag_eval_real_project_holdout_cases.json` is a 36-case fixture-only foundation for `real-project-holdout-v0`. It validates expected files to read, expected patch targets, forbidden patch targets, module hints, eval tiers, and taxonomy coverage. It does not prove a generated patch compiles.
 
 For a true local live UBT baseline, create an ignored private config:
 
@@ -19,6 +19,12 @@ config/rag_eval_real_project_holdout_cases.local.json
 ```
 
 Start from `config/rag_eval_real_project_holdout_cases.local.example.json`, then replace placeholder `fixtureDir` and `projectFile` values with your own local fixtures. The public holdout config should stay path-free and fixture-style; do not commit private project paths or live project names.
+
+To generate the ignored UE 5.8 local fixture suite:
+
+```powershell
+python scripts/bootstrap_local_holdout.py --suite 36 --fixture-root data/local_holdout_fixtures --force
+```
 
 Local configs may contain private absolute paths, so validate them with:
 
@@ -45,6 +51,16 @@ python scripts/report_eval_kpi.py data/baseline/pass-at-k-kpi.json --suite-name 
 ```
 
 For live compile-fix runs, use `--suite-type live-ubt` only when UnrealBuildTool actually ran and completed. Fixture-only and metric-only reports validate aggregation and parsing, not patch correctness.
+
+`eval_pass_at_k.py` writes both overall KPI fields and tier breakdowns under `overall` and `tiers`. Use the `multifile_refactor` tier to track whether small multi-file refactor cases are improving independently from easier module dependency cases.
+
+After a live run with saved artifacts, classify failed attempts with:
+
+```powershell
+python scripts/analyze_failure_attempts.py --artifact-dir <artifact_dir> --config config/rag_eval_real_project_holdout_cases.local.json --out-json <failure-analysis.json> --out-md <failure-analysis.md>
+```
+
+Use `--attach-failure-analysis <kpi.json>` to attach the failure analysis to an existing KPI JSON file.
 
 ## Claim Bars
 

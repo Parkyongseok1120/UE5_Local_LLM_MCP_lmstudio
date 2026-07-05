@@ -1,5 +1,5 @@
 {
-  "description": "Public-safe real-project holdout seeds for Unreal compile-fix workflow evaluation. These are compact log-style cases, not proprietary project reproductions.",
+  "description": "Public-safe 36-case real-project holdout seeds for Unreal compile-fix and small multi-file refactor workflow evaluation. These are compact log-style cases, not proprietary project reproductions.",
   "suite": "real-project-holdout-v0",
   "tier": "real-project-holdout",
   "defaults": {
@@ -13,262 +13,700 @@
       "category": "GameplayTags dependency issue",
       "mode": "module_fix",
       "errorLog": "fatal error C1083: Cannot open include file: 'GameplayTagContainer.h': No such file or directory",
-      "expectedFilesToRead": ["Source/<Module>/<Module>.Build.cs", "failing source/header"],
-      "expectedPatchTargets": ["owner Build.cs"],
-      "forbiddenPatchTargets": ["unrelated gameplay class"],
-      "expectedModules": ["GameplayTags"],
+      "expectedFilesToRead": [
+        "Source/<Module>/<Module>.Build.cs",
+        "failing source/header"
+      ],
+      "expectedPatchTargets": [
+        "owner Build.cs"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated gameplay class"
+      ],
+      "expectedModules": [
+        "GameplayTags"
+      ],
       "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
-      "notes": "Module resolver should identify GameplayTags before a Build.cs patch is proposed."
+      "notes": "Module resolver should identify GameplayTags before a Build.cs patch is proposed.",
+      "evalTier": "module_fix"
     },
     {
       "id": "holdout_enhanced_input_missing_module",
       "category": "EnhancedInput dependency issue",
       "mode": "module_fix",
       "errorLog": "fatal error C1083: Cannot open include file: 'EnhancedInputComponent.h': No such file or directory",
-      "expectedFilesToRead": ["Source/<Module>/<Module>.Build.cs", "failing input component file"],
-      "expectedPatchTargets": ["owner Build.cs"],
-      "forbiddenPatchTargets": ["unrelated PlayerController rewrite"],
-      "expectedModules": ["EnhancedInput"],
+      "expectedFilesToRead": [
+        "Source/<Module>/<Module>.Build.cs",
+        "failing input component file"
+      ],
+      "expectedPatchTargets": [
+        "owner Build.cs"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated PlayerController rewrite"
+      ],
+      "expectedModules": [
+        "EnhancedInput"
+      ],
       "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
-      "notes": "Should not invent input mapping code when the actionable issue is a missing module dependency."
+      "notes": "Should not invent input mapping code when the actionable issue is a missing module dependency.",
+      "evalTier": "module_fix"
     },
     {
       "id": "holdout_umg_missing_module",
       "category": "UMG dependency issue",
       "mode": "module_fix",
       "errorLog": "fatal error C1083: Cannot open include file: 'Blueprint/UserWidget.h': No such file or directory",
-      "expectedFilesToRead": ["Source/<Module>/<Module>.Build.cs", "failing widget host file"],
-      "expectedPatchTargets": ["owner Build.cs"],
-      "forbiddenPatchTargets": ["unrelated UI blueprint asset"],
-      "expectedModules": ["UMG"],
+      "expectedFilesToRead": [
+        "Source/<Module>/<Module>.Build.cs",
+        "failing widget host file"
+      ],
+      "expectedPatchTargets": [
+        "owner Build.cs"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated UI blueprint asset"
+      ],
+      "expectedModules": [
+        "UMG"
+      ],
       "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
-      "notes": "Public UI-facing headers may require PublicDependencyModuleNames depending on exposure."
+      "notes": "Public UI-facing headers may require PublicDependencyModuleNames depending on exposure.",
+      "evalTier": "module_fix"
     },
     {
       "id": "holdout_niagara_missing_module",
       "category": "Niagara dependency issue",
       "mode": "module_fix",
       "errorLog": "fatal error C1083: Cannot open include file: 'NiagaraComponent.h': No such file or directory",
-      "expectedFilesToRead": ["Source/<Module>/<Module>.Build.cs", "failing effects source"],
-      "expectedPatchTargets": ["owner Build.cs"],
-      "forbiddenPatchTargets": ["unrelated particle logic rewrite"],
-      "expectedModules": ["Niagara"],
+      "expectedFilesToRead": [
+        "Source/<Module>/<Module>.Build.cs",
+        "failing effects source"
+      ],
+      "expectedPatchTargets": [
+        "owner Build.cs"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated particle logic rewrite"
+      ],
+      "expectedModules": [
+        "Niagara"
+      ],
       "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
-      "notes": "Should resolve Niagara dependency before touching effect behavior."
+      "notes": "Should resolve Niagara dependency before touching effect behavior.",
+      "evalTier": "module_fix"
     },
     {
       "id": "holdout_aimodule_missing_module",
       "category": "AI module dependency issue",
       "mode": "module_fix",
       "errorLog": "fatal error C1083: Cannot open include file: 'AIController.h': No such file or directory",
-      "expectedFilesToRead": ["Source/<Module>/<Module>.Build.cs", "failing AI source/header"],
-      "expectedPatchTargets": ["owner Build.cs"],
-      "forbiddenPatchTargets": ["unrelated behavior tree asset"],
-      "expectedModules": ["AIModule"],
+      "expectedFilesToRead": [
+        "Source/<Module>/<Module>.Build.cs",
+        "failing AI source/header"
+      ],
+      "expectedPatchTargets": [
+        "owner Build.cs"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated behavior tree asset"
+      ],
+      "expectedModules": [
+        "AIModule"
+      ],
       "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
-      "notes": "Should route to module_fix and identify AIModule."
+      "notes": "Should route to module_fix and identify AIModule.",
+      "evalTier": "module_fix"
     },
     {
       "id": "holdout_navigation_missing_module",
       "category": "NavigationSystem dependency issue",
       "mode": "module_fix",
       "errorLog": "fatal error C1083: Cannot open include file: 'NavigationSystem.h': No such file or directory",
-      "expectedFilesToRead": ["Source/<Module>/<Module>.Build.cs", "failing navigation source"],
-      "expectedPatchTargets": ["owner Build.cs"],
-      "forbiddenPatchTargets": ["unrelated pathfinding rewrite"],
-      "expectedModules": ["NavigationSystem"],
+      "expectedFilesToRead": [
+        "Source/<Module>/<Module>.Build.cs",
+        "failing navigation source"
+      ],
+      "expectedPatchTargets": [
+        "owner Build.cs"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated pathfinding rewrite"
+      ],
+      "expectedModules": [
+        "NavigationSystem"
+      ],
       "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
-      "notes": "Should identify NavigationSystem without guessing gameplay behavior."
+      "notes": "Should identify NavigationSystem without guessing gameplay behavior.",
+      "evalTier": "module_fix"
     },
     {
       "id": "holdout_levelsequence_missing_module",
       "category": "LevelSequence dependency issue",
       "mode": "module_fix",
       "errorLog": "fatal error C1083: Cannot open include file: 'LevelSequence.h': No such file or directory",
-      "expectedFilesToRead": ["Source/<Module>/<Module>.Build.cs", "failing cinematic source"],
-      "expectedPatchTargets": ["owner Build.cs"],
-      "forbiddenPatchTargets": ["unrelated sequencer asset"],
-      "expectedModules": ["LevelSequence"],
+      "expectedFilesToRead": [
+        "Source/<Module>/<Module>.Build.cs",
+        "failing cinematic source"
+      ],
+      "expectedPatchTargets": [
+        "owner Build.cs"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated sequencer asset"
+      ],
+      "expectedModules": [
+        "LevelSequence"
+      ],
       "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
-      "notes": "Module resolver should surface LevelSequence."
+      "notes": "Module resolver should surface LevelSequence.",
+      "evalTier": "module_fix"
     },
     {
       "id": "holdout_generated_h_not_last",
       "category": "generated.h / UHT reflection error",
       "mode": "reflection_fix",
       "errorLog": "error: #include found after .generated.h file - the .generated.h file should always be the last #include in a header",
-      "expectedFilesToRead": ["failing reflected header"],
-      "expectedPatchTargets": ["failing header"],
-      "forbiddenPatchTargets": ["unrelated cpp rewrite"],
+      "expectedFilesToRead": [
+        "failing reflected header"
+      ],
+      "expectedPatchTargets": [
+        "failing header"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated cpp rewrite"
+      ],
       "expectedErrorSubkind": "GENERATED_H_NOT_LAST",
-      "notes": "Should patch include order only."
+      "notes": "Should patch include order only.",
+      "evalTier": "uht_reflection"
     },
     {
       "id": "holdout_uht_missing_body_macro",
       "category": "generated.h / UHT reflection error",
       "mode": "reflection_fix",
       "errorLog": "UnrealHeaderTool failed: GENERATED_BODY missing for reflected type declared with UCLASS",
-      "expectedFilesToRead": ["failing reflected header"],
-      "expectedPatchTargets": ["failing header"],
-      "forbiddenPatchTargets": ["unrelated module Build.cs"],
+      "expectedFilesToRead": [
+        "failing reflected header"
+      ],
+      "expectedPatchTargets": [
+        "failing header"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated module Build.cs"
+      ],
       "expectedErrorSubkind": "UHT_MISSING_BODY_MACRO",
-      "notes": "Reflection route should be selected before implementation edits."
+      "notes": "Reflection route should be selected before implementation edits.",
+      "evalTier": "uht_reflection"
     },
     {
       "id": "holdout_lnk_missing_cpp_definition",
       "category": "unresolved external / missing cpp definition",
       "mode": "compile_fix",
       "errorLog": "error LNK2019: unresolved external symbol \"public: void __cdecl UDemoComponent::StartDash(void)\" referenced in function",
-      "expectedFilesToRead": ["header declaration", "matching cpp file"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "expectedFilesToRead": [
+        "header declaration",
+        "matching cpp file"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
       "expectedErrorSubkind": "LNK_MISSING_CPP_DEFINITION",
-      "notes": "Should not jump to Build.cs without module evidence."
+      "notes": "Should not jump to Build.cs without module evidence.",
+      "evalTier": "single_file_compile_fix"
     },
     {
       "id": "holdout_blueprint_native_event_impl_missing",
       "category": "BlueprintNativeEvent signature issue",
       "mode": "reflection_fix",
       "errorLog": "BlueprintNativeEvent function OnInteract_Implementation not found for declaration",
-      "expectedFilesToRead": ["header declaration", "matching cpp file"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["unrelated interface rewrite"],
+      "expectedFilesToRead": [
+        "header declaration",
+        "matching cpp file"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated interface rewrite"
+      ],
       "expectedErrorSubkind": "BLUEPRINT_NATIVE_EVENT_IMPL_MISSING",
-      "notes": "Should add or correct _Implementation rather than duplicate virtual declarations."
+      "notes": "Should add or correct _Implementation rather than duplicate virtual declarations.",
+      "evalTier": "uht_reflection"
     },
     {
       "id": "holdout_editor_only_include_runtime",
       "category": "editor-only include in runtime module",
       "mode": "module_fix",
       "errorLog": "Runtime module includes UnrealEd.h; Editor-only include detected in runtime module",
-      "expectedFilesToRead": ["failing file", "module Build.cs"],
-      "expectedPatchTargets": ["failing file", "module boundary files"],
-      "forbiddenPatchTargets": ["adding UnrealEd to runtime module as default fix"],
+      "expectedFilesToRead": [
+        "failing file",
+        "module Build.cs"
+      ],
+      "expectedPatchTargets": [
+        "failing file",
+        "module boundary files"
+      ],
+      "forbiddenPatchTargets": [
+        "adding UnrealEd to runtime module as default fix"
+      ],
       "expectedErrorSubkind": "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE",
-      "notes": "Should prefer module boundary or editor guards over adding UnrealEd to runtime dependencies."
+      "notes": "Should prefer module boundary or editor guards over adding UnrealEd to runtime dependencies.",
+      "evalTier": "module_fix"
     },
     {
       "id": "holdout_include_path_wrong_owner",
       "category": "wrong include owner / missing include path",
       "mode": "compile_fix",
       "errorLog": "fatal error C1083: Cannot open include file: 'BoxComponent.h': No such file or directory",
-      "expectedFilesToRead": ["failing header", "include owner evidence"],
-      "expectedPatchTargets": ["failing header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+      "expectedFilesToRead": [
+        "failing header",
+        "include owner evidence"
+      ],
+      "expectedPatchTargets": [
+        "failing header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
       "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
-      "notes": "Should fix the include owner path without a blind Build.cs edit."
+      "notes": "Should fix the include owner path without a blind Build.cs edit.",
+      "evalTier": "single_file_compile_fix"
     },
     {
       "id": "holdout_blueprint_implementable_event_native_impl",
       "category": "BlueprintImplementableEvent signature issue",
       "mode": "reflection_fix",
       "errorLog": "error C2039: 'OnHoldoutBlueprintEvent_Implementation': is not a member of UHoldoutImplementableEventComponent",
-      "expectedFilesToRead": ["BlueprintImplementableEvent declaration", "matching cpp file"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should understand BlueprintImplementableEvent differs from BlueprintNativeEvent."
+      "expectedFilesToRead": [
+        "BlueprintImplementableEvent declaration",
+        "matching cpp file"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should understand BlueprintImplementableEvent differs from BlueprintNativeEvent.",
+      "evalTier": "uht_reflection"
     },
     {
       "id": "holdout_delegate_broadcast_signature_mismatch",
       "category": "delegate binding signature issue",
       "mode": "compile_fix",
       "errorLog": "error C2660: FOnHoldoutScoreChanged::Broadcast: function does not take 0 arguments",
-      "expectedFilesToRead": ["delegate declaration", "broadcast call site"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should align Broadcast arguments with the delegate declaration."
+      "expectedFilesToRead": [
+        "delegate declaration",
+        "broadcast call site"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should align Broadcast arguments with the delegate declaration.",
+      "evalTier": "single_file_compile_fix"
     },
     {
       "id": "holdout_component_registration_missing_include",
       "category": "component registration issue",
       "mode": "compile_fix",
       "errorLog": "error C2027: use of undefined type 'UBoxComponent' while creating a default subobject",
-      "expectedFilesToRead": ["component constructor cpp", "header forward declarations"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should add the concrete component include at the use site."
+      "expectedFilesToRead": [
+        "component constructor cpp",
+        "header forward declarations"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should add the concrete component include at the use site.",
+      "evalTier": "single_file_compile_fix"
     },
     {
       "id": "holdout_game_instance_subsystem_missing_include",
       "category": "subsystem registration issue",
       "mode": "compile_fix",
       "errorLog": "error C2504: 'UGameInstanceSubsystem': base class undefined",
-      "expectedFilesToRead": ["subsystem header"],
-      "expectedPatchTargets": ["failing header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should add the subsystem base class include."
+      "expectedFilesToRead": [
+        "subsystem header"
+      ],
+      "expectedPatchTargets": [
+        "failing header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should add the subsystem base class include.",
+      "evalTier": "single_file_compile_fix"
     },
     {
       "id": "holdout_plugin_projects_missing_module",
       "category": "plugin/module dependency issue",
       "mode": "module_fix",
       "errorLog": "fatal error C1083: Cannot open include file: 'Interfaces/IPluginManager.h': No such file or directory",
-      "expectedFilesToRead": ["owner Build.cs", "failing plugin manager source"],
-      "expectedPatchTargets": ["owner Build.cs"],
-      "forbiddenPatchTargets": ["unrelated plugin descriptor rewrite"],
-      "expectedModules": ["Projects"],
+      "expectedFilesToRead": [
+        "owner Build.cs",
+        "failing plugin manager source"
+      ],
+      "expectedPatchTargets": [
+        "owner Build.cs"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated plugin descriptor rewrite"
+      ],
+      "expectedModules": [
+        "Projects"
+      ],
       "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
-      "notes": "Should identify Projects as the owner module for IPluginManager."
+      "notes": "Should identify Projects as the owner module for IPluginManager.",
+      "evalTier": "module_fix"
     },
     {
       "id": "holdout_uobject_lifecycle_missing_include",
       "category": "UObject lifecycle issue",
       "mode": "compile_fix",
       "errorLog": "error C3861: 'NewObject': identifier not found",
-      "expectedFilesToRead": ["UObject allocation source"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should fix UObject creation API usage without module churn."
+      "expectedFilesToRead": [
+        "UObject allocation source"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should fix UObject creation API usage without module churn.",
+      "evalTier": "single_file_compile_fix"
     },
     {
       "id": "holdout_multifile_method_rename_header_cpp_callsite",
       "category": "simple multi-file compile refactor",
       "mode": "compile_fix",
       "errorLog": "error C2039: 'StartCharge': is not a member of UHoldoutRefactorComponent",
-      "expectedFilesToRead": ["header declaration", "cpp definition", "call site cpp"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should align a renamed method across declaration, definition, and caller."
+      "expectedFilesToRead": [
+        "header declaration",
+        "cpp definition",
+        "call site cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should align a renamed method across declaration, definition, and caller.",
+      "evalTier": "multifile_refactor"
     },
     {
       "id": "holdout_multifile_delegate_signature_update",
       "category": "simple multi-file compile refactor",
       "mode": "compile_fix",
       "errorLog": "error C2660: UHoldoutDelegateOwner::HandleScoreChanged: function does not take 1 arguments",
-      "expectedFilesToRead": ["delegate owner header", "delegate owner cpp"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should update delegate handler declaration and definition together."
+      "expectedFilesToRead": [
+        "delegate owner header",
+        "delegate owner cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should update delegate handler declaration and definition together.",
+      "evalTier": "multifile_refactor"
     },
     {
       "id": "holdout_multifile_interface_signature_update",
       "category": "simple multi-file compile refactor",
       "mode": "compile_fix",
       "errorLog": "error C3668: method with override specifier did not override any base class methods",
-      "expectedFilesToRead": ["interface header", "implementer header", "implementer cpp"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should align an interface method signature with its implementer across files."
+      "expectedFilesToRead": [
+        "interface header",
+        "implementer header",
+        "implementer cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should align an interface method signature with its implementer across files.",
+      "evalTier": "multifile_refactor"
     },
     {
       "id": "holdout_multifile_component_api_move",
       "category": "simple multi-file compile refactor",
       "mode": "compile_fix",
       "errorLog": "error C2039: 'ApplyMovedValue': is not a member of UHoldoutApiComponent",
-      "expectedFilesToRead": ["component header", "component cpp", "consumer cpp"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should repair a small component API move across declaration, definition, and consumer."
+      "expectedFilesToRead": [
+        "component header",
+        "component cpp",
+        "consumer cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should repair a small component API move across declaration, definition, and consumer.",
+      "evalTier": "multifile_refactor"
     },
     {
       "id": "holdout_common_const_signature_mismatch",
       "category": "common compile regression",
       "mode": "compile_fix",
       "errorLog": "error C2511: overloaded member function not found in UHoldoutConstComponent",
-      "expectedFilesToRead": ["header declaration", "matching cpp file"],
-      "expectedPatchTargets": ["matching cpp/header"],
-      "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
-      "notes": "Should fix a const qualifier mismatch without touching Build.cs."
+      "expectedFilesToRead": [
+        "header declaration",
+        "matching cpp file"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Should fix a const qualifier mismatch without touching Build.cs.",
+      "evalTier": "single_file_compile_fix"
+    },
+    {
+      "id": "holdout_multifile_delegate_param_type_change",
+      "category": "simple multi-file compile refactor",
+      "mode": "multifile_refactor",
+      "errorLog": "error C2511: 'void FHoldoutUpdateReceiver::HandleUpdate(float)': overloaded member function not found",
+      "expectedFilesToRead": [
+        "delegate receiver header",
+        "delegate receiver cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Align a delegate handler parameter type across declaration and definition.",
+      "evalTier": "multifile_refactor"
+    },
+    {
+      "id": "holdout_multifile_interface_return_type_change",
+      "category": "simple multi-file compile refactor",
+      "mode": "multifile_refactor",
+      "errorLog": "error C3668: 'FHoldoutReturnImplementer::CanUse': method with override specifier did not override any base class methods",
+      "expectedFilesToRead": [
+        "interface header",
+        "implementer header",
+        "implementer cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Align implementer return type with the interface declaration across header and cpp.",
+      "evalTier": "multifile_refactor"
+    },
+    {
+      "id": "holdout_multifile_subsystem_api_move",
+      "category": "simple multi-file compile refactor",
+      "mode": "multifile_refactor",
+      "errorLog": "error C2039: 'HandleData': is not a member of UHoldoutDataSubsystem",
+      "expectedFilesToRead": [
+        "subsystem header",
+        "subsystem cpp",
+        "consumer cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Resolve an API move across declaration, definition, and caller.",
+      "evalTier": "multifile_refactor"
+    },
+    {
+      "id": "holdout_multifile_uproperty_type_migration",
+      "category": "simple multi-file compile refactor",
+      "mode": "multifile_refactor",
+      "errorLog": "error C2511: 'int32 UHoldoutScoreModel::GetScore(void) const': overloaded member function not found",
+      "expectedFilesToRead": [
+        "reflected header",
+        "matching cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Keep a reflected property and accessor type migration consistent.",
+      "evalTier": "multifile_refactor"
+    },
+    {
+      "id": "holdout_multifile_event_binding_signature_change",
+      "category": "delegate binding signature issue",
+      "mode": "multifile_refactor",
+      "errorLog": "error C2664: cannot convert argument 2 from 'void (__cdecl UHoldoutBindingTarget::*)(void)' to handler taking one parameter",
+      "expectedFilesToRead": [
+        "delegate declaration",
+        "binding target header",
+        "binding target cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Update a bound event handler declaration and definition to match the delegate payload.",
+      "evalTier": "multifile_refactor"
+    },
+    {
+      "id": "holdout_multifile_base_class_method_override_change",
+      "category": "simple multi-file compile refactor",
+      "mode": "multifile_refactor",
+      "errorLog": "error C3668: 'FHoldoutDerivedAbility::Activate': method with override specifier did not override any base class methods",
+      "expectedFilesToRead": [
+        "base class header",
+        "derived header",
+        "derived cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Align derived override declaration and definition with the base signature.",
+      "evalTier": "multifile_refactor"
+    },
+    {
+      "id": "holdout_multifile_callback_param_expand",
+      "category": "simple multi-file compile refactor",
+      "mode": "multifile_refactor",
+      "errorLog": "error C2664: cannot convert argument from callback taking one parameter to callback taking two parameters",
+      "expectedFilesToRead": [
+        "callback declaration",
+        "callback definition",
+        "registration callsite"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Expand a callback parameter list consistently across declaration, definition, and registration.",
+      "evalTier": "multifile_refactor"
+    },
+    {
+      "id": "holdout_multifile_method_split_callsite_update",
+      "category": "simple multi-file compile refactor",
+      "mode": "multifile_refactor",
+      "errorLog": "error C2039: 'DoAll': is not a member of UHoldoutSplitComponent",
+      "expectedFilesToRead": [
+        "component header",
+        "component cpp",
+        "consumer cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Update a split method implementation and call site without reintroducing the removed API.",
+      "evalTier": "multifile_refactor"
+    },
+    {
+      "id": "holdout_reflection_blueprint_event_rename",
+      "category": "BlueprintNativeEvent signature issue",
+      "mode": "reflection_fix",
+      "errorLog": "error C2039: 'OnHoldoutRenamed_Implementation': is not a member of UHoldoutRenamedEventComponent",
+      "expectedFilesToRead": [
+        "reflected header",
+        "matching cpp"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "notes": "Catch a BlueprintNativeEvent rename drift across declaration and implementation.",
+      "evalTier": "uht_reflection"
+    },
+    {
+      "id": "holdout_editor_runtime_guard_boundary",
+      "category": "editor-only include in runtime module",
+      "mode": "compile_fix",
+      "errorLog": "Runtime module source references UnrealEd editor API without WITH_EDITOR guard",
+      "expectedFilesToRead": [
+        "runtime header",
+        "runtime cpp",
+        "module Build.cs"
+      ],
+      "expectedPatchTargets": [
+        "failing file",
+        "module boundary files"
+      ],
+      "forbiddenPatchTargets": [
+        "adding UnrealEd to runtime module as default fix"
+      ],
+      "expectedErrorSubkind": "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE",
+      "notes": "Prefer editor guards or boundary cleanup over adding UnrealEd to a runtime module.",
+      "evalTier": "editor_runtime_boundary"
+    },
+    {
+      "id": "holdout_module_private_vs_public_dependency",
+      "category": "LevelSequence dependency issue",
+      "mode": "module_fix",
+      "errorLog": "fatal error C1083: Cannot open include file: 'LevelSequence.h': No such file or directory",
+      "expectedFilesToRead": [
+        "public header",
+        "owner Build.cs"
+      ],
+      "expectedPatchTargets": [
+        "owner Build.cs"
+      ],
+      "forbiddenPatchTargets": [
+        "unrelated cinematic rewrite"
+      ],
+      "expectedModules": [
+        "LevelSequence"
+      ],
+      "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
+      "notes": "Public header exposure should be treated as a public module dependency decision.",
+      "evalTier": "module_fix"
+    },
+    {
+      "id": "holdout_include_owner_forward_decl_mixup",
+      "category": "wrong include owner / missing include path",
+      "mode": "compile_fix",
+      "errorLog": "fatal error C1083: Cannot open include file: 'SphereComponent.h': No such file or directory",
+      "expectedFilesToRead": [
+        "header forward declaration",
+        "cpp include"
+      ],
+      "expectedPatchTargets": [
+        "matching cpp/header"
+      ],
+      "forbiddenPatchTargets": [
+        "Build.cs-first fix without module evidence"
+      ],
+      "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
+      "notes": "Fix a concrete include owner path while preserving the header forward declaration.",
+      "evalTier": "single_file_compile_fix"
     }
   ]
 }

@@ -29,15 +29,43 @@ def test_classify_inspect_review():
 
 def test_refactor_r0_no_edit():
     plan = build_agent_plan("Discover impact for UMySubsystem refactor R0", "refactor_r0")
+    payload = plan.to_dict()
     assert plan.task_kind == "refactor"
     assert plan.edit_strategy == "no_edit"
     assert plan.evidence.writes_allowed is False
+    assert payload["refactorManager"]["managerMode"] == "refactor_manager"
+    assert "unreal_refactor_manager_plan" in payload["evidencePlan"]["gates"]
+    assert payload["suggestedToolCalls"][1]["tool"] == "unreal_refactor_manager_plan"
+
+
+def test_medium_refactor_requires_approval_gate_before_writes():
+    plan = build_agent_plan("Refactor combat system API across inventory and ability subsystem", "refactor_r2")
+    payload = plan.to_dict()
+
+    assert plan.task_kind == "refactor"
+    assert plan.edit_strategy == "no_edit"
+    assert payload["writeGate"]["requiresHumanApproval"] is True
+    assert payload["writeGate"]["writesAllowed"] is False
+    assert "human_approval_gate" in payload["evidencePlan"]["gates"]
+    assert payload["refactorManager"]["nextAction"] in {
+        "collect_impact_scan_inputs",
+        "collect_missing_impact_roles",
+        "request_human_approval",
+    }
+    assert any("Medium/large refactors require impact plan" in note for note in payload["notes"])
 
 
 def test_compile_fix_patch_strategy():
     plan = build_agent_plan("Fix LNK2019 unresolved external", "compile_fix")
     assert plan.edit_strategy == "exact_patch"
     assert "compile_fix" in plan.evidence.rag_modes
+
+
+def test_multifile_refactor_mode_is_compile_fix_track():
+    plan = build_agent_plan("Fix C3668 interface signature drift across header and cpp", "multifile_refactor")
+
+    assert plan.task_kind == "compile_fix"
+    assert plan.edit_strategy == "exact_patch"
 
 
 def test_compile_fix_link_route_includes_soft_steering_checkpoints():

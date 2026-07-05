@@ -20,6 +20,7 @@ SIDECAR_RAG_MODES = {
     "compile_fix",
     "module_fix",
     "reflection_fix",
+    "multifile_refactor",
     "refactor_r0",
     "refactor_r1",
     "refactor_r2",
@@ -177,7 +178,7 @@ def fetch_module_resolver_sidecar(query: str, mode: str, limit: int = 5) -> list
 
 
 def fetch_error_route_sidecar(query: str, mode: str, limit: int = 3) -> list[dict[str, Any]]:
-    if mode not in {"compile_fix", "module_fix", "reflection_fix"}:
+    if mode not in {"compile_fix", "module_fix", "reflection_fix", "multifile_refactor"}:
         return []
     try:
         from error_taxonomy import route_error_action
@@ -350,7 +351,7 @@ def fetch_architecture_sidecar(query: str, mode: str, limit: int = 5) -> list[di
 
 
 def preferred_modes_from_error_route(query: str, mode: str) -> list[str]:
-    if mode not in {"compile_fix", "module_fix", "reflection_fix"}:
+    if mode not in {"compile_fix", "module_fix", "reflection_fix", "multifile_refactor"}:
         return []
     try:
         from error_taxonomy import route_error_action
@@ -589,6 +590,7 @@ VALID_MODES = {
     "api_lookup",
     "module_fix",
     "reflection_fix",
+    "multifile_refactor",
     "prototype_component",
     "prototype_subsystem",
     "refactor_r0",
@@ -1772,7 +1774,7 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
     mode = resolve_mode(query, options.mode)
     effective_query = query
     preferred_modes: list[str] = []
-    if mode in {"compile_fix", "module_fix", "reflection_fix"}:
+    if mode in {"compile_fix", "module_fix", "reflection_fix", "multifile_refactor"}:
         try:
             from failure_memory_rerank import expand_query_with_memory
 
@@ -1784,6 +1786,11 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
         preferred_modes = preferred_modes_from_error_route(query, mode)
         if preferred_modes:
             effective_query = f"{effective_query} {' '.join(preferred_modes)}"
+    if mode == "multifile_refactor":
+        effective_query = (
+            effective_query
+            + " compile_fix declaration definition callsite binding override interface header cpp signature mismatch"
+        )
     if mode == "agent_edit":
         effective_query = (
             query
@@ -1903,7 +1910,7 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
     ]
     ranked.sort(key=lambda row: (float(row.get("rank_score") or 0.0), float(row.get("score") or 0.0)))
 
-    if mode in {"module_fix", "compile_fix", "reflection_fix", "blueprint_analysis"} or (
+    if mode in {"module_fix", "compile_fix", "reflection_fix", "multifile_refactor", "blueprint_analysis"} or (
         mode == "implementation" and "project profile" in query.lower()
     ) or query_wants_taxonomy_sidecar(query, mode):
         guideline_sidecar = fetch_guideline_sidecar(conn, mode, query, limit=max(8, top_k))

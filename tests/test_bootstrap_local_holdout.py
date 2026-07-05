@@ -61,6 +61,7 @@ def test_bootstrap_suite_12_adds_expected_case_ids(tmp_path):
     assert all(case["target"] == "HoldoutFixtureEditor Win64 Development" for case in data["cases"])
     assert data["engineVersion"] == "5.8"
     assert all(case["engineVersion"] == "5.8" for case in data["cases"])
+    assert all(case.get("evalTier") for case in data["cases"])
 
 
 def test_bootstrap_suite_12_writes_expansion_fixture_skeletons(tmp_path):
@@ -229,6 +230,62 @@ def test_bootstrap_cli_suite_24_writes_expanded_config_and_fixtures(tmp_path):
     assert "local_plugin_projects_missing_module" in ids
     assert (fixture_root / "local_multifile_interface_signature_update" / "request.txt").is_file()
     assert (fixture_root / "local_plugin_projects_missing_module" / "HoldoutFixture.uproject").is_file()
+
+
+def test_bootstrap_suite_36_adds_multifile_refactor_tier_cases(tmp_path):
+    output = tmp_path / "local.json"
+
+    data = bootstrap_local_holdout.write_local_config(
+        example_path=EXAMPLE,
+        output_path=output,
+        fixture_root="data/local_holdout_fixtures",
+        project_file="HoldoutFixture.uproject",
+        suite="36",
+    )
+
+    ids = {case["id"] for case in data["cases"]}
+    tiers = [case.get("evalTier") for case in data["cases"]]
+    assert len(ids) == 36
+    assert "local_multifile_delegate_param_type_change" in ids
+    assert "local_multifile_method_split_callsite_update" in ids
+    assert "local_reflection_blueprint_event_rename" in ids
+    assert tiers.count("multifile_refactor") == 12
+    assert all(tiers)
+
+
+def test_bootstrap_cli_suite_36_writes_expanded_config_and_fixtures(tmp_path):
+    output = tmp_path / "local.json"
+    fixture_root = tmp_path / "fixtures"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "bootstrap_local_holdout.py"),
+            "--suite",
+            "36",
+            "--example-config",
+            str(EXAMPLE),
+            "--output-config",
+            str(output),
+            "--fixture-root",
+            str(fixture_root),
+            "--force",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=20,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "Prepared 36 local fixture directories" in proc.stdout
+    data = json.loads(output.read_text(encoding="utf-8"))
+    assert len(data["cases"]) == 36
+    assert (fixture_root / "local_multifile_delegate_param_type_change" / "request.txt").is_file()
+    assert (fixture_root / "local_include_owner_forward_decl_mixup" / "HoldoutFixture.uproject").is_file()
 
 
 def test_tracked_bootstrap_files_do_not_contain_user_paths():

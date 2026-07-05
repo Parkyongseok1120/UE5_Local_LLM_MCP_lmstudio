@@ -31,7 +31,7 @@ from rag_embeddings import embedding_status
 from rag_index_ops import capabilities_summary, index_health, rebuild_status
 from rag_search import SearchOptions, search, search_hybrid
 from rag_semantic import symbol_lookup
-from refactor_plan import scan_symbol_impact, validate_refactor_plan
+from refactor_plan import build_refactor_manager_plan, scan_symbol_impact, validate_refactor_plan
 from resolve_genre_adapters import resolve_genre_adapters
 from genre_scope_validate import validate_genre_scope
 from review_claim_validate import validate_claims
@@ -60,6 +60,7 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_symbol_lookup",
         "unreal_agent_session",
         "unreal_rag_capabilities",
+        "unreal_refactor_manager_plan",
         "unreal_material_porting_plan_validate",
         "unreal_editor_metadata_status",
         "unreal_run_editor_export",
@@ -442,6 +443,31 @@ class McpServer:
                         "maxFiles": {"type": "integer", "minimum": 1, "maximum": 80, "default": 40},
                     },
                     ["symbol"],
+                ),
+            },
+            {
+                "name": "unreal_refactor_manager_plan",
+                "title": "Build Refactor Manager Plan",
+                "description": (
+                    "Classify a refactor, aggregate optional symbol impact scans, and return the R0-R4 write gates, "
+                    "approval policy, missing impact roles, and validation plan before staged edits."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "request": {"type": "string"},
+                        "projectRoot": {
+                            "type": "string",
+                            "description": "Optional .uproject or project root; defaults to activeProject.",
+                        },
+                        "symbols": {"type": "array", "items": {"type": "string"}},
+                        "approval": {
+                            "type": "boolean",
+                            "description": "Set true only after explicit human approval for the staged refactor.",
+                            "default": False,
+                        },
+                        "maxFiles": {"type": "integer", "minimum": 1, "maximum": 80, "default": 40},
+                    },
+                    ["request"],
                 ),
             },
             {
@@ -1037,6 +1063,26 @@ class McpServer:
                 payload = scan_symbol_impact(
                     project_root,
                     str(arguments.get("symbol") or ""),
+                    max_files=int(arguments.get("maxFiles") or 40),
+                )
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_refactor_manager_plan":
+                project_root = str(arguments.get("projectRoot") or "").strip()
+                if not project_root:
+                    config = load_shared_config()
+                    project_root = str(config.get("activeProject") or "").strip()
+                if project_root.endswith(".uproject"):
+                    project_root = str(Path(project_root).parent)
+                symbols_arg = arguments.get("symbols") or []
+                if isinstance(symbols_arg, str):
+                    symbols = [symbols_arg]
+                else:
+                    symbols = [str(symbol) for symbol in symbols_arg]
+                payload = build_refactor_manager_plan(
+                    str(arguments.get("request") or ""),
+                    project_root=project_root or None,
+                    symbols=symbols,
+                    approval=arguments.get("approval") is True,
                     max_files=int(arguments.get("maxFiles") or 40),
                 )
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)

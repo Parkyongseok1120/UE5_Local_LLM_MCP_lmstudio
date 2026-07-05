@@ -1,7 +1,7 @@
 # R0 action combat plan fixture (synthetic gap analysis)
 
 ## Genre
-action_combat — soulslike melee prototype
+action_combat soulslike melee prototype
 
 ## SSOT
 | State | Owner |
@@ -11,14 +11,23 @@ action_combat — soulslike melee prototype
 | GameMode spawn | ASoulsGameModeBase |
 
 ## Impacted files (slices)
-1. SoulsPlayerCharacter.cpp/.h — fix LookXY camera, unify input
-2. Config/DefaultGame.ini — set ASoulsGameModeBase, DefaultPawnClass
-3. Config/DefaultInput.ini — Attack, MoveXY, LookXY mappings
-4. Later: dodge/block component or method
+1. SoulsPlayerCharacter.cpp/.h: fix LookXY camera and unify input.
+2. Config/DefaultGame.ini: set ASoulsGameModeBase and DefaultPawnClass.
+3. Config/DefaultInput.ini: Attack, MoveXY, LookXY mappings.
+4. Later: dodge/block component or method.
 
 ## Risks
-- Enhanced Input vs legacy BindAction mismatch
-- GameMode not set — SpawnEntities never runs in PIE
+- Enhanced Input vs legacy BindAction mismatch.
+- GameMode not set, so SpawnEntities may never run in PIE.
+
+## Staged patch plan
+1. R1 approval gate: confirm public API and ownership before edits.
+2. R2 implementation slice: adjust one combat/input cluster only after approval.
+3. R3 callsite slice: rewire callers and includes after R2 build passes.
+4. R4 cleanup slice: remove dead includes only after UBT is green.
+
+## Human approval gate
+Medium refactor work must stop after this impact plan until a reviewer approves the staged patch boundary.
 
 ## Build
 UBT YourProjectEditor Win64 Development after each slice.

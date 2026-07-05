@@ -20,6 +20,8 @@ For local Qwen workflows, these metrics matter more than broad chat quality clai
 
 When wrapper runs write `retry_state.json`, `eval_pass_at_k.py` can fold repeated-error, no-op, and validation-rejection data into KPI JSON as `sameErrorRepeatedCount`, `noOpEditCount`, `validationRejectedCount`, `preApplyNoOpCount`, and related case-id lists. Missing retry-state data is treated as absent, not as a failure.
 
+KPI JSON also includes `overall` and `tiers` sections. The `multifile_refactor` tier should be reviewed separately from module and single-file compile fixes so an easy-case-heavy suite cannot hide weak multi-file refactor behavior.
+
 ## Metric-Only Smoke
 
 Full compile-fix eval can require UnrealBuildTool, even in dry-run mode, because golden patches still need a real build to prove they compile.
@@ -31,6 +33,8 @@ python scripts/eval_pass_at_k.py --metrics-only --config config/rag_eval_pass_at
 ```
 
 `--metrics-only` does not invoke UBT, does not call LM Studio, and is not a substitute for live or dry-run compile-fix evaluation.
+
+For saved live artifacts, `scripts/analyze_failure_attempts.py` can classify failed attempts into patterns such as `cpp_only_no_header`, `header_only_no_cpp`, `partial_coverage`, `patch_application_failed`, and `wrong_direction`. The report can be attached to a KPI JSON with `--attach-failure-analysis`.
 
 ## Telemetry Reports
 

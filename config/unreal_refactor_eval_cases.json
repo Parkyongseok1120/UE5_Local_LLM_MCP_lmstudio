@@ -4,7 +4,7 @@
     {
       "id": "r0_good_plan",
       "stage": "R0",
-      "planText": "## R0 Discover\n### SSOT table\n| State | Owner |\n| Health | UHealthComponent |\n### Impact files\n- Source/Game/HealthComponent.h\n- Source/Game/Character.cpp\n### Risks\n- Duplicate health on Character",
+      "planText": "## R0 Discover\n### SSOT table\n| State | Owner |\n| Health | UHealthComponent |\n### Impact files\n- Source/Game/HealthComponent.h\n- Source/Game/Character.cpp\n### Risks\n- Duplicate health on Character\n### Staged patch plan\n- R1 approval gate for public API\n- R2 one implementation slice\n- R3 callsite rewire\n### Human approval gate\nStop before code edits until reviewer approval.",
       "expectOk": true
     },
     {
@@ -16,7 +16,7 @@
     {
       "id": "r2_many_files_warning",
       "stage": "R2",
-      "planText": "Move impl to files a.h a.cpp b.h b.cpp c.h c.cpp d.h d.cpp e.h e.cpp then build with UBT",
+      "planText": "Stage R2 approved implementation slice after human approval gate. Move impl to files a.h a.cpp b.h b.cpp c.h c.cpp d.h d.cpp e.h e.cpp then build with UBT.",
       "expectOk": true,
       "expectWarning": true
     },

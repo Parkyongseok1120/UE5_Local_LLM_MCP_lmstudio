@@ -231,6 +231,162 @@ EXPANSION_CASES_24: list[dict[str, Any]] = [
     },
 ]
 
+EXPANSION_CASES_MULTIFILE: list[dict[str, Any]] = [
+    {
+        "id": "local_multifile_delegate_param_type_change",
+        "category": "simple multi-file compile refactor",
+        "mode": "multifile_refactor",
+        "errorLog": "error C2511: 'void FHoldoutUpdateReceiver::HandleUpdate(float)': overloaded member function not found",
+        "expectedFilesToRead": ["delegate receiver header", "delegate receiver cpp"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "notes": "Align a delegate handler parameter type across declaration and definition.",
+    },
+    {
+        "id": "local_multifile_interface_return_type_change",
+        "category": "simple multi-file compile refactor",
+        "mode": "multifile_refactor",
+        "errorLog": "error C3668: 'FHoldoutReturnImplementer::CanUse': method with override specifier did not override any base class methods",
+        "expectedFilesToRead": ["interface header", "implementer header", "implementer cpp"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "notes": "Align implementer return type with the interface declaration across header and cpp.",
+    },
+    {
+        "id": "local_multifile_subsystem_api_move",
+        "category": "simple multi-file compile refactor",
+        "mode": "multifile_refactor",
+        "errorLog": "error C2039: 'HandleData': is not a member of UHoldoutDataSubsystem",
+        "expectedFilesToRead": ["subsystem header", "subsystem cpp", "consumer cpp"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "notes": "Resolve an API move across declaration, definition, and caller.",
+    },
+    {
+        "id": "local_multifile_uproperty_type_migration",
+        "category": "simple multi-file compile refactor",
+        "mode": "multifile_refactor",
+        "errorLog": "error C2511: 'int32 UHoldoutScoreModel::GetScore(void) const': overloaded member function not found",
+        "expectedFilesToRead": ["reflected header", "matching cpp"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "notes": "Keep a reflected property and accessor type migration consistent.",
+    },
+    {
+        "id": "local_multifile_event_binding_signature_change",
+        "category": "delegate binding signature issue",
+        "mode": "multifile_refactor",
+        "errorLog": "error C2664: cannot convert argument 2 from 'void (__cdecl UHoldoutBindingTarget::*)(void)' to handler taking one parameter",
+        "expectedFilesToRead": ["delegate declaration", "binding target header", "binding target cpp"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "notes": "Update a bound event handler declaration and definition to match the delegate payload.",
+    },
+    {
+        "id": "local_multifile_base_class_method_override_change",
+        "category": "simple multi-file compile refactor",
+        "mode": "multifile_refactor",
+        "errorLog": "error C3668: 'FHoldoutDerivedAbility::Activate': method with override specifier did not override any base class methods",
+        "expectedFilesToRead": ["base class header", "derived header", "derived cpp"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "notes": "Align derived override declaration and definition with the base signature.",
+    },
+    {
+        "id": "local_multifile_callback_param_expand",
+        "category": "simple multi-file compile refactor",
+        "mode": "multifile_refactor",
+        "errorLog": "error C2664: cannot convert argument from callback taking one parameter to callback taking two parameters",
+        "expectedFilesToRead": ["callback declaration", "callback definition", "registration callsite"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "notes": "Expand a callback parameter list consistently across declaration, definition, and registration.",
+    },
+    {
+        "id": "local_multifile_method_split_callsite_update",
+        "category": "simple multi-file compile refactor",
+        "mode": "multifile_refactor",
+        "errorLog": "error C2039: 'DoAll': is not a member of UHoldoutSplitComponent",
+        "expectedFilesToRead": ["component header", "component cpp", "consumer cpp"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "notes": "Update a split method implementation and call site without reintroducing the removed API.",
+    },
+]
+
+EXPANSION_CASES_36_EXTRA: list[dict[str, Any]] = [
+    {
+        "id": "local_reflection_blueprint_event_rename",
+        "category": "BlueprintNativeEvent signature issue",
+        "mode": "reflection_fix",
+        "errorLog": "error C2039: 'OnHoldoutRenamed_Implementation': is not a member of UHoldoutRenamedEventComponent",
+        "expectedFilesToRead": ["reflected header", "matching cpp"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "notes": "Catch a BlueprintNativeEvent rename drift across declaration and implementation.",
+    },
+    {
+        "id": "local_editor_runtime_guard_boundary",
+        "category": "editor-only include in runtime module",
+        "mode": "compile_fix",
+        "errorLog": "Runtime module source references UnrealEd editor API without WITH_EDITOR guard",
+        "expectedFilesToRead": ["runtime header", "runtime cpp", "module Build.cs"],
+        "expectedPatchTargets": ["failing file", "module boundary files"],
+        "forbiddenPatchTargets": ["adding UnrealEd to runtime module as default fix"],
+        "expectedErrorSubkind": "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE",
+        "notes": "Prefer editor guards or boundary cleanup over adding UnrealEd to a runtime module.",
+    },
+    {
+        "id": "local_module_private_vs_public_dependency",
+        "category": "LevelSequence dependency issue",
+        "mode": "module_fix",
+        "errorLog": "fatal error C1083: Cannot open include file: 'LevelSequence.h': No such file or directory",
+        "expectedFilesToRead": ["public header", "owner Build.cs"],
+        "expectedPatchTargets": ["owner Build.cs"],
+        "forbiddenPatchTargets": ["unrelated cinematic rewrite"],
+        "expectedModules": ["LevelSequence"],
+        "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
+        "notes": "Public header exposure should be treated as a public module dependency decision.",
+    },
+    {
+        "id": "local_include_owner_forward_decl_mixup",
+        "category": "wrong include owner / missing include path",
+        "mode": "compile_fix",
+        "errorLog": "fatal error C1083: Cannot open include file: 'SphereComponent.h': No such file or directory",
+        "expectedFilesToRead": ["header forward declaration", "cpp include"],
+        "expectedPatchTargets": ["matching cpp/header"],
+        "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "expectedErrorSubkind": "C1083_MISSING_INCLUDE",
+        "notes": "Fix a concrete include owner path while preserving the header forward declaration.",
+    },
+]
+
+
+def infer_eval_tier(case: dict[str, Any]) -> str:
+    category = str(case.get("category") or "").lower()
+    mode = str(case.get("mode") or "").lower()
+    case_id = str(case.get("id") or "").lower()
+    if "multifile" in mode or "multi-file" in category or "multifile" in case_id:
+        return "multifile_refactor"
+    if mode == "module_fix" or "dependency issue" in category or case.get("expectedModules"):
+        return "module_fix"
+    if mode == "reflection_fix" or "uht" in category or "blueprint" in category:
+        return "uht_reflection"
+    if "editor-only" in category:
+        return "editor_runtime_boundary"
+    return "single_file_compile_fix"
+
+
+def ensure_eval_tiers(cases: list[dict[str, Any]]) -> None:
+    for case in cases:
+        case.setdefault("evalTier", infer_eval_tier(case))
+
+
+ensure_eval_tiers(EXPANSION_CASES_12)
+ensure_eval_tiers(EXPANSION_CASES_24)
+ensure_eval_tiers(EXPANSION_CASES_MULTIFILE)
+ensure_eval_tiers(EXPANSION_CASES_36_EXTRA)
+
 
 def detect_ubt_path() -> Path | None:
     """Return the UE 5.8 UBT path if present; never fail if absent."""
@@ -251,14 +407,19 @@ def load_json(path: Path) -> dict[str, Any]:
 def build_suite_config(data: dict[str, Any], suite: str = "5") -> dict[str, Any]:
     out = json.loads(json.dumps(data))
     if str(suite) == "5":
+        ensure_eval_tiers(out.get("cases") or [])
         return out
-    if str(suite) not in {"12", "24"}:
-        raise ValueError("--suite must be 5, 12, or 24")
+    if str(suite) not in {"12", "24", "36"}:
+        raise ValueError("--suite must be 5, 12, 24, or 36")
     existing = {str(case.get("id")) for case in out.get("cases") or []}
     additions = [case for case in EXPANSION_CASES_12 if case["id"] not in existing]
-    if str(suite) == "24":
+    if str(suite) in {"24", "36"}:
         additions.extend(case for case in EXPANSION_CASES_24 if case["id"] not in existing)
+    if str(suite) == "36":
+        additions.extend(case for case in EXPANSION_CASES_MULTIFILE if case["id"] not in existing)
+        additions.extend(case for case in EXPANSION_CASES_36_EXTRA if case["id"] not in existing)
     out.setdefault("cases", []).extend(json.loads(json.dumps(additions)))
+    ensure_eval_tiers(out.get("cases") or [])
     out["suite"] = f"real-project-holdout-local-v0-{suite}"
     out["description"] = (
         f"UE 5.8 local {suite}-case holdout config. Fixture directories are local-only and ignored; "
@@ -290,9 +451,9 @@ def update_config(
         case.setdefault("projectFile", "HoldoutFixture.uproject")
         case.setdefault("target", "HoldoutFixtureEditor Win64 Development")
         case.setdefault("requestFile", "request.txt")
-        if str(suite) in {"12", "24"} and str(case.get("target") or "").startswith("<TARGET_NAME>"):
+        if str(suite) in {"12", "24", "36"} and str(case.get("target") or "").startswith("<TARGET_NAME>"):
             case["target"] = "HoldoutFixtureEditor Win64 Development"
-        if str(suite) in {"12", "24"} and str(case.get("projectFile") or "").startswith("<PATH_TO_PROJECT>"):
+        if str(suite) in {"12", "24", "36"} and str(case.get("projectFile") or "").startswith("<PATH_TO_PROJECT>"):
             case["projectFile"] = "HoldoutFixture.uproject"
     return out
 
@@ -456,6 +617,18 @@ def write_fixture_case(case_id: str, fixture_root: Path = DEFAULT_FIXTURE_ROOT) 
         "local_multifile_interface_signature_update": _write_multifile_interface_fixture,
         "local_multifile_component_api_move": _write_multifile_component_api_fixture,
         "local_common_const_signature_mismatch": _write_const_signature_fixture,
+        "local_multifile_delegate_param_type_change": _write_multifile_delegate_param_type_change_fixture,
+        "local_multifile_interface_return_type_change": _write_multifile_interface_return_type_change_fixture,
+        "local_multifile_subsystem_api_move": _write_multifile_subsystem_api_move_fixture,
+        "local_multifile_uproperty_type_migration": _write_multifile_uproperty_type_migration_fixture,
+        "local_multifile_event_binding_signature_change": _write_multifile_event_binding_signature_change_fixture,
+        "local_multifile_base_class_method_override_change": _write_multifile_base_class_method_override_change_fixture,
+        "local_multifile_callback_param_expand": _write_multifile_callback_param_expand_fixture,
+        "local_multifile_method_split_callsite_update": _write_multifile_method_split_callsite_update_fixture,
+        "local_reflection_blueprint_event_rename": _write_reflection_blueprint_event_rename_fixture,
+        "local_editor_runtime_guard_boundary": _write_editor_runtime_guard_multifile_fixture,
+        "local_module_private_vs_public_dependency": _write_module_private_vs_public_dependency_fixture,
+        "local_include_owner_forward_decl_mixup": _write_include_owner_forward_decl_mixup_fixture,
     }
     writer = writers.get(case_id)
     if not writer:
@@ -1298,6 +1471,505 @@ int32 UHoldoutConstComponent::GetCount()
     )
 
 
+def _write_multifile_delegate_param_type_change_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutUpdateReceiver")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+
+class FHoldoutUpdateReceiver
+{
+public:
+	void HandleUpdate(int32 Amount);
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "HoldoutUpdateReceiver.h"
+
+void FHoldoutUpdateReceiver::HandleUpdate(float Amount)
+{
+	(void)Amount;
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the multi-file delegate parameter type drift. Read the receiver header and cpp and align the declaration and definition without editing Build.cs.\n",
+    )
+
+
+def _write_multifile_interface_return_type_change_fixture(fixture_dir: Path) -> None:
+    interface_h, _ = _source_paths(fixture_dir, "HoldoutReturnInterface")
+    impl_h, impl_cpp = _source_paths(fixture_dir, "HoldoutReturnImplementer")
+    _write(
+        interface_h,
+        """#pragma once
+
+#include "CoreMinimal.h"
+
+class IHoldoutReturnInterface
+{
+public:
+	virtual ~IHoldoutReturnInterface() = default;
+	virtual bool CanUse() const = 0;
+};
+""",
+    )
+    _write(
+        impl_h,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "HoldoutReturnInterface.h"
+
+class FHoldoutReturnImplementer : public IHoldoutReturnInterface
+{
+public:
+	void CanUse() const override;
+};
+""",
+    )
+    _write(
+        impl_cpp,
+        """#include "HoldoutReturnImplementer.h"
+
+void FHoldoutReturnImplementer::CanUse() const
+{
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the interface return type drift by aligning the implementer header and cpp with the interface declaration.\n",
+    )
+
+
+def _write_multifile_subsystem_api_move_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutDataSubsystem")
+    _, consumer = _source_paths(fixture_dir, "HoldoutDataConsumer")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Subsystems/GameInstanceSubsystem.h"
+#include "HoldoutDataSubsystem.generated.h"
+
+UCLASS()
+class HOLDOUTFIXTURE_API UHoldoutDataSubsystem : public UGameInstanceSubsystem
+{
+	GENERATED_BODY()
+
+public:
+	void ApplyData(int32 Value);
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "HoldoutDataSubsystem.h"
+
+void UHoldoutDataSubsystem::HandleData(int32 Value)
+{
+	(void)Value;
+}
+""",
+    )
+    _write(
+        consumer,
+        """#include "HoldoutDataSubsystem.h"
+
+void UseHoldoutDataSubsystem(UHoldoutDataSubsystem* Subsystem)
+{
+	if (Subsystem)
+	{
+		Subsystem->HandleData(7);
+	}
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the subsystem API move across declaration, definition, and consumer callsite. Prefer the ApplyData API already declared in the header.\n",
+    )
+
+
+def _write_multifile_uproperty_type_migration_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutScoreModel")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "UObject/Object.h"
+#include "HoldoutScoreModel.generated.h"
+
+UCLASS()
+class HOLDOUTFIXTURE_API UHoldoutScoreModel : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere, Category="Holdout")
+	int32 Score = 0;
+
+	UFUNCTION(BlueprintCallable, Category="Holdout")
+	float GetScore() const;
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "HoldoutScoreModel.h"
+
+int32 UHoldoutScoreModel::GetScore() const
+{
+	return Score;
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the reflected score type migration so the UPROPERTY, UFUNCTION declaration, and cpp definition agree. Do not edit Build.cs.\n",
+    )
+
+
+def _write_multifile_event_binding_signature_change_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutBindingTarget")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "HoldoutBindingTarget.generated.h"
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnHoldoutHealthChanged, int32);
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutBindingTarget : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	void Bind(FOnHoldoutHealthChanged& Event);
+	void OnHealthChanged();
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "HoldoutBindingTarget.h"
+
+void UHoldoutBindingTarget::Bind(FOnHoldoutHealthChanged& Event)
+{
+	Event.AddUObject(this, &UHoldoutBindingTarget::OnHealthChanged);
+}
+
+void UHoldoutBindingTarget::OnHealthChanged()
+{
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the event binding signature drift. The bound handler must match the OneParam delegate in both header and cpp.\n",
+    )
+
+
+def _write_multifile_base_class_method_override_change_fixture(fixture_dir: Path) -> None:
+    base_h, _ = _source_paths(fixture_dir, "HoldoutBaseAbility")
+    derived_h, derived_cpp = _source_paths(fixture_dir, "HoldoutDerivedAbility")
+    _write(
+        base_h,
+        """#pragma once
+
+#include "CoreMinimal.h"
+
+class FHoldoutBaseAbility
+{
+public:
+	virtual ~FHoldoutBaseAbility() = default;
+	virtual void Activate(float Strength);
+};
+""",
+    )
+    _write(
+        derived_h,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "HoldoutBaseAbility.h"
+
+class FHoldoutDerivedAbility : public FHoldoutBaseAbility
+{
+public:
+	void Activate() override;
+};
+""",
+    )
+    _write(
+        derived_cpp,
+        """#include "HoldoutDerivedAbility.h"
+
+void FHoldoutDerivedAbility::Activate()
+{
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the base/derived override signature drift by aligning the derived header and cpp with the base class signature.\n",
+    )
+
+
+def _write_multifile_callback_param_expand_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutCallbackReceiver")
+    _, registration = _source_paths(fixture_dir, "HoldoutCallbackRegistration")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+
+class FHoldoutCallbackReceiver
+{
+public:
+	static void OnResult(int32 Value);
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "HoldoutCallbackReceiver.h"
+
+void FHoldoutCallbackReceiver::OnResult(int32 Value)
+{
+	(void)Value;
+}
+""",
+    )
+    _write(
+        registration,
+        """#include "HoldoutCallbackReceiver.h"
+
+using FHoldoutCallback = void (*)(int32, bool);
+
+FHoldoutCallback RegisterHoldoutCallback()
+{
+	return &FHoldoutCallbackReceiver::OnResult;
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the expanded callback parameter list across declaration, definition, and registration callsite.\n",
+    )
+
+
+def _write_multifile_method_split_callsite_update_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutSplitComponent")
+    _, consumer = _source_paths(fixture_dir, "HoldoutSplitConsumer")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "HoldoutSplitComponent.generated.h"
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutSplitComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	void Prepare();
+	void Commit();
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "HoldoutSplitComponent.h"
+
+void UHoldoutSplitComponent::DoAll()
+{
+	Prepare();
+	Commit();
+}
+""",
+    )
+    _write(
+        consumer,
+        """#include "HoldoutSplitComponent.h"
+
+void UseHoldoutSplit(UHoldoutSplitComponent* Component)
+{
+	if (Component)
+	{
+		Component->DoAll();
+	}
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the method split drift. Do not reintroduce DoAll; update the cpp and consumer to use Prepare and Commit.\n",
+    )
+
+
+def _write_reflection_blueprint_event_rename_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutRenamedEventComponent")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "HoldoutRenamedEventComponent.generated.h"
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutRenamedEventComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	UFUNCTION(BlueprintNativeEvent, Category="Holdout")
+	void OnHoldoutFinished(int32 Score);
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "HoldoutRenamedEventComponent.h"
+
+void UHoldoutRenamedEventComponent::OnHoldoutRenamed_Implementation(int32 Score)
+{
+	(void)Score;
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the BlueprintNativeEvent rename drift. The _Implementation name and signature must match the reflected declaration.\n",
+    )
+
+
+def _write_editor_runtime_guard_multifile_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutEditorGuardComponent")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "HoldoutEditorGuardComponent.generated.h"
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutEditorGuardComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	void RefreshEditorPreview();
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "HoldoutEditorGuardComponent.h"
+#include "UnrealEd.h"
+
+void UHoldoutEditorGuardComponent::RefreshEditorPreview()
+{
+	GEditor->RedrawAllViewports();
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the runtime/editor boundary drift. Do not add UnrealEd to the runtime module by default; guard or isolate the editor-only API usage.\n",
+    )
+
+
+def _write_module_private_vs_public_dependency_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutSequencePublicComponent")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "LevelSequence.h"
+#include "HoldoutSequencePublicComponent.generated.h"
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutSequencePublicComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere, Category="Holdout")
+	TObjectPtr<ULevelSequence> Sequence;
+};
+""",
+    )
+    _write(cpp, '#include "HoldoutSequencePublicComponent.h"\n')
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the public header LevelSequence dependency. Read HoldoutFixture.Build.cs and make the dependency visible to the public header surface.\n",
+    )
+
+
+def _write_include_owner_forward_decl_mixup_fixture(fixture_dir: Path) -> None:
+    header, cpp = _source_paths(fixture_dir, "HoldoutSphereActor")
+    _write(
+        header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Actor.h"
+#include "HoldoutSphereActor.generated.h"
+
+class USphereComponent;
+
+UCLASS()
+class HOLDOUTFIXTURE_API AHoldoutSphereActor : public AActor
+{
+	GENERATED_BODY()
+
+public:
+	AHoldoutSphereActor();
+
+private:
+	UPROPERTY(VisibleAnywhere, Category="Holdout")
+	TObjectPtr<USphereComponent> Sphere;
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "HoldoutSphereActor.h"
+#include "SphereComponent.h"
+
+AHoldoutSphereActor::AHoldoutSphereActor()
+{
+	Sphere = CreateDefaultSubobject<USphereComponent>(TEXT("Sphere"));
+	RootComponent = Sphere;
+}
+""",
+    )
+    _write(
+        fixture_dir / "request.txt",
+        "Fix the concrete include owner path in the cpp while preserving the header forward declaration. Do not edit Build.cs.\n",
+    )
+
+
 def next_step_text(output_path: Path, model: str = DEFAULT_MODEL, ubt_path: Path | None = None) -> str:
     config = output_path.as_posix()
     ubt_arg = str(ubt_path) if ubt_path else "<UnrealBuildTool.exe>"
@@ -1317,7 +1989,7 @@ def next_step_text(output_path: Path, model: str = DEFAULT_MODEL, ubt_path: Path
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bootstrap ignored local live holdout config.")
-    parser.add_argument("--suite", choices=["5", "12", "24"], default="5", help="Local holdout suite size to prepare.")
+    parser.add_argument("--suite", choices=["5", "12", "24", "36"], default="5", help="Local holdout suite size to prepare.")
     parser.add_argument("--project-file", default="", help="Path to the local .uproject for all generated cases.")
     parser.add_argument("--fixture-root", default="", help="Root containing one fixture directory per case id.")
     parser.add_argument("--suite-name", default=DEFAULT_SUITE_NAME)
@@ -1327,7 +1999,7 @@ def main() -> int:
     args = parser.parse_args()
     fixture_root = args.fixture_root
     project_file = args.project_file
-    if args.suite in {"12", "24"}:
+    if args.suite in {"12", "24", "36"}:
         fixture_root = fixture_root or DEFAULT_FIXTURE_ROOT.as_posix()
         project_file = project_file or "HoldoutFixture.uproject"
 
@@ -1342,7 +2014,7 @@ def main() -> int:
             force=args.force,
         )
         created = []
-        if args.suite in {"12", "24"}:
+        if args.suite in {"12", "24", "36"}:
             fixture_cases = load_json(args.output_config).get("cases") or []
             created = write_fixture_cases(
                 [str(case["id"]) for case in fixture_cases],
@@ -1356,7 +2028,7 @@ def main() -> int:
         return 1
 
     print(f"Wrote {args.output_config}")
-    if args.suite in {"12", "24"}:
+    if args.suite in {"12", "24", "36"}:
         print(f"Prepared {len(created)} local fixture directories under {fixture_root}")
     detected_ubt = detect_ubt_path()
     if detected_ubt:

@@ -120,6 +120,24 @@ def _case_expects_build_cs(case: dict) -> bool:
     return "build.cs" in text or bool(case.get("expectedModules")) or "dependency issue" in category or mode == "module_fix"
 
 
+def infer_eval_tier(case_or_result: dict) -> str:
+    tier = str(case_or_result.get("evalTier") or "").strip()
+    if tier:
+        return tier
+    category = str(case_or_result.get("category") or "").lower()
+    mode = str(case_or_result.get("mode") or "").lower()
+    case_id = str(case_or_result.get("id") or "").lower()
+    if "multifile" in mode or "multi-file" in category or "multifile" in case_id:
+        return "multifile_refactor"
+    if mode == "module_fix" or "dependency issue" in category or case_or_result.get("expectedModules"):
+        return "module_fix"
+    if mode == "reflection_fix" or "uht" in category or "blueprint" in category:
+        return "uht_reflection"
+    if "editor-only" in category:
+        return "editor_runtime_boundary"
+    return "single_file_compile_fix"
+
+
 def _forbidden_target_hits(case: dict, changed_files: list[str], diff_text: str = "") -> list[str]:
     hits: list[str] = []
     changed_build_cs = any(path.lower().endswith(".build.cs") for path in changed_files)
@@ -214,6 +232,8 @@ def build_metrics_only_results(
         results.append(
             {
                 "id": case_id,
+                "category": case.get("category"),
+                "evalTier": infer_eval_tier(case),
                 "pass": True,
                 "mode": "metrics-only",
                 "detail": "KPI aggregation smoke only; UBT and LM Studio were not invoked.",
@@ -237,10 +257,36 @@ def calculate_kpi_metrics(results: list[dict]) -> dict:
     for attempts in attempts_values:
         key = str(attempts)
         histogram[key] = histogram.get(key, 0) + 1
+
+    def _group_summary(rows: list[dict]) -> dict:
+        row_attempts = [int(row.get("attempts") or 0) for row in rows if row.get("attempts") is not None]
+        row_pass_at_1 = sum(1 for row in rows if row.get("passAt1"))
+        row_pass_at_k = sum(1 for row in rows if row.get("pass"))
+        row_count = len(rows)
+        return {
+            "cases": row_count,
+            "pass_at_1": row_pass_at_1,
+            "pass_at_k": row_pass_at_k,
+            "pass_at_1_rate": round(row_pass_at_1 / row_count, 3) if row_count else 0.0,
+            "pass_at_k_rate": round(row_pass_at_k / row_count, 3) if row_count else 0.0,
+            "avg_attempts": round(sum(row_attempts) / len(row_attempts), 3) if row_attempts else 0.0,
+            "max_attempts_used": max(row_attempts) if row_attempts else 0,
+            "wrong_file_edits": sum(1 for row in rows if row.get("wrongFileEdit")),
+            "build_cs_false_positives": sum(1 for row in rows if row.get("buildCsFalsePositive")),
+            "same_error_repeated": sum(1 for row in rows if row.get("sameErrorRepeated")),
+            "no_op_edits": sum(1 for row in rows if row.get("noOpEdit")),
+        }
+
+    tier_groups: dict[str, list[dict]] = {}
+    for row in results:
+        tier = infer_eval_tier(row)
+        tier_groups.setdefault(tier, []).append(row)
     return {
         "passAt1Count": pass_at_1,
         "passAt1Rate": round(pass_at_1 / total, 3) if total else 0.0,
         "averageAttempts": round(sum(attempts_values) / len(attempts_values), 3) if attempts_values else 0.0,
+        "overall": _group_summary(results),
+        "tiers": {tier: _group_summary(rows) for tier, rows in sorted(tier_groups.items())},
         "failedCaseIds": [str(row.get("id")) for row in results if not row.get("pass")],
         "attemptHistogram": dict(sorted(histogram.items(), key=lambda item: int(item[0]))),
         "sameErrorRepeatedCount": sum(1 for row in results if row.get("sameErrorRepeated")),
@@ -377,6 +423,8 @@ def run_case(
     if not case.get("fixtureDir") or not case.get("projectFile"):
         return {
             "id": case_id,
+            "category": case.get("category"),
+            "evalTier": infer_eval_tier(case),
             "pass": False,
             "mode": mode_label,
             "error": "fixture-only holdout case is not live-applicable: missing fixtureDir/projectFile",
@@ -386,7 +434,14 @@ def run_case(
         }
     fixture_dir = (ROOT / case["fixtureDir"]).resolve()
     if not fixture_dir.is_dir():
-        return {"id": case_id, "pass": False, "mode": mode_label, "error": f"fixture missing: {fixture_dir}"}
+        return {
+            "id": case_id,
+            "category": case.get("category"),
+            "evalTier": infer_eval_tier(case),
+            "pass": False,
+            "mode": mode_label,
+            "error": f"fixture missing: {fixture_dir}",
+        }
 
     with tempfile.TemporaryDirectory(prefix=f"passatk_{case_id}_") as tmp:
         work_dir = Path(tmp)
@@ -402,6 +457,8 @@ def run_case(
             ok, detail = run_ubt(project_file, target, ubt_path, ubt_timeout)
             return {
                 "id": case_id,
+                "category": case.get("category"),
+                "evalTier": infer_eval_tier(case),
                 "pass": ok,
                 "mode": "dry-run",
                 "goldenFiles": applied,
@@ -435,6 +492,8 @@ def run_case(
                 artifact_run_dir = str(dest_run_dir)
         return {
             "id": case_id,
+            "category": case.get("category"),
+            "evalTier": infer_eval_tier(case),
             "pass": ok,
             "mode": "live",
             "detail": detail[:800],
