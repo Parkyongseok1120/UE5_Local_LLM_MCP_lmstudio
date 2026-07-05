@@ -466,20 +466,7 @@ def build_suggested_tool_calls(
     mode: str,
     project_context: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    if not project_context.get("ok"):
-        return list(project_context.get("suggestedToolCalls") or [{"tool": "unreal_set_active_project", "args": {}}])
-
-    from asset_hint_resolver import resolve_asset_folder_hint
-    from code_hint_resolver import looks_like_cpp_domain_request, resolve_code_domain_hint
-
     text = str(request or "")
-    lower = text.lower()
-    asset_markers = (
-        "material", "머티리얼", "shader", "folder", "폴더", "/game/", "m_", "mf_",
-        "blueprint", "블루프린트", "asset", "에셋",
-    )
-    asset_like = any(marker in lower for marker in asset_markers)
-    cpp_like = looks_like_cpp_domain_request(text)
 
     if task_kind == "refactor":
         symbols = _symbol_candidates_from_text(text)
@@ -496,6 +483,20 @@ def build_suggested_tool_calls(
         )
         calls.append({"tool": "unreal_project_architecture", "args": {}})
         return calls
+
+    if not project_context.get("ok"):
+        return list(project_context.get("suggestedToolCalls") or [{"tool": "unreal_set_active_project", "args": {}}])
+
+    from asset_hint_resolver import resolve_asset_folder_hint
+    from code_hint_resolver import looks_like_cpp_domain_request, resolve_code_domain_hint
+
+    lower = text.lower()
+    asset_markers = (
+        "material", "머티리얼", "shader", "folder", "폴더", "/game/", "m_", "mf_",
+        "blueprint", "블루프린트", "asset", "에셋",
+    )
+    asset_like = any(marker in lower for marker in asset_markers)
+    cpp_like = looks_like_cpp_domain_request(text)
 
     if cpp_like and not asset_like:
         payload = resolve_code_domain_hint(text, project_context)
