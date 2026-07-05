@@ -4,6 +4,18 @@
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
+---
+
+## ☕ Support This Project
+
+If this project has been useful to you, please consider sponsoring — it helps keep development going.
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%9D%A4-red?logo=github)](https://github.com/sponsors/Parkyongseok1120)
+
+👉 **[https://github.com/sponsors/Parkyongseok1120](https://github.com/sponsors/Parkyongseok1120)**
+
+---
+
 ## Project Status
 
 > **Project Status — July 2026**
@@ -407,3 +419,13 @@ Still experimental, but now measured more tightly.
 For narrow UE 5.8 compile-fix work, the current Qwen 3.6 27B local workflow is strong in live UBT validation. For multi-file refactor and broader engineering judgment, it still needs better Pass@1 stability and repeated 36-case+ live runs before stronger claims.
 
 If you want local LLMs for Unreal C++ with less hallucination, search evidence first, then answer or patch. Improve RAG, routing, validation, and failure analysis first; use fine-tuning later only when the workflow is already measured on real project errors.
+
+---
+
+## ☕ Support This Project
+
+If this project has been useful to you, please consider sponsoring — it helps keep development going.
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%9D%A4-red?logo=github)](https://github.com/sponsors/Parkyongseok1120)
+
+👉 **[https://github.com/sponsors/Parkyongseok1120](https://github.com/sponsors/Parkyongseok1120)**
