@@ -187,3 +187,84 @@ def test_reflection_generated_h_query_adds_error_route_sidecar(tmp_path):
     assert sidecar is not None
     assert sidecar["items"][0]["broadMode"] == "reflection_fix"
     assert rows[0].get("resolved_mode") == "reflection_fix"
+
+
+def test_architecture_sidecar_missing_map_is_nonfatal(tmp_path, monkeypatch):
+    index = _make_index(tmp_path / "rag.sqlite")
+    monkeypatch.setattr(rag_search, "default_architecture_map_path", lambda root=None: tmp_path / "missing.json")
+
+    rows = rag_search.search(index, "Review ADemoActor architecture ownership", 5, rag_search.SearchOptions(mode="review"))
+
+    assert rows
+    assert _sidecar(rows, "architecture_map") is None
+
+
+def test_architecture_sidecar_uses_compact_map_rows(tmp_path, monkeypatch):
+    index = _make_index(tmp_path / "rag.sqlite")
+    arch_path = tmp_path / "architecture_map.json"
+    arch_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "project": {"name": "Demo"},
+                "types": [
+                    {
+                        "name": "UDemoCombatComponent",
+                        "module": "Demo",
+                        "header": "Source/Demo/Public/DemoCombatComponent.h",
+                        "cpp": "Source/Demo/Private/DemoCombatComponent.cpp",
+                        "category": "ActorComponent",
+                        "responsibilityHints": ["hint: combat state / action execution candidate"],
+                        "riskFlags": ["blueprint_facing_surface"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rag_search, "default_architecture_map_path", lambda root=None: arch_path)
+
+    rows = rag_search.search(
+        index,
+        "Review ADemoActor UDemoCombatComponent architecture ownership",
+        5,
+        rag_search.SearchOptions(mode="review"),
+    )
+    sidecar = _sidecar(rows, "architecture_map")
+
+    assert sidecar is not None
+    assert sidecar["items"][0]["type"] == "UDemoCombatComponent"
+    assert sidecar["items"][0]["riskFlags"] == ["blueprint_facing_surface"]
+    assert "architecture_map" in sidecar["locator"]
+
+
+def test_architecture_sidecar_does_not_trigger_on_generic_review(tmp_path, monkeypatch):
+    index = _make_index(tmp_path / "rag.sqlite")
+    arch_path = tmp_path / "architecture_map.json"
+    arch_path.write_text(json.dumps({"types": [{"name": "UDemoCombatComponent"}]}), encoding="utf-8")
+    monkeypatch.setattr(rag_search, "default_architecture_map_path", lambda root=None: arch_path)
+
+    rows = rag_search.search(
+        index,
+        "Review ADemoActor compile behavior",
+        5,
+        rag_search.SearchOptions(mode="review"),
+    )
+
+    assert _sidecar(rows, "architecture_map") is None
+
+
+def test_architecture_sidecar_does_not_appear_for_unrelated_mode(tmp_path, monkeypatch):
+    index = _make_index(tmp_path / "rag.sqlite")
+    arch_path = tmp_path / "architecture_map.json"
+    arch_path.write_text(json.dumps({"types": [{"name": "UDemoCombatComponent"}]}), encoding="utf-8")
+    monkeypatch.setattr(rag_search, "default_architecture_map_path", lambda root=None: arch_path)
+
+    rows = rag_search.search(
+        index,
+        "ADemoActor UDemoCombatComponent architecture ownership",
+        5,
+        rag_search.SearchOptions(mode="api_lookup"),
+    )
+
+    assert _sidecar(rows, "architecture_map") is None

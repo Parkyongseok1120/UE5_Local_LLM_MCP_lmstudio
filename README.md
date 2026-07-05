@@ -321,6 +321,7 @@ Maintainers: run `.\installer\Verify-Oss-Ready.ps1` before publishing a fork.
 | Error taxonomy | [docs/Error_Taxonomy.md](docs/Error_Taxonomy.md) |
 | clangd policy | [docs/Clangd_Policy.md](docs/Clangd_Policy.md) |
 | Blueprint metadata | [docs/Blueprint_Metadata.md](docs/Blueprint_Metadata.md) |
+| Architecture understanding | [docs/architecture/Architecture_Understanding_Layer.md](docs/architecture/Architecture_Understanding_Layer.md) |
 | Asset automation roadmap | [docs/Asset_Automation_Roadmap.md](docs/Asset_Automation_Roadmap.md) |
 | Eval harness | [docs/Eval_Harness.md](docs/Eval_Harness.md) |
 | Eval risk register | [docs/Evaluation_Risk_Register.md](docs/Evaluation_Risk_Register.md) |

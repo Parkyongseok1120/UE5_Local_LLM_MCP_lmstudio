@@ -15,6 +15,7 @@ data/baseline/*
 data/local_holdout_fixtures/
 data/wrapper_runs/
 data/scaffold_runs/
+data/architecture/
 node_modules/
 lmstudio-unreal-agent-mcp/node_modules/
 lmstudio-unreal-agent-mcp/config/agent-mcp.json

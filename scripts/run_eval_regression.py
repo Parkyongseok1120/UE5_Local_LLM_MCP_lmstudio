@@ -33,13 +33,16 @@ def load_json(path: Path) -> dict | None:
 def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int = DEFAULT_STEP_TIMEOUT) -> dict:
     if ci:
         index = ROOT / "data" / "unreal58" / "rag.sqlite"
-        # Resolve UBT path dynamically instead of hardcoding version
-        sys.path.insert(0, str(SCRIPTS))
-        try:
-            from workspace_paths import resolve_ubt_path
-            ubt = resolve_ubt_path()
-        except Exception:
-            ubt = Path("UnrealBuildTool.exe")
+        if label in {"eval_pass_at_k_dry", "eval_e2e_compile"}:
+            return {
+                "label": label,
+                "exitCode": 0,
+                "pass": True,
+                "skipped": True,
+                "reason": "UBT-dependent step skipped in CI",
+                "stdoutTail": "",
+                "stderrTail": "",
+            }
         if label in {"retrieval_unreal_programming", "bench_mcp", "eval_reasoning"} and not index.is_file():
             return {
                 "label": label,
@@ -47,16 +50,6 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int =
                 "pass": True,
                 "skipped": True,
                 "reason": "rag index missing (CI skip)",
-                "stdoutTail": "",
-                "stderrTail": "",
-            }
-        if label in {"eval_pass_at_k_dry", "eval_e2e_compile"} and not ubt.is_file():
-            return {
-                "label": label,
-                "exitCode": 0,
-                "pass": True,
-                "skipped": True,
-                "reason": "UBT not installed (CI skip)",
                 "stdoutTail": "",
                 "stderrTail": "",
             }

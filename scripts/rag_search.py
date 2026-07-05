@@ -211,6 +211,144 @@ def fetch_error_route_sidecar(query: str, mode: str, limit: int = 3) -> list[dic
     ]
 
 
+ARCHITECTURE_SIDECAR_MODES = {
+    "review",
+    "planning",
+    "design",
+    "agent_edit",
+    "refactor_r0",
+    "refactor_r1",
+    "refactor_r2",
+    "refactor_r3",
+    "refactor_r4",
+}
+ARCHITECTURE_QUERY_MARKERS = (
+    "architecture",
+    "refactor",
+    "ownership",
+    "component",
+    "subsystem",
+    "blueprint",
+    "uproperty",
+    "ufunction",
+    "responsibility",
+    "boundary",
+)
+ARCHITECTURE_SIDECAR_STOPWORDS = {
+    "review",
+    "architecture",
+    "ownership",
+    "refactor",
+    "please",
+    "about",
+    "with",
+    "from",
+    "this",
+    "that",
+    "the",
+    "and",
+}
+
+
+def default_architecture_map_path(root: Path | None = None) -> Path:
+    base = root or Path(__file__).resolve().parent.parent
+    return base / "data" / "architecture" / "architecture_map.json"
+
+
+def architecture_sidecar_locator(path: Path) -> str:
+    root = Path(__file__).resolve().parent.parent
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return "architecture_map"
+
+
+def query_wants_architecture_sidecar(query: str, mode: str) -> bool:
+    if mode not in ARCHITECTURE_SIDECAR_MODES:
+        return False
+    raw = str(query or "").lower()
+    return any(marker in raw for marker in ARCHITECTURE_QUERY_MARKERS)
+
+
+def architecture_sidecar_match_score(row: dict[str, Any], query_lower: str, query_terms: list[str]) -> int:
+    name = str(row.get("name") or "").lower()
+    stripped_name = name[1:] if name[:1] in {"a", "f", "i", "s", "t", "u"} else name
+    category = str(row.get("category") or "").lower()
+    risk_flags = " ".join(str(item) for item in row.get("riskFlags") or []).lower()
+    hints = " ".join(str(item) for item in row.get("responsibilityHints") or []).lower()
+    haystack = " ".join([name, stripped_name, category, risk_flags, hints])
+    score = 0
+    if name and name in query_lower:
+        score += 100
+    if stripped_name and stripped_name in query_lower:
+        score += 80
+    if category and category in query_lower:
+        score += 25
+    for term in query_terms:
+        if term in haystack:
+            score += 8
+    return score
+
+
+def architecture_sidecar_item(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": row.get("name", ""),
+        "category": row.get("category", ""),
+        "module": row.get("module", ""),
+        "header": row.get("header", ""),
+        "cpp": row.get("cpp", ""),
+        "responsibilityHints": list(row.get("responsibilityHints") or [])[:3],
+        "riskFlags": list(row.get("riskFlags") or [])[:6],
+    }
+
+
+def fetch_architecture_sidecar(query: str, mode: str, limit: int = 5) -> list[dict[str, Any]]:
+    if not query_wants_architecture_sidecar(query, mode):
+        return []
+    path = default_architecture_map_path()
+    if not path.is_file():
+        return []
+    try:
+        arch = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    query_lower = str(query or "").lower()
+    query_terms = [
+        term.lower()
+        for term in tokenize(query_lower)
+        if term.lower() not in ARCHITECTURE_SIDECAR_STOPWORDS and len(term) > 2
+    ]
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for row in arch.get("types") or []:
+        score = architecture_sidecar_match_score(row, query_lower, query_terms)
+        if score > 0:
+            scored.append((score, row))
+    items = [architecture_sidecar_item(row) for _score, row in sorted(scored, key=lambda item: item[0], reverse=True)[:limit]]
+
+    if not items:
+        fallback_limit = min(limit, 3)
+        for row in arch.get("types") or []:
+            if row.get("riskFlags") or row.get("responsibilityHints"):
+                item = architecture_sidecar_item(row)
+                item["responsibilityHints"] = item["responsibilityHints"][:2]
+                item["riskFlags"] = item["riskFlags"][:4]
+                items.append(item)
+            if len(items) >= fallback_limit:
+                break
+    if not items:
+        return []
+    return [
+        _sidecar_row(
+            sidecar_type="architecture_map",
+            title="Architecture map sidecar",
+            items=items,
+            mode=mode,
+            locator=architecture_sidecar_locator(path),
+        )
+    ]
+
+
 def preferred_modes_from_error_route(query: str, mode: str) -> list[str]:
     if mode not in {"compile_fix", "module_fix", "reflection_fix"}:
         return []
@@ -1809,6 +1947,7 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
     structured_sidecars.extend(fetch_error_route_sidecar(query, mode, limit=3))
     structured_sidecars.extend(fetch_module_resolver_sidecar(effective_query, mode, limit=5))
     structured_sidecars.extend(fetch_symbol_graph_sidecar(query, mode, limit=5))
+    structured_sidecars.extend(fetch_architecture_sidecar(query, mode, limit=5))
     if structured_sidecars:
         ranked = merge_ranked_sidecar(
             ranked,

@@ -1,0 +1,136 @@
+{
+  "description": "Public-safe architecture understanding eval cases. These validate grounded review behavior, not model parity.",
+  "defaults": {
+    "requireArchitectureMap": true,
+    "requireCitation": false
+  },
+  "cases": [
+    {
+      "id": "architecture_combat_ownership_review",
+      "prompt": "Review combat input and combo ownership boundaries.",
+      "requiredMentions": [
+        "input bridge",
+        "component-owned combat state only if member/function evidence exists",
+        "Blueprint-facing names should not be renamed without migration",
+        "AnimMontage/DataAsset references require validation"
+      ],
+      "forbiddenClaims": [
+        "move all input binding into component without checking Enhanced Input ownership",
+        "rename reflected properties without migration",
+        "claim unused asset without reference scan"
+      ],
+      "requiredEvidenceTypes": [
+        "header/cpp pair",
+        "UPROPERTY/UFUNCTION surface",
+        "module ownership",
+        "asset reference hint"
+      ]
+    },
+    {
+      "id": "architecture_input_ownership_review",
+      "prompt": "Review player input ownership across controller, pawn, component, and Enhanced Input bindings.",
+      "requiredMentions": [
+        "controller or pawn input bridge",
+        "Enhanced Input module evidence",
+        "component ownership only with call/member evidence"
+      ],
+      "forbiddenClaims": [
+        "component owns all input without checking binding site",
+        "remove Enhanced Input without Build.cs and binding evidence"
+      ],
+      "requiredEvidenceTypes": [
+        "header/cpp pair",
+        "module ownership",
+        "function"
+      ]
+    },
+    {
+      "id": "architecture_component_subsystem_boundary_review",
+      "prompt": "Review whether gameplay state belongs in an ActorComponent or subsystem.",
+      "requiredMentions": [
+        "component-level gameplay behavior",
+        "subsystem service boundary",
+        "ownership claim requires members/functions"
+      ],
+      "forbiddenClaims": [
+        "introduce a new subsystem when an existing subsystem already owns the role",
+        "move actor instance state into global subsystem without lifecycle evidence"
+      ],
+      "requiredEvidenceTypes": [
+        "module ownership",
+        "UPROPERTY/UFUNCTION surface"
+      ]
+    },
+    {
+      "id": "architecture_blueprint_rename_risk",
+      "prompt": "Evaluate reflected property/function rename risk for Blueprint-facing classes.",
+      "requiredMentions": [
+        "Blueprint-facing change risk",
+        "migration or redirect validation",
+        "UPROPERTY/UFUNCTION surface"
+      ],
+      "forbiddenClaims": [
+        "rename reflected property safely without migration",
+        "Blueprint references do not need validation"
+      ],
+      "requiredEvidenceTypes": [
+        "UPROPERTY/UFUNCTION surface",
+        "Blueprint-facing risk"
+      ]
+    },
+    {
+      "id": "architecture_asset_reference_risk",
+      "prompt": "Review DataAsset, montage, sequence, texture, and soft object reference risk before cleanup.",
+      "requiredMentions": [
+        "asset reference validation",
+        "do not claim unused without reference scan",
+        "serialized reflected surface"
+      ],
+      "forbiddenClaims": [
+        "asset is unused from C++ grep alone",
+        "delete DataAsset reference without content validation"
+      ],
+      "requiredEvidenceTypes": [
+        "asset reference hint",
+        "UPROPERTY/UFUNCTION surface"
+      ]
+    },
+    {
+      "id": "architecture_editor_runtime_boundary_review",
+      "prompt": "Review editor-only API usage in runtime modules.",
+      "requiredMentions": [
+        "runtime/editor boundary",
+        "WITH_EDITOR or editor module split",
+        "Build.cs dependency context"
+      ],
+      "forbiddenClaims": [
+        "add UnrealEd to runtime module without boundary review",
+        "editor-only include is safe in runtime public header"
+      ],
+      "requiredEvidenceTypes": [
+        "module ownership",
+        "header/cpp pair"
+      ]
+    },
+    {
+      "id": "architecture_safe_refactor_plan_review",
+      "prompt": "Draft a safe refactor plan from architecture hints without executing edits.",
+      "requiredMentions": [
+        "generated architecture hints are not truth",
+        "validate Blueprint/reflection contracts",
+        "small staged refactor",
+        "UBT validation"
+      ],
+      "forbiddenClaims": [
+        "large autonomous refactor",
+        "generated map proves ownership",
+        "skip compile validation"
+      ],
+      "requiredEvidenceTypes": [
+        "module ownership",
+        "header/cpp pair",
+        "risk flags"
+      ]
+    }
+  ]
+}

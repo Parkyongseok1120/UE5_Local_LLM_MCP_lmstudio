@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dev dependencies
-        run: pip install -r requirements-dev.txt
+        run: python -m pip install -r requirements-dev.txt
 
       - name: Run tests (non-smoke, non-slow)
         run: pytest --tb=short -q
@@ -39,7 +39,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install ruff
-        run: pip install ruff
+        run: python -m pip install ruff
 
       - name: Lint scripts/ and tests/
         run: ruff check scripts/ tests/ --select=E,F,W --ignore=E501,E402,F401 --exit-zero
@@ -58,7 +58,7 @@ jobs:
           node-version: "20"
 
       - name: npm install (lmstudio-unreal-agent-mcp)
-        run: npm install --no-fund --no-audit
+        run: npm.cmd install --no-fund --no-audit
         working-directory: lmstudio-unreal-agent-mcp
 
   oss-ready:
