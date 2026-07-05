@@ -1173,6 +1173,8 @@ def request_mentions_any(request: str, needles: tuple[str, ...]) -> bool:
 NEGATIVE_BUILD_CS_MARKERS = (
     "do not",
     "don't",
+    "not to",
+    "not add",
     "without",
     "unless",
     "not supported",
@@ -1262,7 +1264,8 @@ BUILD_CS_ACTION_MARKERS = (
 
 
 def answer_claims_build_cs_edit(answer: str) -> bool:
-    lowered = str(answer or "").lower()
+    text = _positive_build_cs_request_text(answer)
+    lowered = str(text or "").lower()
     if not any(marker in lowered for marker in BUILD_CS_CLAIM_MARKERS):
         return False
     return any(marker in lowered for marker in BUILD_CS_ACTION_MARKERS)
@@ -1275,6 +1278,21 @@ def bundle_includes_build_cs(bundle: dict[str, Any]) -> bool:
     for item in bundle.get("patches") or []:
         paths.append(str(item.get("path") or ""))
     return any(path.lower().endswith(".build.cs") for path in paths if path)
+
+
+def bundle_text_for_path(bundle: dict[str, Any], suffix: str) -> str:
+    chunks: list[str] = []
+    suffix = suffix.lower()
+    for item in bundle.get("files") or []:
+        path = str(item.get("path") or "").lower()
+        if path.endswith(suffix):
+            chunks.append(str(item.get("content") or ""))
+    for item in bundle.get("patches") or []:
+        path = str(item.get("path") or "").lower()
+        if path.endswith(suffix):
+            chunks.append(str(item.get("oldText") or ""))
+            chunks.append(str(item.get("newText") or ""))
+    return "\n".join(chunks)
 
 
 def proposed_bundle_paths(bundle: dict[str, Any] | None) -> list[str]:
@@ -1328,6 +1346,36 @@ def hallucination_blockers(
         issues.append(
             "You claimed or implied a Build.cs / module-dependency fix, but the response did not include any "
             "*.Build.cs file in files[] or patches[]. Return the updated Build.cs content."
+        )
+    return issues
+
+
+def route_forbidden_action_blockers(route: dict[str, Any] | None, bundle: dict[str, Any]) -> list[str]:
+    """Reject route-specific forbidden edits without globally hard-enforcing patch targets."""
+    route = route or {}
+    forbidden = " ".join(str(item).lower() for item in route.get("forbiddenActions") or [])
+    if not forbidden:
+        return []
+
+    issues: list[str] = []
+    build_cs_text_value = bundle_text_for_path(bundle, ".build.cs")
+    if (
+        "adding unrealed to runtime module" in forbidden
+        and bundle_includes_build_cs(bundle)
+        and "UnrealEd" in build_cs_text_value
+    ):
+        issues.append(
+            "The current error route forbids fixing runtime/editor boundary drift by adding UnrealEd to a runtime "
+            "module Build.cs. Remove the Build.cs dependency change and guard or isolate the editor-only source API."
+        )
+    if (
+        "build.cs-first fix without module evidence" in forbidden
+        and bundle_includes_build_cs(bundle)
+        and not request_requests_build_cs_fix(str(route.get("errorSubkind") or ""))
+    ):
+        issues.append(
+            "The current error route forbids a Build.cs-first edit without module evidence. Patch the matching "
+            "header/cpp surface instead, or show module evidence before changing Build.cs."
         )
     return issues
 
@@ -3923,6 +3971,23 @@ def run(args: argparse.Namespace) -> int:
                 blockers=hall_blockers,
                 bundle=bundle,
                 rejection_kind="hallucination_blocker",
+            )
+            continue
+        route_blockers = route_forbidden_action_blockers(active_route, bundle)
+        if route_blockers:
+            previous_feedback = (
+                "Edit rejected because it violates the current error route forbidden actions:\n"
+                + "\n".join(f"- {issue}" for issue in route_blockers)
+                + "\nUse the current project state as authoritative and patch only the allowed root-cause surface."
+            )
+            write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+            record_validation_rejection(
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                feedback=previous_feedback,
+                blockers=route_blockers,
+                bundle=bundle,
+                rejection_kind="route_forbidden_action",
             )
             continue
         has_edits = bool(bundle["files"]) or bool(bundle.get("patches"))

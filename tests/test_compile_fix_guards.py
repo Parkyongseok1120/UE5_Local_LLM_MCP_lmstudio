@@ -20,6 +20,7 @@ from lmstudio_unreal_wrapper import (  # noqa: E402
     no_change_blockers,
     request_forbids_build_cs_first,
     request_requests_build_cs_fix,
+    route_forbidden_action_blockers,
     summarize_project_state,
     validate_unreal_readiness,
 )
@@ -221,6 +222,15 @@ def test_hallucination_rejects_build_cs_claim_without_file():
     assert "Build.cs" in issues[0]
 
 
+def test_negative_build_cs_answer_does_not_claim_build_cs_edit():
+    assert not answer_claims_build_cs_edit(
+        "Guarded the source include without modifying Build.cs; Build.cs remains unchanged."
+    )
+    assert not answer_claims_build_cs_edit(
+        "Wrapped the editor-only code while respecting the constraint not to add UnrealEd to Build.cs."
+    )
+
+
 def test_negative_build_cs_instruction_does_not_require_build_cs_patch(tmp_path):
     fixture = tmp_path
     source = fixture / "Source" / "Demo" / "Private" / "DashComponent.cpp"
@@ -244,6 +254,34 @@ def test_negative_build_cs_instruction_does_not_require_build_cs_patch(tmp_path)
     assert request_forbids_build_cs_first(request)
     assert not request_requests_build_cs_fix(request)
     assert hallucination_blockers(request, bundle["answer"], bundle, fixture) == []
+
+
+def test_route_forbidden_action_rejects_unrealed_build_cs_runtime_fix():
+    route = {"forbiddenActions": ["adding UnrealEd to runtime module as default fix"]}
+    bundle = {
+        "answer": "Guarded source and added conditional UnrealEd.",
+        "files": [
+            {
+                "path": "Source/Demo/Demo.Build.cs",
+                "content": (
+                    "using UnrealBuildTool;\n"
+                    "public class Demo : ModuleRules\n"
+                    "{\n"
+                    "  public Demo(ReadOnlyTargetRules Target) : base(Target)\n"
+                    "  {\n"
+                    "    if (Target.bBuildEditor) { PrivateDependencyModuleNames.Add(\"UnrealEd\"); }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+            }
+        ],
+        "patches": [],
+    }
+
+    issues = route_forbidden_action_blockers(route, bundle)
+
+    assert issues
+    assert "UnrealEd" in issues[0]
 
 
 def test_missing_definition_fix_rejects_removed_existing_call_site(tmp_path):

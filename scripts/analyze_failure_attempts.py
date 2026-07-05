@@ -124,6 +124,38 @@ def classify_attempt(attempt_dir: Path, case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def failed_attempt_names(run_dir: Path) -> set[str] | None:
+    state_path = run_dir / "retry_state.json"
+    if not state_path.is_file():
+        return None
+    try:
+        data = load_json(state_path)
+    except (OSError, json.JSONDecodeError):
+        return None
+    names: set[str] = set()
+    for row in data.get("attempts") or []:
+        attempt = row.get("attempt")
+        if attempt is None:
+            continue
+        if row.get("passed") is True:
+            continue
+        names.add(f"attempt_{attempt}")
+    return names
+
+
+def passed_without_failed_attempts(run_dir: Path) -> bool:
+    if (run_dir / "retry_state.json").is_file():
+        return False
+    final_answer = run_dir / "final_answer.md"
+    if not final_answer.is_file():
+        return False
+    try:
+        text = final_answer.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return False
+    return "Status: BUILD_OK" in text or "Status: NO_FILE_CHANGES" in text
+
+
 def _target_is_covered(target: str, changed_lower: list[str]) -> bool:
     if "build.cs" in target:
         return any(path.endswith(".build.cs") for path in changed_lower)
@@ -152,8 +184,13 @@ def analyze_artifacts(artifact_dir: Path, cases: dict[str, dict[str, Any]]) -> d
             continue
         case = cases.get(case_id, {"id": case_id})
         attempts: list[dict[str, Any]] = []
+        failed_names = failed_attempt_names(run_dir)
+        if failed_names is None and passed_without_failed_attempts(run_dir):
+            continue
         for attempt_dir in sorted(run_dir.glob("attempt_*")):
             if not attempt_dir.is_dir():
+                continue
+            if failed_names is not None and attempt_dir.name not in failed_names:
                 continue
             report = classify_attempt(attempt_dir, case)
             attempts.append(report)
