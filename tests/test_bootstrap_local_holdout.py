@@ -26,6 +26,65 @@ def test_bootstrap_creates_local_config_from_example(tmp_path):
     assert loaded["suite"] == "real-project-holdout-local-v0"
     assert len(loaded["cases"]) == 5
     assert data == loaded
+    assert loaded["engineVersion"] == "5.8"
+    assert all(case["engineVersion"] == "5.8" for case in loaded["cases"])
+
+
+def test_bootstrap_suite_12_adds_expected_case_ids(tmp_path):
+    output = tmp_path / "rag_eval_real_project_holdout_cases.local.json"
+
+    data = bootstrap_local_holdout.write_local_config(
+        example_path=EXAMPLE,
+        output_path=output,
+        fixture_root="data/local_holdout_fixtures",
+        project_file="HoldoutFixture.uproject",
+        suite="12",
+    )
+
+    ids = {case["id"] for case in data["cases"]}
+    assert len(ids) == 12
+    assert {
+        "local_gameplaytags_missing_module",
+        "local_enhanced_input_missing_module",
+        "local_generated_h_not_last",
+        "local_header_cpp_signature_mismatch",
+        "local_lnk2019_missing_cpp_definition",
+        "local_umg_missing_module",
+        "local_niagara_missing_module",
+        "local_aimodule_missing_module",
+        "local_navigation_system_missing_module",
+        "local_levelsequence_missing_module",
+        "local_blueprint_native_event_missing_implementation",
+        "local_editor_only_runtime_boundary",
+    } == ids
+    assert all(case["projectFile"] == "HoldoutFixture.uproject" for case in data["cases"])
+    assert all(case["target"] == "HoldoutFixtureEditor Win64 Development" for case in data["cases"])
+    assert data["engineVersion"] == "5.8"
+    assert all(case["engineVersion"] == "5.8" for case in data["cases"])
+
+
+def test_bootstrap_suite_12_writes_expansion_fixture_skeletons(tmp_path):
+    fixture_root = tmp_path / "local_holdout_fixtures"
+
+    created = bootstrap_local_holdout.write_fixture_cases(
+        [case["id"] for case in bootstrap_local_holdout.EXPANSION_CASES_12],
+        fixture_root,
+    )
+
+    assert len(created) == 7
+    for case in bootstrap_local_holdout.EXPANSION_CASES_12:
+        fixture_dir = fixture_root / case["id"]
+        assert (fixture_dir / "HoldoutFixture.uproject").is_file()
+        assert (fixture_dir / "Source").is_dir()
+        assert (fixture_dir / "request.txt").is_file()
+    assert "UUserWidget" in (
+        fixture_root
+        / "local_umg_missing_module"
+        / "Source"
+        / "HoldoutFixture"
+        / "Public"
+        / "HoldoutWidgetHostComponent.h"
+    ).read_text(encoding="utf-8")
 
 
 def test_bootstrap_does_not_overwrite_without_force(tmp_path):
@@ -99,6 +158,40 @@ def test_bootstrap_cli_writes_temp_config_and_prints_next_steps(tmp_path):
     assert "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max" in proc.stdout
 
 
+def test_bootstrap_cli_suite_12_writes_temp_config_and_fixtures(tmp_path):
+    output = tmp_path / "local.json"
+    fixture_root = tmp_path / "fixtures"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "bootstrap_local_holdout.py"),
+            "--suite",
+            "12",
+            "--example-config",
+            str(EXAMPLE),
+            "--output-config",
+            str(output),
+            "--fixture-root",
+            str(fixture_root),
+            "--force",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=20,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "Prepared 7 local fixture directories" in proc.stdout
+    data = json.loads(output.read_text(encoding="utf-8"))
+    assert len(data["cases"]) == 12
+    assert (fixture_root / "local_umg_missing_module" / "HoldoutFixture.uproject").is_file()
+
+
 def test_tracked_bootstrap_files_do_not_contain_user_paths():
     paths = [
         ROOT / "scripts" / "bootstrap_local_holdout.py",
@@ -118,3 +211,22 @@ def test_bootstrap_detects_only_ue58_ubt_candidates():
     assert "UE_5.8" in text
     assert "UE_5.7" not in text
     assert "UE_5.6" not in text
+
+
+def test_local_holdout_paths_are_ignored_by_gitignore():
+    text = (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+    assert "config/rag_eval_real_project_holdout_cases.local.json" in text
+    assert "data/local_holdout_fixtures/" in text
+    assert "data/baseline/live_holdout/*" in text
+    assert "!data/baseline/live_holdout/.gitkeep" in text
+
+
+def test_live_holdout_milestone_has_claim_guardrail():
+    text = (ROOT / "docs" / "Live_Holdout_Milestone_20260705.md").read_text(encoding="utf-8")
+
+    assert "UE 5.8 local live holdout" in text
+    assert "data/baseline/live_holdout/20260705-040303" in text
+    assert "not a public benchmark" in text
+    assert "does not show Sonnet 4.5 equivalence" in text
+    assert "12-case UE 5.8 local live holdout" in text

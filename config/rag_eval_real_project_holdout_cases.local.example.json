@@ -2,6 +2,7 @@
   "description": "Public-safe template for a private local live UBT holdout baseline. Copy to config/rag_eval_real_project_holdout_cases.local.json and replace placeholders with your own ignored local fixture paths.",
   "suite": "real-project-holdout-local-v0",
   "tier": "real-project-holdout",
+  "engineVersion": "5.8",
   "defaults": {
     "maxAttempts": 5,
     "minPassRate": 0.6,
