@@ -1,4 +1,4 @@
-# UE5_Local_LLM_MCP_lmstudio
+# UE5_Local_LLM_MCP_lmstudio 1.2.0
 
 > **Platform: Windows 10/11 only.** All install scripts are PowerShell/BAT. macOS and Linux are not supported.
 
