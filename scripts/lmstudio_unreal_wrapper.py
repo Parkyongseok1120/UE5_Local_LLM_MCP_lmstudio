@@ -1580,6 +1580,84 @@ BASE_CLASS_INCLUDES = {
     "UEngineSubsystem": "Subsystems/EngineSubsystem.h",
     "UInterface": "UObject/Interface.h",
 }
+UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST = {
+    "AActor": {
+        "BeginDestroy",
+        "BeginPlay",
+        "Destroyed",
+        "EndPlay",
+        "OnConstruction",
+        "PostActorCreated",
+        "PostInitializeComponents",
+        "PostLoad",
+        "ShouldTickIfViewportsOnly",
+        "Tick",
+    },
+    "UActorComponent": {
+        "Activate",
+        "BeginDestroy",
+        "BeginPlay",
+        "Deactivate",
+        "EndPlay",
+        "InitializeComponent",
+        "OnComponentCreated",
+        "OnComponentDestroyed",
+        "OnRegister",
+        "OnUnregister",
+        "TickComponent",
+        "UninitializeComponent",
+    },
+    "UWorldSubsystem": {
+        "Deinitialize",
+        "DoesSupportWorldType",
+        "Initialize",
+        "OnWorldBeginPlay",
+        "OnWorldComponentsUpdated",
+        "OnWorldEndPlay",
+        "PostInitialize",
+        "PreDeinitialize",
+        "ShouldCreateSubsystem",
+    },
+    "UGameInstanceSubsystem": {
+        "Deinitialize",
+        "Initialize",
+        "ShouldCreateSubsystem",
+    },
+    "UEngineSubsystem": {
+        "Deinitialize",
+        "Initialize",
+        "ShouldCreateSubsystem",
+    },
+    "ULocalPlayerSubsystem": {
+        "Deinitialize",
+        "Initialize",
+        "PlayerControllerChanged",
+        "ShouldCreateSubsystem",
+    },
+    "UObject": {
+        "BeginDestroy",
+        "PostInitProperties",
+        "PostLoad",
+    },
+}
+UNREAL_LIFECYCLE_OVERRIDE_CANDIDATES = (
+    set().union(*UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST.values())
+    | {
+        "OnLevelRemovedFromWorld",
+        "OnWorldCleanup",
+        "OnWorldDestroyed",
+        "WorldDestroyed",
+    }
+)
+UNREAL_LIFECYCLE_ALTERNATIVES = {
+    "AActor": "EndPlay(...) or Destroyed()",
+    "UActorComponent": "EndPlay(...) or OnComponentDestroyed(...)",
+    "UWorldSubsystem": "OnWorldEndPlay(UWorld&) or PreDeinitialize()",
+    "UGameInstanceSubsystem": "Deinitialize()",
+    "UEngineSubsystem": "Deinitialize()",
+    "ULocalPlayerSubsystem": "Deinitialize() or PlayerControllerChanged(...)",
+    "UObject": "BeginDestroy()",
+}
 CPP_SYMBOL_INCLUDES = {
     "UGameplayStatics::": "Kismet/GameplayStatics.h",
     "ConstructorHelpers::": "UObject/ConstructorHelpers.h",
@@ -1895,6 +1973,52 @@ def validate_required_includes(path: Path, text: str, root: Path) -> list[Findin
                         f'Code uses {token}; include "{include_path}" in this .cpp file.',
                     )
                 )
+    return findings
+
+
+def validate_unreal_lifecycle_overrides(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    class_re = re.compile(
+        r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?(?P<class>[A-Za-z_][A-Za-z0-9_]*)"
+        r"\s*:\s*public\s+(?P<base>[A-Za-z_][A-Za-z0-9_]*)[^;{]*\{",
+        flags=re.MULTILINE,
+    )
+    override_re = re.compile(
+        r"(?m)^[^\n;{}]*\b(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\([^;\n{}]*\)\s*(?:const\s*)?(?:final\s*)?override\b"
+    )
+    for class_match in class_re.finditer(text):
+        base_name = class_match.group("base")
+        allowed = UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST.get(base_name)
+        if not allowed:
+            continue
+        open_index = text.find("{", class_match.end() - 1)
+        if open_index < 0:
+            continue
+        close_index = find_matching_brace(text, open_index)
+        if close_index < 0:
+            continue
+        body = text[open_index + 1 : close_index]
+        for override_match in override_re.finditer(body):
+            function_name = override_match.group("func")
+            if function_name not in UNREAL_LIFECYCLE_OVERRIDE_CANDIDATES:
+                continue
+            if function_name in allowed:
+                continue
+            class_name = class_match.group("class")
+            alternative = UNREAL_LIFECYCLE_ALTERNATIVES.get(
+                base_name,
+                "the lifecycle hook declared by the direct base class",
+            )
+            findings.append(
+                Finding(
+                    "error",
+                    rel,
+                    line_number(text, open_index + 1 + override_match.start()),
+                    "INVALID_UNREAL_LIFECYCLE_OVERRIDE",
+                    f"{class_name} derives from {base_name}; {function_name} is not a valid lifecycle override for that base. Use {alternative} or verify the exact UE API before editing.",
+                )
+            )
     return findings
 
 
@@ -2586,6 +2710,7 @@ def validate_unreal_readiness(
         if path.suffix.lower() in {".h", ".hpp"}:
             findings.extend(validate_generated_h(path, text, root))
             findings.extend(validate_reflected_namespace(path, text, root))
+            findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
             findings.extend(validate_blueprint_native_event_declarations(path, text, root))
             findings.extend(validate_private_blueprint_access(path, text, root))
             findings.extend(validate_raw_uobject_members(path, text, root))
@@ -2617,6 +2742,7 @@ def validate_unreal_readiness_lightweight(root: Path) -> list[Finding]:
         if path.suffix.lower() in {".h", ".hpp"}:
             findings.extend(validate_generated_h(path, text, root))
             findings.extend(validate_reflected_namespace(path, text, root))
+            findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
             findings.extend(validate_blueprint_native_event_declarations(path, text, root))
         if path.suffix.lower() in {".cpp", ".c", ".cc"}:
             findings.extend(validate_cpp_declarations(path, text, root, headers))

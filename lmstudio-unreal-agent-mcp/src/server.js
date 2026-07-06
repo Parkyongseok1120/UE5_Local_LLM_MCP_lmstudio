@@ -457,7 +457,7 @@ function allAgentTools() {
       },
       {
         name: "replace_in_file",
-        description: "Safely replace exact text in a file. Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible.",
+        description: "Safely replace exact text in a file. Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           oldText: { type: "string", description: "Exact text to replace." },
@@ -705,7 +705,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const buffer = Buffer.alloc(Math.min(maxBytes, s.size));
         await fd.read(buffer, 0, buffer.length, 0);
         if (!isTextLikely(buffer)) return fail(`file appears binary: ${args.path}`);
-        let out = buffer.toString("utf8");
+        const hasCRLF = buffer.includes(Buffer.from("\r\n"));
+        // Normalize line endings so model's copy-paste into oldText matches replace_in_file
+        let out = buffer.toString("utf8").replace(/\r\n/g, "\n");
+        if (hasCRLF) {
+          out = `[line-endings: CRLF — replace_in_file normalizes automatically]\n` + out;
+        }
         if (s.size > buffer.length) {
           const nextDetail = detail === "compact" ? "medium" : detail === "medium" ? "large" : null;
           out += `\n\n[TRUNCATED: file size ${s.size} bytes, read ${buffer.length} bytes at detailLevel=${detail}.`;
@@ -794,14 +799,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const newText = String(args.newText ?? "");
       if (!oldText) return fail("oldText must not be empty");
 
-      const content = await fsp.readFile(target, "utf8");
-      const occurrences = content.split(oldText).length - 1;
-      if (occurrences === 0) return fail("oldText not found");
+      const raw = await fsp.readFile(target);
+      const hasCRLF = raw.includes(Buffer.from("\r\n"));
+      // Normalize to LF for matching; preserve original line endings in output
+      const content = raw.toString("utf8");
+      const contentNorm = content.replace(/\r\n/g, "\n");
+      const oldTextNorm = oldText.replace(/\r\n/g, "\n");
+
+      const occurrences = contentNorm.split(oldTextNorm).length - 1;
+      if (occurrences === 0) {
+        // Provide actionable diagnostic: show up to 3 lines around nearest partial match
+        const firstLine = oldTextNorm.split("\n")[0].trim().slice(0, 60);
+        const nearIdx = firstLine ? contentNorm.indexOf(firstLine) : -1;
+        let hint = "";
+        if (nearIdx !== -1) {
+          const before = contentNorm.lastIndexOf("\n", nearIdx - 1);
+          const snippetStart = Math.max(0, before);
+          const snippet = contentNorm.slice(snippetStart, nearIdx + 200).split("\n").slice(0, 5).join("\n");
+          hint = `\n\nNearest partial match context:\n${snippet}\n\nHint: read the file with read_file_range to get the exact text, then retry with the exact content shown.`;
+        } else {
+          hint = "\n\nHint: the first line of oldText was not found anywhere in the file. Use read_file or search_files to verify the exact content before retrying.";
+        }
+        return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`);
+      }
       if (args.expectedOccurrences !== undefined && occurrences !== Number(args.expectedOccurrences)) {
         return fail(`occurrence mismatch: expected ${args.expectedOccurrences}, found ${occurrences}`);
       }
 
-      const updated = content.split(oldText).join(newText);
+      // Apply replacement on normalized content, then restore original line endings if needed
+      const updatedNorm = contentNorm.split(oldTextNorm).join(newText.replace(/\r\n/g, "\n"));
+      const updated = hasCRLF ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
       await fsp.writeFile(target, updated, "utf8");
       const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
       const rel = path.relative(WORKSPACE_ROOT, target);

@@ -248,6 +248,9 @@ UCLASS()
 class SAMPLE_API UBadWorldSubsystem : public UWorldSubsystem
 {
     GENERATED_BODY()
+
+protected:
+    virtual void OnWorldDestroyed(UWorld* World) override;
 };
 """.strip()
             + "\n",
@@ -282,6 +285,7 @@ UBadWorldSubsystem::UBadWorldSubsystem()
             "MISSING_CPP_SYMBOL_INCLUDE",
             "RPC_IMPLEMENTATION_MISSING",
             "SUBSYSTEM_CREATE_SUBOBJECT",
+            "INVALID_UNREAL_LIFECYCLE_OVERRIDE",
         }
         missing = expected - found
         if missing:

@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 VALID_STAGES = {"R0", "R1", "R2", "R3", "R4", "r0", "r1", "r2", "r3", "r4"}
+INVALID_UNREAL_LIFECYCLE_OVERRIDES = {
+    "onworlddestroyed": "UWorldSubsystem does not expose OnWorldDestroyed in UE 5.8; use OnWorldEndPlay(UWorld&) or PreDeinitialize().",
+    "worlddestroyed": "WorldDestroyed is not a standard UE subsystem lifecycle override; verify the direct base API before planning edits.",
+}
 
 FORBIDDEN_CODE_MARKERS = (
     "#include",
@@ -171,6 +175,15 @@ def _unique_items(items: list[str]) -> list[str]:
     return unique
 
 
+def invalid_unreal_lifecycle_mentions(text: str) -> list[str]:
+    lowered = str(text or "").lower()
+    issues: list[str] = []
+    for marker, message in INVALID_UNREAL_LIFECYCLE_OVERRIDES.items():
+        if re.search(rf"\b{re.escape(marker)}\b", lowered):
+            issues.append(message)
+    return issues
+
+
 def validate_refactor_plan(stage: str, plan_text: str) -> dict[str, Any]:
     stage = normalize_stage(stage)
     text = str(plan_text or "").strip()
@@ -189,6 +202,8 @@ def validate_refactor_plan(stage: str, plan_text: str) -> dict[str, Any]:
             "warnings": [],
             "passed": [],
         }
+
+    issues.extend(invalid_unreal_lifecycle_mentions(text))
 
     if stage == "R0":
         if any(marker.lower() in lowered for marker in FORBIDDEN_CODE_MARKERS):
