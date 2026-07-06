@@ -88,55 +88,11 @@ This repo targets a **Sonnet 4.5-oriented Unreal C++ workflow**, but this is a w
 
 ## Evaluation Claim Guardrail
 
-Current Tier/KPI numbers are internal UE RAG/MCP/UBT scorecard results, not external standardized model benchmarks. Do not claim that Qwen, GPT OSS, or any other local model is generally Sonnet-grade.
+KPI numbers are internal UE RAG/MCP/UBT scorecard results, **not** external standardized model benchmarks. Do not claim any local model is generally Sonnet-grade.
 
-Safer wording: inside this Unreal-specific validation loop, Qwen 3.6 27B currently behaves like a strong local compile-fix agent with practical results in the lower-to-mid Sonnet 4 workflow band for narrow UE C++ compile-fix tasks, while still below Sonnet 4.5 expectations for Pass@1 multi-file refactor stability.
-
-The forward target remains a Sonnet 4.5-oriented local Unreal workflow. This is a target, not a current model-grade claim. See [docs/Sonnet45_Target_Plan.md](docs/Sonnet45_Target_Plan.md).
-
-Sonnet 5 is tracked only as a gap-analysis target for future workflow improvements around long-context agentic coding, tool use, retry judgment, and project memory. This does not claim Sonnet 5 equivalence; see [docs/Sonnet5_Gap_Plan.md](docs/Sonnet5_Gap_Plan.md).
-
-Compact-model optimization tracks include Qwen 3.5 9B, Qwen3.5-9B-DeepSeek-V4-Flash-GGUF, GPT OSS 20B, and gpt-oss-20b-claude-opus-sonnet-reasoning-i1-GGUF community fine-tunes. See [docs/Model_Profiles.md](docs/Model_Profiles.md).
-
-### Observed Local Model Ranking
-
-This ranking is **not a global model benchmark**. It is the observed behavior inside this repository's Unreal-specific loop:
-
-```text
-LM Studio
-+ MCP Essential Tools
-+ strict project-filtered RAG
-+ Unreal symbol / range lookup
-+ static validation
-+ UBT compile wrapper
-```
-
-Within that loop, the current practical ranking is:
-
-| Model profile | Evidence level | Practical behavior in this project | Claude Sonnet workflow proxy estimate |
-|---|---|---|---|
-| `qwen3_6_27b` / `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | Measured on 36-case UE 5.8 live holdout | Current primary profile. 36/36 Pass@K, 29/36 Pass@1, avg attempts 1.25. Strong module, UHT, single-file compile-fix behavior. Multi-file refactor still needs retries. | Lower-to-mid Sonnet 4 for narrow UE compile-fix workflow; not Sonnet 4.5 overall because multifile Pass@1 is 58.3%. |
-| `qwen3_5_9b_deepseek_v4_flash` | Profiled/observed, not rerun on latest 36-case live suite | Best compact track when VRAM is limited. Usually follows JSON/tool/patch discipline better than base GPT OSS 20B. | Upper Sonnet 3.7-ish for narrow compile-fix loops; below Sonnet 4 for refactor. Needs fresh 36-case live proof. |
-| `qwen3_5_9b` | Profiled/observed, not rerun on latest 36-case live suite | Stable compact baseline for Essential Tools, small patch loops, and focused compile-fix tasks. | Mid-to-upper Sonnet 3.7 for narrow UE compile-fix; below Sonnet 4 on multi-file refactor. |
-| `qwen3_8b` | Profiled only | Smaller compact fallback. Useful for RAG Q&A and small fixes with strict prompts. | Sonnet 3.5 to lower Sonnet 3.7 for narrow tasks. |
-| `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | Profiled/experimental | Community reasoning fine-tune profile. Better theoretical reasoning budget than base GPT OSS 20B, but still needs stable MCP/JSON verification. | Upper Sonnet 3.7-ish estimate if tool discipline holds; not proven on 36-case live. |
-| `gpt_oss_20b` | Profiled/observed variable stability | Useful, but more variable in MCP/JSON/tool-call loops; prefer Qwen 9B or Qwen 27B when available. | Around Sonnet 3.5 for this workflow. |
-| `gpt_oss_small` | Profiled only | Lightweight fallback for simple inspect/patch tasks. | Below Sonnet 3.5 for this workflow. |
-| `gpt_oss_120b`, `qwen_coder_large`, `generic_large` | Configured, not currently proven in this local 36-case report | Potentially stronger if local hardware can run them well, but this repo has no current 36-case live KPI for them. | Unknown until measured; do not infer quality from parameter count alone. |
-
-In short: **Qwen 3.6 27B is currently the only profile with a saved 36-case UE 5.8 live holdout result in this README.** Qwen 3.5 9B-family models remain valuable because this agent stack rewards tool-call, patch, symbol-lookup, and validation discipline. This does **not** mean a smaller model is generally smarter than a larger model; it means it may fit this Unreal RAG/MCP/UBT automation loop better.
-
-Old name: **Unreal58-RAG**. Officially tested on **UE 5.8**. Other 5.x versions can work, but build your own index from **your** licensed UE install (BYOI).
+[![Evaluation Claims & Model Ranking](https://img.shields.io/badge/Docs-Evaluation%20Claims%20%26%20Model%20Ranking-blue?logo=gitbook)](docs/Evaluation_Claim_Guardrail.md)
 
 > **BYOI** = Bring Your Own Index. This repo ships **tooling only**: not Epic source, not a pre-built `rag.sqlite`.
-
-The first goal is to make local models hallucinate less on Unreal C++, especially `Build.cs`, include, UHT, project-specific code, and asset metadata.
-
-```text
-Unreal knowledge / API evidence = RAG
-Answer tone / format / habits     = LoRA (optional, later)
-Workflow (search / files / build) = MCP
-```
 
 ## Minimum Requirements
 
@@ -201,94 +157,36 @@ Then in LM Studio:
 
 `INSTALL-SAFE-MODE.bat` patches `%USERPROFILE%\.lmstudio\mcp.json` with full paths to Python/Node.
 
+---
+
+## 🍎 Mac mini / Mac Studio as LLM Server
+
+Run LM Studio + your model on a Mac, Windows PC handles UE / UBT / this project.
+
+**Mac**: Load model in LM Studio → Developer → Local Server → enable **LM Link**. No MCP install needed on Mac.  
+**Windows**: Install this project normally, then use `--url http://<MAC_IP>:1234/v1` instead of `localhost`.
+
+```powershell
+# verify connection from Windows
+Invoke-RestMethod -Uri "http://<MAC_IP>:1234/v1/models"
+```
+
+[![Full Mac Setup Guide](https://img.shields.io/badge/Docs-Mac%20Remote%20Setup-blue?logo=gitbook)](docs/Mac_Remote_Setup.md)
+
 ## PowerShell `rag.ps1` Setup
 
-If PowerShell blocks `.\rag.ps1` with an execution policy error, keep the system policy unchanged and run it with a per-command bypass:
-
 ```powershell
-cd "$env:USERPROFILE\Documents\Git\UE5_Local_LLM_MCP_lmstudio"
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 doctor
+.\rag.ps1 collect-projects -CopyProjectText
+.\rag.ps1 collect-symbols
+.\rag.ps1 collect-module-graph
+.\rag.ps1 build
+.\rag.ps1 doctor
 ```
 
-Build a useful local RAG index for your active Unreal project:
+If PowerShell blocks the script with an execution policy error, prefix with `powershell -NoProfile -ExecutionPolicy Bypass -File`.  
+After rebuilding, restart LM Studio so `unreal-rag` reloads the new `rag.sqlite`.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-projects -CopyProjectText
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-symbols
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-module-graph
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 doctor
-```
-
-For a minimal guideline-only index, run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
-```
-
-When writing docs, issues, or logs, avoid hard-coding a personal Windows username such as `C:\Users\<name>\...`. Prefer:
-
-```powershell
-$env:USERPROFILE\Documents\Git\UE5_Local_LLM_MCP_lmstudio
-%USERPROFILE%\Documents\Git\UE5_Local_LLM_MCP_lmstudio
-C:\Path\To\YourProject
-```
-
-After rebuilding the index, restart LM Studio MCP servers or restart LM Studio so `unreal-rag` reloads the new `rag.sqlite`.
-
-### Shader / Material / Blueprint Knowledge
-
-Project text indexing already includes `.usf` and `.ush` shader files:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-projects -CopyProjectText
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 query -Mode shader -Question "USF USH GlobalShader RenderCore RHI plugin setup"
-```
-
-For Material and Blueprint graph analysis, export metadata from Unreal Editor first, then ingest it:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-material-metadata -Question C:\Path\To\materials.jsonl -ProjectName MyGame
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-blueprint-metadata -Question C:\Path\To\blueprints.jsonl -ProjectName MyGame
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
-```
-
-Use `-Mode material_analysis` for material node screenshots/parameter inventory and `-Mode blueprint_analysis` for Blueprint variables, functions, nodes, and pins. Screenshot answers must separate visible facts from guesses.
-
-For reliable Blueprint node/pin/link analysis, install the editor graph exporter plugin into each Unreal project you want to inspect:
-
-```powershell
-.\rag.ps1 pick-project
-.\rag.ps1 install-editor-graph-plugin
-```
-
-During `INSTALL-SAFE-MODE-BUILD-RAG.bat` and `INSTALL-AGENT-MODE-BUILD-RAG.bat`, the setup asks:
-
-```text
-Install Blueprint graph exporter plugin into this active project? [Y/n]
-```
-
-Choose `Y` to copy `tools\ue_plugins\LmStudioGraphExporter` into `<YourProject>\Plugins\LmStudioGraphExporter`, enable it in the project's `.uproject`, and build the editor module with UnrealBuildTool when needed. Existing project copies are hash-checked against this repo's plugin source; stale copies are updated automatically by the installer. Choose `N` to skip installation; metadata export will still run, but Blueprint graph details can fall back to the limited Python exporter on UE versions where Editor Python cannot read every graph node.
-
-What improves after installing the plugin:
-
-- Blueprint and AnimBlueprint exports include real graph nodes, pins, and links.
-- Local-model answers can verify actual asset wiring instead of guessing from names only.
-- Claim validation and `blueprint_analysis` become much better at finding missing events, disconnected pins, and parameter usage.
-- The install is per project and portable: it does not modify the Unreal Engine installation, and project paths are resolved from the active `.uproject` instead of a hard-coded user folder.
-
-If you prefer double-click / one-command setup, use:
-
-```powershell
-.\installer\INSTALL-SAFE-MODE-BUILD-RAG.bat
-```
-
-For trusted projects where the agent may write files and run UBT builds:
-
-```powershell
-.\installer\INSTALL-AGENT-MODE-BUILD-RAG.bat
-```
+[![Full RAG Setup Guide](https://img.shields.io/badge/Docs-RAG%20Setup%20Reference-blue?logo=gitbook)](docs/RAG_Setup.md)
 
 ## Safe vs Agent Mode
 
@@ -385,6 +283,9 @@ Maintainers: run `.\installer\Verify-Oss-Ready.ps1` before publishing a fork.
 
 | Topic | File |
 |---|---|
+| Evaluation claims & model ranking | [docs/Evaluation_Claim_Guardrail.md](docs/Evaluation_Claim_Guardrail.md) |
+| RAG setup reference | [docs/RAG_Setup.md](docs/RAG_Setup.md) |
+| Mac mini / Mac Studio remote setup | [docs/Mac_Remote_Setup.md](docs/Mac_Remote_Setup.md) |
 | Architecture & pipeline | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Safe vs agent mode | [docs/Safe_Agent_Mode.md](docs/Safe_Agent_Mode.md) |
 | Build.cs parser | [docs/Build_Cs_Parser.md](docs/Build_Cs_Parser.md) |
