@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """Tests for extended metadata exporters and ingestion."""
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ def test_texture_row_to_chunk():
             "height": "2048",
             "srgb": "True",
         },
-        "Project_MJS",
+        "OtherGame",
     )
     assert "width: 2048" in chunk["text"]
     assert chunk["source"] == "unreal_texture_metadata"
@@ -70,7 +70,7 @@ def test_mesh_row_to_chunk():
             "material_slots": [{"slot": "Body", "material": "MI_Wood"}],
             "nanite_enabled": "True",
         },
-        "Project_MJS",
+        "OtherGame",
     )
     assert "material_slots:" in chunk["text"]
 
@@ -84,7 +84,7 @@ def test_animation_pose_row_to_chunk():
             "poses": ["Smile", "Blink"],
             "skeleton": "SK_Hero_Skeleton",
         },
-        "Project_MJS",
+        "OtherGame",
     )
     assert "poses: ['Smile', 'Blink']" in chunk["text"]
 
@@ -100,7 +100,8 @@ def test_merge_texture_export(tmp_path: Path):
         encoding="utf-8",
     )
     out_path = tmp_path / "raw_texture_metadata.jsonl"
-    ingested, _ = merge_export_into_raw(export_path, "texture", "Project_MJS", out_path)
+    ingested, _ = merge_export_into_raw(export_path, "texture", "OtherGame", out_path)
     assert ingested == 1
     row = json.loads(out_path.read_text(encoding="utf-8").strip())
     assert row["source"] == "unreal_texture_metadata"
+

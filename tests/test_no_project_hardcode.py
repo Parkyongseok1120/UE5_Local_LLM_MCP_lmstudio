@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Guard against Project_MJS hardcoding in scripts/prompts (smoke files excluded)."""
+"""Guard against fixed-project hardcoding in scripts/prompts."""
 
 from __future__ import annotations
 
@@ -8,9 +8,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCAN_DIRS = (ROOT / "scripts", ROOT / "prompts")
+LEGACY_PROJECT_NAME = "_".join(("Project", "MJS"))
+LEGACY_PROJECT_PATH = rf"Git[/\\]{LEGACY_PROJECT_NAME}"
+
 FORBIDDEN = (
-    re.compile(r"Project_MJS"),
-    re.compile(r"Git[/\\]Project_MJS"),
+    re.compile(re.escape(LEGACY_PROJECT_NAME)),
+    re.compile(LEGACY_PROJECT_PATH),
     re.compile(r"/Game/01_Character"),
 )
 ALLOWLIST = (

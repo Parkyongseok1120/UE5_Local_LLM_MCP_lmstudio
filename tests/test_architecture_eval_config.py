@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "rag_eval_architecture_cases.json"
+LEGACY_PROJECT_NAME = "_".join(("Project", "MJS"))
 
 
 def test_architecture_eval_config_is_public_safe_and_structured() -> None:
@@ -23,7 +24,7 @@ def test_architecture_eval_config_is_public_safe_and_structured() -> None:
         text = json.dumps(case, ensure_ascii=False)
         assert ("C:" + "\\Users\\") not in text
         assert ("C:" + "/Users/") not in text
-        assert "Project_MJS" not in text
+        assert LEGACY_PROJECT_NAME not in text
 
 
 def test_architecture_eval_config_covers_expected_review_categories() -> None:

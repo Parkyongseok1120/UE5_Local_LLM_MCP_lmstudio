@@ -20,7 +20,7 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 
 ## Standard sequence
 
-0. **Never hardcode `Project_MJS`, `Git/Project_MJS`, or `/Game/01_Character/...` paths.** Always read `projectContext` from `unreal_get_active_project` / `get_active_project` and copy `suggestedToolCalls` args exactly.
+0. **Never hardcode a fixed project folder, module name, or content path from a previous session.** Always read `projectContext` from `unreal_get_active_project` / `get_active_project` and copy `suggestedToolCalls` args exactly.
 1. `unreal_get_active_project`
 2. `unreal_agent_plan` and follow `toolPolicy`, `writeGate`, `checkpoints`, and `stopConditions`
 3. If `writeGate.writesAllowed=false`, do not call write tools; answer or report findings only

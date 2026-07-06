@@ -16,7 +16,7 @@ def test_filter_project_blocks_empty_project_rows():
     rows = [
         {"metadata": {"project": "", "asset_path": "/Game/A"}},
         {"metadata": {"project": "DemoGame", "asset_path": "/Game/B"}},
-        {"metadata": {"project": "Project_MJS", "asset_path": "/Game/C"}},
+        {"metadata": {"project": "OtherGame", "asset_path": "/Game/C"}},
     ]
     filtered = _filter_project(rows, "DemoGame")
     assert len(filtered) == 1

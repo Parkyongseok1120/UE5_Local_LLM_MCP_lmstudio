@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """Tests for MCP tool response compaction."""
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def test_truncate_text():
 def test_compact_sync_metadata_payload_drops_full_status_files():
     payload = {
         "ok": False,
-        "projectName": "Project_MJS",
+        "projectName": "OtherGame",
         "ingestReason": "metadata_status_needs_export_or_ingest",
         "ingest": {"ok": True, "reason": "x", "stdout": "x" * 5000, "stderr": ""},
         "rebuild": {"ok": True, "stdout": "done"},
@@ -67,7 +67,7 @@ def test_lookup_empty_graph_sets_stop_retry(tmp_path: Path):
         "metadata": {
             "asset_path": "/Game/01_Character/98_Shading/M_Layer/ML_BaseColor",
             "asset_type": "MaterialFunctionMaterialLayer",
-            "project": "Project_MJS",
+            "project": "OtherGame",
             "expressions": [],
             "graph_edges": [],
         }
@@ -79,7 +79,7 @@ def test_lookup_empty_graph_sets_stop_retry(tmp_path: Path):
     payload = lookup_asset_graph(
         "/Game/01_Character/98_Shading/M_Layer/ML_BaseColor",
         index_dir=index_dir,
-        project_name="Project_MJS",
+        project_name="OtherGame",
         compact=True,
     )
     assert payload["ok"] is True
@@ -98,7 +98,7 @@ def test_short_name_lookup_does_not_match_falloff_suffix(tmp_path: Path):
             "metadata": {
                 "asset_path": "/Game/01_Character/98_Shading/M_Layer/ML_BaseColor",
                 "asset_type": "MaterialFunctionMaterialLayer",
-                "project": "Project_MJS",
+                "project": "OtherGame",
                 "expressions": [{"name": "Tex_1", "class": "MaterialExpressionTextureSample"}],
                 "graph_edges": [{"from": "Tex_1", "to": "Out_1", "to_input": "A"}],
             }
@@ -107,7 +107,7 @@ def test_short_name_lookup_does_not_match_falloff_suffix(tmp_path: Path):
             "metadata": {
                 "asset_path": "/Game/Samples/Functions/ML_BaseColorFallOff",
                 "asset_type": "MaterialFunction",
-                "project": "Project_MJS",
+                "project": "OtherGame",
                 "expressions": [{"name": "Other_1", "class": "MaterialExpressionConstant"}],
                 "graph_edges": [],
             }
@@ -121,7 +121,7 @@ def test_short_name_lookup_does_not_match_falloff_suffix(tmp_path: Path):
         "ML_BaseColor",
         asset_kind="material",
         index_dir=index_dir,
-        project_name="Project_MJS",
+        project_name="OtherGame",
         compact=True,
     )
     assert payload["ok"] is True
@@ -199,3 +199,4 @@ def test_lookup_medium_detail_returns_more_nodes(tmp_path: Path):
     assert payload["detailLevel"] == "medium"
     assert len(payload["primary"]["expressions"]) == 36
     assert payload["primary"]["nextDetailLevel"] == "large"
+

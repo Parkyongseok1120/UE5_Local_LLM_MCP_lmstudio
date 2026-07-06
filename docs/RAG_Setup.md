@@ -29,7 +29,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
 
 After rebuilding the index, restart LM Studio MCP servers or restart LM Studio so `unreal-rag` reloads the new `rag.sqlite`.
 
-> When writing docs, issues, or logs, avoid hard-coding a personal Windows username such as `C:\Users\<name>\...`. Prefer `$env:USERPROFILE\...` or `%USERPROFILE%\...`.
+> When writing docs, issues, or logs, avoid hard-coding a personal Windows user profile path. Prefer `$env:USERPROFILE\...` or `%USERPROFILE%\...`.
 
 ## Shader / Material / Blueprint Knowledge
 

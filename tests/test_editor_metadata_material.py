@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """Tests for editor-exported Blueprint/Material metadata ingestion."""
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def test_material_row_to_chunk_includes_graph_wires():
             ],
             "root_outputs": [{"output": "EmissiveColor", "expression": "Multiply_1"}],
         },
-        "Project_MJS",
+        "OtherGame",
     )
 
     assert "graph_edges:" in chunk["text"]
@@ -99,7 +99,7 @@ def test_material_claim_validate_supports_wire_evidence(tmp_path):
             "graph_edges": [{"from": "Tex_1", "to": "Multiply_1", "to_input": "A"}],
             "expressions": [{"name": "Multiply_1", "class": "MaterialExpressionMultiply"}],
         },
-        "Project_MJS",
+        "OtherGame",
     )
     raw_path = idx / "raw_material_metadata.jsonl"
     raw_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -107,7 +107,7 @@ def test_material_claim_validate_supports_wire_evidence(tmp_path):
     payload = validate_material_claims(
         ["M_Blackhole_Core Multiply_1 wire from Tex_1 to A input"],
         index_dir=idx,
-        project_name="Project_MJS",
+        project_name="OtherGame",
     )
 
     assert payload["results"][0]["verdict"] in {"supported", "supported_partial"}
@@ -176,7 +176,7 @@ def test_blueprint_row_to_chunk_includes_pin_links():
                 }
             ],
         },
-        "Project_MJS",
+        "OtherGame",
     )
 
     assert "graph_links:" in chunk["text"]
@@ -200,7 +200,7 @@ def test_blueprint_claim_validate_supports_pin_links(tmp_path):
                 }
             ],
         },
-        "Project_MJS",
+        "OtherGame",
     )
     raw_path = idx / "raw_blueprint_metadata.jsonl"
     raw_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -208,7 +208,7 @@ def test_blueprint_claim_validate_supports_pin_links(tmp_path):
     payload = validate_blueprint_claims(
         ["BP_Player EventGraph pin link from K2Node_Event_0 then to execute"],
         index_dir=idx,
-        project_name="Project_MJS",
+        project_name="OtherGame",
     )
 
     assert payload["results"][0]["verdict"] in {"supported", "supported_partial"}
@@ -286,7 +286,7 @@ def test_merge_export_replaces_same_project_asset(tmp_path):
     first = row_to_chunk(
         "unreal_material_metadata",
         {"asset_path": "/Game/Materials/M_Old", "expressions": [{"name": "OldNode", "class": "MaterialExpressionConstant"}]},
-        "Project_MJS",
+        "OtherGame",
     )
     out_path.write_text(json.dumps(first, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -303,7 +303,7 @@ def test_merge_export_replaces_same_project_asset(tmp_path):
         encoding="utf-8",
     )
 
-    ingested, replaced = merge_export_into_raw(export_file, "material", "Project_MJS", out_path)
+    ingested, replaced = merge_export_into_raw(export_file, "material", "OtherGame", out_path)
     rows = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     assert ingested == 1
@@ -319,7 +319,7 @@ def test_asset_graph_lookup_by_short_name(tmp_path):
             "asset_path": "/Game/06_Environment/BossStage/M_Blackhole_Core",
             "graph_edges": [{"from": "Tex_1", "to": "Multiply_1", "to_input": "A"}],
         },
-        "Project_MJS",
+        "OtherGame",
     )
     raw_path = tmp_path / "raw_material_metadata.jsonl"
     raw_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -328,7 +328,7 @@ def test_asset_graph_lookup_by_short_name(tmp_path):
         "M_Blackhole_Core",
         asset_kind="material",
         index_dir=tmp_path,
-        project_name="Project_MJS",
+        project_name="OtherGame",
     )
 
     assert payload["ok"] is True
@@ -340,12 +340,12 @@ def test_asset_graph_search_finds_materials(tmp_path):
     row = row_to_chunk(
         "unreal_material_metadata",
         {"asset_path": "/Game/Materials/MI_Armor", "expressions": []},
-        "Project_MJS",
+        "OtherGame",
     )
     raw_path = tmp_path / "raw_material_metadata.jsonl"
     raw_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    payload = search_asset_graphs("Armor", index_dir=tmp_path, project_name="Project_MJS")
+    payload = search_asset_graphs("Armor", index_dir=tmp_path, project_name="OtherGame")
 
     assert payload["ok"] is True
     assert payload["results"][0]["name"] == "MI_Armor"
@@ -519,8 +519,8 @@ def test_material_layer_row_ingest_and_lookup(tmp_path):
     export_file.write_text(json.dumps(export_row, ensure_ascii=False) + "\n", encoding="utf-8")
     raw_path = tmp_path / "raw_material_metadata.jsonl"
 
-    ingested, replaced = merge_export_into_raw(export_file, "material", "Project_MJS", raw_path)
-    chunk = row_to_chunk("unreal_material_metadata", export_row, "Project_MJS")
+    ingested, replaced = merge_export_into_raw(export_file, "material", "OtherGame", raw_path)
+    chunk = row_to_chunk("unreal_material_metadata", export_row, "OtherGame")
 
     assert ingested == 1
     assert "graph_edges:" in chunk["text"]
@@ -530,10 +530,11 @@ def test_material_layer_row_ingest_and_lookup(tmp_path):
         "ML_BaseColor",
         asset_kind="material",
         index_dir=tmp_path,
-        project_name="Project_MJS",
+        project_name="OtherGame",
     )
 
     assert payload["ok"] is True
     assert payload["primary"]["graphEdgeCount"] == 2
     assert payload["primary"]["expressionCount"] == 2
     assert payload["primary"]["assetPath"].endswith("ML_BaseColor")
+

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """Tests for structured asset metadata export and ingestion."""
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def test_structured_row_to_chunk_includes_data_table_fields():
             "columns": ["Damage", "AttackSpeed"],
             "row_names": ["Sword_01", "Bow_01"],
         },
-        "Project_MJS",
+        "OtherGame",
     )
 
     assert "row_struct: FWeaponRow" in chunk["text"]
@@ -71,8 +71,9 @@ def test_merge_structured_export_into_raw(tmp_path: Path):
         encoding="utf-8",
     )
     out_path = tmp_path / "raw_structured_metadata.jsonl"
-    ingested, replaced = merge_export_into_raw(export_path, "structured", "Project_MJS", out_path)
+    ingested, replaced = merge_export_into_raw(export_path, "structured", "OtherGame", out_path)
     assert ingested == 1
     row = json.loads(out_path.read_text(encoding="utf-8").strip())
     assert row["source"] == "unreal_structured_metadata"
     assert "emitters:" in row["text"]
+

@@ -28,7 +28,7 @@
 - RAG 워크스페이스: `config\workspace.json`의 `rootPath` (설치 시 자동 기록)
 - Editor export: `{ActiveProject}/Saved/LmStudioMetadataExports` (프로젝트별 자동)
 
-사용자 이름·PC 이름·`C:\Users\<username>\...` 같은 고정 경로는 저장소에 넣지 않습니다.  
+사용자 이름, PC 이름, 고정 사용자 프로필 경로 같은 머신 전용 값은 저장소에 넣지 않습니다.  
 `INSTALL-*-BUILD-RAG.bat` 또는 `installer\Sync-InstallMachinePaths.ps1`가 현재 PC 기준으로 경로를 다시 씁니다.
 
 ## BUILD-RAG 설치 (인덱스 + Editor export)

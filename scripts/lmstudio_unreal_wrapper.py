@@ -21,7 +21,7 @@ from load_sampling_preset import preset_for_wrapper, profile_edit_limits, set_sa
 from preflight_lmstudio import extract_assistant_text
 from rag_search import SearchOptions, search as search_index
 import token_budget
-from workspace_paths import resolve_active_project_path, resolve_ubt_path
+from workspace_paths import active_project_names, resolve_active_project_path, resolve_ubt_path
 from error_taxonomy import mode_from_error_kind as taxonomy_mode_from_error_kind, route_error_action
 from module_resolver import build_cs_has_module, resolve_modules_from_error, resolve_modules_from_text
 from retry_state import make_attempt_record, recommend_retry_action
@@ -2884,6 +2884,23 @@ def write_rag_telemetry(run_dir: Path | None, record: dict[str, Any]) -> None:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def wrapper_rag_project_filters(args: argparse.Namespace) -> list[str]:
+    """Keep live wrapper retrieval anchored to the target Unreal project."""
+    names: list[str] = []
+    project_file = str(getattr(args, "project_file", "") or "").strip()
+    if project_file:
+        path = Path(project_file)
+        if path.suffix.lower() == ".uproject":
+            for value in (path.stem, path.parent.name):
+                if value and value not in names:
+                    names.append(value)
+        return names
+    for value in active_project_names():
+        if value and value not in names:
+            names.append(value)
+    return names
+
+
 def collect_rag_context(
     args: argparse.Namespace,
     request: str,
@@ -2897,12 +2914,14 @@ def collect_rag_context(
     policy = profile_edit_limits()
     effective_top_k = top_k if top_k is not None else args.top_k
     candidate_scale = int(policy.get("candidateLimitScale") or 20)
+    project_filters = wrapper_rag_project_filters(args)
     rows = search_index(
         index,
         request,
         effective_top_k,
         SearchOptions(
             mode=args.mode,
+            projects=project_filters,
             candidate_limit=max(40, effective_top_k * candidate_scale),
         ),
     )
@@ -2937,11 +2956,16 @@ def collect_delta_rag_context(
     policy = profile_edit_limits()
     effective_top_k = int(policy.get("deltaTopK") or 4)
     candidate_scale = int(policy.get("candidateLimitScale") or 20)
+    project_filters = wrapper_rag_project_filters(args)
     rows = search_index(
         index,
         query,
         effective_top_k,
-        SearchOptions(mode="compile_fix", candidate_limit=max(30, effective_top_k * candidate_scale)),
+        SearchOptions(
+            mode="compile_fix",
+            projects=project_filters,
+            candidate_limit=max(30, effective_top_k * candidate_scale),
+        ),
     )
     context = assemble_context(rows, query, "compile_fix")
     write_rag_telemetry(
@@ -3119,11 +3143,12 @@ def rerag_for_build_errors(args: argparse.Namespace, records: list[dict[str, Any
     index = Path(args.index)
     if not index.exists():
         return ParsedBuildFeedback(records, mode, query, f"RAG index does not exist: {index}")
+    project_filters = wrapper_rag_project_filters(args)
     rows = search_index(
         index,
         query,
         args.top_k,
-        SearchOptions(mode=mode, candidate_limit=max(120, args.top_k * 20)),
+        SearchOptions(mode=mode, projects=project_filters, candidate_limit=max(120, args.top_k * 20)),
     )
     return ParsedBuildFeedback(records, mode, query, assemble_context(rows, query, mode))
 

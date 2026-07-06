@@ -44,7 +44,7 @@ These are workflow observations, not model-grade equivalence claims.
 
 ## Live Holdout Baseline Run
 
-Use this flow for a conservative UE 5.8 local holdout baseline. Do not compare fixture-only results as if they were live UBT results, and do not claim improvement from a single run. This is not a Project_MJS or UE 5.7.x baseline.
+Use this flow for a conservative UE 5.8 local holdout baseline. Do not compare fixture-only results as if they were live UBT results, and do not claim improvement from a single run. This is not tied to any one project or UE 5.7.x baseline.
 
 `config/rag_eval_real_project_holdout_cases.json` is public-safe and fixture-style. It is useful for validation, taxonomy coverage, module resolver coverage, and metrics-only smoke, but it is not enough for true live UBT compile-fix claims. For an actual local live baseline, copy `config/rag_eval_real_project_holdout_cases.local.example.json` to the ignored `config/rag_eval_real_project_holdout_cases.local.json` and fill in real private `fixtureDir` and `projectFile` values. Do not commit local project paths.
 

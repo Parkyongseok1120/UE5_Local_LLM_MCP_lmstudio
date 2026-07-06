@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""DemoGame fixture API tests without Project_MJS disk dependency."""
+"""DemoGame fixture API tests without a fixed disk project dependency."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from asset_hint_resolver import resolve_asset_folder_hint  # noqa: E402
 from code_hint_resolver import resolve_code_domain_hint  # noqa: E402
 from collect_editor_metadata import row_to_chunk  # noqa: E402
 from project_context import resolve_active_project_context  # noqa: E402
+
+LEGACY_PROJECT_NAME = "_".join(("Project", "MJS"))
 
 
 def test_demo_game_material_folder_hint(demo_game_project, monkeypatch):
@@ -49,7 +51,7 @@ def test_orchestrator_injects_project_context_and_suggested_calls(demo_game_proj
     assert graph_calls[0]["args"]["folderHint"] == "MF_Test"
     assert graph_calls[0]["args"]["projectName"] == "DemoGame"
     assert "search" not in graph_calls[0]["args"]
-    assert "Project_MJS" not in json.dumps(plan.to_dict())
+    assert LEGACY_PROJECT_NAME not in json.dumps(plan.to_dict())
 
 
 def test_analyze_asset_folder_uses_active_project_and_folder_hint(demo_game_project, tmp_path, monkeypatch):

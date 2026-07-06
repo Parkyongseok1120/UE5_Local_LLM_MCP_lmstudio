@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """Claim validators use strict project row filtering."""
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def test_material_claim_validate_blocks_other_project_rows(tmp_path):
             },
             {
                 "metadata": {
-                    "project": "Project_MJS",
+                    "project": "OtherGame",
                     "asset_path": "/Game/Other/M_Other",
                     "expressions": [{"class": "MaterialExpressionScalarParameter", "name": "OtherParam"}],
                 }
@@ -63,7 +63,7 @@ def test_blueprint_claim_validate_blocks_other_project_rows(tmp_path):
         json.dumps(
             {
                 "metadata": {
-                    "project": "Project_MJS",
+                    "project": "OtherGame",
                     "asset_path": "/Game/BP_Other",
                     "graph_links": [],
                 }
@@ -90,3 +90,4 @@ def test_blueprint_claim_validate_blocks_other_project_rows(tmp_path):
         project_name="DemoGame",
     )
     assert payload["results"][0]["matchingAssets"] == ["/Game/BP_Demo"]
+

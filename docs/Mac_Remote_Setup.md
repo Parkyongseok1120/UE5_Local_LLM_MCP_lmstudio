@@ -31,7 +31,7 @@ You don't need a high-end Windows GPU to run this stack. If you have a **Mac min
      --config "config\rag_eval_real_project_holdout_cases.local.json" `
      --url "http://<MAC_IP>:1234/v1" `
      --model "your-model-id" `
-     --ubt-path "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
+     --ubt-path "<UE_ROOT>\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
    ```
 
 ## Notes

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -121,6 +122,46 @@ def test_rag_telemetry_summary_counts_sidecars(tmp_path):
     assert telemetry["sidecarCountsByType"] == {"module_resolver": 1, "error_route": 1}
     assert telemetry["suspectedModules"] == ["UMG"]
     assert (tmp_path / "rag_telemetry.jsonl").is_file()
+
+
+def test_wrapper_rag_project_filters_prefers_explicit_project_file(tmp_path):
+    project_dir = tmp_path / "DemoProject"
+    args = SimpleNamespace(project_file=str(project_dir / "DemoProject.uproject"))
+
+    assert wrapper.wrapper_rag_project_filters(args) == ["DemoProject"]
+
+
+def test_collect_rag_context_passes_project_filter_for_live_refactor(tmp_path, monkeypatch):
+    index = tmp_path / "rag.sqlite"
+    index.write_text("", encoding="utf-8")
+    project_dir = tmp_path / "AdventureGame"
+    captured = {}
+
+    def fake_search(index_path, query, top_k, options):
+        captured["projects"] = options.projects
+        captured["mode"] = options.mode
+        return [
+            {
+                "source": "project_source",
+                "layer": "project_text",
+                "resolved_mode": "refactor_r2",
+            }
+        ]
+
+    monkeypatch.setattr(wrapper, "search_index", fake_search)
+    monkeypatch.setattr(wrapper, "assemble_context", lambda rows, request, mode: "ctx")
+    monkeypatch.setattr(wrapper, "write_rag_telemetry", lambda run_dir, record: None)
+
+    args = SimpleNamespace(
+        index=str(index),
+        mode="refactor_r2",
+        top_k=8,
+        project_file=str(project_dir / "AdventureGame.uproject"),
+    )
+
+    assert wrapper.collect_rag_context(args, "refactor cinematic logging") == "ctx"
+    assert captured["mode"] == "refactor_r2"
+    assert captured["projects"] == ["AdventureGame"]
 
 
 def test_rag_telemetry_summary_includes_route_hint_fields():
