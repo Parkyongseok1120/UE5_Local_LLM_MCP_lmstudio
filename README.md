@@ -22,7 +22,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 >
 > The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. The 36-case live UBT holdout benchmark (Pass@K: 36/36, Pass@1: 29/36) reflects where the system currently stands.
 >
-> Over the next **~4 months**, development will be limited to minor bug fixes and stability improvements due to other commitments. Broader platform support (macOS, Linux) and additional LLM frontends beyond LM Studio (e.g., Ollama, Open WebUI) are on the roadmap but will not receive active development during this period.
+> Over the next **~4 months**, development will be limited to minor bug fixes and stability improvements due to academic commitments. Broader platform support (macOS, Linux) and additional LLM frontends beyond LM Studio (e.g., Ollama, Open WebUI) are on the roadmap but will not receive active development during this period.
 >
 > I appreciate your patience and understanding.
 
@@ -32,7 +32,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 >
 > 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. 36-case 라이브 UBT 홀드아웃 벤치마크(Pass@K: 36/36, Pass@1: 29/36) 결과가 현재 시스템의 수준을 잘 보여주고 있습니다.
 >
-> 본업 일정상 향후 **약 4개월간**은 소소한 버그 수정 및 안정화 위주의 업데이트만 이루어질 예정입니다. macOS·Linux 지원과 LM Studio 외 다른 LLM 프론트엔드(Ollama, Open WebUI 등) 연동은 로드맵에 있지만, 이 기간 동안은 적극적인 개발이 어려울 것 같습니다.
+> 학업 일정상 향후 **약 4개월간**은 소소한 버그 수정 및 안정화 위주의 업데이트만 이루어질 예정입니다. macOS·Linux 지원과 LM Studio 외 다른 LLM 프론트엔드(Ollama, Open WebUI 등) 연동은 로드맵에 있지만, 이 기간 동안은 적극적인 개발이 어려울 것 같습니다.
 >
 > 넓은 양해 부탁드립니다.
 
