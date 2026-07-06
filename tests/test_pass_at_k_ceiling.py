@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -65,6 +66,11 @@ MODULE_FIX_STATIC_CODES = {
     "missing_aimodule_dep": {"POSSIBLE_MISSING_MODULE"},
     "missing_umg_dep": {"POSSIBLE_MISSING_MODULE"},
     "missing_niagara_dep": {"POSSIBLE_MISSING_MODULE"},
+    "missing_navigation_system_dep": {"POSSIBLE_MISSING_MODULE"},
+    "missing_inputcore_dep": {"POSSIBLE_MISSING_MODULE"},
+    "missing_slate_dep": {"POSSIBLE_MISSING_MODULE"},
+    "missing_movie_scene_dep": {"POSSIBLE_MISSING_MODULE"},
+    "missing_levelsequence_dep": {"POSSIBLE_MISSING_MODULE"},
 }
 
 NON_MODULE_STATIC_CODES = {
@@ -125,7 +131,10 @@ def test_ceiling_golden_fixture_exists(case: dict):
     assert any(golden.rglob("*")), f"empty golden/: {case['id']}"
 
 
-@pytest.mark.skipif(not DEFAULT_UBT.is_file(), reason="UBT not installed")
+@pytest.mark.skipif(
+    not DEFAULT_UBT.is_file() or os.environ.get("RUN_SLOW_UBT_TESTS") != "1",
+    reason="Set RUN_SLOW_UBT_TESTS=1 with UBT installed to run slow UBT tests",
+)
 @pytest.mark.slow
 def test_ceiling_dry_run_golden_ubt():
     proc = subprocess.run(

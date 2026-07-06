@@ -538,3 +538,163 @@ def test_build_retry_state_payload_carries_static_validation_hint():
 
 def test_write_rag_telemetry_without_run_dir_is_noop():
     wrapper.write_rag_telemetry(None, {"query": "noop"})
+
+
+def test_cached_rag_context_reuses_value_for_same_key():
+    cache: dict[str, str] = {}
+    calls = 0
+
+    def factory() -> str:
+        nonlocal calls
+        calls += 1
+        return "assembled context"
+
+    assert wrapper.cached_rag_context(cache, "same-query", factory) == "assembled context"
+    assert wrapper.cached_rag_context(cache, "same-query", factory) == "assembled context"
+    assert calls == 1
+
+
+def test_rag_context_cache_key_sorts_changed_files(tmp_path):
+    project_file = tmp_path / "Demo" / "Demo.uproject"
+    args = SimpleNamespace(
+        index=str(tmp_path / "rag.sqlite"),
+        mode="compile_fix",
+        top_k=4,
+        project_file=str(project_file),
+    )
+
+    left = wrapper.rag_context_cache_key(args, "delta", "C2511", changed_files=["B.cpp", "A.h"])
+    right = wrapper.rag_context_cache_key(args, "delta", "C2511", changed_files=["A.h", "B.cpp"])
+    different = wrapper.rag_context_cache_key(args, "delta", "C2511", changed_files=["A.h"])
+
+    assert left == right
+    assert left != different
+
+
+def test_project_summary_prioritizes_focus_paths(tmp_path: Path):
+    source = tmp_path / "Source" / "Demo" / "Public"
+    source.mkdir(parents=True)
+    (source / "AOther.h").write_text(
+        "UCLASS()\nclass DEMO_API UAOther : public UObject\n{\n\tGENERATED_BODY()\n};\n",
+        encoding="utf-8",
+    )
+    target = source / "TargetComponent.h"
+    target.write_text(
+        "UCLASS()\nclass DEMO_API UTargetComponent : public UActorComponent\n{\n\tGENERATED_BODY()\n\tvoid RefreshScore();\n};\n",
+        encoding="utf-8",
+    )
+
+    summary = wrapper.summarize_project_state(
+        tmp_path,
+        max_files=1,
+        max_chars=1200,
+        focus_text="C2511 in Source/Demo/Public/TargetComponent.h",
+    )
+
+    assert "Focused files are summarized first" in summary
+    assert "Source/Demo/Public/TargetComponent.h" in summary
+    assert "Source/Demo/Public/AOther.h" not in summary
+
+
+def test_project_summary_prioritizes_absolute_windows_style_focus_path(tmp_path: Path):
+    source = tmp_path / "Source" / "Demo" / "Public"
+    source.mkdir(parents=True)
+    target = source / "TargetComponent.h"
+    target.write_text(
+        "UCLASS()\nclass DEMO_API UTargetComponent : public UActorComponent\n{\n\tGENERATED_BODY()\n};\n",
+        encoding="utf-8",
+    )
+    other = source / "AOther.h"
+    other.write_text(
+        "UCLASS()\nclass DEMO_API UAOther : public UObject\n{\n\tGENERATED_BODY()\n};\n",
+        encoding="utf-8",
+    )
+
+    absoluteish = str(target).replace("/", "\\")
+    summary = wrapper.summarize_project_state(
+        tmp_path,
+        max_files=1,
+        max_chars=1200,
+        focus_text=f"{absoluteish}(17): error C2511",
+    )
+
+    assert "Source/Demo/Public/TargetComponent.h" in summary
+    assert "Source/Demo/Public/AOther.h" not in summary
+
+
+def test_project_summary_limits_shrink_after_first_attempt(monkeypatch):
+    monkeypatch.setattr(wrapper.token_budget, "project_summary_limits", lambda mode: (22, 6000))
+
+    assert wrapper.project_summary_limits_for_attempt("compile_fix", 1) == (22, 6000)
+    assert wrapper.project_summary_limits_for_attempt("compile_fix", 2) == (6, 3300)
+
+
+def test_refactor_surface_evidence_names_callsite_binding_and_override(tmp_path: Path):
+    public = tmp_path / "Source" / "Demo" / "Public"
+    private = tmp_path / "Source" / "Demo" / "Private"
+    public.mkdir(parents=True)
+    private.mkdir(parents=True)
+    (public / "DemoComponent.h").write_text(
+        "class UDemoComponent : public UActorComponent\n"
+        "{\n"
+        "\tvirtual void ActivateFeature(float Strength) override;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    (private / "DemoComponent.cpp").write_text(
+        "void UDemoComponent::ActivateFeature(float Strength)\n"
+        "{\n"
+        "\tOnFeatureChanged.AddDynamic(this, &UDemoComponent::ActivateFeature);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (private / "FeatureUser.cpp").write_text(
+        "void UseFeature(UDemoComponent* Component)\n"
+        "{\n"
+        "\tComponent->ActivateFeature(1.0f);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    evidence = wrapper.refactor_surface_evidence(
+        tmp_path,
+        "Update UDemoComponent::ActivateFeature and all callsites",
+    )
+
+    assert "Multifile/refactor surface evidence" in evidence
+    assert "DemoComponent.h" in evidence
+    assert "DemoComponent.cpp" in evidence
+    assert "FeatureUser.cpp" in evidence
+    assert "override" in evidence
+    assert "definition" in evidence
+    assert "callsite" in evidence
+    assert "binding/delegate" in evidence
+
+
+def test_focused_current_source_evidence_prefers_structured_evidence_over_full_snippet(tmp_path: Path):
+    header = tmp_path / "Source" / "Demo" / "Public" / "DashComponent.h"
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "DashComponent.cpp"
+    header.parent.mkdir(parents=True)
+    cpp.parent.mkdir(parents=True)
+    header.write_text(
+        "class DEMO_API UDashComponent : public UActorComponent\n{\npublic:\n    void StartDash();\n};\n",
+        encoding="utf-8",
+    )
+    cpp.write_text(
+        "#include \"DashComponent.h\"\n"
+        "void UDashComponent::BeginPlay()\n"
+        "{\n"
+        "\tStartDash();\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    evidence = wrapper.focused_current_source_evidence(
+        tmp_path,
+        "LNK2019 unresolved external UDashComponent::StartDash",
+        {"errorSubkind": "LNK_MISSING_CPP_DEFINITION"},
+    )
+
+    assert "Current declaration/definition evidence" in evidence
+    assert "Focused current source evidence" not in evidence
+    assert len(evidence) < 2500

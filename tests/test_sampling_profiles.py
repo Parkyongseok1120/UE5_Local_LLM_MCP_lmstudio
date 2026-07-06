@@ -64,6 +64,9 @@ def test_qwen36_profile_mcp_meta(monkeypatch):
     assert limits["rangeReadContextLines"] == 40
     assert limits["patchChangedLineLimit"] == 60
     assert limits["noOpGuard"] is True
+    assert limits["defaultTopK"] == 6
+    assert limits["deltaTopK"] == 3
+    assert limits["candidateLimitScale"] == 16
 
 
 def test_module_fix_mode_uses_compile_fix_patch_preset(monkeypatch):

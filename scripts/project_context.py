@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,22 @@ from workspace_paths import (
     resolve_active_project_path,
     resolve_active_project_root,
 )
+
+
+_PROJECT_CONTEXT_CACHE: dict[str, Any] | None = None
+
+
+def _cache_ttl_seconds() -> float:
+    raw = os.environ.get("PROJECT_CONTEXT_TTL_SECONDS", "60")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 60.0
+
+
+def clear_project_context_cache() -> None:
+    global _PROJECT_CONTEXT_CACHE
+    _PROJECT_CONTEXT_CACHE = None
 
 
 def _resolve_workspace_root() -> Path:
@@ -76,6 +93,60 @@ def _project_under_workspace(project_dir: Path, workspace_root: Path) -> bool:
         return False
 
 
+def _mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _project_context_cache_key(uproject: Path, project_dir: Path, workspace_root: Path) -> tuple[str, str, str, int, int]:
+    try:
+        uproject_key = str(uproject.resolve())
+    except OSError:
+        uproject_key = str(uproject)
+    try:
+        project_key = str(project_dir.resolve())
+    except OSError:
+        project_key = str(project_dir)
+    try:
+        workspace_key = str(workspace_root.resolve())
+    except OSError:
+        workspace_key = str(workspace_root)
+    return (
+        uproject_key,
+        project_key,
+        workspace_key,
+        _mtime_ns(uproject),
+        _mtime_ns(project_dir / "Source"),
+    )
+
+
+def _cached_project_context(cache_key: tuple[str, str, str, int, int]) -> dict[str, Any] | None:
+    ttl = _cache_ttl_seconds()
+    if ttl <= 0 or not _PROJECT_CONTEXT_CACHE:
+        return None
+    if _PROJECT_CONTEXT_CACHE.get("key") != cache_key:
+        return None
+    if time.monotonic() >= float(_PROJECT_CONTEXT_CACHE.get("expiresAt") or 0.0):
+        return None
+    value = _PROJECT_CONTEXT_CACHE.get("value")
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _store_project_context(cache_key: tuple[str, str, str, int, int], ctx: dict[str, Any]) -> None:
+    global _PROJECT_CONTEXT_CACHE
+    ttl = _cache_ttl_seconds()
+    if ttl <= 0:
+        _PROJECT_CONTEXT_CACHE = None
+        return
+    _PROJECT_CONTEXT_CACHE = {
+        "key": cache_key,
+        "expiresAt": time.monotonic() + ttl,
+        "value": dict(ctx),
+    }
+
+
 def resolve_active_project_context(start: Path | None = None) -> dict[str, Any]:
     uproject = resolve_active_project_path(start)
     workspace_root = _resolve_workspace_root()
@@ -89,6 +160,11 @@ def resolve_active_project_context(start: Path | None = None) -> dict[str, Any]:
         }
 
     project_dir = resolve_active_project_root(start) or uproject.parent
+    cache_key = _project_context_cache_key(uproject, project_dir, workspace_root)
+    cached = _cached_project_context(cache_key)
+    if cached:
+        return cached
+
     project_name = uproject.stem
     modules = _read_uproject_modules(uproject)
     source_modules = _list_source_modules(project_dir)
@@ -130,6 +206,7 @@ def resolve_active_project_context(start: Path | None = None) -> dict[str, Any]:
             "Use RAG, metadata lookup, or absolute Python reads."
         )
 
+    _store_project_context(cache_key, ctx)
     return ctx
 
 

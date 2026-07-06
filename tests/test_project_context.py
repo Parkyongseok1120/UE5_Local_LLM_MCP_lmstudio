@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import project_context  # noqa: E402
 from project_context import resolve_active_project_context  # noqa: E402
 
 
@@ -58,3 +59,27 @@ def test_project_context_missing_active_project(shared_config_path):
     ctx = resolve_active_project_context()
     assert ctx["ok"] is False
     assert ctx["suggestedToolCalls"][0]["tool"] == "unreal_set_active_project"
+
+
+def test_project_context_reuses_ttl_cache_for_same_uproject(demo_game_project, monkeypatch):
+    monkeypatch.setenv("WORKSPACE_ROOT", str(demo_game_project["projectDir"].parent))
+    monkeypatch.setenv("PROJECT_CONTEXT_TTL_SECONDS", "60")
+    project_context.clear_project_context_cache()
+
+    calls = 0
+    original = project_context._read_uproject_modules
+
+    def counted_read(uproject: Path) -> list[str]:
+        nonlocal calls
+        calls += 1
+        return original(uproject)
+
+    monkeypatch.setattr(project_context, "_read_uproject_modules", counted_read)
+
+    first = resolve_active_project_context()
+    second = resolve_active_project_context()
+
+    assert first["projectName"] == "DemoGame"
+    assert second["projectName"] == "DemoGame"
+    assert calls == 1
+    project_context.clear_project_context_cache()

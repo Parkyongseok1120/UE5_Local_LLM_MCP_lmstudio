@@ -53,6 +53,11 @@ const {
   formatValidationResult
 } = require("./validate-write.js");
 
+function numberEnv(name, fallback, min = 0) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? Math.max(min, value) : fallback;
+}
+
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || process.cwd());
 const CONFIG_PATH = path.resolve(
   process.env.AGENT_MCP_CONFIG
@@ -65,6 +70,9 @@ const ALLOW_EXISTING_SOURCE_WRITE = ["1", "true", "yes", "on"].includes(
   String(process.env.ALLOW_EXISTING_SOURCE_WRITE || "").trim().toLowerCase()
 );
 const MAX_READ_BYTES = Number(process.env.MAX_READ_BYTES || 64 * 1024);
+const FILE_CACHE_MAX_ENTRIES = numberEnv("FILE_CACHE_MAX_ENTRIES", 20, 0);
+const FILE_CACHE_MAX_BYTES = numberEnv("FILE_CACHE_MAX_BYTES", MAX_READ_BYTES, 0);
+const WORKSPACE_INFO_CACHE_TTL_MS = numberEnv("WORKSPACE_INFO_CACHE_TTL_MS", 60 * 1000, 0);
 const CODE_DETAIL_READ_BYTES = {
   compact: 16 * 1024,
   medium: 32 * 1024,
@@ -101,6 +109,8 @@ const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
   "read_unreal_logs"
 ]);
 const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
+const fileCache = new Map();
+let workspaceInfoCache = null;
 
 const server = new Server(
   {
@@ -299,10 +309,91 @@ function makeJsonSchema(properties, required = []) {
   };
 }
 
+function fileStatSignature(stat) {
+  return `${stat.size}:${stat.mtimeMs}`;
+}
+
+function rememberCachedFile(target, stat, buffer) {
+  if (FILE_CACHE_MAX_ENTRIES <= 0 || FILE_CACHE_MAX_BYTES <= 0 || buffer.length > FILE_CACHE_MAX_BYTES) {
+    return;
+  }
+  const key = path.resolve(target);
+  fileCache.delete(key);
+  fileCache.set(key, {
+    signature: fileStatSignature(stat),
+    buffer
+  });
+  while (fileCache.size > FILE_CACHE_MAX_ENTRIES) {
+    const oldest = fileCache.keys().next().value;
+    fileCache.delete(oldest);
+  }
+}
+
+async function readCachedBufferFile(target, stat) {
+  if (FILE_CACHE_MAX_ENTRIES <= 0 || FILE_CACHE_MAX_BYTES <= 0 || stat.size > FILE_CACHE_MAX_BYTES) {
+    return fsp.readFile(target);
+  }
+  const key = path.resolve(target);
+  const signature = fileStatSignature(stat);
+  const cached = fileCache.get(key);
+  if (cached && cached.signature === signature && Buffer.isBuffer(cached.buffer)) {
+    fileCache.delete(key);
+    fileCache.set(key, cached);
+    return cached.buffer;
+  }
+  const buffer = await fsp.readFile(target);
+  rememberCachedFile(target, stat, buffer);
+  return buffer;
+}
+
+async function readLeadingFileBuffer(target, stat, maxBytes) {
+  if (stat.size <= FILE_CACHE_MAX_BYTES) {
+    const raw = await readCachedBufferFile(target, stat);
+    return raw.subarray(0, Math.min(maxBytes, raw.length));
+  }
+  const fd = await fsp.open(target, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(maxBytes, stat.size));
+    await fd.read(buffer, 0, buffer.length, 0);
+    return buffer;
+  } finally {
+    await fd.close();
+  }
+}
+
+async function readCachedTextFile(target, stat) {
+  const raw = await readCachedBufferFile(target, stat);
+  if (!isTextLikely(raw.subarray(0, Math.min(raw.length, MAX_READ_BYTES)))) {
+    const err = new Error("file appears binary");
+    err.code = "BINARY_FILE";
+    throw err;
+  }
+  return raw.toString("utf8");
+}
+
+function invalidateFileCache(target) {
+  fileCache.delete(path.resolve(target));
+}
+
+function invalidateWorkspaceInfoCache() {
+  workspaceInfoCache = null;
+}
+
 async function buildWorkspaceInfo() {
+  const activeProject = getActiveProject(CONFIG_PATH);
+  const cacheKey = `${WORKSPACE_ROOT}|${CONFIG_PATH}|${activeProject || ""}`;
+  const now = Date.now();
+  if (
+    WORKSPACE_INFO_CACHE_TTL_MS > 0
+    && workspaceInfoCache
+    && workspaceInfoCache.key === cacheKey
+    && now < workspaceInfoCache.expiresAt
+  ) {
+    return workspaceInfoCache.value;
+  }
+
   const engines = await findEngineInstalls();
   const discovery = await discoverProjects(WORKSPACE_ROOT, CONFIG_PATH);
-  const activeProject = getActiveProject(CONFIG_PATH);
   let projectContext = null;
   if (activeProject) {
     projectContext = {
@@ -317,7 +408,7 @@ async function buildWorkspaceInfo() {
       suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
     };
   }
-  return {
+  const payload = {
     workspaceRoot: WORKSPACE_ROOT,
     configPath: CONFIG_PATH,
     activeProject,
@@ -341,6 +432,14 @@ async function buildWorkspaceInfo() {
       modifiedAt: p.modifiedAt
     }))
   };
+  if (WORKSPACE_INFO_CACHE_TTL_MS > 0) {
+    workspaceInfoCache = {
+      key: cacheKey,
+      expiresAt: now + WORKSPACE_INFO_CACHE_TTL_MS,
+      value: payload
+    };
+  }
+  return payload;
 }
 
 function allAgentTools() {
@@ -558,6 +657,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         hint: args.hint,
         clear: args.clear === true
       });
+      invalidateWorkspaceInfoCache();
       return text(JSON.stringify(result, null, 2));
     }
 
@@ -700,30 +800,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         1,
         Math.min(Number(args.maxBytes || tierCap), tierCap, MAX_READ_BYTES)
       );
-      const fd = await fsp.open(target, "r");
-      try {
-        const buffer = Buffer.alloc(Math.min(maxBytes, s.size));
-        await fd.read(buffer, 0, buffer.length, 0);
-        if (!isTextLikely(buffer)) return fail(`file appears binary: ${args.path}`);
-        const hasCRLF = buffer.includes(Buffer.from("\r\n"));
-        // Normalize line endings so model's copy-paste into oldText matches replace_in_file
-        let out = buffer.toString("utf8").replace(/\r\n/g, "\n");
-        if (hasCRLF) {
+      const buffer = await readLeadingFileBuffer(target, s, maxBytes);
+      if (!isTextLikely(buffer)) return fail(`file appears binary: ${args.path}`);
+      const hasCRLF = buffer.includes(Buffer.from("\r\n"));
+      // Normalize line endings so model's copy-paste into oldText matches replace_in_file
+      let out = buffer.toString("utf8").replace(/\r\n/g, "\n");
+      if (hasCRLF) {
           out = `[line-endings: CRLF — replace_in_file normalizes automatically]\n` + out;
         }
-        if (s.size > buffer.length) {
-          const nextDetail = detail === "compact" ? "medium" : detail === "medium" ? "large" : null;
-          out += `\n\n[TRUNCATED: file size ${s.size} bytes, read ${buffer.length} bytes at detailLevel=${detail}.`;
-          if (nextDetail) {
-            out += ` Escalate once with detailLevel=${nextDetail} or use read_file_range.]`;
-          } else {
-            out += ` Use read_file_range for partial reads.]`;
-          }
-        }
-        return text(out);
-      } finally {
-        await fd.close();
+      if (s.size > buffer.length) {
+        const nextDetail = detail === "compact" ? "medium" : detail === "medium" ? "large" : null;
+        out += `\n\n[TRUNCATED: file size ${s.size} bytes, read ${buffer.length} bytes at detailLevel=${detail}.`;
+        if (nextDetail) {
+          out += ` Escalate once with detailLevel=${nextDetail} or use read_file_range.]`;
+        } else {
+          out += ` Use read_file_range for partial reads.]`;
       }
+      }
+      return text(out);
     }
 
     if (name === "read_file_range") {
@@ -746,7 +840,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return fail("line range too large (max 2000 lines per request)");
       }
 
-      const content = await fsp.readFile(target, "utf8");
+      let content = "";
+      try {
+        content = await readCachedTextFile(target, s);
+      } catch (err) {
+        if (err && err.code === "BINARY_FILE") return fail(`file appears binary: ${args.path}`);
+        throw err;
+      }
       const lines = content.split(/\r?\n/);
       const slice = lines.slice(startLine - 1, endLine);
       const numbered = slice.map((line, idx) => `${startLine + idx}|${line}`).join("\n");
@@ -772,6 +872,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
       }
       await fsp.writeFile(target, String(args.content || ""), "utf8");
+      invalidateFileCache(target);
       const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
       const rel = path.relative(WORKSPACE_ROOT, target);
       if (validation && !validation.skipped && !validation.ok) {
@@ -799,7 +900,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const newText = String(args.newText ?? "");
       if (!oldText) return fail("oldText must not be empty");
 
-      const raw = await fsp.readFile(target);
+      const raw = await readCachedBufferFile(target, s);
       const hasCRLF = raw.includes(Buffer.from("\r\n"));
       // Normalize to LF for matching; preserve original line endings in output
       const content = raw.toString("utf8");
@@ -830,6 +931,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const updatedNorm = contentNorm.split(oldTextNorm).join(newText.replace(/\r\n/g, "\n"));
       const updated = hasCRLF ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
       await fsp.writeFile(target, updated, "utf8");
+      invalidateFileCache(target);
       const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
       const rel = path.relative(WORKSPACE_ROOT, target);
       if (validation && !validation.skipped && !validation.ok) {

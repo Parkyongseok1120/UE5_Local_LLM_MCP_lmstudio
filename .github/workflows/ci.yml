@@ -22,7 +22,7 @@ jobs:
       - name: Install dev dependencies
         run: python -m pip install -r requirements-dev.txt
 
-      - name: Run tests (non-smoke, non-slow)
+      - name: Run tests
         run: pytest --tb=short -q
         working-directory: ${{ github.workspace }}
 

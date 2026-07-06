@@ -20,23 +20,27 @@
       "historySummaryMaxChars": 2200
     },
     "execute": {
-      "ragAssemblyChars": 10000,
+      "ragAssemblyChars": 5000,
       "readFileMaxBytes": 65536,
       "maxOutputTokens": 4096,
-      "feedbackTailChars": 12000,
+      "feedbackTailChars": 5000,
       "historyAttempts": 2,
-      "maxHistoryMessages": 8,
-      "historySummaryMaxChars": 2600
+      "maxHistoryMessages": 4,
+      "historySummaryMaxChars": 1400,
+      "projectSummaryMaxFiles": 14,
+      "projectSummaryMaxChars": 4200
     },
     "compile_fix": {
-      "ragAssemblyChars": 8000,
+      "ragAssemblyChars": 4500,
       "readFileMaxBytes": 65536,
       "maxOutputTokens": 4096,
-      "feedbackTailChars": 12000,
+      "feedbackTailChars": 5000,
       "historyAttempts": 2,
-      "maxHistoryMessages": 8,
-      "historySummaryMaxChars": 2800,
-      "compileFixEngineSourceMax": 2
+      "maxHistoryMessages": 4,
+      "historySummaryMaxChars": 1400,
+      "compileFixEngineSourceMax": 1,
+      "projectSummaryMaxFiles": 14,
+      "projectSummaryMaxChars": 4200
     },
     "review": {
       "ragAssemblyChars": 8000,
@@ -49,13 +53,15 @@
       "pabSummaryMaxChars": 2000
     },
     "codegen": {
-      "ragAssemblyChars": 10000,
+      "ragAssemblyChars": 5000,
       "readFileMaxBytes": 65536,
       "maxOutputTokens": 4096,
-      "feedbackTailChars": 12000,
+      "feedbackTailChars": 5000,
       "historyAttempts": 2,
-      "maxHistoryMessages": 8,
-      "historySummaryMaxChars": 2600
+      "maxHistoryMessages": 4,
+      "historySummaryMaxChars": 1400,
+      "projectSummaryMaxFiles": 14,
+      "projectSummaryMaxChars": 4200
     },
     "api_lookup": {
       "ragAssemblyChars": 6000,
@@ -69,15 +75,15 @@
   },
   "session": {
     "newChatPerSlice": true,
-    "maxHistoryMessages": 8
+    "maxHistoryMessages": 4
   },
   "maxCharsPerRow": {
     "plan": 3000,
     "critique": 3000,
-    "execute": 5000,
-    "compile_fix": 5000,
+    "execute": 2800,
+    "compile_fix": 2800,
     "review": 4000,
-    "default": 5000
+    "default": 3000
   },
   "kpi": {
     "executeSliceInputTokensMax": 12000,

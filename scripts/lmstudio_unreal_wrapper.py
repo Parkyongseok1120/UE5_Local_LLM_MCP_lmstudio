@@ -13,7 +13,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.request import Request, urlopen
 
 from rag_context import assemble_context
@@ -353,6 +353,7 @@ def summarize_project_state(
     max_chars: int | None = None,
     mode: str = "execute",
     include_full_build_cs: bool | None = None,
+    focus_text: str = "",
 ) -> str:
     default_files, default_chars = token_budget.project_summary_limits(mode)
     max_files = default_files if max_files is None else max_files
@@ -361,11 +362,15 @@ def summarize_project_state(
     if not snapshot:
         return "Current project file state summary: no text project files found."
 
+    focus_paths = project_summary_focus_paths(root, focus_text, snapshot) if focus_text else []
+    focus_order = {relative: index for index, relative in enumerate(focus_paths)}
     lines = [
         "Current project file state summary (authoritative):",
         "- Treat these files as already existing. Do not re-add declarations, includes, modules, or bindings that are already present.",
         "- For existing files, prefer exact patches. Return complete content only for new files unless the mode explicitly allows full-file replacement.",
     ]
+    if focus_paths:
+        lines.append("- Focused files are summarized first: " + ", ".join(focus_paths[:8]))
     modes_with_full_build_cs = frozenset({"module_fix"})
     show_full_build_cs = include_full_build_cs if include_full_build_cs is not None else mode in modes_with_full_build_cs
     included = 0
@@ -389,13 +394,15 @@ def summarize_project_state(
 
     def state_sort_key(item: tuple[str, str]) -> tuple[int, str]:
         relative = item[0]
+        if relative in focus_order:
+            return (focus_order[relative], relative)
         if relative.startswith("Source/"):
-            return (0, relative)
+            return (1000, relative)
         if relative.startswith("Plugins/"):
-            return (1, relative)
+            return (2000, relative)
         if relative.startswith("Config/"):
-            return (2, relative)
-        return (3, relative)
+            return (3000, relative)
+        return (4000, relative)
 
     for relative, text in sorted(snapshot.items(), key=state_sort_key):
         if included >= max_files:
@@ -460,7 +467,60 @@ def _matching_source_pair_paths(root: Path, path: Path) -> list[Path]:
     return list(dict.fromkeys(results))
 
 
-def focused_source_pair_context(root: Path, focus_text: str, *, max_files: int = 4, max_chars: int = 7000) -> str:
+def project_summary_focus_paths(root: Path, focus_text: str, snapshot: dict[str, str] | None = None) -> list[str]:
+    snapshot = snapshot if snapshot is not None else snapshot_project_files(root)
+    root_resolved = root.resolve()
+    rels: list[str] = []
+
+    def add_relative(relative: str) -> None:
+        if relative in snapshot and relative not in rels:
+            rels.append(relative)
+        stem = Path(relative).stem
+        for candidate in snapshot:
+            candidate_path = Path(candidate)
+            if candidate_path.stem == stem and candidate_path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+                if candidate not in rels:
+                    rels.append(candidate)
+
+    path_pattern = re.compile(
+        r"(?:[A-Za-z]:[\\/][^\s:'\"]+|(?:Source|Plugins|Config)[\\/][^\s:'\"]+)"
+        r"\.(?:h|hpp|cpp|c|cc|cs|ini|json|uproject|uplugin)",
+        re.I,
+    )
+    for match in path_pattern.finditer(focus_text or ""):
+        raw = match.group(0).strip().strip(".,);]")
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = root / raw.replace("\\", "/")
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved.is_file() and root_resolved in resolved.parents:
+            try:
+                add_relative(project_relative_path(resolved, root))
+            except ValueError:
+                continue
+
+    terms = _refactor_symbol_terms(focus_text)
+    if terms:
+        for relative, text in snapshot.items():
+            suffix = Path(relative).suffix.lower()
+            if suffix not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+                continue
+            if any(term in text for term in terms):
+                add_relative(relative)
+    return rels
+
+
+def focused_source_pair_context(
+    root: Path,
+    focus_text: str,
+    *,
+    max_files: int = 2,
+    max_chars: int = 2800,
+    snippet_chars: int = 900,
+) -> str:
     paths: list[Path] = []
     for candidate in _candidate_source_paths_from_text(root, focus_text):
         for paired in _matching_source_pair_paths(root, candidate):
@@ -481,8 +541,8 @@ def focused_source_pair_context(root: Path, focus_text: str, *, max_files: int =
             continue
         text = read_text(path)
         snippet = text.strip()
-        if len(snippet) > 1800:
-            snippet = snippet[:1800].rstrip() + "\n..."
+        if len(snippet) > snippet_chars:
+            snippet = snippet[:snippet_chars].rstrip() + "\n..."
         lines.append(f"\n## {relative}")
         lines.append("```")
         lines.append(snippet)
@@ -684,7 +744,7 @@ def declaration_definition_evidence(
     route: dict[str, Any] | None = None,
     *,
     max_pairs: int = 3,
-    max_chars: int = 6000,
+    max_chars: int = 3600,
 ) -> str:
     fallback = _route_needs_decl_definition_evidence(route, focus_text)
     pairs = _matching_header_cpp_pairs(root, focus_text, fallback=fallback)
@@ -754,12 +814,126 @@ def declaration_definition_evidence(
     return "\n".join(lines)[:max_chars]
 
 
-def focused_current_source_evidence(root: Path, focus_text: str, route: dict[str, Any] | None = None) -> str:
-    parts = [
-        declaration_definition_evidence(root, focus_text, route),
-        focused_source_pair_context(root, focus_text),
+def _refactor_symbol_terms(focus_text: str) -> list[str]:
+    terms: list[str] = []
+    for cls, func in re.findall(r"\b([AUFSI][A-Za-z0-9_]{3,})::([~A-Za-z_][A-Za-z0-9_]*)\b", focus_text or ""):
+        for value in (cls, func.lstrip("~")):
+            if value and value not in terms:
+                terms.append(value)
+    for match in re.finditer(r"\b([AUFSI][A-Za-z0-9_]{4,})\b", focus_text or ""):
+        value = match.group(1)
+        if value not in terms:
+            terms.append(value)
+    return terms[:12]
+
+
+def _refactor_line_role(line: str, terms: list[str], suffix: str) -> str:
+    stripped = line.strip()
+    if re.search(r"\b(?:AddDynamic|AddUObject|BindAction|BindUFunction|DECLARE_.*DELEGATE)\b", stripped):
+        return "binding/delegate"
+    if "override" in stripped:
+        return "override"
+    if "::" in stripped and any(term in stripped for term in terms):
+        return "definition"
+    if suffix.lower() in {".h", ".hpp"} and any(term in stripped for term in terms):
+        if ";" in stripped or "UFUNCTION" in stripped or "UPROPERTY" in stripped:
+            return "declaration"
+    if any(re.search(rf"\b{re.escape(term)}\s*\(", stripped) for term in terms):
+        return "callsite"
+    return ""
+
+
+def refactor_surface_evidence(
+    root: Path,
+    focus_text: str,
+    *,
+    max_files: int = 6,
+    max_lines_per_file: int = 8,
+    max_chars: int = 4200,
+) -> str:
+    terms = _refactor_symbol_terms(focus_text)
+    if not terms:
+        return ""
+
+    paths: list[Path] = []
+    for candidate in _candidate_source_paths_from_text(root, focus_text):
+        for paired in _matching_source_pair_paths(root, candidate):
+            if paired not in paths:
+                paths.append(paired)
+
+    for path in iter_source_files(root):
+        if path in paths or path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+            continue
+        text = read_text(path)
+        if any(term in text for term in terms):
+            paths.append(path)
+        if len(paths) >= max_files * 2:
+            break
+
+    if not paths:
+        return ""
+
+    lines = [
+        "Multifile/refactor surface evidence (current project only):",
+        "- Verify declaration -> definition -> callsite -> binding -> override before patching.",
+        "- Prefer exact patches on the listed files; do not rewrite unrelated files.",
+        "- Symbol terms: " + ", ".join(terms),
     ]
-    return "\n\n".join(part for part in parts if part.strip())
+    root_resolved = root.resolve()
+    files_added = 0
+    for path in paths:
+        if files_added >= max_files:
+            break
+        try:
+            rel = path.resolve().relative_to(root_resolved).as_posix()
+        except ValueError:
+            continue
+        text = read_text(path)
+        file_lines: list[str] = []
+        for line_no, raw_line in enumerate(text.splitlines(), start=1):
+            if not any(term in raw_line for term in terms) and not re.search(
+                r"\b(?:AddDynamic|AddUObject|BindAction|BindUFunction|DECLARE_.*DELEGATE|override)\b",
+                raw_line,
+            ):
+                continue
+            role = _refactor_line_role(raw_line, terms, path.suffix)
+            if not role:
+                continue
+            compact = re.sub(r"\s+", " ", raw_line).strip()
+            file_lines.append(f"- {role} line {line_no}: {compact}")
+            if len(file_lines) >= max_lines_per_file:
+                break
+        if not file_lines:
+            continue
+        lines.append("")
+        lines.append(f"## {rel}")
+        lines.extend(file_lines)
+        files_added += 1
+        if len("\n".join(lines)) >= max_chars:
+            lines.append("- ... refactor surface evidence truncated.")
+            break
+    return "\n".join(lines)[:max_chars] if files_added else ""
+
+
+def _should_include_refactor_surface(mode: str) -> bool:
+    normalized = str(mode or "").strip().lower()
+    return normalized == "multifile_refactor" or normalized.startswith("refactor_")
+
+
+def focused_current_source_evidence(
+    root: Path,
+    focus_text: str,
+    route: dict[str, Any] | None = None,
+    *,
+    mode: str = "",
+    max_chars: int = 6000,
+) -> str:
+    declaration_evidence = declaration_definition_evidence(root, focus_text, route)
+    refactor_evidence = refactor_surface_evidence(root, focus_text) if _should_include_refactor_surface(mode) else ""
+    pair_context = "" if (declaration_evidence or refactor_evidence) else focused_source_pair_context(root, focus_text)
+    return "\n\n".join(
+        part for part in (declaration_evidence, refactor_evidence, pair_context) if part.strip()
+    )[:max_chars]
 
 
 def diff_snapshots(before: dict[str, str], after: dict[str, str]) -> str:
@@ -2411,6 +2585,11 @@ def validate_build_modules(root: Path, source_text: str, build_text_value: str) 
         "UMG": ("UUserWidget", "UWidget", "UButton", "UTextBlock"),
         "AIModule": ("AAIController", "UBehaviorTree", "UBlackboardComponent"),
         "Niagara": ("UNiagaraComponent", "UNiagaraSystem", "UNiagaraFunctionLibrary"),
+        "NavigationSystem": ("NavigationSystem.h", "UNavigationSystemV1", "ANavigationData"),
+        "InputCore": ("InputCoreTypes.h", "FKey", "EKeys::"),
+        "Slate": ("SlateBrush.h", "FSlateBrush", "SWidget", "SButton"),
+        "MovieScene": ("MovieScene.h", "UMovieScene", "FMovieScene"),
+        "LevelSequence": ("LevelSequence.h", "ULevelSequence", "ALevelSequenceActor"),
     }
     build_files = find_build_cs_files(root)
     rel = str(build_files[0].relative_to(root)) if build_files else "Source/*.Build.cs"
@@ -2888,8 +3067,32 @@ def cap_message_history(messages: list[dict[str, str]], mode: str = "execute") -
     return [messages[0], {"role": "system", "content": summary}] + messages[-keep_tail:]
 
 
+def prepare_messages_for_attempt(
+    messages: list[dict[str, str]],
+    mode: str = "execute",
+    *,
+    attempt: int = 1,
+) -> list[dict[str, str]]:
+    if attempt <= 1 or len(messages) <= 1:
+        return messages
+    budget = token_budget.mode_budget(mode)
+    session = budget.get("session") if isinstance(budget.get("session"), dict) else {}
+    summary_chars = int(budget.get("historySummaryMaxChars") or 1800)
+    if bool(session.get("newChatPerSlice", True)):
+        summary = summarize_compacted_messages(messages[1:], summary_chars)
+        return [messages[0], {"role": "system", "content": summary}]
+    return cap_message_history(messages, mode)
+
+
 def count_compact_summary_messages(messages: list[dict[str, str]]) -> int:
     return sum(1 for message in messages if str(message.get("content") or "").startswith(COMPACT_SUMMARY_PREFIX))
+
+
+def project_summary_limits_for_attempt(mode: str, attempt: int) -> tuple[int, int]:
+    max_files, max_chars = token_budget.project_summary_limits(mode)
+    if attempt <= 1:
+        return max_files, max_chars
+    return min(max_files, 6), min(max_chars, max(2400, int(max_chars * 0.55)))
 
 
 def write_token_usage(
@@ -2904,13 +3107,16 @@ def write_token_usage(
     preset: dict[str, Any],
 ) -> None:
     input_chars = sum(len(str(message.get("content") or "")) for message in messages)
-    input_chars += len(prompt) + len(rag_context) + len(project_state)
     budget = token_budget.mode_budget(mode)
     usage = {
         "attempt": attempt,
         "mode": mode,
         "inputChars": input_chars,
         "estimatedInputTokens": token_budget.chars_to_token_estimate(" " * input_chars),
+        "messageChars": input_chars,
+        "currentPromptChars": len(prompt),
+        "ragContextChars": len(rag_context),
+        "projectStateChars": len(project_state),
         "maxOutputTokens": int(preset.get("maxTokens") or budget.get("maxOutputTokens") or 0),
         "feedbackTailChars": int(budget.get("feedbackTailChars") or 0),
         "maxHistoryMessages": int(budget.get("maxHistoryMessages") or 0),
@@ -3047,6 +3253,35 @@ def wrapper_rag_project_filters(args: argparse.Namespace) -> list[str]:
         if value and value not in names:
             names.append(value)
     return names
+
+
+def rag_context_cache_key(
+    args: argparse.Namespace,
+    kind: str,
+    query: str,
+    *,
+    changed_files: list[str] | None = None,
+) -> str:
+    """Stable key for run-local RAG de-duplication."""
+    payload = {
+        "kind": kind,
+        "query": query,
+        "changedFiles": sorted({str(path) for path in (changed_files or []) if str(path)}),
+        "index": str(Path(args.index)),
+        "mode": str(getattr(args, "mode", "") or ""),
+        "topK": int(getattr(args, "top_k", 0) or 0),
+        "projectFile": str(getattr(args, "project_file", "") or ""),
+        "projects": wrapper_rag_project_filters(args),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def cached_rag_context(cache: dict[str, str], key: str, factory: Callable[[], str]) -> str:
+    if key in cache:
+        return cache[key]
+    value = factory()
+    cache[key] = value
+    return value
 
 
 def collect_rag_context(
@@ -3898,7 +4133,26 @@ def run(args: argparse.Namespace) -> int:
         agent_plan_block = format_plan_for_prompt(plan) + "\n\n"
         write_file(run_dir / "agent_plan.json", json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
 
-    rag_context = collect_rag_context(args, request, run_dir=run_dir)
+    rag_cache: dict[str, str] = {}
+
+    def collect_cached_initial_rag(query: str) -> str:
+        key = rag_context_cache_key(args, "initial", query)
+        return cached_rag_context(
+            rag_cache,
+            key,
+            lambda: collect_rag_context(args, query, run_dir=run_dir),
+        )
+
+    def collect_cached_delta_rag(query_parts: list[str], changed_files: list[str]) -> str:
+        query = " ".join(part.strip() for part in query_parts if part and part.strip())
+        key = rag_context_cache_key(args, "delta", query[:4000] or "compile_fix", changed_files=changed_files)
+        return cached_rag_context(
+            rag_cache,
+            key,
+            lambda: collect_delta_rag_context(args, query_parts, changed_files, run_dir=run_dir),
+        )
+
+    rag_context = collect_cached_initial_rag(request)
     symbol_context = optional_symbol_graph_context(request)
     if symbol_context:
         rag_context = rag_context + "\n\n" + symbol_context
@@ -3960,11 +4214,12 @@ def run(args: argparse.Namespace) -> int:
     initial_prompt = agent_plan_block + user_prompt(
         request=request,
         rag_context=rag_context,
-        focused_evidence=focused_current_source_evidence(project_root, request, active_route),
+        focused_evidence=focused_current_source_evidence(project_root, request, active_route, mode=args.mode),
         project_state=summarize_project_state(
             project_root,
             mode=args.mode,
             include_full_build_cs=args.mode == "module_fix",
+            focus_text=request,
         ),
         project_name=project_name,
         project_file=project_file,
@@ -4038,12 +4293,12 @@ def run(args: argparse.Namespace) -> int:
             query_parts = [request]
             if last_build_records:
                 query_parts.append(build_error_query(last_build_records, last_build.output if last_build else ""))
-            rag_context = collect_delta_rag_context(args, query_parts, changed_files, run_dir=run_dir)
+            rag_context = collect_cached_delta_rag(query_parts, changed_files)
             symbol_context = optional_symbol_graph_context(" ".join(query_parts))
             if symbol_context:
                 rag_context = rag_context + "\n\n" + symbol_context
         elif attempt == 1:
-            rag_context = collect_rag_context(args, request, run_dir=run_dir)
+            rag_context = collect_cached_initial_rag(request)
             symbol_context = optional_symbol_graph_context(request)
             if symbol_context:
                 rag_context = rag_context + "\n\n" + symbol_context
@@ -4067,15 +4322,24 @@ def run(args: argparse.Namespace) -> int:
                 build_error_query(last_build_records, last_build.output if last_build else "") if last_build_records else "",
             ]
         )
+        summary_max_files, summary_max_chars = project_summary_limits_for_attempt(budget_mode, attempt)
         project_state = summarize_project_state(
             project_root,
+            max_files=summary_max_files,
+            max_chars=summary_max_chars,
             mode=budget_mode,
             include_full_build_cs=args.mode == "module_fix" or active_route.get("broadMode") == "module_fix",
+            focus_text=focus_text,
         )
         prompt = user_prompt(
             request=request,
             rag_context=rag_context,
-            focused_evidence=focused_current_source_evidence(project_root, focus_text, active_route),
+            focused_evidence=focused_current_source_evidence(
+                project_root,
+                focus_text,
+                active_route,
+                mode=original_mode if attempt >= 2 else args.mode,
+            ),
             project_state=project_state,
             project_name=project_name,
             project_file=project_file,
@@ -4083,8 +4347,7 @@ def run(args: argparse.Namespace) -> int:
             previous_feedback=attempt_prefix + previous_feedback,
             mode=original_mode if attempt >= 2 else args.mode,
         )
-        if attempt >= 3:
-            messages = cap_message_history(messages, budget_mode)
+        messages = prepare_messages_for_attempt(messages, budget_mode, attempt=attempt)
         compile_patch_turn = attempt >= 2 or first_attempt_patch_route
         attempt_preset = preset_for_wrapper(args.mode, compile_patch=compile_patch_turn)
         if float(getattr(args, "temperature", 0.1)) == 0.1 or attempt >= 2:
