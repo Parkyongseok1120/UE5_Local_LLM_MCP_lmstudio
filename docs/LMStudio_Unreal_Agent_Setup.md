@@ -58,20 +58,24 @@ Paste [`prompts/lmstudio_session_bootstrap.md`](../prompts/lmstudio_session_boot
 2. If wrong project: `unreal_set_active_project` or `unreal_open_project_picker`
 3. `unreal_rag_health` once
 4. `get_workspace_info` (unreal-agent)
-5. For implementation: `unreal_agent_plan` then `unreal_rag_search` **before** `write_file`
+5. For implementation: `unreal_agent_plan` then `unreal_rag_search` **before** any edit
+6. Use `read_file_range` / `read_file`, then `replace_in_file`; `write_file` is only for brand-new files
+
+Do not use `run_javascript`, `js-code-sandbox`, Deno file APIs, Node `fs`, or browser/code-sandbox tools for project file I/O. If LM Studio exposes the JavaScript/TypeScript Code Sandbox plugin, hide or disable it for Unreal coding chats.
 
 Task templates: [`lmstudio_user_compile_fix.md`](../prompts/lmstudio_user_compile_fix.md), [`lmstudio_user_agent_edit.md`](../prompts/lmstudio_user_agent_edit.md)
 
 ## 5. Standard loop
 
 ```
-RAG search -> read_file -> write_file -> build_unreal_project -> read log on failure
+unreal_agent_plan -> RAG search -> read_file_range/read_file -> replace_in_file -> build_unreal_project -> read log on failure
 ```
 
 Rules:
 - Do **not** paste full `.cpp` in chat when MCP write is available.
 - Do **not** say "done" without build output.
-- `write_file` runs static validation when `VALIDATE_ON_WRITE=1` (blocks bad includes like `Game/Framework/`).
+- Existing source files are patch-only. `write_file` is for brand-new files; existing `.h`, `.cpp`, and `.cs` writes are blocked by default in `unreal-agent`.
+- `replace_in_file` / `write_file` run static validation when `VALIDATE_ON_WRITE=1` (blocks bad includes like `Game/Framework/`).
 
 ## 6. Modes
 

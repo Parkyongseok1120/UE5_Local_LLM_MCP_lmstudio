@@ -53,6 +53,9 @@ def test_medium_refactor_requires_approval_gate_before_writes():
         "request_human_approval",
     }
     assert any("Medium/large refactors require impact plan" in note for note in payload["notes"])
+    assert any("write_file only for brand-new files" in item for item in payload["checkpoints"])
+    assert any("do not fall back to write_file" in item for item in payload["checkpoints"])
+    assert any("run_javascript" in item and "project file I/O" in item for item in payload["checkpoints"])
 
 
 def test_compile_fix_patch_strategy():

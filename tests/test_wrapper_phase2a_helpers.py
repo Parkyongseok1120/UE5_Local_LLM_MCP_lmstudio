@@ -340,7 +340,68 @@ def test_refactor_r2_directive_limits_execution_to_approved_cluster():
 
     assert "approved implementation cluster" in directive
     assert "Do not combine API migration" in directive
+    assert "Existing files are patch-only" in directive
     assert "UBT must pass" in directive
+
+
+def test_refactor_mode_rejects_existing_full_file_rewrite(tmp_path: Path):
+    target = tmp_path / "Source" / "Demo" / "Private" / "DemoComponent.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void UDemoComponent::OldName() {}\n", encoding="utf-8")
+
+    bundle = {
+        "files": [
+            {
+                "path": "Source/Demo/Private/DemoComponent.cpp",
+                "content": "void UDemoComponent::NewName() {}\n",
+            }
+        ],
+        "patches": [],
+    }
+
+    blockers = wrapper.existing_full_file_rewrite_blockers(tmp_path, bundle, "refactor_r2")
+
+    assert blockers
+    assert "patches[]" in blockers[0]
+    assert "files[] is only for new files" in blockers[0]
+
+
+def test_refactor_mode_allows_new_file_content(tmp_path: Path):
+    bundle = {
+        "files": [
+            {
+                "path": "Source/Demo/Private/NewComponent.cpp",
+                "content": "void NewHelper() {}\n",
+            }
+        ],
+        "patches": [],
+    }
+
+    assert wrapper.existing_full_file_rewrite_blockers(tmp_path, bundle, "refactor_r2") == []
+
+
+def test_non_refactor_mode_allows_legacy_full_file_response(tmp_path: Path):
+    target = tmp_path / "Source" / "Demo" / "Private" / "DemoComponent.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void UDemoComponent::OldName() {}\n", encoding="utf-8")
+    bundle = {
+        "files": [
+            {
+                "path": "Source/Demo/Private/DemoComponent.cpp",
+                "content": "void UDemoComponent::NewName() {}\n",
+            }
+        ],
+        "patches": [],
+    }
+
+    assert wrapper.existing_full_file_rewrite_blockers(tmp_path, bundle, "compile_fix") == []
+
+
+def test_refactor_system_prompt_makes_existing_files_patch_only():
+    prompt = wrapper.system_prompt("", {"maxFilesPerEdit": 2, "preferPatchOverFullFile": True}, mode="refactor_r2")
+
+    assert "Refactor patch-only rule" in prompt
+    assert "existing files in files[] will be rejected" in prompt
 
 
 def test_missing_definition_full_file_merge_preserves_existing_call_site(tmp_path: Path):

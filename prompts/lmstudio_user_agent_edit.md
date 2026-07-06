@@ -13,8 +13,10 @@ Edit request — use MCP tools only.
 **Rules:**
 
 1. `unreal_agent_plan` first (`mode=agent_edit` or `auto`)
-2. `unreal_rag_search` then `read_file` on the target file
+2. `unreal_rag_search` then `read_file_range` / `read_file` on the target file
 3. Apply change with **`replace_in_file`** only (no full file in chat)
 4. `build_unreal_project` if C++ or Build.cs changed
+
+Never use `run_javascript`, `js-code-sandbox`, `Deno.readTextFile`, `Deno.writeTextFile`, or Node `fs` for project file edits.
 
 One tool per turn. Max 2 files for this task; prefer **1 file** per patch turn.

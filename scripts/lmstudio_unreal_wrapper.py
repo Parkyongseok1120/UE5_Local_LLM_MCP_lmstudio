@@ -364,7 +364,7 @@ def summarize_project_state(
     lines = [
         "Current project file state summary (authoritative):",
         "- Treat these files as already existing. Do not re-add declarations, includes, modules, or bindings that are already present.",
-        "- Return complete content only for files that need a new change; omitted files remain unchanged.",
+        "- For existing files, prefer exact patches. Return complete content only for new files unless the mode explicitly allows full-file replacement.",
     ]
     modes_with_full_build_cs = frozenset({"module_fix"})
     show_full_build_cs = include_full_build_cs if include_full_build_cs is not None else mode in modes_with_full_build_cs
@@ -1102,6 +1102,27 @@ def enforce_edit_limits(bundle: dict[str, Any], limits: dict[str, Any]) -> None:
         raise ValueError(
             f"too many edits ({total}); active profile maxFilesPerEdit={max_files}"
         )
+
+
+def existing_full_file_rewrite_blockers(root: Path, bundle: dict[str, Any], mode: str) -> list[str]:
+    if mode not in REFACTOR_PATCH_ONLY_MODES:
+        return []
+    blockers: list[str] = []
+    for item in bundle.get("files") or []:
+        rel_path = str(item.get("path") or "").strip()
+        if not rel_path:
+            continue
+        try:
+            target = safe_output_path(root, rel_path)
+        except Exception as exc:
+            blockers.append(f"{rel_path}: unsafe file path ({exc})")
+            continue
+        if target.exists():
+            blockers.append(
+                f"{rel_path}: existing files cannot be returned in files[] during {mode}; "
+                "use patches[] with exact oldText/newText. files[] is only for new files."
+            )
+    return blockers
 
 
 def strip_thinking_from_response(text: str) -> str:
@@ -1991,6 +2012,7 @@ from apply_patch import apply_patch as apply_single_patch
 from parse_build_cs import declared_modules_from_text, public_modules_from_text
 
 PATCH_PREFERRED_LINE_THRESHOLD = 200
+REFACTOR_PATCH_ONLY_MODES = {"refactor_r2", "refactor_r3", "refactor_r4"}
 
 
 def declared_build_modules(build_text_value: str) -> set[str]:
@@ -3382,7 +3404,7 @@ def build_retry_state_payload(
     return {"current": current, "recommendation": recommendation}
 
 
-def system_prompt(rules_text: str, edit_limits: dict[str, Any] | None = None) -> str:
+def system_prompt(rules_text: str, edit_limits: dict[str, Any] | None = None, mode: str = "agent_edit") -> str:
     base_prompt = read_text(PROMPT_PATH, "You are an Unreal Engine 5.8 C++ assistant.")
     threshold = PATCH_PREFERRED_LINE_THRESHOLD
     limits = edit_limits or {}
@@ -3390,10 +3412,20 @@ def system_prompt(rules_text: str, edit_limits: dict[str, Any] | None = None) ->
     prefer_patch = bool(limits.get("preferPatchOverFullFile", True))
     target_tier = str(limits.get("targetTier") or "").strip()
     prompt_contract = str(limits.get("promptContract") or "").strip()
-    patch_hint = (
-        f"Prefer patches[] for existing files over ~{threshold} lines when possible."
-        if prefer_patch
-        else f"You may use full files[] up to {max_files} files per response."
+    if mode in REFACTOR_PATCH_ONLY_MODES:
+        patch_hint = (
+            "Refactor patch-only rule: existing files must be changed with patches[] only, "
+            "regardless of size. files[] is only for brand-new files."
+        )
+    elif prefer_patch:
+        patch_hint = f"Prefer patches[] for existing files over ~{threshold} lines when possible."
+    else:
+        patch_hint = f"You may use full files[] up to {max_files} files per response."
+    file_mode_rule = (
+        "For refactor modes: use patches[] for every existing file, regardless of size. "
+        "Use files[] only for brand-new files; existing files in files[] will be rejected."
+        if mode in REFACTOR_PATCH_ONLY_MODES
+        else f"For NEW files or small files (under ~{threshold} lines), use files[] with full content."
     )
     return f"""{base_prompt}
 
@@ -3411,6 +3443,7 @@ Global file edit discipline:
 - Omit unchanged files from the files array. Include a file only when its full final content differs from the current file.
 - If the current files already satisfy the request, return an empty files array and explain that no new file edits are needed.
 - Never return a file entry whose content is byte-for-byte identical to the current file. The wrapper will reject no-op file bundles.
+- In refactor modes, never rewrite an existing .h/.cpp/.cs file as a full file. Use patches[] with exact oldText/newText.
 - Every .cpp member function must have a matching declaration in the relevant header unless it is a constructor, destructor, static local helper, lambda, or non-member function.
 - Every header declaration added for a reflected Unreal type must include the needed macro, generated.h placement, and Build.cs dependency evidence.
 
@@ -3437,7 +3470,7 @@ The JSON object must match this schema:
   "notes": ["optional implementation notes"]
 }}
 
-For NEW files or small files (under ~{threshold} lines), use files[] with full content.
+{file_mode_rule}
 For LARGE existing files, prefer patches[] with exact oldText/newText (expectedOccurrences required).
 {patch_hint}
 Maximum edits per response: {max_files} (files + patches combined).
@@ -3493,19 +3526,22 @@ def mode_directive(mode: str) -> str:
         "refactor_r1": (
             "Mode directive: refactor_r1. API boundary planning only unless approval is explicit. "
             "Name declaration, definition, callsite, binding, override, Blueprint/event, asset, and module impacts. "
-            "No large cpp bodies. Max 3 files if edits are explicitly approved."
+            "No large cpp bodies. If edits are explicitly approved, use patches for existing files; write full files only for new files."
         ),
         "refactor_r2": (
             "Mode directive: refactor_r2. Execute one approved implementation cluster only. "
-            "Do not combine API migration, callsite rewiring, and cleanup. Max 3 files. UBT must pass or report errors."
+            "Do not combine API migration, callsite rewiring, and cleanup. Existing files are patch-only: use exact patches[]/replace_in_file, "
+            "never files[]/write_file full rewrites. If a patch does not match, re-read a smaller range and patch again. Max 3 files. UBT must pass or report errors."
         ),
         "refactor_r3": (
             "Mode directive: refactor_r3. Rewire approved callers/includes only. "
-            "Verify declaration, definition, callsite, delegate binding, and override surfaces before patching. Max 3 files."
+            "Verify declaration, definition, callsite, delegate binding, and override surfaces before patching. Existing files are patch-only; "
+            "do not use full-file rewrites for .h/.cpp. Max 3 files."
         ),
         "refactor_r4": (
             "Mode directive: refactor_r4. Cleanup dead code/includes only after R2/R3 builds pass. "
-            "Do not rename public API, assets, Blueprint-facing functions, SaveGame fields, or replicated fields here. Max 5 files."
+            "Do not rename public API, assets, Blueprint-facing functions, SaveGame fields, or replicated fields here. Existing files are patch-only; "
+            "do not use full-file rewrites. Max 5 files."
         ),
     }
     return directives.get(str(mode or "").strip(), "")
@@ -3859,7 +3895,7 @@ def run(args: argparse.Namespace) -> int:
             previous_feedback = "Safe static generated.h autofix was applied, but static validation still reports issues:\n" + static_report
 
     edit_limits = profile_edit_limits()
-    messages = [{"role": "system", "content": system_prompt(rules_text, edit_limits)}]
+    messages = [{"role": "system", "content": system_prompt(rules_text, edit_limits, mode=args.mode)}]
     last_answer = ""
     last_written: list[Path] = []
     last_build: BuildResult | None = None
@@ -4013,6 +4049,25 @@ def run(args: argparse.Namespace) -> int:
                 blockers=route_blockers,
                 bundle=bundle,
                 rejection_kind="route_forbidden_action",
+            )
+            continue
+        rewrite_blockers = existing_full_file_rewrite_blockers(project_root, bundle, original_mode)
+        if rewrite_blockers:
+            previous_feedback = (
+                "Refactor edit rejected because it attempted a full-file rewrite of an existing file:\n"
+                + "\n".join(f"- {issue}" for issue in rewrite_blockers)
+                + "\nFor refactor modes, re-read the exact current range and return patches[] only. "
+                "If replace text no longer matches, narrow the oldText or split into smaller exact patches; "
+                "do not use files[] or write_file for existing .h/.cpp files."
+            )
+            write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+            record_validation_rejection(
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                feedback=previous_feedback,
+                blockers=rewrite_blockers,
+                bundle=bundle,
+                rejection_kind="full_file_rewrite_blocker",
             )
             continue
         has_edits = bool(bundle["files"]) or bool(bundle.get("patches"))

@@ -10,6 +10,8 @@ Session start. Perform **only** these steps, then reply `ready`:
 2. `unreal_rag_health` (unreal-rag)
 3. `get_workspace_info` (unreal-agent)
 
+Allowed project file tools are only the `unreal-rag` and `unreal-agent` MCP tools. Never call `run_javascript`, `js-code-sandbox`, `Deno.readTextFile`, `Deno.writeTextFile`, Node `fs`, or browser/code-sandbox tools for project file I/O. Those tools are not rooted at the active Unreal project. Use `read_file_range`, `read_file`, and `replace_in_file`; use `write_file` only for brand-new files.
+
 If the active project is not your target `.uproject`, call `unreal_set_active_project` with the correct path from `projectContext.uprojectPath`.
 
 If `unreal_rag_health` returns `okForChat=false` or `chatAction=stop_and_report_rag_rebuild_required`, do **not** search project files for RAG repair scripts. Reply `rag_blocked` plus the reported `recommendedCommand` / `recommendedDoctorCommand`.

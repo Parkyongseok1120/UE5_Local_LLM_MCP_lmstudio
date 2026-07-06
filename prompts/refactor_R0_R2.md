@@ -15,13 +15,14 @@ Use when splitting responsibilities or moving implementation incrementally.
 1. `unreal_refactor_impact_scan` (symbol/class name)
 2. `unreal_rag_search` with `mode=refactor_r0` … `refactor_r2`
 3. `unreal_refactor_plan_validate` before any edit
-4. `read_file` / `write_file` — **max 3 files**
+4. `read_file_range` / `read_file` -> `replace_in_file` with `expectedOccurrences=1` — **max 3 files**. Use `write_file` only for brand-new files.
 5. `build_unreal_project`
 
 ## Hard limits
 
 - R0: no `#include`, `UCLASS`, `GENERATED_BODY`, or function bodies
 - R2/R3: one turn ≤ **3 files**; build must pass before next stage
+- Existing `.h` / `.cpp` / `.cs` files are patch-only. If `replace_in_file` fails, re-read a smaller range and retry; do not fall back to full `write_file`.
 - On build failure: fix only — **no architecture changes** that turn
 
 ## Sampling (Qwen 27B)

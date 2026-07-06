@@ -60,8 +60,9 @@ def main() -> int:
         "toolPolicy": plan.tool_policy,
         "nextSteps": plan.tool_policy or [
             "unreal_get_active_project (confirm .uproject)",
-            "read_file on target Source files (unreal-agent)",
-            "write_file minimal patch (unreal-agent; VALIDATE_ON_WRITE)",
+            "read_file_range/read_file on target Source files (unreal-agent)",
+            "replace_in_file minimal patch (unreal-agent; write_file only for brand-new files)",
+            "do not use run_javascript/js-code-sandbox/Deno file APIs for project file I/O",
             "build_unreal_project (unreal-agent)",
             "on failure: unreal_rag_search mode=compile_fix with log excerpt",
         ],

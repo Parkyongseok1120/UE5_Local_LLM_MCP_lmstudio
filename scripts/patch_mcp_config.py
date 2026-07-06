@@ -17,6 +17,10 @@ from workspace_paths import find_workspace_root as resolve_workspace_root, resol
 
 DEFAULT_LMSTUDIO_ROOT = Path.home() / ".lmstudio"
 SHARED_CONFIG = DEFAULT_LMSTUDIO_ROOT / "config" / "unreal-workspace.json"
+FORBIDDEN_TOOL_CONFIRMATION_PATTERNS = {
+    "lmstudio/js-code-sandbox:run_javascript",
+    "lmstudio/js-code-sandbox:*",
+}
 NODE_CANDIDATES = (
     Path(r"C:\Program Files\nodejs\node.exe"),
     Path(r"C:\Program Files (x86)\nodejs\node.exe"),
@@ -48,13 +52,25 @@ def resolve_mcp_remote_proxy() -> Path:
     return proxy.resolve()
 
 
-def patch_node_commands(entry: dict[str, Any], node_exe: Path, mcp_remote_proxy: Path) -> dict[str, Any]:
+def entry_uses_mcp_remote(entry: dict[str, Any]) -> bool:
+    command = str(entry.get("command") or "")
+    args = list(entry.get("args") or [])
+    if command not in {"node", "npx"} and not command.lower().endswith(("node.exe", "npx.cmd")):
+        return False
+    return any(str(arg) == "mcp-remote" for arg in args)
+
+
+def patch_node_commands(
+    entry: dict[str, Any], node_exe: Path, mcp_remote_proxy: Path | None
+) -> dict[str, Any]:
     command = str(entry.get("command") or "")
     args = list(entry.get("args") or [])
     if command in {"node", "npx"} or command.lower().endswith(("node.exe", "npx.cmd")):
         if any(str(arg) == "mcp-remote" for arg in args):
             remote_url = next((str(arg) for arg in args if str(arg).startswith("http")), "")
             if remote_url:
+                if mcp_remote_proxy is None:
+                    mcp_remote_proxy = resolve_mcp_remote_proxy()
                 entry["command"] = str(node_exe)
                 entry["args"] = [str(mcp_remote_proxy), remote_url]
                 entry.pop("env", None)
@@ -69,7 +85,7 @@ def patch_node_commands(entry: dict[str, Any], node_exe: Path, mcp_remote_proxy:
 
 
 def find_workspace_root() -> Path:
-    return resolve_workspace_root(DEFAULT_LMSTUDIO_ROOT)
+    return resolve_workspace_root(SCRIPTS_DIR.parent)
 
 
 def patch_server(entry: dict[str, Any], workspace: Path, shared_config: Path) -> dict[str, Any]:
@@ -131,9 +147,44 @@ def save_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def prune_forbidden_tool_confirmation_patterns(settings: dict[str, Any]) -> list[str]:
+    chat = settings.get("chat")
+    if not isinstance(chat, dict):
+        return []
+    patterns = chat.get("skipToolConfirmationPatterns")
+    if not isinstance(patterns, list):
+        return []
+
+    removed: list[str] = []
+    kept: list[Any] = []
+    for pattern in patterns:
+        if isinstance(pattern, str) and pattern in FORBIDDEN_TOOL_CONFIRMATION_PATTERNS:
+            removed.append(pattern)
+            continue
+        kept.append(pattern)
+    chat["skipToolConfirmationPatterns"] = kept
+    return removed
+
+
+def patch_lmstudio_settings(settings_json: Path, dry_run: bool = False) -> list[str]:
+    if not settings_json.is_file():
+        return []
+    settings = load_json(settings_json)
+    removed = prune_forbidden_tool_confirmation_patterns(settings)
+    if removed and not dry_run:
+        save_json(settings_json, settings)
+    return removed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mcp-json", type=Path, default=DEFAULT_LMSTUDIO_ROOT / "mcp.json")
+    parser.add_argument("--settings-json", type=Path, default=DEFAULT_LMSTUDIO_ROOT / "settings.json")
+    parser.add_argument(
+        "--keep-js-sandbox-auto-approval",
+        action="store_true",
+        help="Do not remove LM Studio js-code-sandbox auto-approval patterns from settings.json.",
+    )
     parser.add_argument(
         "--python",
         type=Path,
@@ -151,9 +202,13 @@ def main() -> None:
 
     workspace = find_workspace_root()
     node_exe = (args.node or resolve_node_exe()).resolve()
-    mcp_remote_proxy = resolve_mcp_remote_proxy()
     config = load_json(args.mcp_json)
     servers = config.setdefault("mcpServers", {})
+    mcp_remote_proxy = (
+        resolve_mcp_remote_proxy()
+        if any(entry_uses_mcp_remote(entry) for entry in servers.values())
+        else None
+    )
 
     for name, entry in list(servers.items()):
         servers[name] = patch_node_commands(entry, node_exe, mcp_remote_proxy)
@@ -165,9 +220,24 @@ def main() -> None:
 
     if args.dry_run:
         print(json.dumps(config, ensure_ascii=False, indent=2))
+        if not args.keep_js_sandbox_auto_approval:
+            removed = patch_lmstudio_settings(args.settings_json, dry_run=True)
+            if removed:
+                print(
+                    "Would remove forbidden LM Studio tool auto-approval patterns: "
+                    + ", ".join(removed),
+                    file=sys.stderr,
+                )
         return
 
     save_json(args.mcp_json, config)
+    if not args.keep_js_sandbox_auto_approval:
+        removed = patch_lmstudio_settings(args.settings_json)
+        if removed:
+            print(
+                "Removed forbidden LM Studio tool auto-approval patterns: "
+                + ", ".join(removed)
+            )
     print(f"Patched {args.mcp_json}")
 
 

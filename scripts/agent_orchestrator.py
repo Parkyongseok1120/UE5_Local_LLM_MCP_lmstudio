@@ -417,8 +417,10 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
     if task_kind == "runtime_debug":
         return common + ["Read logs/config before diagnosis; do not write files by default."]
     edit_steps = [
-        "Read each target file before replace_in_file or write_file.",
+        "Read each target file before editing.",
         "Prefer replace_in_file with expectedOccurrences=1 for existing files.",
+        "Use write_file only for brand-new files; never full-rewrite an existing .h/.cpp/.cs.",
+        "Do not use run_javascript/js-code-sandbox/Deno file APIs for project file I/O; use unreal-agent file tools.",
     ]
     if "ubt_build" in evidence.gates or task_kind in {"edit", "compile_fix", "refactor"}:
         edit_steps.append("Run build_unreal_project after C++ or Build.cs changes.")
@@ -429,6 +431,7 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
                 "Classify refactor scope before writes: small, medium, or large.",
                 "Run unreal_refactor_impact_scan for each public symbol touched.",
                 "Use staged patches; do not mix API boundary, callsite rewiring, and cleanup in one turn.",
+                "If replace_in_file fails, re-read a smaller range and retry; do not fall back to write_file on existing files.",
                 "For medium/large scope, stop at impact plan until human approval is explicit.",
             ]
         )

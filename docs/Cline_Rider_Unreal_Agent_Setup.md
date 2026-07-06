@@ -1,9 +1,9 @@
 # Cline + Rider Unreal Agent Setup (UE 5.8)
 
-**Primary IDE:** JetBrains Rider (Unreal plugin, UBT, debugger)  
-**AI agent:** Cline (MCP tools, local LM Studio model)
+**Primary IDE:** JetBrains Rider for Unreal C++ editing, UBT builds, and debugging.
+**AI agent:** Cline with `unreal-rag` and `unreal-agent` MCP tools.
 
-Continue / Rider AI plugin는 사용하지 않습니다. Cline + 이 RAG 스택을 사용합니다.
+Use this path when you want Rider to remain the source of truth for project state while Cline performs small, tool-backed edits.
 
 ## 1. Prerequisites
 
@@ -13,28 +13,29 @@ cd $HOME\.lmstudio\Unreal58-RAG
 .\installer\Verify-UnrealMcp.ps1
 ```
 
-LM Studio local server (`http://localhost:1234/v1`) with a tool-capable model loaded.
+LM Studio should have a tool-capable local model loaded at `http://localhost:1234/v1`.
 
-## 2. Rider (주력 IDE)
+## 2. Rider Role
 
-1. Unreal 프로젝트를 Rider로 엽니다 (`.sln` / `.uproject`).
-2. **Settings → Build** 에서 UE 5.8 toolchain 확인.
-3. 일반 작업: Rider Build/Rebuild, 디버그, 심볼 탐색.
-4. `activeProject` 동기화: `.\rag.ps1 pick-project` 또는 MCP `set_active_project`.
+1. Open the target Unreal project in Rider through its `.uproject` or generated solution.
+2. Confirm the UE 5.8 toolchain in Rider build settings.
+3. Use Rider for normal C++ navigation, build, rebuild, debugging, and project structure inspection.
+4. Keep MCP `activeProject` aligned through `.\rag.ps1 pick-project` or the MCP project selection tools.
 
-Rider는 **편집·빌드·디버그** 담당. Cline은 **RAG + 패치 + (선택) agent UBT** 담당.
+Rider owns manual IDE confidence. Cline owns RAG-assisted inspection, small patches, and optional agent UBT runs.
 
-## 3. Cline MCP 설정
+## 3. Cline MCP Setup
 
-템플릿: [`config/cline_mcp_settings.template.json`](../config/cline_mcp_settings.template.json)
+Template: [`config/cline_mcp_settings.template.json`](../config/cline_mcp_settings.template.json)
 
-### VS Code + Cline 확장
+### VS Code + Cline Extension
 
-1. Cline 패널 → MCP Servers → **Configure MCP Servers**
-2. `cline_mcp_settings.json`에 `unreal-rag`, `unreal-agent` 추가 (템플릿 복사)
-3. LM Studio provider: `http://localhost:1234/v1`, tool use 활성
+1. Open Cline > MCP Servers > Configure MCP Servers.
+2. Add `unreal-rag` and `unreal-agent` from the template.
+3. Configure LM Studio as provider: `http://localhost:1234/v1`.
+4. Enable tool use.
 
-Windows 경로 예:
+Common Windows path:
 
 `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
 
@@ -42,46 +43,54 @@ Windows 경로 예:
 
 `%USERPROFILE%\.cline\data\settings\cline_mcp_settings.json`
 
-설치 스크립트:
+Install helper:
 
 ```powershell
 .\installer\Install-ClineUnrealMcp.ps1
 ```
 
-## 4. Project rules
+## 4. Project Rules
 
-Cline은 워크스pace 루트의 [`.clinerules`](../.clinerules)를 읽습니다.  
-Unreal 게임 repo에도 동일 규칙을 복사하거나 symlink 하세요.
+Cline reads workspace rules from [`.clinerules`](../.clinerules). Copy or symlink equivalent rules into Unreal game repositories when you want the same patch discipline there.
 
-## 5. Agent workflow (Rider + Cline)
+## 5. Agent Workflow
 
-```
+```text
 unreal_agent_session / unreal_rag_search
-  → read_file
-  → write_file (static validate)
-  → Rider Build OR build_unreal_project
-  → read log / read_unreal_logs on failure
+  -> read_file_range / read_file
+  -> replace_in_file for existing files
+  -> write_file only for brand-new files
+  -> Rider Build or build_unreal_project
+  -> read log / read_unreal_logs on failure
 ```
 
-| Surface | 역할 |
+Rules:
+
+- Existing `.h`, `.hpp`, `.cpp`, `.c`, `.cc`, `.cxx`, and `.cs` files are patch-only.
+- Do not use LM Studio `run_javascript`, `js-code-sandbox`, Deno file APIs, Node `fs`, or browser/code-sandbox tools for project file I/O.
+- If a replacement does not match, re-read a narrower range and retry `replace_in_file`.
+- Do not claim success without Rider build output, UBT output, or an explicit user-provided verification note.
+
+| Surface | Role |
 |---------|------|
-| Rider | C++ 편집, UBT, 디버그, 프로젝트 구조 |
-| Cline | MCP 도구, RAG, 자동 패치 |
-| LM Studio | 로컬 LLM API |
+| Rider | C++ editing, UBT, debugger, project structure |
+| Cline | MCP tools, RAG, small patches |
+| LM Studio | Local LLM API |
 
-## 6. LM Studio chat (보조)
+## 6. LM Studio Chat
 
-기본 채팅만 쓸 때: [`docs/LMStudio_Unreal_Agent_Setup.md`](LMStudio_Unreal_Agent_Setup.md)
+For direct LM Studio chat, use [`docs/LMStudio_Unreal_Agent_Setup.md`](LMStudio_Unreal_Agent_Setup.md).
 
-## 7. Legacy: Continue
+## 7. Legacy Continue Setup
 
-Continue 설정은 유지되나 **권장하지 않음**. 마이그레이션 전용: [`Continue_Qwen_Unreal_Agent_Setup.md`](Continue_Qwen_Unreal_Agent_Setup.md)
+Continue setup is kept for migration reference only and is not the recommended path. See [`Continue_Qwen_Unreal_Agent_Setup.md`](Continue_Qwen_Unreal_Agent_Setup.md).
 
 ## 8. Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
-| Cline MCP empty | `Install-ClineUnrealMcp.ps1`, LM Studio 재시작 |
-| Wrong project in RAG | `pick-project`, shared `unreal-workspace.json` |
-| Slow search | `hybrid=false` on `unreal_rag_search` |
-| Validate errors | Fix `BAD_INCLUDE_PATH`, rebuild in Rider |
+| Cline MCP empty | Run `Install-ClineUnrealMcp.ps1`, then restart LM Studio/Cline |
+| Wrong project in RAG | Run `pick-project` or use shared `unreal-workspace.json` |
+| Slow search | Use `hybrid=false` on `unreal_rag_search` |
+| Validation errors | Fix the reported include/reflection/module issue, then rebuild in Rider |
+| Model tries JS sandbox | Cancel the tool call and continue with `unreal-agent` file tools |

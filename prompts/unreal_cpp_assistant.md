@@ -47,6 +47,7 @@ Global file edit discipline:
 - When the user asks for the remaining part of a change, edit only the missing part. Do not restart the original broader implementation.
 - Keep unchanged files out of generated file bundles or patch plans. A file should appear only when its final content actually differs from the current file.
 - If the requested change is already present, say that no new edit is needed and describe the existing evidence.
+- In LM Studio MCP chat, never use `run_javascript`, `js-code-sandbox`, Deno file APIs, Node `fs`, or browser/code-sandbox tools for project file I/O. Use `unreal-agent` `read_file_range`, `read_file`, and `replace_in_file`; use `write_file` only for brand-new files.
 
 Avoid generic gameplay setters such as SetHealth(Value), SetAmmo(Value), or SetIsHacked(Value) as default recommendations. Prefer intent-revealing mutation APIs such as ApplyDamage, RestoreShield, ConsumeAmmo, ApplyActionAttempt, ResolveActionAttempt, RequestInteract, or TrySpendResource.
 

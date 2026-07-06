@@ -45,6 +45,26 @@ Restart LM Studio after changes.
 - `replace_in_file`, `write_file`, `search_files`
 - `build_unreal_project`, `read_unreal_logs`
 
+## Forbidden Tools
+
+Do not use LM Studio's JavaScript/code sandbox for Unreal project file work:
+
+- `run_javascript`
+- `lmstudio/js-code-sandbox`
+- `Deno.readTextFile` / `Deno.writeTextFile`
+- Node `fs` / CommonJS `require`
+
+That sandbox has its own working directory and is not rooted at the active `.uproject`. Project file I/O must go through `unreal-agent`: `read_file_range`, `read_file`, `replace_in_file`, and `write_file` only for brand-new files.
+
+If LM Studio auto-approves this sandbox, remove these patterns from `%USERPROFILE%\.lmstudio\settings.json` `chat.skipToolConfirmationPatterns`:
+
+```json
+"lmstudio/js-code-sandbox:run_javascript",
+"lmstudio/js-code-sandbox:*"
+```
+
+Restart LM Studio after changing that setting. If the plugin is still shown to the model, hide or disable the JavaScript/TypeScript Code Sandbox plugin in LM Studio for Unreal coding chats.
+
 ## Required Chat Order
 
 1. `unreal_get_active_project`
@@ -59,7 +79,7 @@ For edit tasks:
 - Do not write when `writeGate.writesAllowed=false`.
 - Read every target file before `replace_in_file` or `write_file`.
 - Prefer `replace_in_file` with `expectedOccurrences=1` for existing files.
-- Use `write_file` mainly for new or small files.
+- Use `write_file` only for brand-new files. Existing `.h`, `.hpp`, `.cpp`, `.c`, `.cc`, `.cxx`, and `.cs` files are patch-only.
 - Run `build_unreal_project` after C++ or `Build.cs` edits.
 - On UBT failure, search only the current error context with `mode=compile_fix`, then patch the smallest failing surface.
 
@@ -103,6 +123,7 @@ Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_
 | Model answers without tools | Resend session bootstrap; check Essential Tools ON |
 | Wrong paths (`Documents` vs project) | Call `unreal_get_active_project`; use returned root |
 | Writes on review/runtime tasks | Re-call `unreal_agent_plan`; obey `writeGate.writesAllowed=false` |
+| Model calls `run_javascript` / `js-code-sandbox` | Start a new chat with the bootstrap prompt, remove sandbox auto-approval, and hide/disable the sandbox plugin if available |
 | Hallucinated analysis | Force `read_file` before claims or edits |
 | Repeated no-op patch | Re-read file, patch only missing current text, set `expectedOccurrences=1` |
 | Tool not in list | Essential mode hides advanced tools; use wrapper/Cline for clangd/graph |

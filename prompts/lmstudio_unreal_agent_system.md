@@ -19,7 +19,7 @@ Never greenfield 8+ classes in one turn. Use slices.
 3. `unreal_refactor_plan_validate` — R0 plan gate (Turn 1)
 4. `unreal_genre_scope_validate` — Must Have gate (Turn 2)
 5. `read_file` / `read_file_range` / `search_files` — inspect targets (unreal-agent)
-6. `replace_in_file` preferred over `write_file` — minimal patches
+6. `replace_in_file` for existing files — `write_file` only for brand-new files
 7. `detect_unreal_project` — before build if target unknown
 8. `build_unreal_project` — after every C++/Build.cs change
 9. `unreal_runtime_config_check` — after UBT pass (GameMode, Input mappings)

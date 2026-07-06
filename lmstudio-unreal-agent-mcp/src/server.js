@@ -61,6 +61,9 @@ const CONFIG_PATH = path.resolve(
 const ALLOW_WRITE = process.env.ALLOW_WRITE === "1" || process.env.ALLOW_WRITE === "true";
 const ALLOW_COMMANDS = process.env.ALLOW_COMMANDS === "1" || process.env.ALLOW_COMMANDS === "true";
 const ALLOW_UNREAL_BUILD = process.env.ALLOW_UNREAL_BUILD === "1" || process.env.ALLOW_UNREAL_BUILD === "true";
+const ALLOW_EXISTING_SOURCE_WRITE = ["1", "true", "yes", "on"].includes(
+  String(process.env.ALLOW_EXISTING_SOURCE_WRITE || "").trim().toLowerCase()
+);
 const MAX_READ_BYTES = Number(process.env.MAX_READ_BYTES || 64 * 1024);
 const CODE_DETAIL_READ_BYTES = {
   compact: 16 * 1024,
@@ -97,6 +100,7 @@ const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
   "build_unreal_project",
   "read_unreal_logs"
 ]);
+const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
 
 const server = new Server(
   {
@@ -180,6 +184,10 @@ async function statSafe(p) {
   } catch {
     return null;
   }
+}
+
+function isPatchOnlyExistingFile(p) {
+  return PATCH_ONLY_EXISTING_EXTENSIONS.has(path.extname(String(p || "")).toLowerCase());
 }
 
 function truncateOutput(s, maxBytes = MAX_OUTPUT_BYTES) {
@@ -440,7 +448,7 @@ function allAgentTools() {
       },
       {
         name: "write_file",
-        description: "Write a UTF-8 file inside WORKSPACE_ROOT. Requires ALLOW_WRITE=1. Use mainly for new or small files after reading current state. Does not delete files.",
+        description: "Write a UTF-8 file inside WORKSPACE_ROOT. Requires ALLOW_WRITE=1. Use for brand-new files. Existing source files (.h/.cpp/.cs) are blocked by default; use replace_in_file instead.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           content: { type: "string", description: "Full file content to write." },
@@ -749,6 +757,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const parent = path.dirname(target);
       if (args.createDirs) await fsp.mkdir(parent, { recursive: true });
       if (!(await exists(parent))) return fail(`parent directory not found: ${path.relative(WORKSPACE_ROOT, parent)}`);
+      if ((await exists(target)) && isPatchOnlyExistingFile(target) && !ALLOW_EXISTING_SOURCE_WRITE) {
+        const rel = path.relative(WORKSPACE_ROOT, target);
+        return fail(
+          `write_file blocked for existing source file: ${rel}. `
+          + "Use replace_in_file with exact oldText/newText. "
+          + "If oldText does not match, re-read a smaller range and retry. "
+          + "Set ALLOW_EXISTING_SOURCE_WRITE=1 only for a deliberate manual override."
+        );
+      }
       await fsp.writeFile(target, String(args.content || ""), "utf8");
       const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
       const rel = path.relative(WORKSPACE_ROOT, target);
