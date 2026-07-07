@@ -72,12 +72,10 @@ def recommend_retry_action(
 ) -> dict[str, Any]:
     repeated = same_error_repeated(previous, current)
     noop = bool(current.get("noOpEdit")) or detect_noop_edit(list(current.get("changedPaths") or []))
-    if attempts is not None:
+    if attempts:
         repeat_count = count_consecutive_same_errors(list(attempts) + [current])
-    elif repeated:
-        repeat_count = 2
     else:
-        repeat_count = 1
+        repeat_count = 2 if repeated else 1
     if current.get("passed"):
         action = "stop_success"
         reason = "build passed"
@@ -92,11 +90,11 @@ def recommend_retry_action(
         escalation_level = 1
     elif repeat_count >= 4:
         action = "stop_diagnosis_report"
-        reason = "same error repeated three times; stop and emit diagnosis report"
+        reason = "same error observed on four consecutive attempts; stop and emit diagnosis report"
         escalation_level = 3
     elif repeat_count >= 3:
         action = "escalate_evidence"
-        reason = "same error repeated twice; widen evidence and change patch target"
+        reason = "same error observed on three consecutive attempts; widen evidence and change patch target"
         escalation_level = 2
     elif repeated:
         action = "escalate_routing"

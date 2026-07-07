@@ -31,13 +31,6 @@ def _row_metadata(row: dict[str, Any]) -> dict[str, Any]:
     return meta if isinstance(meta, dict) else row
 
 
-def _pin_key(pin: dict[str, Any]) -> str:
-    direction = str(pin.get("direction") or "")
-    pin_type = str(pin.get("type") or pin.get("pin_type") or "")
-    name = str(pin.get("name") or "")
-    return f"{direction}:{pin_type}:{name}"
-
-
 def aggregate_blueprint_nodes(rows: list[dict[str, Any]]) -> dict[str, Any]:
     classes: dict[str, dict[str, Any]] = {}
     for row in rows:

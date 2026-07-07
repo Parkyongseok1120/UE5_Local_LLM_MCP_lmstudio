@@ -40,6 +40,14 @@ def on_project_switch_invalidate(
     clear_wrapper_snapshot_cache()
     cleared.append("wrapper_snapshot_cache")
 
+    try:
+        from index_staleness import invalidate_stale_cache
+
+        invalidate_stale_cache()
+        cleared.append("index_staleness_cache")
+    except Exception:
+        pass
+
     if workspace is not None and prev_identity.get("ok"):
         removed = invalidate_project_caches(
             workspace,

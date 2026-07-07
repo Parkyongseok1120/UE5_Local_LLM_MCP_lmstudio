@@ -31,6 +31,8 @@ RAG_ESSENTIAL = {
     "unreal_material_claim_validate",
     "unreal_code_sketch_claim_validate",
     "unreal_rag_refresh",
+    "unreal_node_plan_validate",
+    "unreal_render_report",
 }
 
 AGENT_ESSENTIAL = {

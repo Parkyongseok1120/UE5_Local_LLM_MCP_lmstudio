@@ -34,6 +34,13 @@ def run_static(project_root: Path, expect_codes: list[str], forbid_errors: bool)
     return True, f"findings={len(findings)} codes={sorted(codes)}"
 
 
+LIVE_CODING_BLOCK_MARKER = "Unable to build while Live Coding is active"
+LIVE_CODING_HINT = (
+    "[blocked-by-live-coding] Unreal Editor is running with Live Coding active. "
+    "Close the editor (or disable Live Coding) and re-run this eval."
+)
+
+
 def run_ubt(project_file: Path, target: str, ubt_path: Path, timeout: int) -> tuple[bool, str]:
     if not ubt_path.is_file():
         return False, f"UBT missing: {ubt_path}"
@@ -54,7 +61,10 @@ def run_ubt(project_file: Path, target: str, ubt_path: Path, timeout: int) -> tu
     except subprocess.TimeoutExpired:
         return False, "UBT timeout"
     ok = proc.returncode == 0
-    tail = (proc.stdout or proc.stderr or "")[-2000:]
+    output = proc.stdout or proc.stderr or ""
+    tail = output[-2000:]
+    if not ok and LIVE_CODING_BLOCK_MARKER in output:
+        return False, f"{LIVE_CODING_HINT}\nreturncode={proc.returncode}\n{tail}"
     return ok, f"returncode={proc.returncode}\n{tail}"
 
 

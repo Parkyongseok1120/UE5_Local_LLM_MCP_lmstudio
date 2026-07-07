@@ -83,7 +83,7 @@ def main() -> int:
 
         text = sys.stdin.read()
     else:
-        text = open(args.input, encoding="utf-8", errors="replace").read()
+        text = Path(args.input).read_text(encoding="utf-8", errors="replace")
     payload = parse_bp_clipboard(text)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0

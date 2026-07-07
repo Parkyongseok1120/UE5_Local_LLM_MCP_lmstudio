@@ -132,6 +132,50 @@ def _handle_unreal_render_report(server: McpServer, message_id: Any, arguments: 
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
 
+def _handle_unreal_rag_search(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    server.handle_search(message_id, arguments)
+
+
+def _handle_unreal_symbol_lookup(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    server.handle_symbol_lookup(message_id, arguments)
+
+
+def _handle_unreal_get_active_project(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    config = load_shared_config()
+    project_context = resolve_active_project_context()
+    payload = {
+        "activeProject": config.get("activeProject"),
+        "activeProjectNames": active_project_names(),
+        "sharedConfigPath": str(shared_config_path()),
+        "projectContext": project_context,
+    }
+    if not project_context.get("ok"):
+        payload["suggestedToolCalls"] = project_context.get("suggestedToolCalls") or []
+    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _handle_unreal_rag_health(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    health = index_health(server.index)
+    health["activeProject"] = load_shared_config().get("activeProject")
+    health["activeProjectNames"] = active_project_names()
+    health["embeddings"] = embedding_status(server.index)
+    server.tool_result(message_id, json.dumps(health, ensure_ascii=False, indent=2))
+
+
+def _handle_unreal_rag_rebuild_status(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    server.tool_result(message_id, json.dumps(rebuild_status(server.index), ensure_ascii=False, indent=2))
+
+
+def _handle_unreal_rag_capabilities(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    status = rebuild_status(server.index)
+    payload = {
+        **capabilities_summary(),
+        "architecture": status.get("architecture", {}),
+        "indexHealthy": status.get("chunkCount", 0) > 0 and not status.get("needsRebuild", True),
+    }
+    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 def build_mcp_tool_registry() -> McpToolRegistry:
     registry = McpToolRegistry()
     registry.register(
@@ -194,6 +238,24 @@ def build_mcp_tool_registry() -> McpToolRegistry:
             handler=_handle_unreal_render_report,
         )
     )
+    registry.register(
+        ToolSpec(name="unreal_rag_search", schema_dict={}, handler=_handle_unreal_rag_search)
+    )
+    registry.register(
+        ToolSpec(name="unreal_symbol_lookup", schema_dict={}, handler=_handle_unreal_symbol_lookup)
+    )
+    registry.register(
+        ToolSpec(name="unreal_get_active_project", schema_dict={}, handler=_handle_unreal_get_active_project)
+    )
+    registry.register(
+        ToolSpec(name="unreal_rag_health", schema_dict={}, handler=_handle_unreal_rag_health)
+    )
+    registry.register(
+        ToolSpec(name="unreal_rag_rebuild_status", schema_dict={}, handler=_handle_unreal_rag_rebuild_status)
+    )
+    registry.register(
+        ToolSpec(name="unreal_rag_capabilities", schema_dict={}, handler=_handle_unreal_rag_capabilities)
+    )
     return registry
 
 
@@ -219,6 +281,8 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_material_claim_validate",
         "unreal_code_sketch_claim_validate",
         "unreal_rag_refresh",
+        "unreal_node_plan_validate",
+        "unreal_render_report",
     }
 )
 
@@ -1244,43 +1308,11 @@ class McpServer:
         try:
             if _MCP_TOOL_REGISTRY.dispatch(self, message_id, name, arguments):
                 return
-            if name == "unreal_rag_search":
-                self.handle_search(message_id, arguments)
-            elif name == "unreal_symbol_lookup":
-                self.handle_symbol_lookup(message_id, arguments)
-            elif name == "unreal_get_active_project":
-                config = load_shared_config()
-                project_context = resolve_active_project_context()
-                payload = {
-                    "activeProject": config.get("activeProject"),
-                    "activeProjectNames": active_project_names(),
-                    "sharedConfigPath": str(shared_config_path()),
-                    "projectContext": project_context,
-                }
-                if not project_context.get("ok"):
-                    payload["suggestedToolCalls"] = project_context.get("suggestedToolCalls") or []
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
-            elif name == "unreal_open_project_picker":
+            if name == "unreal_open_project_picker":
                 payload = self.launch_project_picker(arguments.get("explorer") is True)
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
             elif name == "unreal_set_active_project":
                 self.handle_set_active_project(message_id, arguments)
-            elif name == "unreal_rag_health":
-                health = index_health(self.index)
-                health["activeProject"] = load_shared_config().get("activeProject")
-                health["activeProjectNames"] = active_project_names()
-                health["embeddings"] = embedding_status(self.index)
-                self.tool_result(message_id, json.dumps(health, ensure_ascii=False, indent=2))
-            elif name == "unreal_rag_rebuild_status":
-                self.tool_result(message_id, json.dumps(rebuild_status(self.index), ensure_ascii=False, indent=2))
-            elif name == "unreal_rag_capabilities":
-                status = rebuild_status(self.index)
-                payload = {
-                    **capabilities_summary(),
-                    "architecture": status.get("architecture", {}),
-                    "indexHealthy": status.get("chunkCount", 0) > 0 and not status.get("needsRebuild", True),
-                }
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
             elif name == "unreal_start_compile_loop":
                 self.handle_start_compile_loop(message_id, arguments)
             elif name == "unreal_compile_loop_status":

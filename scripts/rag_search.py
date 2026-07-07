@@ -391,9 +391,10 @@ def fetch_module_graph_sidecar(
             from include_owners
             where lower(symbol_name) = ?
                or lower(include_path) like ?
+            order by case when lower(symbol_name) = ? then 0 else 1 end
             limit ?
             """,
-            (basename, f"%/{basename}", limit),
+            (basename, f"%/{basename}", basename, limit),
         ):
             add_row(row)
 
@@ -452,6 +453,10 @@ GUIDELINE_SIDECAR_TITLE_PATTERNS: dict[str, list[str]] = {
     "blueprint_analysis": [
         "%shader, material, and blueprint analysis workflow%",
     ],
+    "runtime_debug": [
+        "%tick ordering and lifecycle contract%",
+        "%runtime debugging playbook%",
+    ],
 }
 
 TAXONOMY_QUERY_HINTS = (
@@ -464,12 +469,31 @@ TAXONOMY_QUERY_HINTS = (
     "material function",
 )
 
+TICK_ORDER_QUERY_HINTS = (
+    "tick order",
+    "tick ordering",
+    "tickgroup",
+    "tick group",
+    "tick prerequisite",
+    "addtickprerequisite",
+    "tick 순서",
+    "틱 순서",
+)
+
 
 def query_wants_taxonomy_sidecar(query: str, mode: str) -> bool:
-    if mode == "api_lookup":
-        return True
     raw = query.lower()
+    if mode == "api_lookup":
+        # Only inject the asset-taxonomy sidecar when the query actually asks
+        # about assets/coverage; otherwise it hijacks unrelated api_lookup
+        # queries (e.g. hallucination blocklist lookups).
+        return any(hint in raw for hint in TAXONOMY_QUERY_HINTS)
     return any(hint in raw for hint in TAXONOMY_QUERY_HINTS)
+
+
+def query_wants_tick_order_sidecar(query: str) -> bool:
+    raw = query.lower()
+    return any(hint in raw for hint in TICK_ORDER_QUERY_HINTS)
 
 
 def fetch_guideline_sidecar(
@@ -526,6 +550,12 @@ def fetch_guideline_sidecar(
 
     if query_wants_taxonomy_sidecar(query, mode):
         requests.append(("project_guideline", "%unreal asset taxonomy for production work%"))
+
+    if query_wants_tick_order_sidecar(query):
+        requests.append(("project_guideline", "%tick ordering and lifecycle contract%"))
+
+    if "hallucination" in query_lower or "blocklist" in query_lower or "블록리스트" in query_lower:
+        requests.append(("project_guideline", "%api hallucination blocklist%"))
 
     seen: set[str] = set()
     results: list[dict[str, Any]] = []
@@ -1898,9 +1928,11 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
     ]
     ranked.sort(key=lambda row: (float(row.get("rank_score") or 0.0), float(row.get("score") or 0.0)))
 
-    if mode in {"module_fix", "compile_fix", "reflection_fix", "multifile_refactor", "blueprint_analysis"} or (
+    if mode in {"module_fix", "compile_fix", "reflection_fix", "multifile_refactor", "blueprint_analysis", "runtime_debug"} or (
         mode == "implementation" and "project profile" in query.lower()
-    ) or query_wants_taxonomy_sidecar(query, mode):
+    ) or query_wants_taxonomy_sidecar(query, mode) or query_wants_tick_order_sidecar(query) or (
+        mode == "api_lookup" and ("hallucination" in query.lower() or "blocklist" in query.lower())
+    ):
         guideline_sidecar = fetch_guideline_sidecar(conn, mode, query, limit=max(8, top_k))
         for preferred_mode in preferred_modes_from_error_route(query, mode):
             if preferred_mode != mode:
@@ -1928,6 +1960,10 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
                     boost = 45.0
                 if sym in header_names or any(sym == h or path.endswith("/" + h) for h in header_names):
                     boost = 100.0
+                if sym in header_names:
+                    # Prefer the exact-basename include_owner row over full-path
+                    # duplicates so evals and agents see the canonical entry first.
+                    boost += 30.0
                 if boost:
                     row["rank_score"] = float(row.get("rank_score") or 0.0) - boost
             merged_map: dict[str, dict[str, Any]] = {str(r["chunk_id"]): r for r in ranked}

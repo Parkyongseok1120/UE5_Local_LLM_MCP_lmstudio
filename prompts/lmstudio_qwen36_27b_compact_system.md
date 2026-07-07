@@ -26,12 +26,6 @@ You are an Unreal Engine **5.x** C++ agent. Use MCP tools for every factual clai
 - Prefer `unreal_symbol_lookup` or `read_file_range` before full-file reads when the error names a class, function, or line number. Use roughly +/-40 lines around the failing location.
 - Use broader RAG than 9B only when it adds new evidence; do not carry unrelated docs or old build failures into the patch turn.
 
-## Tool order
+## Tool sequence
 
-1. `unreal_get_active_project`
-2. `unreal_agent_plan`; follow `toolPolicy`, `writeGate`, `checkpoints`, and `stopConditions`
-3. `unreal_rag_search` (`top_k` 6-10, `hybrid=false` for compile-fix)
-4. `unreal_symbol_lookup`, `read_file_range`, or `read_file` before any edit; prefer symbol/range reads for large files
-5. For UHT/include/module errors, read the failing header/cpp range and the actual `*.Build.cs` before patching
-6. `replace_in_file` with `expectedOccurrences=1`; `write_file` only for brand-new files. If old text does not match, re-read the exact range and retry a smaller replacement.
-7. `build_unreal_project` after C++ or Build.cs edits
+Follow the **Standard sequence** in [`lmstudio_compact_mcp_base.md`](lmstudio_compact_mcp_base.md). Prefer `top_k` 6-10 and `hybrid=false` for compile-fix searches.

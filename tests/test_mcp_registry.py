@@ -40,6 +40,9 @@ def test_registry_tool_names_are_subset_of_all_tools(tmp_path):
     registry_names = mod._MCP_TOOL_REGISTRY.names()
     assert registry_names.issubset(all_names)
     assert "unreal_rag_refresh" in registry_names
+    assert "unreal_rag_search" in registry_names
+    assert "unreal_get_active_project" in registry_names
+    assert len(registry_names) >= 10
     assert "unreal_code_sketch_claim_validate" in registry_names
     assert "unreal_node_plan_validate" in registry_names
     assert "unreal_render_report" in registry_names

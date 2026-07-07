@@ -27,7 +27,6 @@ from error_taxonomy import mode_from_error_kind as taxonomy_mode_from_error_kind
 from module_resolver import build_cs_has_module, resolve_modules_from_error, resolve_modules_from_text
 from retry_state import make_attempt_record, recommend_retry_action
 from prompt_history import (
-    COMPACT_SUMMARY_PREFIX,
     count_compact_summary_messages,
     prepare_messages_for_attempt,
 )
@@ -2435,6 +2434,7 @@ def build_retry_state_payload(
     fallback_message: str,
     static_findings: list[Finding] | None = None,
     build_output: str = "",
+    attempt_history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     first = records[0] if records else {}
     metadata = first.get("metadata") or {}
@@ -2453,7 +2453,7 @@ def build_retry_state_payload(
     recommendation = recommend_retry_action(
         previous_record,
         current,
-        attempts=records[:-1] if records else [],
+        attempts=list(attempt_history or []),
         no_op_guard=bool(profile_edit_limits().get("noOpGuard")),
     )
     static_hint = static_validation_retry_feedback(static_findings, route, build_output=build_output)
@@ -3610,6 +3610,7 @@ def run(args: argparse.Namespace) -> int:
             fallback_message=tail_text(last_build.output, 1000),
             static_findings=last_findings,
             build_output=last_build.output,
+            attempt_history=retry_records,
         )
         module_block = module_resolver_feedback(
             "\n".join([request, build_error_query(parsed_feedback.records, last_build.output)]),

@@ -100,7 +100,7 @@ def _render_docx(text: str, out: Path) -> None:
 
 def _render_pptx(text: str, out: Path) -> None:
     from pptx import Presentation  # type: ignore[import-untyped]
-    from pptx.util import Inches, Pt  # type: ignore[import-untyped]
+    from pptx.util import Pt  # type: ignore[import-untyped]
 
     prs = Presentation()
     for title, body in _split_sections(text):

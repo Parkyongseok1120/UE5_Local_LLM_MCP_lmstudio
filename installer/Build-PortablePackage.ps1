@@ -1,9 +1,16 @@
 param(
-    [string]$OutputDir = "D:\Unreal58-RAG-Portable",
-    [string]$ZipPath = "D:\Unreal58-RAG-Portable.zip"
+    [string]$OutputDir = "",
+    [string]$ZipPath = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $OutputDir) {
+    $OutputDir = Join-Path $env:TEMP "Unreal58-RAG-Portable"
+}
+if (-not $ZipPath) {
+    $ZipPath = Join-Path $env:TEMP "Unreal58-RAG-Portable.zip"
+}
 
 $lmstudio = Join-Path $HOME ".lmstudio"
 $staging = $OutputDir

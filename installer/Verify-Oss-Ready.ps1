@@ -97,7 +97,9 @@ $forbiddenContentPatterns = @(
     'C:\\Program Files\\Epic Games\\UE_',
     'C:/Program Files/Epic Games/UE_',
     'SoulslikePrototype',
-    '\\Unreal Projects\\SoulslikePrototype'
+    '\\Unreal Projects\\SoulslikePrototype',
+    'D:\\Unreal58-RAG-Portable',
+    'D:/Unreal58-RAG-Portable'
 )
 
 $scanFiles = Get-ScanFiles $root

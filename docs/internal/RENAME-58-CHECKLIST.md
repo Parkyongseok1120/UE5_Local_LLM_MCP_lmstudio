@@ -32,12 +32,9 @@
 - `installer\*.ps1` — portable + install paths
 - Eval configs, baseline JSON, build_manifest.jsonl paths
 
-## Portable backup (D:)
-- `D:\Unreal58-RAG-Portable\`
-- `D:\Unreal58-RAG-Portable.zip`
+## Portable backup (optional local staging)
 
-## Not renamed (legacy / optional)
-- Old `D:\Unreal58-RAG-Portable` — previous backup; safe to delete after verifying 58 zip
+Use a maintainer-chosen output directory (for example `$env:TEMP\Unreal58-RAG-Portable` or an external drive path you control). Do not commit machine-specific drive letters to the public repo.
 - `$HOME\.lmstudio\Unreal58-RAG-Portable` — old C: staging (deprecated)
 - Scaffold `Intermediate/` build artifacts — stale paths; delete or rebuild scaffold if needed
 

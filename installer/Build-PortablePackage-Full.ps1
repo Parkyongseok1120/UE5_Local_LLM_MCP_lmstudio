@@ -1,9 +1,16 @@
 param(
-    [string]$OutputDir = "D:\Unreal58-RAG-Portable-Full",
-    [string]$ZipPath = "D:\Unreal58-RAG-Portable-Full.zip"
+    [string]$OutputDir = "",
+    [string]$ZipPath = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $OutputDir) {
+    $OutputDir = Join-Path $env:TEMP "Unreal58-RAG-Portable-Full"
+}
+if (-not $ZipPath) {
+    $ZipPath = Join-Path $env:TEMP "Unreal58-RAG-Portable-Full.zip"
+}
 
 function Copy-FullTree {
     param(
