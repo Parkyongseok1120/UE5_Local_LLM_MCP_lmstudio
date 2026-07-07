@@ -13,6 +13,7 @@ from typing import Any, Literal
 TaskKind = Literal[
     "answer_only",
     "inspect_only",
+    "code_sketch",
     "edit",
     "compile_fix",
     "refactor",
@@ -33,7 +34,14 @@ COMPILE_MARKERS = (
     "빌드 오류", "빌드오류", "컴파일 오류", "컴파일오류", "에러", "오류",
 )
 REFACTOR_MARKERS = ("refactor", "r0", "r1", "r2", "r3", "r4", "move class", "extract")
-RUNTIME_MARKERS = ("pie", "runtime", "gamemode", "input mapping", "crash", "assert", "log")
+RUNTIME_MARKERS = (
+    "pie", "runtime", "gamemode", "input mapping", "crash", "assert", "log",
+    # Sequencer / state-preservation behavior questions are runtime-behavior, not
+    # codegen: route them to log/evidence-first debugging instead of a quick patch.
+    "sequencer", "levelsequence", "level sequence", "completion mode", "restore state",
+    "tick order", "tickgroup", "tick group",
+    "시퀀서", "레벨 시퀀스", "상태 보존", "위치 유지", "되돌아감", "틱 순서", "틱 그룹",
+)
 REVIEW_MARKERS = (
     "review", "inventory", "audit", "findings", "architecture review",
     "리뷰", "코드리뷰", "코드 리뷰", "프로젝트 리뷰", "구조 리뷰",
@@ -49,19 +57,20 @@ CODEGEN_MARKERS = (
     "codegen", "code generation", "generate code",
     "코드 생성", "코드생성", "클래스 생성", "컴포넌트 생성", "서브시스템 생성",
 )
-ASSET_METADATA_MODES = frozenset(
-    {"shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification"}
+# Explicit "draft/sketch/example code" intent. Chat requests that match these are
+# routed to the evidence-first code_sketch task (no writes, symbol verification
+# required) instead of falling through to a write-enabled edit task.
+SKETCH_MARKERS = (
+    "sketch", "draft", "example code", "sample code", "show me code",
+    "show me the code", "pseudocode", "pseudo code", "mock up", "mockup",
+    "시안", "초안", "예시 코드", "예시코드", "샘플 코드", "샘플코드",
+    "코드 예시", "코드예시", "코드 샘플", "코드 초안", "코드초안",
+    "대략적인 코드", "간단한 코드 예", "코드 스케치",
 )
+from rag_modes import ASSET_METADATA_MODES  # single source of truth
+from tool_policy import tool_sequence_for_task
 
-ASSET_METADATA_TOOL_POLICY = [
-    "unreal_editor_metadata_status",
-    "unreal_run_editor_export",
-    "unreal_sync_editor_metadata",
-    "unreal_asset_graph_lookup",
-    "unreal_rag_search",
-    "unreal_material_claim_validate",
-    "unreal_blueprint_claim_validate",
-]
+ASSET_METADATA_TOOL_POLICY = tool_sequence_for_task("asset_metadata_inspect")
 CPP_REVIEW_TOOL_POLICY = [
     "unreal_get_active_project",
     "search_files",
@@ -143,10 +152,16 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "runtime_debug"
     if mode in {"review", "planning"}:
         return "inspect_only"
+    if mode == "code_sketch":
+        return "code_sketch"
     if mode == "api_lookup":
         return "answer_only"
     if any(m in text for m in COMPILE_MARKERS):
         return "compile_fix"
+    # Explicit sketch/draft intent (without a concrete compile error) is routed to
+    # the evidence-first code_sketch task before edit/refactor/runtime fallbacks.
+    if any(m in text for m in SKETCH_MARKERS):
+        return "code_sketch"
     if any(m in text for m in REFACTOR_MARKERS):
         return "refactor"
     if any(m in text for m in RUNTIME_MARKERS):
@@ -169,7 +184,7 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
 
 
 def choose_edit_strategy(task_kind: TaskKind, request: str, *, file_count_hint: int = 0) -> EditStrategy:
-    if task_kind in {"answer_only", "inspect_only"}:
+    if task_kind in {"answer_only", "inspect_only", "code_sketch"}:
         return "no_edit"
     if task_kind == "compile_fix":
         return "exact_patch"
@@ -195,6 +210,14 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.gates = []
         plan.writes_allowed = False
         plan.confidence = 0.8
+    elif task_kind == "code_sketch":
+        # Draft/example code: gather codegen + API evidence, verify every named
+        # symbol, and never write files. The sketch stays at proof level Proposed.
+        plan.rag_modes = ["codegen", "api_lookup", "implementation"]
+        plan.gates = ["unreal_symbol_lookup", "unreal_code_sketch_claim_validate"]
+        plan.writes_allowed = False
+        plan.confidence = 0.6
+        plan.files_to_read.append("Source/**/*.h")
     elif task_kind == "inspect_only":
         if mode in ASSET_METADATA_MODES:
             plan.rag_modes = [mode, "review"]
@@ -388,7 +411,7 @@ def build_write_gate(task_kind: TaskKind, evidence: EvidencePlan, policy: dict[s
         "mustReadBeforeWrite": bool(evidence.writes_allowed),
         "mustBuildAfterWrite": task_kind in {"edit", "compile_fix", "refactor"},
         "forbiddenWhen": [
-            "taskKind is answer_only, inspect_only, or runtime_debug",
+            "taskKind is answer_only, inspect_only, code_sketch, or runtime_debug",
             "editStrategy is no_edit",
             "target file was not read in this session",
             "human_approval_gate is required and has not been satisfied",
@@ -404,6 +427,19 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
     ]
     if task_kind == "answer_only":
         return common + ["Answer only after symbol/RAG evidence; do not write files."]
+    if task_kind == "code_sketch":
+        return common + [
+            "Decompose the problem before code: state preservation, target APIs, "
+            "lifecycle point, and restore order. List unknowns first.",
+            "Call unreal_symbol_lookup for every Unreal type/function you name; "
+            "mark anything not found as UNKNOWN instead of inventing an API.",
+            "Do not confuse similar concepts (e.g. Actor Tag vs Sequencer Binding "
+            "Tag, Spawnable vs Possessable); cite evidence for the distinction.",
+            "Validate the drafted symbols with unreal_code_sketch_claim_validate "
+            "before presenting compile-ready code.",
+            "Keep proof level at Proposed; do not claim it compiles or runs. Do not "
+            "write files.",
+        ]
     if task_kind == "inspect_only":
         asset_steps = [
             "Call unreal_editor_metadata_status before material/blueprint wire claims.",
@@ -439,6 +475,13 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
 
 
 def build_stop_conditions(task_kind: TaskKind) -> list[str]:
+    if task_kind == "code_sketch":
+        return [
+            "Stop after presenting a labeled Proposed sketch backed by symbol evidence.",
+            "If a required API cannot be verified, present it as UNKNOWN and state "
+            "what log/header/export would confirm it; do not guess an API name.",
+            "Do not write files or claim the sketch compiles or runs.",
+        ]
     if task_kind in {"answer_only", "inspect_only", "runtime_debug"}:
         return [
             "Stop after evidence-backed answer or findings.",
@@ -485,6 +528,22 @@ def build_suggested_tool_calls(
             }
         )
         calls.append({"tool": "unreal_project_architecture", "args": {}})
+        return calls
+
+    if task_kind == "code_sketch":
+        symbols = _symbol_candidates_from_text(text)
+        calls = [
+            {"tool": "unreal_get_active_project", "args": {}},
+            {"tool": "unreal_rag_search", "args": {"query": text, "mode": "codegen", "hybrid": False, "top_k": 6}},
+        ]
+        for symbol in symbols[:4]:
+            calls.append({"tool": "unreal_symbol_lookup", "args": {"query": symbol, "top_k": 3}})
+        calls.append(
+            {
+                "tool": "unreal_code_sketch_claim_validate",
+                "args": {"sketch": "<paste your drafted code/API list here before presenting it>"},
+            }
+        )
         return calls
 
     if not project_context.get("ok"):
@@ -562,13 +621,16 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     strategy = choose_edit_strategy(task_kind, request, file_count_hint=file_count_hint)
     if not evidence.writes_allowed:
         strategy = "no_edit"
-    tool_policy_key = (
-        "codegen"
-        if resolved_mode in {"codegen", "prototype_component", "prototype_subsystem"}
-        else resolved_mode
-        if resolved_mode in {"module_fix", "reflection_fix"}
-        else task_kind
-    )
+    if task_kind == "code_sketch":
+        tool_policy_key = "code_sketch"
+    else:
+        tool_policy_key = (
+            "codegen"
+            if resolved_mode in {"codegen", "prototype_component", "prototype_subsystem"}
+            else resolved_mode
+            if resolved_mode in {"module_fix", "reflection_fix"}
+            else task_kind
+        )
     tool_policy = tool_sequence_for_task(tool_policy_key) or tool_sequence_for_task(task_kind)
     if task_kind == "inspect_only" and mode in ASSET_METADATA_MODES:
         tool_policy = list(ASSET_METADATA_TOOL_POLICY)

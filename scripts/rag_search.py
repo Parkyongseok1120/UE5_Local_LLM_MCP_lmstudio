@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import hashlib
@@ -11,6 +10,7 @@ import json
 import re
 import sqlite3
 
+from rag_types import SearchOptions  # re-exported for backward compatibility
 
 TERM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[\uac00-\ud7a3]+")
 
@@ -572,32 +572,11 @@ def merge_ranked_sidecar(
     )
 
 
-VALID_MODES = {
-    "auto",
-    "planning",
-    "design",
-    "implementation",
-    "review",
-    "agent_edit",
-    "codegen",
-    "shader",
-    "material_analysis",
-    "material_porting",
-    "blueprint_analysis",
-    "blueprint_verification",
-    "compile_fix",
-    "runtime_debug",
-    "api_lookup",
-    "module_fix",
-    "reflection_fix",
-    "multifile_refactor",
-    "prototype_component",
-    "prototype_subsystem",
-    "refactor_r0",
-    "refactor_r1",
-    "refactor_r2",
-    "refactor_r3",
-    "refactor_r4",
+from rag_modes import VALID_MODES  # single source of truth for mode names
+# code_sketch reuses codegen retrieval scoring (symbol/source-focused evidence)
+# while remaining a distinct routing/policy mode in the orchestrator.
+SCORING_MODE_ALIAS = {
+    "code_sketch": "codegen",
 }
 META_COLUMNS = (
     "project",
@@ -1090,6 +1069,25 @@ IMPLEMENTATION_HINTS = {
     "GENERATED_BODY",
     "Build.cs",
 }
+SKETCH_HINTS = {
+    "sketch",
+    "draft",
+    "example code",
+    "sample code",
+    "show me code",
+    "pseudocode",
+    "시안",
+    "초안",
+    "예시 코드",
+    "예시코드",
+    "샘플 코드",
+    "샘플코드",
+    "코드 예시",
+    "코드예시",
+    "코드 샘플",
+    "코드 초안",
+    "코드 스케치",
+}
 CODEGEN_HINTS = {
     "생성",
     "작성",
@@ -1328,19 +1326,6 @@ BLUEPRINT_ANALYSIS_HINTS.update({
 })
 
 
-@dataclass
-class SearchOptions:
-    mode: str = "auto"
-    sources: list[str] = field(default_factory=list)
-    projects: list[str] = field(default_factory=list)
-    layers: list[str] = field(default_factory=list)
-    doc_types: list[str] = field(default_factory=list)
-    genres: list[str] = field(default_factory=list)
-    extensions: list[str] = field(default_factory=list)
-    required_terms: list[str] = field(default_factory=list)
-    candidate_limit: int = 120
-
-
 def tokenize(value: str) -> list[str]:
     return [term for term in TERM_RE.findall(value) if len(term) > 1]
 
@@ -1472,6 +1457,8 @@ def resolve_mode(query: str, mode: str) -> str:
         return "api_lookup"
     if has_hint(terms, raw, AGENT_EDIT_HINTS):
         return "agent_edit"
+    if has_hint(terms, raw, SKETCH_HINTS):
+        return "code_sketch"
     if has_hint(terms, raw, CODEGEN_HINTS):
         return "codegen"
     if has_hint(terms, raw, IMPLEMENTATION_HINTS):
@@ -1577,8 +1564,9 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
     text = str(row.get("text") or "").lower()
     query_lower = " ".join(query_terms).lower()
 
-    score += MODE_SOURCE_BIAS.get(mode, {}).get(source, 0.0)
-    score += MODE_LAYER_BIAS.get(mode, {}).get(layer, 0.0)
+    bias_mode = SCORING_MODE_ALIAS.get(mode, mode)
+    score += MODE_SOURCE_BIAS.get(bias_mode, {}).get(source, 0.0)
+    score += MODE_LAYER_BIAS.get(bias_mode, {}).get(layer, 0.0)
 
     matched_terms = 0
     for term in query_terms:

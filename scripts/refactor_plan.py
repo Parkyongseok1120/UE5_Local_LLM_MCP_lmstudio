@@ -7,11 +7,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from unreal_api_denylist import INVALID_LIFECYCLE_OVERRIDES
+
 VALID_STAGES = {"R0", "R1", "R2", "R3", "R4", "r0", "r1", "r2", "r3", "r4"}
-INVALID_UNREAL_LIFECYCLE_OVERRIDES = {
-    "onworlddestroyed": "UWorldSubsystem does not expose OnWorldDestroyed in UE 5.8; use OnWorldEndPlay(UWorld&) or PreDeinitialize().",
-    "worlddestroyed": "WorldDestroyed is not a standard UE subsystem lifecycle override; verify the direct base API before planning edits.",
-}
+# Sourced from the shared denylist so plan validation and the chat sketch
+# validator stay in sync. Kept as a module-level alias for backward compatibility.
+INVALID_UNREAL_LIFECYCLE_OVERRIDES = INVALID_LIFECYCLE_OVERRIDES
 
 FORBIDDEN_CODE_MARKERS = (
     "#include",

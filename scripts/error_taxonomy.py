@@ -43,6 +43,9 @@ SUBKIND_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE", "module_fix", re.compile(r"UnrealEd|Editor.*runtime module", re.I)),
     ("RAW_UOBJECT_MEMBER_WITHOUT_UPROPERTY", "reflection_fix", re.compile(r"UPROPERTY.*UObject|raw pointer.*UObject", re.I)),
     ("CONSTRUCTOR_LIFECYCLE_MISUSE", "compile_fix", re.compile(r"constructor.*CreateDefaultSubobject|FObjectInitializer", re.I)),
+    ("SEQUENCER_BINDING_CONFUSION", "runtime_debug", re.compile(r"sequencer|level\s*sequence|movie\s*scene|binding.*(actor|component)|FMovieScene", re.I)),
+    ("TICK_ORDER_SUSPECT", "runtime_debug", re.compile(r"tick\s*order|PrimaryActorTick|TG_|ETickingGroup|before.*tick|after.*tick", re.I)),
+    ("API_VERSION_MISMATCH", "compile_fix", re.compile(r"API_VERSION|deprecated.*UE_|engine\s*version|WITH_ENGINE|UNREAL_ENGINE", re.I)),
 ]
 
 BROAD_MODES = frozenset({"module_fix", "reflection_fix", "compile_fix", "runtime_debug", "link_fix"})
@@ -197,6 +200,36 @@ def route_error_action(message: str, error_code: str = "") -> dict[str, Any]:
             forbidden=["adding UnrealEd to runtime module as default fix"],
             notes=["Prefer moving editor-only code behind editor modules or guards."],
         )
+
+    if subkind == "SEQUENCER_BINDING_CONFUSION":
+        return set_route(
+            broad_mode="runtime_debug",
+            reads=["sequencer asset", "binding target actor/component", "possessable/spawnable setup"],
+            rag=["runtime_debug", "compile_fix"],
+            targets=["sequencer binding setup", "bound actor/component"],
+            forbidden=["random cpp refactor unrelated to bindings"],
+            notes=["Log-first: verify binding IDs, spawnable vs possessable, and playback context before code edits."],
+        ) | {"routePriorityApplied": "sequencer_binding_log_first"}
+
+    if subkind == "TICK_ORDER_SUSPECT":
+        return set_route(
+            broad_mode="runtime_debug",
+            reads=["PrimaryActorTick settings", "AddTickPrerequisiteActor/Component usage", "subsystem tick group"],
+            rag=["runtime_debug", "compile_fix"],
+            targets=["tick registration/lifecycle files"],
+            forbidden=["broad gameplay rewrite before confirming tick order"],
+            notes=["Log-first: confirm tick group and prerequisite chain before changing gameplay logic."],
+        ) | {"routePriorityApplied": "tick_order_log_first"}
+
+    if subkind == "API_VERSION_MISMATCH":
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["failing API call site", "engine version macros", "module Build.cs/API surface"],
+            rag=["compile_fix", "module_fix"],
+            targets=["failing call site", "version-guarded wrapper if needed"],
+            forbidden=["inventing APIs from memory"],
+            notes=["Log-first: verify engine version and symbol availability before patching."],
+        ) | {"routePriorityApplied": "api_version_log_first"}
 
     if broad == "link_fix":
         return set_route(

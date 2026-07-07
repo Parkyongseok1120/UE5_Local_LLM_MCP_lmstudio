@@ -27,7 +27,7 @@ python scripts/patch_mcp_config.py
 
 Restart LM Studio after changes.
 
-### unreal-rag (8 tools)
+### unreal-rag (9 tools)
 
 - `unreal_get_active_project`
 - `unreal_set_active_project`
@@ -37,6 +37,7 @@ Restart LM Studio after changes.
 - `unreal_symbol_lookup`
 - `unreal_agent_session`
 - `unreal_rag_capabilities`
+- `unreal_code_sketch_claim_validate` - verify drafted APIs before showing code sketches
 
 ### unreal-agent (10 tools)
 

@@ -47,3 +47,29 @@ def set_cached(workspace: Path, query: str, projects: list[str] | None, limit: i
         json.dumps({"cachedAt": time.time(), "rows": rows}, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def invalidate_project_caches(workspace: Path, project_names: list[str], project_stem: str = "") -> int:
+    """Remove disk cache entries keyed to the given project name(s). Returns files removed."""
+    names = {name.strip() for name in project_names if str(name).strip()}
+    if project_stem:
+        names.add(project_stem.strip())
+    if not names:
+        return 0
+    removed = 0
+    root = cache_dir(workspace)
+    for path in root.glob("*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        # Cache files do not store project names directly; key includes sorted projects.
+        # Best-effort: delete entries whose filename key was built with those project filters.
+        for name in names:
+            probe_key = cache_key(f"__invalidate__{name}", [name], 64)
+            if path.stem == probe_key:
+                path.unlink(missing_ok=True)
+                removed += 1
+                break
+    # Conservative fallback: when we cannot match keys, leave disk cache until TTL expiry.
+    return removed

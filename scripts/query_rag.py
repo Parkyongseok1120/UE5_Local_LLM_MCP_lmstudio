@@ -401,27 +401,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("query")
     parser.add_argument("--index", default="data/unreal58/rag.sqlite")
     parser.add_argument("--top-k", type=int, default=0, help="Defaults to the active model profile.")
+    from rag_modes import MODE_ENUM
+
     parser.add_argument(
         "--mode",
-        choices=[
-            "auto",
-            "planning",
-            "design",
-            "implementation",
-            "review",
-            "agent_edit",
-            "codegen",
-            "shader",
-            "material_analysis",
-            "material_porting",
-            "blueprint_analysis",
-            "blueprint_verification",
-            "compile_fix",
-            "runtime_debug",
-            "api_lookup",
-            "module_fix",
-            "reflection_fix",
-        ],
+        choices=list(MODE_ENUM),
         default="auto",
         help="Search intent. auto detects from the query.",
     )

@@ -116,6 +116,7 @@ BUDGET_MODE_ALIASES: dict[str, str] = {
     "runtime_debug": "compile_fix",
     "agent_edit": "execute",
     "codegen": "codegen",
+    "code_sketch": "codegen",
     "shader": "codegen",
     "material_analysis": "review",
     "material_porting": "review",
@@ -783,7 +784,10 @@ def assemble_context(
     max_assembly_chars: int | None = None,
     include_header: bool = True,
     compact: bool = True,
+    exclude_chunk_ids: set[str] | None = None,
 ) -> str:
+    if exclude_chunk_ids:
+        rows = [row for row in rows if str(row.get("chunk_id") or "") not in exclude_chunk_ids]
     if not rows:
         return "No matching Unreal RAG context was found. Ask for more exact class, file, module, log, or asset names."
 

@@ -29,6 +29,8 @@ RAG_ESSENTIAL = {
     "unreal_asset_graph_lookup",
     "unreal_blueprint_claim_validate",
     "unreal_material_claim_validate",
+    "unreal_code_sketch_claim_validate",
+    "unreal_rag_refresh",
 }
 
 AGENT_ESSENTIAL = {

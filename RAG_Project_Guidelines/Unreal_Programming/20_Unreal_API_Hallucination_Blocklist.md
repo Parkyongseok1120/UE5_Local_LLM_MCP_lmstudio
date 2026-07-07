@@ -18,6 +18,8 @@ Do not claim these are available unless a cited project file, engine symbol, off
 - Blueprint node execution or pin links inferred only from asset/class/variable names.
 - Adding Build.cs module dependencies without include-owner evidence, symbol evidence, or a real compile/link/UHT error.
 - Claiming Editor, PIE, shader compile, or UBT success without the corresponding log or tool result.
+- Sequencer/MovieScene invented APIs: `bRestoreState` as a public player field, `SetRestoreState(...)`, `SetBindingTag(...)`, `AddBindingOverride(...)`, or treating `AActor::Tags` as a Sequencer binding tag. Restore-on-finish is a sequence/section Completion Mode (Restore State vs Keep State) plus `FMovieSceneSequencePlaybackSettings`; binding overrides use `FMovieSceneObjectBindingID`. Verify the exact symbol before use (see `23_Sequencer_Binding_And_Playback_Playbook.md`).
+- Tick ordering guesses: asserting a `TickGroup` value, prerequisite API (`AddTickPrerequisiteActor/Component`), or tick-enable call without confirming the enum/function name (see `24_Tick_Ordering_And_Lifecycle_Contract.md`).
 
 ## Rewrite Pattern
 

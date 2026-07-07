@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from lmstudio_unreal_wrapper import (
+from unreal_static_validate import (
     format_findings,
     has_static_errors,
     validate_unreal_readiness,

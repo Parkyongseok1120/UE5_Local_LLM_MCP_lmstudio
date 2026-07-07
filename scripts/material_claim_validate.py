@@ -77,6 +77,31 @@ def _matching_rows(rows: list[dict[str, Any]], identifiers: list[str]) -> list[d
     return matches
 
 
+def infer_material_coverage(meta: dict[str, Any]) -> str:
+    """Return full|partial|registry_only based on export metadata richness."""
+    if meta.get("graph_edges"):
+        return "full"
+    expressions = meta.get("expressions") or []
+    if expressions:
+        if any(isinstance(item, dict) and item.get("input_wires") for item in expressions):
+            return "partial"
+        return "partial"
+    if meta.get("asset_path") or meta.get("asset_type"):
+        return "registry_only"
+    return "registry_only"
+
+
+def _coverage_for_matches(matches: list[dict[str, Any]]) -> str:
+    if not matches:
+        return "registry_only"
+    levels = {infer_material_coverage(_row_metadata(row)) for row in matches}
+    if "full" in levels:
+        return "full"
+    if "partial" in levels:
+        return "partial"
+    return "registry_only"
+
+
 def validate_material_claims(
     claims: list[str],
     index_dir: str | Path | None = None,
@@ -132,6 +157,7 @@ def validate_material_claims(
             {
                 "claim": text,
                 "verdict": verdict,
+                "coverage": _coverage_for_matches(matches),
                 "identifiers": identifiers,
                 "expressionClasses": class_names,
                 "matchingAssets": matching_assets[:8],

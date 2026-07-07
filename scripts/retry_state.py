@@ -47,39 +47,116 @@ def same_error_repeated(previous: dict[str, Any] | None, current: dict[str, Any]
     return bool(previous.get("errorKey")) and previous.get("errorKey") == current.get("errorKey")
 
 
+def count_consecutive_same_errors(attempts: list[dict[str, Any]]) -> int:
+    if not attempts:
+        return 0
+    count = 1
+    for idx in range(len(attempts) - 1, 0, -1):
+        if same_error_repeated(attempts[idx - 1], attempts[idx]):
+            count += 1
+        else:
+            break
+    return count
+
+
 def detect_noop_edit(changed_paths: list[str]) -> bool:
     return len([path for path in changed_paths if str(path).strip()]) == 0
 
 
-def recommend_retry_action(previous: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any]:
+def recommend_retry_action(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+    *,
+    attempts: list[dict[str, Any]] | None = None,
+    no_op_guard: bool = False,
+) -> dict[str, Any]:
     repeated = same_error_repeated(previous, current)
     noop = bool(current.get("noOpEdit")) or detect_noop_edit(list(current.get("changedPaths") or []))
+    if attempts is not None:
+        repeat_count = count_consecutive_same_errors(list(attempts) + [current])
+    elif repeated:
+        repeat_count = 2
+    else:
+        repeat_count = 1
     if current.get("passed"):
         action = "stop_success"
         reason = "build passed"
+        escalation_level = 0
+    elif noop and no_op_guard:
+        action = "force_new_evidence"
+        reason = "no-op edit with noOpGuard enabled"
+        escalation_level = 1
     elif noop:
         action = "force_new_evidence"
         reason = "no changed paths were recorded"
+        escalation_level = 1
+    elif repeat_count >= 4:
+        action = "stop_diagnosis_report"
+        reason = "same error repeated three times; stop and emit diagnosis report"
+        escalation_level = 3
+    elif repeat_count >= 3:
+        action = "escalate_evidence"
+        reason = "same error repeated twice; widen evidence and change patch target"
+        escalation_level = 2
     elif repeated:
         action = "escalate_routing"
         reason = "same error repeated after an edit"
+        escalation_level = 1
     else:
         action = "continue_first_error_loop"
         reason = "new failing error surface"
+        escalation_level = 0
+    blocked_paths = _blocked_repeat_paths(attempts or [], current, escalation_level)
     return {
         "action": action,
         "reason": reason,
         "sameErrorRepeated": repeated,
+        "sameErrorRepeatCount": repeat_count,
+        "escalationLevel": escalation_level,
         "noOpEdit": noop,
-        "requiredPromptHints": _prompt_hints(action),
+        "blockedRepeatPaths": blocked_paths,
+        "deltaTopKBoost": 2 if escalation_level >= 2 else (1 if escalation_level >= 1 else 0),
+        "codeDetailBump": 1 if escalation_level >= 2 else 0,
+        "requiredPromptHints": _prompt_hints(action, blocked_paths),
     }
 
 
-def _prompt_hints(action: str) -> list[str]:
+def _blocked_repeat_paths(
+    attempts: list[dict[str, Any]],
+    current: dict[str, Any],
+    escalation_level: int,
+) -> list[str]:
+    if escalation_level < 2:
+        return []
+    paths: list[str] = []
+    for record in attempts[-2:]:
+        paths.extend(str(path) for path in (record.get("changedPaths") or []) if str(path).strip())
+    paths.extend(str(path) for path in (current.get("changedPaths") or []) if str(path).strip())
+    return list(dict.fromkeys(path.replace("\\", "/") for path in paths))[:6]
+
+
+def _prompt_hints(action: str, blocked_paths: list[str] | None = None) -> list[str]:
+    hints: list[str] = []
     if action == "force_new_evidence":
-        return ["Do not resubmit the same patch.", "Read current file state before editing."]
-    if action == "escalate_routing":
-        return ["Classify the first actionable error again.", "Read owner Build.cs or symbol graph before patching."]
-    if action == "continue_first_error_loop":
-        return ["Patch one root cause only.", "Verify with build output before claiming success."]
-    return []
+        hints.extend(["Do not resubmit the same patch.", "Read current file state before editing."])
+    elif action == "escalate_routing":
+        hints.extend(["Classify the first actionable error again.", "Read owner Build.cs or symbol graph before patching."])
+    elif action == "escalate_evidence":
+        hints.extend(
+            [
+                "Same error repeated twice. Do not patch the same file/hunk again.",
+                "Use broader symbol lookup and read additional owner files before editing.",
+            ]
+        )
+    elif action == "stop_diagnosis_report":
+        hints.extend(
+            [
+                "Stop patching. Summarize root cause, evidence read, and next manual steps.",
+                "Do not submit another patch in this run.",
+            ]
+        )
+    elif action == "continue_first_error_loop":
+        hints.extend(["Patch one root cause only.", "Verify with build output before claiming success."])
+    if blocked_paths:
+        hints.append("Blocked repeat patch targets: " + ", ".join(blocked_paths))
+    return hints

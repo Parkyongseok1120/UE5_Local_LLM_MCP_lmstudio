@@ -10,7 +10,13 @@ WORKSPACE = Path(__file__).resolve().parents[1]
 SCRIPTS = WORKSPACE / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from build_rag_index import apply_compact_profile_defaults, parse_args, resolve_chunk_params  # noqa: E402
+from build_rag_index import (  # noqa: E402
+    apply_compact_profile_defaults,
+    doc_matches_replace_project,
+    parse_args,
+    replace_project_enabled,
+    resolve_chunk_params,
+)
 
 
 def _compact_args(*extra: str):
@@ -69,3 +75,21 @@ def test_module_graph_still_skips_text_chunking():
 
     assert chunk_tokens is None
     assert overlap_tokens is None
+
+
+def test_replace_project_flag_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("ENABLE_REPLACE_PROJECT", raising=False)
+    assert replace_project_enabled() is False
+
+
+def test_doc_matches_replace_project_for_symbol_rows():
+    assert doc_matches_replace_project(
+        "unreal_symbol",
+        {"project": "DemoGame", "symbol_name": "UDemoActor"},
+        "DemoGame",
+    )
+    assert not doc_matches_replace_project(
+        "unreal_symbol",
+        {"project": "OtherGame"},
+        "DemoGame",
+    )

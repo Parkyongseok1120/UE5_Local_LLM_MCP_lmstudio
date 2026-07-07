@@ -11,7 +11,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from rag_search import META_COLUMNS, SearchOptions, expand_query_terms, rerank_row, resolve_mode, table_columns, tokenize
+from rag_search import META_COLUMNS, expand_query_terms, rerank_row, resolve_mode, table_columns, tokenize
+from rag_types import SearchOptions
 from symbol_cache import get_cached, set_cached
 from workspace_paths import find_workspace_root
 

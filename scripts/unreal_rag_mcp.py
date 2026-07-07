@@ -28,6 +28,32 @@ from mcp_tool_compact import (
 )
 from rag_context import assemble_context, assemble_context_mixed
 from rag_embeddings import embedding_status
+
+_ENGINE_PROJECTS = frozenset({"", "engine", "Engine", "__engine__"})
+
+
+def annotate_other_project_rows(rows: list[dict[str, Any]], active_names: list[str]) -> list[dict[str, Any]]:
+    active = {str(name).strip().lower() for name in active_names if str(name).strip()}
+    annotated: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        project = str(item.get("project") or "").strip()
+        if project and project.lower() not in _ENGINE_PROJECTS and project.lower() not in active:
+            item["otherProject"] = True
+        annotated.append(item)
+    return annotated
+
+
+def other_project_context_warning(rows: list[dict[str, Any]]) -> str:
+    flagged = [str(row.get("project") or "") for row in rows if row.get("otherProject")]
+    if not flagged:
+        return ""
+    unique = sorted({name for name in flagged if name})
+    return (
+        "\n[otherProject warning: results include chunks from non-active projects "
+        f"({', '.join(unique[:6])}). Do not cite them as active-project evidence.]\n"
+    )
+from rag_modes import MODE_ENUM
 from rag_index_ops import capabilities_summary, index_health, rebuild_status
 from rag_search import SearchOptions, search, search_hybrid
 from rag_semantic import symbol_lookup
@@ -39,6 +65,9 @@ from material_porting_validate import validate_material_porting_plan
 from editor_metadata_status import editor_metadata_status
 from blueprint_claim_validate import validate_blueprint_claims
 from material_claim_validate import validate_material_claims
+from node_plan_validate import validate_node_plan
+from code_sketch_claim_validate import validate_sketch
+from render_report import render_report
 from asset_graph_lookup import analyze_asset_folder, graph_detail_limits, lookup_asset_graph, search_asset_graphs
 from project_context import resolve_active_project_context
 from project_routing import resolve_project_filters
@@ -47,8 +76,128 @@ from editor_export_runner import run_editor_export
 from runtime_config_checklist import check_runtime_config
 from wrapper_job_manager import job_status, list_jobs, start_job
 from mcp_stdio import configure_stdio_utf8, write_json_line, write_utf8_line
+from mcp_tool_registry import McpToolRegistry, ToolSpec
 
 configure_stdio_utf8()
+
+
+def _handle_unreal_rag_refresh(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    from rag_refresh import refresh_active_project
+
+    scope = str(arguments.get("scope") or "all")
+    payload = refresh_active_project(
+        scope=scope,  # type: ignore[arg-type]
+        workspace=server.workspace,
+        force=bool(arguments.get("force")),
+    )
+    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+
+
+def _handle_unreal_code_sketch_claim_validate(
+    server: McpServer, message_id: Any, arguments: dict[str, Any]
+) -> None:
+    sketch = str(arguments.get("sketch") or "")
+    if not sketch.strip():
+        server.tool_result(message_id, "Missing required argument: sketch", is_error=True)
+        return
+    payload = validate_sketch(
+        sketch,
+        server.index,
+        top_k=max(1, min(16, int(arguments.get("topK") or 5))),
+    )
+    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+
+
+def _handle_unreal_node_plan_validate(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    plan = arguments.get("plan")
+    if not isinstance(plan, dict):
+        server.tool_result(message_id, "Missing required argument: plan (object)", is_error=True)
+        return
+    payload = validate_node_plan(
+        plan,
+        catalog_path=str(arguments.get("catalogPath") or "").strip() or None,
+        domain=str(arguments.get("domain") or "auto"),
+    )
+    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+
+
+def _handle_unreal_render_report(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    text = str(arguments.get("text") or "")
+    if not text.strip():
+        server.tool_result(message_id, "Missing required argument: text", is_error=True)
+        return
+    fmt = str(arguments.get("format") or "md").strip().lower()
+    output_path = str(arguments.get("outputPath") or "").strip() or None
+    payload = render_report(text, format=fmt, output_path=output_path)  # type: ignore[arg-type]
+    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+
+
+def build_mcp_tool_registry() -> McpToolRegistry:
+    registry = McpToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="unreal_rag_refresh",
+            schema_dict={
+                "scope": {
+                    "type": "string",
+                    "enum": ["project_source", "editor_metadata", "all"],
+                    "default": "all",
+                },
+                "force": {"type": "boolean", "default": False},
+            },
+            handler=_handle_unreal_rag_refresh,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="unreal_code_sketch_claim_validate",
+            schema_dict={
+                "sketch": {
+                    "type": "string",
+                    "description": "Drafted code / API list to validate before presenting it.",
+                },
+                "topK": {"type": "integer", "minimum": 1, "maximum": 16, "default": 5},
+            },
+            handler=_handle_unreal_code_sketch_claim_validate,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="unreal_node_plan_validate",
+            schema_dict={
+                "plan": {
+                    "type": "object",
+                    "description": "Blueprint/Material node plan with nodes[] entries.",
+                },
+                "catalogPath": {"type": "string", "default": "data/unreal58/node_catalog.json"},
+                "domain": {
+                    "type": "string",
+                    "enum": ["auto", "blueprint", "material"],
+                    "default": "auto",
+                },
+            },
+            handler=_handle_unreal_node_plan_validate,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="unreal_render_report",
+            schema_dict={
+                "text": {"type": "string", "description": "Markdown report body."},
+                "format": {
+                    "type": "string",
+                    "enum": ["md", "pptx", "docx", "pdf"],
+                    "default": "md",
+                },
+                "outputPath": {"type": "string", "description": "Optional output file path."},
+            },
+            handler=_handle_unreal_render_report,
+        )
+    )
+    return registry
+
+
+_MCP_TOOL_REGISTRY = build_mcp_tool_registry()
 
 ESSENTIAL_TOOL_NAMES = frozenset(
     {
@@ -68,6 +217,8 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_asset_graph_lookup",
         "unreal_blueprint_claim_validate",
         "unreal_material_claim_validate",
+        "unreal_code_sketch_claim_validate",
+        "unreal_rag_refresh",
     }
 )
 
@@ -217,13 +368,7 @@ class McpServer:
                         "top_k": {"type": "integer", "minimum": 1, "maximum": 16, "default": 6},
                         "mode": {
                             "type": "string",
-                            "enum": [
-                                "auto", "planning", "design", "implementation", "review",
-                                "agent_edit", "codegen", "shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification", "compile_fix", "runtime_debug",
-                                "api_lookup", "module_fix", "reflection_fix",
-                                "prototype_component", "prototype_subsystem",
-                                "refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4",
-                            ],
+                            "enum": list(MODE_ENUM),
                             "default": "auto",
                         },
                         "hybrid": {
@@ -343,6 +488,24 @@ class McpServer:
                 "title": "Unreal RAG Rebuild Status",
                 "description": "Check whether raw inputs are newer than the index and whether rebuild/collect is needed.",
                 "inputSchema": self._schema({}),
+            },
+            {
+                "name": "unreal_rag_refresh",
+                "title": "Refresh Active Project RAG Inputs",
+                "description": (
+                    "Re-collect active project source/symbols and/or editor metadata, rebuild the index when stale, "
+                    "and invalidate project-scoped session caches. Use when unreal_rag_search reports indexStaleness."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "scope": {
+                            "type": "string",
+                            "enum": ["project_source", "editor_metadata", "all"],
+                            "default": "all",
+                        },
+                        "force": {"type": "boolean", "default": False},
+                    }
+                ),
             },
             {
                 "name": "unreal_start_compile_loop",
@@ -698,6 +861,67 @@ class McpServer:
                 ),
             },
             {
+                "name": "unreal_code_sketch_claim_validate",
+                "title": "Validate Unreal API names in a code sketch",
+                "description": (
+                    "Anti-hallucination check for plain-chat code sketches (시안). "
+                    "Extracts Unreal-style symbols and member calls from drafted code, "
+                    "verifies each against the local symbol index, and flags invented "
+                    "APIs (denylist) and unverified names. Call this BEFORE presenting "
+                    "compile-ready code; remove or mark UNKNOWN any known_bad/unverified "
+                    "symbol. Evidence only: never writes files or builds."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "sketch": {
+                            "type": "string",
+                            "description": "Drafted code / API list to validate before presenting it.",
+                        },
+                        "topK": {"type": "integer", "minimum": 1, "maximum": 16, "default": 5},
+                    },
+                    ["sketch"],
+                ),
+            },
+            {
+                "name": "unreal_node_plan_validate",
+                "title": "Validate Blueprint/Material Node Plan",
+                "description": (
+                    "Validate a planned node graph (nodes[] with class/pins) against data/unreal58/node_catalog.json."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "plan": {"type": "object", "description": "Node plan JSON with nodes[] entries."},
+                        "catalogPath": {"type": "string", "default": "data/unreal58/node_catalog.json"},
+                        "domain": {
+                            "type": "string",
+                            "enum": ["auto", "blueprint", "material"],
+                            "default": "auto",
+                        },
+                    },
+                    ["plan"],
+                ),
+            },
+            {
+                "name": "unreal_render_report",
+                "title": "Render Markdown Report",
+                "description": (
+                    "Render markdown report text to md/pptx/docx/pdf. Markdown always works as UTF-8; "
+                    "other formats degrade gracefully when optional deps are missing."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "text": {"type": "string", "description": "Markdown report body."},
+                        "format": {
+                            "type": "string",
+                            "enum": ["md", "pptx", "docx", "pdf"],
+                            "default": "md",
+                        },
+                        "outputPath": {"type": "string"},
+                    },
+                    ["text"],
+                ),
+            },
+            {
                 "name": "unreal_review_claim_validate",
                 "title": "Validate Review Claims (grep + PAB)",
                 "description": (
@@ -864,6 +1088,8 @@ class McpServer:
                     merged.append(row)
                     seen.add(cid)
             context = assemble_context_mixed(local_rows, engine_rows, query, mode, **assembly_kwargs)
+            merged = annotate_other_project_rows(merged, active_project_names())
+            context += other_project_context_warning(merged)
             return merged, context, resolved_scope, detail
 
         rows = search_hybrid(self.index, query, top_k, options) if use_hybrid else search(
@@ -897,8 +1123,12 @@ class McpServer:
                     "\n[project scope fallback: active project filter returned 0 rows; "
                     "showing engine-wide matches. Re-sync metadata for the active project.]\n"
                 )
+                rows = annotate_other_project_rows(rows, active_project_names())
+                context += other_project_context_warning(rows)
                 return rows, context, resolved_scope, detail
         context = assemble_context(rows, query, mode, **assembly_kwargs)
+        rows = annotate_other_project_rows(rows, active_project_names())
+        context += other_project_context_warning(rows)
         return rows, context, resolved_scope, detail
 
     def launch_project_picker(self, explorer: bool = False) -> dict[str, Any]:
@@ -974,6 +1204,13 @@ class McpServer:
         save_shared_config(config)
 
         setup_payload: dict[str, Any] | None = None
+        invalidate_payload: dict[str, Any] | None = None
+        try:
+            from project_switch_invalidate import on_project_switch_invalidate
+
+            invalidate_payload = on_project_switch_invalidate(previous or None, resolved, workspace=self.workspace)
+        except Exception as exc:
+            invalidate_payload = {"ok": False, "error": str(exc)}
         try:
             from on_active_project_changed import ensure_active_project_ready
 
@@ -992,6 +1229,7 @@ class McpServer:
                     "activeProject": str(resolved),
                     "activeProjectNames": active_project_names(),
                     "message": f"Active project set to {resolved.name}",
+                    "cacheInvalidation": invalidate_payload,
                     "autoSetup": setup_payload,
                 },
                 ensure_ascii=False,
@@ -1004,6 +1242,8 @@ class McpServer:
         arguments = params.get("arguments") or {}
 
         try:
+            if _MCP_TOOL_REGISTRY.dispatch(self, message_id, name, arguments):
+                return
             if name == "unreal_rag_search":
                 self.handle_search(message_id, arguments)
             elif name == "unreal_symbol_lookup":
@@ -1390,21 +1630,30 @@ class McpServer:
             return
 
         rows, context, resolved_scope, detail = self.run_search(query, top_k, arguments, use_hybrid)
+        from index_staleness import project_source_stale_status
         from token_budget import code_detail_limits, next_code_detail
 
         char_limit = int(code_detail_limits(detail)["max_tool_chars"])
         truncated = "assembly budget truncated" in context
         next_detail = next_code_detail(detail) if truncated else None
+        stale_status = project_source_stale_status()
+        structured = {
+            "matches": rows,
+            "hybrid": use_hybrid,
+            "scope": resolved_scope,
+            "detailLevel": detail,
+            "nextDetailLevel": next_detail,
+            "indexStaleness": stale_status,
+        }
+        if stale_status.get("stale"):
+            structured["nextSteps"] = [
+                "unreal_rag_refresh",
+                str(stale_status.get("recommendedCommand") or ".\\rag.ps1 sync-active-project"),
+            ]
         self.tool_result(
             message_id,
             context,
-            structured={
-                "matches": rows,
-                "hybrid": use_hybrid,
-                "scope": resolved_scope,
-                "detailLevel": detail,
-                "nextDetailLevel": next_detail,
-            },
+            structured=structured,
             char_limit=char_limit,
         )
 

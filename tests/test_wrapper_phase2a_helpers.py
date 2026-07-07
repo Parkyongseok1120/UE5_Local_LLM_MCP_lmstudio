@@ -149,7 +149,7 @@ def test_collect_rag_context_passes_project_filter_for_live_refactor(tmp_path, m
         ]
 
     monkeypatch.setattr(wrapper, "search_index", fake_search)
-    monkeypatch.setattr(wrapper, "assemble_context", lambda rows, request, mode: "ctx")
+    monkeypatch.setattr(wrapper, "assemble_context", lambda rows, request, mode, **kwargs: "ctx")
     monkeypatch.setattr(wrapper, "write_rag_telemetry", lambda run_dir, record: None)
 
     args = SimpleNamespace(
@@ -159,7 +159,9 @@ def test_collect_rag_context_passes_project_filter_for_live_refactor(tmp_path, m
         project_file=str(project_dir / "AdventureGame.uproject"),
     )
 
-    assert wrapper.collect_rag_context(args, "refactor cinematic logging") == "ctx"
+    context, used_ids = wrapper.collect_rag_context(args, "refactor cinematic logging")
+    assert context == "ctx"
+    assert isinstance(used_ids, set)
     assert captured["mode"] == "refactor_r2"
     assert captured["projects"] == ["AdventureGame"]
 
