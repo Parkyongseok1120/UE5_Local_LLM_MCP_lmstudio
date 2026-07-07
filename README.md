@@ -1,7 +1,7 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.2.1
+# UE5_Local_LLM_MCP_lmstudio 1.2.2
 
 > **Platform: Windows 10/11 only.** All install scripts are PowerShell/BAT. macOS and Linux are not supported.
 
