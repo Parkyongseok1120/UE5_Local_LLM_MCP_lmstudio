@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -207,8 +208,13 @@ def ensure_editor_plugin(
     return result
 
 
-def run_active_project_sync(workspace: Path, project: Path | None = None) -> dict[str, Any]:
-    return sync_active_project(workspace=workspace, project=project)
+def run_active_project_sync(
+    workspace: Path,
+    project: Path | None = None,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    return sync_active_project(workspace=workspace, project=project, progress=progress)
 
 
 def ensure_active_project_ready(
@@ -219,6 +225,7 @@ def ensure_active_project_ready(
     force: bool = False,
     skip_plugin: bool = False,
     skip_sync: bool = False,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     workspace = find_workspace_root()
     config = load_shared_config()
@@ -290,7 +297,7 @@ def ensure_active_project_ready(
                 "dryRun": True,
             }
         else:
-            sync_result = run_active_project_sync(workspace, resolved)
+            sync_result = run_active_project_sync(workspace, resolved, progress=progress)
             payload["sync"] = {
                 "skipped": False,
                 "needed": True,

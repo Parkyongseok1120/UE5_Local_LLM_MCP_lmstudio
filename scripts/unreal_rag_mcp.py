@@ -85,11 +85,18 @@ def _handle_unreal_rag_refresh(server: McpServer, message_id: Any, arguments: di
     from rag_refresh import refresh_active_project
 
     scope = str(arguments.get("scope") or "all")
+
+    def progress(message: str) -> None:
+        server.notify(f"unreal_rag_refresh: {message}")
+
+    progress(f"started (scope={scope})")
     payload = refresh_active_project(
         scope=scope,  # type: ignore[arg-type]
         workspace=server.workspace,
         force=bool(arguments.get("force")),
+        progress=progress,
     )
+    progress("finished")
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
 
@@ -558,7 +565,8 @@ class McpServer:
                 "title": "Refresh Active Project RAG Inputs",
                 "description": (
                     "Re-collect active project source/symbols and/or editor metadata, rebuild the index when stale, "
-                    "and invalidate project-scoped session caches. Use when unreal_rag_search reports indexStaleness."
+                    "and invalidate project-scoped session caches. Use when unreal_rag_search reports indexStaleness. "
+                    "This is a long-running tool (minutes). Prefer scope=project_source when Editor metadata is not needed."
                 ),
                 "inputSchema": self._schema(
                     {

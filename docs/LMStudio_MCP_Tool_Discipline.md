@@ -128,6 +128,7 @@ Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_
 | Hallucinated analysis | Force `read_file` before claims or edits |
 | Repeated no-op patch | Re-read file, patch only missing current text, set `expectedOccurrences=1` |
 | Tool not in list | Essential mode hides advanced tools; use wrapper/Cline for clangd/graph |
+| `unreal_rag_refresh` times out | Re-run `python scripts/patch_mcp_config.py` so `unreal-rag` has `"timeout": 420000` (7 minutes, ms) in `%USERPROFILE%\.lmstudio\mcp.json`, then restart LM Studio. Use `scope=project_source` for a faster refresh when Editor metadata is not needed. |
 
 ## Sampling Metadata
 

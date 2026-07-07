@@ -17,6 +17,9 @@ from workspace_paths import find_workspace_root as resolve_workspace_root, resol
 
 DEFAULT_LMSTUDIO_ROOT = Path.home() / ".lmstudio"
 SHARED_CONFIG = DEFAULT_LMSTUDIO_ROOT / "config" / "unreal-workspace.json"
+# LM Studio mcp.json server timeout is in milliseconds (0.3.18+). unreal_rag_refresh can
+# run collect + index rebuild + optional Editor export for several minutes.
+DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS = 420_000
 FORBIDDEN_TOOL_CONFIRMATION_PATTERNS = {
     "lmstudio/js-code-sandbox:run_javascript",
     "lmstudio/js-code-sandbox:*",
@@ -110,6 +113,7 @@ def patch_unreal_rag(entry: dict[str, Any], workspace: Path, python_exe: Path) -
     env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
     entry["env"] = env
+    entry["timeout"] = DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
     return entry
 
 

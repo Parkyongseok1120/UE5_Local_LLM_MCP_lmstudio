@@ -62,3 +62,26 @@ def test_find_workspace_root_prefers_script_repository() -> None:
     mod = load_module()
 
     assert mod.find_workspace_root() == ROOT
+
+
+def test_patch_unreal_rag_sets_long_tool_timeout(tmp_path) -> None:
+    mod = load_module()
+    python = tmp_path / "python.exe"
+    python.write_text("", encoding="utf-8")
+    workspace = ROOT
+    entry = {"command": "python", "args": [], "env": {}}
+
+    patched = mod.patch_unreal_rag(entry, workspace, python)
+
+    assert patched["timeout"] == mod.DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
+
+
+def test_patch_unreal_rag_overwrites_existing_timeout(tmp_path) -> None:
+    mod = load_module()
+    python = tmp_path / "python.exe"
+    python.write_text("", encoding="utf-8")
+    entry = {"command": "python", "args": [], "env": {}, "timeout": 900_000}
+
+    patched = mod.patch_unreal_rag(entry, ROOT, python)
+
+    assert patched["timeout"] == mod.DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS

@@ -222,6 +222,7 @@ foreach ($mcpPath in $mcpPaths) {
     $config.mcpServers = Merge-McpServer $config.mcpServers "unreal-rag" ([ordered]@{
         command = $python
         args    = @($ragServer, "--index", $ragIndex)
+        timeout = 420000
         env     = [ordered]@{
             SHARED_UNREAL_CONFIG = $sharedConfigPath
             UNREAL58_ROOT        = $ragRoot

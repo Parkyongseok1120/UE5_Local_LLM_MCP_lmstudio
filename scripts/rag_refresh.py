@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
 RefreshScope = Literal["project_source", "editor_metadata", "all"]
+ProgressFn = Callable[[str], None]
 
 
 def refresh_active_project(
@@ -17,6 +19,7 @@ def refresh_active_project(
     workspace: Path | None = None,
     project: Path | None = None,
     force: bool = False,
+    progress: ProgressFn | None = None,
 ) -> dict[str, Any]:
     from active_project_sync import sync_active_project
     from index_staleness import invalidate_stale_cache
@@ -24,6 +27,10 @@ def refresh_active_project(
     from project_context import clear_project_context_cache
     from project_switch_invalidate import clear_wrapper_snapshot_cache
     from workspace_paths import find_workspace_root, resolve_active_project_path
+
+    def _progress(message: str) -> None:
+        if progress is not None:
+            progress(message)
 
     ws = workspace or find_workspace_root()
     active = project or resolve_active_project_path()
@@ -37,17 +44,20 @@ def refresh_active_project(
     }
 
     if scope in {"project_source", "all"}:
-        sync_result = sync_active_project(workspace=ws, project=active)
+        _progress("project_source: collecting symbols and rebuilding index (may take several minutes)")
+        sync_result = sync_active_project(workspace=ws, project=active, progress=_progress)
         payload["projectSourceSync"] = sync_result
         if not sync_result.get("ok", True):
             payload["ok"] = False
 
     if scope in {"editor_metadata", "all"}:
-        setup = ensure_active_project_ready(active, force=force, skip_plugin=True)
+        _progress("editor_metadata: syncing exports and index (may launch Editor export)")
+        setup = ensure_active_project_ready(active, force=force, skip_plugin=True, progress=_progress)
         payload["editorMetadataSetup"] = setup
         if not setup.get("ok", True):
             payload["ok"] = False
 
+    _progress("invalidating project-scoped caches")
     clear_project_context_cache()
     clear_wrapper_snapshot_cache()
     invalidate_stale_cache()
