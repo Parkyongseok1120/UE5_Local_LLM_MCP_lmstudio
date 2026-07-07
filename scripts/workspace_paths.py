@@ -20,7 +20,7 @@ DEFAULT_SHARED_CONFIG: dict = {
     "autoSetupOnProjectSwitch": True,
 }
 
-WORKSPACE_DIR_NAMES = ("UE5_Local_LLM_MCP_lmstudio", "Unreal58-RAG", "Gemma4 LORA", "UnrealEngine57Dev_RAG")
+WORKSPACE_DIR_NAMES = ("UE5_Local_LLM_MCP_lmstudio", "Unreal58-RAG", "UnrealEngine57Dev_RAG")
 
 LEGACY_LOCATOR_PREFIXES: tuple[str, ...] = ()
 

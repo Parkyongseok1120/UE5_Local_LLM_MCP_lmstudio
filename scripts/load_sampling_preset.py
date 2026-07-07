@@ -186,6 +186,7 @@ def profile_edit_limits(profile: str = "") -> dict[str, Any]:
         "rangeReadContextLines": int(policy.get("rangeReadContextLines") or 0),
         "patchChangedLineLimit": int(policy.get("patchChangedLineLimit") or 0),
         "noOpGuard": bool(policy.get("noOpGuard", False)),
+        "twoPhase": bool(policy.get("twoPhase", False)),
     }
 
 

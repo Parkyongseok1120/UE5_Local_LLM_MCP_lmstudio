@@ -22,6 +22,9 @@ Legacy standalone layout (still supported):
 - `read_file`
 - `write_file`
 - `replace_in_file`
+- `propose_file_deletions` (extended; dry-run deletion plan with count/reason/impact)
+- `delete_file` (extended; `ALLOW_SOURCE_DELETE=1`, Source/ only, requires matching plan token)
+- `static_validate_project` (extended)
 - `search_files`
 - `run_command`
 - `build_unreal_project` — 인자 생략 시 자동 감지 후 UBT 실행

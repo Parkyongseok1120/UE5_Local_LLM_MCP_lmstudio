@@ -25,6 +25,12 @@ if (-not $config.mcpServers."unreal-agent".env) {
 $config.mcpServers."unreal-agent".env.ALLOW_WRITE = "1"
 $config.mcpServers."unreal-agent".env.ALLOW_COMMANDS = "1"
 $config.mcpServers."unreal-agent".env.ALLOW_UNREAL_BUILD = "1"
+$config.mcpServers."unreal-agent".env.VALIDATE_ON_WRITE = "1"
+if (-not $config.mcpServers."unreal-agent".PSObject.Properties.Name.Contains("timeout")) {
+    $config.mcpServers."unreal-agent" | Add-Member -NotePropertyName timeout -NotePropertyValue 720000
+} else {
+    $config.mcpServers."unreal-agent".timeout = 720000
+}
 
 $json = $config | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText($mcpPath, $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding $false))

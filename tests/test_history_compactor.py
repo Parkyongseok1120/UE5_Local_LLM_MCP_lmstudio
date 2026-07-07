@@ -4,13 +4,13 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from lmstudio_unreal_wrapper import (
+from prompt_history import (
     COMPACT_SUMMARY_PREFIX,
     cap_message_history,
     prepare_messages_for_attempt,
     summarize_compacted_messages,
-    write_token_usage,
 )
+from lmstudio_unreal_wrapper import write_token_usage
 
 
 def test_cap_message_history_preserves_summary_and_tail():
@@ -41,7 +41,7 @@ def test_compact_summary_truncation_preserves_prefix():
         }
     ]
 
-    summary = summarize_compacted_messages(messages, 240)
+    summary, _ = summarize_compacted_messages(messages, 240)
 
     assert summary.startswith(COMPACT_SUMMARY_PREFIX)
     assert len(summary) <= 240
@@ -63,7 +63,7 @@ def test_prepare_messages_for_attempt_uses_new_chat_slice(monkeypatch):
         {"role": "assistant", "content": '{"answer":"patched","patches":[{"path":"Source/Game/Foo.cpp"}]}'},
     ]
 
-    prepared = prepare_messages_for_attempt(messages, "compile_fix", attempt=2)
+    prepared, _ = prepare_messages_for_attempt(messages, "compile_fix", attempt=2)
 
     assert len(prepared) == 2
     assert prepared[0]["role"] == "system"

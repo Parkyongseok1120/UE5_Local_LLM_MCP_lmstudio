@@ -48,12 +48,6 @@ Before using `read_file` on a large header:
 2. Use `read_file_range` with a +/-30-line window around the error line, not the full file.
 3. Only read the full file if `read_file_range` is insufficient.
 
-## Tool order
+## Tool sequence
 
-1. `unreal_get_active_project`
-2. `unreal_agent_plan`; follow `toolPolicy`, `writeGate`, `checkpoints`, and `stopConditions`
-3. **Classify error first** (see table above), then `unreal_rag_search` with classified `mode`
-4. `unreal_symbol_lookup` OR `read_file_range` before any edit (prefer symbol lookup)
-5. For UHT/include/module errors, read only the failing header/cpp range and the actual `*.Build.cs` before patching
-6. `replace_in_file` with `expectedOccurrences=1`; `write_file` only for brand-new files
-7. `build_unreal_project` after C++ or Build.cs edits
+Follow the **Standard sequence** in [`lmstudio_compact_mcp_base.md`](lmstudio_compact_mcp_base.md). The model-specific constraints above still apply.

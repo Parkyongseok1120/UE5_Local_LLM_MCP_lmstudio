@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +38,12 @@ def sync_active_project(
     project: Path | None = None,
     index_dir: Path | None = None,
     workspace: Path | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
+    def _progress(message: str) -> None:
+        if progress is not None:
+            progress(message)
+
     workspace = workspace or find_workspace_root()
     active = project or resolve_active_project_path()
     if not active or not active.is_file():
@@ -91,6 +97,7 @@ def sync_active_project(
 
     symbols_path = idx / "raw_project_symbols.jsonl"
     if source_root.is_dir():
+        _progress("collect_unreal_symbols.py (project source scan)")
         if symbols_path.is_file():
             symbols_path.unlink()
         symbol_step = _run_script(
@@ -138,6 +145,7 @@ def sync_active_project(
         ok = False
 
     for step_name in ("incremental_build.py", "warm_symbol_cache.py"):
+        _progress(step_name)
         step = _run_script(workspace, step_name, "--out-dir", data_rel_text) if step_name == "incremental_build.py" else _run_script(workspace, step_name)
         steps.append({"name": step_name, **step})
         if step_name == "incremental_build.py" and not step["ok"]:

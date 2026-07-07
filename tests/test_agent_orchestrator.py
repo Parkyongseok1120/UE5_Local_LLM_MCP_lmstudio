@@ -166,6 +166,28 @@ def test_asset_metadata_modes_use_metadata_tool_policy():
     assert "unreal_asset_graph_lookup" in plan.tool_policy
 
 
+def test_code_sketch_verify_edit_blocked():
+    plan = build_agent_plan("Sketch a HealthComponent API", "codegen")
+    assert plan.task_kind == "code_sketch"
+    result = verify_edit_allowed(plan, files_count=1, patches_count=0)
+    assert result["ok"] is False
+    assert any("code_sketch" in issue for issue in result["issues"])
+
+
+def test_edit_plan_suggests_search_files_before_write(monkeypatch):
+    monkeypatch.setattr(
+        "project_context.resolve_active_project_context",
+        lambda: {
+            "ok": True,
+            "sourceBrowsePath": "Project/Source/Game",
+            "projectName": "Game",
+        },
+    )
+    plan = build_agent_plan("Add UHealthComponent under SharedComponent", "agent_edit")
+    tools = [call["tool"] for call in plan.suggested_tool_calls]
+    assert "search_files" in tools
+
+
 def test_verify_edit_limit_from_profile():
     plan = build_agent_plan("Implement dodge component", "agent_edit")
     max_files = int(plan.write_gate["maxFilesPerEdit"])

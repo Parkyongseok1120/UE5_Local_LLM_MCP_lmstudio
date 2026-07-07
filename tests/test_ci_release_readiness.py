@@ -52,11 +52,14 @@ def test_ci_eval_regression_skips_rag_and_mcp_environment_dependent_steps() -> N
     fail_cmd = [sys.executable, "-c", "raise SystemExit(38)"]
 
     retrieval = run_eval_regression.run_cmd("retrieval_unreal_programming", fail_cmd, ci=True, step_timeout=1)
+    sequencer = run_eval_regression.run_cmd("retrieval_sequencer", fail_cmd, ci=True, step_timeout=1)
     bench = run_eval_regression.run_cmd("bench_mcp", fail_cmd, ci=True, step_timeout=1)
 
     assert retrieval["pass"] is True
     assert retrieval["skipped"] is True
     assert "RAG index/performance-dependent step skipped in CI" in retrieval["reason"]
+    assert sequencer["pass"] is True
+    assert sequencer["skipped"] is True
     assert bench["pass"] is True
     assert bench["skipped"] is True
     assert bench["exitCode"] == 0
@@ -84,3 +87,57 @@ def test_node_install_command_available_via_cmd_on_windows() -> None:
 
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip()
+
+
+def test_eval_regression_compare_ignores_intentionally_skipped_pytest_baseline_steps() -> None:
+    baseline = {
+        "steps": [
+            {"label": "eval_reasoning", "pass": True},
+            {"label": "test_agent_orchestrator", "pass": True},
+        ],
+        "metrics": {},
+    }
+    current = {
+        "steps": [
+            {"label": "eval_reasoning", "pass": True},
+        ],
+        "metrics": {},
+    }
+
+    delta = run_eval_regression.compare_reports(
+        current,
+        baseline,
+        ignored_missing_labels={"test_agent_orchestrator"},
+    )
+
+    assert delta["regressions"] == []
+
+
+def test_eval_regression_compare_flags_unexpected_missing_green_step() -> None:
+    baseline = {
+        "steps": [
+            {"label": "eval_reasoning", "pass": True},
+            {"label": "report_tier_kpi", "pass": True},
+        ],
+        "metrics": {},
+    }
+    current = {
+        "steps": [
+            {"label": "eval_reasoning", "pass": True},
+        ],
+        "metrics": {},
+    }
+
+    delta = run_eval_regression.compare_reports(current, baseline)
+
+    assert "step report_tier_kpi missing from current run" in delta["regressions"]
+
+
+def test_agent_delete_file_requires_structured_deletion_plan() -> None:
+    server_js = _read("lmstudio-unreal-agent-mcp/src/server.js")
+
+    assert 'name: "propose_file_deletions"' in server_js
+    assert 'No files were deleted' in server_js
+    assert 'wait for explicit user approval' in server_js
+    assert 'approvalToken does not match this deletion explanation' in server_js
+    assert '["path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"]' in server_js

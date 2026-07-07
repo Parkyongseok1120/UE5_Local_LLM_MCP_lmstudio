@@ -12,21 +12,37 @@ SCAN_DIRS = (
     ROOT / "installer",
     ROOT / "config",
     ROOT / ".github",
+    ROOT / "docs",
+    ROOT / "prompts",
+    ROOT / "tests",
+    ROOT / "lmstudio-unreal-agent-mcp",
+    ROOT / "RAG_Project_Guidelines",
 )
+SCAN_ROOT_MARKDOWN = True
+TEXT_SUFFIXES = {".bat", ".json", ".ps1", ".py", ".txt", ".yml", ".yaml", ".md"}
 SKIP_FILES = {
     ROOT / "installer" / "Verify-Oss-Ready.ps1",
+    ROOT / "CONTRIBUTING.md",
+    ROOT / "SECURITY.md",
+    ROOT / "tests" / "test_public_path_hygiene.py",
 }
-TEXT_SUFFIXES = {".bat", ".json", ".ps1", ".py", ".txt", ".yml", ".yaml"}
 
 
 def _text_files():
+    seen: set[Path] = set()
     for base in SCAN_DIRS:
         if not base.exists():
             continue
         for path in base.rglob("*"):
-            if not path.is_file() or path in SKIP_FILES:
+            if not path.is_file() or path in SKIP_FILES or path in seen:
                 continue
             if path.suffix.lower() in TEXT_SUFFIXES:
+                seen.add(path)
+                yield path
+    if SCAN_ROOT_MARKDOWN:
+        for path in ROOT.glob("*.md"):
+            if path.is_file() and path not in SKIP_FILES and path not in seen:
+                seen.add(path)
                 yield path
 
 

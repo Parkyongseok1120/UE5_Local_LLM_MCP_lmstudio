@@ -63,7 +63,7 @@ Paste [`prompts/lmstudio_session_bootstrap.md`](../prompts/lmstudio_session_boot
 
 Do not use `run_javascript`, `js-code-sandbox`, Deno file APIs, Node `fs`, or browser/code-sandbox tools for project file I/O. If LM Studio exposes the JavaScript/TypeScript Code Sandbox plugin, hide or disable it for Unreal coding chats.
 
-Task templates: [`lmstudio_user_compile_fix.md`](../prompts/lmstudio_user_compile_fix.md), [`lmstudio_user_agent_edit.md`](../prompts/lmstudio_user_agent_edit.md)
+Task templates: [`lmstudio_user_compile_fix.md`](../prompts/lmstudio_user_compile_fix.md), [`lmstudio_user_agent_edit.md`](../prompts/lmstudio_user_agent_edit.md), [`lmstudio_user_code_sketch.md`](../prompts/lmstudio_user_code_sketch.md)
 
 ## 5. Standard loop
 
@@ -75,13 +75,14 @@ Rules:
 - Do **not** paste full `.cpp` in chat when MCP write is available.
 - Do **not** say "done" without build output.
 - Existing source files are patch-only. `write_file` is for brand-new files; existing `.h`, `.cpp`, and `.cs` writes are blocked by default in `unreal-agent`.
-- `replace_in_file` / `write_file` run static validation when `VALIDATE_ON_WRITE=1` (blocks bad includes like `Game/Framework/`).
+- `replace_in_file` / `write_file` run static validation when `VALIDATE_ON_WRITE=1` (default on when `ALLOW_WRITE=1` via `patch_mcp_config.py`; blocks duplicate basenames, bad includes like `Game/Framework/`, and missing project includes).
 
 ## 6. Modes
 
 | Task | RAG mode | Notes |
 |------|----------|-------|
 | New component | `prototype_component` | one UActorComponent |
+| Code sketch / 시안 | `code_sketch` | draft only; symbol-verified, no writes/build |
 | Compile error | `compile_fix` | paste error line |
 | Runtime crash | `runtime_debug` | paste log/callstack |
 | Refactor plan | `refactor_r0`..`r4` | plan only first |

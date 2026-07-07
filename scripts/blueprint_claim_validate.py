@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from blueprint_graph_format import blueprint_row_search_text, iter_pin_links
+from blueprint_graph_format import blueprint_row_search_text, iter_graph_nodes, iter_pin_links
 from project_row_filter import filter_rows_by_project
 from workspace_paths import load_shared_config
 
@@ -75,6 +75,34 @@ def _matching_rows(rows: list[dict[str, Any]], identifiers: list[str]) -> list[d
     return matches
 
 
+def infer_blueprint_coverage(meta: dict[str, Any]) -> str:
+    """Return full|partial|registry_only based on export metadata richness."""
+    if meta.get("graph_links") or iter_pin_links(meta):
+        return "full"
+    nodes = iter_graph_nodes(meta)
+    if nodes or meta.get("graphs"):
+        has_pins = any(isinstance(node, dict) and node.get("pins") for node in nodes)
+        if has_pins:
+            return "full"
+        return "partial"
+    if any(meta.get(key) for key in ("variables", "functions", "interfaces", "parent_class")):
+        return "partial"
+    if meta.get("asset_path") or meta.get("generated_class"):
+        return "registry_only"
+    return "registry_only"
+
+
+def _coverage_for_matches(matches: list[dict[str, Any]]) -> str:
+    if not matches:
+        return "registry_only"
+    levels = {infer_blueprint_coverage(_row_metadata(row)) for row in matches}
+    if "full" in levels:
+        return "full"
+    if "partial" in levels:
+        return "partial"
+    return "registry_only"
+
+
 def validate_blueprint_claims(
     claims: list[str],
     index_dir: str | Path | None = None,
@@ -125,6 +153,7 @@ def validate_blueprint_claims(
             {
                 "claim": text[:500],
                 "verdict": verdict,
+                "coverage": _coverage_for_matches(matches),
                 "identifiers": identifiers,
                 "assetExists": bool(matching_assets),
                 "nodeEvidenceCount": len(node_evidence),

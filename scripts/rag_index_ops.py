@@ -9,17 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-RAW_INPUT_FILES = (
-    "raw_guidelines.jsonl",
-    "raw_game_design.jsonl",
-    "raw_symbols.jsonl",
-    "raw_module_graph.jsonl",
-    "raw_project_profiles.jsonl",
-    "raw_build_logs.jsonl",
-    "raw_docs.jsonl",
-    "raw_source.jsonl",
-    "raw_projects.jsonl",
-)
+from index_inputs import RAW_INPUT_FILES, existing_input_paths
 
 
 def _iso_mtime(path: Path) -> str | None:

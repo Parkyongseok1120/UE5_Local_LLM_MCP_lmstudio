@@ -21,14 +21,16 @@ RAG_ESSENTIAL = {
     "unreal_symbol_lookup",
     "unreal_agent_session",
     "unreal_rag_capabilities",
-    "unreal_refactor_manager_plan",
-    "unreal_material_porting_plan_validate",
-    "unreal_editor_metadata_status",
-    "unreal_run_editor_export",
-    "unreal_sync_editor_metadata",
-    "unreal_asset_graph_lookup",
-    "unreal_blueprint_claim_validate",
-    "unreal_material_claim_validate",
+    "unreal_code_sketch_claim_validate",
+}
+
+RAG_EXTENDED_ONLY = {
+    "unreal_rag_refresh",
+    "unreal_start_rag_refresh",
+    "unreal_rag_refresh_status",
+    "unreal_start_compile_loop",
+    "unreal_compile_loop_status",
+    "unreal_cancel_compile_loop",
 }
 
 AGENT_ESSENTIAL = {
@@ -65,11 +67,22 @@ def test_essential_tools_disabled_exposes_many_tools(monkeypatch, tmp_path):
 
 def test_essential_tools_enabled_filters_rag_tools(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.delenv("MCP_EXTENDED_TOOLS", raising=False)
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")
     names = {tool["name"] for tool in server.all_tool_definitions()}
     assert names == set(mod.ESSENTIAL_TOOL_NAMES)
     assert names == RAG_ESSENTIAL
+    assert "unreal_rag_refresh" not in names
+
+
+def test_extended_tools_enabled_exposes_refresh_and_compile_loop(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_EXTENDED_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    names = {tool["name"] for tool in server.all_tool_definitions()}
+    assert "unreal_start_rag_refresh" in names
+    assert "unreal_start_compile_loop" in names
 
 
 def test_unreal_agent_plan_description_mentions_chat_first(monkeypatch, tmp_path):
@@ -86,3 +99,11 @@ def test_agent_essential_tool_names_documented():
     server_js = (ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js").read_text(encoding="utf-8")
     for name in AGENT_ESSENTIAL:
         assert f'"{name}"' in server_js
+
+
+def test_agent_extended_delete_tools_are_documented_in_server() -> None:
+    server_js = (ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js").read_text(encoding="utf-8")
+
+    assert '"propose_file_deletions"' in server_js
+    assert '"delete_file"' in server_js
+    assert 'Required before delete_file' in server_js

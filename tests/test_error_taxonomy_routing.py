@@ -109,3 +109,25 @@ def test_known_module_fix_routes_still_allow_dependency_flow():
         assert route["broadMode"] == "module_fix"
         assert "owner Build.cs" in route["allowedPatchTargets"]
         assert not route["buildCsFirstWarning"]
+
+
+def test_route_sequencer_binding_confusion_log_first():
+    route = error_taxonomy.route_error_action("LevelSequence binding actor mismatch during playback")
+
+    assert route["errorSubkind"] == "SEQUENCER_BINDING_CONFUSION"
+    assert route["routePriorityApplied"] == "sequencer_binding_log_first"
+    assert "sequencer asset" in route["requiredReads"]
+
+
+def test_route_tick_order_suspect_log_first():
+    route = error_taxonomy.route_error_action("PrimaryActorTick order suspect before TG_PrePhysics")
+
+    assert route["errorSubkind"] == "TICK_ORDER_SUSPECT"
+    assert route["routePriorityApplied"] == "tick_order_log_first"
+
+
+def test_route_api_version_mismatch_log_first():
+    route = error_taxonomy.route_error_action("API_VERSION mismatch for deprecated UE macro")
+
+    assert route["errorSubkind"] == "API_VERSION_MISMATCH"
+    assert route["routePriorityApplied"] == "api_version_log_first"

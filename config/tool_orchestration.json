@@ -71,6 +71,17 @@
       ],
       "writesAllowed": true
     },
+    "code_sketch": {
+      "sequence": [
+        "unreal_get_active_project",
+        "unreal_agent_plan",
+        "unreal_rag_search",
+        "unreal_symbol_lookup",
+        "unreal_code_sketch_claim_validate",
+        "answer_with_evidence"
+      ],
+      "writesAllowed": false
+    },
     "compile_fix": {
       "sequence": [
         "parse_build_log",

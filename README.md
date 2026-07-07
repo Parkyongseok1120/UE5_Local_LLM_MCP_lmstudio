@@ -1,7 +1,7 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.2.1
+# UE5_Local_LLM_MCP_lmstudio 1.2.3
 
 > **Platform: Windows 10/11 only.** All install scripts are PowerShell/BAT. macOS and Linux are not supported.
 
@@ -38,6 +38,52 @@ If this project has been useful to you, please consider sponsoring — it helps 
 > 학업 일정상 향후 **약 4개월간**은 소소한 버그 수정 및 안정화 위주의 업데이트만 이루어질 예정입니다. macOS·Linux 지원과 LM Studio 외 다른 LLM 프론트엔드(Ollama, Open WebUI 등) 연동은 로드맵에 있지만, 이 기간 동안은 적극적인 개발이 어려울 것 같습니다.
 >
 > 넓은 양해 부탁드립니다.
+
+---
+
+## What's New Since 1.2.2 (v1.2.3 stabilization)
+
+Post-1.2.2 work focuses on **LM Studio chat safety** and **regression gates**, after local-agent failures such as duplicate `HealthComponent` paths, wrong includes, and unsafe cleanup attempts.
+
+### Agent write safety (`unreal-agent`)
+
+- **`VALIDATE_ON_WRITE` default-on** when writes are enabled; validation failures are **fail-closed** instead of silently skipped.
+- **`write-guards.js`**: blocks basename collisions under `Source/`, protected paths (`Saved/`, `Binaries/`, existing `.ini`/`.uproject`), and unsafe `createDirs`.
+- **Static rules**: `DUPLICATE_SOURCE_BASENAME`, `INCLUDE_PATH_NOT_FOUND` in `scripts/unreal_static_validate.py`.
+- **`static_validate_project`** (extended): full-project static check before UBT.
+- **Agent MCP timeout** patched to **720s**; `build_unreal_project` accepts optional `timeoutMs`.
+
+### Deletion safety (latest)
+
+- **`propose_file_deletions`** (extended): does **not** delete anything. Returns a structured plan with file count, path, file name, reason, impact if kept, and impact if deleted.
+- **`delete_file`** (extended): requires `completedEditsSummary`, `reason`, `ifNotDeleted`, `ifDeleted`, and a matching per-file **`approvalToken`** from the proposal. `ALLOW_SOURCE_DELETE=1` still required; Source/ scope only.
+- **Orchestrator / prompts / docs** now enforce: **finish edits → propose deletion plan → visible report → explicit user approval → delete**.
+
+### RAG / MCP reliability (`unreal-rag`)
+
+- **`unreal_rag_refresh` timeout** patched to **420s** in `patch_mcp_config.py` (long refresh no longer dies at default LM Studio ~60s).
+- **Async refresh**: `unreal_start_rag_refresh` + `unreal_rag_refresh_status` for non-blocking long jobs.
+- **Compile loop lifecycle**: optional `timeoutSec`, `unreal_cancel_compile_loop`, stale job pruning.
+- **Tool tiers**: Essential (9+10 core tools) vs Extended (`MCP_EXTENDED_TOOLS=1` for refresh, validators, compile loop, deletion tools).
+
+### Orchestration & regression
+
+- Edit checkpoints: `search_files` before new `.h`/`.cpp`, fix validation findings before build, compile loop for multi-file work.
+- `verify_edit_allowed` blocks writes on `code_sketch` and `runtime_debug`.
+- Runtime taxonomy routes wired for sequencer/tick debug flows.
+- Expanded pytest bundle in `run_eval_regression.py`; `rag.ps1 eval-sequencer` wired.
+
+**Apply locally after pull:**
+
+```powershell
+python scripts/patch_mcp_config.py
+# Restart LM Studio → verify unreal-rag timeout 420000, unreal-agent timeout 720000, VALIDATE_ON_WRITE=1
+# Optional extended tools: MCP_EXTENDED_TOOLS=1
+# Optional source delete: ALLOW_SOURCE_DELETE=1 (only after propose_file_deletions + user approval)
+```
+
+> **1.2.2 이후 요약 (v1.2.3)**  
+> HealthComponent류 중복 생성·잘못된 include·무분별 삭제를 막기 위한 안정화 패치입니다. 쓰기 시 정적 검증 기본 활성화, basename 충돌 차단, RAG refresh 비동기/타임아웃, Essential/Extended 도구 분리, 회귀 테스트 확장이 포함됩니다. **삭제는 `propose_file_deletions`로 계획 보고 → 사용자 명시 승인 → `delete_file`** 순서만 허용됩니다.
 
 ---
 

@@ -140,7 +140,7 @@ if (Test-Path $wp) {
     if ($py -notlike '*"Unreal58-RAG"*') {
         $py = $py.Replace(
             'WORKSPACE_DIR_NAMES = ("Unreal58-RAG", "Gemma4 LORA", "UnrealEngine57Dev_RAG")',
-            'WORKSPACE_DIR_NAMES = ("Unreal58-RAG", "Unreal58-RAG", "Gemma4 LORA", "UnrealEngine57Dev_RAG")'
+            'WORKSPACE_DIR_NAMES = ("Unreal58-RAG", "Unreal58-RAG", "UnrealEngine57Dev_RAG")'
         )
         $py = $py.Replace(
             'env_root = os.environ.get("UNREAL58_ROOT", "").strip()',
@@ -165,10 +165,12 @@ if (Test-Path $patch) {
 powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\Install-ClineUnrealMcp.ps1
 
 if (-not $SkipPortableBackup) {
-    Write-Host "Building D: portable backup..."
+    $portableDir = Join-Path $env:TEMP "Unreal58-RAG-Portable"
+    $portableZip = Join-Path $env:TEMP "Unreal58-RAG-Portable.zip"
+    Write-Host "Building portable backup at $portableDir ..."
     powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\Build-PortablePackage.ps1 `
-        -OutputDir "D:\Unreal58-RAG-Portable" `
-        -ZipPath "D:\Unreal58-RAG-Portable.zip"
+        -OutputDir $portableDir `
+        -ZipPath $portableZip
 }
 
 Write-Host "=== Done. Restart LM Studio and Cline. ==="

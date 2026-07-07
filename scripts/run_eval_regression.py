@@ -42,7 +42,7 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int =
                 "stdoutTail": "",
                 "stderrTail": "",
             }
-        if label in {"retrieval_unreal_programming", "bench_mcp"}:
+        if label in {"retrieval_unreal_programming", "retrieval_sequencer", "bench_mcp"}:
             return {
                 "label": label,
                 "exitCode": 0,
@@ -98,28 +98,30 @@ def collect_kpi_metrics() -> dict:
     return metrics
 
 
-def compare_reports(current: dict, baseline: dict | None) -> dict:
+def compare_reports(current: dict, baseline: dict | None, *, ignored_missing_labels: set[str] | None = None) -> dict:
     if not baseline:
         return {"hasBaseline": False, "regressions": [], "improvements": []}
     regressions: list[str] = []
     improvements: list[str] = []
-    cur_pass = int(current.get("passCount") or 0)
-    base_pass = int(baseline.get("passCount") or 0)
-    cur_total = int(current.get("total") or 0)
-    base_total = int(baseline.get("total") or 0)
-    if cur_pass < base_pass or cur_total < base_total:
-        regressions.append(f"step pass count {cur_pass}/{cur_total} vs baseline {base_pass}/{base_total}")
-    elif cur_pass > base_pass:
-        improvements.append(f"step pass count improved to {cur_pass}/{cur_total}")
+    ignored_missing_labels = ignored_missing_labels or set()
 
     cur_steps = {s["label"]: s for s in current.get("steps") or []}
     base_steps = {s["label"]: s for s in baseline.get("steps") or []}
+
+    for label, prev in base_steps.items():
+        if label in cur_steps or label in ignored_missing_labels:
+            continue
+        if prev.get("pass"):
+            regressions.append(f"step {label} missing from current run")
+
     for label, row in cur_steps.items():
         prev = base_steps.get(label)
         if prev and prev.get("pass") and not row.get("pass"):
             regressions.append(f"step {label} regressed")
         if prev and not prev.get("pass") and row.get("pass"):
             improvements.append(f"step {label} improved")
+        if not prev and row.get("pass"):
+            improvements.append(f"step {label} added")
 
     cur_metrics = current.get("metrics") or {}
     base_metrics = baseline.get("metrics") or {}
@@ -151,6 +153,7 @@ def main() -> int:
 
     steps_spec = [
         ("retrieval_unreal_programming", [python, str(SCRIPTS / "evaluate_rag_queries.py"), "--query-set", "config/rag_eval_unreal_programming_queries.json"]),
+        ("retrieval_sequencer", [python, str(SCRIPTS / "evaluate_rag_queries.py"), "--query-set", "config/rag_eval_sequencer_queries.json"]),
         ("eval_reasoning", [python, str(SCRIPTS / "eval_reasoning.py")]),
         ("eval_e2e_compile", [python, str(SCRIPTS / "eval_e2e_compile.py")]),
         ("eval_pass_at_k_dry", [python, str(SCRIPTS / "eval_pass_at_k.py"), "--dry-run"]),
@@ -158,11 +161,17 @@ def main() -> int:
         ("bench_mcp", [python, str(SCRIPTS / "bench_mcp.py")]),
         ("report_tier_kpi", [python, str(SCRIPTS / "report_tier_kpi.py")]),
     ]
+    pytest_steps = [
+        ("test_agent_orchestrator", [python, "-m", "pytest", "tests/test_agent_orchestrator.py", "-q"]),
+        ("test_apply_patch", [python, "-m", "pytest", "tests/test_apply_patch.py", "-q"]),
+        ("test_retry_state", [python, "-m", "pytest", "tests/test_retry_state.py", "-q"]),
+        ("test_unreal_static_validate", [python, "-m", "pytest", "tests/test_unreal_static_validate.py", "-q"]),
+        ("test_validate_project_sources", [python, "-m", "pytest", "tests/test_validate_project_sources.py", "-q"]),
+        ("test_error_taxonomy_routing", [python, "-m", "pytest", "tests/test_error_taxonomy_routing.py", "-q"]),
+        ("test_retrieval_guideline_sidecar", [python, "-m", "pytest", "tests/test_retrieval_guideline_sidecar.py", "-q"]),
+    ]
     if not args.skip_pytest:
-        steps_spec.extend([
-            ("test_agent_orchestrator", [python, "-m", "pytest", "tests/test_agent_orchestrator.py", "-q"]),
-            ("test_apply_patch", [python, "-m", "pytest", "tests/test_apply_patch.py", "-q"]),
-        ])
+        steps_spec.extend(pytest_steps)
     if args.live:
         steps_spec.extend([
             ("eval_soulslike_live", [python, str(SCRIPTS / "eval_soulslike_live.py"), "--no-dry-run", "--require-live"]),
@@ -192,7 +201,8 @@ def main() -> int:
 
     baseline_path = Path(args.compare) if args.compare else EVAL_DIR / "latest.json"
     baseline = load_json(baseline_path) if baseline_path.is_file() else None
-    report["delta"] = compare_reports(report, baseline)
+    ignored_missing = {label for label, _ in pytest_steps} if args.skip_pytest else set()
+    report["delta"] = compare_reports(report, baseline, ignored_missing_labels=ignored_missing)
 
     latest_json = EVAL_DIR / "latest.json"
     latest_md = EVAL_DIR / "latest.md"

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import hashlib
@@ -11,6 +10,7 @@ import json
 import re
 import sqlite3
 
+from rag_types import SearchOptions  # re-exported for backward compatibility
 
 TERM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[\uac00-\ud7a3]+")
 
@@ -391,9 +391,10 @@ def fetch_module_graph_sidecar(
             from include_owners
             where lower(symbol_name) = ?
                or lower(include_path) like ?
+            order by case when lower(symbol_name) = ? then 0 else 1 end
             limit ?
             """,
-            (basename, f"%/{basename}", limit),
+            (basename, f"%/{basename}", basename, limit),
         ):
             add_row(row)
 
@@ -452,6 +453,10 @@ GUIDELINE_SIDECAR_TITLE_PATTERNS: dict[str, list[str]] = {
     "blueprint_analysis": [
         "%shader, material, and blueprint analysis workflow%",
     ],
+    "runtime_debug": [
+        "%tick ordering and lifecycle contract%",
+        "%runtime debugging playbook%",
+    ],
 }
 
 TAXONOMY_QUERY_HINTS = (
@@ -464,12 +469,31 @@ TAXONOMY_QUERY_HINTS = (
     "material function",
 )
 
+TICK_ORDER_QUERY_HINTS = (
+    "tick order",
+    "tick ordering",
+    "tickgroup",
+    "tick group",
+    "tick prerequisite",
+    "addtickprerequisite",
+    "tick 순서",
+    "틱 순서",
+)
+
 
 def query_wants_taxonomy_sidecar(query: str, mode: str) -> bool:
-    if mode == "api_lookup":
-        return True
     raw = query.lower()
+    if mode == "api_lookup":
+        # Only inject the asset-taxonomy sidecar when the query actually asks
+        # about assets/coverage; otherwise it hijacks unrelated api_lookup
+        # queries (e.g. hallucination blocklist lookups).
+        return any(hint in raw for hint in TAXONOMY_QUERY_HINTS)
     return any(hint in raw for hint in TAXONOMY_QUERY_HINTS)
+
+
+def query_wants_tick_order_sidecar(query: str) -> bool:
+    raw = query.lower()
+    return any(hint in raw for hint in TICK_ORDER_QUERY_HINTS)
 
 
 def fetch_guideline_sidecar(
@@ -527,6 +551,12 @@ def fetch_guideline_sidecar(
     if query_wants_taxonomy_sidecar(query, mode):
         requests.append(("project_guideline", "%unreal asset taxonomy for production work%"))
 
+    if query_wants_tick_order_sidecar(query):
+        requests.append(("project_guideline", "%tick ordering and lifecycle contract%"))
+
+    if "hallucination" in query_lower or "blocklist" in query_lower or "블록리스트" in query_lower:
+        requests.append(("project_guideline", "%api hallucination blocklist%"))
+
     seen: set[str] = set()
     results: list[dict[str, Any]] = []
     for source, pattern in requests:
@@ -572,32 +602,11 @@ def merge_ranked_sidecar(
     )
 
 
-VALID_MODES = {
-    "auto",
-    "planning",
-    "design",
-    "implementation",
-    "review",
-    "agent_edit",
-    "codegen",
-    "shader",
-    "material_analysis",
-    "material_porting",
-    "blueprint_analysis",
-    "blueprint_verification",
-    "compile_fix",
-    "runtime_debug",
-    "api_lookup",
-    "module_fix",
-    "reflection_fix",
-    "multifile_refactor",
-    "prototype_component",
-    "prototype_subsystem",
-    "refactor_r0",
-    "refactor_r1",
-    "refactor_r2",
-    "refactor_r3",
-    "refactor_r4",
+from rag_modes import VALID_MODES  # single source of truth for mode names
+# code_sketch reuses codegen retrieval scoring (symbol/source-focused evidence)
+# while remaining a distinct routing/policy mode in the orchestrator.
+SCORING_MODE_ALIAS = {
+    "code_sketch": "codegen",
 }
 META_COLUMNS = (
     "project",
@@ -1090,6 +1099,25 @@ IMPLEMENTATION_HINTS = {
     "GENERATED_BODY",
     "Build.cs",
 }
+SKETCH_HINTS = {
+    "sketch",
+    "draft",
+    "example code",
+    "sample code",
+    "show me code",
+    "pseudocode",
+    "시안",
+    "초안",
+    "예시 코드",
+    "예시코드",
+    "샘플 코드",
+    "샘플코드",
+    "코드 예시",
+    "코드예시",
+    "코드 샘플",
+    "코드 초안",
+    "코드 스케치",
+}
 CODEGEN_HINTS = {
     "생성",
     "작성",
@@ -1328,19 +1356,6 @@ BLUEPRINT_ANALYSIS_HINTS.update({
 })
 
 
-@dataclass
-class SearchOptions:
-    mode: str = "auto"
-    sources: list[str] = field(default_factory=list)
-    projects: list[str] = field(default_factory=list)
-    layers: list[str] = field(default_factory=list)
-    doc_types: list[str] = field(default_factory=list)
-    genres: list[str] = field(default_factory=list)
-    extensions: list[str] = field(default_factory=list)
-    required_terms: list[str] = field(default_factory=list)
-    candidate_limit: int = 120
-
-
 def tokenize(value: str) -> list[str]:
     return [term for term in TERM_RE.findall(value) if len(term) > 1]
 
@@ -1472,6 +1487,8 @@ def resolve_mode(query: str, mode: str) -> str:
         return "api_lookup"
     if has_hint(terms, raw, AGENT_EDIT_HINTS):
         return "agent_edit"
+    if has_hint(terms, raw, SKETCH_HINTS):
+        return "code_sketch"
     if has_hint(terms, raw, CODEGEN_HINTS):
         return "codegen"
     if has_hint(terms, raw, IMPLEMENTATION_HINTS):
@@ -1577,8 +1594,9 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
     text = str(row.get("text") or "").lower()
     query_lower = " ".join(query_terms).lower()
 
-    score += MODE_SOURCE_BIAS.get(mode, {}).get(source, 0.0)
-    score += MODE_LAYER_BIAS.get(mode, {}).get(layer, 0.0)
+    bias_mode = SCORING_MODE_ALIAS.get(mode, mode)
+    score += MODE_SOURCE_BIAS.get(bias_mode, {}).get(source, 0.0)
+    score += MODE_LAYER_BIAS.get(bias_mode, {}).get(layer, 0.0)
 
     matched_terms = 0
     for term in query_terms:
@@ -1910,9 +1928,11 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
     ]
     ranked.sort(key=lambda row: (float(row.get("rank_score") or 0.0), float(row.get("score") or 0.0)))
 
-    if mode in {"module_fix", "compile_fix", "reflection_fix", "multifile_refactor", "blueprint_analysis"} or (
+    if mode in {"module_fix", "compile_fix", "reflection_fix", "multifile_refactor", "blueprint_analysis", "runtime_debug"} or (
         mode == "implementation" and "project profile" in query.lower()
-    ) or query_wants_taxonomy_sidecar(query, mode):
+    ) or query_wants_taxonomy_sidecar(query, mode) or query_wants_tick_order_sidecar(query) or (
+        mode == "api_lookup" and ("hallucination" in query.lower() or "blocklist" in query.lower())
+    ):
         guideline_sidecar = fetch_guideline_sidecar(conn, mode, query, limit=max(8, top_k))
         for preferred_mode in preferred_modes_from_error_route(query, mode):
             if preferred_mode != mode:
@@ -1940,6 +1960,10 @@ def search(index: Path, query: str, top_k: int, options: SearchOptions | None = 
                     boost = 45.0
                 if sym in header_names or any(sym == h or path.endswith("/" + h) for h in header_names):
                     boost = 100.0
+                if sym in header_names:
+                    # Prefer the exact-basename include_owner row over full-path
+                    # duplicates so evals and agents see the canonical entry first.
+                    boost += 30.0
                 if boost:
                     row["rank_score"] = float(row.get("rank_score") or 0.0) - boost
             merged_map: dict[str, dict[str, Any]] = {str(r["chunk_id"]): r for r in ranked}

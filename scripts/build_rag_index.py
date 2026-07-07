@@ -18,6 +18,12 @@ from workspace_paths import canonical_workspace_root, find_workspace_root, norma
 
 TOKEN_RE = re.compile(r"\S+")
 
+REPLACE_PROJECT_SOURCES = frozenset({"unreal_project_text", "unreal_symbol"})
+
+
+def replace_project_enabled() -> bool:
+    return os.environ.get("ENABLE_REPLACE_PROJECT", "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 def approx_tokens(text: str) -> list[str]:
     return TOKEN_RE.findall(text)
@@ -298,6 +304,18 @@ def create_schema(conn: sqlite3.Connection) -> None:
             values (new.rowid, new.title, new.locator, new.symbol_name, new.symbol_kind, new.module_name, new.error_code, new.error_file, new.text);
         end;
 
+        create trigger chunks_ad after delete on chunks begin
+            insert into chunks_fts(chunks_fts, rowid, title, locator, symbol_name, symbol_kind, module_name, error_code, error_file, text)
+            values('delete', old.rowid, old.title, old.locator, old.symbol_name, old.symbol_kind, old.module_name, old.error_code, old.error_file, old.text);
+        end;
+
+        create trigger chunks_au after update on chunks begin
+            insert into chunks_fts(chunks_fts, rowid, title, locator, symbol_name, symbol_kind, module_name, error_code, error_file, text)
+            values('delete', old.rowid, old.title, old.locator, old.symbol_name, old.symbol_kind, old.module_name, old.error_code, old.error_file, old.text);
+            insert into chunks_fts(rowid, title, locator, symbol_name, symbol_kind, module_name, error_code, error_file, text)
+            values (new.rowid, new.title, new.locator, new.symbol_name, new.symbol_kind, new.module_name, new.error_code, new.error_file, new.text);
+        end;
+
         create index chunks_source_idx on chunks(source);
         create index chunks_project_idx on chunks(project);
         create index chunks_layer_idx on chunks(layer);
@@ -505,6 +523,263 @@ def stable_module_graph_id(symbol_kind: str, key: str, title: str) -> str:
     return hashlib.sha1(f"{symbol_kind}:{key}:{title}".encode("utf-8")).hexdigest()
 
 
+def doc_matches_replace_project(source: str, metadata: dict, project_name: str) -> bool:
+    if source not in REPLACE_PROJECT_SOURCES:
+        return False
+    project = str(metadata.get("project") or "").strip()
+    if project and project == project_name:
+        return True
+    relative_path = str(metadata.get("relative_path") or metadata.get("path") or "").replace("\\", "/")
+    if relative_path.startswith(f"Projects/{project_name}/") or f"/{project_name}/" in relative_path:
+        return True
+    root = str(metadata.get("root") or "")
+    return project_name.lower() in root.lower()
+
+
+def delete_project_chunks(conn: sqlite3.Connection, project_name: str) -> int:
+    placeholders = ",".join("?" for _ in REPLACE_PROJECT_SOURCES)
+    cursor = conn.execute(
+        f"""
+        delete from chunks
+        where project = ?
+          and source in ({placeholders})
+        """,
+        (project_name, *sorted(REPLACE_PROJECT_SOURCES)),
+    )
+    return int(cursor.rowcount)
+
+
+def rebuild_fts_index(conn: sqlite3.Connection) -> None:
+    conn.execute("insert into chunks_fts(chunks_fts) values('rebuild')")
+
+
+def _ingest_document_chunks(
+    conn: sqlite3.Connection,
+    chunks_file,
+    doc: dict,
+    *,
+    workspace_root: Path,
+    chunk_tokens: int,
+    overlap_tokens: int,
+    document_id_counts: dict[str, int],
+    insert_batch: list[tuple],
+    batch_size: int = 500,
+) -> int:
+    source = str(doc.get("source") or "unknown")
+    metadata = doc.get("metadata") or {}
+    if isinstance(metadata, dict):
+        metadata = dict(metadata)
+    else:
+        metadata = {}
+
+    if source == "module_graph":
+        ingest_module_graph(conn, doc)
+        return 0
+
+    text = str(doc.get("text") or "").strip()
+    if not text:
+        return 0
+
+    base_document_id = str(doc.get("id") or "")
+    document_id_count = document_id_counts.get(base_document_id, 0)
+    document_id_counts[base_document_id] = document_id_count + 1
+    document_id = base_document_id if document_id_count == 0 else f"{base_document_id}:{document_id_count}"
+    title = str(doc.get("title") or document_id or "Untitled")
+    locator = normalize_locator(str(doc.get("url") or doc.get("path") or document_id), workspace_root)
+    for key in ("root", "relative_path", "path", "source_path"):
+        if metadata.get(key):
+            metadata[key] = normalize_locator(str(metadata[key]), workspace_root)
+    fields = metadata_fields(source, title, locator, metadata)
+    resolved_chunk_tokens, resolved_overlap_tokens = resolve_chunk_params(
+        source,
+        metadata,
+        default_chunk_tokens=chunk_tokens,
+        default_overlap_tokens=overlap_tokens,
+    )
+    if resolved_chunk_tokens is None or resolved_overlap_tokens is None:
+        return 0
+
+    added = 0
+    for index, chunk in enumerate(chunk_text(text, resolved_chunk_tokens, resolved_overlap_tokens)):
+        chunk_id = f"{document_id}:{index}"
+        item = {
+            "chunk_id": chunk_id,
+            "document_id": document_id,
+            "source": source,
+            "title": title,
+            "locator": locator,
+            "chunk_index": index,
+            "text": chunk,
+            "metadata": metadata,
+            **fields,
+        }
+        chunks_file.write(json.dumps(item, ensure_ascii=False) + "\n")
+        insert_batch.append(
+            (
+                chunk_id,
+                document_id,
+                source,
+                title,
+                locator,
+                fields["project"],
+                fields["relative_path"],
+                fields["extension"],
+                fields["layer"],
+                fields["doc_type"],
+                fields["genre"],
+                fields["symbol_name"],
+                fields["symbol_kind"],
+                fields["module_name"],
+                fields["error_code"],
+                fields["error_file"],
+                int(fields["path_only"]),
+                index,
+                chunk,
+                json.dumps(metadata, ensure_ascii=False),
+            )
+        )
+        if len(insert_batch) >= batch_size:
+            conn.executemany(
+                """
+                insert into chunks(
+                    chunk_id, document_id, source, title, locator, project, relative_path, extension,
+                    layer, doc_type, genre, symbol_name, symbol_kind, module_name, error_code, error_file,
+                    path_only, chunk_index, text, metadata_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                insert_batch,
+            )
+            insert_batch.clear()
+        added += 1
+    return added
+
+
+def rewrite_chunks_jsonl(
+    chunks_path: Path,
+    *,
+    project_name: str,
+    new_lines: list[str],
+) -> None:
+    kept: list[str] = []
+    if chunks_path.exists():
+        for line in chunks_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)
+                continue
+            source = str(item.get("source") or "")
+            project = str(item.get("project") or "")
+            if source in REPLACE_PROJECT_SOURCES and project == project_name:
+                continue
+            kept.append(line)
+    chunks_path.write_text("\n".join(kept + new_lines) + ("\n" if kept or new_lines else ""), encoding="utf-8")
+
+
+def build_replace_project(args: argparse.Namespace) -> None:
+    project_name = str(args.replace_project or "").strip()
+    if not project_name:
+        raise ValueError("replace-project name is required")
+    if not replace_project_enabled():
+        print(
+            "warning: --replace-project ignored because ENABLE_REPLACE_PROJECT is not set; "
+            "falling back to full rebuild",
+            flush=True,
+        )
+        build(args)
+        return
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    chunks_path = out_dir / "chunks.jsonl"
+    sqlite_path = out_dir / "rag.sqlite"
+    workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else find_workspace_root()
+    input_paths = [Path(value) for value in args.input]
+
+    if not sqlite_path.exists():
+        print("warning: index missing; falling back to full rebuild", flush=True)
+        build(args)
+        return
+
+    try:
+        conn = sqlite3.connect(sqlite_path)
+        deleted = delete_project_chunks(conn, project_name)
+        conn.commit()
+
+        new_jsonl_lines: list[str] = []
+        total_chunks = 0
+        document_id_counts: dict[str, int] = {}
+        insert_batch: list[tuple] = []
+
+        class _LineWriter:
+            def write(self, line: str) -> None:
+                new_jsonl_lines.append(line.rstrip("\n"))
+
+        writer = _LineWriter()
+        for _, _, doc in read_jsonl(input_paths):
+            source = str(doc.get("source") or "unknown")
+            metadata = doc.get("metadata") or {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if not doc_matches_replace_project(source, metadata, project_name):
+                continue
+            total_chunks += _ingest_document_chunks(
+                conn,
+                writer,
+                doc,
+                workspace_root=workspace_root,
+                chunk_tokens=args.chunk_tokens,
+                overlap_tokens=args.overlap_tokens,
+                document_id_counts=document_id_counts,
+                insert_batch=insert_batch,
+            )
+
+        if insert_batch:
+            conn.executemany(
+                """
+                insert into chunks(
+                    chunk_id, document_id, source, title, locator, project, relative_path, extension,
+                    layer, doc_type, genre, symbol_name, symbol_kind, module_name, error_code, error_file,
+                    path_only, chunk_index, text, metadata_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                insert_batch,
+            )
+
+        rebuild_fts_index(conn)
+        conn.execute("select count(*) from chunks_fts").fetchone()
+        conn.commit()
+        conn.close()
+        rewrite_chunks_jsonl(chunks_path, project_name=project_name, new_lines=new_jsonl_lines)
+
+        manifest_path = out_dir / "build_manifest.json"
+        manifest = {}
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                manifest = {}
+        manifest.update(
+            {
+                "workspaceRoot": str(canonical_workspace_root(workspace_root)),
+                "engineVersion": os.environ.get("UNREAL_ENGINE_VERSION", "5.8"),
+                "builtAt": datetime.now(timezone.utc).isoformat(),
+                "replaceProject": project_name,
+                "replacedChunkDeletes": deleted,
+                "replacedChunkInserts": total_chunks,
+            }
+        )
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"done: replace-project {project_name} deleted={deleted} inserted={total_chunks}")
+        print(f"sqlite: {sqlite_path}")
+    except sqlite3.DatabaseError as exc:
+        print(f"warning: incremental replace-project failed ({exc}); falling back to full rebuild", flush=True)
+        build(args)
+
+
 def build(args: argparse.Namespace) -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -701,6 +976,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Equivalent to --chunk-tokens 720 --overlap-tokens 96 unless overridden."
         ),
     )
+    parser.add_argument(
+        "--replace-project",
+        default="",
+        help=(
+            "Replace chunks for one project in unreal_project_text/unreal_symbol only. "
+            "Requires ENABLE_REPLACE_PROJECT=1; falls back to full rebuild on FTS failure or when disabled."
+        ),
+    )
     args = parser.parse_args(raw_args)
     args._explicit_args = _explicit_option_names(raw_args)
     return args
@@ -724,4 +1007,7 @@ def apply_compact_profile_defaults(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     _args = parse_args()
     apply_compact_profile_defaults(_args)
-    build(_args)
+    if str(_args.replace_project or "").strip():
+        build_replace_project(_args)
+    else:
+        build(_args)

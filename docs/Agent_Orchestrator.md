@@ -43,7 +43,8 @@ Plan is written to `agent_plan.json` in the wrapper run dir and prepended to pro
 
 `verify_edit_allowed(plan, files_count, patches_count)` blocks:
 
-- writes on inspect-only, answer-only, and runtime-debug tasks
+- writes on inspect-only, answer-only, code-sketch, and runtime-debug tasks
+- duplicate `.h`/`.cpp` creation without prior `search_files` (checkpoint guidance; extended mode: finish edits → `propose_file_deletions` → explicit user approval → `delete_file` with matching `approvalToken`)
 - edits when `editStrategy=no_edit`
 - bundles larger than `writeGate.maxFilesPerEdit`
 

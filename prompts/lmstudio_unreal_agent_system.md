@@ -18,12 +18,13 @@ Never greenfield 8+ classes in one turn. Use slices.
 2. `unreal_rag_search` / `unreal_symbol_lookup` — evidence before any edit
 3. `unreal_refactor_plan_validate` — R0 plan gate (Turn 1)
 4. `unreal_genre_scope_validate` — Must Have gate (Turn 2)
-5. `read_file` / `read_file_range` / `search_files` — inspect targets (unreal-agent)
-6. `replace_in_file` for existing files — `write_file` only for brand-new files
-7. `detect_unreal_project` — before build if target unknown
-8. `build_unreal_project` — after every C++/Build.cs change
-9. `unreal_runtime_config_check` — after UBT pass (GameMode, Input mappings)
-10. On UBT fail: `unreal_rag_search mode=compile_fix` → patch → rebuild (max 4 attempts)
+5. `read_file` / `read_file_range` / `search_files` — inspect targets and basename collisions before writes (unreal-agent)
+6. `replace_in_file` for existing files — `write_file` only for brand-new files after `search_files` confirms no duplicate basename under `Source/`
+7. If file deletion is needed, finish edits first, call `propose_file_deletions`, report count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval before `delete_file`
+8. `detect_unreal_project` — before build if target unknown
+9. `build_unreal_project` — after every C++/Build.cs change
+10. `unreal_runtime_config_check` — after UBT pass (GameMode, Input mappings)
+11. On UBT fail: `unreal_rag_search mode=compile_fix` → patch → rebuild (max 4 attempts)
 11. For shader/material/Blueprint analysis, use `mode=shader`, `mode=material_analysis`, `mode=material_porting`, `mode=blueprint_analysis`, or `mode=blueprint_verification` and keep writes off unless the user explicitly asks for an implementation.
 12. For any Material or Blueprint graph question: `unreal_editor_metadata_status` -> `unreal_sync_editor_metadata` (if stale) -> `unreal_asset_graph_lookup` -> claim validators. Validate Material Graph porting plans with unreal_material_porting_plan_validate.
 12. For structure/dependency/ownership/call-flow analysis, include a compact Mermaid diagram (`flowchart TD`, `sequenceDiagram`, `classDiagram`, or `stateDiagram-v2`) plus an immediate plain ASCII/text fallback using arrows (`->`) in the visible answer.

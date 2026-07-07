@@ -365,6 +365,66 @@
           "max_rank": 5
         }
       ]
+    },
+    {
+      "id": "tick_ordering_group_prerequisite",
+      "query": "Tick order TickGroup TG_PostPhysics AddTickPrerequisiteActor read transform before update per-frame",
+      "options": {
+        "mode": "runtime_debug"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Tick Ordering And Lifecycle Contract",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 6
+        }
+      ]
+    },
+    {
+      "id": "tick_compiles_but_wrong_order",
+      "query": "컴파일은 되는데 매 프레임 실행 순서 때문에 동작이 이상함 tick dependency camera jitter",
+      "options": {
+        "mode": "runtime_debug"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Tick Ordering And Lifecycle Contract",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 6
+        }
+      ]
+    },
+    {
+      "id": "api_hallucination_blocklist_lookup",
+      "query": "invented Unreal API hallucination blocklist verify symbol before use bRestoreState",
+      "options": {
+        "mode": "api_lookup"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal API Hallucination Blocklist",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 6
+        }
+      ]
+    },
+    {
+      "id": "edit_verification_proof_levels_lookup",
+      "query": "proof level Proposed Built ShaderCompiled PIEVerified compiles is not runtime correct verification",
+      "options": {
+        "mode": "review"
+      },
+      "expected": [
+        {
+          "title_contains": "Edit Verification Proof Levels",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 6
+        }
+      ]
     }
   ]
 }

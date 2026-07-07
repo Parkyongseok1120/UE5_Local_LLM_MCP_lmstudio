@@ -455,6 +455,13 @@ def run_case(
         if dry_run:
             applied = apply_golden(fixture_dir, work_dir)
             ok, detail = run_ubt(project_file, target, ubt_path, ubt_timeout)
+            blocked_by_live_coding = "blocked-by-live-coding" in detail
+            if blocked_by_live_coding:
+                print(
+                    f"[pass-at-k] {case_id}: SKIP-worthy environment failure — "
+                    "Live Coding is active. Close Unreal Editor and re-run.",
+                    flush=True,
+                )
             return {
                 "id": case_id,
                 "category": case.get("category"),
@@ -465,6 +472,7 @@ def run_case(
                 "detail": detail[:800],
                 "attempts": 1 if ok else 0,
                 "passAt1": ok,
+                "environmentBlocked": blocked_by_live_coding,
             }
 
         ok, detail, attempts, retry_metrics = run_wrapper_live(
@@ -580,8 +588,10 @@ def main() -> int:
                         break
 
     passed = sum(1 for r in results if r.get("pass"))
+    env_blocked = sum(1 for r in results if r.get("environmentBlocked"))
     total = len(results)
-    pass_rate = passed / total if total else 0.0
+    eligible_total = total - env_blocked
+    pass_rate = (passed / eligible_total) if eligible_total else 1.0
     extended_metrics = calculate_kpi_metrics(results)
     pass_at_1 = int(extended_metrics["passAt1Count"])
     pass_at_1_rate = float(extended_metrics["passAt1Rate"])
@@ -593,7 +603,9 @@ def main() -> int:
         p1 = " pass@1" if row.get("passAt1") else ""
         print(f"[{status}] {row['id']} ({row.get('mode')}){attempt_note}{p1}")
 
-    print(f"\nPass@K summary: {passed}/{total} ({pass_rate:.0%}), min {min_pass_rate:.0%}")
+    print(f"\nPass@K summary: {passed}/{eligible_total} ({pass_rate:.0%}), min {min_pass_rate:.0%}")
+    if env_blocked:
+        print(f"Environment-blocked (excluded from rate): {env_blocked}/{total}")
     if defaults.get("reportPassAt1") or config.get("tier") == "ceiling":
         print(f"Pass@1 summary: {pass_at_1}/{total} ({pass_at_1_rate:.0%})")
 
@@ -604,7 +616,9 @@ def main() -> int:
         "config": args.config,
         "maxAttempts": max_attempts,
         "passCount": passed,
-        "total": total,
+        "total": eligible_total,
+        "totalCases": total,
+        "environmentBlockedCount": env_blocked,
         "passRate": round(pass_rate, 3),
         "minPassRate": min_pass_rate,
         "pass": pass_rate >= min_pass_rate,

@@ -1,0 +1,69 @@
+{
+  "description": "Regression queries for Sequencer binding/playback knowledge (guideline 23). Requires the RAG index to include RAG_Project_Guidelines/Unreal_Programming/23_Sequencer_Binding_And_Playback_Playbook.md.",
+  "defaults": {
+    "top_k": 6,
+    "candidate_limit": 200
+  },
+  "cases": [
+    {
+      "id": "sequencer_keep_end_position",
+      "query": "시퀀서 재생이 끝난 뒤 액터 위치 유지 상태 보존 completion mode restore state",
+      "options": {
+        "mode": "runtime_debug"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Sequencer Binding And Playback Playbook",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 6
+        }
+      ]
+    },
+    {
+      "id": "sequencer_spawnable_vs_possessable",
+      "query": "Sequencer spawnable vs possessable binding difference LevelSequence MovieScene",
+      "options": {
+        "mode": "runtime_debug"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Sequencer Binding And Playback Playbook",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 6
+        }
+      ]
+    },
+    {
+      "id": "sequencer_binding_tag_vs_actor_tag",
+      "query": "Sequencer binding tag vs Actor Tag binding override dynamic binding FMovieSceneObjectBindingID",
+      "options": {
+        "mode": "runtime_debug"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Sequencer Binding And Playback Playbook",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 6
+        }
+      ]
+    },
+    {
+      "id": "sequencer_brestorestate_hallucination",
+      "query": "bRestoreState LevelSequencePlayer restore transform after playback flag",
+      "options": {
+        "mode": "runtime_debug"
+      },
+      "expected": [
+        {
+          "title_contains": "Unreal Sequencer Binding And Playback Playbook",
+          "source": "project_guideline",
+          "layer": "unreal_domain",
+          "max_rank": 6
+        }
+      ]
+    }
+  ]
+}
