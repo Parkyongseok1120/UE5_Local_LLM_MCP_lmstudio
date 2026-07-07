@@ -74,7 +74,7 @@ from project_routing import resolve_project_filters
 from sync_editor_metadata import refresh_editor_metadata, sync_editor_metadata
 from editor_export_runner import run_editor_export
 from runtime_config_checklist import check_runtime_config
-from wrapper_job_manager import job_status, list_jobs, start_job
+from wrapper_job_manager import cancel_job, job_status, list_jobs, start_job, start_rag_refresh_job
 from mcp_stdio import configure_stdio_utf8, write_json_line, write_utf8_line
 from mcp_tool_registry import McpToolRegistry, ToolSpec
 
@@ -97,6 +97,42 @@ def _handle_unreal_rag_refresh(server: McpServer, message_id: Any, arguments: di
         progress=progress,
     )
     progress("finished")
+    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+
+
+def _handle_unreal_start_rag_refresh(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    def on_progress(job: dict[str, Any], message: str) -> None:
+        server.notify(f"[{job.get('jobId')}] {message}")
+
+    job = start_rag_refresh_job(server.workspace, arguments, on_progress=on_progress)
+    payload = {
+        "jobId": job["jobId"],
+        "status": job["status"],
+        "message": "Background RAG refresh started. Poll unreal_rag_refresh_status with this jobId.",
+    }
+    server.notify(f"Started RAG refresh job {job['jobId']}")
+    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+
+
+def _handle_unreal_rag_refresh_status(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    job_id = str(arguments.get("job_id") or "").strip()
+    if not job_id:
+        if arguments.get("list_recent"):
+            payload = {"jobs": list_jobs(server.workspace)}
+            server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            return
+        server.tool_result(message_id, "Provide job_id or set list_recent=true.", is_error=True)
+        return
+    payload = job_status(server.workspace, job_id)
+    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+
+
+def _handle_unreal_cancel_compile_loop(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    job_id = str(arguments.get("job_id") or "").strip()
+    if not job_id:
+        server.tool_result(message_id, "Missing required argument: job_id", is_error=True)
+        return
+    payload = cancel_job(server.workspace, job_id)
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
 
@@ -278,6 +314,18 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_symbol_lookup",
         "unreal_agent_session",
         "unreal_rag_capabilities",
+        "unreal_code_sketch_claim_validate",
+    }
+)
+
+EXTENDED_TOOL_NAMES = frozenset(
+    {
+        "unreal_rag_refresh",
+        "unreal_start_rag_refresh",
+        "unreal_rag_refresh_status",
+        "unreal_start_compile_loop",
+        "unreal_compile_loop_status",
+        "unreal_cancel_compile_loop",
         "unreal_refactor_manager_plan",
         "unreal_material_porting_plan_validate",
         "unreal_editor_metadata_status",
@@ -286,16 +334,20 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_asset_graph_lookup",
         "unreal_blueprint_claim_validate",
         "unreal_material_claim_validate",
-        "unreal_code_sketch_claim_validate",
-        "unreal_rag_refresh",
         "unreal_node_plan_validate",
         "unreal_render_report",
+        "unreal_rag_rebuild_status",
     }
 )
 
 
 def essential_tools_enabled() -> bool:
     value = os.environ.get("MCP_ESSENTIAL_TOOLS", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def extended_tools_enabled() -> bool:
+    value = os.environ.get("MCP_EXTENDED_TOOLS", "").strip().lower()
     return value in {"1", "true", "yes", "on"}
 
 
@@ -420,9 +472,11 @@ class McpServer:
 
     def all_tool_definitions(self) -> list[dict[str, Any]]:
         tools = self._all_tool_definitions_unfiltered()
+        if extended_tools_enabled():
+            return tools
         if essential_tools_enabled():
             return [tool for tool in tools if tool["name"] in ESSENTIAL_TOOL_NAMES]
-        return tools
+        return [tool for tool in tools if tool["name"] not in EXTENDED_TOOL_NAMES]
 
     def _all_tool_definitions_unfiltered(self) -> list[dict[str, Any]]:
         return [
@@ -566,7 +620,8 @@ class McpServer:
                 "description": (
                     "Re-collect active project source/symbols and/or editor metadata, rebuild the index when stale, "
                     "and invalidate project-scoped session caches. Use when unreal_rag_search reports indexStaleness. "
-                    "This is a long-running tool (minutes). Prefer scope=project_source when Editor metadata is not needed."
+                    "This is a long-running tool (minutes). Prefer scope=project_source when Editor metadata is not needed. "
+                    "For non-blocking refresh, use unreal_start_rag_refresh + unreal_rag_refresh_status."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -576,6 +631,36 @@ class McpServer:
                             "default": "all",
                         },
                         "force": {"type": "boolean", "default": False},
+                    }
+                ),
+            },
+            {
+                "name": "unreal_start_rag_refresh",
+                "title": "Start Background RAG Refresh Job",
+                "description": (
+                    "Start active-project RAG refresh as a background job. Returns jobId immediately. "
+                    "Poll unreal_rag_refresh_status instead of blocking MCP during long refresh."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "scope": {
+                            "type": "string",
+                            "enum": ["project_source", "editor_metadata", "all"],
+                            "default": "all",
+                        },
+                        "force": {"type": "boolean", "default": False},
+                        "timeoutSec": {"type": "integer", "minimum": 60, "default": 600},
+                    }
+                ),
+            },
+            {
+                "name": "unreal_rag_refresh_status",
+                "title": "RAG Refresh Job Status",
+                "description": "Poll a background RAG refresh job started by unreal_start_rag_refresh.",
+                "inputSchema": self._schema(
+                    {
+                        "job_id": {"type": "string"},
+                        "list_recent": {"type": "boolean", "default": False},
                     }
                 ),
             },
@@ -605,6 +690,7 @@ class McpServer:
                         },
                         "skip_build": {"type": "boolean", "default": False},
                         "dry_run": {"type": "boolean", "default": False},
+                        "timeoutSec": {"type": "integer", "minimum": 60, "default": 600},
                     },
                     ["request"],
                 ),
@@ -623,6 +709,12 @@ class McpServer:
                         },
                     },
                 ),
+            },
+            {
+                "name": "unreal_cancel_compile_loop",
+                "title": "Cancel Background Wrapper Job",
+                "description": "Cancel a compile-loop or other background wrapper job by jobId.",
+                "inputSchema": self._schema({"job_id": {"type": "string"}}, ["job_id"]),
             },
             {
                 "name": "unreal_rag_capabilities",
@@ -1321,10 +1413,16 @@ class McpServer:
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
             elif name == "unreal_set_active_project":
                 self.handle_set_active_project(message_id, arguments)
+            elif name == "unreal_start_rag_refresh":
+                _handle_unreal_start_rag_refresh(self, message_id, arguments)
+            elif name == "unreal_rag_refresh_status":
+                _handle_unreal_rag_refresh_status(self, message_id, arguments)
             elif name == "unreal_start_compile_loop":
                 self.handle_start_compile_loop(message_id, arguments)
             elif name == "unreal_compile_loop_status":
                 self.handle_compile_loop_status(message_id, arguments)
+            elif name == "unreal_cancel_compile_loop":
+                _handle_unreal_cancel_compile_loop(self, message_id, arguments)
             elif name == "unreal_generate_compile_loop":
                 self.handle_legacy_compile_loop(message_id, arguments)
             elif name == "unreal_refactor_plan_validate":

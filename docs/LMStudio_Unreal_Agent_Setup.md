@@ -75,7 +75,7 @@ Rules:
 - Do **not** paste full `.cpp` in chat when MCP write is available.
 - Do **not** say "done" without build output.
 - Existing source files are patch-only. `write_file` is for brand-new files; existing `.h`, `.cpp`, and `.cs` writes are blocked by default in `unreal-agent`.
-- `replace_in_file` / `write_file` run static validation when `VALIDATE_ON_WRITE=1` (blocks bad includes like `Game/Framework/`).
+- `replace_in_file` / `write_file` run static validation when `VALIDATE_ON_WRITE=1` (default on when `ALLOW_WRITE=1` via `patch_mcp_config.py`; blocks duplicate basenames, bad includes like `Game/Framework/`, and missing project includes).
 
 ## 6. Modes
 

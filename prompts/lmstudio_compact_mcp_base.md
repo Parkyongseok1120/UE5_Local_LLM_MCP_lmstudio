@@ -29,10 +29,11 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 3. If `writeGate.writesAllowed=false`, do not call write tools; answer or report findings only
 4. `unreal_rag_search` (`hybrid=false`, `top_k` 4-6, `detailLevel=compact`) before edits; escalate to `medium`/`large` once if assembly note says truncated.
 5. `read_file` / `read_file_range` on every target file before writing — default `detailLevel=compact`; escalate once for large `.cpp`/`.h` if truncated.
-6. `replace_in_file` preferred with `expectedOccurrences=1`; use `write_file` only for brand-new files. If a replacement fails, re-read a narrower range and patch again; do not rewrite an existing `.h`/`.cpp` with `write_file`.
-7. `build_unreal_project` after C++ / Build.cs changes
-8. On UBT failure: `unreal_rag_search` `mode=compile_fix` with only the current error context, then patch and rebuild
-9. For UHT/generated.h/include/module errors, read the failing file and the actual `*.Build.cs` before editing. Patch one root cause per build loop.
+6. `replace_in_file` preferred with `expectedOccurrences=1`; use `write_file` only for brand-new files. Before creating a new `.h`/`.cpp`, run `search_files` for basename collisions under `Source/`. If a replacement fails, re-read a narrower range and patch again; do not rewrite an existing `.h`/`.cpp` with `write_file`.
+7. If deletion cleanup is needed, finish edits first, call `propose_file_deletions`, visibly report file count, path, file name, reason, if-not-deleted impact, and if-deleted impact, then wait for explicit user approval before `delete_file`.
+8. `build_unreal_project` after C++ / Build.cs changes
+9. On UBT failure: `unreal_rag_search` `mode=compile_fix` with only the current error context, then patch and rebuild
+10. For UHT/generated.h/include/module errors, read the failing file and the actual `*.Build.cs` before editing. Patch one root cause per build loop.
 
 ## Shader / Material / Blueprint analysis
 

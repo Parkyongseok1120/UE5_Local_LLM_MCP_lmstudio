@@ -12,7 +12,19 @@ const execFile = promisify(cp.execFile);
 const UNREAL58_ROOT = path.resolve(
   process.env.UNREAL58_ROOT || path.join(os.homedir(), ".lmstudio", "Unreal58-RAG")
 );
-const VALIDATE_ON_WRITE = process.env.VALIDATE_ON_WRITE === "1" || process.env.VALIDATE_ON_WRITE === "true";
+function resolveValidateOnWrite() {
+  const explicit = String(process.env.VALIDATE_ON_WRITE || "").trim().toLowerCase();
+  if (["0", "false", "no", "off"].includes(explicit)) {
+    return false;
+  }
+  if (["1", "true", "yes", "on"].includes(explicit)) {
+    return true;
+  }
+  const allowWrite = String(process.env.ALLOW_WRITE || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(allowWrite);
+}
+
+const VALIDATE_ON_WRITE = resolveValidateOnWrite();
 
 function resolvePythonExe() {
   const bundled = path.join(
@@ -69,7 +81,19 @@ async function runRuntimeConfigCheck(projectRoot) {
     const payload = JSON.parse(stdout);
     return { ok: payload.ok, skipped: false, payload };
   } catch (error) {
-    return { ok: true, skipped: true, reason: String(error.message || error) };
+    return {
+      ok: false,
+      skipped: false,
+      reason: String(error.message || error),
+      findingCount: 1,
+      findings: [{
+        severity: "error",
+        code: "RUNTIME_CONFIG_CHECK_FAILED",
+        path: projectRoot,
+        line: 0,
+        message: String(error.message || error),
+      }],
+    };
   }
 }
 
@@ -108,9 +132,16 @@ async function runStaticValidation(projectRoot) {
   if (!fs.existsSync(script)) {
     return {
       ok: false,
-      skipped: true,
+      skipped: false,
       reason: `validator script missing: ${script}`,
-      findings: [],
+      findingCount: 1,
+      findings: [{
+        severity: "error",
+        code: "VALIDATOR_MISSING",
+        path: projectRoot,
+        line: 0,
+        message: `validator script missing: ${script}`,
+      }],
     };
   }
 
@@ -153,9 +184,16 @@ async function runStaticValidation(projectRoot) {
     }
     return {
       ok: false,
-      skipped: true,
+      skipped: false,
       reason: `${error.message}${stderr ? `\n${stderr}` : ""}`,
-      findings: [],
+      findingCount: 1,
+      findings: [{
+        severity: "error",
+        code: "VALIDATOR_EXEC_FAILED",
+        path: projectRoot,
+        line: 0,
+        message: `${error.message}${stderr ? `\n${stderr}` : ""}`,
+      }],
     };
   }
 }
@@ -167,10 +205,17 @@ async function validateAfterWrite(absPath, getActiveProject) {
   const projectRoot = await resolveProjectRootForFile(absPath, getActiveProject);
   if (!projectRoot) {
     return {
-      ok: true,
-      skipped: true,
-      reason: "could not resolve project root for validation",
-      findings: [],
+      ok: false,
+      skipped: false,
+      projectRoot: null,
+      findingCount: 1,
+      findings: [{
+        severity: "error",
+        code: "VALIDATION_PROJECT_ROOT",
+        path: absPath,
+        line: 0,
+        message: "could not resolve project root for validation",
+      }],
     };
   }
   if (isConfigLike(absPath)) {
@@ -199,7 +244,10 @@ async function validateAfterWrite(absPath, getActiveProject) {
 }
 
 function formatValidationResult(result) {
-  if (!result || result.skipped) {
+  if (!result) {
+    return "";
+  }
+  if (result.skipped && result.ok !== false) {
     return "";
   }
   const lines = [
@@ -226,6 +274,7 @@ function formatValidationResult(result) {
 
 module.exports = {
   VALIDATE_ON_WRITE,
+  resolveValidateOnWrite,
   validateAfterWrite,
   formatValidationResult,
   runStaticValidation,

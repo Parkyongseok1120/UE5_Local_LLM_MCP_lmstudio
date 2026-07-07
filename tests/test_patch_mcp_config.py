@@ -85,3 +85,15 @@ def test_patch_unreal_rag_overwrites_existing_timeout(tmp_path) -> None:
     patched = mod.patch_unreal_rag(entry, ROOT, python)
 
     assert patched["timeout"] == mod.DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
+
+
+def test_patch_unreal_agent_sets_validate_on_write_and_timeout(tmp_path) -> None:
+    mod = load_module()
+    node = tmp_path / "node.exe"
+    node.write_text("", encoding="utf-8")
+    entry = {"command": "node", "args": [], "env": {"ALLOW_WRITE": "1"}}
+
+    patched = mod.patch_unreal_agent(entry, ROOT, node)
+
+    assert patched["timeout"] == mod.DEFAULT_UNREAL_AGENT_MCP_TIMEOUT_MS
+    assert patched["env"]["VALIDATE_ON_WRITE"] == "1"

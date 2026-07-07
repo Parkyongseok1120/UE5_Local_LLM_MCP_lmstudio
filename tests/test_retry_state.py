@@ -89,3 +89,39 @@ def test_third_repeat_stops_with_diagnosis_report():
     recommendation = retry_state.recommend_retry_action(attempts[-2], attempts[-1], attempts=attempts[:-1])
     assert recommendation["action"] == "stop_diagnosis_report"
     assert recommendation["escalationLevel"] == 3
+
+
+def test_stop_success_when_passed():
+    record = retry_state.make_attempt_record(attempt=1, passed=True, error_message="", changed_paths=["A.cpp"])
+    recommendation = retry_state.recommend_retry_action(None, record)
+    assert recommendation["action"] == "stop_success"
+
+
+def test_noop_edit_with_guard_recommends_new_evidence():
+    current = retry_state.make_attempt_record(attempt=2, passed=False, error_message="fail", changed_paths=[])
+    recommendation = retry_state.recommend_retry_action(None, current, no_op_guard=True)
+    assert recommendation["action"] == "force_new_evidence"
+
+
+def test_continue_first_error_loop_on_new_error_surface():
+    first = retry_state.make_attempt_record(attempt=1, passed=False, error_message="error A", changed_paths=["A.cpp"])
+    second = retry_state.make_attempt_record(attempt=2, passed=False, error_message="error B", changed_paths=["B.cpp"])
+    recommendation = retry_state.recommend_retry_action(first, second)
+    assert recommendation["action"] == "continue_first_error_loop"
+
+
+def test_stop_diagnosis_report_includes_prompt_hints():
+    attempts = []
+    for idx in range(1, 5):
+        attempts.append(
+            retry_state.make_attempt_record(
+                attempt=idx,
+                passed=False,
+                error_message="same linker error LNK2019 unresolved external",
+                error_code="LNK2019",
+                changed_paths=[f"File{idx}.cpp"],
+            )
+        )
+    recommendation = retry_state.recommend_retry_action(attempts[-2], attempts[-1], attempts=attempts[:-1])
+    hints = retry_state._prompt_hints("stop_diagnosis_report")
+    assert any("diagnosis" in hint.lower() or "stop" in hint.lower() for hint in hints)

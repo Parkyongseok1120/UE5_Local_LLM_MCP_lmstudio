@@ -46,6 +46,20 @@ Restart LM Studio after changes.
 - `replace_in_file`, `write_file`, `search_files`
 - `build_unreal_project`, `read_unreal_logs`
 
+### Extended tools (`MCP_EXTENDED_TOOLS=1`)
+
+Enable when you need refresh, compile loop jobs, claim validators, refactor helpers, or cleanup:
+
+**unreal-rag:** `unreal_rag_refresh`, `unreal_start_rag_refresh`, `unreal_rag_refresh_status`, compile-loop tools, editor metadata, asset graph, claim validators, refactor manager, render report.
+
+**unreal-agent:** `propose_file_deletions`, `delete_file` (requires `ALLOW_SOURCE_DELETE=1` and a matching deletion plan token), `static_validate_project`, `set_active_project`, refactor scan/plan tools.
+
+With `MCP_ESSENTIAL_TOOLS=1` alone, extended tools stay hidden to reduce model confusion.
+
+## Validate-on-write
+
+When agent mode enables writes, `patch_mcp_config.py` sets `VALIDATE_ON_WRITE=1` by default. `write_file` / `replace_in_file` run static validation and fail closed on project-wide errors (duplicate basenames, bad includes, etc.). Fix findings before `build_unreal_project`.
+
 ## Forbidden Tools
 
 Do not use LM Studio's JavaScript/code sandbox for Unreal project file work:
@@ -82,6 +96,7 @@ For edit tasks:
 - Prefer `replace_in_file` with `expectedOccurrences=1` for existing files.
 - Use `write_file` only for brand-new files. Existing `.h`, `.hpp`, `.cpp`, `.c`, `.cc`, `.cxx`, and `.cs` files are patch-only.
 - Run `build_unreal_project` after C++ or `Build.cs` edits.
+- If cleanup appears to require deleting files, finish all edits first, call `propose_file_deletions`, report the count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval before `delete_file`.
 - On UBT failure, search only the current error context with `mode=compile_fix`, then patch the smallest failing surface.
 
 ## Session Bootstrap
@@ -128,7 +143,8 @@ Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_
 | Hallucinated analysis | Force `read_file` before claims or edits |
 | Repeated no-op patch | Re-read file, patch only missing current text, set `expectedOccurrences=1` |
 | Tool not in list | Essential mode hides advanced tools; use wrapper/Cline for clangd/graph |
-| `unreal_rag_refresh` times out | Re-run `python scripts/patch_mcp_config.py` so `unreal-rag` has `"timeout": 420000` (7 minutes, ms) in `%USERPROFILE%\.lmstudio\mcp.json`, then restart LM Studio. Use `scope=project_source` for a faster refresh when Editor metadata is not needed. |
+| `unreal_rag_refresh` times out | Re-run `python scripts/patch_mcp_config.py` so `unreal-rag` has `"timeout": 420000` (7 minutes, ms) and `unreal-agent` has `"timeout": 720000` in `%USERPROFILE%\.lmstudio\mcp.json`, then restart LM Studio. Prefer `unreal_start_rag_refresh` + `unreal_rag_refresh_status` for long refresh. Use `scope=project_source` when Editor metadata is not needed. |
+| Write blocked for basename collision | Use `search_files` to find the existing file; patch with `replace_in_file` on that path. Extended mode: after duplicate cleanup, call `propose_file_deletions`, get approval, then `delete_file` with `ALLOW_SOURCE_DELETE=1`. |
 
 ## Sampling Metadata
 

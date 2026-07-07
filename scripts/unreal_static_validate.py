@@ -1189,6 +1189,116 @@ def validate_typo_includes(path: Path, text: str, root: Path) -> list[Finding]:
     return findings
 
 
+def build_source_include_index(root: Path) -> dict[str, list[str]]:
+    index: dict[str, list[str]] = {}
+    source = root / "Source"
+    if not source.is_dir():
+        return index
+    for path in source.rglob("*"):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        if should_ignore_project_path(path):
+            continue
+        parts = path.parts
+        rel = path.name
+        if "Public" in parts:
+            rel = "/".join(parts[parts.index("Public") + 1 :])
+        elif "Private" in parts:
+            rel = "/".join(parts[parts.index("Private") + 1 :])
+        rel = rel.replace("\\", "/")
+        index.setdefault(rel, []).append(str(path))
+        index.setdefault(path.name, []).append(str(path))
+    return index
+
+
+ENGINE_INCLUDE_PREFIXES = (
+    "Core/",
+    "CoreUObject/",
+    "Engine/",
+    "GameFramework/",
+    "Components/",
+    "UObject/",
+    "Input/",
+    "EnhancedInput/",
+    "Kismet/",
+    "Blueprint/",
+    "Editor/",
+    "UnrealEd/",
+    "Materials/",
+    "RHI/",
+    "RenderCore/",
+    "PhysicsCore/",
+    "Navigation/",
+    "AI/",
+    "GameplayTags/",
+    "GameplayTasks/",
+    "Net/",
+    "Sockets/",
+    "HAL/",
+    "Misc/",
+    "Logging/",
+    "Stats/",
+    "Async/",
+    "Serialization/",
+)
+
+
+def validate_duplicate_source_basenames(root: Path) -> list[Finding]:
+    counts: dict[str, list[str]] = {}
+    source = root / "Source"
+    if not source.is_dir():
+        return []
+    for path in source.rglob("*"):
+        if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+            continue
+        if should_ignore_project_path(path):
+            continue
+        key = path.name.lower()
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        counts.setdefault(key, []).append(rel)
+    findings: list[Finding] = []
+    for basename, paths in sorted(counts.items()):
+        if len(paths) < 2:
+            continue
+        findings.append(
+            Finding(
+                "error",
+                paths[0],
+                1,
+                "DUPLICATE_SOURCE_BASENAME",
+                f'Duplicate source basename "{basename}" under Source/: {", ".join(paths)}',
+            )
+        )
+    return findings
+
+
+def validate_include_paths_exist(path: Path, text: str, root: Path, include_index: dict[str, list[str]]) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root)).replace("\\", "/")
+    for line, include_path in include_lines(text):
+        normalized = include_path.replace("\\", "/")
+        if normalized.startswith("Game/Framework/"):
+            continue
+        if any(normalized.startswith(prefix) for prefix in ENGINE_INCLUDE_PREFIXES):
+            continue
+        if normalized in {"CoreMinimal.h", "Generated.h"} or normalized.endswith(".generated.h"):
+            continue
+        candidates = include_index.get(normalized, [])
+        if candidates:
+            continue
+        if normalized.endswith(".h") or normalized.endswith(".hpp"):
+            findings.append(
+                Finding(
+                    "error",
+                    rel,
+                    line,
+                    "INCLUDE_PATH_NOT_FOUND",
+                    f'Include "{include_path}" was not found under the project Source/ tree.',
+                )
+            )
+    return findings
+
+
 def validate_unreal_readiness(
     root: Path,
     module_graph_path: Path | None = None,
@@ -1200,6 +1310,7 @@ def validate_unreal_readiness(
     findings: list[Finding] = []
     build_text_value = build_cs_text(root)
     include_owner_map = load_include_owner_map(module_graph_path) if module_graph_path else {}
+    include_index = build_source_include_index(root)
     headers = class_headers(root)
     bases = class_bases(root)
     all_source_text = []
@@ -1221,6 +1332,7 @@ def validate_unreal_readiness(
             findings.extend(validate_editor_only_runtime_includes(path, text, root))
             findings.extend(validate_enhanced_input(path, text, root, build_text_value))
             findings.extend(validate_action_request_order(path, text, root))
+            findings.extend(validate_include_paths_exist(path, text, root, include_index))
         if path.suffix.lower() in {".cpp", ".c", ".cc"}:
             findings.extend(validate_required_includes(path, text, root))
             findings.extend(validate_constructor_lifecycle_usage(path, text, root))
@@ -1229,6 +1341,7 @@ def validate_unreal_readiness(
             findings.extend(validate_cpp_declarations(path, text, root, headers))
     findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
     findings.extend(validate_include_owner_modules(root, build_text_value, include_owner_map))
+    findings.extend(validate_duplicate_source_basenames(root))
     findings.extend(validate_rpc_implementations(root))
     return findings
 

@@ -291,9 +291,19 @@ def _extract_symbols(request: str, plan: EvidencePlan) -> None:
 
 
 def build_error_route(request: str, task_kind: TaskKind, mode: str) -> dict[str, Any]:
+    lower = f"{mode} {request}".lower()
+    if task_kind == "runtime_debug" or any(marker in lower for marker in RUNTIME_MARKERS):
+        try:
+            from error_taxonomy import route_error_action
+
+            routed = route_error_action(request)
+            if routed:
+                return routed
+        except Exception:
+            pass
     if task_kind != "compile_fix" and mode not in {"compile_fix", "module_fix", "reflection_fix", "multifile_refactor"}:
         return {}
-    if mode != "multifile_refactor" and not any(marker in f"{mode} {request}".lower() for marker in COMPILE_MARKERS):
+    if mode != "multifile_refactor" and not any(marker in lower for marker in COMPILE_MARKERS):
         return {}
     try:
         from error_taxonomy import route_error_action
@@ -454,8 +464,12 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
         return common + ["Read logs/config before diagnosis; do not write files by default."]
     edit_steps = [
         "Read each target file before editing.",
+        "Before creating a new .h/.cpp, search_files for basename collisions under Source/.",
         "Prefer replace_in_file with expectedOccurrences=1 for existing files.",
         "Use write_file only for brand-new files; never full-rewrite an existing .h/.cpp/.cs.",
+        "If write/replace returns static validation findings, fix them before build_unreal_project.",
+        "If cleanup requires deleting files, finish edits first, call propose_file_deletions with count/path/fileName/reason/ifNotDeleted/ifDeleted, report the plan, and wait for explicit user approval before delete_file.",
+        "For more than 2 files, prefer unreal_start_compile_loop + unreal_compile_loop_status.",
         "Do not use run_javascript/js-code-sandbox/Deno file APIs for project file I/O; use unreal-agent file tools.",
     ]
     if "ubt_build" in evidence.gates or task_kind in {"edit", "compile_fix", "refactor"}:
@@ -601,6 +615,23 @@ def build_suggested_tool_calls(
         if browse_path:
             calls.append({"tool": "search_files", "args": {"query": text, "path": browse_path}})
         calls.append({"tool": "unreal_rag_search", "args": {"query": text, "mode": "review", "hybrid": False, "top_k": 6}})
+        return calls
+
+    if task_kind in {"edit", "compile_fix", "refactor"} and project_context.get("ok"):
+        browse_path = str(project_context.get("sourceBrowsePath") or "")
+        symbols = _symbol_candidates_from_text(text)
+        calls: list[dict[str, Any]] = [{"tool": "unreal_get_active_project", "args": {}}]
+        if browse_path:
+            for symbol in symbols[:3]:
+                calls.append({"tool": "search_files", "args": {"query": symbol, "path": browse_path}})
+            if "component" in lower:
+                calls.append({"tool": "search_files", "args": {"query": "Component", "path": browse_path}})
+        calls.append(
+            {
+                "tool": "unreal_rag_search",
+                "args": {"query": text, "mode": "codegen" if task_kind == "edit" else "compile_fix", "hybrid": False, "top_k": 6},
+            }
+        )
         return calls
 
     return [{"tool": "unreal_get_active_project", "args": {}}]
@@ -784,8 +815,8 @@ def verify_edit_allowed(plan: AgentPlan, *, files_count: int, patches_count: int
     issues: list[str] = []
     if plan.edit_strategy == "no_edit" and (files_count or patches_count):
         issues.append("Plan forbids edits but bundle contains file changes.")
-    if plan.task_kind == "inspect_only" and (files_count or patches_count):
-        issues.append("Inspect-only task must not write files.")
+    if plan.task_kind in {"inspect_only", "code_sketch", "runtime_debug"} and (files_count or patches_count):
+        issues.append(f"{plan.task_kind} task must not write files.")
     if not plan.write_gate.get("writesAllowed", plan.evidence.writes_allowed) and (files_count or patches_count):
         issues.append("Write gate forbids edits for this task.")
     max_files = int(plan.write_gate.get("maxFilesPerEdit") or 0)

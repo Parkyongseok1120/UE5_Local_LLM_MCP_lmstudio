@@ -19,6 +19,7 @@ const fsp = fs.promises;
 const path = require("path");
 const cp = require("child_process");
 const os = require("os");
+const crypto = require("crypto");
 
 const {
   Server
@@ -50,8 +51,15 @@ const {
 } = require("./refactor-tools.js");
 const {
   validateAfterWrite,
-  formatValidationResult
+  formatValidationResult,
+  runStaticValidation,
+  resolveValidateOnWrite
 } = require("./validate-write.js");
+const {
+  validateWriteTarget,
+  isDeleteAllowedPath,
+  isPatchOnlyExistingFile: isPatchOnlyFile
+} = require("./write-guards.js");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -93,8 +101,15 @@ function resolveCodeDetail(raw) {
 const MAX_OUTPUT_BYTES = Number(process.env.MAX_OUTPUT_BYTES || 1024 * 256);
 const COMMAND_TIMEOUT_MS = Number(process.env.COMMAND_TIMEOUT_MS || 1000 * 60 * 10);
 const SEARCH_MAX_FILES = Number(process.env.SEARCH_MAX_FILES || 5000);
+const ALLOW_SOURCE_DELETE = ["1", "true", "yes", "on"].includes(
+  String(process.env.ALLOW_SOURCE_DELETE || "").trim().toLowerCase()
+);
+const VALIDATE_ON_WRITE = resolveValidateOnWrite();
 const MCP_ESSENTIAL_TOOLS = ["1", "true", "yes", "on"].includes(
   String(process.env.MCP_ESSENTIAL_TOOLS || "").trim().toLowerCase()
+);
+const MCP_EXTENDED_TOOLS = ["1", "true", "yes", "on"].includes(
+  String(process.env.MCP_EXTENDED_TOOLS || "").trim().toLowerCase()
 );
 const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
   "get_workspace_info",
@@ -107,6 +122,18 @@ const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
   "search_files",
   "build_unreal_project",
   "read_unreal_logs"
+]);
+const EXTENDED_AGENT_TOOL_NAMES = new Set([
+  "set_active_project",
+  "detect_unreal_project",
+  "list_unreal_projects",
+  "open_active_project_picker",
+  "run_command",
+  "refactor_impact_scan",
+  "refactor_plan_validate",
+  "propose_file_deletions",
+  "delete_file",
+  "static_validate_project"
 ]);
 const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
 const fileCache = new Map();
@@ -163,6 +190,86 @@ function fail(message) {
   return text(`ERROR: ${message}`);
 }
 
+function normalizeForToken(value) {
+  return String(value || "").replace(/\r\n/g, "\n").trim();
+}
+
+function requireDeletionText(value, fieldName) {
+  const textValue = normalizeForToken(value);
+  if (textValue.length < 12) {
+    throw new Error(`${fieldName} must be a concrete sentence of at least 12 characters.`);
+  }
+  return textValue;
+}
+
+function deletionApprovalToken({ relPath, completedEditsSummary, reason, ifNotDeleted, ifDeleted }) {
+  const payload = JSON.stringify({
+    relPath: normalizeForToken(relPath).replace(/\\/g, "/"),
+    completedEditsSummary: normalizeForToken(completedEditsSummary),
+    reason: normalizeForToken(reason),
+    ifNotDeleted: normalizeForToken(ifNotDeleted),
+    ifDeleted: normalizeForToken(ifDeleted),
+  });
+  return crypto.createHash("sha256").update(payload).digest("hex").slice(0, 24);
+}
+
+async function buildDeletionProposal(rawFiles, completedEditsSummary, activeProject) {
+  const summary = requireDeletionText(completedEditsSummary, "completedEditsSummary");
+  if (!Array.isArray(rawFiles) || rawFiles.length === 0) {
+    throw new Error("files must contain at least one deletion candidate.");
+  }
+  if (rawFiles.length > 20) {
+    throw new Error("files may contain at most 20 deletion candidates.");
+  }
+
+  const seen = new Set();
+  const files = [];
+  for (const item of rawFiles) {
+    const target = normalizeRelPath(String(item && item.path || ""));
+    const guard = isDeleteAllowedPath(target, WORKSPACE_ROOT, activeProject);
+    if (!guard.ok) {
+      throw new Error(guard.message);
+    }
+    const delStat = await statSafe(target);
+    if (!delStat || !delStat.isFile()) {
+      throw new Error(`not found or not file: ${item && item.path}`);
+    }
+    const relPath = path.relative(WORKSPACE_ROOT, target).replace(/\\/g, "/");
+    const relKey = relPath.toLowerCase();
+    if (seen.has(relKey)) {
+      throw new Error(`duplicate deletion candidate: ${relPath}`);
+    }
+    seen.add(relKey);
+
+    const reason = requireDeletionText(item.reason, `reason for ${relPath}`);
+    const ifNotDeleted = requireDeletionText(item.ifNotDeleted, `ifNotDeleted for ${relPath}`);
+    const ifDeleted = requireDeletionText(item.ifDeleted, `ifDeleted for ${relPath}`);
+    files.push({
+      path: relPath,
+      fileName: path.basename(target),
+      sizeBytes: delStat.size,
+      reason,
+      ifNotDeleted,
+      ifDeleted,
+      approvalToken: deletionApprovalToken({
+        relPath,
+        completedEditsSummary: summary,
+        reason,
+        ifNotDeleted,
+        ifDeleted,
+      }),
+    });
+  }
+
+  return {
+    fileCount: files.length,
+    completedEditsSummary: summary,
+    files,
+    deleted: false,
+    instruction: "No files were deleted. Explain this plan to the user and wait for explicit approval before calling delete_file with the matching per-file approvalToken.",
+  };
+}
+
 function normalizeRelPath(p) {
   if (!p || typeof p !== "string") {
     throw new Error("path must be a non-empty string");
@@ -197,7 +304,21 @@ async function statSafe(p) {
 }
 
 function isPatchOnlyExistingFile(p) {
-  return PATCH_ONLY_EXISTING_EXTENSIONS.has(path.extname(String(p || "")).toLowerCase());
+  return isPatchOnlyFile(p);
+}
+
+function validationFailed(validation) {
+  return Boolean(validation && validation.ok === false);
+}
+
+function filterAgentTools(tools) {
+  if (MCP_EXTENDED_TOOLS) {
+    return tools;
+  }
+  if (MCP_ESSENTIAL_TOOLS) {
+    return tools.filter((tool) => ESSENTIAL_AGENT_TOOL_NAMES.has(tool.name));
+  }
+  return tools.filter((tool) => !EXTENDED_AGENT_TOOL_NAMES.has(tool.name));
 }
 
 function truncateOutput(s, maxBytes = MAX_OUTPUT_BYTES) {
@@ -416,6 +537,10 @@ async function buildWorkspaceInfo() {
     allowWrite: ALLOW_WRITE,
     allowCommands: ALLOW_COMMANDS,
     allowUnrealBuild: ALLOW_UNREAL_BUILD,
+    validateOnWrite: VALIDATE_ON_WRITE,
+    allowSourceDelete: ALLOW_SOURCE_DELETE,
+    mcpEssentialTools: MCP_ESSENTIAL_TOOLS,
+    mcpExtendedTools: MCP_EXTENDED_TOOLS,
     maxReadBytes: MAX_READ_BYTES,
     maxOutputBytes: MAX_OUTPUT_BYTES,
     commandTimeoutMs: COMMAND_TIMEOUT_MS,
@@ -565,6 +690,46 @@ function allAgentTools() {
         }, ["path", "oldText", "newText"])
       },
       {
+        name: "propose_file_deletions",
+        description: "Create a structured deletion plan after edits are complete. Deletes nothing. Required before delete_file: list file count, path, file name, reason, impact if kept, and impact if deleted, then wait for explicit user approval.",
+        inputSchema: makeJsonSchema({
+          completedEditsSummary: { type: "string", description: "What edits/checks are already complete before considering deletion." },
+          files: {
+            type: "array",
+            description: "Deletion candidates. Each item must include path, reason, ifNotDeleted, and ifDeleted.",
+            items: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                reason: { type: "string" },
+                ifNotDeleted: { type: "string" },
+                ifDeleted: { type: "string" }
+              }
+            }
+          }
+        }, ["completedEditsSummary", "files"])
+      },
+      {
+        name: "delete_file",
+        description: "Delete one file under the active project's Source/ tree only after propose_file_deletions returned a per-file approvalToken and the user approved that plan. Requires ALLOW_WRITE=1 and ALLOW_SOURCE_DELETE=1. Extended mode only.",
+        inputSchema: makeJsonSchema({
+          path: { type: "string", description: "Relative path inside workspace." },
+          completedEditsSummary: { type: "string", description: "Same completedEditsSummary used in propose_file_deletions." },
+          reason: { type: "string", description: "Specific reason this file must be deleted." },
+          ifNotDeleted: { type: "string", description: "What concretely happens if this file is not deleted." },
+          ifDeleted: { type: "string", description: "What concretely happens if this file is deleted." },
+          approvalToken: { type: "string", description: "Per-file approvalToken returned by propose_file_deletions after user approval." },
+          expectedContent: { type: "string", description: "Optional exact file content guard before delete." }
+        }, ["path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"])
+      },
+      {
+        name: "static_validate_project",
+        description: "Run static Unreal compile-readiness validation on the active project Source tree. Extended mode. Call before build_unreal_project when validation findings from writes need a full-project check.",
+        inputSchema: makeJsonSchema({
+          projectRoot: { type: "string", description: "Optional project root or .uproject path. Defaults to active project." }
+        })
+      },
+      {
         name: "search_files",
         description: "Search text files by regex or plain text under WORKSPACE_ROOT. Scope path to the active project whenever possible; do not search repo infrastructure to explain Unreal build failures.",
         inputSchema: makeJsonSchema({
@@ -593,7 +758,8 @@ function allAgentTools() {
           target: { type: "string", description: "Optional target name. Defaults to detected *Editor target." },
           platform: { type: "string", description: "Optional platform. Default Win64 on Windows." },
           configuration: { type: "string", description: "Optional configuration. Default Development." },
-          allowAbsoluteProject: { type: "boolean", description: "Allow absolute .uproject path outside workspace. Default false." }
+          allowAbsoluteProject: { type: "boolean", description: "Allow absolute .uproject path outside workspace. Default false." },
+          timeoutMs: { type: "number", description: "Build timeout in ms. Default COMMAND_TIMEOUT_MS." }
         })
       }
   ];
@@ -602,9 +768,7 @@ function allAgentTools() {
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const tools = allAgentTools();
   return {
-    tools: MCP_ESSENTIAL_TOOLS
-      ? tools.filter((tool) => ESSENTIAL_AGENT_TOOL_NAMES.has(tool.name))
-      : tools
+    tools: filterAgentTools(tools)
   };
 });
 
@@ -860,9 +1024,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!ALLOW_WRITE) return fail("write_file blocked. Set ALLOW_WRITE=1 to enable.");
       const target = normalizeRelPath(args.path);
       const parent = path.dirname(target);
+      const activeProject = getActiveProject(CONFIG_PATH);
+      const targetExists = await exists(target);
+      const guard = await validateWriteTarget({
+        targetAbsPath: target,
+        workspaceRoot: WORKSPACE_ROOT,
+        activeProjectPath: activeProject,
+        createDirs: Boolean(args.createDirs),
+        fileExists: async (p) => exists(p)
+      });
+      if (!guard.ok) {
+        return fail(guard.message);
+      }
       if (args.createDirs) await fsp.mkdir(parent, { recursive: true });
       if (!(await exists(parent))) return fail(`parent directory not found: ${path.relative(WORKSPACE_ROOT, parent)}`);
-      if ((await exists(target)) && isPatchOnlyExistingFile(target) && !ALLOW_EXISTING_SOURCE_WRITE) {
+      if (targetExists && isPatchOnlyExistingFile(target) && !ALLOW_EXISTING_SOURCE_WRITE) {
         const rel = path.relative(WORKSPACE_ROOT, target);
         return fail(
           `write_file blocked for existing source file: ${rel}. `
@@ -875,7 +1051,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       invalidateFileCache(target);
       const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
       const rel = path.relative(WORKSPACE_ROOT, target);
-      if (validation && !validation.skipped && !validation.ok) {
+      if (validationFailed(validation)) {
         return {
           content: [{
             type: "text",
@@ -934,7 +1110,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       invalidateFileCache(target);
       const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
       const rel = path.relative(WORKSPACE_ROOT, target);
-      if (validation && !validation.skipped && !validation.ok) {
+      if (validationFailed(validation)) {
         return {
           content: [{
             type: "text",
@@ -948,6 +1124,91 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         message += formatValidationResult(validation);
       }
       return text(message);
+    }
+
+    if (name === "propose_file_deletions") {
+      const activeProject = getActiveProject(CONFIG_PATH);
+      const plan = await buildDeletionProposal(args.files, args.completedEditsSummary, activeProject);
+      return text(JSON.stringify(plan, null, 2));
+    }
+
+    if (name === "delete_file") {
+      if (!ALLOW_WRITE) return fail("delete_file blocked. Set ALLOW_WRITE=1 to enable.");
+      if (!ALLOW_SOURCE_DELETE) {
+        return fail("delete_file blocked. Set ALLOW_SOURCE_DELETE=1 to enable source deletions.");
+      }
+      const target = normalizeRelPath(args.path);
+      const activeProject = getActiveProject(CONFIG_PATH);
+      const guard = isDeleteAllowedPath(target, WORKSPACE_ROOT, activeProject);
+      if (!guard.ok) {
+        return fail(guard.message);
+      }
+      const rel = path.relative(WORKSPACE_ROOT, target).replace(/\\/g, "/");
+      const completedEditsSummary = requireDeletionText(args.completedEditsSummary, "completedEditsSummary");
+      const reason = requireDeletionText(args.reason, "reason");
+      const ifNotDeleted = requireDeletionText(args.ifNotDeleted, "ifNotDeleted");
+      const ifDeleted = requireDeletionText(args.ifDeleted, "ifDeleted");
+      const expectedToken = deletionApprovalToken({
+        relPath: rel,
+        completedEditsSummary,
+        reason,
+        ifNotDeleted,
+        ifDeleted,
+      });
+      if (String(args.approvalToken || "") !== expectedToken) {
+        return fail(
+          "delete_file blocked: approvalToken does not match this deletion explanation. "
+          + "Call propose_file_deletions after edits are complete, show the plan to the user, "
+          + "and pass the matching per-file approvalToken only after approval."
+        );
+      }
+      const delStat = await statSafe(target);
+      if (!delStat || !delStat.isFile()) return fail(`not found or not file: ${args.path}`);
+      if (args.expectedContent !== undefined) {
+        const content = await fsp.readFile(target, "utf8");
+        if (content !== String(args.expectedContent)) {
+          return fail("expectedContent mismatch; delete aborted.");
+        }
+      }
+      await fsp.unlink(target);
+      invalidateFileCache(target);
+      return text(JSON.stringify({
+        ok: true,
+        deleted: rel,
+        fileName: path.basename(target),
+        completedEditsSummary,
+        reason,
+        ifNotDeleted,
+        ifDeleted,
+      }, null, 2));
+    }
+
+    if (name === "static_validate_project") {
+      const activeProject = getActiveProject(CONFIG_PATH);
+      let projectRoot = String(args.projectRoot || "").trim();
+      if (!projectRoot && activeProject) {
+        projectRoot = path.dirname(path.resolve(activeProject));
+      }
+      if (!projectRoot) {
+        return fail("No active project and no projectRoot provided.");
+      }
+      const resolved = path.resolve(projectRoot);
+      if (resolved.toLowerCase().endsWith(".uproject")) {
+        projectRoot = path.dirname(resolved);
+      } else {
+        projectRoot = resolved;
+      }
+      const validation = await runStaticValidation(projectRoot);
+      if (validationFailed(validation)) {
+        return {
+          content: [{
+            type: "text",
+            text: `Static validation failed.${formatValidationResult(validation)}`
+          }],
+          isError: true
+        };
+      }
+      return text(`Static validation passed.${formatValidationResult(validation)}`);
     }
 
     if (name === "search_files") {
@@ -1069,7 +1330,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!/^[A-Za-z0-9_]+$/.test(configuration)) return fail("invalid configuration");
 
       const command = `"${build.buildBat}" ${target} ${platform} ${configuration} -Project="${projectPath}" -WaitMutex -NoHotReloadFromIDE`;
-      const result = await execCommand(command, path.dirname(projectPath), COMMAND_TIMEOUT_MS);
+      const buildTimeout = Number(args.timeoutMs || COMMAND_TIMEOUT_MS);
+      const result = await execCommand(command, path.dirname(projectPath), buildTimeout);
       const likelyErrors = extractLikelyCompileErrors(result.stdout, result.stderr);
 
       return text(JSON.stringify({

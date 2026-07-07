@@ -11,11 +11,13 @@
         "ALLOW_WRITE": "0",
         "ALLOW_COMMANDS": "0",
         "ALLOW_UNREAL_BUILD": "0",
+        "VALIDATE_ON_WRITE": "1",
         "MAX_READ_BYTES": "524288",
         "MAX_OUTPUT_BYTES": "262144",
         "COMMAND_TIMEOUT_MS": "600000",
         "MCP_ESSENTIAL_TOOLS": "1"
-      }
+      },
+      "timeout": 720000
     }
   }
 }
