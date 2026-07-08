@@ -169,7 +169,13 @@ def apply_patch(
         ok, msg, updated = _apply_leading_ws_normalized_patch(content, old_text, new_text, expected_occurrences)
         if ok:
             return ok, msg, updated
-        return _apply_single_line_normalized_patch(content, old_text, new_text, expected_occurrences)
+        ok2, msg2, updated2 = _apply_single_line_normalized_patch(content, old_text, new_text, expected_occurrences)
+        if ok2:
+            return ok2, msg2, updated2
+        for candidate_msg, candidate_updated in ((msg, updated), (msg2, updated2)):
+            if "candidates=" in candidate_msg:
+                return False, candidate_msg, candidate_updated
+        return False, msg2, updated2
     if count != expected_occurrences:
         return False, f"expected {expected_occurrences} occurrence(s), found {count}", content
     updated = content.replace(old_text, new_text, expected_occurrences)
