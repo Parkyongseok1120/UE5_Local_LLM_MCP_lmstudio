@@ -103,6 +103,60 @@ def test_noop_edit_with_guard_recommends_new_evidence():
     assert recommendation["action"] == "force_new_evidence"
 
 
+def test_file_application_failed_recommends_exact_oldtext():
+    current = retry_state.make_validation_rejection_record(
+        attempt=2,
+        rejection_kind="file_application_failed",
+        feedback="patch failed",
+        error_subkind="DELEGATE_BROADCAST_SIGNATURE_MISMATCH",
+    )
+    recommendation = retry_state.recommend_retry_action(None, current, rejection_kind="file_application_failed")
+    assert recommendation["action"] == "require_exact_oldtext"
+
+
+def test_empty_files_without_evidence_escalates_after_repeat():
+    attempts = [
+        retry_state.make_validation_rejection_record(
+            attempt=1,
+            rejection_kind="empty_files_without_evidence",
+            feedback="empty",
+        ),
+        retry_state.make_validation_rejection_record(
+            attempt=2,
+            rejection_kind="empty_files_without_evidence",
+            feedback="empty again",
+        ),
+    ]
+    current = retry_state.make_validation_rejection_record(
+        attempt=3,
+        rejection_kind="empty_files_without_evidence",
+        feedback="still empty",
+    )
+    recommendation = retry_state.recommend_retry_action(
+        attempts[-1],
+        current,
+        attempts=attempts,
+        rejection_kind="empty_files_without_evidence",
+    )
+    assert recommendation["action"] == "force_patch_with_evidence"
+
+
+def test_multifile_incomplete_recommends_surface_coverage():
+    current = retry_state.make_attempt_record(
+        attempt=2,
+        passed=False,
+        error_message="validation rejected",
+        error_code="VALIDATION_REJECTED",
+        changed_paths=["Header.h"],
+    )
+    recommendation = retry_state.recommend_retry_action(
+        None,
+        current,
+        rejection_kind="multifile_incomplete",
+    )
+    assert recommendation["action"] == "require_multifile_surfaces"
+
+
 def test_continue_first_error_loop_on_new_error_surface():
     first = retry_state.make_attempt_record(attempt=1, passed=False, error_message="error A", changed_paths=["A.cpp"])
     second = retry_state.make_attempt_record(attempt=2, passed=False, error_message="error B", changed_paths=["B.cpp"])

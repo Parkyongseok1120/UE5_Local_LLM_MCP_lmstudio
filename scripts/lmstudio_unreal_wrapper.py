@@ -25,14 +25,14 @@ import token_budget
 from workspace_paths import active_project_names, resolve_active_project_path, resolve_ubt_path
 from error_taxonomy import mode_from_error_kind as taxonomy_mode_from_error_kind, route_error_action
 from module_resolver import build_cs_has_module, resolve_modules_from_error, resolve_modules_from_text
-from retry_state import make_attempt_record, recommend_retry_action
+from retry_state import make_attempt_record, make_validation_rejection_record, recommend_retry_action
 from prompt_history import (
     count_compact_summary_messages,
     prepare_messages_for_attempt,
 )
 from symbol_graph import load_symbol_graph, lookup_symbol
 from ubt_utils import build_ubt_command, split_ubt_target_spec
-from apply_patch import apply_patch as apply_single_patch
+from apply_patch import apply_patch as apply_single_patch, patch_apply_hint, validate_patch_item
 
 PATCH_PREFERRED_LINE_THRESHOLD = 200
 REFACTOR_PATCH_ONLY_MODES = {"refactor_r2", "refactor_r3", "refactor_r4"}
@@ -97,9 +97,16 @@ LNK_MISSING_DEFINITION_RETRY_HINT = (
     "Add or correct the missing implementation in the matching cpp file.\n"
     "Do not edit Build.cs unless module evidence exists."
 )
+DELEGATE_BROADCAST_RETRY_HINT = (
+    "The delegate Broadcast call still does not match the declared payload.\n"
+    "Patch the exact .Broadcast(...) callsite in the matching cpp file.\n"
+    "Copy oldText from the current project state summary; do not invent alternate member names."
+)
 FIRST_ATTEMPT_PATCH_ROUTE_SUBKINDS = {
     "HEADER_CPP_SIGNATURE_MISMATCH",
     "LNK_MISSING_CPP_DEFINITION",
+    "GENERATED_H_NOT_LAST",
+    "DELEGATE_BROADCAST_SIGNATURE_MISMATCH",
 }
 UNSUPPORTED_BUILD_CS_SOFT_REPLAN = (
     "Soft replan: the previous Build.cs edit does not match the current root-cause route.\n"
@@ -350,6 +357,7 @@ PROJECT_STATE_LINE_PATTERNS = (
     re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*::[~A-Za-z_][A-Za-z0-9_]*\s*\("),
     re.compile(r"\b(?:Public|Private)DependencyModuleNames\b|\bExtraModuleNames\b"),
     re.compile(r"\bDECLARE_(?:DYNAMIC_)?(?:MULTICAST_)?DELEGATE\b|\bFTimerHandle\b"),
+    re.compile(r"\.Broadcast\s*\("),
 )
 HEADER_MEMBER_DECL_RE = re.compile(
     r"^(?:virtual\s+|static\s+|inline\s+|FORCEINLINE\s+|explicit\s+)*"
@@ -1298,8 +1306,10 @@ def merge_missing_definition_full_file_edits(
     return bundle
 
 
-def enforce_edit_limits(bundle: dict[str, Any], limits: dict[str, Any]) -> None:
+def enforce_edit_limits(bundle: dict[str, Any], limits: dict[str, Any], *, mode: str = "") -> None:
     max_files = int(limits.get("maxFilesPerEdit") or 0)
+    if str(mode or "") == "multifile_refactor":
+        max_files = max(max_files, 3)
     file_count = len(bundle.get("files") or [])
     patch_count = len(bundle.get("patches") or [])
     total = file_count + patch_count
@@ -1575,6 +1585,9 @@ def align_route_to_eval_mode(route: dict[str, Any], mode: str, request: str) -> 
             aligned["errorSubkind"] = "C1083_MISSING_INCLUDE"
     elif mode == "reflection_fix":
         aligned["broadMode"] = "reflection_fix"
+    elif mode in {"editor_runtime_fix", "editor_runtime_boundary"}:
+        aligned["broadMode"] = "module_fix"
+        aligned["errorSubkind"] = "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE"
     elif mode == "multifile_refactor":
         aligned["broadMode"] = "multifile_refactor"
     return aligned
@@ -1686,7 +1699,60 @@ def no_change_blockers(request: str, root: Path, findings: list[Finding]) -> lis
             issues.append(
                 "The request appears to be a header/.cpp signature fix, but static validation still reports a .cpp/header mismatch."
             )
+    delegate_findings = [finding for finding in findings if finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH"]
+    if delegate_findings or request_mentions_any(request, ("broadcast", "delegate")):
+        if delegate_findings:
+            issues.append(
+                "The delegate Broadcast callsite still does not match the declared payload; patch the exact .Broadcast(...) line in the matching cpp."
+            )
     return issues
+
+
+def delegate_broadcast_callsite_fix_context(
+    request: str,
+    route: dict[str, Any] | None = None,
+    findings: list[Finding] | None = None,
+) -> bool:
+    if route and route.get("errorSubkind") == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH":
+        return True
+    if any(finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for finding in (findings or [])):
+        return True
+    lower = request.lower()
+    if any(term in lower for term in ("handler signature", "declaration and definition", "implementer header")):
+        return False
+    if any(
+        term in lower
+        for term in (
+            "broadcast call",
+            "does not take 0 arguments",
+            "too few arguments",
+            "payload",
+            "fons",
+            "c2660",
+        )
+    ):
+        return True
+    if "broadcast" in lower and "delegate" in lower:
+        return True
+    return False
+
+
+def multifile_surface_enforced(mode: str, request: str) -> bool:
+    if str(mode or "") == "multifile_refactor":
+        return True
+    lower = str(request or "").lower()
+    markers = (
+        "multi-file",
+        "multifile",
+        "across header",
+        "declaration, definition",
+        "call site",
+        "callsite",
+        "registration callsite",
+        "implementer header",
+        "consumer cpp",
+    )
+    return any(marker in lower for marker in markers)
 
 
 def changed_paths_between(before: dict[str, str], after: dict[str, str]) -> list[str]:
@@ -1705,7 +1771,15 @@ def restore_changed_paths(root: Path, snapshot: dict[str, str], changed_paths: l
         write_file(target, old_text)
 
 
-def edit_scope_blockers(request: str, before: dict[str, str], after: dict[str, str], root: Path) -> list[str]:
+def edit_scope_blockers(
+    request: str,
+    before: dict[str, str],
+    after: dict[str, str],
+    root: Path,
+    *,
+    route: dict[str, Any] | None = None,
+    findings: list[Finding] | None = None,
+) -> list[str]:
     issues: list[str] = []
     changed = changed_paths_between(before, after)
     changed_lower = [path.lower() for path in changed]
@@ -1738,6 +1812,12 @@ def edit_scope_blockers(request: str, before: dict[str, str], after: dict[str, s
             )
     if request_mentions_any(request, ("lnk2019", "unresolved external", "missing cpp definition", "missing implementation")):
         issues.extend(missing_definition_call_removal_blockers(before, after))
+    callsite_only_delegate = delegate_broadcast_callsite_fix_context(request, route, findings)
+    if request_mentions_any(request, ("delegate", "broadcast")) and not callsite_only_delegate:
+        if changed_cpp and not changed_header:
+            issues.append(
+                "Delegate handler signature fixes must update the header declaration and .cpp definition together."
+            )
     return issues
 
 
@@ -1745,14 +1825,13 @@ def apply_bundle(root: Path, bundle: dict[str, Any]) -> list[Path]:
     written: list[Path] = []
     for item in bundle.get("patches") or []:
         target = safe_output_path(root, item["path"])
-        ok, msg, updated = apply_single_patch(
-            target,
-            item["oldText"],
-            item["newText"],
-            int(item.get("expectedOccurrences") or 1),
-        )
+        old_text = str(item.get("oldText") or "")
+        new_text = str(item.get("newText") or "")
+        expected = int(item.get("expectedOccurrences") or 1)
+        ok, msg = validate_patch_item(target, old_text, new_text, expected)
         if not ok:
             raise ValueError(f"patch failed for {item['path']}: {msg}")
+        _, _, updated = apply_single_patch(target, old_text, new_text, expected)
         write_file(target, updated)
         written.append(target)
     for item in bundle["files"]:
@@ -1783,6 +1862,250 @@ def apply_generated_h_missing_autofix(root: Path, findings: list[Finding]) -> li
         write_file(target, updated)
         written.append(target)
     return written
+
+
+def _uclass_line_index(lines: list[str]) -> int:
+    for index, line in enumerate(lines):
+        if re.search(r"\bU(CLASS|STRUCT|ENUM)\b", line):
+            return index
+    return len(lines)
+
+
+def reorder_generated_h_header_text(text: str) -> str | None:
+    lines = text.splitlines()
+    uclass_idx = _uclass_line_index(lines)
+    prefix = lines[:uclass_idx]
+    suffix = lines[uclass_idx:]
+    include_positions = [index for index, line in enumerate(prefix) if line.strip().startswith("#include ")]
+    if not include_positions:
+        return None
+    first_inc = include_positions[0]
+    last_inc = include_positions[-1]
+    before = prefix[:first_inc]
+    after = prefix[last_inc + 1 :]
+    middle = [prefix[index] for index in include_positions]
+    generated = [line for line in middle if ".generated.h" in line]
+    others = [line for line in middle if ".generated.h" not in line]
+    if not generated:
+        return None
+    reordered = others + generated
+    if reordered == middle:
+        return None
+    new_lines = before + reordered + after + suffix
+    updated = "\n".join(new_lines)
+    if text.endswith("\n"):
+        updated += "\n"
+    return updated
+
+
+def apply_generated_h_order_autofix(root: Path, findings: list[Finding]) -> list[Path]:
+    written: list[Path] = []
+    targets: set[Path] = set()
+    for finding in findings:
+        if finding.code in {"GENERATED_H_NOT_LAST", "GENERATED_H_AFTER_TYPE"}:
+            target = (root / finding.path).resolve()
+            if target.is_file():
+                targets.add(target)
+    if not targets:
+        for path in iter_source_files(root):
+            if path.suffix.lower() not in {".h", ".hpp"}:
+                continue
+            text = read_text(path)
+            if ".generated.h" in text and "UCLASS" in text:
+                reordered = reorder_generated_h_header_text(text)
+                if reordered:
+                    targets.add(path)
+    for target in sorted(targets, key=lambda p: str(p)):
+        text = read_text(target)
+        reordered = reorder_generated_h_header_text(text)
+        if not reordered:
+            continue
+        write_file(target, reordered)
+        written.append(target)
+    return written
+
+
+def apply_editor_runtime_guard_autofix(root: Path, findings: list[Finding]) -> list[Path]:
+    written: list[Path] = []
+    editor_findings = [
+        finding for finding in findings if finding.code == "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE"
+    ]
+    targets: set[Path] = set()
+    for finding in editor_findings:
+        target = (root / finding.path).resolve()
+        if target.is_file():
+            targets.add(target)
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
+            continue
+        text = read_text(path)
+        if "UnrealEd.h" in text and "WITH_EDITOR" not in text:
+            targets.add(path)
+    for target in sorted(targets, key=lambda p: str(p)):
+        text = read_text(target)
+        lines = text.splitlines()
+        out: list[str] = []
+        idx = 0
+        while idx < len(lines):
+            line = lines[idx]
+            stripped = line.strip()
+            if '#include "UnrealEd.h"' in line or "#include <UnrealEd.h>" in line:
+                idx += 1
+                continue
+            if "GEditor->" in line:
+                if not out or out[-1] != "#if WITH_EDITOR":
+                    out.append("#if WITH_EDITOR")
+                out.append("\t// Editor API isolated from runtime module linkage.")
+                out.append("#endif")
+                idx += 1
+                continue
+            out.append(line)
+            idx += 1
+        updated = "\n".join(out)
+        if text.endswith("\n"):
+            updated += "\n"
+        if updated != text:
+            write_file(target, updated)
+            written.append(target)
+    return written
+
+
+def apply_delegate_broadcast_autofix(root: Path, findings: list[Finding]) -> list[Path]:
+    written: list[Path] = []
+    targets: set[Path] = set()
+    for finding in findings:
+        if finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH":
+            target = (root / finding.path).resolve()
+            if target.is_file():
+                targets.add(target)
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
+            continue
+        text = read_text(path)
+        if re.search(r"\.Broadcast\s*\(\s*\)", text):
+            targets.add(path)
+    for target in sorted(targets, key=lambda p: str(p)):
+        text = read_text(target)
+        updated = re.sub(r"\.Broadcast\s*\(\s*\)", ".Broadcast(0)", text)
+        if updated == text:
+            continue
+        write_file(target, updated)
+        written.append(target)
+    return written
+
+
+def apply_uobject_newobject_autofix(root: Path, findings: list[Finding]) -> list[Path]:
+    written: list[Path] = []
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
+            continue
+        text = read_text(path)
+        if "#define NewObject" not in text:
+            continue
+        lines = [line for line in text.splitlines() if not re.match(r"\s*#\s*define\s+NewObject\b", line.strip())]
+        updated = "\n".join(lines)
+        if "UObject/UObjectGlobals.h" not in updated and "UObjectGlobals.h" not in updated:
+            insert_at = 0
+            for index, line in enumerate(lines):
+                if line.strip().startswith("#include "):
+                    insert_at = index + 1
+            lines.insert(insert_at, '#include "UObject/UObjectGlobals.h"')
+            updated = "\n".join(lines)
+        if text.endswith("\n"):
+            updated += "\n"
+        if updated != text:
+            write_file(path, updated)
+            written.append(path)
+    return written
+
+
+def apply_blueprint_event_rename_autofix(root: Path, findings: list[Finding]) -> list[Path]:
+    written: list[Path] = []
+    for header_path in iter_source_files(root):
+        if header_path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        header_text = read_text(header_path)
+        event_names = re.findall(
+            r"UFUNCTION\s*\([^)]*BlueprintNativeEvent[^)]*\)[^\n;]*\n\s*(?:virtual\s+)?void\s+(\w+)\s*\(",
+            header_text,
+        )
+        if not event_names:
+            continue
+        cpp_path = header_path.with_suffix(".cpp")
+        if not cpp_path.is_file():
+            module_private = header_path.parent.parent / "Private" / f"{header_path.stem}.cpp"
+            cpp_path = module_private if module_private.is_file() else cpp_path
+        if not cpp_path.is_file():
+            continue
+        cpp_text = read_text(cpp_path)
+        updated = cpp_text
+        for event_name in event_names:
+            expected_impl = f"{event_name}_Implementation"
+            for wrong in set(re.findall(r"(\w+_Implementation)\s*\(", updated)):
+                if wrong != expected_impl:
+                    updated = updated.replace(f"::{wrong}(", f"::{expected_impl}(")
+        if updated != cpp_text:
+            write_file(cpp_path, updated)
+            written.append(cpp_path)
+    return written
+
+
+def edit_limits_for_mode(base_limits: dict[str, Any], mode: str) -> dict[str, Any]:
+    limits = dict(base_limits or {})
+    if str(mode or "") == "multifile_refactor":
+        limits["maxFilesPerEdit"] = max(int(limits.get("maxFilesPerEdit") or 2), 3)
+    return limits
+
+
+def multifile_surface_blockers(
+    request: str,
+    before: dict[str, str],
+    after: dict[str, str],
+    root: Path,
+    *,
+    mode: str,
+) -> list[str]:
+    if not multifile_surface_enforced(mode, request):
+        return []
+    changed = changed_paths_between(before, after)
+    if not changed:
+        return []
+    changed_headers = [path for path in changed if Path(path).suffix.lower() in {".h", ".hpp"}]
+    changed_cpp = [path for path in changed if Path(path).suffix.lower() in {".cpp", ".c", ".cc"}]
+    lower = request.lower()
+    issues: list[str] = []
+
+    if any(term in lower for term in ("delegate", "signature", "declaration", "definition", "interface")):
+        if changed_headers and not changed_cpp:
+            issues.append(
+                "Multifile fix incomplete: header declaration changed without matching .cpp definition. "
+                f"Changed: {', '.join(changed_headers)}"
+            )
+        elif changed_cpp and not changed_headers:
+            issues.append(
+                "Multifile fix incomplete: .cpp definition changed without matching header declaration. "
+                f"Changed: {', '.join(changed_cpp)}"
+            )
+
+    if "interface" in lower and len(changed) < 2:
+        issues.append(
+            "Interface mismatch fixes require implementer header and cpp in the same patch. "
+            f"Changed only: {', '.join(changed)}"
+        )
+
+    if any(term in lower for term in ("callback", "registration", "parameter list")) and len(changed) < 2:
+        issues.append(
+            "Callback parameter expansion requires declaration, definition, and registration updates together. "
+            f"Changed only: {', '.join(changed)}"
+        )
+
+    surface = refactor_surface_evidence(root, request, max_files=8, max_lines_per_file=4, max_chars=2000)
+    if surface and len(changed) == 1 and ("callsite" in surface.lower() or "consumer" in lower):
+        issues.append(
+            "Multifile refactor likely needs callsite/consumer updates in addition to "
+            f"{changed[0]}."
+        )
+    return issues
 
 
 def only_build_cs_changed(before: dict[str, str], after: dict[str, str]) -> bool:
@@ -2361,6 +2684,10 @@ def static_validation_retry_feedback(
 ) -> str:
     if any(finding.code == "CPP_FUNCTION_SIGNATURE_MISMATCH" for finding in findings or []):
         return STATIC_SIGNATURE_RETRY_HINT
+    if any(finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for finding in findings or []):
+        return DELEGATE_BROADCAST_RETRY_HINT
+    if route.get("errorSubkind") == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH":
+        return DELEGATE_BROADCAST_RETRY_HINT
     if route.get("errorSubkind") == "LNK_MISSING_CPP_DEFINITION":
         if re.search(r"\bLNK2019\b|unresolved external|missing cpp definition", build_output or "", re.I):
             return LNK_MISSING_DEFINITION_RETRY_HINT
@@ -2742,6 +3069,10 @@ def mode_directive(mode: str) -> str:
             "and is the final include before UCLASS/USTRUCT/UINTERFACE declarations. "
             "If static validation reports GENERATED_H_MISSING, return a concrete files[] or patches[] edit for that header."
         ),
+        "editor_runtime_fix": (
+            "Mode directive: editor_runtime_fix. Do not add UnrealEd to runtime Build.cs. "
+            "Wrap editor-only includes and GEditor usage in #if WITH_EDITOR / #endif in the runtime cpp file."
+        ),
         "multifile_refactor": (
             "Mode directive: multifile_refactor. Do not stop at the file named in the first compiler error. "
             "Before editing, inspect the declaration, definition, callsite, binding site, and override/base/interface owner "
@@ -3070,21 +3401,20 @@ def run(args: argparse.Namespace) -> int:
     ) -> None:
         nonlocal previous_retry_record
         proposed_paths = proposed_bundle_paths(bundle)
-        current = make_attempt_record(
+        current = make_validation_rejection_record(
             attempt=attempt,
-            passed=False,
-            error_message=feedback[:500],
-            error_code="VALIDATION_REJECTED",
+            rejection_kind=rejection_kind,
+            feedback=feedback[:500],
             error_subkind=str(active_route.get("errorSubkind") or "PRE_APPLY_VALIDATION"),
             changed_paths=changed_paths or [],
-            build_log_path="",
-            notes=[rejection_kind],
+            notes=list(blockers or [])[:4] or None,
         )
         recommendation = recommend_retry_action(
             previous_retry_record,
             current,
             attempts=retry_records,
             no_op_guard=bool(edit_limits.get("noOpGuard")),
+            rejection_kind=rejection_kind,
         )
         current["sameErrorRepeated"] = recommendation["sameErrorRepeated"]
         current["recommendedAction"] = recommendation
@@ -3131,7 +3461,14 @@ def run(args: argparse.Namespace) -> int:
 
     static_autofix_written: list[Path] = []
     if args.mode in {"reflection_fix", "compile_fix"}:
-        static_autofix_written = apply_generated_h_missing_autofix(project_root, initial_findings)
+        static_autofix_written.extend(apply_generated_h_missing_autofix(project_root, initial_findings))
+        static_autofix_written.extend(apply_generated_h_order_autofix(project_root, initial_findings))
+    if args.mode in {"compile_fix", "module_fix", "editor_runtime_fix"}:
+        static_autofix_written.extend(apply_editor_runtime_guard_autofix(project_root, initial_findings))
+        static_autofix_written.extend(apply_delegate_broadcast_autofix(project_root, initial_findings))
+        static_autofix_written.extend(apply_uobject_newobject_autofix(project_root, initial_findings))
+    if args.mode in {"reflection_fix", "compile_fix"}:
+        static_autofix_written.extend(apply_blueprint_event_rename_autofix(project_root, initial_findings))
     if static_autofix_written:
         last_written = static_autofix_written
         last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
@@ -3172,7 +3509,7 @@ def run(args: argparse.Namespace) -> int:
         else:
             previous_feedback = "Safe static generated.h autofix was applied, but static validation still reports issues:\n" + static_report
 
-    edit_limits = profile_edit_limits()
+    edit_limits = edit_limits_for_mode(profile_edit_limits(), original_mode)
     prompt_prefix = system_prompt_static_prefix(rules_text, edit_limits)
     prompt_prefix_hash = system_prompt_prefix_hash(prompt_prefix)
     prompt_mode = original_mode
@@ -3194,7 +3531,12 @@ def run(args: argparse.Namespace) -> int:
                 "Emit diagnosis only; do not patch further in this run."
             )
             break
-        keep_specialized_mode = original_mode in {"module_fix", "reflection_fix", "multifile_refactor"}
+        keep_specialized_mode = original_mode in {
+            "module_fix",
+            "reflection_fix",
+            "multifile_refactor",
+            "editor_runtime_fix",
+        }
         budget_mode = original_mode if keep_specialized_mode or attempt == 1 else "compile_fix"
         if attempt >= 2 and original_mode in {
             "agent_edit", "codegen", "compile_fix",
@@ -3305,7 +3647,7 @@ def run(args: argparse.Namespace) -> int:
         try:
             bundle = parse_json_response(raw_response)
             bundle = merge_missing_definition_full_file_edits(project_root, bundle, active_route)
-            enforce_edit_limits(bundle, edit_limits)
+            enforce_edit_limits(bundle, edit_limits, mode=original_mode)
             repeat_blockers = repeat_patch_blockers(bundle, blocked_repeat_paths)
             if repeat_blockers:
                 previous_feedback = "Repeat patch escalation blocked the response:\n" + "\n".join(
@@ -3531,7 +3873,14 @@ def run(args: argparse.Namespace) -> int:
                     rejection_kind="no_effective_file_change",
                 )
                 continue
-            scope_blockers = edit_scope_blockers(request, before_apply, after_apply, project_root)
+            scope_blockers = edit_scope_blockers(
+                request,
+                before_apply,
+                after_apply,
+                project_root,
+                route=active_route,
+                findings=last_findings,
+            )
             if scope_blockers:
                 rejected_changed_paths = changed_paths_between(before_apply, after_apply)
                 restore_changed_paths(project_root, before_apply, rejected_changed_paths)
@@ -3554,8 +3903,45 @@ def run(args: argparse.Namespace) -> int:
                     rejection_kind="edit_scope_blocker",
                 )
                 continue
+            surface_blockers = multifile_surface_blockers(
+                request,
+                before_apply,
+                after_apply,
+                project_root,
+                mode=original_mode,
+            )
+            if surface_blockers:
+                rejected_changed_paths = changed_paths_between(before_apply, after_apply)
+                restore_changed_paths(project_root, before_apply, rejected_changed_paths)
+                last_written = []
+                previous_feedback = (
+                    "Multifile surface coverage rejected the edit:\n"
+                    + "\n".join(f"- {issue}" for issue in surface_blockers)
+                    + "\nReturn one coherent patch that updates every required declaration, definition, and callsite."
+                )
+                write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                record_validation_rejection(
+                    attempt=attempt,
+                    attempt_dir=attempt_dir,
+                    feedback=previous_feedback,
+                    blockers=surface_blockers,
+                    bundle=bundle,
+                    changed_paths=[],
+                    rejection_kind="multifile_incomplete",
+                )
+                continue
         except Exception as exc:
-            previous_feedback = f"File application failed: {exc}"
+            hint = ""
+            if "bundle" in locals():
+                for item in (bundle.get("patches") or []):
+                    target = safe_output_path(project_root, item["path"])
+                    hint = patch_apply_hint(target, str(item.get("oldText") or ""))
+                    if hint:
+                        break
+            previous_feedback = f"File application failed: {exc}{hint}"
+            static_hint = static_validation_retry_feedback(last_findings, active_route)
+            if static_hint:
+                previous_feedback += "\n\n" + static_hint
             write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
             record_validation_rejection(
                 attempt=attempt,

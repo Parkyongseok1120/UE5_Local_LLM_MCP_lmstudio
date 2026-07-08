@@ -58,6 +58,65 @@ def _adapt_new_text_indent(new_text: str, old_lines: list[str], actual_lines: li
     return adapted
 
 
+def _apply_single_line_normalized_patch(
+    content: str,
+    old_text: str,
+    new_text: str,
+    expected_occurrences: int,
+) -> tuple[bool, str, str]:
+    if expected_occurrences != 1:
+        return False, "oldText not found; single-line fallback supports expectedOccurrences=1 only", content
+    if "\n" in old_text or "\r" in old_text:
+        return False, "oldText not found", content
+    wanted = old_text.strip()
+    if not wanted:
+        return False, "oldText must not be empty", content
+    lines = content.splitlines(keepends=True)
+    matches: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        if wanted in line or _line_without_leading_ws(line) == _line_without_leading_ws(wanted):
+            matches.append((index, line))
+    if len(matches) != 1:
+        return False, f"oldText not found; single-line normalized candidates={len(matches)}", content
+    index, actual_line = matches[0]
+    actual_lines = [actual_line]
+    old_lines = [old_text if old_text.endswith(("\n", "\r")) else old_text + "\n"]
+    adapted_new_text = _adapt_new_text_indent(new_text, old_lines, actual_lines)
+    if not adapted_new_text.endswith(("\n", "\r")) and actual_line.endswith(("\n", "\r")):
+        adapted_new_text += actual_line[len(actual_line.rstrip("\r\n")) :]
+    updated = "".join(lines[:index]) + adapted_new_text + "".join(lines[index + 1 :])
+    return True, "ok (single-line normalized)", updated
+
+
+def patch_apply_hint(path: Path, old_text: str) -> str:
+    if not path.is_file() or not old_text:
+        return ""
+    content = path.read_text(encoding="utf-8")
+    needle = old_text.strip()
+    if not needle:
+        return ""
+    if needle in content:
+        return ""
+    for line_no, line in enumerate(content.splitlines(), start=1):
+        if needle in line or _line_without_leading_ws(line) == _line_without_leading_ws(needle):
+            return f" nearest file line {line_no}: {line.strip()[:160]}"
+        if ".Broadcast(" in needle and ".Broadcast(" in line:
+            return f" nearest Broadcast line {line_no}: {line.strip()[:160]}"
+    return ""
+
+
+def validate_patch_item(path: Path, old_text: str, new_text: str, expected_occurrences: int = 1) -> tuple[bool, str]:
+    if not old_text:
+        return False, "oldText must not be empty"
+    if not path.is_file():
+        return False, f"file not found: {path}"
+    ok, msg, _ = apply_patch(path, old_text, new_text, expected_occurrences)
+    if ok:
+        return True, ""
+    hint = patch_apply_hint(path, old_text)
+    return False, f"{msg}{hint}"
+
+
 def _apply_leading_ws_normalized_patch(
     content: str,
     old_text: str,
@@ -107,7 +166,10 @@ def apply_patch(
     content = path.read_text(encoding="utf-8")
     count = content.count(old_text)
     if count == 0:
-        return _apply_leading_ws_normalized_patch(content, old_text, new_text, expected_occurrences)
+        ok, msg, updated = _apply_leading_ws_normalized_patch(content, old_text, new_text, expected_occurrences)
+        if ok:
+            return ok, msg, updated
+        return _apply_single_line_normalized_patch(content, old_text, new_text, expected_occurrences)
     if count != expected_occurrences:
         return False, f"expected {expected_occurrences} occurrence(s), found {count}", content
     updated = content.replace(old_text, new_text, expected_occurrences)

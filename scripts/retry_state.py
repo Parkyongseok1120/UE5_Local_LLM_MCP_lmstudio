@@ -63,23 +63,87 @@ def detect_noop_edit(changed_paths: list[str]) -> bool:
     return len([path for path in changed_paths if str(path).strip()]) == 0
 
 
+def _validation_error_key(rejection_kind: str, error_subkind: str = "") -> str:
+    return "|".join(["validation", str(rejection_kind or ""), str(error_subkind or "")])
+
+
+def count_consecutive_validation_rejections(attempts: list[dict[str, Any]], rejection_kind: str) -> int:
+    if not attempts or not rejection_kind:
+        return 0
+    count = 0
+    for record in reversed(attempts):
+        notes = [str(note) for note in (record.get("notes") or [])]
+        if rejection_kind in notes or record.get("validationRejectionKind") == rejection_kind:
+            count += 1
+            continue
+        break
+    return count
+
+
+def make_validation_rejection_record(
+    *,
+    attempt: int,
+    rejection_kind: str,
+    feedback: str,
+    error_subkind: str = "",
+    changed_paths: list[str] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any]:
+    record = make_attempt_record(
+        attempt=attempt,
+        passed=False,
+        error_message=feedback[:500],
+        error_code="VALIDATION_REJECTED",
+        error_subkind=error_subkind or "PRE_APPLY_VALIDATION",
+        changed_paths=changed_paths or [],
+        build_log_path="",
+        notes=[rejection_kind, *(notes or [])],
+    )
+    record["errorKey"] = _validation_error_key(rejection_kind, error_subkind)
+    record["validationRejectionKind"] = rejection_kind
+    return record
+
+
 def recommend_retry_action(
     previous: dict[str, Any] | None,
     current: dict[str, Any],
     *,
     attempts: list[dict[str, Any]] | None = None,
     no_op_guard: bool = False,
+    rejection_kind: str = "",
 ) -> dict[str, Any]:
     repeated = same_error_repeated(previous, current)
     noop = bool(current.get("noOpEdit")) or detect_noop_edit(list(current.get("changedPaths") or []))
     if attempts:
         repeat_count = count_consecutive_same_errors(list(attempts) + [current])
+        validation_repeat = count_consecutive_validation_rejections(list(attempts), str(rejection_kind or ""))
     else:
         repeat_count = 2 if repeated else 1
+        validation_repeat = 0
     if current.get("passed"):
         action = "stop_success"
         reason = "build passed"
         escalation_level = 0
+    elif str(rejection_kind or "") == "multifile_incomplete":
+        action = "require_multifile_surfaces"
+        reason = "multifile patch did not cover all required declaration/definition/callsite surfaces"
+        escalation_level = 1
+    elif str(rejection_kind or "") == "file_application_failed":
+        action = "require_exact_oldtext"
+        reason = "patch oldText did not match the current file; copy the exact callsite line from project state"
+        escalation_level = 2 if validation_repeat >= 2 else 1
+    elif str(rejection_kind or "") == "empty_files_without_evidence":
+        action = "force_patch_with_evidence" if validation_repeat >= 2 else "force_new_evidence"
+        reason = "empty response without evidence while static validation still reports actionable errors"
+        escalation_level = 2 if validation_repeat >= 2 else 1
+    elif str(rejection_kind or "") == "edit_scope_blocker":
+        action = "require_multifile_surfaces" if validation_repeat >= 1 else "force_new_evidence"
+        reason = "edit rejected by compile-fix scope guard; widen the patch to required surfaces"
+        escalation_level = 1
+    elif validation_repeat >= 4:
+        action = "stop_diagnosis_report"
+        reason = "same validation rejection repeated on four consecutive attempts"
+        escalation_level = 3
     elif noop and no_op_guard:
         action = "force_new_evidence"
         reason = "no-op edit with noOpGuard enabled"
@@ -155,6 +219,27 @@ def _prompt_hints(action: str, blocked_paths: list[str] | None = None) -> list[s
         )
     elif action == "continue_first_error_loop":
         hints.extend(["Patch one root cause only.", "Verify with build output before claiming success."])
+    elif action == "require_multifile_surfaces":
+        hints.extend(
+            [
+                "Return one patch that updates every required header, cpp, and callsite together.",
+                "Do not stop after editing only the first file named in the compiler error.",
+            ]
+        )
+    elif action == "require_exact_oldtext":
+        hints.extend(
+            [
+                "Copy oldText exactly from the current project state summary or compiler snippet.",
+                "Patch only the exact Broadcast/callsite line; do not invent alternate member names.",
+            ]
+        )
+    elif action == "force_patch_with_evidence":
+        hints.extend(
+            [
+                "Static validation still reports an actionable error; return a concrete patch, not an empty files array.",
+                "Include the exact oldText/newText pair for the failing line.",
+            ]
+        )
     if blocked_paths:
         hints.append("Blocked repeat patch targets: " + ", ".join(blocked_paths))
     return hints

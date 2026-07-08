@@ -10,6 +10,8 @@ from unreal_static_validate import (  # noqa: E402
     validate_duplicate_source_basenames,
     validate_include_paths_exist,
     validate_unreal_readiness,
+    validate_generated_h,
+    validate_delegate_broadcast_consistency,
     build_source_include_index,
     has_static_errors,
 )
@@ -81,4 +83,42 @@ def test_module_fix_build_cs_patch_skips_include_path_gate(tmp_path: Path) -> No
     after = validate_unreal_readiness(project, skip_include_path_checks=True)
     assert not any(item.code == "INCLUDE_PATH_NOT_FOUND" for item in after)
     assert not has_static_errors(after)
+
+
+def test_generated_h_after_type_detected(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "FooComponent.h"
+    _write(
+        header,
+        """#pragma once
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+
+UCLASS()
+class UFooComponent : public UActorComponent
+{
+	GENERATED_BODY()
+};
+#include "FooComponent.generated.h"
+""",
+    )
+    findings = validate_generated_h(header, header.read_text(encoding="utf-8"), project)
+    assert any(item.code == "GENERATED_H_AFTER_TYPE" for item in findings)
+
+
+def test_delegate_broadcast_empty_args_detected(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "Score.cpp"
+    _write(
+        cpp,
+        """#include "Score.h"
+
+void Trigger()
+{
+	OnScoreChanged.Broadcast();
+}
+""",
+    )
+    findings = validate_delegate_broadcast_consistency(cpp, cpp.read_text(encoding="utf-8"), project)
+    assert any(item.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for item in findings)
 

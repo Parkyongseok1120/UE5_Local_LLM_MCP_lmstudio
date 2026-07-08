@@ -229,6 +229,44 @@ def validate_generated_h(path: Path, text: str, root: Path) -> list[Finding]:
                     "generated.h must be the last include in the header.",
                 )
             )
+        uclass_idx = _uclass_line_index(text)
+        for line_no, _ in generated:
+            if line_no > uclass_idx:
+                findings.append(
+                    Finding(
+                        "error",
+                        str(path.relative_to(root)),
+                        line_no,
+                        "GENERATED_H_AFTER_TYPE",
+                        "generated.h must appear in the include block before UCLASS/USTRUCT, not after the type body.",
+                    )
+                )
+                break
+    return findings
+
+
+def _uclass_line_index(text: str) -> int:
+    for index, line in enumerate(text.splitlines(), start=1):
+        if re.search(r"\bU(CLASS|STRUCT|ENUM)\b", line):
+            return index
+    return len(text.splitlines()) + 1
+
+
+def validate_delegate_broadcast_consistency(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
+        return findings
+    for match in re.finditer(r"\.Broadcast\s*\(\s*\)", text):
+        line_no = text[: match.start()].count("\n") + 1
+        findings.append(
+            Finding(
+                "error",
+                str(path.relative_to(root)),
+                line_no,
+                "DELEGATE_BROADCAST_SIGNATURE_MISMATCH",
+                "Delegate Broadcast() is missing required payload arguments.",
+            )
+        )
     return findings
 
 
@@ -1341,6 +1379,7 @@ def validate_unreal_readiness(
             findings.extend(validate_newobject_outer(path, text, root))
             findings.extend(validate_component_timer_manager(path, text, root, bases))
             findings.extend(validate_cpp_declarations(path, text, root, headers))
+            findings.extend(validate_delegate_broadcast_consistency(path, text, root))
     findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
     findings.extend(validate_include_owner_modules(root, build_text_value, include_owner_map))
     findings.extend(validate_duplicate_source_basenames(root))

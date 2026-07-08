@@ -41,6 +41,26 @@ SUBKIND_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("RPC_IMPLEMENTATION_MISSING", "compile_fix", re.compile(r"RPC|Server_|Client_|NetMulticast", re.I)),
     ("ENHANCED_INPUT_BINDING_ERROR", "compile_fix", re.compile(r"EnhancedInput|ETriggerEvent|BindAction", re.I)),
     ("EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE", "module_fix", re.compile(r"UnrealEd|Editor.*runtime module", re.I)),
+    (
+        "DELEGATE_BROADCAST_SIGNATURE_MISMATCH",
+        "compile_fix",
+        re.compile(r"delegate.*broadcast|Broadcast.*argument|too few arguments.*Broadcast|C2660.*Broadcast", re.I),
+    ),
+    (
+        "INTERFACE_IMPLEMENTER_MISMATCH",
+        "compile_fix",
+        re.compile(r"interface.*implement|does not implement|abstract class|C2259|C3668", re.I),
+    ),
+    (
+        "MULTIFILE_CALLSITE_DRIFT",
+        "compile_fix",
+        re.compile(r"callsite|call site|consumer|is not a member|C2039|C3861", re.I),
+    ),
+    (
+        "CALLBACK_PARAM_EXPAND",
+        "compile_fix",
+        re.compile(r"callback.*parameter|function pointer|cannot convert.*callback|C2664", re.I),
+    ),
     ("RAW_UOBJECT_MEMBER_WITHOUT_UPROPERTY", "reflection_fix", re.compile(r"UPROPERTY.*UObject|raw pointer.*UObject", re.I)),
     ("CONSTRUCTOR_LIFECYCLE_MISUSE", "compile_fix", re.compile(r"constructor.*CreateDefaultSubobject|FObjectInitializer", re.I)),
     ("SEQUENCER_BINDING_CONFUSION", "runtime_debug", re.compile(r"sequencer|level\s*sequence|movie\s*scene|binding.*(actor|component)|FMovieScene", re.I)),
@@ -180,6 +200,21 @@ def route_error_action(message: str, error_code: str = "") -> dict[str, Any]:
                 "Re-check the root cause and read declaration/definition files before editing Build.cs."
             ),
         ) | {"routePriorityApplied": "signature_mismatch_without_lnk_evidence"}
+
+    if subkind == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH":
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["delegate declaration", "Broadcast callsite in matching cpp"],
+            rag=["compile_fix"],
+            targets=["Broadcast callsite in matching cpp"],
+            forbidden=["Build.cs-first fix without module evidence", "header rewrite when only Broadcast arity is wrong"],
+            notes=["Patch the exact MemberName.Broadcast(...) call to match the declared delegate payload."],
+            soft=[
+                "This is a delegate Broadcast arity mismatch.",
+                "Read the DECLARE_*DELEGATE line and the exact .Broadcast(...) callsite.",
+                "Cpp-only callsite patch is allowed when the header delegate declaration is already correct.",
+            ],
+        )
 
     if subkind == "ENHANCED_INPUT_BINDING_ERROR":
         return set_route(

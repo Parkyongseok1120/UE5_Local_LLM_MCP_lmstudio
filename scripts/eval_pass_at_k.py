@@ -570,6 +570,11 @@ def main() -> int:
                         help="Optional directory to preserve live wrapper run artifacts per case.")
     parser.add_argument("--output", type=Path, default=None,
                         help="Optional KPI JSON output path. Defaults to data/baseline/pass-at-k*.json.")
+    parser.add_argument(
+        "--case-ids",
+        default="",
+        help="Comma-separated case ids to run (default: all cases in config)",
+    )
     args = parser.parse_args()
 
     config = json.loads((ROOT / args.config).read_text(encoding="utf-8-sig"))
@@ -596,6 +601,12 @@ def main() -> int:
 
     # Run cases sequentially; use --early-exit to stop once min_pass_rate is met.
     cases = config.get("cases") or []
+    if args.case_ids.strip():
+        selected = {item.strip() for item in args.case_ids.split(",") if item.strip()}
+        cases = [case for case in cases if str(case.get("id") or "") in selected]
+        missing = sorted(selected - {str(case.get("id") or "") for case in cases})
+        if missing:
+            print(f"[warn] unknown --case-ids (skipped): {', '.join(missing)}", file=sys.stderr)
     if args.metrics_only:
         results = build_metrics_only_results(cases, args.retry_state_fixture, args.artifact_dir)
     else:

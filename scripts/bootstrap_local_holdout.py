@@ -182,7 +182,7 @@ EXPANSION_CASES_24: list[dict[str, Any]] = [
     {
         "id": "local_multifile_method_rename_header_cpp_callsite",
         "category": "simple multi-file compile refactor",
-        "mode": "compile_fix",
+        "mode": "multifile_refactor",
         "errorLog": "error C2039: 'StartCharge': is not a member of UHoldoutRefactorComponent",
         "expectedFilesToRead": ["header declaration", "cpp definition", "call site cpp"],
         "expectedPatchTargets": ["matching cpp/header"],
@@ -192,7 +192,7 @@ EXPANSION_CASES_24: list[dict[str, Any]] = [
     {
         "id": "local_multifile_delegate_signature_update",
         "category": "simple multi-file compile refactor",
-        "mode": "compile_fix",
+        "mode": "multifile_refactor",
         "errorLog": "error C2660: UHoldoutDelegateOwner::HandleScoreChanged: function does not take 1 arguments",
         "expectedFilesToRead": ["delegate owner header", "delegate owner cpp"],
         "expectedPatchTargets": ["matching cpp/header"],
@@ -202,7 +202,7 @@ EXPANSION_CASES_24: list[dict[str, Any]] = [
     {
         "id": "local_multifile_interface_signature_update",
         "category": "simple multi-file compile refactor",
-        "mode": "compile_fix",
+        "mode": "multifile_refactor",
         "errorLog": "error C3668: method with override specifier did not override any base class methods",
         "expectedFilesToRead": ["interface header", "implementer header", "implementer cpp"],
         "expectedPatchTargets": ["matching cpp/header"],
@@ -212,7 +212,7 @@ EXPANSION_CASES_24: list[dict[str, Any]] = [
     {
         "id": "local_multifile_component_api_move",
         "category": "simple multi-file compile refactor",
-        "mode": "compile_fix",
+        "mode": "multifile_refactor",
         "errorLog": "error C2039: 'ApplyMovedValue': is not a member of UHoldoutApiComponent",
         "expectedFilesToRead": ["component header", "component cpp", "consumer cpp"],
         "expectedPatchTargets": ["matching cpp/header"],
@@ -328,7 +328,7 @@ EXPANSION_CASES_36_EXTRA: list[dict[str, Any]] = [
     {
         "id": "local_editor_runtime_guard_boundary",
         "category": "editor-only include in runtime module",
-        "mode": "compile_fix",
+        "mode": "editor_runtime_fix",
         "errorLog": "Runtime module source references UnrealEd editor API without WITH_EDITOR guard",
         "expectedFilesToRead": ["runtime header", "runtime cpp", "module Build.cs"],
         "expectedPatchTargets": ["failing file", "module boundary files"],
@@ -645,6 +645,168 @@ def write_fixture_cases(case_ids: list[str], fixture_root: Path = DEFAULT_FIXTUR
     return [write_fixture_case(case_id, fixture_root) for case_id in case_ids]
 
 
+def _write_golden_file(fixture_dir: Path, rel_path: str, text: str) -> None:
+    _write(fixture_dir / "golden" / rel_path, text)
+
+
+def _write_delegate_broadcast_golden(fixture_dir: Path) -> None:
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutScoreDelegateComponent.cpp",
+        """#include "HoldoutScoreDelegateComponent.h"
+
+void UHoldoutScoreDelegateComponent::TriggerScore()
+{
+	OnScoreChanged.Broadcast(0);
+}
+""",
+    )
+
+
+def _write_multifile_delegate_golden(fixture_dir: Path) -> None:
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutDelegateOwner.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+
+class FHoldoutDelegateOwner
+{
+public:
+	void HandleScoreChanged(int32 Score);
+};
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutDelegateOwner.cpp",
+        """#include "HoldoutDelegateOwner.h"
+
+void FHoldoutDelegateOwner::HandleScoreChanged(int32 Score)
+{
+	(void)Score;
+}
+""",
+    )
+
+
+def _write_multifile_interface_golden(fixture_dir: Path) -> None:
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutActionImplementer.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "HoldoutActionInterface.h"
+
+class FHoldoutActionImplementer : public IHoldoutActionInterface
+{
+public:
+	void ApplyInteraction(float Strength) override;
+};
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutActionImplementer.cpp",
+        """#include "HoldoutActionImplementer.h"
+
+void FHoldoutActionImplementer::ApplyInteraction(float Strength)
+{
+	(void)Strength;
+}
+""",
+    )
+
+
+def _write_multifile_interface_return_golden(fixture_dir: Path) -> None:
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutReturnImplementer.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "HoldoutReturnInterface.h"
+
+class FHoldoutReturnImplementer : public IHoldoutReturnInterface
+{
+public:
+	bool CanUse() const override;
+};
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutReturnImplementer.cpp",
+        """#include "HoldoutReturnImplementer.h"
+
+bool FHoldoutReturnImplementer::CanUse() const
+{
+	return true;
+}
+""",
+    )
+
+
+def _write_multifile_callback_expand_golden(fixture_dir: Path) -> None:
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutCallbackReceiver.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+
+class FHoldoutCallbackReceiver
+{
+public:
+	static void OnResult(int32 Value, bool bSuccess);
+};
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutCallbackReceiver.cpp",
+        """#include "HoldoutCallbackReceiver.h"
+
+void FHoldoutCallbackReceiver::OnResult(int32 Value, bool bSuccess)
+{
+	(void)Value;
+	(void)bSuccess;
+}
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutCallbackRegistration.cpp",
+        """#include "HoldoutCallbackReceiver.h"
+
+using FHoldoutCallback = void (*)(int32, bool);
+
+FHoldoutCallback RegisterHoldoutCallback()
+{
+	return &FHoldoutCallbackReceiver::OnResult;
+}
+""",
+    )
+
+
+def _write_editor_runtime_guard_golden(fixture_dir: Path) -> None:
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutEditorGuardComponent.cpp",
+        """#include "HoldoutEditorGuardComponent.h"
+
+void UHoldoutEditorGuardComponent::RefreshEditorPreview()
+{
+#if WITH_EDITOR
+	// Editor viewport refresh stays isolated from runtime module linkage.
+#endif
+}
+""",
+    )
+
+
 def _write_module_fix_request(fixture_dir: Path, error_log: str, instruction: str) -> None:
     _write(fixture_dir / "request.txt", f"{error_log}\n\n{instruction}\n")
 
@@ -813,6 +975,17 @@ void UHoldoutDashComponent::ApplyDash(int32 Strength)
         fixture_dir / "request.txt",
         "Fix the header/cpp signature mismatch. Read both files and align the cpp definition with the header declaration. Do not edit Build.cs.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutDashComponent.cpp",
+        """#include "HoldoutDashComponent.h"
+
+void UHoldoutDashComponent::ApplyDash(float Strength)
+{
+	(void)Strength;
+}
+""",
+    )
 
 
 def _write_lnk_missing_definition_fixture(fixture_dir: Path) -> None:
@@ -849,6 +1022,21 @@ void UHoldoutMissingDefinitionComponent::TriggerDash()
     _write(
         fixture_dir / "request.txt",
         "Fix the LNK2019 missing cpp definition by adding the missing StartDash implementation in the matching cpp file. Do not edit Build.cs.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutMissingDefinitionComponent.cpp",
+        """#include "HoldoutMissingDefinitionComponent.h"
+
+void UHoldoutMissingDefinitionComponent::StartDash()
+{
+}
+
+void UHoldoutMissingDefinitionComponent::TriggerDash()
+{
+	StartDash();
+}
+""",
     )
 
 
@@ -1042,6 +1230,16 @@ public:
         fixture_dir / "request.txt",
         "Fix the BlueprintNativeEvent implementation gap. Add the missing OnHoldoutEvent_Implementation definition in the matching cpp file.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutNativeEventComponent.cpp",
+        """#include "HoldoutNativeEventComponent.h"
+
+void UHoldoutNativeEventComponent::OnHoldoutEvent_Implementation()
+{
+}
+""",
+    )
 
 
 def _write_editor_only_fixture(fixture_dir: Path) -> None:
@@ -1066,6 +1264,22 @@ class HOLDOUTFIXTURE_API UHoldoutEditorBoundaryComponent : public UActorComponen
     _write(
         fixture_dir / "request.txt",
         "Fix the runtime module boundary error caused by editor-only UnrealEd usage. Do not blindly add UnrealEd to the runtime module; remove or guard the editor-only dependency.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutEditorBoundaryComponent.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "HoldoutEditorBoundaryComponent.generated.h"
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutEditorBoundaryComponent : public UActorComponent
+{
+	GENERATED_BODY()
+};
+""",
     )
 
 
@@ -1095,6 +1309,27 @@ public:
     _write(
         fixture_dir / "request.txt",
         "Fix the missing include owner path. Replace BoxComponent.h with Components/BoxComponent.h; do not edit Build.cs.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutIncludeOwnerComponent.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "Components/BoxComponent.h"
+#include "HoldoutIncludeOwnerComponent.generated.h"
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutIncludeOwnerComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(VisibleAnywhere, Category="Holdout")
+	TObjectPtr<UBoxComponent> Box;
+};
+""",
     )
 
 
@@ -1131,6 +1366,11 @@ void UHoldoutImplementableEventComponent::OnHoldoutBlueprintEvent_Implementation
     _write(
         fixture_dir / "request.txt",
         "Fix the BlueprintImplementableEvent native implementation compile error. Prefer removing the invalid _Implementation body unless the declaration is intentionally changed to BlueprintNativeEvent.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutImplementableEventComponent.cpp",
+        '#include "HoldoutImplementableEventComponent.h"\n',
     )
 
 
@@ -1173,6 +1413,7 @@ void UHoldoutScoreDelegateComponent::TriggerScore()
         fixture_dir / "request.txt",
         "Fix the delegate Broadcast call to match FOnHoldoutScoreChanged, which requires the Score payload.\n",
     )
+    _write_delegate_broadcast_golden(fixture_dir)
 
 
 def _write_component_registration_fixture(fixture_dir: Path) -> None:
@@ -1216,6 +1457,19 @@ AHoldoutBoxActor::AHoldoutBoxActor()
         fixture_dir / "request.txt",
         "Fix the component registration compile error by including the concrete UBoxComponent header in the cpp. Do not edit Build.cs.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutBoxActor.cpp",
+        """#include "HoldoutBoxActor.h"
+#include "Components/BoxComponent.h"
+
+AHoldoutBoxActor::AHoldoutBoxActor()
+{
+	Box = CreateDefaultSubobject<UBoxComponent>(TEXT("Box"));
+	RootComponent = Box;
+}
+""",
+    )
 
 
 def _write_subsystem_include_fixture(fixture_dir: Path) -> None:
@@ -1238,6 +1492,22 @@ class HOLDOUTFIXTURE_API UHoldoutGlobalSubsystem : public UGameInstanceSubsystem
     _write(
         fixture_dir / "request.txt",
         "Fix the subsystem base class compile error by adding the correct GameInstanceSubsystem include to the header.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutGlobalSubsystem.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Subsystems/GameInstanceSubsystem.h"
+#include "HoldoutGlobalSubsystem.generated.h"
+
+UCLASS()
+class HOLDOUTFIXTURE_API UHoldoutGlobalSubsystem : public UGameInstanceSubsystem
+{
+	GENERATED_BODY()
+};
+""",
     )
 
 
@@ -1316,6 +1586,18 @@ UObject* UHoldoutObjectFactoryComponent::CreateRuntimeObject()
         fixture_dir / "request.txt",
         "Fix the UObject lifecycle compile error by removing the bad local NewObject macro and using the proper UObject creation API include/usage.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutObjectFactoryComponent.cpp",
+        """#include "HoldoutObjectFactoryComponent.h"
+#include "UObject/UObjectGlobals.h"
+
+UObject* UHoldoutObjectFactoryComponent::CreateRuntimeObject()
+{
+	return NewObject<UObject>(this);
+}
+""",
+    )
 
 
 def _write_multifile_method_rename_fixture(fixture_dir: Path) -> None:
@@ -1365,6 +1647,49 @@ void UseHoldoutRefactor(UHoldoutRefactorComponent* Component)
         fixture_dir / "request.txt",
         "Fix the small multi-file refactor drift by aligning the method name across header, cpp definition, and call site.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutRefactorComponent.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "HoldoutRefactorComponent.generated.h"
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutRefactorComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	void StartCharge();
+};
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutRefactorComponent.cpp",
+        """#include "HoldoutRefactorComponent.h"
+
+void UHoldoutRefactorComponent::StartCharge()
+{
+}
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutRefactorConsumer.cpp",
+        """#include "HoldoutRefactorComponent.h"
+
+void UseHoldoutRefactor(UHoldoutRefactorComponent* Component)
+{
+	if (Component)
+	{
+		Component->StartCharge();
+	}
+}
+""",
+    )
 
 
 def _write_multifile_delegate_fixture(fixture_dir: Path) -> None:
@@ -1396,6 +1721,7 @@ void FHoldoutDelegateOwner::HandleScoreChanged(int32 Score)
         fixture_dir / "request.txt",
         "Fix the multi-file delegate handler signature drift by updating declaration and definition consistently.\n",
     )
+    _write_multifile_delegate_golden(fixture_dir)
 
 
 def _write_multifile_interface_fixture(fixture_dir: Path) -> None:
@@ -1443,6 +1769,7 @@ void FHoldoutActionImplementer::ApplyInteraction(int32 Strength)
         fixture_dir / "request.txt",
         "Fix the multi-file interface signature mismatch by aligning the implementer header and cpp with the interface declaration.\n",
     )
+    _write_multifile_interface_golden(fixture_dir)
 
 
 def _write_multifile_component_api_fixture(fixture_dir: Path) -> None:
@@ -1493,6 +1820,31 @@ void UseHoldoutApi(UHoldoutApiComponent* Component)
         fixture_dir / "request.txt",
         "Fix the component API move across declaration, definition, and consumer call site. Keep the change minimal.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutApiComponent.cpp",
+        """#include "HoldoutApiComponent.h"
+
+void UHoldoutApiComponent::ApplyValue(float Value)
+{
+	(void)Value;
+}
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutApiConsumer.cpp",
+        """#include "HoldoutApiComponent.h"
+
+void UseHoldoutApi(UHoldoutApiComponent* Component)
+{
+	if (Component)
+	{
+		Component->ApplyValue(1.0f);
+	}
+}
+""",
+    )
 
 
 def _write_const_signature_fixture(fixture_dir: Path) -> None:
@@ -1529,6 +1881,17 @@ int32 UHoldoutConstComponent::GetCount()
         fixture_dir / "request.txt",
         "Fix the const qualifier mismatch between the header declaration and cpp definition. Do not edit Build.cs.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutConstComponent.cpp",
+        """#include "HoldoutConstComponent.h"
+
+int32 UHoldoutConstComponent::GetCount() const
+{
+	return 0;
+}
+""",
+    )
 
 
 def _write_multifile_delegate_param_type_change_fixture(fixture_dir: Path) -> None:
@@ -1559,6 +1922,31 @@ void FHoldoutUpdateReceiver::HandleUpdate(float Amount)
     _write(
         fixture_dir / "request.txt",
         "Fix the multi-file delegate parameter type drift. Read the receiver header and cpp and align the declaration and definition without editing Build.cs.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutUpdateReceiver.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+
+class FHoldoutUpdateReceiver
+{
+public:
+	void HandleUpdate(float Amount);
+};
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutUpdateReceiver.cpp",
+        """#include "HoldoutUpdateReceiver.h"
+
+void FHoldoutUpdateReceiver::HandleUpdate(float Amount)
+{
+	(void)Amount;
+}
+""",
     )
 
 
@@ -1606,6 +1994,7 @@ void FHoldoutReturnImplementer::CanUse() const
         fixture_dir / "request.txt",
         "Fix the interface return type drift by aligning the implementer header and cpp with the interface declaration.\n",
     )
+    _write_multifile_interface_return_golden(fixture_dir)
 
 
 def _write_multifile_subsystem_api_move_fixture(fixture_dir: Path) -> None:
@@ -1656,6 +2045,31 @@ void UseHoldoutDataSubsystem(UHoldoutDataSubsystem* Subsystem)
         fixture_dir / "request.txt",
         "Fix the subsystem API move across declaration, definition, and consumer callsite. Prefer the ApplyData API already declared in the header.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutDataSubsystem.cpp",
+        """#include "HoldoutDataSubsystem.h"
+
+void UHoldoutDataSubsystem::ApplyData(int32 Value)
+{
+	(void)Value;
+}
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutDataConsumer.cpp",
+        """#include "HoldoutDataSubsystem.h"
+
+void UseHoldoutDataSubsystem(UHoldoutDataSubsystem* Subsystem)
+{
+	if (Subsystem)
+	{
+		Subsystem->ApplyData(7);
+	}
+}
+""",
+    )
 
 
 def _write_multifile_uproperty_type_migration_fixture(fixture_dir: Path) -> None:
@@ -1695,6 +2109,17 @@ int32 UHoldoutScoreModel::GetScore() const
     _write(
         fixture_dir / "request.txt",
         "Fix the reflected score type migration so the UPROPERTY, UFUNCTION declaration, and cpp definition agree. Do not edit Build.cs.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutScoreModel.cpp",
+        """#include "HoldoutScoreModel.h"
+
+float UHoldoutScoreModel::GetScore() const
+{
+	return static_cast<float>(Score);
+}
+""",
     )
 
 
@@ -1738,6 +2163,44 @@ void UHoldoutBindingTarget::OnHealthChanged()
     _write(
         fixture_dir / "request.txt",
         "Fix the event binding signature drift. The bound handler must match the OneParam delegate in both header and cpp.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutBindingTarget.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "HoldoutBindingTarget.generated.h"
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnHoldoutHealthChanged, int32);
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutBindingTarget : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	void Bind(FOnHoldoutHealthChanged& Event);
+	void OnHealthChanged(int32 Health);
+};
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutBindingTarget.cpp",
+        """#include "HoldoutBindingTarget.h"
+
+void UHoldoutBindingTarget::Bind(FOnHoldoutHealthChanged& Event)
+{
+	Event.AddUObject(this, &UHoldoutBindingTarget::OnHealthChanged);
+}
+
+void UHoldoutBindingTarget::OnHealthChanged(int32 Health)
+{
+	(void)Health;
+}
+""",
     )
 
 
@@ -1785,6 +2248,32 @@ void FHoldoutDerivedAbility::Activate()
         fixture_dir / "request.txt",
         "Fix the base/derived override signature drift by aligning the derived header and cpp with the base class signature.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Public/HoldoutDerivedAbility.h",
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "HoldoutBaseAbility.h"
+
+class FHoldoutDerivedAbility : public FHoldoutBaseAbility
+{
+public:
+	void Activate(float Strength) override;
+};
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutDerivedAbility.cpp",
+        """#include "HoldoutDerivedAbility.h"
+
+void FHoldoutDerivedAbility::Activate(float Strength)
+{
+	(void)Strength;
+}
+""",
+    )
 
 
 def _write_multifile_callback_param_expand_fixture(fixture_dir: Path) -> None:
@@ -1829,6 +2318,7 @@ FHoldoutCallback RegisterHoldoutCallback()
         fixture_dir / "request.txt",
         "Fix the expanded callback parameter list across declaration, definition, and registration callsite.\n",
     )
+    _write_multifile_callback_expand_golden(fixture_dir)
 
 
 def _write_multifile_method_split_callsite_update_fixture(fixture_dir: Path) -> None:
@@ -1881,6 +2371,35 @@ void UseHoldoutSplit(UHoldoutSplitComponent* Component)
         fixture_dir / "request.txt",
         "Fix the method split drift. Do not reintroduce DoAll; update the cpp and consumer to use Prepare and Commit.\n",
     )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutSplitComponent.cpp",
+        """#include "HoldoutSplitComponent.h"
+
+void UHoldoutSplitComponent::Prepare()
+{
+}
+
+void UHoldoutSplitComponent::Commit()
+{
+}
+""",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutSplitConsumer.cpp",
+        """#include "HoldoutSplitComponent.h"
+
+void UseHoldoutSplit(UHoldoutSplitComponent* Component)
+{
+	if (Component)
+	{
+		Component->Prepare();
+		Component->Commit();
+	}
+}
+""",
+    )
 
 
 def _write_reflection_blueprint_event_rename_fixture(fixture_dir: Path) -> None:
@@ -1917,6 +2436,17 @@ void UHoldoutRenamedEventComponent::OnHoldoutRenamed_Implementation(int32 Score)
     _write(
         fixture_dir / "request.txt",
         "Fix the BlueprintNativeEvent rename drift. The _Implementation name and signature must match the reflected declaration.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutRenamedEventComponent.cpp",
+        """#include "HoldoutRenamedEventComponent.h"
+
+void UHoldoutRenamedEventComponent::OnHoldoutFinished_Implementation(int32 Score)
+{
+	(void)Score;
+}
+""",
     )
 
 
@@ -1955,6 +2485,7 @@ void UHoldoutEditorGuardComponent::RefreshEditorPreview()
         fixture_dir / "request.txt",
         "Fix the runtime/editor boundary drift. Do not add UnrealEd to the runtime module by default; guard or isolate the editor-only API usage.\n",
     )
+    _write_editor_runtime_guard_golden(fixture_dir)
 
 
 def _write_module_private_vs_public_dependency_fixture(fixture_dir: Path) -> None:
@@ -1984,6 +2515,7 @@ public:
         fixture_dir / "request.txt",
         "Fix the public header LevelSequence dependency. Read HoldoutFixture.Build.cs and make the dependency visible to the public header surface.\n",
     )
+    _write_module_fix_golden(fixture_dir, ["LevelSequence"])
 
 
 def _write_include_owner_forward_decl_mixup_fixture(fixture_dir: Path) -> None:
@@ -2027,6 +2559,19 @@ AHoldoutSphereActor::AHoldoutSphereActor()
     _write(
         fixture_dir / "request.txt",
         "Fix the concrete include owner path in the cpp while preserving the header forward declaration. Do not edit Build.cs.\n",
+    )
+    _write_golden_file(
+        fixture_dir,
+        "Source/HoldoutFixture/Private/HoldoutSphereActor.cpp",
+        """#include "HoldoutSphereActor.h"
+#include "Components/SphereComponent.h"
+
+AHoldoutSphereActor::AHoldoutSphereActor()
+{
+	Sphere = CreateDefaultSubobject<USphereComponent>(TEXT("Sphere"));
+	RootComponent = Sphere;
+}
+""",
     )
 
 
