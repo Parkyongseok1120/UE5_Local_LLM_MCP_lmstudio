@@ -518,7 +518,9 @@ public class HoldoutFixtureTarget : TargetRules
 	{
 		Type = TargetType.Game;
 		DefaultBuildSettings = BuildSettingsVersion.V5;
+		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
 		ExtraModuleNames.Add("HoldoutFixture");
+		bOverrideBuildEnvironment = true;
 	}
 }
 """,
@@ -534,7 +536,9 @@ public class HoldoutFixtureEditorTarget : TargetRules
 	{
 		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.V5;
+		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
 		ExtraModuleNames.Add("HoldoutFixture");
+		bOverrideBuildEnvironment = true;
 	}
 }
 """,
@@ -641,6 +645,30 @@ def write_fixture_cases(case_ids: list[str], fixture_root: Path = DEFAULT_FIXTUR
     return [write_fixture_case(case_id, fixture_root) for case_id in case_ids]
 
 
+def _write_module_fix_request(fixture_dir: Path, error_log: str, instruction: str) -> None:
+    _write(fixture_dir / "request.txt", f"{error_log}\n\n{instruction}\n")
+
+
+def _write_module_fix_golden(fixture_dir: Path, extra_modules: list[str]) -> None:
+    modules = ["Core", "CoreUObject", "Engine", *extra_modules]
+    joined = ", ".join(f'"{name}"' for name in modules)
+    golden_path = fixture_dir / "golden" / "Source" / "HoldoutFixture" / "HoldoutFixture.Build.cs"
+    _write(
+        golden_path,
+        f"""using UnrealBuildTool;
+
+public class HoldoutFixture : ModuleRules
+{{
+	public HoldoutFixture(ReadOnlyTargetRules Target) : base(Target)
+	{{
+		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+		PublicDependencyModuleNames.AddRange(new string[] {{ {joined} }});
+	}}
+}}
+""",
+    )
+
+
 def _write_gameplaytags_fixture(fixture_dir: Path) -> None:
     header, cpp = _source_paths(fixture_dir, "HoldoutGameplayTagComponent")
     _write(
@@ -664,10 +692,12 @@ public:
 """,
     )
     _write(cpp, '#include "HoldoutGameplayTagComponent.h"\n')
-    _write(
-        fixture_dir / "request.txt",
-        "Fix the Unreal C++ compile error. GameplayTagContainer.h cannot be found; read the owner Build.cs and add GameplayTags only if missing.\n",
+    _write_module_fix_request(
+        fixture_dir,
+        "fatal error C1083: Cannot open include file: 'GameplayTagContainer.h': No such file or directory",
+        "Fix the Unreal C++ compile error. Read the owner Build.cs and add GameplayTags only if missing.",
     )
+    _write_module_fix_golden(fixture_dir, ["GameplayTags"])
 
 
 def _write_enhanced_input_fixture(fixture_dir: Path) -> None:
@@ -701,10 +731,12 @@ void UHoldoutEnhancedInputComponent::ConfigureInput(UEnhancedInputComponent* Inp
 }
 """,
     )
-    _write(
-        fixture_dir / "request.txt",
-        "Fix the missing EnhancedInput module dependency. Patch HoldoutFixture.Build.cs, not PlayerController behavior.\n",
+    _write_module_fix_request(
+        fixture_dir,
+        "fatal error C1083: Cannot open include file: 'EnhancedInputComponent.h': No such file or directory",
+        "Fix the missing EnhancedInput module dependency. Patch HoldoutFixture.Build.cs, not PlayerController behavior.",
     )
+    _write_module_fix_golden(fixture_dir, ["InputCore", "EnhancedInput"])
 
 
 def _write_generated_h_order_fixture(fixture_dir: Path) -> None:
@@ -725,6 +757,22 @@ class HOLDOUTFIXTURE_API UHoldoutGeneratedOrderComponent : public UActorComponen
 """,
     )
     _write(cpp, '#include "HoldoutGeneratedOrderComponent.h"\n')
+    golden_header = fixture_dir / "golden" / "Source" / "HoldoutFixture" / "Public" / "HoldoutGeneratedOrderComponent.h"
+    _write(
+        golden_header,
+        """#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "HoldoutGeneratedOrderComponent.generated.h"
+
+UCLASS(ClassGroup=(Holdout), meta=(BlueprintSpawnableComponent))
+class HOLDOUTFIXTURE_API UHoldoutGeneratedOrderComponent : public UActorComponent
+{
+	GENERATED_BODY()
+};
+""",
+    )
     _write(
         fixture_dir / "request.txt",
         "Fix the UHT include ordering error. The .generated.h include must be the last include in the reflected header.\n",
@@ -827,10 +875,12 @@ public:
 """,
     )
     _write(cpp, '#include "HoldoutWidgetHostComponent.h"\n')
-    _write(
-        fixture_dir / "request.txt",
-        "Public header uses UUserWidget. Add the missing UMG module dependency to HoldoutFixture.Build.cs.\n",
+    _write_module_fix_request(
+        fixture_dir,
+        "fatal error C1083: Cannot open include file: 'Blueprint/UserWidget.h': No such file or directory",
+        "Public header uses UUserWidget. Add the missing UMG module dependency to HoldoutFixture.Build.cs.",
     )
+    _write_module_fix_golden(fixture_dir, ["UMG"])
 
 
 def _write_niagara_fixture(fixture_dir: Path) -> None:
@@ -856,10 +906,12 @@ public:
 """,
     )
     _write(cpp, '#include "HoldoutNiagaraHostComponent.h"\n')
-    _write(
-        fixture_dir / "request.txt",
-        "Public header uses UNiagaraComponent. Add the missing Niagara module dependency to HoldoutFixture.Build.cs.\n",
+    _write_module_fix_request(
+        fixture_dir,
+        "fatal error C1083: Cannot open include file: 'NiagaraComponent.h': No such file or directory",
+        "Public header uses UNiagaraComponent. Add the missing Niagara module dependency to HoldoutFixture.Build.cs.",
     )
+    _write_module_fix_golden(fixture_dir, ["Niagara"])
 
 
 def _write_ai_fixture(fixture_dir: Path) -> None:
@@ -885,10 +937,12 @@ public:
 """,
     )
     _write(cpp, '#include "HoldoutAIProbeComponent.h"\n')
-    _write(
-        fixture_dir / "request.txt",
-        "Public header uses AAIController. Add the missing AIModule dependency to HoldoutFixture.Build.cs.\n",
+    _write_module_fix_request(
+        fixture_dir,
+        "fatal error C1083: Cannot open include file: 'AIController.h': No such file or directory",
+        "Public header uses AAIController. Add the missing AIModule dependency to HoldoutFixture.Build.cs.",
     )
+    _write_module_fix_golden(fixture_dir, ["AIModule"])
 
 
 def _write_navigation_fixture(fixture_dir: Path) -> None:
@@ -923,10 +977,12 @@ bool UHoldoutNavigationProbeComponent::HasNavigationSystem() const
 }
 """,
     )
-    _write(
-        fixture_dir / "request.txt",
-        "Source uses UNavigationSystemV1 from NavigationSystem.h. Add the missing NavigationSystem module dependency to HoldoutFixture.Build.cs.\n",
+    _write_module_fix_request(
+        fixture_dir,
+        "fatal error C1083: Cannot open include file: 'NavigationSystem.h': No such file or directory",
+        "Source uses UNavigationSystemV1 from NavigationSystem.h. Add the missing NavigationSystem module dependency to HoldoutFixture.Build.cs.",
     )
+    _write_module_fix_golden(fixture_dir, ["NavigationSystem"])
 
 
 def _write_levelsequence_fixture(fixture_dir: Path) -> None:
@@ -952,10 +1008,12 @@ public:
 """,
     )
     _write(cpp, '#include "HoldoutLevelSequenceProbeComponent.h"\n')
-    _write(
-        fixture_dir / "request.txt",
-        "Public header uses ULevelSequence. Add the missing LevelSequence module dependency to HoldoutFixture.Build.cs. If live UBT proves this needs extra modules, report the blocker instead of inventing unrelated code.\n",
+    _write_module_fix_request(
+        fixture_dir,
+        "fatal error C1083: Cannot open include file: 'LevelSequence.h': No such file or directory",
+        "Public header uses ULevelSequence. Add the missing LevelSequence module dependency to HoldoutFixture.Build.cs.",
     )
+    _write_module_fix_golden(fixture_dir, ["LevelSequence"])
 
 
 def _write_blueprint_native_event_fixture(fixture_dir: Path) -> None:
@@ -1214,10 +1272,12 @@ bool UHoldoutPluginProbeComponent::HasAnyPlugin() const
 }
 """,
     )
-    _write(
-        fixture_dir / "request.txt",
-        "Fix the missing Projects module dependency for IPluginManager. Patch HoldoutFixture.Build.cs only.\n",
+    _write_module_fix_request(
+        fixture_dir,
+        "fatal error C1083: Cannot open include file: 'Interfaces/IPluginManager.h': No such file or directory",
+        "Fix the missing Projects module dependency for IPluginManager. Patch HoldoutFixture.Build.cs only.",
     )
+    _write_module_fix_golden(fixture_dir, ["Projects"])
 
 
 def _write_uobject_lifecycle_fixture(fixture_dir: Path) -> None:
@@ -1970,6 +2030,51 @@ AHoldoutSphereActor::AHoldoutSphereActor()
     )
 
 
+FIXTURE_ARTIFACT_DIRS = frozenset({"Intermediate", "Binaries", "Saved", "DerivedDataCache", ".vs"})
+
+
+def clean_fixture_build_artifacts(fixture_root: Path) -> int:
+    """Remove stale UBT artifacts from fixture trees so live eval temp copies stay isolated."""
+    cleaned = 0
+    if not fixture_root.is_dir():
+        return cleaned
+    for fixture_dir in sorted(fixture_root.iterdir()):
+        if not fixture_dir.is_dir():
+            continue
+        for name in FIXTURE_ARTIFACT_DIRS:
+            path = fixture_dir / name
+            if path.exists():
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                cleaned += 1
+    return cleaned
+
+
+def repair_fixture_game_targets(fixture_root: Path) -> int:
+    """Ensure Game targets opt out of shared UnrealGame build-environment coupling."""
+    repaired = 0
+    needle = "bOverrideBuildEnvironment = true"
+    for target_path in sorted(fixture_root.glob("*/Source/HoldoutFixture.Target.cs")):
+        text = target_path.read_text(encoding="utf-8")
+        if needle in text:
+            continue
+        if "ExtraModuleNames.Add(\"HoldoutFixture\");" not in text:
+            continue
+        updated = text.replace(
+            '\t\tExtraModuleNames.Add("HoldoutFixture");\r\n\t}',
+            '\t\tExtraModuleNames.Add("HoldoutFixture");\r\n\t\tbOverrideBuildEnvironment = true;\r\n\t}',
+        ).replace(
+            '\t\tExtraModuleNames.Add("HoldoutFixture");\n\t}',
+            '\t\tExtraModuleNames.Add("HoldoutFixture");\n\t\tbOverrideBuildEnvironment = true;\n\t}',
+        )
+        if updated != text:
+            target_path.write_text(updated, encoding="utf-8")
+            repaired += 1
+    return repaired
+
+
 def next_step_text(output_path: Path, model: str = DEFAULT_MODEL, ubt_path: Path | None = None) -> str:
     config = output_path.as_posix()
     ubt_arg = str(ubt_path) if ubt_path else "<UnrealBuildTool.exe>"
@@ -1994,13 +2099,18 @@ def main() -> int:
     parser.add_argument("--fixture-root", default="", help="Root containing one fixture directory per case id.")
     parser.add_argument("--suite-name", default=DEFAULT_SUITE_NAME)
     parser.add_argument("--force", action="store_true", help="Overwrite existing local config.")
+    parser.add_argument(
+        "--clean-artifacts",
+        action="store_true",
+        help="Remove Intermediate/Binaries/Saved from fixture dirs after bootstrap.",
+    )
     parser.add_argument("--example-config", type=Path, default=DEFAULT_EXAMPLE)
     parser.add_argument("--output-config", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
     fixture_root = args.fixture_root
     project_file = args.project_file
     if args.suite in {"12", "24", "36"}:
-        fixture_root = fixture_root or DEFAULT_FIXTURE_ROOT.as_posix()
+        fixture_root = fixture_root or "data/local_holdout_fixtures"
         project_file = project_file or "HoldoutFixture.uproject"
 
     try:
@@ -2020,6 +2130,13 @@ def main() -> int:
                 [str(case["id"]) for case in fixture_cases],
                 Path(fixture_root),
             )
+            root_path = Path(fixture_root)
+            repaired = repair_fixture_game_targets(root_path)
+            cleaned = clean_fixture_build_artifacts(root_path) if args.clean_artifacts else 0
+            if repaired:
+                print(f"Repaired {repaired} HoldoutFixture.Target.cs file(s) for UE 5.8 build isolation")
+            if cleaned:
+                print(f"Removed {cleaned} stale artifact path(s) under {fixture_root}")
     except FileExistsError as exc:
         print(str(exc), file=sys.stderr)
         return 1

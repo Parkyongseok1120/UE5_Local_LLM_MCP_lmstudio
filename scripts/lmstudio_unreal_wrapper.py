@@ -1536,13 +1536,48 @@ def proposed_bundle_paths(bundle: dict[str, Any] | None) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
-BUILD_CS_RETRY_FEEDBACK = (
-    "Build.cs is only the correct target when the current root cause is a missing Unreal module dependency. "
-    "For declaration/definition, signature mismatch, or missing implementation routes, prefer the matching header/cpp files unless module evidence appears.\n"
-    "If code includes FGameplayTag, FGameplayTagContainer, UGameplayTagsManager, or GameplayTag-related headers, "
-    'check whether "GameplayTags" exists in PublicDependencyModuleNames or PrivateDependencyModuleNames. '
-    'If it is missing and the error is module-dependency related, modify the module Build.cs file and add "GameplayTags".'
+MODULE_FIX_RETRY_FEEDBACK_PENDING = (
+    "When the root cause is a missing Unreal module dependency, patch the owner *.Build.cs file. "
+    "Return concrete files[] or patches[] for the Build.cs change in this turn; do not stop at diagnosis-only JSON. "
+    "For declaration/definition, signature mismatch, or missing implementation routes, prefer the matching header/cpp "
+    "files unless module evidence appears."
 )
+MODULE_FIX_RETRY_FEEDBACK_APPLIED = (
+    "Build.cs module dependencies already include the required module(s) for this request. "
+    "Do not resubmit Build.cs unless static validation or UBT still proves a dependency is missing. "
+    "Fix the current build error surface (header/cpp/link/reflection) with the smallest patch."
+)
+MODULE_FIX_RETRY_FEEDBACK = MODULE_FIX_RETRY_FEEDBACK_PENDING
+BUILD_CS_RETRY_FEEDBACK = MODULE_FIX_RETRY_FEEDBACK_PENDING
+
+
+def unresolved_build_cs_modules(request: str, root: Path) -> list[str]:
+    """Return module names inferred from the request/source that are still absent from Build.cs."""
+    build_text = build_cs_text(root)
+    modules: set[str] = set(resolve_modules_from_error(request)) | set(resolve_modules_from_text(request))
+    if source_uses_gameplay_tags(root) and not build_cs_has_module(build_text, "GameplayTags"):
+        modules.add("GameplayTags")
+    return sorted(module for module in modules if module and not build_cs_has_module(build_text, module))
+
+
+def module_fix_retry_feedback(request: str, root: Path) -> str:
+    if unresolved_build_cs_modules(request, root):
+        return MODULE_FIX_RETRY_FEEDBACK_PENDING
+    return MODULE_FIX_RETRY_FEEDBACK_APPLIED
+
+
+def align_route_to_eval_mode(route: dict[str, Any], mode: str, request: str) -> dict[str, Any]:
+    aligned = dict(route)
+    lower = request.lower()
+    if mode == "module_fix":
+        aligned["broadMode"] = "module_fix"
+        if "c1083" in lower or "cannot open include" in lower:
+            aligned["errorSubkind"] = "C1083_MISSING_INCLUDE"
+    elif mode == "reflection_fix":
+        aligned["broadMode"] = "reflection_fix"
+    elif mode == "multifile_refactor":
+        aligned["broadMode"] = "multifile_refactor"
+    return aligned
 
 
 def hallucination_blockers(
@@ -1555,14 +1590,7 @@ def hallucination_blockers(
     after: dict[str, str] | None = None,
 ) -> list[str]:
     issues: list[str] = []
-    uses_gameplay_tags = source_uses_gameplay_tags(root)
-    needs_build_cs = (
-        request_requests_build_cs_fix(request)
-        or uses_gameplay_tags
-        or answer_claims_build_cs_edit(answer)
-    )
-    if not needs_build_cs:
-        return issues
+    unresolved = unresolved_build_cs_modules(request, root)
     changed_build = False
     if before is not None and after is not None:
         changed_build = any(
@@ -1570,10 +1598,17 @@ def hallucination_blockers(
             for path in changed_paths_between(before, after)
         )
     in_bundle = bundle_includes_build_cs(bundle)
-    if (answer_claims_build_cs_edit(answer) or (needs_build_cs and not answer_claims_no_changes(answer))) and not in_bundle and not changed_build:
+    if answer_claims_build_cs_edit(answer) and not in_bundle and not changed_build:
         issues.append(
             "You claimed or implied a Build.cs / module-dependency fix, but the response did not include any "
             "*.Build.cs file in files[] or patches[]. Return the updated Build.cs content."
+        )
+        return issues
+    if unresolved and not answer_claims_no_changes(answer) and not in_bundle and not changed_build:
+        issues.append(
+            "The current Build.cs still appears to miss required module dependency(ies): "
+            + ", ".join(unresolved)
+            + ". Return the updated Build.cs content in files[] or patches[]."
         )
     return issues
 
@@ -1748,6 +1783,13 @@ def apply_generated_h_missing_autofix(root: Path, findings: list[Finding]) -> li
         write_file(target, updated)
         written.append(target)
     return written
+
+
+def only_build_cs_changed(before: dict[str, str], after: dict[str, str]) -> bool:
+    changed = [path for path in sorted(set(before) | set(after)) if before.get(path) != after.get(path)]
+    if not changed:
+        return False
+    return all(path.lower().endswith(".build.cs") for path in changed)
 
 
 def only_source_files_changed(before: dict[str, str], after: dict[str, str]) -> bool:
@@ -2412,14 +2454,30 @@ def should_use_patch_preset_on_first_attempt(route: dict[str, Any] | None, mode:
 def preserve_specific_route(
     current_route: dict[str, Any],
     previous_route: dict[str, Any] | None,
+    *,
+    attempt: int = 1,
+    changed_paths: list[str] | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    if is_generic_error_route(current_route) and not is_generic_error_route(previous_route):
-        preserved = dict(previous_route or {})
+    current = dict(current_route or {})
+    previous = dict(previous_route or {}) if previous_route else {}
+    build_cs_touched = any(str(path).lower().endswith(".build.cs") for path in (changed_paths or []))
+    current_broad = str(current.get("broadMode") or "")
+    previous_broad = str(previous.get("broadMode") or "")
+    if (
+        attempt == 1
+        and build_cs_touched
+        and current_broad
+        and previous_broad
+        and current_broad != previous_broad
+    ):
+        current["routePreservedFromInitial"] = False
+        return current, False
+    if is_generic_error_route(current) and not is_generic_error_route(previous):
+        preserved = dict(previous)
         preserved["routePreservedFromInitial"] = True
         return preserved, True
-    out = dict(current_route)
-    out["routePreservedFromInitial"] = False
-    return out, False
+    current["routePreservedFromInitial"] = False
+    return current, False
 
 
 def build_retry_state_payload(
@@ -2449,7 +2507,12 @@ def build_retry_state_payload(
         build_log_path=build_log_path,
     )
     parsed_route = route_error_action(message, str(metadata.get("error_code") or ""))
-    route, route_preserved = preserve_specific_route(parsed_route, previous_route)
+    route, route_preserved = preserve_specific_route(
+        parsed_route,
+        previous_route,
+        attempt=attempt,
+        changed_paths=changed_paths,
+    )
     recommendation = recommend_retry_action(
         previous_record,
         current,
@@ -2993,7 +3056,7 @@ def run(args: argparse.Namespace) -> int:
     original_mode = args.mode
     retry_records: list[dict[str, Any]] = []
     previous_retry_record: dict[str, Any] | None = None
-    active_route: dict[str, Any] = route_error_action(request)
+    active_route: dict[str, Any] = align_route_to_eval_mode(route_error_action(request), original_mode, request)
 
     def record_validation_rejection(
         *,
@@ -3131,12 +3194,15 @@ def run(args: argparse.Namespace) -> int:
                 "Emit diagnosis only; do not patch further in this run."
             )
             break
-        budget_mode = "compile_fix" if attempt >= 2 else original_mode
+        keep_specialized_mode = original_mode in {"module_fix", "reflection_fix", "multifile_refactor"}
+        budget_mode = original_mode if keep_specialized_mode or attempt == 1 else "compile_fix"
         if attempt >= 2 and original_mode in {
-            "agent_edit", "codegen", "compile_fix", "module_fix", "reflection_fix",
+            "agent_edit", "codegen", "compile_fix",
             "prototype_component", "prototype_subsystem",
         }:
             args.mode = "compile_fix"
+        elif keep_specialized_mode:
+            args.mode = original_mode
         if attempt == 1:
             prompt_mode = original_mode
         else:
@@ -3314,7 +3380,8 @@ def run(args: argparse.Namespace) -> int:
         hall_blockers = hallucination_blockers(request, last_answer, bundle, project_root)
         if hall_blockers:
             previous_feedback = (
-                BUILD_CS_RETRY_FEEDBACK + "\n"
+                module_fix_retry_feedback(request, project_root)
+                + "\n"
                 + "\n".join(f"- {issue}" for issue in hall_blockers)
             )
             write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
@@ -3369,8 +3436,14 @@ def run(args: argparse.Namespace) -> int:
                 last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
                 static_report = format_findings(last_findings)
                 blockers = no_change_blockers(request, project_root, last_findings)
+                module_prefix = (
+                    module_fix_retry_feedback(request, project_root) + "\n"
+                    if original_mode == "module_fix"
+                    else ""
+                )
                 previous_feedback = (
-                    "Model returned no files without clearly saying the current files already satisfy the request. "
+                    module_prefix
+                    + "Model returned no files without clearly saying the current files already satisfy the request. "
                     "Inspect the current project state and either return the smallest changed file bundle, or return "
                     "an empty files array with explicit evidence that no new edit is needed.\n"
                     + static_report
@@ -3495,10 +3568,12 @@ def run(args: argparse.Namespace) -> int:
             continue
 
         lightweight_static = only_source_files_changed(before_apply, after_apply)
+        build_cs_only = only_build_cs_changed(before_apply, after_apply)
         last_findings = validate_unreal_readiness(
             project_root,
             Path(args.module_graph),
             lightweight=lightweight_static,
+            skip_include_path_checks=build_cs_only,
         )
         static_report = format_findings(last_findings)
         write_file(attempt_dir / "static_validation.txt", static_report + "\n")
@@ -3543,6 +3618,28 @@ def run(args: argparse.Namespace) -> int:
             args.build_timeout,
         )
         if last_build.ok:
+            changed_paths_success: list[str] = []
+            for path in last_written:
+                try:
+                    changed_paths_success.append(str(path.relative_to(project_root)).replace("\\", "/"))
+                except ValueError:
+                    changed_paths_success.append(str(path))
+            success_record = make_attempt_record(
+                attempt=attempt,
+                passed=True,
+                changed_paths=changed_paths_success,
+                build_log_path=str(attempt_dir / "ubt.log"),
+            )
+            write_json(
+                run_dir / "retry_state.json",
+                {
+                    "attempts": list(retry_records) + [success_record],
+                    "latest": success_record,
+                    "sameErrorRepeated": False,
+                    "noOpEdit": False,
+                    "recommendedAction": {"action": "done"},
+                },
+            )
             if attempt >= 2 and last_build_records:
                 try:
                     from failure_memory import append_failure_memory, maybe_auto_reindex_failure_memory

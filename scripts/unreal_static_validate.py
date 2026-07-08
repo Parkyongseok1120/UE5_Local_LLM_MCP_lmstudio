@@ -1304,6 +1304,7 @@ def validate_unreal_readiness(
     module_graph_path: Path | None = None,
     *,
     lightweight: bool = False,
+    skip_include_path_checks: bool = False,
 ) -> list[Finding]:
     if lightweight:
         return validate_unreal_readiness_lightweight(root)
@@ -1332,7 +1333,8 @@ def validate_unreal_readiness(
             findings.extend(validate_editor_only_runtime_includes(path, text, root))
             findings.extend(validate_enhanced_input(path, text, root, build_text_value))
             findings.extend(validate_action_request_order(path, text, root))
-            findings.extend(validate_include_paths_exist(path, text, root, include_index))
+            if not skip_include_path_checks:
+                findings.extend(validate_include_paths_exist(path, text, root, include_index))
         if path.suffix.lower() in {".cpp", ".c", ".cc"}:
             findings.extend(validate_required_includes(path, text, root))
             findings.extend(validate_constructor_lifecycle_usage(path, text, root))

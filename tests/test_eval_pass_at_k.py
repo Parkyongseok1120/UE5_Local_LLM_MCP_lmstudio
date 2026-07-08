@@ -16,11 +16,30 @@ from eval_pass_at_k import (  # noqa: E402
     build_metrics_only_results,
     calculate_kpi_metrics,
     changed_files_from_diff,
+    compose_eval_request,
     count_wrapper_attempts,
     infer_eval_tier,
     patch_target_metrics,
+    should_abort_consecutive_failures,
 )
+from error_taxonomy import route_error_action  # noqa: E402
+from lmstudio_unreal_wrapper import align_route_to_eval_mode  # noqa: E402
 from eval_e2e_compile import split_ubt_target_spec  # noqa: E402
+
+
+def test_should_abort_consecutive_failures_requires_all_tail_failures():
+    results = [
+        {"id": "a", "pass": False},
+        {"id": "b", "pass": False},
+        {"id": "c", "pass": True},
+        {"id": "d", "pass": False},
+        {"id": "e", "pass": False},
+    ]
+    assert should_abort_consecutive_failures(results, 0) is False
+    assert should_abort_consecutive_failures(results, 5) is False
+    assert should_abort_consecutive_failures(results[:2], 2) is True
+    assert should_abort_consecutive_failures(results, 3) is False
+    assert should_abort_consecutive_failures(results[-2:], 2) is True
 
 
 def test_count_wrapper_attempts_handles_missing_dir(tmp_path):
@@ -296,3 +315,54 @@ def test_fixture_only_holdout_case_reports_not_live_applicable(tmp_path):
     assert result["pass"] is False
     assert result["mode"] == "live"
     assert "not live-applicable" in result["error"]
+
+
+def test_compose_eval_request_includes_error_log():
+    case = {
+        "errorLog": "fatal error C1083: Cannot open include file: 'EnhancedInputComponent.h'",
+    }
+    text = compose_eval_request(case, "Patch the owner Build.cs.")
+
+    assert text.startswith("fatal error C1083")
+    assert "Patch the owner Build.cs." in text
+
+
+def test_compose_eval_request_dedups_bootstrap_shaped_request():
+    error_log = "fatal error C1083: Cannot open include file: 'EnhancedInputComponent.h'"
+    case = {"errorLog": error_log}
+    body = f"{error_log}\n\nPatch the owner Build.cs."
+    text = compose_eval_request(case, body)
+
+    assert text.count("fatal error C1083") == 1
+    assert "Patch the owner Build.cs." in text
+
+
+def test_copy_fixture_skips_build_artifacts(tmp_path):
+    from eval_pass_at_k import copy_fixture
+
+    fixture_dir = tmp_path / "fixture"
+    work_dir = tmp_path / "work"
+    fixture_dir.mkdir()
+    (fixture_dir / "Intermediate").mkdir()
+    (fixture_dir / "Intermediate" / "Build.txt").write_text("stale", encoding="utf-8")
+    (fixture_dir / "Binaries").mkdir()
+    (fixture_dir / "HoldoutFixture.uproject").write_text("{}", encoding="utf-8")
+
+    copy_fixture(fixture_dir, work_dir)
+
+    assert (work_dir / "HoldoutFixture.uproject").is_file()
+    assert not (work_dir / "Intermediate").exists()
+    assert not (work_dir / "Binaries").exists()
+
+
+def test_module_fix_route_prefers_c1083_when_error_log_present():
+    request = compose_eval_request(
+        {
+            "errorLog": "fatal error C1083: Cannot open include file: 'EnhancedInputComponent.h'",
+        },
+        "Fix the missing EnhancedInput module dependency.",
+    )
+    route = align_route_to_eval_mode(route_error_action(request), "module_fix", request)
+
+    assert route["broadMode"] == "module_fix"
+    assert route["errorSubkind"] == "C1083_MISSING_INCLUDE"

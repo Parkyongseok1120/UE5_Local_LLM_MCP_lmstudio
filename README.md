@@ -110,6 +110,8 @@ These are internal workflow results, not a public standardized model benchmark.
 | wrong-file edit cases | 1 in the full run |
 | Build.cs false positive cases | 1 in the full run |
 
+> **Hotfix note (v1.2.3-hotfix):** The KPI above was measured on 2026-07-06 before the holdout retry-loop regression. v1.2.3-hotfix restores live holdout retry behavior; re-run Gate D before treating this KPI as current.
+
 Post-run stabilization added a route-specific guard for runtime/editor boundary fixes. A targeted recheck of `editor_runtime_boundary` kept Pass@K at 1/1 and reduced that case's wrong-file / Build.cs false-positive metrics to 0. The full 36-case suite should be rerun after any scoring claim that depends on this post-run guard.
 
 ### Improvement Snapshot

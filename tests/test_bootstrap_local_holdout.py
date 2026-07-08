@@ -61,6 +61,7 @@ def test_bootstrap_suite_12_adds_expected_case_ids(tmp_path):
     assert all(case["target"] == "HoldoutFixtureEditor Win64 Development" for case in data["cases"])
     assert data["engineVersion"] == "5.8"
     assert all(case["engineVersion"] == "5.8" for case in data["cases"])
+    assert all(str(case["fixtureDir"]).startswith("data/local_holdout_fixtures/") for case in data["cases"])
     assert all(case.get("evalTier") for case in data["cases"])
 
 
@@ -86,6 +87,85 @@ def test_bootstrap_suite_12_writes_expansion_fixture_skeletons(tmp_path):
         / "Public"
         / "HoldoutWidgetHostComponent.h"
     ).read_text(encoding="utf-8")
+
+
+def test_bootstrap_fixture_targets_are_ue58_editor_compatible(tmp_path):
+    fixture_root = tmp_path / "local_holdout_fixtures"
+    bootstrap_local_holdout.write_fixture_cases(["local_gameplaytags_missing_module"], fixture_root)
+    editor_target = (
+        fixture_root
+        / "local_gameplaytags_missing_module"
+        / "Source"
+        / "HoldoutFixtureEditor.Target.cs"
+    ).read_text(encoding="utf-8")
+    game_target = (
+        fixture_root
+        / "local_gameplaytags_missing_module"
+        / "Source"
+        / "HoldoutFixture.Target.cs"
+    ).read_text(encoding="utf-8")
+
+    assert "IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8" in editor_target
+    assert "bOverrideBuildEnvironment = true" in editor_target
+    assert "bOverrideBuildEnvironment = true" in game_target
+    assert "IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8" in game_target
+
+
+def test_bootstrap_generated_h_fixture_writes_golden_header(tmp_path):
+    fixture_root = tmp_path / "local_holdout_fixtures"
+    bootstrap_local_holdout.write_fixture_cases(["local_generated_h_not_last"], fixture_root)
+    golden_header = (
+        fixture_root
+        / "local_generated_h_not_last"
+        / "golden"
+        / "Source"
+        / "HoldoutFixture"
+        / "Public"
+        / "HoldoutGeneratedOrderComponent.h"
+    )
+    broken_header = (
+        fixture_root
+        / "local_generated_h_not_last"
+        / "Source"
+        / "HoldoutFixture"
+        / "Public"
+        / "HoldoutGeneratedOrderComponent.h"
+    ).read_text(encoding="utf-8")
+    golden_text = golden_header.read_text(encoding="utf-8")
+
+    assert golden_header.is_file()
+    assert ".generated.h" in broken_header
+    assert broken_header.index(".generated.h") < broken_header.index("Components/ActorComponent.h")
+    assert golden_text.index("Components/ActorComponent.h") < golden_text.index(".generated.h")
+
+
+def test_bootstrap_module_fix_fixture_writes_golden_build_cs(tmp_path):
+    fixture_root = tmp_path / "local_holdout_fixtures"
+    bootstrap_local_holdout.write_fixture_cases(
+        ["local_gameplaytags_missing_module", "local_enhanced_input_missing_module"],
+        fixture_root,
+    )
+    gameplay_golden = (
+        fixture_root
+        / "local_gameplaytags_missing_module"
+        / "golden"
+        / "Source"
+        / "HoldoutFixture"
+        / "HoldoutFixture.Build.cs"
+    )
+    enhanced_golden = (
+        fixture_root
+        / "local_enhanced_input_missing_module"
+        / "golden"
+        / "Source"
+        / "HoldoutFixture"
+        / "HoldoutFixture.Build.cs"
+    )
+    assert gameplay_golden.is_file()
+    assert enhanced_golden.is_file()
+    assert '"GameplayTags"' in gameplay_golden.read_text(encoding="utf-8")
+    assert '"InputCore"' in enhanced_golden.read_text(encoding="utf-8")
+    assert '"EnhancedInput"' in enhanced_golden.read_text(encoding="utf-8")
 
 
 def test_bootstrap_does_not_overwrite_without_force(tmp_path):
