@@ -23,7 +23,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — July 2026**
 >
-> The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. **Live KPI claims are pending revalidation** after v1.2.4 stabilization (latest measured live: Pass@K 33/36, Pass@1 28/36 on 2026-07-08; dry-run gate: 36/36).
+> The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. **Latest v1.2.4 live revalidation (2026-07-08):** Pass@K **34/36**, Pass@1 **34/36** on UE 5.8 (`20260708-211549`); dry-run compile gate **36/36** (`20260708-203003`).
 >
 > Over the next **~4 months**, development will be limited to minor bug fixes and stability improvements due to academic commitments. Broader platform support (macOS, Linux) and additional LLM frontends beyond LM Studio (e.g., Ollama, Open WebUI) are on the roadmap but will not receive active development during this period.
 >
@@ -33,7 +33,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **프로젝트 현황 — 2026년 7월**
 >
-> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. **v1.2.4 안정화 이후 라이브 KPI는 재검증 대기 중**입니다 (최근 측정 live: Pass@K 33/36, Pass@1 28/36, 2026-07-08; dry-run: 36/36).
+> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. **v1.2.4 라이브 재검증 (2026-07-08):** Pass@K **34/36**, Pass@1 **34/36** (UE 5.8, `20260708-211549`); dry-run **36/36** (`20260708-203003`).
 >
 > 학업 일정상 향후 **약 4개월간**은 소소한 버그 수정 및 안정화 위주의 업데이트만 이루어질 예정입니다. macOS·Linux 지원과 LM Studio 외 다른 LLM 프론트엔드(Ollama, Open WebUI 등) 연동은 로드맵에 있지만, 이 기간 동안은 적극적인 개발이 어려울 것 같습니다.
 >
@@ -96,13 +96,13 @@ python scripts/patch_mcp_config.py
 
 ---
 
-As of 2026-07-06, this project is in active KPI-driven local-agent testing for Unreal Engine 5.8. The current focus is not broad feature expansion, but making the LM Studio + RAG + MCP + UBT loop measurable and stable.
+As of 2026-07-08, this project is in active KPI-driven local-agent testing for Unreal Engine 5.8. The current focus is not broad feature expansion, but making the LM Studio + RAG + MCP + UBT loop measurable and stable.
 
 ### Latest Internal Live Holdout
 
-> **KPI status (v1.2.4):** Numbers below include a 2026-07-06 run (36/36 Pass@K). After v1.2.4 stabilization, treat **live 36/36 as pending revalidation**. Latest live run `20260708-172842`: Pass@K **33/36**, Pass@1 **28/36**. Dry-run gate `20260708-191239`: **36/36**.
+> **KPI status (v1.2.4, revalidated 2026-07-08):** Latest live run `20260708-211549`: Pass@K **34/36**, Pass@1 **34/36**. Dry-run compile gate `20260708-203003`: **36/36**. Artifact: `data/baseline/live_holdout/20260708-211549/`.
 
-The strongest historical measured run is the UE 5.8 local 36-case live holdout on:
+The strongest measured run on the UE 5.8 local 36-case live holdout is:
 
 ```text
 qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max
@@ -110,33 +110,45 @@ qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max
 
 These are internal workflow results, not a public standardized model benchmark.
 
-| Metric | Latest 36-case live run (2026-07-06, pending revalidation) |
+| Metric | Latest 36-case live run (2026-07-08, v1.2.4) |
 |---|---:|
-| Pass@K | 36/36 = 100% (revalidate after v1.2.4) |
-| Pass@1 | 29/36 = 80.6% (revalidate after v1.2.4) |
+| Pass@K | 34/36 = 94.4% |
+| Pass@1 | 34/36 = 94.4% |
+| Failed cases | `local_multifile_uproperty_type_migration`, `local_multifile_callback_param_expand` |
+| multifile_refactor tier | Pass@1 10/12 = 83.3%, Pass@K 10/12 |
+| Same-error repeated | 1 |
+| no-op edit cases | 2 (both failures) |
+| wrong-file edit cases | 0 |
+| Build.cs false positive cases | 0 |
+
+| Metric | Prior live run (2026-07-06) |
+|---|---:|
+| Pass@K | 36/36 = 100% |
+| Pass@1 | 29/36 = 80.6% |
 | Average attempts | 1.25 |
-| Attempt histogram | 29 cases at 1 attempt, 5 at 2 attempts, 2 at 3 attempts |
-| Same-error repeated | 0 |
-| no-op edit cases | 4 |
-| wrong-file edit cases | 1 in the full run |
-| Build.cs false positive cases | 1 in the full run |
 
-> **Hotfix note (v1.2.4):** Run `scripts/run_live_holdout.ps1` before updating public KPI claims. Dry-run gate: `scripts/run_dryrun_holdout.ps1` (36/36 as of 2026-07-08).
+> **Hotfix note (v1.2.4):** Reproduce with `scripts/run_live_holdout.ps1` (live) and `scripts/run_dryrun_holdout.ps1` (compile gate, no LM Studio).
 
-Post-run stabilization added a route-specific guard for runtime/editor boundary fixes. A targeted recheck of `editor_runtime_boundary` kept Pass@K at 1/1 and reduced that case's wrong-file / Build.cs false-positive metrics to 0. The full 36-case suite should be rerun after any scoring claim that depends on this post-run guard.
+Post-v1.2.4 stabilization improved first-shot Pass@1 (+13.8pp vs 2026-07-06) but left two multifile cases failing on validation/no-op after max attempts. Dry-run 36/36 confirms fixture/golden quality; remaining gap is live LLM patch discipline on `UPROPERTY` type migration and callback param expansion.
 
 ### Improvement Snapshot
 
 Compared with the earliest saved 5-case live baseline in this repo:
 
-| Metric | Early 5-case live baseline | Latest 36-case live run | Change |
+| Metric | Early 5-case live baseline | Latest 36-case live run (2026-07-08) | Change |
 |---|---:|---:|---:|
-| Pass@K | 3/5 = 60% | 36/36 = 100% | +40 percentage points |
-| Pass@1 | 3/5 = 60% | 29/36 = 80.6% | +20.6 percentage points |
-| Average attempts | 2.6 | 1.25 | 51.9% lower |
+| Pass@K | 3/5 = 60% | 34/36 = 94.4% | +34.4 percentage points |
+| Pass@1 | 3/5 = 60% | 34/36 = 94.4% | +34.4 percentage points |
 | Suite size | 5 cases | 36 cases | 7.2x larger |
 
-The biggest remaining weakness is `multifile_refactor`: latest tier result is Pass@1 7/12 = 58.3%, Pass@K 12/12 = 100%, average attempts 1.5. Compile-fix, module dependency, and UHT/reflection cases are much stronger than small multi-file refactor cases.
+Compared with the prior 36-case live peak (2026-07-06):
+
+| Metric | 2026-07-06 | 2026-07-08 (v1.2.4) | Change |
+|---|---:|---:|---:|
+| Pass@K | 36/36 = 100% | 34/36 = 94.4% | −5.6 pp |
+| Pass@1 | 29/36 = 80.6% | 34/36 = 94.4% | +13.8 pp |
+
+The biggest remaining weakness is `multifile_refactor`: latest tier result is Pass@1 **10/12 = 83.3%**, Pass@K **10/12**. Failures cluster on UPROPERTY type migration and callback param expansion (validation/no-op under max attempts). Compile-fix, module dependency, and UHT/reflection cases remain strong.
 
 ### Agent Trust
 
