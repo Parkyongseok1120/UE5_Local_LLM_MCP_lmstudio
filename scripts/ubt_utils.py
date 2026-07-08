@@ -8,6 +8,21 @@ from pathlib import Path
 KNOWN_UBT_PLATFORMS = {"Win64", "Win32", "Linux", "LinuxArm64", "Mac", "Android", "IOS", "TVOS"}
 KNOWN_UBT_CONFIGURATIONS = {"Debug", "DebugGame", "Development", "Test", "Shipping"}
 UBT_STABILITY_FLAGS = ["-NoUBA", "-MaxParallelActions=4"]
+SOURCE_LIKE_SUFFIXES = {".h", ".hpp", ".cpp", ".c", ".cc", ".cs", ".build.cs", ".target.cs"}
+
+
+def sanitize_ubt_target(target: str, *, fallback: str = "HoldoutFixtureEditor") -> tuple[str, str | None]:
+    """Reject source-file paths accidentally passed as UBT build targets."""
+    raw = str(target or "").strip()
+    if not raw:
+        return fallback, "empty target replaced with fallback"
+    candidate = raw.replace("\\", "/")
+    if candidate.endswith(".uproject"):
+        return fallback, f"project file used as UBT target: {raw}"
+    suffix = Path(candidate).suffix.lower()
+    if suffix in SOURCE_LIKE_SUFFIXES or "/source/" in candidate.lower():
+        return fallback, f"source path used as UBT target: {raw}"
+    return raw, None
 
 
 def split_ubt_target_spec(
@@ -37,6 +52,7 @@ def build_ubt_command(
         platform,
         configuration,
     )
+    target_name, _ = sanitize_ubt_target(target_name)
     return [
         str(ubt_path),
         target_name,

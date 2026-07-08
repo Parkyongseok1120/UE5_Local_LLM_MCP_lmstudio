@@ -17,11 +17,14 @@ from lmstudio_unreal_wrapper import (  # noqa: E402
     focused_current_source_evidence,
     focused_source_pair_context,
     hallucination_blockers,
+    module_fix_retry_feedback,
     no_change_blockers,
+    preserve_specific_route,
     request_forbids_build_cs_first,
     request_requests_build_cs_fix,
     route_forbidden_action_blockers,
     summarize_project_state,
+    unresolved_build_cs_modules,
     validate_unreal_readiness,
 )
 
@@ -339,3 +342,65 @@ def test_bundle_includes_build_cs_detects_path():
 def test_answer_claims_build_cs_edit():
     assert answer_claims_build_cs_edit("Updated PublicDependencyModuleNames in Build.cs to add GameplayTags.")
     assert not answer_claims_build_cs_edit("No changes needed.")
+
+
+def test_hallucination_allows_non_build_cs_patch_when_modules_present(tmp_path):
+    fixture = ROOT / "tests" / "fixtures" / "compile_fix" / "missing_gameplaytags_dep"
+    project = tmp_path / "CompileFixTags"
+    for path in fixture.rglob("*"):
+        if path.is_file():
+            rel = path.relative_to(fixture)
+            dest = project / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    golden = fixture / "golden" / "Source" / "CompileFixTags" / "CompileFixTags.Build.cs"
+    build_cs = project / "Source" / "CompileFixTags" / "CompileFixTags.Build.cs"
+    build_cs.write_text(golden.read_text(encoding="utf-8"), encoding="utf-8")
+
+    request = (fixture / "request.txt").read_text(encoding="utf-8-sig")
+    assert unresolved_build_cs_modules(request, project) == []
+
+    bundle = {
+        "answer": "Adjusted header include order only.",
+        "files": [{"path": "Source/CompileFixTags/Public/TaggedActorComponent.h", "content": "x"}],
+        "patches": [],
+    }
+    assert hallucination_blockers(request, bundle["answer"], bundle, project) == []
+
+
+def test_module_fix_retry_feedback_switches_after_build_cs_present(tmp_path):
+    fixture = ROOT / "tests" / "fixtures" / "compile_fix" / "missing_gameplaytags_dep"
+    project = tmp_path / "CompileFixTags"
+    for path in fixture.rglob("*"):
+        if path.is_file():
+            rel = path.relative_to(fixture)
+            dest = project / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    request = (fixture / "request.txt").read_text(encoding="utf-8-sig")
+    assert "patch the owner" in module_fix_retry_feedback(request, project).lower()
+    golden = fixture / "golden" / "Source" / "CompileFixTags" / "CompileFixTags.Build.cs"
+    build_cs = project / "Source" / "CompileFixTags" / "CompileFixTags.Build.cs"
+    build_cs.write_text(golden.read_text(encoding="utf-8"), encoding="utf-8")
+    assert "already include" in module_fix_retry_feedback(request, project)
+
+
+def test_preserve_specific_route_updates_after_build_cs_link_error():
+    previous = {"broadMode": "module_fix", "errorSubkind": "C1083_MISSING_INCLUDE"}
+    current = {"broadMode": "link_fix", "errorSubkind": "LINK_GENERIC"}
+    route, preserved = preserve_specific_route(
+        current,
+        previous,
+        attempt=1,
+        changed_paths=["Source/HoldoutFixture/HoldoutFixture.Build.cs"],
+    )
+    assert route["broadMode"] == "link_fix"
+    assert preserved is False
+
+
+def test_preserve_specific_route_uses_current_route_on_retry_when_specific():
+    previous = {"broadMode": "module_fix", "errorSubkind": "C1083_MISSING_INCLUDE"}
+    current = {"broadMode": "compile_fix", "errorSubkind": "HEADER_CPP_SIGNATURE_MISMATCH"}
+    route, preserved = preserve_specific_route(current, previous, attempt=2)
+    assert route["errorSubkind"] == "HEADER_CPP_SIGNATURE_MISMATCH"
+    assert preserved is False

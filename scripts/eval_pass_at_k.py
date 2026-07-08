@@ -21,6 +21,20 @@ from preflight_lmstudio import check_lmstudio  # noqa: E402
 from ubt_utils import split_ubt_target_spec  # noqa: E402
 
 
+def compose_eval_request(case: dict, request_text: str) -> str:
+    """Combine synthetic errorLog with fixture request text for wrapper routing."""
+    parts: list[str] = []
+    error_log = str(case.get("errorLog") or "").strip()
+    body = str(request_text or "").strip()
+    if error_log:
+        body_starts_with_log = body.startswith(error_log) or error_log in body.split("\n", 1)[0]
+        if not body_starts_with_log:
+            parts.append(error_log)
+    if body:
+        parts.append(body)
+    return "\n\n".join(parts)
+
+
 def count_wrapper_attempts(run_dir: Path) -> int:
     if not run_dir.is_dir():
         return 0
@@ -246,6 +260,14 @@ def build_metrics_only_results(
     return results
 
 
+def should_abort_consecutive_failures(results: list[dict], threshold: int) -> bool:
+    """Return True when the last `threshold` cases all failed."""
+    if threshold <= 0 or len(results) < threshold:
+        return False
+    tail = results[-threshold:]
+    return all(not row.get("pass") for row in tail)
+
+
 def calculate_kpi_metrics(results: list[dict]) -> dict:
     """Calculate extended Pass@K metrics without changing CLI behavior."""
     total = len(results)
@@ -314,14 +336,19 @@ def calculate_kpi_metrics(results: list[dict]) -> dict:
     }
 
 
+FIXTURE_COPY_SKIP_DIRS = frozenset(
+    {"golden", "request.txt", "Intermediate", "Binaries", "Saved", "DerivedDataCache", ".vs"}
+)
+
+
 def copy_fixture(fixture_dir: Path, work_dir: Path) -> None:
-    ignore = shutil.ignore_patterns("golden", "request.txt")
+    work_dir.mkdir(parents=True, exist_ok=True)
     for item in fixture_dir.iterdir():
-        if item.name in {"golden", "request.txt"}:
+        if item.name in FIXTURE_COPY_SKIP_DIRS:
             continue
         dest = work_dir / item.name
         if item.is_dir():
-            shutil.copytree(item, dest, ignore=ignore)
+            shutil.copytree(item, dest)
         else:
             shutil.copy2(item, dest)
 
@@ -451,6 +478,8 @@ def run_case(
         mode = str(case.get("mode") or "compile_fix")
         request_path = fixture_dir / str(case.get("requestFile") or "request.txt")
         request_text = request_path.read_text(encoding="utf-8-sig") if request_path.is_file() else ""
+        if not dry_run:
+            request_text = compose_eval_request(case, request_text)
 
         if dry_run:
             applied = apply_golden(fixture_dir, work_dir)
@@ -525,6 +554,12 @@ def main() -> int:
     parser.add_argument("--max-attempts", type=int, default=0, help="Override config maxAttempts (e.g. 1 for Pass@1)")
     parser.add_argument("--early-exit", action="store_true",
                         help="Stop after min_pass_rate is met (saves time on passing runs)")
+    parser.add_argument(
+        "--abort-after-consecutive-failures",
+        type=int,
+        default=0,
+        help="Stop live eval after N consecutive case failures (0 = disabled)",
+    )
     parser.add_argument("--wrapper-timeout", type=int, default=0,
                         help="Per-case wrapper subprocess timeout in seconds (0 = no limit)")
     parser.add_argument("--metrics-only", action="store_true",
@@ -535,6 +570,11 @@ def main() -> int:
                         help="Optional directory to preserve live wrapper run artifacts per case.")
     parser.add_argument("--output", type=Path, default=None,
                         help="Optional KPI JSON output path. Defaults to data/baseline/pass-at-k*.json.")
+    parser.add_argument(
+        "--case-ids",
+        default="",
+        help="Comma-separated case ids to run (default: all cases in config)",
+    )
     args = parser.parse_args()
 
     config = json.loads((ROOT / args.config).read_text(encoding="utf-8-sig"))
@@ -561,6 +601,12 @@ def main() -> int:
 
     # Run cases sequentially; use --early-exit to stop once min_pass_rate is met.
     cases = config.get("cases") or []
+    if args.case_ids.strip():
+        selected = {item.strip() for item in args.case_ids.split(",") if item.strip()}
+        cases = [case for case in cases if str(case.get("id") or "") in selected]
+        missing = sorted(selected - {str(case.get("id") or "") for case in cases})
+        if missing:
+            print(f"[warn] unknown --case-ids (skipped): {', '.join(missing)}", file=sys.stderr)
     if args.metrics_only:
         results = build_metrics_only_results(cases, args.retry_state_fixture, args.artifact_dir)
     else:
@@ -578,6 +624,13 @@ def main() -> int:
                 artifact_dir=args.artifact_dir,
             )
             results.append(result)
+            if should_abort_consecutive_failures(results, args.abort_after_consecutive_failures):
+                print(
+                    f"[abort] {args.abort_after_consecutive_failures} consecutive failures "
+                    f"(last: {result['id']}); stopping early for diagnosis",
+                    flush=True,
+                )
+                break
             if args.early_exit:
                 done = len(results)
                 passed_so_far = sum(1 for r in results if r.get("pass"))

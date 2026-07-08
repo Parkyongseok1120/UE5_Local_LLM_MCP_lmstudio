@@ -48,12 +48,11 @@ def should_ignore_project_path(path: Path) -> bool:
 
 def iter_source_files(root: Path) -> list[Path]:
     suffixes = {".h", ".hpp", ".cpp", ".c", ".cc", ".cs"}
-    ignored = {"Binaries", "Intermediate", "Saved", "DerivedDataCache"}
     files: list[Path] = []
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in suffixes:
             continue
-        if any(part in ignored for part in path.parts):
+        if should_ignore_project_path(path):
             continue
         files.append(path)
     return files
@@ -229,6 +228,44 @@ def validate_generated_h(path: Path, text: str, root: Path) -> list[Finding]:
                     "generated.h must be the last include in the header.",
                 )
             )
+        uclass_idx = _uclass_line_index(text)
+        for line_no, _ in generated:
+            if line_no > uclass_idx:
+                findings.append(
+                    Finding(
+                        "error",
+                        str(path.relative_to(root)),
+                        line_no,
+                        "GENERATED_H_AFTER_TYPE",
+                        "generated.h must appear in the include block before UCLASS/USTRUCT, not after the type body.",
+                    )
+                )
+                break
+    return findings
+
+
+def _uclass_line_index(text: str) -> int:
+    for index, line in enumerate(text.splitlines(), start=1):
+        if re.search(r"\bU(CLASS|STRUCT|ENUM)\b", line):
+            return index
+    return len(text.splitlines()) + 1
+
+
+def validate_delegate_broadcast_consistency(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
+        return findings
+    for match in re.finditer(r"\.Broadcast\s*\(\s*\)", text):
+        line_no = text[: match.start()].count("\n") + 1
+        findings.append(
+            Finding(
+                "error",
+                str(path.relative_to(root)),
+                line_no,
+                "DELEGATE_BROADCAST_SIGNATURE_MISMATCH",
+                "Delegate Broadcast() is missing required payload arguments.",
+            )
+        )
     return findings
 
 
@@ -775,7 +812,9 @@ def validate_enhanced_input(path: Path, text: str, root: Path, build_text: str) 
 
 def class_headers(root: Path) -> dict[str, str]:
     headers: dict[str, str] = {}
-    for path in root.rglob("*.h"):
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
         text = read_text(path)
         for match in re.finditer(r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b", text):
             headers.setdefault(match.group(1), text)
@@ -787,7 +826,47 @@ def _normalize_signature_params(params: str) -> str:
     if not value or value == "void":
         return ""
     value = re.sub(r"=\s*[^,]+", "", value)
-    return value.replace(" const", "").strip()
+    value = value.replace(" const", "").strip()
+    types: list[str] = []
+    for part in value.split(","):
+        part = part.strip()
+        if part:
+            types.append(part.split()[0])
+    return ", ".join(types)
+
+
+INTERFACE_VIRTUAL_METHOD_RE = re.compile(
+    r"virtual\s+(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?=\s*0\s*;",
+)
+
+IMPLEMENTER_OVERRIDE_DECL_RE = re.compile(
+    r"^[\t ]*(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s+)?override\s*;",
+    re.MULTILINE,
+)
+
+
+def parse_interface_virtual_methods(text: str) -> list[tuple[str, str, str]]:
+    methods: list[tuple[str, str, str]] = []
+    for match in INTERFACE_VIRTUAL_METHOD_RE.finditer(text):
+        methods.append(
+            (
+                match.group("func"),
+                _normalize_signature_params(match.group("params")),
+                match.group("ret").strip(),
+            )
+        )
+    return methods
+
+
+def find_implementer_method_decl(text: str, func_name: str) -> re.Match[str] | None:
+    for match in IMPLEMENTER_OVERRIDE_DECL_RE.finditer(text):
+        if match.group("func") == func_name:
+            return match
+    return re.search(
+        rf"^[\t ]*(?P<ret>[\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?;",
+        text,
+        re.MULTILINE,
+    )
 
 
 def _header_has_matching_signature(header: str, func_name: str, params: str) -> bool:
@@ -1215,6 +1294,7 @@ ENGINE_INCLUDE_PREFIXES = (
     "Core/",
     "CoreUObject/",
     "Engine/",
+    "Subsystems/",
     "GameFramework/",
     "Components/",
     "UObject/",
@@ -1299,11 +1379,137 @@ def validate_include_paths_exist(path: Path, text: str, root: Path, include_inde
     return findings
 
 
+def validate_interface_implementer_drift(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    interface_specs: dict[str, list[tuple[str, str, str]]] = {}
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        text = read_text(path)
+        if not re.search(r"\bclass\s+I[A-Za-z_][A-Za-z0-9_]*\b", text):
+            continue
+        interface_name = ""
+        for match in re.finditer(r"\bclass\s+(I[A-Za-z_][A-Za-z0-9_]*)\b", text):
+            interface_name = match.group(1)
+        if not interface_name:
+            continue
+        methods = parse_interface_virtual_methods(text)
+        if methods:
+            interface_specs[interface_name] = methods
+
+    if not interface_specs:
+        return findings
+
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        text = read_text(path)
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        for interface_name, methods in interface_specs.items():
+            if interface_name not in text:
+                continue
+            if re.search(rf"\bclass\s+{re.escape(interface_name)}\b", text):
+                continue
+            if f": public {interface_name}" not in text and f", public {interface_name}" not in text:
+                continue
+            for func_name, iface_params, iface_ret in methods:
+                impl_match = find_implementer_method_decl(text, func_name)
+                if impl_match is None:
+                    impl_match = re.search(
+                        rf"^[\t ]*(?:static\s+)?(?P<ret>[\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*;",
+                        text,
+                        re.MULTILINE,
+                    )
+                if not impl_match:
+                    findings.append(
+                        Finding(
+                            "warning",
+                            rel,
+                            line_number(text, 0),
+                            "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH",
+                            f"{interface_name} requires {func_name}({iface_params or 'void'}) but implementer declaration was not found.",
+                        )
+                    )
+                    continue
+                impl_params = _normalize_signature_params(impl_match.group("params"))
+                impl_ret = impl_match.group("ret").strip()
+                if impl_params != iface_params or impl_ret.replace("const", "").strip() != iface_ret.replace("const", "").strip():
+                    findings.append(
+                        Finding(
+                            "warning",
+                            rel,
+                            line_number(text, impl_match.start()),
+                            "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH",
+                            f"{func_name} implementer signature does not match {interface_name} ({iface_ret} {func_name} vs {impl_ret} {func_name}).",
+                        )
+                    )
+    return findings
+
+
+TYPEDEF_FUNCTION_POINTER_RE = re.compile(
+    r"using\s+(?P<alias>\w+)\s*=\s*(?P<ret>[\w:<>,\s*&]+)\s*\(\s*\*\s*\)\s*\((?P<params>[^)]*)\)\s*;",
+)
+FUNCTION_POINTER_TARGET_RE = re.compile(
+    r"&(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<func>[A-Za-z_][A-Za-z0-9_]*)",
+)
+
+
+def validate_callback_function_pointer_drift(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    headers = class_headers(root)
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
+            continue
+        text = read_text(path)
+        if "using " not in text or "&" not in text:
+            continue
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        typedefs = list(TYPEDEF_FUNCTION_POINTER_RE.finditer(text))
+        targets = list(FUNCTION_POINTER_TARGET_RE.finditer(text))
+        if not typedefs or not targets:
+            continue
+        for match in targets:
+            class_name = match.group("class")
+            func_name = match.group("func")
+            header = headers.get(class_name)
+            if not header:
+                continue
+            decl_match = find_implementer_method_decl(header, func_name)
+            if decl_match is None:
+                decl_match = re.search(
+                    rf"^[\t ]*(?:static\s+)?(?P<ret>[\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*;",
+                    header,
+                    re.MULTILINE,
+                )
+            if not decl_match:
+                continue
+            method_params = _normalize_signature_params(decl_match.group("params"))
+            for typedef_match in typedefs:
+                typedef_params = _normalize_signature_params(typedef_match.group("params"))
+                if method_params == typedef_params:
+                    continue
+                findings.append(
+                    Finding(
+                        "warning",
+                        rel,
+                        line_number(text, match.start()),
+                        "CALLBACK_FUNCTION_POINTER_MISMATCH",
+                        (
+                            f"{class_name}::{func_name} params ({method_params or 'void'}) do not match "
+                            f"callback typedef {typedef_match.group('alias')} ({typedef_params or 'void'})."
+                        ),
+                    )
+                )
+                break
+    return findings
+
+
 def validate_unreal_readiness(
     root: Path,
     module_graph_path: Path | None = None,
     *,
     lightweight: bool = False,
+    skip_include_path_checks: bool = False,
 ) -> list[Finding]:
     if lightweight:
         return validate_unreal_readiness_lightweight(root)
@@ -1332,17 +1538,21 @@ def validate_unreal_readiness(
             findings.extend(validate_editor_only_runtime_includes(path, text, root))
             findings.extend(validate_enhanced_input(path, text, root, build_text_value))
             findings.extend(validate_action_request_order(path, text, root))
-            findings.extend(validate_include_paths_exist(path, text, root, include_index))
+            if not skip_include_path_checks:
+                findings.extend(validate_include_paths_exist(path, text, root, include_index))
         if path.suffix.lower() in {".cpp", ".c", ".cc"}:
             findings.extend(validate_required_includes(path, text, root))
             findings.extend(validate_constructor_lifecycle_usage(path, text, root))
             findings.extend(validate_newobject_outer(path, text, root))
             findings.extend(validate_component_timer_manager(path, text, root, bases))
             findings.extend(validate_cpp_declarations(path, text, root, headers))
+            findings.extend(validate_delegate_broadcast_consistency(path, text, root))
     findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
     findings.extend(validate_include_owner_modules(root, build_text_value, include_owner_map))
     findings.extend(validate_duplicate_source_basenames(root))
     findings.extend(validate_rpc_implementations(root))
+    findings.extend(validate_interface_implementer_drift(root))
+    findings.extend(validate_callback_function_pointer_drift(root))
     return findings
 
 
@@ -1376,4 +1586,34 @@ def format_findings(findings: list[Finding]) -> str:
 
 def has_static_errors(findings: list[Finding]) -> bool:
     return any(finding.severity == "error" for finding in findings)
+
+
+BLOCKING_STATIC_ERROR_CODES = {
+    "DUPLICATE_SOURCE_BASENAME",
+}
+
+
+def has_blocking_static_errors(findings: list[Finding]) -> bool:
+    for finding in findings:
+        if finding.severity != "error":
+            continue
+        if finding.code.startswith("GENERATED_H"):
+            return True
+        if finding.code in BLOCKING_STATIC_ERROR_CODES:
+            return True
+        if finding.code == "INCLUDE_PATH_NOT_FOUND":
+            return True
+    return False
+
+
+def can_run_autofix_ubt(findings: list[Finding], *, autofix_written: bool = False) -> bool:
+    if has_blocking_static_errors(findings):
+        return False
+    if autofix_written:
+        return True
+    if not findings:
+        return True
+    if not has_static_errors(findings):
+        return True
+    return False
 
