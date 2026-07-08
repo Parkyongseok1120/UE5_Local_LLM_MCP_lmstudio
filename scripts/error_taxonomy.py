@@ -47,9 +47,24 @@ SUBKIND_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         re.compile(r"delegate.*broadcast|Broadcast.*argument|too few arguments.*Broadcast|C2660.*Broadcast", re.I),
     ),
     (
+        "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH",
+        "compile_fix",
+        re.compile(r"INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH|implementer signature does not match", re.I),
+    ),
+    (
         "INTERFACE_IMPLEMENTER_MISMATCH",
         "compile_fix",
         re.compile(r"interface.*implement|does not implement|abstract class|C2259|C3668", re.I),
+    ),
+    (
+        "CPP_FUNCTION_NOT_DECLARED_IN_HEADER",
+        "compile_fix",
+        re.compile(r"CPP_FUNCTION_NOT_DECLARED_IN_HEADER|not found in the matching header", re.I),
+    ),
+    (
+        "CALLBACK_FUNCTION_POINTER_MISMATCH",
+        "compile_fix",
+        re.compile(r"CALLBACK_FUNCTION_POINTER_MISMATCH|callback typedef", re.I),
     ),
     (
         "MULTIFILE_CALLSITE_DRIFT",
@@ -214,6 +229,56 @@ def route_error_action(message: str, error_code: str = "") -> dict[str, Any]:
                 "Read the DECLARE_*DELEGATE line and the exact .Broadcast(...) callsite.",
                 "Cpp-only callsite patch is allowed when the header delegate declaration is already correct.",
             ],
+        )
+
+    if subkind in {"INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH", "INTERFACE_IMPLEMENTER_MISMATCH"}:
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["interface declaration", "implementer header", "matching cpp definition"],
+            rag=["compile_fix"],
+            targets=["implementer header", "matching cpp"],
+            forbidden=["Build.cs-first fix without module evidence", "single-surface header-only patch"],
+            notes=["Align implementer header and cpp with the interface virtual method in one patch."],
+        )
+
+    if subkind == "CALLBACK_FUNCTION_POINTER_MISMATCH":
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["callback typedef", "handler declaration", "registration assignment"],
+            rag=["compile_fix"],
+            targets=["handler header", "handler cpp", "registration site"],
+            forbidden=["Build.cs-first fix without module evidence"],
+            notes=["Expand handler params to match callback typedef; keep registration assignment consistent."],
+        )
+
+    if subkind == "CPP_FUNCTION_NOT_DECLARED_IN_HEADER":
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["header declaration", "matching cpp definition"],
+            rag=["compile_fix"],
+            targets=["matching header", "matching cpp"],
+            forbidden=["Build.cs-first fix without module evidence"],
+            notes=["Add or fix the header declaration for the cpp implementation."],
+        )
+
+    if subkind == "MULTIFILE_CALLSITE_DRIFT":
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["declaration header", "definition cpp", "consumer callsite"],
+            rag=["compile_fix"],
+            targets=["consumer callsite", "matching header/cpp"],
+            forbidden=["Build.cs-first fix without module evidence", "single-file patch when callsites drift"],
+            notes=["Update declaration, definition, and consumer callsites together."],
+        )
+
+    if subkind == "CALLBACK_PARAM_EXPAND":
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["callback typedef", "handler declaration", "registration site"],
+            rag=["compile_fix"],
+            targets=["handler header", "handler cpp", "registration site"],
+            forbidden=["Build.cs-first fix without module evidence"],
+            notes=["Expand callback handler signature to match typedef arity."],
         )
 
     if subkind == "ENHANCED_INPUT_BINDING_ERROR":

@@ -6,73 +6,31 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from unreal_static_validate import (
-    Finding,
-    FUNCTION_POINTER_TARGET_RE,
-    INTERFACE_VIRTUAL_METHOD_RE,
-    TYPEDEF_FUNCTION_POINTER_RE,
-    class_headers,
-    find_implementer_method_decl,
-    iter_source_files,
-    read_text,
+from unreal_static_validate import Finding, iter_source_files, read_text
+from ue_cpp_signatures import (
+    CPP_METHOD_DEFINITION_RE,
+    SourceTreeIndex,
+    build_source_tree_index,
+    collect_callback_drifts,
+    collect_interface_specs,
+    find_method_decl_in_header,
+    header_method_params,
+    normalize_signature_params,
 )
+
+FINDING_STEP_CODES: dict[str, set[str]] = {
+    "callback_expand": {"CALLBACK_FUNCTION_POINTER_MISMATCH"},
+    "method_rename": {"CPP_FUNCTION_NOT_DECLARED_IN_HEADER", "CPP_FUNCTION_SIGNATURE_MISMATCH"},
+    "method_split": {"MULTIFILE_CALLSITE_DRIFT", "CPP_FUNCTION_SIGNATURE_MISMATCH"},
+    "interface_implementer": {"INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH"},
+    "return_type_sync": {"INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH", "CPP_FUNCTION_SIGNATURE_MISMATCH"},
+    "delegate_header_sync": {"CPP_FUNCTION_SIGNATURE_MISMATCH", "DELEGATE_BROADCAST_SIGNATURE_MISMATCH"},
+}
 
 
 def write_file(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-
-
-def _iter_headers(root: Path) -> list[Path]:
-    return [path for path in iter_source_files(root) if path.suffix.lower() in {".h", ".hpp"}]
-
-
-def _iter_cpp(root: Path) -> list[Path]:
-    return [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
-
-
-def _normalize_params(params: str) -> str:
-    value = re.sub(r"\s+", " ", str(params or "").strip())
-    if not value or value == "void":
-        return ""
-    value = re.sub(r"=\s*[^,]+", "", value)
-    value = value.replace(" const", "").strip()
-    types: list[str] = []
-    for part in value.split(","):
-        part = part.strip()
-        if part:
-            types.append(part.split()[0])
-    return ", ".join(types)
-
-
-def _header_method_params(header: str, func_name: str) -> str | None:
-    match = re.search(rf"\b{re.escape(func_name)}\s*\((?P<params>[^)]*)\)", header)
-    if not match:
-        return None
-    return match.group("params").strip()
-
-
-def _find_method_decl_in_header(header: str, func_name: str) -> re.Match[str] | None:
-    match = find_implementer_method_decl(header, func_name)
-    if match:
-        return match
-    return re.search(
-        rf"^[\t ]*(?:static\s+)?(?P<ret>[\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*;",
-        header,
-        re.MULTILINE,
-    )
-
-
-def _replace_cpp_method_name(text: str, class_name: str, old_name: str, new_name: str) -> str:
-    return re.sub(
-        rf"\b{re.escape(class_name)}::{re.escape(old_name)}\s*\(",
-        f"{class_name}::{new_name}(",
-        text,
-    )
-
-
-def _replace_callsite(text: str, old_name: str, new_name: str) -> str:
-    return re.sub(rf"->{re.escape(old_name)}\s*\(", f"->{new_name}(", text)
 
 
 def _dedupe_include_lines(text: str) -> str:
@@ -90,6 +48,28 @@ def _dedupe_include_lines(text: str) -> str:
     return "\n".join(output) + ("\n" if text.endswith("\n") else "")
 
 
+def _finding_codes(findings: list[Finding]) -> set[str]:
+    return {str(finding.code) for finding in findings}
+
+
+def _should_run(step: str, findings: list[Finding]) -> bool:
+    if not findings:
+        return True
+    codes = FINDING_STEP_CODES.get(step, set())
+    if not codes:
+        return True
+    present = _finding_codes(findings)
+    return bool(present & codes)
+
+
+def _write_header_for_class(index: SourceTreeIndex, class_name: str, updated: str, written: list[Path]) -> None:
+    header_path = index.class_to_path.get(class_name)
+    if header_path and read_text(header_path) != updated:
+        write_file(header_path, updated)
+        written.append(header_path)
+        index.class_to_text[class_name] = updated
+
+
 def apply_subsystem_include_autofix(root: Path, findings: list[Finding]) -> list[Path]:
     written: list[Path] = []
     needed = any(
@@ -97,8 +77,9 @@ def apply_subsystem_include_autofix(root: Path, findings: list[Finding]) -> list
         or "GameInstanceSubsystem" in finding.message
         for finding in findings
     )
+    index = build_source_tree_index(root)
     if not needed:
-        for path in _iter_headers(root):
+        for path in index.headers:
             text = read_text(path)
             if "UGameInstanceSubsystem" in text and "Subsystems/GameInstanceSubsystem.h" not in text:
                 needed = True
@@ -106,7 +87,7 @@ def apply_subsystem_include_autofix(root: Path, findings: list[Finding]) -> list
     if not needed:
         return written
     include_line = '#include "Subsystems/GameInstanceSubsystem.h"'
-    for path in _iter_headers(root):
+    for path in index.headers:
         text = read_text(path)
         if "UGameInstanceSubsystem" not in text:
             continue
@@ -115,11 +96,11 @@ def apply_subsystem_include_autofix(root: Path, findings: list[Finding]) -> list
             lines = text.splitlines()
             insert_at = 0
             generated_index = -1
-            for index, line in enumerate(lines):
+            for idx, line in enumerate(lines):
                 if line.strip().startswith("#include"):
-                    insert_at = index + 1
+                    insert_at = idx + 1
                 if ".generated.h" in line:
-                    generated_index = index
+                    generated_index = idx
                     break
             if generated_index >= 0:
                 insert_at = generated_index
@@ -132,79 +113,51 @@ def apply_subsystem_include_autofix(root: Path, findings: list[Finding]) -> list
     return written
 
 
-def apply_callback_param_expand_autofix(root: Path) -> list[Path]:
-    """Expand handler method params to match callback typedef when pointer assignment drifts."""
+def apply_callback_param_expand_autofix(root: Path, *, index: SourceTreeIndex | None = None) -> list[Path]:
     written: list[Path] = []
-    headers = class_headers(root)
-    expansions: list[tuple[str, str, str, str]] = []
-    for cpp_path in _iter_cpp(root):
-        text = read_text(cpp_path)
-        typedef_params: dict[str, str] = {}
-        for match in TYPEDEF_FUNCTION_POINTER_RE.finditer(text):
-            typedef_params[match.group("alias")] = match.group("params").strip()
-        if not typedef_params:
+    tree = index or build_source_tree_index(root)
+    for drift in collect_callback_drifts(root, index=tree):
+        if not drift.expandable:
             continue
-        for match in FUNCTION_POINTER_TARGET_RE.finditer(text):
-            class_name = match.group("class")
-            func_name = match.group("func")
-            header_text = headers.get(class_name)
-            if not header_text:
-                continue
-            decl = _find_method_decl_in_header(header_text, func_name)
-            if not decl:
-                continue
-            ret_type = decl.group("ret").strip()
-            current_params = decl.group("params").strip()
-            for params in typedef_params.values():
-                if _normalize_params(params) == _normalize_params(current_params):
-                    continue
-                if params.count(",") <= current_params.count(","):
-                    continue
-                expansions.append((class_name, func_name, ret_type, params))
-
-    if not expansions:
-        return written
-
-    seen: set[tuple[str, str]] = set()
-    for class_name, func_name, ret_type, new_params in expansions:
-        key = (class_name, func_name)
-        if key in seen:
-            continue
-        seen.add(key)
-        header_text = headers.get(class_name)
+        class_name = drift.class_name
+        func_name = drift.func_name
+        header_text = tree.class_to_text.get(class_name)
         if not header_text:
             continue
-        decl_match = _find_method_decl_in_header(header_text, func_name)
+        decl_match = find_method_decl_in_header(header_text, func_name)
         if not decl_match:
             continue
+        ret_type = decl_match.group("ret").strip()
         current_params = decl_match.group("params").strip()
+        typedef_match = re.search(
+            rf"using\s+\w+\s*=\s*[\w:<>,\s*&]+\s*\(\s*\*\s*\)\s*\((?P<params>[^)]*)\)\s*;",
+            read_text(drift.cpp_path),
+        )
+        if not typedef_match:
+            continue
+        new_params = typedef_match.group("params").strip()
         current_param_parts = [part.strip() for part in current_params.split(",") if part.strip()]
         new_param_parts = [part.strip() for part in new_params.split(",") if part.strip()]
         expanded_params: list[str] = []
-        for index, part in enumerate(new_param_parts):
-            if index < len(current_param_parts) and _normalize_params(current_param_parts[index]) == _normalize_params(part):
-                expanded_params.append(current_param_parts[index])
+        for idx, part in enumerate(new_param_parts):
+            if idx < len(current_param_parts) and normalize_signature_params(current_param_parts[idx]) == normalize_signature_params(part):
+                expanded_params.append(current_param_parts[idx])
             elif " " not in part:
                 if part == "int32":
                     expanded_params.append("int32 Value")
                 elif part == "bool":
                     expanded_params.append("bool bSuccess")
                 else:
-                    expanded_params.append(f"{part} Value{index + 1}")
+                    expanded_params.append(f"{part} Value{idx + 1}")
             else:
                 expanded_params.append(part)
         params_text = ", ".join(expanded_params)
         static_prefix = "static " if decl_match.group(0).lstrip().startswith("static") else ""
         new_decl = f"{static_prefix}{ret_type} {func_name}({params_text});"
         updated_header = header_text[: decl_match.start()] + new_decl + header_text[decl_match.end() :]
-        for header_path in _iter_headers(root):
-            if read_text(header_path) == header_text:
-                write_file(header_path, updated_header)
-                written.append(header_path)
-                headers[class_name] = updated_header
-                header_text = updated_header
-                break
-        for cpp_path in _iter_cpp(root):
+        _write_header_for_class(tree, class_name, updated_header, written)
+        header_text = tree.class_to_text[class_name]
+        for cpp_path in tree.cpps:
             text = read_text(cpp_path)
             def_match = re.search(
                 rf"^[\t ]*(?:static\s+)?{re.escape(ret_type)}\s+{re.escape(class_name)}::{re.escape(func_name)}\s*\([^)]*\)",
@@ -221,69 +174,43 @@ def apply_callback_param_expand_autofix(root: Path) -> list[Path]:
                 continue
             new_def = f"{ret_type} {class_name}::{func_name}({params_text})"
             updated = text[: def_match.start()] + new_def + text[def_match.end() :]
-            old_params = re.search(rf"{re.escape(func_name)}\s*\((?P<params>[^)]*)\)", def_match.group(0))
-            old_param_names = []
-            if old_params:
-                old_param_names = [part.strip().split()[-1] for part in old_params.group("params").split(",") if part.strip()]
-            new_param_names = [part.strip().split()[-1] for part in params_text.split(",") if part.strip()]
-            body_match = re.search(rf"{re.escape(class_name)}::{re.escape(func_name)}\s*\([^)]*\)\s*\{{", updated)
-            if body_match:
-                insert_at = body_match.end()
-                stubs = []
-                for name in new_param_names:
-                    if name not in old_param_names:
-                        stubs.append(f"\n\t(void){name};")
-                if stubs:
-                    updated = updated[:insert_at] + "".join(stubs) + updated[insert_at:]
             if updated != text:
                 write_file(cpp_path, updated)
                 written.append(cpp_path)
     return written
 
 
-def apply_multifile_delegate_header_sync_autofix(root: Path) -> list[Path]:
-    """Align header declaration params to match existing cpp definition."""
+def apply_multifile_delegate_header_sync_autofix(root: Path, *, index: SourceTreeIndex | None = None) -> list[Path]:
     written: list[Path] = []
-    headers = class_headers(root)
-    for cpp_path in _iter_cpp(root):
+    tree = index or build_source_tree_index(root)
+    for cpp_path in tree.cpps:
         text = read_text(cpp_path)
-        for match in re.finditer(
-            r"\b(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)",
-            text,
-        ):
+        for match in CPP_METHOD_DEFINITION_RE.finditer(text):
             class_name = match.group("class")
             func_name = match.group("func")
             cpp_params = match.group("params").strip()
-            header_text = headers.get(class_name)
+            header_text = tree.class_to_text.get(class_name)
             if not header_text:
                 continue
-            header_params = _header_method_params(header_text, func_name)
+            header_params = header_method_params(header_text, func_name)
             if header_params is None:
                 continue
-            if _normalize_params(header_params) == _normalize_params(cpp_params):
+            if normalize_signature_params(header_params) == normalize_signature_params(cpp_params):
                 continue
             old_decl_match = re.search(rf"void\s+{re.escape(func_name)}\s*\([^)]*\)\s*;", header_text)
             if not old_decl_match:
                 continue
             new_decl = f"void {func_name}({cpp_params});"
-            updated_header = (
-                header_text[: old_decl_match.start()] + new_decl + header_text[old_decl_match.end() :]
-            )
-            for header_path in _iter_headers(root):
-                if read_text(header_path) == header_text:
-                    write_file(header_path, updated_header)
-                    written.append(header_path)
-                    headers[class_name] = updated_header
-                    break
+            updated_header = header_text[: old_decl_match.start()] + new_decl + header_text[old_decl_match.end() :]
+            _write_header_for_class(tree, class_name, updated_header, written)
     return written
 
 
-def apply_multifile_method_rename_autofix(root: Path) -> list[Path]:
-    """Rename cpp definition + callsites to match header-declared method name."""
+def apply_multifile_method_rename_autofix(root: Path, *, index: SourceTreeIndex | None = None) -> list[Path]:
     written: list[Path] = []
-    headers = class_headers(root)
+    tree = index or build_source_tree_index(root)
     rename_pairs: list[tuple[str, str, str]] = []
-    for cpp_path in _iter_cpp(root):
+    for cpp_path in tree.cpps:
         text = read_text(cpp_path)
         for match in re.finditer(
             r"\b(?P<class>U[A-Za-z_][A-Za-z0-9_]*)::(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
@@ -291,10 +218,10 @@ def apply_multifile_method_rename_autofix(root: Path) -> list[Path]:
         ):
             class_name = match.group("class")
             cpp_func = match.group("func")
-            header_text = headers.get(class_name)
+            header_text = tree.class_to_text.get(class_name)
             if not header_text:
                 continue
-            if _header_method_params(header_text, cpp_func) is not None:
+            if header_method_params(header_text, cpp_func) is not None:
                 continue
             candidates = re.findall(r"\bvoid\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", header_text)
             if len(candidates) != 1:
@@ -303,33 +230,33 @@ def apply_multifile_method_rename_autofix(root: Path) -> list[Path]:
             if header_func != cpp_func:
                 rename_pairs.append((class_name, cpp_func, header_func))
 
-    if not rename_pairs:
-        return written
-
-    for cpp_path in _iter_cpp(root):
+    for cpp_path in tree.cpps:
         text = read_text(cpp_path)
         updated = text
         for class_name, old_func, new_func in rename_pairs:
-            updated = _replace_cpp_method_name(updated, class_name, old_func, new_func)
-            updated = _replace_callsite(updated, old_func, new_func)
+            updated = re.sub(
+                rf"\b{re.escape(class_name)}::{re.escape(old_func)}\s*\(",
+                f"{class_name}::{new_func}(",
+                updated,
+            )
+            updated = re.sub(rf"->{re.escape(old_func)}\s*\(", f"->{new_func}(", updated)
         if updated != text:
             write_file(cpp_path, updated)
             written.append(cpp_path)
     return written
 
 
-def apply_multifile_method_split_autofix(root: Path) -> list[Path]:
-    """Replace stale combined method bodies with split header methods + update callsites."""
+def apply_multifile_method_split_autofix(root: Path, *, index: SourceTreeIndex | None = None) -> list[Path]:
     written: list[Path] = []
-    headers = class_headers(root)
-    for class_name, header_text in headers.items():
+    tree = index or build_source_tree_index(root)
+    for class_name, header_text in tree.class_to_text.items():
         if not class_name.startswith("U"):
             continue
         declared = re.findall(r"\bvoid\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*;", header_text)
         if len(declared) < 2:
             continue
         stale_names = {"DoAll", "HandleAll", "RunAll"}
-        for cpp_path in _iter_cpp(root):
+        for cpp_path in tree.cpps:
             text = read_text(cpp_path)
             for stale in stale_names:
                 stale_match = re.search(
@@ -347,79 +274,62 @@ def apply_multifile_method_split_autofix(root: Path) -> list[Path]:
                     write_file(cpp_path, updated)
                     written.append(cpp_path)
                     text = updated
-                for consumer_path in _iter_cpp(root):
+                for consumer_path in tree.cpps:
                     consumer = read_text(consumer_path)
                     callsite = re.search(rf"(\w+)->{re.escape(stale)}\s*\(\s*\)", consumer)
                     if not callsite or len(declared) < 2:
                         continue
                     var_name = callsite.group(1)
-                    replacement = ";\n\t\t".join(f"{var_name}->{method}()" for method in declared[:2])
-                    new_consumer = consumer[: callsite.start()] + replacement + consumer[callsite.end() :]
+                    replacement_calls = ";\n\t\t".join(f"{var_name}->{method}()" for method in declared[:2])
+                    new_consumer = consumer[: callsite.start()] + replacement_calls + consumer[callsite.end() :]
                     if new_consumer != consumer:
                         write_file(consumer_path, new_consumer)
                         written.append(consumer_path)
     return written
 
 
-def apply_multifile_interface_implementer_autofix(root: Path) -> list[Path]:
-    """Align implementer method signatures to declared interface methods."""
+def apply_multifile_interface_implementer_autofix(root: Path, *, index: SourceTreeIndex | None = None) -> list[Path]:
     written: list[Path] = []
-    interface_methods: dict[str, list[tuple[str, str, str]]] = {}
-    for path in _iter_headers(root):
-        if not path.name.endswith("Interface.h"):
-            continue
-        text = read_text(path)
-        interface_class = ""
-        for match in re.finditer(r"\bclass\s+(I[A-Za-z_][A-Za-z0-9_]*)\b", text):
-            interface_class = match.group(1)
-        if not interface_class or not re.search(r"\bclass\s+I[A-Za-z_][A-Za-z0-9_]*\b", text):
-            continue
-        for match in INTERFACE_VIRTUAL_METHOD_RE.finditer(text):
-            interface_methods.setdefault(interface_class, []).append(
-                (
-                    match.group("func"),
-                    match.group("ret").strip(),
-                    match.group("params").strip(),
-                )
-            )
-    if not interface_methods:
+    tree = index or build_source_tree_index(root)
+    interface_specs = collect_interface_specs(root, index=tree)
+    if not interface_specs:
         return written
-    for path in _iter_headers(root):
+    for path in tree.headers:
         text = read_text(path)
-        for interface_name, methods in interface_methods.items():
+        for interface_name, methods in interface_specs.items():
             if interface_name not in text:
                 continue
             if f": public {interface_name}" not in text and f", public {interface_name}" not in text:
                 continue
             updated = text
-            for func_name, ret_type, params in methods:
-                decl_match = find_implementer_method_decl(updated, func_name)
+            for method in methods:
+                decl_match = find_method_decl_in_header(updated, method.func)
                 if not decl_match:
                     continue
                 const_suffix = " const" if " const" in decl_match.group(0) else ""
-                new_decl = f"{ret_type} {func_name}({params}){const_suffix} override;"
+                new_decl = f"{method.ret} {method.func}({method.params_raw}){const_suffix} override;"
                 updated = updated[: decl_match.start()] + new_decl + updated[decl_match.end() :]
             if updated != text:
                 write_file(path, updated)
                 written.append(path)
                 text = updated
-    for cpp_path in _iter_cpp(root):
+    for cpp_path in tree.cpps:
         text = read_text(cpp_path)
         updated = text
-        for methods in interface_methods.values():
-            for func_name, ret_type, params in methods:
+        for methods in interface_specs.values():
+            for method in methods:
                 updated = re.sub(
-                    rf"^[\t ]*(?:void|bool|int32|float)\s+(?P<class>[A-Za-z_][A-Za-z0-9_]*)::{re.escape(func_name)}\s*\([^)]*\)",
-                    f"{ret_type} \\g<class>::{func_name}({params})",
+                    rf"^[\t ]*(?:void|bool|int32|float)\s+(?P<class>[A-Za-z_][A-Za-z0-9_]*)::{re.escape(method.func)}\s*\([^)]*\)",
+                    f"{method.ret} \\g<class>::{method.func}({method.params_raw})",
                     updated,
                     count=1,
                     flags=re.MULTILINE,
                 )
                 body_match = re.search(
-                    rf"{re.escape(func_name)}\s*\([^)]*\)\s*(?:const\s*)?\{{\s*}}",
+                    rf"{re.escape(method.func)}\s*\([^)]*\)\s*(?:const\s*)?\{{\s*}}",
                     updated,
                 )
-                if body_match and ret_type == "bool":
+                if body_match and method.ret == "bool":
                     updated = updated[: body_match.end() - 1] + "\n\treturn true;\n}" + updated[body_match.end() :]
         if updated != text:
             write_file(cpp_path, updated)
@@ -427,11 +337,10 @@ def apply_multifile_interface_implementer_autofix(root: Path) -> list[Path]:
     return written
 
 
-def apply_multifile_return_type_sync_autofix(root: Path) -> list[Path]:
-    """Sync implementer return types when header declares void but cpp uses bool/int/float."""
+def apply_multifile_return_type_sync_autofix(root: Path, *, index: SourceTreeIndex | None = None) -> list[Path]:
     written: list[Path] = []
-    headers = class_headers(root)
-    for cpp_path in _iter_cpp(root):
+    tree = index or build_source_tree_index(root)
+    for cpp_path in tree.cpps:
         text = read_text(cpp_path)
         for match in re.finditer(
             r"^(?P<ret>[\w:<>,\s*&]+)\s+(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
@@ -441,12 +350,10 @@ def apply_multifile_return_type_sync_autofix(root: Path) -> list[Path]:
             class_name = match.group("class")
             func_name = match.group("func")
             cpp_ret = match.group("ret").strip()
-            header_text = headers.get(class_name)
+            header_text = tree.class_to_text.get(class_name)
             if not header_text:
                 continue
-            decl_match = find_implementer_method_decl(header_text, func_name)
-            if decl_match is None:
-                decl_match = _find_method_decl_in_header(header_text, func_name)
+            decl_match = find_method_decl_in_header(header_text, func_name)
             if not decl_match:
                 continue
             header_ret = decl_match.group("ret").strip()
@@ -459,27 +366,25 @@ def apply_multifile_return_type_sync_autofix(root: Path) -> list[Path]:
                     header_text,
                     count=1,
                 )
-                for header_path in _iter_headers(root):
-                    if read_text(header_path) == header_text:
-                        write_file(header_path, new_header)
-                        written.append(header_path)
-                        headers[class_name] = new_header
-                        break
+                _write_header_for_class(tree, class_name, new_header, written)
     return written
 
 
 def apply_multifile_refactor_autofixes(root: Path, findings: list[Finding]) -> list[Path]:
     written: list[Path] = []
+    index = build_source_tree_index(root)
     steps = (
-        apply_callback_param_expand_autofix,
-        apply_multifile_method_rename_autofix,
-        apply_multifile_method_split_autofix,
-        apply_multifile_interface_implementer_autofix,
-        apply_multifile_return_type_sync_autofix,
-        apply_multifile_delegate_header_sync_autofix,
+        ("callback_expand", apply_callback_param_expand_autofix),
+        ("method_rename", apply_multifile_method_rename_autofix),
+        ("method_split", apply_multifile_method_split_autofix),
+        ("interface_implementer", apply_multifile_interface_implementer_autofix),
+        ("return_type_sync", apply_multifile_return_type_sync_autofix),
+        ("delegate_header_sync", apply_multifile_delegate_header_sync_autofix),
     )
-    for step in steps:
-        for path in step(root):
+    for step_name, step in steps:
+        if not _should_run(step_name, findings):
+            continue
+        for path in step(root, index=index):
             if path not in written:
                 written.append(path)
     return written

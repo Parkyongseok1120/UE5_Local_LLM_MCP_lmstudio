@@ -14,6 +14,7 @@ import sys
 
 sys.path.insert(0, str(SCRIPTS))
 from workspace_paths import resolve_ubt_path  # noqa: E402
+from ubt_utils import ubt_subprocess_env  # noqa: E402
 
 DEFAULT_UBT = resolve_ubt_path()
 SKIP_DIRS = {"Intermediate", "Binaries", "Saved", "DerivedDataCache", ".vs", "golden", "request.txt"}
@@ -38,6 +39,7 @@ def run_ubt(ubt: Path, project: Path, target: str, timeout: int) -> tuple[int, s
         errors="replace",
         check=False,
         timeout=timeout,
+        env=ubt_subprocess_env(),
     )
     out = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode, out

@@ -3,12 +3,20 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 KNOWN_UBT_PLATFORMS = {"Win64", "Win32", "Linux", "LinuxArm64", "Mac", "Android", "IOS", "TVOS"}
 KNOWN_UBT_CONFIGURATIONS = {"Debug", "DebugGame", "Development", "Test", "Shipping"}
 UBT_STABILITY_FLAGS = ["-NoUBA", "-MaxParallelActions=4"]
 SOURCE_LIKE_SUFFIXES = {".h", ".hpp", ".cpp", ".c", ".cc", ".cs", ".build.cs", ".target.cs"}
+
+
+def ubt_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Return subprocess env with .NET roll-forward for UE UBT on newer runtimes."""
+    env = dict(os.environ if base is None else base)
+    env.setdefault("DOTNET_ROLL_FORWARD", "LatestMajor")
+    return env
 
 
 def sanitize_ubt_target(target: str, *, fallback: str = "HoldoutFixtureEditor") -> tuple[str, str | None]:
@@ -45,6 +53,7 @@ def build_ubt_command(
     configuration: str = "Development",
     *,
     stability_flags: list[str] | None = None,
+    log_file: Path | None = None,
 ) -> list[str]:
     """Build a stable UBT command list for local eval/wrapper runs."""
     target_name, resolved_platform, resolved_configuration = split_ubt_target_spec(
@@ -53,7 +62,7 @@ def build_ubt_command(
         configuration,
     )
     target_name, _ = sanitize_ubt_target(target_name)
-    return [
+    command = [
         str(ubt_path),
         target_name,
         resolved_platform,
@@ -62,3 +71,6 @@ def build_ubt_command(
         "-WaitMutex",
         *(UBT_STABILITY_FLAGS if stability_flags is None else stability_flags),
     ]
+    if log_file is not None:
+        command.append(f"-Log={log_file}")
+    return command

@@ -31,11 +31,37 @@ from prompt_history import (
     prepare_messages_for_attempt,
 )
 from symbol_graph import load_symbol_graph, lookup_symbol
-from ubt_utils import build_ubt_command, sanitize_ubt_target, split_ubt_target_spec
+from ubt_utils import build_ubt_command, sanitize_ubt_target, split_ubt_target_spec, ubt_subprocess_env
 from apply_patch import apply_patch as apply_single_patch, patch_apply_hint, validate_patch_item
 from multifile_refactor_autofix import (
     apply_multifile_refactor_autofixes,
     apply_subsystem_include_autofix,
+)
+from wrapper_evidence import (
+    clear_refactor_surface_cache,
+    declaration_definition_evidence,
+    focused_current_source_evidence,
+    focused_source_pair_context,
+    invalidate_project_snapshot_cache,
+    multifile_pattern_hint,
+    multifile_required_surface_hint,
+    refactor_surface_evidence,
+    snapshot_project_files,
+    summarize_project_state,
+)
+from wrapper_guards import (
+    PENDING_CPP_FOLLOWUP,
+    changed_paths_between,
+    delegate_broadcast_callsite_fix_context,
+    edit_scope_blockers,
+    multifile_exact_snippets,
+    multifile_surface_blockers,
+    no_change_blockers,
+    pending_surfaces_after_partial,
+    restore_changed_paths,
+    route_forbidden_action_blockers,
+    safe_output_path,
+    scope_blocker_allows_partial_apply,
 )
 
 PATCH_PREFERRED_LINE_THRESHOLD = 200
@@ -120,20 +146,6 @@ UNSUPPORTED_BUILD_CS_SOFT_REPLAN = (
     "Re-read the exact header declaration and matching cpp implementation.\n"
     "Next patch should target the matching header/cpp pair only, unless the build log shows a missing module dependency."
 )
-ALLOWED_SUFFIXES = {
-    ".h",
-    ".hpp",
-    ".cpp",
-    ".c",
-    ".cc",
-    ".cs",
-    ".ini",
-    ".json",
-    ".uproject",
-    ".uplugin",
-    ".md",
-    ".txt",
-}
 PROJECT_COPY_DIRS = {"Source", "Config"}
 PROJECT_COPY_PLUGIN_DIRS = {"Source", "Config", "Resources"}
 IGNORED_PROJECT_DIRS = {
@@ -145,7 +157,6 @@ IGNORED_PROJECT_DIRS = {
     "Intermediate",
     "Saved",
 }
-_PROJECT_SNAPSHOT_CACHE: dict[str, dict[str, tuple[float, str]]] = {}
 SOURCE_ONLY_SUFFIXES = {".cpp", ".c", ".cc", ".h", ".hpp"}
 
 
@@ -324,664 +335,6 @@ def project_relative_path(path: Path, root: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
 
 
-def is_text_project_file(path: Path) -> bool:
-    if not path.is_file() or path.suffix.lower() not in ALLOWED_SUFFIXES:
-        return False
-    return not should_ignore_project_path(path)
-
-
-def snapshot_project_files(root: Path) -> dict[str, str]:
-    root_key = str(root.resolve())
-    cache = _PROJECT_SNAPSHOT_CACHE.setdefault(root_key, {})
-    snapshot: dict[str, str] = {}
-    seen: set[str] = set()
-    for path in sorted(root.rglob("*")):
-        if not is_text_project_file(path):
-            continue
-        try:
-            relative = project_relative_path(path, root)
-        except ValueError:
-            continue
-        seen.add(relative)
-        mtime = path.stat().st_mtime
-        cached = cache.get(relative)
-        if cached and cached[0] == mtime:
-            snapshot[relative] = cached[1]
-        else:
-            content = read_text(path)
-            cache[relative] = (mtime, content)
-            snapshot[relative] = content
-    for stale in set(cache) - seen:
-        del cache[stale]
-    return snapshot
-
-
-PROJECT_STATE_LINE_PATTERNS = (
-    re.compile(r"\b(?:UCLASS|USTRUCT|UENUM|UINTERFACE|UFUNCTION|UPROPERTY|GENERATED_BODY)\b"),
-    re.compile(r"\b(?:class|struct|enum\s+class|enum)\s+(?:[A-Z0-9_]+_API\s+)?[A-Za-z_][A-Za-z0-9_]*\b"),
-    re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*::[~A-Za-z_][A-Za-z0-9_]*\s*\("),
-    re.compile(r"\b(?:Public|Private)DependencyModuleNames\b|\bExtraModuleNames\b"),
-    re.compile(r"\bDECLARE_(?:DYNAMIC_)?(?:MULTICAST_)?DELEGATE\b|\bFTimerHandle\b"),
-    re.compile(r"\.Broadcast\s*\("),
-)
-HEADER_MEMBER_DECL_RE = re.compile(
-    r"^(?:virtual\s+|static\s+|inline\s+|FORCEINLINE\s+|explicit\s+)*"
-    r"(?:[A-Za-z_][A-Za-z0-9_:<>*&,\s]+\s+)+"
-    r"[~A-Za-z_][A-Za-z0-9_]*\s*\([^;{}]*\)\s*"
-    r"(?:const\s*)?(?:override\s*)?(?:final\s*)?;\s*$"
-)
-
-
-def summarize_interesting_lines(text: str, max_lines: int = 14, *, suffix: str = "") -> list[str]:
-    results: list[str] = []
-    seen: set[str] = set()
-    is_header = suffix.lower() in {".h", ".hpp"}
-    for raw_line in text.splitlines():
-        line = re.sub(r"\s+", " ", raw_line).strip()
-        if not line or len(line) > 220:
-            continue
-        if not any(pattern.search(line) for pattern in PROJECT_STATE_LINE_PATTERNS) and not (
-            is_header and HEADER_MEMBER_DECL_RE.search(line)
-        ):
-            continue
-        if line in seen:
-            continue
-        results.append(line)
-        seen.add(line)
-        if len(results) >= max_lines:
-            break
-    return results
-
-
-def summarize_project_state(
-    root: Path,
-    max_files: int | None = None,
-    max_chars: int | None = None,
-    mode: str = "execute",
-    include_full_build_cs: bool | None = None,
-    focus_text: str = "",
-) -> str:
-    default_files, default_chars = token_budget.project_summary_limits(mode)
-    max_files = default_files if max_files is None else max_files
-    max_chars = default_chars if max_chars is None else max_chars
-    snapshot = snapshot_project_files(root)
-    if not snapshot:
-        return "Current project file state summary: no text project files found."
-
-    focus_paths = project_summary_focus_paths(root, focus_text, snapshot) if focus_text else []
-    focus_order = {relative: index for index, relative in enumerate(focus_paths)}
-    lines = [
-        "Current project file state summary (authoritative):",
-        "- Treat these files as already existing. Do not re-add declarations, includes, modules, or bindings that are already present.",
-        "- For existing files, prefer exact patches. Return complete content only for new files unless the mode explicitly allows full-file replacement.",
-    ]
-    if focus_paths:
-        lines.append("- Focused files are summarized first: " + ", ".join(focus_paths[:8]))
-    modes_with_full_build_cs = frozenset({"module_fix"})
-    show_full_build_cs = include_full_build_cs if include_full_build_cs is not None else mode in modes_with_full_build_cs
-    included = 0
-    if show_full_build_cs:
-        build_entries = sorted(
-            (rel, txt) for rel, txt in snapshot.items() if rel.lower().endswith(".build.cs")
-        )
-        if build_entries:
-            lines.append(
-                "- Full *.Build.cs content below (authoritative for PublicDependencyModuleNames / module dependencies):"
-            )
-            for relative, text in build_entries:
-                lines.append(f"- {relative} ({len(text.splitlines())} lines, full file):")
-                for line in text.splitlines():
-                    lines.append(f"    {line}")
-                included += 1
-                current = "\n".join(lines)
-                if len(current) >= max_chars:
-                    lines.append("- ... project state summary truncated.")
-                    return "\n".join(lines)
-
-    def state_sort_key(item: tuple[str, str]) -> tuple[int, str]:
-        relative = item[0]
-        if relative in focus_order:
-            return (focus_order[relative], relative)
-        if relative.startswith("Source/"):
-            return (1000, relative)
-        if relative.startswith("Plugins/"):
-            return (2000, relative)
-        if relative.startswith("Config/"):
-            return (3000, relative)
-        return (4000, relative)
-
-    for relative, text in sorted(snapshot.items(), key=state_sort_key):
-        if included >= max_files:
-            lines.append(f"- ... {len(snapshot) - included} additional file(s) omitted from this summary.")
-            break
-        suffix = Path(relative).suffix.lower()
-        if suffix not in {".h", ".hpp", ".cpp", ".c", ".cc", ".cs", ".ini", ".json", ".uproject", ".uplugin"}:
-            continue
-        if relative.lower().endswith(".build.cs") and show_full_build_cs:
-            continue
-        interesting = summarize_interesting_lines(text, suffix=suffix)
-        included += 1
-        line_count = len(text.splitlines())
-        lines.append(f"- {relative} ({line_count} lines)")
-        for item in interesting:
-            lines.append(f"  - {item}")
-        current = "\n".join(lines)
-        if len(current) >= max_chars:
-            lines.append("- ... project state summary truncated.")
-            break
-    return "\n".join(lines)
-
-
-def _candidate_source_paths_from_text(root: Path, text: str) -> list[Path]:
-    candidates: list[Path] = []
-    root_resolved = root.resolve()
-    path_pattern = re.compile(r"(?:[A-Za-z]:[\\/][^\s:'\"]+|Source[\\/][^\s:'\"]+)\.(?:h|hpp|cpp|c|cc)", re.I)
-    for match in path_pattern.finditer(text or ""):
-        raw = match.group(0).strip().strip(".,);]")
-        path = Path(raw)
-        if not path.is_absolute():
-            path = root / raw.replace("\\", "/")
-        try:
-            resolved = path.resolve()
-        except OSError:
-            continue
-        if resolved.is_file() and root_resolved in resolved.parents:
-            candidates.append(resolved)
-    symbol_matches = re.findall(r"\b([AUFSI][A-Za-z0-9_]{3,})::([~A-Za-z_][A-Za-z0-9_]*)\b", text or "")
-    class_names = {item[0] for item in symbol_matches}
-    func_names = {item[1].lstrip("~") for item in symbol_matches}
-    for match in re.finditer(r"\b([AUFSI][A-Za-z0-9_]{3,})\b", text or ""):
-        class_names.add(match.group(1))
-    if class_names or func_names:
-        for path in iter_source_files(root):
-            if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
-                continue
-            content = read_text(path)
-            if any(name in content for name in class_names) or any(f"{name}(" in content for name in func_names):
-                candidates.append(path.resolve())
-    return list(dict.fromkeys(candidates))
-
-
-def _matching_source_pair_paths(root: Path, path: Path) -> list[Path]:
-    results = [path]
-    stem = path.stem
-    suffix = path.suffix.lower()
-    wanted_suffixes = {".h", ".hpp", ".cpp", ".c", ".cc"} - {suffix}
-    for candidate in iter_source_files(root):
-        if candidate.stem == stem and candidate.suffix.lower() in wanted_suffixes:
-            results.append(candidate.resolve())
-    return list(dict.fromkeys(results))
-
-
-def project_summary_focus_paths(root: Path, focus_text: str, snapshot: dict[str, str] | None = None) -> list[str]:
-    snapshot = snapshot if snapshot is not None else snapshot_project_files(root)
-    root_resolved = root.resolve()
-    rels: list[str] = []
-
-    def add_relative(relative: str) -> None:
-        if relative in snapshot and relative not in rels:
-            rels.append(relative)
-        stem = Path(relative).stem
-        for candidate in snapshot:
-            candidate_path = Path(candidate)
-            if candidate_path.stem == stem and candidate_path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
-                if candidate not in rels:
-                    rels.append(candidate)
-
-    path_pattern = re.compile(
-        r"(?:[A-Za-z]:[\\/][^\s:'\"]+|(?:Source|Plugins|Config)[\\/][^\s:'\"]+)"
-        r"\.(?:h|hpp|cpp|c|cc|cs|ini|json|uproject|uplugin)",
-        re.I,
-    )
-    for match in path_pattern.finditer(focus_text or ""):
-        raw = match.group(0).strip().strip(".,);]")
-        candidate = Path(raw)
-        if not candidate.is_absolute():
-            candidate = root / raw.replace("\\", "/")
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            continue
-        if resolved.is_file() and root_resolved in resolved.parents:
-            try:
-                add_relative(project_relative_path(resolved, root))
-            except ValueError:
-                continue
-
-    terms = _refactor_symbol_terms(focus_text)
-    if terms:
-        for relative, text in snapshot.items():
-            suffix = Path(relative).suffix.lower()
-            if suffix not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
-                continue
-            if any(term in text for term in terms):
-                add_relative(relative)
-    return rels
-
-
-def focused_source_pair_context(
-    root: Path,
-    focus_text: str,
-    *,
-    max_files: int = 2,
-    max_chars: int = 2800,
-    snippet_chars: int = 900,
-) -> str:
-    paths: list[Path] = []
-    for candidate in _candidate_source_paths_from_text(root, focus_text):
-        for paired in _matching_source_pair_paths(root, candidate):
-            if paired.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"} and paired not in paths:
-                paths.append(paired)
-    if not paths:
-        return ""
-    lines = [
-        "Focused current source evidence (authoritative; prefer this over generic RAG examples):",
-        "- Compare these matching header/cpp files before editing.",
-        "- Do not copy helper names from generic examples unless they already exist here.",
-    ]
-    root_resolved = root.resolve()
-    for path in paths[:max_files]:
-        try:
-            relative = path.resolve().relative_to(root_resolved).as_posix()
-        except ValueError:
-            continue
-        text = read_text(path)
-        snippet = text.strip()
-        if len(snippet) > snippet_chars:
-            snippet = snippet[:snippet_chars].rstrip() + "\n..."
-        lines.append(f"\n## {relative}")
-        lines.append("```")
-        lines.append(snippet)
-        lines.append("```")
-        if len("\n".join(lines)) >= max_chars:
-            lines.append("\n- ... focused evidence truncated.")
-            break
-    return "\n".join(lines)[:max_chars]
-
-
-CLASS_DECL_RE = re.compile(
-    r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?(?P<name>[AUFSI][A-Za-z0-9_]*)\b"
-)
-HEADER_DECL_DETAIL_RE = re.compile(
-    r"^\s*(?:virtual\s+|static\s+|inline\s+|FORCEINLINE\s+|explicit\s+)*"
-    r"(?P<ret>[A-Za-z_][A-Za-z0-9_:<>*&,\s]*?)\s+"
-    r"(?P<name>[~A-Za-z_][A-Za-z0-9_]*)\s*"
-    r"\((?P<args>[^;{}]*)\)\s*"
-    r"(?P<qualifiers>(?:const\s*)?(?:override\s*)?(?:final\s*)?)\s*;\s*$"
-)
-CPP_DEFINITION_DETAIL_RE = re.compile(
-    r"\b(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<name>[~A-Za-z_][A-Za-z0-9_]*)\s*\((?P<args>[^)]*)\)"
-)
-
-
-def _relative_project_path(root: Path, path: Path) -> str:
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return str(path).replace("\\", "/")
-
-
-def _class_names_from_header(text: str) -> list[str]:
-    names: list[str] = []
-    for match in CLASS_DECL_RE.finditer(text or ""):
-        name = match.group("name")
-        if name not in names:
-            names.append(name)
-    return names
-
-
-def _header_member_declarations(text: str) -> list[dict[str, Any]]:
-    classes = _class_names_from_header(text)
-    current_class = classes[0] if classes else ""
-    declarations: list[dict[str, Any]] = []
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        class_match = CLASS_DECL_RE.search(raw_line)
-        if class_match:
-            current_class = class_match.group("name")
-            continue
-        stripped = raw_line.strip()
-        match = HEADER_DECL_DETAIL_RE.match(stripped)
-        if not match:
-            continue
-        name = match.group("name")
-        if not current_class or name == current_class or name == f"~{current_class}":
-            continue
-        declarations.append(
-            {
-                "class": current_class,
-                "name": name,
-                "args": re.sub(r"\s+", " ", match.group("args")).strip(),
-                "raw": stripped,
-                "line": line_no,
-            }
-        )
-    return declarations
-
-
-def _cpp_member_definitions(text: str, class_names: set[str]) -> list[dict[str, Any]]:
-    definitions: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        for match in CPP_DEFINITION_DETAIL_RE.finditer(raw_line):
-            cls = match.group("class")
-            if class_names and cls not in class_names:
-                continue
-            name = match.group("name")
-            key = (cls, name, re.sub(r"\s+", " ", match.group("args")).strip())
-            if key in seen:
-                continue
-            seen.add(key)
-            definitions.append(
-                {
-                    "class": cls,
-                    "name": name,
-                    "args": key[2],
-                    "raw": raw_line.strip(),
-                    "line": line_no,
-                }
-            )
-    return definitions
-
-
-def _call_site_count(text: str, function_name: str) -> int:
-    count = 0
-    call_re = re.compile(rf"\b{re.escape(function_name)}\s*\(")
-    definition_re = re.compile(rf"::\s*{re.escape(function_name)}\s*\(")
-    for raw_line in text.splitlines():
-        if definition_re.search(raw_line):
-            continue
-        if call_re.search(raw_line):
-            count += 1
-    return count
-
-
-def missing_definition_call_removal_blockers(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    issues: list[str] = []
-    before_cpp_by_stem = {
-        Path(path).stem: path
-        for path in before
-        if Path(path).suffix.lower() in {".cpp", ".c", ".cc"}
-    }
-    for header_path, header_text in before.items():
-        if Path(header_path).suffix.lower() not in {".h", ".hpp"}:
-            continue
-        cpp_path = before_cpp_by_stem.get(Path(header_path).stem)
-        if not cpp_path:
-            continue
-        before_cpp = before.get(cpp_path, "")
-        after_cpp = after.get(cpp_path, before_cpp)
-        declarations = _header_member_declarations(header_text)
-        class_names = {str(item["class"]) for item in declarations if item.get("class")}
-        before_definitions = {
-            (item["class"], item["name"]) for item in _cpp_member_definitions(before_cpp, class_names)
-        }
-        after_definitions = {
-            (item["class"], item["name"]) for item in _cpp_member_definitions(after_cpp, class_names)
-        }
-        for decl in declarations:
-            key = (decl["class"], decl["name"])
-            if key in before_definitions or key not in after_definitions:
-                continue
-            before_calls = _call_site_count(before_cpp, str(decl["name"]))
-            after_calls = _call_site_count(after_cpp, str(decl["name"]))
-            if before_calls > 0 and after_calls < before_calls:
-                issues.append(
-                    f"The edit added {decl['class']}::{decl['name']} but removed existing call site(s) in {cpp_path}. "
-                    "For missing-definition fixes, add the implementation without deleting existing callers unless the request explicitly asks for removal."
-                )
-    return issues
-
-
-def _matching_header_cpp_pairs(root: Path, focus_text: str, *, fallback: bool) -> list[tuple[Path, Path]]:
-    pairs: list[tuple[Path, Path]] = []
-
-    def add_pair(header: Path, cpp: Path) -> None:
-        pair = (header.resolve(), cpp.resolve())
-        if pair not in pairs:
-            pairs.append(pair)
-
-    for candidate in _candidate_source_paths_from_text(root, focus_text):
-        matched = _matching_source_pair_paths(root, candidate)
-        headers = [path for path in matched if path.suffix.lower() in {".h", ".hpp"}]
-        cpps = [path for path in matched if path.suffix.lower() in {".cpp", ".c", ".cc"}]
-        for header in headers:
-            for cpp in cpps:
-                add_pair(header, cpp)
-
-    if fallback and not pairs:
-        headers = [
-            path
-            for path in iter_source_files(root)
-            if path.suffix.lower() in {".h", ".hpp"} and "Source" in path.parts
-        ]
-        by_stem = {
-            path.stem: path
-            for path in iter_source_files(root)
-            if path.suffix.lower() in {".cpp", ".c", ".cc"} and "Source" in path.parts
-        }
-        for header in headers:
-            cpp = by_stem.get(header.stem)
-            if cpp:
-                add_pair(header, cpp)
-    return pairs
-
-
-def _route_needs_decl_definition_evidence(route: dict[str, Any] | None, focus_text: str) -> bool:
-    subkind = str((route or {}).get("errorSubkind") or "")
-    if subkind in {"LNK_MISSING_CPP_DEFINITION", "HEADER_CPP_SIGNATURE_MISMATCH"}:
-        return True
-    lowered = str(focus_text or "").lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "lnk2019",
-            "unresolved external",
-            "missing cpp definition",
-            "signature mismatch",
-            "declaration",
-            "definition",
-        )
-    )
-
-
-def declaration_definition_evidence(
-    root: Path,
-    focus_text: str,
-    route: dict[str, Any] | None = None,
-    *,
-    max_pairs: int = 3,
-    max_chars: int = 3600,
-) -> str:
-    fallback = _route_needs_decl_definition_evidence(route, focus_text)
-    pairs = _matching_header_cpp_pairs(root, focus_text, fallback=fallback)
-    if not pairs:
-        return ""
-
-    analyzed: list[dict[str, Any]] = []
-    for header, cpp in pairs:
-        header_text = read_text(header)
-        cpp_text = read_text(cpp)
-        declarations = _header_member_declarations(header_text)
-        class_names = {str(item["class"]) for item in declarations if item.get("class")}
-        definitions = _cpp_member_definitions(cpp_text, class_names)
-        definition_names = {(item["class"], item["name"]) for item in definitions}
-        missing = [
-            item
-            for item in declarations
-            if (item["class"], item["name"]) not in definition_names
-            and re.search(rf"\b{re.escape(str(item['name']))}\s*\(", cpp_text)
-        ]
-        analyzed.append(
-            {
-                "header": header,
-                "cpp": cpp,
-                "declarations": declarations,
-                "definitions": definitions,
-                "missing": missing,
-            }
-        )
-
-    analyzed.sort(key=lambda item: (0 if item["missing"] else 1, _relative_project_path(root, item["header"])))
-    if fallback and not any(item["missing"] for item in analyzed):
-        analyzed = [item for item in analyzed if item["declarations"] or item["definitions"]]
-    if not analyzed:
-        return ""
-
-    lines = [
-        "Current declaration/definition evidence (authoritative; prefer this over generic RAG examples):",
-        "- These facts are extracted from the current project files, not from examples.",
-        "- Do not copy function names from generic RAG examples unless they appear below.",
-        "- For missing-definition fixes, add the implementation without deleting existing call sites.",
-    ]
-    for item in analyzed[:max_pairs]:
-        header = item["header"]
-        cpp = item["cpp"]
-        lines.append("")
-        lines.append(f"## {_relative_project_path(root, header)} <-> {_relative_project_path(root, cpp)}")
-        missing = item["missing"]
-        if missing:
-            lines.append("Declared without matching cpp definition and called/needed in cpp:")
-            for decl in missing[:8]:
-                args = f"({decl['args']})"
-                lines.append(f"- {decl['class']}::{decl['name']}{args} from header line {decl['line']}: {decl['raw']}")
-        declarations = item["declarations"]
-        if declarations:
-            lines.append("Header member declarations:")
-            for decl in declarations[:10]:
-                lines.append(f"- line {decl['line']}: {decl['raw']}")
-        definitions = item["definitions"]
-        if definitions:
-            lines.append("Existing cpp member definitions:")
-            for definition in definitions[:10]:
-                lines.append(f"- line {definition['line']}: {definition['raw']}")
-        if len("\n".join(lines)) >= max_chars:
-            lines.append("- ... declaration/definition evidence truncated.")
-            break
-    return "\n".join(lines)[:max_chars]
-
-
-def _refactor_symbol_terms(focus_text: str) -> list[str]:
-    terms: list[str] = []
-    for cls, func in re.findall(r"\b([AUFSI][A-Za-z0-9_]{3,})::([~A-Za-z_][A-Za-z0-9_]*)\b", focus_text or ""):
-        for value in (cls, func.lstrip("~")):
-            if value and value not in terms:
-                terms.append(value)
-    for match in re.finditer(r"\b([AUFSI][A-Za-z0-9_]{4,})\b", focus_text or ""):
-        value = match.group(1)
-        if value not in terms:
-            terms.append(value)
-    return terms[:12]
-
-
-def _refactor_line_role(line: str, terms: list[str], suffix: str) -> str:
-    stripped = line.strip()
-    if re.search(r"\b(?:AddDynamic|AddUObject|BindAction|BindUFunction|DECLARE_.*DELEGATE)\b", stripped):
-        return "binding/delegate"
-    if "override" in stripped:
-        return "override"
-    if "::" in stripped and any(term in stripped for term in terms):
-        return "definition"
-    if suffix.lower() in {".h", ".hpp"} and any(term in stripped for term in terms):
-        if ";" in stripped or "UFUNCTION" in stripped or "UPROPERTY" in stripped:
-            return "declaration"
-    if any(re.search(rf"\b{re.escape(term)}\s*\(", stripped) for term in terms):
-        return "callsite"
-    return ""
-
-
-def refactor_surface_evidence(
-    root: Path,
-    focus_text: str,
-    *,
-    max_files: int = 6,
-    max_lines_per_file: int = 8,
-    max_chars: int = 4200,
-) -> str:
-    terms = _refactor_symbol_terms(focus_text)
-    if not terms:
-        return ""
-
-    paths: list[Path] = []
-    for candidate in _candidate_source_paths_from_text(root, focus_text):
-        for paired in _matching_source_pair_paths(root, candidate):
-            if paired not in paths:
-                paths.append(paired)
-
-    for path in iter_source_files(root):
-        if path in paths or path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
-            continue
-        text = read_text(path)
-        if any(term in text for term in terms):
-            paths.append(path)
-        if len(paths) >= max_files * 2:
-            break
-
-    if not paths:
-        return ""
-
-    lines = [
-        "Multifile/refactor surface evidence (current project only):",
-        "- Verify declaration -> definition -> callsite -> binding -> override before patching.",
-        "- Prefer exact patches on the listed files; do not rewrite unrelated files.",
-        "- Symbol terms: " + ", ".join(terms),
-    ]
-    root_resolved = root.resolve()
-    files_added = 0
-    for path in paths:
-        if files_added >= max_files:
-            break
-        try:
-            rel = path.resolve().relative_to(root_resolved).as_posix()
-        except ValueError:
-            continue
-        text = read_text(path)
-        file_lines: list[str] = []
-        for line_no, raw_line in enumerate(text.splitlines(), start=1):
-            if not any(term in raw_line for term in terms) and not re.search(
-                r"\b(?:AddDynamic|AddUObject|BindAction|BindUFunction|DECLARE_.*DELEGATE|override)\b",
-                raw_line,
-            ):
-                continue
-            role = _refactor_line_role(raw_line, terms, path.suffix)
-            if not role:
-                continue
-            compact = re.sub(r"\s+", " ", raw_line).strip()
-            file_lines.append(f"- {role} line {line_no}: {compact}")
-            if len(file_lines) >= max_lines_per_file:
-                break
-        if not file_lines:
-            continue
-        lines.append("")
-        lines.append(f"## {rel}")
-        lines.extend(file_lines)
-        files_added += 1
-        if len("\n".join(lines)) >= max_chars:
-            lines.append("- ... refactor surface evidence truncated.")
-            break
-    return "\n".join(lines)[:max_chars] if files_added else ""
-
-
-def _should_include_refactor_surface(mode: str) -> bool:
-    normalized = str(mode or "").strip().lower()
-    return normalized == "multifile_refactor" or normalized.startswith("refactor_")
-
-
-def focused_current_source_evidence(
-    root: Path,
-    focus_text: str,
-    route: dict[str, Any] | None = None,
-    *,
-    mode: str = "",
-    max_chars: int = 6000,
-) -> str:
-    declaration_evidence = declaration_definition_evidence(root, focus_text, route)
-    refactor_evidence = refactor_surface_evidence(root, focus_text) if _should_include_refactor_surface(mode) else ""
-    pair_context = "" if (declaration_evidence or refactor_evidence) else focused_source_pair_context(root, focus_text)
-    return "\n\n".join(
-        part for part in (declaration_evidence, refactor_evidence, pair_context) if part.strip()
-    )[:max_chars]
-
-
 def diff_snapshots(before: dict[str, str], after: dict[str, str]) -> str:
     lines: list[str] = []
     all_paths = sorted(set(before) | set(after))
@@ -1125,38 +478,6 @@ def create_minimal_unreal_project(root: Path, project_name: str) -> Path:
         ),
     )
     return root / f"{project_name}.uproject"
-
-
-def safe_output_path(root: Path, relative_path: str) -> Path:
-    if not relative_path or "\x00" in relative_path:
-        raise ValueError("empty or invalid path")
-    raw = Path(relative_path.replace("/", "\\"))
-    if raw.is_absolute() or raw.drive:
-        raise ValueError(f"absolute paths are not allowed: {relative_path}")
-    if any(part in {"..", ""} for part in raw.parts):
-        raise ValueError(f"path traversal is not allowed: {relative_path}")
-    suffix = raw.suffix.lower()
-    if suffix not in ALLOWED_SUFFIXES:
-        raise ValueError(f"unsupported file suffix: {relative_path}")
-    parts = raw.parts
-    allowed = False
-    if parts[0] in {"Source", "Config"}:
-        allowed = True
-    elif parts[0] == "Plugins" and len(parts) >= 3:
-        if parts[2] == "Source" or raw.suffix.lower() == ".uplugin":
-            allowed = True
-    elif len(parts) == 1 and raw.suffix.lower() == ".uproject":
-        allowed = True
-    if not allowed:
-        raise ValueError(
-            "writes are limited to Source/, Config/, project .uproject, "
-            "and Plugins/<Plugin>/Source/ or plugin descriptors"
-        )
-    target = (root / raw).resolve()
-    resolved_root = root.resolve()
-    if target != resolved_root and resolved_root not in target.parents:
-        raise ValueError(f"path escapes workspace: {relative_path}")
-    return target
 
 
 def normalize_bundle(data: Any) -> dict[str, Any]:
@@ -1314,7 +635,7 @@ def merge_missing_definition_full_file_edits(
 def enforce_edit_limits(bundle: dict[str, Any], limits: dict[str, Any], *, mode: str = "") -> None:
     max_files = int(limits.get("maxFilesPerEdit") or 0)
     if str(mode or "") == "multifile_refactor":
-        max_files = max(max_files, 3)
+        max_files = max(max_files, 4)
     file_count = len(bundle.get("files") or [])
     patch_count = len(bundle.get("patches") or [])
     total = file_count + patch_count
@@ -1581,6 +902,20 @@ def module_fix_retry_feedback(request: str, root: Path) -> str:
     return MODULE_FIX_RETRY_FEEDBACK_APPLIED
 
 
+def refresh_route_from_findings(
+    findings: list[Finding],
+    mode: str,
+    request: str,
+    current_route: dict[str, Any],
+) -> dict[str, Any]:
+    top = next((finding for finding in findings if finding.severity in {"error", "warning"}), None)
+    if not top:
+        return align_route_to_eval_mode(current_route, mode, request)
+    message = f"{top.code} {top.message}"
+    new_route = route_error_action(message, top.code)
+    return align_route_to_eval_mode(new_route, mode, request)
+
+
 def align_route_to_eval_mode(route: dict[str, Any], mode: str, request: str) -> dict[str, Any]:
     aligned = dict(route)
     lower = request.lower()
@@ -1631,36 +966,6 @@ def hallucination_blockers(
     return issues
 
 
-def route_forbidden_action_blockers(route: dict[str, Any] | None, bundle: dict[str, Any]) -> list[str]:
-    """Reject route-specific forbidden edits without globally hard-enforcing patch targets."""
-    route = route or {}
-    forbidden = " ".join(str(item).lower() for item in route.get("forbiddenActions") or [])
-    if not forbidden:
-        return []
-
-    issues: list[str] = []
-    build_cs_text_value = bundle_text_for_path(bundle, ".build.cs")
-    if (
-        "adding unrealed to runtime module" in forbidden
-        and bundle_includes_build_cs(bundle)
-        and "UnrealEd" in build_cs_text_value
-    ):
-        issues.append(
-            "The current error route forbids fixing runtime/editor boundary drift by adding UnrealEd to a runtime "
-            "module Build.cs. Remove the Build.cs dependency change and guard or isolate the editor-only source API."
-        )
-    if (
-        "build.cs-first fix without module evidence" in forbidden
-        and bundle_includes_build_cs(bundle)
-        and not request_requests_build_cs_fix(str(route.get("errorSubkind") or ""))
-    ):
-        issues.append(
-            "The current error route forbids a Build.cs-first edit without module evidence. Patch the matching "
-            "header/cpp surface instead, or show module evidence before changing Build.cs."
-        )
-    return issues
-
-
 def source_uses_gameplay_tags(root: Path, *, public_only: bool = False) -> bool:
     tokens = ("GameplayTagContainer.h", "FGameplayTag", "FGameplayTagContainer", "UGameplayTagsManager")
     for path in iter_source_files(root):
@@ -1672,243 +977,6 @@ def source_uses_gameplay_tags(root: Path, *, public_only: bool = False) -> bool:
     return False
 
 
-def no_change_blockers(request: str, root: Path, findings: list[Finding]) -> list[str]:
-    issues: list[str] = []
-    build_text_value = build_cs_text(root)
-    declared_modules = declared_build_modules(build_text_value)
-    public_modules = public_build_modules(build_text_value)
-    uses_gameplay_tags = source_uses_gameplay_tags(root)
-    public_uses_gameplay_tags = source_uses_gameplay_tags(root, public_only=True)
-    if request_mentions_gameplay_tags(request) or uses_gameplay_tags:
-        if "GameplayTags" not in declared_modules:
-            issues.append(
-                'The request mentions GameplayTags, but the current Build.cs still does not declare "GameplayTags".'
-            )
-        elif public_uses_gameplay_tags and "GameplayTags" not in public_modules:
-            issues.append(
-                'A public header exposes GameplayTags types, but Build.cs does not declare "GameplayTags" in PublicDependencyModuleNames.'
-            )
-    if request_mentions_any(request, ("generated.h", "uht", "unrealheadertool")):
-        generated_findings = [finding for finding in findings if finding.code.startswith("GENERATED_H")]
-        if generated_findings:
-            issues.append(
-                "The request is a reflection/generated.h fix, but static validation still reports generated.h issues."
-            )
-    if request_mentions_any(request, ("signature", "시그니처", "declaration", "definition", ".cpp", "parameter", "callback", "registration")):
-        signature_findings = [
-            finding
-            for finding in findings
-            if finding.code
-            in {
-                "CPP_FUNCTION_NOT_DECLARED_IN_HEADER",
-                "CPP_FUNCTION_SIGNATURE_MISMATCH",
-                "CALLBACK_FUNCTION_POINTER_MISMATCH",
-                "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH",
-            }
-        ]
-        if signature_findings:
-            issues.append(
-                "The request appears to be a header/.cpp signature fix, but static validation still reports a .cpp/header mismatch."
-            )
-    callback_findings = [finding for finding in findings if finding.code == "CALLBACK_FUNCTION_POINTER_MISMATCH"]
-    if callback_findings or request_mentions_any(request, ("callback", "registration", "parameter list")):
-        if callback_findings:
-            issues.append(
-                "The callback registration still does not match the handler signature; update header, cpp, and registration together."
-            )
-    delegate_findings = [finding for finding in findings if finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH"]
-    if delegate_findings or request_mentions_any(request, ("broadcast", "delegate")):
-        if delegate_findings:
-            issues.append(
-                "The delegate Broadcast callsite still does not match the declared payload; patch the exact .Broadcast(...) line in the matching cpp."
-            )
-    return issues
-
-
-def delegate_broadcast_callsite_fix_context(
-    request: str,
-    route: dict[str, Any] | None = None,
-    findings: list[Finding] | None = None,
-) -> bool:
-    if route and route.get("errorSubkind") == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH":
-        return True
-    if any(finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for finding in (findings or [])):
-        return True
-    lower = request.lower()
-    if any(term in lower for term in ("handler signature", "declaration and definition", "implementer header")):
-        return False
-    if any(
-        term in lower
-        for term in (
-            "broadcast call",
-            "does not take 0 arguments",
-            "too few arguments",
-            "payload",
-            "fons",
-            "c2660",
-        )
-    ):
-        return True
-    if "broadcast" in lower and "delegate" in lower:
-        return True
-    return False
-
-
-def multifile_surface_enforced(mode: str, request: str) -> bool:
-    if str(mode or "") == "multifile_refactor":
-        return True
-    lower = str(request or "").lower()
-    markers = (
-        "multi-file",
-        "multifile",
-        "across header",
-        "declaration, definition",
-        "call site",
-        "callsite",
-        "registration callsite",
-        "implementer header",
-        "consumer cpp",
-    )
-    return any(marker in lower for marker in markers)
-
-
-def changed_paths_between(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    changed = [path for path in sorted(set(before) | set(after)) if before.get(path) != after.get(path)]
-    return changed
-
-
-def restore_changed_paths(root: Path, snapshot: dict[str, str], changed_paths: list[str]) -> None:
-    for relative in changed_paths:
-        target = safe_output_path(root, relative)
-        old_text = snapshot.get(relative)
-        if old_text is None:
-            if target.exists() and target.is_file():
-                target.unlink()
-            continue
-        write_file(target, old_text)
-
-
-def multifile_pattern_hint(request: str) -> str:
-    lower = str(request or "").lower()
-    hints: list[str] = []
-    if "interface" in lower and ("return type" in lower or "implementer" in lower):
-        hints.append("Pattern: align implementer header + cpp return type/signature with the interface declaration in one patch.")
-    if "subsystem" in lower and ("applydata" in lower or "api move" in lower or "consumer" in lower):
-        hints.append("Pattern: rename cpp definition and consumer callsites to the header-declared method name.")
-    if "callback" in lower or "registration" in lower or "parameter list" in lower:
-        hints.append("Pattern: expand handler header/cpp params to match the callback typedef, then keep registration assignment.")
-    if "prepare" in lower and "commit" in lower:
-        hints.append("Pattern: replace stale combined method with split header methods and update consumer callsites.")
-    if "split" in lower and "callsite" in lower:
-        hints.append("Pattern: update cpp definitions and consumer callsites together; do not reintroduce removed combined methods.")
-    return "\n".join(hints)
-
-
-def multifile_required_surface_hint(mode: str, request: str, root: Path) -> str:
-    if str(mode or "") != "multifile_refactor" and not multifile_surface_enforced(mode, request):
-        return ""
-    surfaces: list[str] = []
-    lower = request.lower()
-    if any(term in lower for term in ("delegate", "signature", "declaration", "definition")):
-        surfaces.extend(["matching header declaration", "matching .cpp definition"])
-    if "interface" in lower:
-        surfaces.append("interface + implementer header/cpp")
-    if "callsite" in lower or "call site" in lower or "consumer" in lower:
-        surfaces.append("consumer/callsite .cpp")
-    if "callback" in lower or "registration" in lower:
-        surfaces.append("callback handler + registration site")
-    evidence = refactor_surface_evidence(root, request, max_files=6, max_lines_per_file=3, max_chars=1200)
-    if evidence:
-        surfaces.append("refactor surface evidence below")
-    if not surfaces:
-        return ""
-    pattern_hint = multifile_pattern_hint(request)
-    parts = ["Required multifile surfaces: " + "; ".join(dict.fromkeys(surfaces))]
-    if pattern_hint:
-        parts.append(pattern_hint)
-    return "\n".join(parts)
-
-
-def multifile_exact_snippets(root: Path, paths: list[str], *, context_lines: int = 1) -> str:
-    lines: list[str] = ["Exact current snippets (copy oldText from these):"]
-    for rel in paths[:6]:
-        path = root / rel.replace("/", "\\")
-        if not path.is_file():
-            continue
-        text = read_text(path)
-        file_lines = text.splitlines()
-        if not file_lines:
-            continue
-        preview = "\n".join(file_lines[: min(len(file_lines), context_lines * 2 + 3)])
-        lines.append(f"## {rel}\n{preview}")
-    return "\n".join(lines) if len(lines) > 1 else ""
-
-
-def edit_scope_blockers(
-    request: str,
-    before: dict[str, str],
-    after: dict[str, str],
-    root: Path,
-    *,
-    route: dict[str, Any] | None = None,
-    findings: list[Finding] | None = None,
-    mode: str = "",
-) -> list[str]:
-    issues: list[str] = []
-    changed = changed_paths_between(before, after)
-    changed_lower = [path.lower() for path in changed]
-    changed_build = any(path.endswith(".build.cs") for path in changed_lower)
-    changed_cpp = any(Path(path).suffix.lower() in {".cpp", ".c", ".cc"} for path in changed)
-    changed_header = any(Path(path).suffix.lower() in {".h", ".hpp"} for path in changed)
-    uses_gameplay_tags = source_uses_gameplay_tags(root)
-    public_uses_gameplay_tags = source_uses_gameplay_tags(root, public_only=True)
-    declared_modules = declared_build_modules(build_cs_text(root))
-    public_modules = public_build_modules(build_cs_text(root))
-
-    if request_mentions_gameplay_tags(request) or uses_gameplay_tags:
-        if "GameplayTags" not in declared_modules:
-            issues.append(
-                'GameplayTags is still missing from Build.cs; inspect the actual *.Build.cs and add it to PublicDependencyModuleNames when a public header exposes GameplayTags types.'
-            )
-        elif public_uses_gameplay_tags and "GameplayTags" not in public_modules:
-            issues.append(
-                'GameplayTags is declared outside PublicDependencyModuleNames, but a public header exposes GameplayTags types.'
-            )
-    if request_requests_build_cs_fix(request):
-        if not changed_build:
-            issues.append(
-                "The request targets Build.cs/module dependencies, but this edit did not change any *.Build.cs file."
-            )
-    if request_mentions_any(request, ("signature", "시그니처", "declaration", "definition", ".cpp")):
-        if changed_header and not changed_cpp:
-            if str(mode or "") == "multifile_refactor" or multifile_surface_enforced(mode, request):
-                hint = multifile_required_surface_hint(mode, request, root)
-                issues.append(
-                    "Multifile fix incomplete: header changed without matching .cpp definition in the same patch. "
-                    + (hint or "Update header and .cpp together, plus any callsite/consumer files.")
-                )
-            else:
-                issues.append(
-                    "The request appears to require matching the .cpp definition to the header declaration; do not change only the header unless the request explicitly asks for that."
-                )
-    if request_mentions_any(request, ("lnk2019", "unresolved external", "missing cpp definition", "missing implementation")):
-        issues.extend(missing_definition_call_removal_blockers(before, after))
-    callsite_only_delegate = delegate_broadcast_callsite_fix_context(request, route, findings)
-    if request_mentions_any(request, ("delegate", "broadcast")) and not callsite_only_delegate:
-        if changed_cpp and not changed_header:
-            issues.append(
-                "Delegate handler signature fixes must update the header declaration and .cpp definition together."
-            )
-    return issues
-
-
-def scope_blocker_allows_partial_apply(mode: str, blockers: list[str]) -> bool:
-    if str(mode or "") != "multifile_refactor":
-        return False
-    joined = "\n".join(blockers).lower()
-    return "multifile fix incomplete" in joined or "header changed without matching .cpp" in joined
-
-
 def apply_bundle(root: Path, bundle: dict[str, Any]) -> list[Path]:
     written: list[Path] = []
     for item in bundle.get("patches") or []:
@@ -1916,10 +984,9 @@ def apply_bundle(root: Path, bundle: dict[str, Any]) -> list[Path]:
         old_text = str(item.get("oldText") or "")
         new_text = str(item.get("newText") or "")
         expected = int(item.get("expectedOccurrences") or 1)
-        ok, msg = validate_patch_item(target, old_text, new_text, expected)
+        ok, msg, updated = apply_single_patch(target, old_text, new_text, expected)
         if not ok:
             raise ValueError(f"patch failed for {item['path']}: {msg}")
-        _, _, updated = apply_single_patch(target, old_text, new_text, expected)
         write_file(target, updated)
         written.append(target)
     for item in bundle["files"]:
@@ -1927,7 +994,6 @@ def apply_bundle(root: Path, bundle: dict[str, Any]) -> list[Path]:
         write_file(target, item["content"])
         written.append(target)
     return written
-
 
 
 def apply_generated_h_missing_autofix(root: Path, findings: list[Finding]) -> list[Path]:
@@ -2141,59 +1207,8 @@ def apply_blueprint_event_rename_autofix(root: Path, findings: list[Finding]) ->
 def edit_limits_for_mode(base_limits: dict[str, Any], mode: str) -> dict[str, Any]:
     limits = dict(base_limits or {})
     if str(mode or "") == "multifile_refactor":
-        limits["maxFilesPerEdit"] = max(int(limits.get("maxFilesPerEdit") or 2), 3)
+        limits["maxFilesPerEdit"] = max(int(limits.get("maxFilesPerEdit") or 2), 4)
     return limits
-
-
-def multifile_surface_blockers(
-    request: str,
-    before: dict[str, str],
-    after: dict[str, str],
-    root: Path,
-    *,
-    mode: str,
-) -> list[str]:
-    if not multifile_surface_enforced(mode, request):
-        return []
-    changed = changed_paths_between(before, after)
-    if not changed:
-        return []
-    changed_headers = [path for path in changed if Path(path).suffix.lower() in {".h", ".hpp"}]
-    changed_cpp = [path for path in changed if Path(path).suffix.lower() in {".cpp", ".c", ".cc"}]
-    lower = request.lower()
-    issues: list[str] = []
-
-    if any(term in lower for term in ("delegate", "signature", "declaration", "definition", "interface")):
-        if changed_headers and not changed_cpp:
-            issues.append(
-                "Multifile fix incomplete: header declaration changed without matching .cpp definition. "
-                f"Changed: {', '.join(changed_headers)}"
-            )
-        elif changed_cpp and not changed_headers:
-            issues.append(
-                "Multifile fix incomplete: .cpp definition changed without matching header declaration. "
-                f"Changed: {', '.join(changed_cpp)}"
-            )
-
-    if "interface" in lower and len(changed) < 2:
-        issues.append(
-            "Interface mismatch fixes require implementer header and cpp in the same patch. "
-            f"Changed only: {', '.join(changed)}"
-        )
-
-    if any(term in lower for term in ("callback", "registration", "parameter list")) and len(changed) < 2:
-        issues.append(
-            "Callback parameter expansion requires declaration, definition, and registration updates together. "
-            f"Changed only: {', '.join(changed)}"
-        )
-
-    surface = refactor_surface_evidence(root, request, max_files=8, max_lines_per_file=4, max_chars=2000)
-    if surface and len(changed) == 1 and ("callsite" in surface.lower() or "consumer" in lower):
-        issues.append(
-            "Multifile refactor likely needs callsite/consumer updates in addition to "
-            f"{changed[0]}."
-        )
-    return issues
 
 
 def only_build_cs_changed(before: dict[str, str], after: dict[str, str]) -> bool:
@@ -2526,7 +1541,14 @@ def run_ubt(
         write_file(log_path, message + "\n")
         return BuildResult(False, 127, log_path, message)
 
-    command = build_ubt_command(ubt_path, project_file, target, platform, configuration)
+    command = build_ubt_command(
+        ubt_path,
+        project_file,
+        target,
+        platform,
+        configuration,
+        log_file=log_path,
+    )
     completed = subprocess.run(
         command,
         cwd=str(project_file.parent),
@@ -2537,6 +1559,7 @@ def run_ubt(
         stderr=subprocess.STDOUT,
         timeout=timeout,
         check=False,
+        env=ubt_subprocess_env(),
     )
     output = completed.stdout or ""
     write_file(log_path, output)
@@ -2649,7 +1672,13 @@ def build_error_query(records: list[dict[str, Any]], output: str) -> str:
     return " ".join(part for part in parts if part.strip())[:4000]
 
 
-def rerag_for_build_errors(args: argparse.Namespace, records: list[dict[str, Any]], output: str) -> ParsedBuildFeedback:
+def rerag_for_build_errors(
+    args: argparse.Namespace,
+    records: list[dict[str, Any]],
+    output: str,
+    *,
+    exclude_chunk_ids: set[str] | None = None,
+) -> ParsedBuildFeedback:
     kinds = [
         str((record.get("metadata") or {}).get("error_kind") or "compile_fix")
         for record in records
@@ -2661,13 +1690,16 @@ def rerag_for_build_errors(args: argparse.Namespace, records: list[dict[str, Any
     if not index.exists():
         return ParsedBuildFeedback(records, mode, query, f"RAG index does not exist: {index}")
     project_filters = wrapper_rag_project_filters(args)
+    candidate_limit = max(40, min(60, args.top_k * 8))
     rows = search_index(
         index,
         query,
         args.top_k,
-        SearchOptions(mode=mode, projects=project_filters, candidate_limit=max(120, args.top_k * 20)),
+        SearchOptions(mode=mode, projects=project_filters, candidate_limit=candidate_limit),
     )
-    return ParsedBuildFeedback(records, mode, query, assemble_context(rows, query, mode))
+    if exclude_chunk_ids:
+        rows = [row for row in rows if str(row.get("chunk_id") or row.get("id") or "") not in exclude_chunk_ids]
+    return ParsedBuildFeedback(records, mode, query, assemble_context(rows, query, mode, include_header=False))
 
 
 def format_build_records(records: list[dict[str, Any]]) -> str:
@@ -3489,6 +2521,8 @@ def run(args: argparse.Namespace) -> int:
     retry_records: list[dict[str, Any]] = []
     previous_retry_record: dict[str, Any] | None = None
     active_route: dict[str, Any] = align_route_to_eval_mode(route_error_action(request), original_mode, request)
+    pending_multifile_surfaces: set[str] = set()
+    attempt_snapshot: dict[str, str] | None = None
 
     def record_validation_rejection(
         *,
@@ -3500,7 +2534,8 @@ def run(args: argparse.Namespace) -> int:
         changed_paths: list[str] | None = None,
         rejection_kind: str = "pre_apply_validation",
     ) -> None:
-        nonlocal previous_retry_record
+        nonlocal previous_retry_record, active_route, last_recommendation, rag_top_k_boost, blocked_repeat_paths, last_findings
+        active_route = refresh_route_from_findings(last_findings, args.mode, request, active_route)
         proposed_paths = proposed_bundle_paths(bundle)
         current = make_validation_rejection_record(
             attempt=attempt,
@@ -3528,6 +2563,9 @@ def run(args: argparse.Namespace) -> int:
         current["noEffectiveEdit"] = not bool(changed_paths)
         retry_records.append(current)
         previous_retry_record = current
+        last_recommendation = recommendation
+        rag_top_k_boost = int(recommendation.get("deltaTopKBoost") or 0)
+        blocked_repeat_paths = list(recommendation.get("blockedRepeatPaths") or [])
         retry_state_doc = {
             "attempts": retry_records,
             "latest": current,
@@ -3538,6 +2576,11 @@ def run(args: argparse.Namespace) -> int:
         }
         write_json(run_dir / "retry_state.json", retry_state_doc)
         write_json(attempt_dir / "retry_state.json", retry_state_doc)
+        retry_block = retry_feedback_block(recommendation)
+        if retry_block:
+            feedback_path = attempt_dir / "validation_feedback.txt"
+            if feedback_path.is_file():
+                write_file(feedback_path, read_text(feedback_path).rstrip() + "\n\n" + retry_block)
 
     initial_prompt = agent_plan_block + user_prompt(
         request=request,
@@ -3667,6 +2710,7 @@ def run(args: argparse.Namespace) -> int:
     diagnosis_feedback = ""
 
     for attempt in range(1, args.max_attempts + 1):
+        clear_refactor_surface_cache()
         if last_recommendation.get("action") == "stop_diagnosis_report":
             previous_feedback = (
                 "Retry escalation stopped the compile loop after repeated identical errors. "
@@ -3687,6 +2731,8 @@ def run(args: argparse.Namespace) -> int:
             args.mode = "compile_fix"
         elif keep_specialized_mode:
             args.mode = original_mode
+        if attempt >= 2 and args.mode == "compile_fix":
+            active_route = align_route_to_eval_mode(active_route, "compile_fix", request)
         if attempt == 1:
             prompt_mode = original_mode
         else:
@@ -3707,11 +2753,7 @@ def run(args: argparse.Namespace) -> int:
             symbol_context = optional_symbol_graph_context(" ".join(query_parts))
             if symbol_context:
                 rag_context = rag_context + "\n\n" + symbol_context
-        elif attempt == 1:
-            rag_context = collect_cached_initial_rag(request)
-            symbol_context = optional_symbol_graph_context(request)
-            if symbol_context:
-                rag_context = rag_context + "\n\n" + symbol_context
+        attempt_snapshot = snapshot_project_files(project_root)
 
         attempt_dir = run_dir / f"attempt_{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -3774,7 +2816,11 @@ def run(args: argparse.Namespace) -> int:
             attempt=attempt,
             history_turns=int(edit_limits.get("historyTurns") or 0) or None,
         )
-        compile_patch_turn = attempt >= 2 or first_attempt_patch_route
+        compile_patch_turn = (
+            attempt >= 2
+            or first_attempt_patch_route
+            or original_mode == "multifile_refactor"
+        )
         attempt_preset = preset_for_wrapper(args.mode, compile_patch=compile_patch_turn)
         if float(getattr(args, "temperature", 0.1)) == 0.1 or attempt >= 2:
             args.temperature = float(attempt_preset.get("temperature", args.temperature))
@@ -3889,7 +2935,12 @@ def run(args: argparse.Namespace) -> int:
                 rejection_kind="hallucination_blocker",
             )
             continue
-        route_blockers = route_forbidden_action_blockers(active_route, bundle)
+        route_blockers = route_forbidden_action_blockers(
+            active_route,
+            bundle,
+            request=request,
+            mode=original_mode,
+        )
         if route_blockers:
             previous_feedback = (
                 "Edit rejected because it violates the current error route forbidden actions:\n"
@@ -3927,9 +2978,9 @@ def run(args: argparse.Namespace) -> int:
             continue
         has_edits = bool(bundle["files"]) or bool(bundle.get("patches"))
         if not has_edits:
+            last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
+            static_report = format_findings(last_findings)
             if not args.allow_empty_files and not answer_claims_no_changes(last_answer):
-                last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
-                static_report = format_findings(last_findings)
                 blockers = no_change_blockers(request, project_root, last_findings)
                 module_prefix = (
                     module_fix_retry_feedback(request, project_root) + "\n"
@@ -3954,8 +3005,6 @@ def run(args: argparse.Namespace) -> int:
                     rejection_kind="empty_files_without_evidence",
                 )
                 continue
-            last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
-            static_report = format_findings(last_findings)
             write_file(attempt_dir / "static_validation.txt", static_report + "\n")
             blockers = no_change_blockers(request, project_root, last_findings)
             if blockers and not args.allow_empty_files:
@@ -4005,9 +3054,12 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         try:
-            before_apply = snapshot_project_files(project_root)
+            before_apply = attempt_snapshot if attempt_snapshot is not None else snapshot_project_files(project_root)
             last_written = apply_bundle(project_root, bundle)
             after_apply = snapshot_project_files(project_root)
+            applied_paths = changed_paths_between(before_apply, after_apply)
+            invalidate_project_snapshot_cache(project_root, relative_paths=applied_paths)
+            attempt_snapshot = after_apply
             attempt_diff = diff_snapshots(before_apply, after_apply)
             write_file(attempt_dir / "diff.patch", attempt_diff + "\n")
             if attempt_diff == "No file changes detected.":
@@ -4026,19 +3078,25 @@ def run(args: argparse.Namespace) -> int:
                     rejection_kind="no_effective_file_change",
                 )
                 continue
+            guard_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
+            last_findings = guard_findings
+            active_route = refresh_route_from_findings(guard_findings, args.mode, request, active_route)
             scope_blockers = edit_scope_blockers(
                 request,
                 before_apply,
                 after_apply,
                 project_root,
                 route=active_route,
-                findings=last_findings,
+                findings=guard_findings,
                 mode=original_mode,
             )
             if scope_blockers:
                 rejected_changed_paths = changed_paths_between(before_apply, after_apply)
-                partial_apply = scope_blocker_allows_partial_apply(original_mode, scope_blockers)
+                partial_apply = scope_blocker_allows_partial_apply(
+                    original_mode, scope_blockers, attempt=attempt
+                )
                 if partial_apply:
+                    pending_multifile_surfaces |= pending_surfaces_after_partial(scope_blockers)
                     last_written = [
                         project_root / path for path in rejected_changed_paths
                     ]
@@ -4077,11 +3135,15 @@ def run(args: argparse.Namespace) -> int:
                 after_apply,
                 project_root,
                 mode=original_mode,
+                pending_surfaces=pending_multifile_surfaces,
             )
             if surface_blockers:
                 rejected_changed_paths = changed_paths_between(before_apply, after_apply)
-                partial_apply = scope_blocker_allows_partial_apply(original_mode, surface_blockers)
+                partial_apply = scope_blocker_allows_partial_apply(
+                    original_mode, surface_blockers, attempt=attempt
+                )
                 if partial_apply:
+                    pending_multifile_surfaces |= pending_surfaces_after_partial(surface_blockers)
                     last_written = [project_root / path for path in rejected_changed_paths]
                     snippet_block = multifile_exact_snippets(project_root, rejected_changed_paths)
                 else:
@@ -4109,6 +3171,7 @@ def run(args: argparse.Namespace) -> int:
                     rejection_kind="multifile_incomplete",
                 )
                 continue
+            pending_multifile_surfaces.clear()
         except Exception as exc:
             hint = ""
             if "bundle" in locals():
@@ -4251,7 +3314,12 @@ def run(args: argparse.Namespace) -> int:
 
         build_records = parse_build_feedback(last_build.log_path, project_root, last_build.output)
         last_build_records = build_records
-        parsed_feedback = rerag_for_build_errors(args, build_records, last_build.output)
+        parsed_feedback = rerag_for_build_errors(
+            args,
+            build_records,
+            last_build.output,
+            exclude_chunk_ids=seen_chunk_ids,
+        )
         write_json(attempt_dir / "structured_errors.json", parsed_feedback.records)
         write_file(attempt_dir / "structured_errors.md", format_build_records(parsed_feedback.records) + "\n")
         write_file(attempt_dir / "failure_rag_context.md", parsed_feedback.rag_context + "\n")
@@ -4317,6 +3385,11 @@ def run(args: argparse.Namespace) -> int:
         write_json(attempt_dir / "retry_state.json", retry_state_doc)
         static_retry_hint = str(retry_payload["current"].get("staticValidationRetryHint") or "")
         retry_block = retry_feedback_block(retry_payload["recommendation"])
+        failure_rag_note = ""
+        if parsed_feedback.rag_context and attempt < args.max_attempts:
+            failure_rag_note = (
+                "Failure-specific RAG context was written to failure_rag_context.md in this attempt folder."
+            )
         previous_feedback = "\n\n".join(
             [part for part in [
                 static_report,
@@ -4331,9 +3404,7 @@ def run(args: argparse.Namespace) -> int:
                 f"Unsupported Build.cs soft replan: {soft_replan_feedback}" if soft_replan_feedback else "",
                 f"Static validation retry hint: {static_retry_hint}" if static_retry_hint else "",
                 retry_block,
-                f"Failure-specific RAG mode: {parsed_feedback.mode}",
-                "Failure-specific RAG context:",
-                parsed_feedback.rag_context,
+                failure_rag_note,
                 tail_text(last_build.output, token_budget.feedback_tail_chars("compile_fix")),
             ] if part]
         )
@@ -4347,7 +3418,7 @@ def run(args: argparse.Namespace) -> int:
         source_project_file=prepared.source_project_file,
         direct_project_write=prepared.direct_project_write,
         target=target,
-        answer=last_answer or "최대 시도 횟수 안에 컴파일 가능한 결과를 만들지 못했습니다.",
+        answer=last_answer or "최대 시도 횟수 내에 컴파일 가능한 결과를 만들지 못했습니다.",
         written=last_written,
         build_result=last_build,
         findings=last_findings,

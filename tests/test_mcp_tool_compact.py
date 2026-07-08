@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 """Tests for MCP tool response compaction."""
 
 from __future__ import annotations

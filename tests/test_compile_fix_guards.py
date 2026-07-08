@@ -404,3 +404,52 @@ def test_preserve_specific_route_uses_current_route_on_retry_when_specific():
     route, preserved = preserve_specific_route(current, previous, attempt=2)
     assert route["errorSubkind"] == "HEADER_CPP_SIGNATURE_MISMATCH"
     assert preserved is False
+
+
+def test_multifile_surface_allows_cpp_followup_after_partial_header(tmp_path):
+    from wrapper_guards import PENDING_CPP_FOLLOWUP, multifile_surface_blockers
+
+    before = {
+        "Source/Demo/Public/DemoComp.h": "void Foo();\n",
+        "Source/Demo/Private/DemoComp.cpp": "void UDemoComp::Foo(){}\n",
+    }
+    after = {
+        **before,
+        "Source/Demo/Private/DemoComp.cpp": "void UDemoComp::Foo(int32 Value){}\n",
+    }
+    issues = multifile_surface_blockers(
+        "multifile refactor signature across header and cpp",
+        before,
+        after,
+        tmp_path,
+        mode="multifile_refactor",
+        pending_surfaces={PENDING_CPP_FOLLOWUP},
+    )
+    assert issues == []
+
+
+def test_route_forbidden_allows_build_cs_when_request_targets_module():
+    route = {
+        "forbiddenActions": ["Build.cs-first fix without module evidence"],
+        "broadMode": "compile_fix",
+    }
+    bundle = {
+        "files": [
+            {
+                "path": "Source/Mod/Mod.Build.cs",
+                "content": 'PublicDependencyModuleNames.Add("GameplayTags");',
+            }
+        ],
+        "patches": [],
+    }
+    request = "Add GameplayTags to PublicDependencyModuleNames in Build.cs"
+    issues = route_forbidden_action_blockers(route, bundle, request=request, mode="compile_fix")
+    assert issues == []
+
+
+def test_multifile_pattern_hint_includes_callback_pattern():
+    from wrapper_evidence import multifile_pattern_hint
+
+    hint = multifile_pattern_hint("Expand callback registration parameter list to match typedef")
+    assert "callback" in hint.lower() or "typedef" in hint.lower()
+

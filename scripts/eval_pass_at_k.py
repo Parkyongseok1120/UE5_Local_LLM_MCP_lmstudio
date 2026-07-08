@@ -483,7 +483,8 @@ def run_case(
 
         if dry_run:
             applied = apply_golden(fixture_dir, work_dir)
-            ok, detail = run_ubt(project_file, target, ubt_path, ubt_timeout)
+            ubt_log = work_dir / "Saved" / "Logs" / f"passatk_{case_id}.log"
+            ok, detail = run_ubt(project_file, target, ubt_path, ubt_timeout, log_file=ubt_log)
             blocked_by_live_coding = "blocked-by-live-coding" in detail
             if blocked_by_live_coding:
                 print(

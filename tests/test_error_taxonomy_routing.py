@@ -131,3 +131,26 @@ def test_route_api_version_mismatch_log_first():
 
     assert route["errorSubkind"] == "API_VERSION_MISMATCH"
     assert route["routePriorityApplied"] == "api_version_log_first"
+
+
+def test_route_callback_function_pointer_mismatch():
+    route = error_taxonomy.route_error_action("CALLBACK_FUNCTION_POINTER_MISMATCH handler params drift")
+
+    assert route["errorSubkind"] == "CALLBACK_FUNCTION_POINTER_MISMATCH"
+    assert route["broadMode"] == "compile_fix"
+    assert "registration site" in route["allowedPatchTargets"]
+
+
+def test_route_interface_implementer_signature_mismatch():
+    route = error_taxonomy.route_error_action("INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH implementer signature does not match")
+
+    assert route["errorSubkind"] == "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH"
+    assert "implementer header" in route["allowedPatchTargets"]
+
+
+def test_route_cpp_not_declared_in_header():
+    route = error_taxonomy.route_error_action("CPP_FUNCTION_NOT_DECLARED_IN_HEADER missing declaration")
+
+    assert route["errorSubkind"] == "CPP_FUNCTION_NOT_DECLARED_IN_HEADER"
+    assert "matching header" in route["allowedPatchTargets"]
+

@@ -110,7 +110,7 @@ def validate_patch_item(path: Path, old_text: str, new_text: str, expected_occur
         return False, "oldText must not be empty"
     if not path.is_file():
         return False, f"file not found: {path}"
-    ok, msg, _ = apply_patch(path, old_text, new_text, expected_occurrences)
+    ok, msg, _ = apply_patch(path, old_text, new_text, expected_occurrences, dry_run=True)
     if ok:
         return True, ""
     hint = patch_apply_hint(path, old_text)
@@ -159,8 +159,10 @@ def apply_patch(
     old_text: str,
     new_text: str,
     expected_occurrences: int = 1,
+    *,
+    dry_run: bool = False,
 ) -> tuple[bool, str, str]:
-    """Apply patch; return (ok, message, updated_content)."""
+    """Apply patch; return (ok, message, updated_content). When dry_run=True, do not write."""
     if not old_text:
         return False, "oldText must not be empty", ""
     content = path.read_text(encoding="utf-8")

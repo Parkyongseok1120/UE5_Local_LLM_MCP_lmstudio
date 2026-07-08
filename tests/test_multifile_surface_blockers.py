@@ -66,3 +66,11 @@ def test_multifile_enforced_for_multifile_request_text() -> None:
         mode="compile_fix",
     )
     assert issues
+
+
+def test_partial_apply_disabled_on_first_attempt() -> None:
+    from wrapper_guards import scope_blocker_allows_partial_apply
+
+    blockers = ["header declaration changed without matching .cpp definition"]
+    assert scope_blocker_allows_partial_apply("multifile_refactor", blockers, attempt=1) is False
+    assert scope_blocker_allows_partial_apply("multifile_refactor", blockers, attempt=2) is True

@@ -9,6 +9,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from parse_build_cs import declared_modules_from_text, public_modules_from_text
+from ue_cpp_signatures import (
+    FUNCTION_POINTER_TARGET_RE,
+    INTERFACE_VIRTUAL_METHOD_RE,
+    TYPEDEF_FUNCTION_POINTER_RE,
+    collect_callback_drifts,
+    collect_interface_specs,
+    find_implementer_method_decl,
+    find_method_decl_in_header,
+    normalize_signature_params,
+    parse_interface_virtual_methods,
+)
 
 SOURCE_ONLY_SUFFIXES = {".cpp", ".c", ".cc", ".h", ".hpp"}
 IGNORED_PROJECT_DIRS = {
@@ -460,7 +471,9 @@ def class_base_names(text: str) -> dict[str, str]:
 
 def class_bases(root: Path) -> dict[str, str]:
     bases: dict[str, str] = {}
-    for path in root.rglob("*.h"):
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
         bases.update(class_base_names(read_text(path)))
     return bases
 
@@ -822,58 +835,14 @@ def class_headers(root: Path) -> dict[str, str]:
 
 
 def _normalize_signature_params(params: str) -> str:
-    value = re.sub(r"\s+", " ", str(params or "").strip())
-    if not value or value == "void":
-        return ""
-    value = re.sub(r"=\s*[^,]+", "", value)
-    value = value.replace(" const", "").strip()
-    types: list[str] = []
-    for part in value.split(","):
-        part = part.strip()
-        if part:
-            types.append(part.split()[0])
-    return ", ".join(types)
-
-
-INTERFACE_VIRTUAL_METHOD_RE = re.compile(
-    r"virtual\s+(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?=\s*0\s*;",
-)
-
-IMPLEMENTER_OVERRIDE_DECL_RE = re.compile(
-    r"^[\t ]*(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s+)?override\s*;",
-    re.MULTILINE,
-)
-
-
-def parse_interface_virtual_methods(text: str) -> list[tuple[str, str, str]]:
-    methods: list[tuple[str, str, str]] = []
-    for match in INTERFACE_VIRTUAL_METHOD_RE.finditer(text):
-        methods.append(
-            (
-                match.group("func"),
-                _normalize_signature_params(match.group("params")),
-                match.group("ret").strip(),
-            )
-        )
-    return methods
-
-
-def find_implementer_method_decl(text: str, func_name: str) -> re.Match[str] | None:
-    for match in IMPLEMENTER_OVERRIDE_DECL_RE.finditer(text):
-        if match.group("func") == func_name:
-            return match
-    return re.search(
-        rf"^[\t ]*(?P<ret>[\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?;",
-        text,
-        re.MULTILINE,
-    )
+    return normalize_signature_params(params)
 
 
 def _header_has_matching_signature(header: str, func_name: str, params: str) -> bool:
-    wanted = _normalize_signature_params(params)
+    wanted = normalize_signature_params(params)
     declaration_re = re.compile(rf"\b{re.escape(func_name)}\s*\((?P<params>[^)]*)\)")
     for declaration in declaration_re.finditer(header):
-        if _normalize_signature_params(declaration.group("params")) == wanted:
+        if normalize_signature_params(declaration.group("params")) == wanted:
             return True
     return False
 
@@ -926,7 +895,9 @@ def validate_cpp_declarations(path: Path, text: str, root: Path, headers: dict[s
 
 def collect_rpc_declarations(root: Path) -> list[tuple[str, str, Path, int]]:
     declarations: list[tuple[str, str, Path, int]] = []
-    for path in root.rglob("*.h"):
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
         text = read_text(path)
         current_class = ""
         lines = text.splitlines()
@@ -961,9 +932,10 @@ def collect_rpc_declarations(root: Path) -> list[tuple[str, str, Path, int]]:
 
 def validate_rpc_implementations(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    if not any(True for _ in root.rglob("*.cpp")):
+    cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+    if not cpp_paths:
         return findings
-    cpp_text = "\n".join(read_text(path) for path in root.rglob("*.cpp"))
+    cpp_text = "\n".join(read_text(path) for path in cpp_paths)
     for class_name, function_name, path, line in collect_rpc_declarations(root):
         implementation = rf"\b{re.escape(class_name)}::{re.escape(function_name)}_Implementation\s*\("
         if re.search(implementation, cpp_text):
@@ -1381,22 +1353,10 @@ def validate_include_paths_exist(path: Path, text: str, root: Path, include_inde
 
 def validate_interface_implementer_drift(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    interface_specs: dict[str, list[tuple[str, str, str]]] = {}
-    for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp"}:
-            continue
-        text = read_text(path)
-        if not re.search(r"\bclass\s+I[A-Za-z_][A-Za-z0-9_]*\b", text):
-            continue
-        interface_name = ""
-        for match in re.finditer(r"\bclass\s+(I[A-Za-z_][A-Za-z0-9_]*)\b", text):
-            interface_name = match.group(1)
-        if not interface_name:
-            continue
-        methods = parse_interface_virtual_methods(text)
-        if methods:
-            interface_specs[interface_name] = methods
-
+    interface_specs = {
+        name: [(m.func, m.params_normalized, m.ret) for m in methods]
+        for name, methods in collect_interface_specs(root).items()
+    }
     if not interface_specs:
         return findings
 
@@ -1413,13 +1373,7 @@ def validate_interface_implementer_drift(root: Path) -> list[Finding]:
             if f": public {interface_name}" not in text and f", public {interface_name}" not in text:
                 continue
             for func_name, iface_params, iface_ret in methods:
-                impl_match = find_implementer_method_decl(text, func_name)
-                if impl_match is None:
-                    impl_match = re.search(
-                        rf"^[\t ]*(?:static\s+)?(?P<ret>[\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*;",
-                        text,
-                        re.MULTILINE,
-                    )
+                impl_match = find_method_decl_in_header(text, func_name)
                 if not impl_match:
                     findings.append(
                         Finding(
@@ -1431,7 +1385,7 @@ def validate_interface_implementer_drift(root: Path) -> list[Finding]:
                         )
                     )
                     continue
-                impl_params = _normalize_signature_params(impl_match.group("params"))
+                impl_params = normalize_signature_params(impl_match.group("params"))
                 impl_ret = impl_match.group("ret").strip()
                 if impl_params != iface_params or impl_ret.replace("const", "").strip() != iface_ret.replace("const", "").strip():
                     findings.append(
@@ -1446,61 +1400,77 @@ def validate_interface_implementer_drift(root: Path) -> list[Finding]:
     return findings
 
 
-TYPEDEF_FUNCTION_POINTER_RE = re.compile(
-    r"using\s+(?P<alias>\w+)\s*=\s*(?P<ret>[\w:<>,\s*&]+)\s*\(\s*\*\s*\)\s*\((?P<params>[^)]*)\)\s*;",
-)
-FUNCTION_POINTER_TARGET_RE = re.compile(
-    r"&(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<func>[A-Za-z_][A-Za-z0-9_]*)",
-)
-
-
 def validate_callback_function_pointer_drift(root: Path) -> list[Finding]:
     findings: list[Finding] = []
+    for drift in collect_callback_drifts(root):
+        rel = str(drift.cpp_path.relative_to(root)).replace("\\", "/")
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                1,
+                "CALLBACK_FUNCTION_POINTER_MISMATCH",
+                (
+                    f"{drift.class_name}::{drift.func_name} params ({drift.method_params or 'void'}) do not match "
+                    f"callback typedef {drift.typedef_alias} ({drift.typedef_params or 'void'})."
+                ),
+            )
+        )
+    return findings
+
+
+STALE_MULTIFILE_METHOD_NAMES = frozenset({"DoAll", "HandleAll", "RunAll"})
+
+
+def validate_multifile_callsite_drift(root: Path) -> list[Finding]:
+    """Detect consolidated method names still used after header method split."""
+    findings: list[Finding] = []
     headers = class_headers(root)
-    for path in iter_source_files(root):
-        if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
+    for class_name, header_text in headers.items():
+        if not class_name.startswith("U"):
             continue
-        text = read_text(path)
-        if "using " not in text or "&" not in text:
+        declared = set(re.findall(r"\bvoid\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*;", header_text))
+        if len(declared) < 2:
             continue
-        rel = str(path.relative_to(root)).replace("\\", "/")
-        typedefs = list(TYPEDEF_FUNCTION_POINTER_RE.finditer(text))
-        targets = list(FUNCTION_POINTER_TARGET_RE.finditer(text))
-        if not typedefs or not targets:
+        stale_in_project = STALE_MULTIFILE_METHOD_NAMES - declared
+        if not stale_in_project:
             continue
-        for match in targets:
-            class_name = match.group("class")
-            func_name = match.group("func")
-            header = headers.get(class_name)
-            if not header:
+        for path in iter_source_files(root):
+            if path.suffix.lower() not in {".cpp", ".c", ".cc", ".h", ".hpp"}:
                 continue
-            decl_match = find_implementer_method_decl(header, func_name)
-            if decl_match is None:
-                decl_match = re.search(
-                    rf"^[\t ]*(?:static\s+)?(?P<ret>[\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*;",
-                    header,
-                    re.MULTILINE,
+            text = read_text(path)
+            rel = str(path.relative_to(root)).replace("\\", "/")
+            for stale in stale_in_project:
+                def_match = re.search(
+                    rf"\bvoid\s+{re.escape(class_name)}::{re.escape(stale)}\s*\(",
+                    text,
                 )
-            if not decl_match:
-                continue
-            method_params = _normalize_signature_params(decl_match.group("params"))
-            for typedef_match in typedefs:
-                typedef_params = _normalize_signature_params(typedef_match.group("params"))
-                if method_params == typedef_params:
-                    continue
-                findings.append(
-                    Finding(
-                        "warning",
-                        rel,
-                        line_number(text, match.start()),
-                        "CALLBACK_FUNCTION_POINTER_MISMATCH",
-                        (
-                            f"{class_name}::{func_name} params ({method_params or 'void'}) do not match "
-                            f"callback typedef {typedef_match.group('alias')} ({typedef_params or 'void'})."
-                        ),
+                if def_match:
+                    findings.append(
+                        Finding(
+                            "warning",
+                            rel,
+                            line_number(text, def_match.start()),
+                            "MULTIFILE_CALLSITE_DRIFT",
+                            (
+                                f"{class_name}::{stale} is defined in cpp but header declares "
+                                f"{', '.join(sorted(declared))} instead."
+                            ),
+                        )
                     )
-                )
-                break
+                for call_match in re.finditer(rf"->{re.escape(stale)}\s*\(", text):
+                    findings.append(
+                        Finding(
+                            "warning",
+                            rel,
+                            line_number(text, call_match.start()),
+                            "MULTIFILE_CALLSITE_DRIFT",
+                            (
+                                f"Callsite uses {stale}() but {class_name} header declares "
+                                f"{', '.join(sorted(declared))}."
+                            ),
+                        )
+                    )
     return findings
 
 
@@ -1553,6 +1523,7 @@ def validate_unreal_readiness(
     findings.extend(validate_rpc_implementations(root))
     findings.extend(validate_interface_implementer_drift(root))
     findings.extend(validate_callback_function_pointer_drift(root))
+    findings.extend(validate_multifile_callsite_drift(root))
     return findings
 
 

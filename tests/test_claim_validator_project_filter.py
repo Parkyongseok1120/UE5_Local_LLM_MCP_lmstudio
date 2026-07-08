@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 """Claim validators use strict project row filtering."""
 
 from __future__ import annotations

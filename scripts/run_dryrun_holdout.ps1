@@ -28,6 +28,22 @@ function Find-Python {
 function Resolve-UbtPath {
     if ($UbtPath) { return $UbtPath }
     if ($env:UNREAL_UBT_PATH) { return $env:UNREAL_UBT_PATH }
+    if (-not $env:UNREAL_ENGINE_ROOT) {
+        $epicRoots = @(
+            (Join-Path ${env:ProgramFiles} "Epic Games"),
+            (Join-Path ${env:ProgramFiles(x86)} "Epic Games")
+        )
+        foreach ($epicRoot in $epicRoots) {
+            if (-not (Test-Path -LiteralPath $epicRoot)) { continue }
+            $engines = Get-ChildItem -LiteralPath $epicRoot -Directory -Filter "UE_5.*" |
+                Sort-Object Name -Descending
+            if ($engines) {
+                $env:UNREAL_ENGINE_ROOT = $engines[0].FullName
+                Write-Host "Auto-discovered UNREAL_ENGINE_ROOT: $($env:UNREAL_ENGINE_ROOT)"
+                break
+            }
+        }
+    }
     if ($env:UNREAL_ENGINE_ROOT) {
         return (Join-Path $env:UNREAL_ENGINE_ROOT "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe")
     }
@@ -60,6 +76,9 @@ if (-not (Test-Path -LiteralPath $Config)) {
 
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUNBUFFERED = "1"
+if (-not $env:DOTNET_ROLL_FORWARD) {
+    $env:DOTNET_ROLL_FORWARD = "LatestMajor"
+}
 
 $ts = Get-Date -Format "yyyyMMdd-HHmmss"
 $runDir = Join-Path $Root "data\baseline\dryrun_holdout\$ts"

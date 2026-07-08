@@ -11,6 +11,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from apply_patch import apply_patch, apply_patches, is_allowed_path  # noqa: E402
 
 
+def test_apply_dry_run_does_not_write(tmp_path: Path) -> None:
+    target = tmp_path / "Source" / "Game" / "Foo.cpp"
+    target.parent.mkdir(parents=True)
+    original = "int a = 1;\n"
+    target.write_text(original, encoding="utf-8")
+    ok, msg, updated = apply_patch(target, "int a = 1;", "int a = 99;", dry_run=True)
+    assert ok, msg
+    assert "99" in updated
+    assert target.read_text(encoding="utf-8") == original
+
+
 def test_apply_single_occurrence(tmp_path: Path) -> None:
     target = tmp_path / "Source" / "Game" / "Foo.cpp"
     target.parent.mkdir(parents=True)

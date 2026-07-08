@@ -72,6 +72,13 @@ def count_consecutive_validation_rejections(attempts: list[dict[str, Any]], reje
         return 0
     count = 0
     for record in reversed(attempts):
+        is_validation = (
+            record.get("errorCode") == "VALIDATION_REJECTED"
+            or record.get("validationRejectionKind")
+            or record.get("validationRejected")
+        )
+        if not is_validation:
+            continue
         notes = [str(note) for note in (record.get("notes") or [])]
         if rejection_kind in notes or record.get("validationRejectionKind") == rejection_kind:
             count += 1
@@ -128,6 +135,10 @@ def recommend_retry_action(
         action = "require_multifile_surfaces"
         reason = "multifile patch did not cover all required declaration/definition/callsite surfaces"
         escalation_level = 1
+    elif noop and no_op_guard and validation_repeat >= 1:
+        action = "require_exact_oldtext"
+        reason = "no-op edit with noOpGuard enabled; copy exact oldText from project state"
+        escalation_level = 2
     elif str(rejection_kind or "") == "file_application_failed":
         action = "require_exact_oldtext"
         reason = "patch oldText did not match the current file; copy the exact callsite line from project state"
@@ -145,9 +156,9 @@ def recommend_retry_action(
         reason = "same validation rejection repeated on four consecutive attempts"
         escalation_level = 3
     elif noop and no_op_guard:
-        action = "force_new_evidence"
-        reason = "no-op edit with noOpGuard enabled"
-        escalation_level = 1
+        action = "require_exact_oldtext" if validation_repeat >= 1 else "force_new_evidence"
+        reason = "no-op edit with noOpGuard enabled; copy exact oldText from project state"
+        escalation_level = 2 if validation_repeat >= 1 else 1
     elif noop:
         action = "force_new_evidence"
         reason = "no changed paths were recorded"

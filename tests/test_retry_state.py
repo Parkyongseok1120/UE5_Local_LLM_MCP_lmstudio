@@ -9,6 +9,50 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import retry_state  # noqa: E402
 
 
+def test_validation_rejection_count_skips_ubt_records():
+    ubt = retry_state.make_attempt_record(
+        attempt=1,
+        passed=False,
+        error_message="UBT failed",
+        error_code="C1083",
+        changed_paths=["A.cpp"],
+    )
+    first = retry_state.make_validation_rejection_record(
+        attempt=2,
+        rejection_kind="edit_scope_blocker",
+        feedback="scope",
+    )
+    second = retry_state.make_validation_rejection_record(
+        attempt=3,
+        rejection_kind="edit_scope_blocker",
+        feedback="scope again",
+    )
+    count = retry_state.count_consecutive_validation_rejections(
+        [ubt, first, second],
+        "edit_scope_blocker",
+    )
+    assert count == 2
+
+
+def test_noop_guard_escalates_to_exact_oldtext_after_validation_repeat():
+    attempts = [
+        retry_state.make_validation_rejection_record(
+            attempt=1,
+            rejection_kind="empty_files_without_evidence",
+            feedback="empty",
+        )
+    ]
+    current = retry_state.make_attempt_record(attempt=2, passed=False, error_message="fail", changed_paths=[])
+    recommendation = retry_state.recommend_retry_action(
+        attempts[-1],
+        current,
+        attempts=attempts,
+        no_op_guard=True,
+        rejection_kind="empty_files_without_evidence",
+    )
+    assert recommendation["action"] == "require_exact_oldtext"
+
+
 def test_same_error_repeated_detects_stable_error_key():
     first = retry_state.make_attempt_record(
         attempt=1,

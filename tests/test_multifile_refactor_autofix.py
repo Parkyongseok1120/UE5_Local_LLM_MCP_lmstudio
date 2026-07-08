@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from bootstrap_local_holdout import (  # noqa: E402
     _write_multifile_callback_param_expand_fixture,
     _write_multifile_interface_return_type_change_fixture,
+    _write_multifile_method_split_callsite_update_fixture,
     _write_multifile_subsystem_api_move_fixture,
 )
 from multifile_refactor_autofix import (  # noqa: E402
@@ -16,6 +17,7 @@ from multifile_refactor_autofix import (  # noqa: E402
     apply_multifile_delegate_header_sync_autofix,
     apply_multifile_interface_implementer_autofix,
     apply_multifile_method_rename_autofix,
+    apply_multifile_method_split_autofix,
     apply_multifile_refactor_autofixes,
     apply_subsystem_include_autofix,
 )
@@ -25,6 +27,7 @@ from unreal_static_validate import (  # noqa: E402
     read_text,
     validate_callback_function_pointer_drift,
     validate_interface_implementer_drift,
+    validate_multifile_callsite_drift,
     validate_unreal_readiness,
 )
 
@@ -136,3 +139,14 @@ def test_subsystems_include_whitelist(tmp_path: Path) -> None:
     _write_multifile_subsystem_api_move_fixture(tmp_path)
     findings = validate_unreal_readiness(tmp_path)
     assert not any(f.code == "INCLUDE_PATH_NOT_FOUND" for f in findings)
+
+
+def test_method_split_fixture_validate_and_autofix(tmp_path: Path) -> None:
+    _write_multifile_method_split_callsite_update_fixture(tmp_path)
+    findings = validate_multifile_callsite_drift(tmp_path)
+    assert any(f.code == "MULTIFILE_CALLSITE_DRIFT" for f in findings)
+    written = apply_multifile_method_split_autofix(tmp_path)
+    assert written
+    assert "Prepare()" in read_text(next(tmp_path.rglob("HoldoutSplitComponent.cpp")))
+    assert "Commit()" in read_text(next(tmp_path.rglob("HoldoutSplitConsumer.cpp")))
+    assert not validate_multifile_callsite_drift(tmp_path)

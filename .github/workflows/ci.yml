@@ -22,6 +22,21 @@ jobs:
       - name: Install dev dependencies
         run: python -m pip install -r requirements-dev.txt
 
+      - name: Fail on UTF-8 BOM in scripts/tests Python files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bomFiles = @()
+          Get-ChildItem scripts,tests -Filter *.py -Recurse | ForEach-Object {
+            $bytes = Get-Content -LiteralPath $_.FullName -AsByteStream -TotalCount 3
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+              $bomFiles += $_.FullName
+            }
+          }
+          if ($bomFiles.Count -gt 0) {
+            Write-Error ("UTF-8 BOM detected:`n" + ($bomFiles -join "`n"))
+          }
+
       - name: Run tests
         run: pytest --tb=short -q
         working-directory: ${{ github.workspace }}

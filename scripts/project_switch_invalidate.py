@@ -13,10 +13,10 @@ from symbol_cache import invalidate_project_caches
 
 def clear_wrapper_snapshot_cache() -> None:
     try:
-        import lmstudio_unreal_wrapper as wrapper
+        from wrapper_evidence import clear_all_project_snapshot_caches, clear_refactor_surface_cache
 
-        if hasattr(wrapper, "_PROJECT_SNAPSHOT_CACHE"):
-            wrapper._PROJECT_SNAPSHOT_CACHE.clear()
+        clear_all_project_snapshot_caches()
+        clear_refactor_surface_cache()
     except Exception:
         pass
 
@@ -39,6 +39,7 @@ def on_project_switch_invalidate(
 
     clear_wrapper_snapshot_cache()
     cleared.append("wrapper_snapshot_cache")
+    cleared.append("wrapper_refactor_surface_cache")
 
     try:
         from index_staleness import invalidate_stale_cache

@@ -11,7 +11,7 @@ from glob import glob
 from pathlib import Path
 
 from lmstudio_unreal_wrapper import has_static_errors, validate_unreal_readiness
-from ubt_utils import build_ubt_command, split_ubt_target_spec
+from ubt_utils import build_ubt_command, split_ubt_target_spec, ubt_subprocess_env
 from workspace_paths import resolve_ubt_path
 
 DEFAULT_UBT = resolve_ubt_path()
@@ -41,12 +41,15 @@ LIVE_CODING_HINT = (
 )
 
 
-def run_ubt(project_file: Path, target: str, ubt_path: Path, timeout: int) -> tuple[bool, str]:
+def run_ubt(project_file: Path, target: str, ubt_path: Path, timeout: int, log_file: Path | None = None) -> tuple[bool, str]:
     if not ubt_path.is_file():
         return False, f"UBT missing: {ubt_path}"
     if not project_file.is_file():
         return False, f"uproject missing: {project_file}"
-    cmd = build_ubt_command(ubt_path, project_file, target)
+    if log_file is None:
+        log_file = project_file.parent / "Saved" / "Logs" / f"eval_ubt_{project_file.stem}.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    cmd = build_ubt_command(ubt_path, project_file, target, log_file=log_file)
     try:
         proc = subprocess.run(
             cmd,
@@ -57,6 +60,7 @@ def run_ubt(project_file: Path, target: str, ubt_path: Path, timeout: int) -> tu
             errors="replace",
             timeout=timeout,
             check=False,
+            env=ubt_subprocess_env(),
         )
     except subprocess.TimeoutExpired:
         return False, "UBT timeout"

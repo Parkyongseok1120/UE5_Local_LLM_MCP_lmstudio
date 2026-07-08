@@ -169,6 +169,14 @@ def main() -> int:
         ("test_validate_project_sources", [python, "-m", "pytest", "tests/test_validate_project_sources.py", "-q"]),
         ("test_error_taxonomy_routing", [python, "-m", "pytest", "tests/test_error_taxonomy_routing.py", "-q"]),
         ("test_retrieval_guideline_sidecar", [python, "-m", "pytest", "tests/test_retrieval_guideline_sidecar.py", "-q"]),
+        ("test_multifile_refactor_autofix", [python, "-m", "pytest", "tests/test_multifile_refactor_autofix.py", "-q"]),
+        ("test_interface_implementer_validate", [python, "-m", "pytest", "tests/test_interface_implementer_validate.py", "-q"]),
+        ("test_compile_fix_guards", [python, "-m", "pytest", "tests/test_compile_fix_guards.py", "-q"]),
+        ("test_wrapper_phase2a_helpers", [python, "-m", "pytest", "tests/test_wrapper_phase2a_helpers.py", "-q"]),
+        ("test_multifile_surface_blockers", [python, "-m", "pytest", "tests/test_multifile_surface_blockers.py", "-q"]),
+        ("test_delegate_broadcast_autofix", [python, "-m", "pytest", "tests/test_delegate_broadcast_autofix.py", "-q"]),
+        ("test_ubt_target_sanitize", [python, "-m", "pytest", "tests/test_ubt_target_sanitize.py", "-q"]),
+        ("test_wrapper_evidence_paths", [python, "-m", "pytest", "tests/test_wrapper_evidence_paths.py", "-q"]),
     ]
     if not args.skip_pytest:
         steps_spec.extend(pytest_steps)

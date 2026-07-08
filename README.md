@@ -23,7 +23,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — July 2026**
 >
-> The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. The 36-case live UBT holdout benchmark (Pass@K: 36/36, Pass@1: 29/36) reflects where the system currently stands.
+> The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. **Live KPI claims are pending revalidation** after v1.2.4 stabilization (latest measured live: Pass@K 33/36, Pass@1 28/36 on 2026-07-08; dry-run gate: 36/36).
 >
 > Over the next **~4 months**, development will be limited to minor bug fixes and stability improvements due to academic commitments. Broader platform support (macOS, Linux) and additional LLM frontends beyond LM Studio (e.g., Ollama, Open WebUI) are on the roadmap but will not receive active development during this period.
 >
@@ -33,7 +33,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **프로젝트 현황 — 2026년 7월**
 >
-> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. 36-case 라이브 UBT 홀드아웃 벤치마크(Pass@K: 36/36, Pass@1: 29/36) 결과가 현재 시스템의 수준을 잘 보여주고 있습니다.
+> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. **v1.2.4 안정화 이후 라이브 KPI는 재검증 대기 중**입니다 (최근 측정 live: Pass@K 33/36, Pass@1 28/36, 2026-07-08; dry-run: 36/36).
 >
 > 학업 일정상 향후 **약 4개월간**은 소소한 버그 수정 및 안정화 위주의 업데이트만 이루어질 예정입니다. macOS·Linux 지원과 LM Studio 외 다른 LLM 프론트엔드(Ollama, Open WebUI 등) 연동은 로드맵에 있지만, 이 기간 동안은 적극적인 개발이 어려울 것 같습니다.
 >
@@ -41,7 +41,16 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 ---
 
-## What's New Since 1.2.4 
+## What's New Since 1.2.4
+
+### Compile-loop stabilization (v1.2.4)
+
+- **Shared C++ signature module** (`scripts/ue_cpp_signatures.py`): unified validate/autofix interface and callback drift detection.
+- **Guard deadlock fix**: partial multifile header apply now allows cpp-only follow-up attempts.
+- **Route fix**: `route_forbidden_action_blockers` uses the user request (not error subkind) for Build.cs-first gates.
+- **Performance**: single-pass patch apply, attempt-scoped snapshot cache, RAG dedupe on UBT failure, `SourceTreeIndex` for multifix autofix.
+- **Extracted modules**: `wrapper_guards.py`, `wrapper_evidence.py` for maintainability.
+- **Eval regression**: extended pytest subset for multifile autofix, interface validate, compile-fix guards.
 
 Post-1.2.2 / 1.2.3 work focuses on **LM Studio chat safety** and **regression gates**, after local-agent failures such as duplicate `HealthComponent` paths, wrong includes, and unsafe cleanup attempts.
 
@@ -91,7 +100,9 @@ As of 2026-07-06, this project is in active KPI-driven local-agent testing for U
 
 ### Latest Internal Live Holdout
 
-The strongest current measured run is the UE 5.8 local 36-case live holdout on:
+> **KPI status (v1.2.4):** Numbers below include a 2026-07-06 run (36/36 Pass@K). After v1.2.4 stabilization, treat **live 36/36 as pending revalidation**. Latest live run `20260708-172842`: Pass@K **33/36**, Pass@1 **28/36**. Dry-run gate `20260708-191239`: **36/36**.
+
+The strongest historical measured run is the UE 5.8 local 36-case live holdout on:
 
 ```text
 qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max
@@ -99,10 +110,10 @@ qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max
 
 These are internal workflow results, not a public standardized model benchmark.
 
-| Metric | Latest 36-case live run |
+| Metric | Latest 36-case live run (2026-07-06, pending revalidation) |
 |---|---:|
-| Pass@K | 36/36 = 100% |
-| Pass@1 | 29/36 = 80.6% |
+| Pass@K | 36/36 = 100% (revalidate after v1.2.4) |
+| Pass@1 | 29/36 = 80.6% (revalidate after v1.2.4) |
 | Average attempts | 1.25 |
 | Attempt histogram | 29 cases at 1 attempt, 5 at 2 attempts, 2 at 3 attempts |
 | Same-error repeated | 0 |
@@ -110,7 +121,7 @@ These are internal workflow results, not a public standardized model benchmark.
 | wrong-file edit cases | 1 in the full run |
 | Build.cs false positive cases | 1 in the full run |
 
-> **Hotfix note (v1.2.3-hotfix):** The KPI above was measured on 2026-07-06 before the holdout retry-loop regression. v1.2.3-hotfix restores live holdout retry behavior; re-run Gate D before treating this KPI as current.
+> **Hotfix note (v1.2.4):** Run `scripts/run_live_holdout.ps1` before updating public KPI claims. Dry-run gate: `scripts/run_dryrun_holdout.ps1` (36/36 as of 2026-07-08).
 
 Post-run stabilization added a route-specific guard for runtime/editor boundary fixes. A targeted recheck of `editor_runtime_boundary` kept Pass@K at 1/1 and reduced that case's wrong-file / Build.cs false-positive metrics to 0. The full 36-case suite should be rerun after any scoring claim that depends on this post-run guard.
 

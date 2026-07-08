@@ -162,6 +162,14 @@ def _pid_alive(pid: int) -> bool:
     try:
         import os
 
+        if os.name == "nt":
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
         os.kill(pid, 0)
         return True
     except OSError:

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 """Tests for extended metadata exporters and ingestion."""
 
 from __future__ import annotations

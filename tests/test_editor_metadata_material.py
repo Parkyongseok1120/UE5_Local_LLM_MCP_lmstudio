@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 """Tests for editor-exported Blueprint/Material metadata ingestion."""
 
 from __future__ import annotations
