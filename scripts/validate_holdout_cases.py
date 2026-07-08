@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from error_taxonomy import route_error_action  # noqa: E402
 from module_resolver import resolve_modules_from_error, resolve_modules_from_text  # noqa: E402
+from subkind_policy import validate_policy_coverage  # noqa: E402
 
 ALLOWED_CATEGORIES = {
     "missing module dependency",
@@ -111,6 +112,7 @@ def validate_cases(config: dict[str, Any], *, allow_local_paths: bool = False) -
             if actual not in compatible:
                 errors.append(f"{label}: expectedErrorSubkind={expected_subkind}, route returned {actual}")
             taxonomy_covered += 1
+            errors.extend(f"{label}: {issue}" for issue in validate_policy_coverage(case))
 
         expected_modules = [str(item) for item in case.get("expectedModules") or []]
         if expected_modules:

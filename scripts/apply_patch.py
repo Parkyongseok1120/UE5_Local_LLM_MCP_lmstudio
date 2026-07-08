@@ -91,7 +91,7 @@ def _apply_single_line_normalized_patch(
 def patch_apply_hint(path: Path, old_text: str) -> str:
     if not path.is_file() or not old_text:
         return ""
-    content = path.read_text(encoding="utf-8")
+    content = path.read_text(encoding="utf-8-sig")
     needle = old_text.strip()
     if not needle:
         return ""
@@ -154,18 +154,15 @@ def _apply_leading_ws_normalized_patch(
     return True, "ok (leading whitespace normalized)", updated
 
 
-def apply_patch(
-    path: Path,
+def apply_patch_content(
+    content: str,
     old_text: str,
     new_text: str,
     expected_occurrences: int = 1,
-    *,
-    dry_run: bool = False,
 ) -> tuple[bool, str, str]:
-    """Apply patch; return (ok, message, updated_content). When dry_run=True, do not write."""
+    """Apply a patch to in-memory content; return (ok, message, updated_content)."""
     if not old_text:
-        return False, "oldText must not be empty", ""
-    content = path.read_text(encoding="utf-8")
+        return False, "oldText must not be empty", content
     count = content.count(old_text)
     if count == 0:
         ok, msg, updated = _apply_leading_ws_normalized_patch(content, old_text, new_text, expected_occurrences)
@@ -184,31 +181,73 @@ def apply_patch(
     return True, "ok", updated
 
 
+def apply_patch(
+    path: Path,
+    old_text: str,
+    new_text: str,
+    expected_occurrences: int = 1,
+    *,
+    dry_run: bool = False,
+) -> tuple[bool, str, str]:
+    """Apply patch; return (ok, message, updated_content). When dry_run=True, do not write."""
+    content = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
+    return apply_patch_content(content, old_text, new_text, expected_occurrences)
+
+
 def apply_patches(
     workspace_root: Path,
     patches: list[dict],
 ) -> tuple[list[Path], list[str]]:
     written: list[Path] = []
     errors: list[str] = []
+    targets: list[Path] = []
     for item in patches:
         rel = str(item.get("path") or "").strip()
         if not rel:
-            errors.append("patch missing path")
             continue
         target = (workspace_root / rel).resolve()
-        if not is_allowed_path(target, workspace_root):
-            errors.append(f"path not allowed: {rel}")
-            continue
-        ok, msg, updated = apply_patch(
-            target,
-            str(item.get("oldText") or ""),
-            str(item.get("newText") or ""),
-            int(item.get("expectedOccurrences") or 1),
-        )
-        if not ok:
-            errors.append(f"{rel}: {msg}")
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(updated, encoding="utf-8")
-        written.append(target)
+        if is_allowed_path(target, workspace_root):
+            targets.append(target)
+    snapshot = {
+        path: path.read_text(encoding="utf-8-sig") if path.is_file() else ""
+        for path in targets
+    }
+    try:
+        for item in patches:
+            rel = str(item.get("path") or "").strip()
+            if not rel:
+                errors.append("patch missing path")
+                continue
+            target = (workspace_root / rel).resolve()
+            if not is_allowed_path(target, workspace_root):
+                errors.append(f"path not allowed: {rel}")
+                continue
+            ok, msg, updated = apply_patch(
+                target,
+                str(item.get("oldText") or ""),
+                str(item.get("newText") or ""),
+                int(item.get("expectedOccurrences") or 1),
+            )
+            if not ok:
+                errors.append(f"{rel}: {msg}")
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(updated, encoding="utf-8", newline="\n")
+            written.append(target)
+        if errors:
+            for path, content in snapshot.items():
+                if content:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content, encoding="utf-8", newline="\n")
+                elif path.is_file():
+                    path.unlink()
+            written.clear()
+    except Exception:
+        for path, content in snapshot.items():
+            if content:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8", newline="\n")
+            elif path.is_file():
+                path.unlink()
+        raise
     return written, errors

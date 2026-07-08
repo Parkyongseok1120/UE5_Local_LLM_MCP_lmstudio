@@ -32,11 +32,28 @@ from prompt_history import (
 )
 from symbol_graph import load_symbol_graph, lookup_symbol
 from ubt_utils import build_ubt_command, sanitize_ubt_target, split_ubt_target_spec, ubt_subprocess_env
-from apply_patch import apply_patch as apply_single_patch, patch_apply_hint, validate_patch_item
+from apply_patch import apply_patch as apply_single_patch, apply_patch_content, patch_apply_hint, validate_patch_item
 from multifile_refactor_autofix import (
+    FINDING_STEP_CODES,
     apply_multifile_refactor_autofixes,
     apply_subsystem_include_autofix,
 )
+from autofix_runtime import (
+    AutofixStep,
+    autofix_ubt_allowed,
+    describe_applied_steps,
+    run_autofix_pipeline,
+    snapshot_paths,
+    restore_paths,
+)
+from holdout_autofixes import (
+    apply_blueprint_implementable_event_strip_autofix,
+    apply_blueprint_native_event_impl_autofix,
+    apply_build_module_autofix,
+    apply_component_include_autofix,
+    apply_include_path_autofix,
+)
+from retry_feedback import retry_feedback_block, static_validation_retry_feedback
 from wrapper_evidence import (
     clear_refactor_surface_cache,
     declaration_definition_evidence,
@@ -51,6 +68,7 @@ from wrapper_evidence import (
 )
 from wrapper_guards import (
     PENDING_CPP_FOLLOWUP,
+    blueprint_native_event_dual_surface_blockers,
     changed_paths_between,
     delegate_broadcast_callsite_fix_context,
     edit_scope_blockers,
@@ -75,6 +93,7 @@ from unreal_static_validate import (
     declared_build_modules,
     format_findings,
     has_static_errors,
+    should_block_llm_apply_static_gate,
     include_visibility,
     iter_source_files,
     public_build_modules,
@@ -645,6 +664,19 @@ def enforce_edit_limits(bundle: dict[str, Any], limits: dict[str, Any], *, mode:
         raise ValueError(
             f"too many edits ({total}); active profile maxFilesPerEdit={max_files}"
         )
+    line_limit = int(limits.get("patchChangedLineLimit") or 0)
+    if line_limit > 0:
+        changed_lines = 0
+        for item in bundle.get("patches") or []:
+            old_lines = str(item.get("oldText") or "").splitlines()
+            new_lines = str(item.get("newText") or "").splitlines()
+            changed_lines += max(len(old_lines), len(new_lines))
+        for item in bundle.get("files") or []:
+            changed_lines += len(str(item.get("content") or "").splitlines())
+        if changed_lines > line_limit:
+            raise ValueError(
+                f"patch exceeds changed-line budget ({changed_lines}>{line_limit}); split into smaller edits"
+            )
 
 
 def existing_full_file_rewrite_blockers(root: Path, bundle: dict[str, Any], mode: str) -> list[str]:
@@ -977,23 +1009,96 @@ def source_uses_gameplay_tags(root: Path, *, public_only: bool = False) -> bool:
     return False
 
 
-def apply_bundle(root: Path, bundle: dict[str, Any]) -> list[Path]:
-    written: list[Path] = []
+def stage_bundle_apply(
+    root: Path,
+    bundle: dict[str, Any],
+    before_apply: dict[str, str],
+) -> dict[str, str]:
+    """Apply bundle patches in memory against before_apply snapshot."""
+    staged: dict[str, str] = {}
     for item in bundle.get("patches") or []:
-        target = safe_output_path(root, item["path"])
+        rel = str(item.get("path") or "").replace("\\", "/")
+        if not rel:
+            continue
+        target = safe_output_path(root, rel)
+        base = staged.get(rel, before_apply.get(rel))
+        if base is None:
+            base = read_text(target) if target.is_file() else ""
         old_text = str(item.get("oldText") or "")
         new_text = str(item.get("newText") or "")
         expected = int(item.get("expectedOccurrences") or 1)
-        ok, msg, updated = apply_single_patch(target, old_text, new_text, expected)
+        ok, msg, updated = apply_patch_content(base, old_text, new_text, expected)
         if not ok:
-            raise ValueError(f"patch failed for {item['path']}: {msg}")
-        write_file(target, updated)
-        written.append(target)
-    for item in bundle["files"]:
-        target = safe_output_path(root, item["path"])
-        write_file(target, item["content"])
+            raise ValueError(f"patch failed for {rel}: {msg}")
+        staged[rel] = updated
+    for item in bundle.get("files") or []:
+        rel = str(item.get("path") or "").replace("\\", "/")
+        if rel:
+            staged[rel] = str(item.get("content") or "")
+    return staged
+
+
+def commit_staged_bundle(root: Path, staged: dict[str, str]) -> list[Path]:
+    written: list[Path] = []
+    for rel, content in staged.items():
+        target = safe_output_path(root, rel)
+        write_file(target, content)
         written.append(target)
     return written
+
+
+def apply_bundle(
+    root: Path,
+    bundle: dict[str, Any],
+    *,
+    before_apply: dict[str, str] | None = None,
+) -> list[Path]:
+    if before_apply is not None:
+        staged = stage_bundle_apply(root, bundle, before_apply)
+        if not staged:
+            return []
+        targets = [safe_output_path(root, rel) for rel in staged]
+        snap = snapshot_paths(targets)
+        try:
+            return commit_staged_bundle(root, staged)
+        except Exception:
+            restore_paths(snap)
+            raise
+
+    targets: set[Path] = set()
+    for item in bundle.get("patches") or []:
+        targets.add(safe_output_path(root, item["path"]))
+    for item in bundle.get("files") or []:
+        targets.add(safe_output_path(root, item["path"]))
+    snap = snapshot_paths(list(targets))
+    written: list[Path] = []
+    try:
+        for item in bundle.get("patches") or []:
+            target = safe_output_path(root, item["path"])
+            old_text = str(item.get("oldText") or "")
+            new_text = str(item.get("newText") or "")
+            expected = int(item.get("expectedOccurrences") or 1)
+            ok, msg, updated = apply_single_patch(target, old_text, new_text, expected)
+            if not ok:
+                raise ValueError(f"patch failed for {item['path']}: {msg}")
+            write_file(target, updated)
+            written.append(target)
+        for item in bundle["files"]:
+            target = safe_output_path(root, item["path"])
+            write_file(target, item["content"])
+            written.append(target)
+        return written
+    except Exception:
+        restore_paths(snap)
+        raise
+
+
+def rollback_bundle_apply(
+    root: Path,
+    before_apply: dict[str, str],
+    changed_paths: list[str],
+) -> None:
+    restore_changed_paths(root, before_apply, changed_paths)
 
 
 def apply_generated_h_missing_autofix(root: Path, findings: list[Finding]) -> list[Path]:
@@ -1109,7 +1214,7 @@ def apply_editor_runtime_guard_autofix(root: Path, findings: list[Finding]) -> l
             if "GEditor->" in line:
                 if not out or out[-1] != "#if WITH_EDITOR":
                     out.append("#if WITH_EDITOR")
-                out.append("\t// Editor API isolated from runtime module linkage.")
+                out.append(line)
                 out.append("#endif")
                 idx += 1
                 continue
@@ -1202,6 +1307,93 @@ def apply_blueprint_event_rename_autofix(root: Path, findings: list[Finding]) ->
             write_file(cpp_path, updated)
             written.append(cpp_path)
     return written
+
+
+def build_static_autofix_steps(mode: str) -> list[AutofixStep]:
+    multifile_codes: set[str] = set()
+    for codes in FINDING_STEP_CODES.values():
+        multifile_codes |= codes
+
+    steps: list[AutofixStep] = []
+    if mode in {"reflection_fix", "compile_fix"}:
+        steps.extend(
+            [
+                AutofixStep(
+                    "generated_h_missing",
+                    apply_generated_h_missing_autofix,
+                    {"GENERATED_H_MISSING"},
+                ),
+                AutofixStep(
+                    "generated_h_order",
+                    apply_generated_h_order_autofix,
+                    {"GENERATED_H_NOT_LAST", "GENERATED_H_AFTER_TYPE"},
+                ),
+                AutofixStep(
+                    "blueprint_event_rename",
+                    apply_blueprint_event_rename_autofix,
+                    {"CPP_FUNCTION_NOT_DECLARED_IN_HEADER"},
+                ),
+            ]
+        )
+    if mode in {"compile_fix", "module_fix", "editor_runtime_fix", "multifile_refactor"}:
+        steps.extend(
+            [
+                AutofixStep(
+                    "editor_runtime_guard",
+                    apply_editor_runtime_guard_autofix,
+                    {"EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE"},
+                ),
+                AutofixStep(
+                    "delegate_broadcast",
+                    apply_delegate_broadcast_autofix,
+                    {"DELEGATE_BROADCAST_SIGNATURE_MISMATCH"},
+                ),
+                AutofixStep("uobject_newobject", apply_uobject_newobject_autofix, None),
+                AutofixStep(
+                    "subsystem_include",
+                    apply_subsystem_include_autofix,
+                    {"GENERATED_H_MISSING", "MISSING_BASE_CLASS_INCLUDE"},
+                ),
+            ]
+        )
+    if mode == "multifile_refactor" or multifile_codes:
+        steps.append(
+            AutofixStep(
+                "multifile_refactor",
+                apply_multifile_refactor_autofixes,
+                multifile_codes,
+            )
+        )
+    steps.extend(
+        [
+            AutofixStep(
+                "blueprint_native_event_impl",
+                apply_blueprint_native_event_impl_autofix,
+                {"BLUEPRINT_NATIVE_EVENT_IMPL_MISSING", "BLUEPRINT_NATIVE_EVENT_MANUAL_IMPL_DECL"},
+            ),
+            AutofixStep(
+                "blueprint_implementable_event_strip",
+                apply_blueprint_implementable_event_strip_autofix,
+                {"BLUEPRINT_IMPLEMENTABLE_EVENT_INVALID_IMPL"},
+            ),
+            AutofixStep(
+                "build_module",
+                apply_build_module_autofix,
+                {"POSSIBLE_MISSING_MODULE"},
+            ),
+            AutofixStep(
+                "component_include",
+                apply_component_include_autofix,
+                {"MISSING_CONCRETE_COMPONENT_INCLUDE"},
+            ),
+            AutofixStep(
+                "include_path",
+                apply_include_path_autofix,
+                {"INCLUDE_PATH_NOT_FOUND"},
+            ),
+        ]
+    )
+    return steps
 
 
 def edit_limits_for_mode(base_limits: dict[str, Any], mode: str) -> dict[str, Any]:
@@ -1467,6 +1659,22 @@ def collect_rag_context(
         rows = [row for row in rows if str(row.get("chunk_id") or "") not in exclude_chunk_ids]
     used_ids = {str(row.get("chunk_id") or "") for row in rows if row.get("chunk_id")}
     context = assemble_context(rows, request, args.mode, exclude_chunk_ids=exclude_chunk_ids)
+    try:
+        from index_staleness import project_source_stale_status
+
+        stale = project_source_stale_status()
+        if stale.get("stale"):
+            context = (
+                "RAG index may be stale for the active project; refresh before trusting retrieval.\n"
+                f"reason={stale.get('reason')}\n\n"
+                + context
+            )
+    except Exception as exc:
+        print(f"WARNING: RAG staleness check failed: {exc}", file=sys.stderr)
+        context = (
+            f"RAG staleness check could not run ({exc}); treat retrieval as potentially stale.\n\n"
+            + context
+        )
     write_rag_telemetry(
         run_dir,
         summarize_rag_telemetry(
@@ -1796,34 +2004,6 @@ def unsupported_build_cs_soft_replan_feedback(
     return UNSUPPORTED_BUILD_CS_SOFT_REPLAN
 
 
-def static_validation_retry_feedback(
-    findings: list[Finding] | None,
-    route: dict[str, Any],
-    *,
-    build_output: str = "",
-) -> str:
-    if any(finding.code == "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH" for finding in findings or []):
-        return (
-            "Static validation reports interface implementer signature drift.\n"
-            "Read the interface header and update implementer header/cpp together in one patch."
-        )
-    if any(finding.code == "CALLBACK_FUNCTION_POINTER_MISMATCH" for finding in findings or []):
-        return (
-            "Static validation reports callback/function-pointer signature drift.\n"
-            "Update the handler header, cpp definition, and registration assignment together."
-        )
-    if any(finding.code == "CPP_FUNCTION_SIGNATURE_MISMATCH" for finding in findings or []):
-        return STATIC_SIGNATURE_RETRY_HINT
-    if any(finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for finding in findings or []):
-        return DELEGATE_BROADCAST_RETRY_HINT
-    if route.get("errorSubkind") == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH":
-        return DELEGATE_BROADCAST_RETRY_HINT
-    if route.get("errorSubkind") == "LNK_MISSING_CPP_DEFINITION":
-        if re.search(r"\bLNK2019\b|unresolved external|missing cpp definition", build_output or "", re.I):
-            return LNK_MISSING_DEFINITION_RETRY_HINT
-    return ""
-
-
 def _symbol_candidates_from_text(text: str) -> list[str]:
     found: list[str] = []
     for pattern in (
@@ -1864,31 +2044,15 @@ def optional_symbol_graph_context(text: str, *, limit: int = 6) -> str:
     return "\n".join(lines) if count else ""
 
 
-def retry_feedback_block(recommendation: dict[str, Any]) -> str:
-    lines: list[str] = []
-    if recommendation.get("sameErrorRepeated"):
-        lines.append(
-            "The previous attempt repeated the same error. Do not repeat the same patch. "
-            "Reclassify the root cause and read the required files from errorRoute before editing."
-        )
-    repeat_count = int(recommendation.get("sameErrorRepeatCount") or 0)
-    if repeat_count >= 2:
-        lines.append(
-            f"Same error repeated {repeat_count} times. Change patch target and gather broader evidence before editing."
-        )
-    if recommendation.get("noOpEdit"):
-        lines.append("The previous attempt produced no effective file change. Do not submit the same patch again.")
-    for hint in recommendation.get("requiredPromptHints") or []:
-        if hint not in lines:
-            lines.append(str(hint))
-    return "\n".join(lines)
-
-
 def repeat_patch_blockers(bundle: dict[str, Any], blocked_paths: list[str]) -> list[str]:
     if not blocked_paths:
         return []
     proposed = {path.replace("\\", "/") for path in proposed_bundle_paths(bundle)}
-    hits = sorted(path for path in proposed if path in set(blocked_paths))
+    blocked = {path.replace("\\", "/") for path in blocked_paths}
+    if proposed and all(path.lower().endswith((".cpp", ".c", ".cc")) for path in proposed):
+        if blocked and all(path.lower().endswith((".h", ".hpp")) for path in blocked):
+            return []
+    hits = sorted(path for path in proposed if path in blocked)
     if not hits:
         return []
     return [f"Repeat patch blocked for: {', '.join(hits)}"]
@@ -2431,7 +2595,7 @@ def run(args: argparse.Namespace) -> int:
 
     request = load_request(args)
     model = ""
-    if not args.dry_run:
+    if not args.dry_run and not getattr(args, "autofix_only", False):
         model = resolve_model(args)
         selected_profile = set_sampling_profile_for_model(model)
         if selected_profile:
@@ -2534,7 +2698,7 @@ def run(args: argparse.Namespace) -> int:
         changed_paths: list[str] | None = None,
         rejection_kind: str = "pre_apply_validation",
     ) -> None:
-        nonlocal previous_retry_record, active_route, last_recommendation, rag_top_k_boost, blocked_repeat_paths, last_findings
+        nonlocal previous_retry_record, active_route, last_recommendation, rag_top_k_boost, blocked_repeat_paths, last_findings, previous_feedback
         active_route = refresh_route_from_findings(last_findings, args.mode, request, active_route)
         proposed_paths = proposed_bundle_paths(bundle)
         current = make_validation_rejection_record(
@@ -2576,11 +2740,12 @@ def run(args: argparse.Namespace) -> int:
         }
         write_json(run_dir / "retry_state.json", retry_state_doc)
         write_json(attempt_dir / "retry_state.json", retry_state_doc)
+        merged_feedback = feedback.rstrip()
         retry_block = retry_feedback_block(recommendation)
         if retry_block:
-            feedback_path = attempt_dir / "validation_feedback.txt"
-            if feedback_path.is_file():
-                write_file(feedback_path, read_text(feedback_path).rstrip() + "\n\n" + retry_block)
+            merged_feedback = merged_feedback + "\n\n" + retry_block
+        write_file(attempt_dir / "validation_feedback.txt", merged_feedback)
+        previous_feedback = merged_feedback
 
     initial_prompt = agent_plan_block + user_prompt(
         request=request,
@@ -2604,25 +2769,21 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     static_autofix_written: list[Path] = []
-    if args.mode in {"reflection_fix", "compile_fix"}:
-        static_autofix_written.extend(apply_generated_h_missing_autofix(project_root, initial_findings))
-        static_autofix_written.extend(apply_generated_h_order_autofix(project_root, initial_findings))
-    if args.mode in {"compile_fix", "module_fix", "editor_runtime_fix", "multifile_refactor"}:
-        static_autofix_written.extend(apply_editor_runtime_guard_autofix(project_root, initial_findings))
-        static_autofix_written.extend(apply_delegate_broadcast_autofix(project_root, initial_findings))
-        static_autofix_written.extend(apply_uobject_newobject_autofix(project_root, initial_findings))
-        static_autofix_written.extend(apply_subsystem_include_autofix(project_root, initial_findings))
-    if args.mode == "multifile_refactor":
-        static_autofix_written.extend(apply_multifile_refactor_autofixes(project_root, initial_findings))
-    if args.mode in {"reflection_fix", "compile_fix"}:
-        static_autofix_written.extend(apply_blueprint_event_rename_autofix(project_root, initial_findings))
-    if static_autofix_written:
+    autofix_result = run_autofix_pipeline(
+        project_root,
+        initial_findings,
+        args.mode,
+        build_static_autofix_steps(args.mode),
+        module_graph=Path(args.module_graph),
+    )
+    static_autofix_written = autofix_result.written
+    if static_autofix_written or autofix_result.restored:
         last_written = static_autofix_written
-        last_findings = validate_unreal_readiness(project_root, Path(args.module_graph))
-        static_report = format_findings(last_findings)
+        last_findings = autofix_result.findings
+        static_report = autofix_result.static_report or format_findings(last_findings)
         write_file(run_dir / "static_autofix.txt", static_report + "\n")
         write_file(final_diff_path, diff_snapshots(baseline_snapshot, snapshot_project_files(project_root)) + "\n")
-        if can_run_autofix_ubt(last_findings, autofix_written=True) and not args.skip_build:
+        if autofix_ubt_allowed(autofix_result) and not args.skip_build:
             last_build = run_ubt(
                 Path(args.ubt_path),
                 project_file,
@@ -2640,7 +2801,7 @@ def run(args: argparse.Namespace) -> int:
                     source_project_file=prepared.source_project_file,
                     direct_project_write=prepared.direct_project_write,
                     target=target,
-                    answer="Applied safe static generated.h autofix.",
+                    answer=describe_applied_steps(autofix_result.step_names),
                     written=last_written,
                     build_result=last_build,
                     findings=last_findings,
@@ -2649,12 +2810,56 @@ def run(args: argparse.Namespace) -> int:
                 write_file(run_dir / "final_answer.md", summary)
                 print(summary)
                 return 0
-            previous_feedback = "Safe static generated.h autofix was applied, but UBT still failed:\n" + tail_text(
-                last_build.output,
-                token_budget.feedback_tail_chars("compile_fix"),
+            previous_feedback = (
+                describe_applied_steps(autofix_result.step_names)
+                + " was applied, but UBT still failed:\n"
+                + tail_text(
+                    last_build.output,
+                    token_budget.feedback_tail_chars("compile_fix"),
+                )
             )
         else:
-            previous_feedback = "Safe static generated.h autofix was applied, but static validation still reports issues:\n" + static_report
+            previous_feedback = (
+                describe_applied_steps(autofix_result.step_names)
+                + " was applied, but static validation still reports issues:\n"
+                + static_report
+            )
+        if getattr(args, "autofix_only", False):
+            build_ok = bool(locals().get("last_build") and last_build.ok)
+            summary = final_summary(
+                status="AUTOFIX_ONLY",
+                run_dir=run_dir,
+                project_file=project_file,
+                source_project_file=prepared.source_project_file,
+                direct_project_write=prepared.direct_project_write,
+                target=target,
+                answer=describe_applied_steps(autofix_result.step_names),
+                written=last_written,
+                build_result=locals().get("last_build"),
+                findings=last_findings,
+                final_diff_path=final_diff_path,
+            )
+            write_file(run_dir / "final_answer.md", summary)
+            print(summary)
+            return 0 if build_ok else 1
+
+    if getattr(args, "autofix_only", False):
+        summary = final_summary(
+            status="AUTOFIX_ONLY",
+            run_dir=run_dir,
+            project_file=project_file,
+            source_project_file=prepared.source_project_file,
+            direct_project_write=prepared.direct_project_write,
+            target=target,
+            answer="No static autofix steps applied.",
+            written=[],
+            build_result=None,
+            findings=initial_findings,
+            final_diff_path=final_diff_path,
+        )
+        write_file(run_dir / "final_answer.md", summary)
+        print(summary)
+        return 1
 
     if (
         not static_autofix_written
@@ -2710,6 +2915,8 @@ def run(args: argparse.Namespace) -> int:
     diagnosis_feedback = ""
 
     for attempt in range(1, args.max_attempts + 1):
+        before_apply = None
+        after_apply = None
         clear_refactor_surface_cache()
         if last_recommendation.get("action") == "stop_diagnosis_report":
             previous_feedback = (
@@ -2847,6 +3054,30 @@ def run(args: argparse.Namespace) -> int:
             bundle = parse_json_response(raw_response)
             bundle = merge_missing_definition_full_file_edits(project_root, bundle, active_route)
             enforce_edit_limits(bundle, edit_limits, mode=original_mode)
+        except ValueError as exc:
+            previous_feedback = f"Edit limit exceeded: {exc}"
+            write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+            record_validation_rejection(
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                feedback=previous_feedback,
+                blockers=[str(exc)],
+                rejection_kind="edit_limit_exceeded",
+            )
+            continue
+        except Exception as exc:
+            previous_feedback = f"Model response was not valid JSON: {exc}"
+            write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+            record_validation_rejection(
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                feedback=previous_feedback,
+                blockers=[str(exc)],
+                rejection_kind="invalid_json",
+            )
+            continue
+
+        try:
             repeat_blockers = repeat_patch_blockers(bundle, blocked_repeat_paths)
             if repeat_blockers:
                 previous_feedback = "Repeat patch escalation blocked the response:\n" + "\n".join(
@@ -2860,6 +3091,21 @@ def run(args: argparse.Namespace) -> int:
                     blockers=repeat_blockers,
                     bundle=bundle,
                     rejection_kind="repeat_patch_blocked",
+                )
+                continue
+            dual_surface_blockers = blueprint_native_event_dual_surface_blockers(bundle)
+            if dual_surface_blockers:
+                previous_feedback = "Pre-apply guard rejected the patch:\n" + "\n".join(
+                    f"- {issue}" for issue in dual_surface_blockers
+                )
+                write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
+                record_validation_rejection(
+                    attempt=attempt,
+                    attempt_dir=attempt_dir,
+                    feedback=previous_feedback,
+                    blockers=dual_surface_blockers,
+                    bundle=bundle,
+                    rejection_kind="pre_apply_validation",
                 )
                 continue
             if agent_plan is not None:
@@ -2987,6 +3233,27 @@ def run(args: argparse.Namespace) -> int:
                     if original_mode == "module_fix"
                     else ""
                 )
+                empty_context_parts: list[str] = []
+                if last_build is not None and not last_build.ok:
+                    empty_context_parts.append(
+                        f"UBT still failing (return code {last_build.returncode}).\n"
+                        f"Log path: {last_build.log_path}\n"
+                        + tail_text(last_build.output, token_budget.feedback_tail_chars("compile_fix"))
+                    )
+                elif any(
+                    marker in previous_feedback
+                    for marker in ("UBT still failed", "compile before model edits failed", "autofix was applied, but UBT still failed")
+                ):
+                    empty_context_parts.append(previous_feedback)
+                drift_report = format_findings(
+                    [
+                        finding
+                        for finding in last_findings
+                        if finding.code in {"CALLBACK_FUNCTION_POINTER_MISMATCH", "CPP_RETURN_TYPE_MISMATCH"}
+                    ]
+                )
+                if drift_report.strip():
+                    empty_context_parts.append(drift_report)
                 previous_feedback = (
                     module_prefix
                     + "Model returned no files without clearly saying the current files already satisfy the request. "
@@ -2994,8 +3261,8 @@ def run(args: argparse.Namespace) -> int:
                     "an empty files array with explicit evidence that no new edit is needed.\n"
                     + static_report
                     + ("\nNo-change blockers:\n" + "\n".join(f"- {issue}" for issue in blockers) if blockers else "")
+                    + ("\n\n" + "\n\n".join(empty_context_parts) if empty_context_parts else "")
                 )
-                write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
                 record_validation_rejection(
                     attempt=attempt,
                     attempt_dir=attempt_dir,
@@ -3026,7 +3293,6 @@ def run(args: argparse.Namespace) -> int:
                 continue
             if has_static_errors(last_findings) and not args.skip_static_gate:
                 previous_feedback = static_report
-                write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
                 record_validation_rejection(
                     attempt=attempt,
                     attempt_dir=attempt_dir,
@@ -3055,15 +3321,16 @@ def run(args: argparse.Namespace) -> int:
 
         try:
             before_apply = attempt_snapshot if attempt_snapshot is not None else snapshot_project_files(project_root)
-            last_written = apply_bundle(project_root, bundle)
+            last_written = apply_bundle(project_root, bundle, before_apply=before_apply)
             after_apply = snapshot_project_files(project_root)
             applied_paths = changed_paths_between(before_apply, after_apply)
             invalidate_project_snapshot_cache(project_root, relative_paths=applied_paths)
-            attempt_snapshot = after_apply
             attempt_diff = diff_snapshots(before_apply, after_apply)
             write_file(attempt_dir / "diff.patch", attempt_diff + "\n")
             if attempt_diff == "No file changes detected.":
                 last_written = []
+                rollback_bundle_apply(project_root, before_apply, applied_paths)
+                attempt_snapshot = before_apply
                 previous_feedback = (
                     "Model returned file entries, but their content produced no effective changes. "
                     "Do not resend identical file contents. If the request is already satisfied, return an empty "
@@ -3100,10 +3367,12 @@ def run(args: argparse.Namespace) -> int:
                     last_written = [
                         project_root / path for path in rejected_changed_paths
                     ]
+                    attempt_snapshot = after_apply
                     snippet_block = multifile_exact_snippets(project_root, rejected_changed_paths)
                 else:
-                    restore_changed_paths(project_root, before_apply, rejected_changed_paths)
+                    rollback_bundle_apply(project_root, before_apply, rejected_changed_paths)
                     last_written = []
+                    attempt_snapshot = before_apply
                 retry_tail = BUILD_CS_RETRY_FEEDBACK if any("Build.cs" in issue for issue in scope_blockers) else ""
                 previous_feedback = (
                     (retry_tail + "\n" if retry_tail else "")
@@ -3136,6 +3405,7 @@ def run(args: argparse.Namespace) -> int:
                 project_root,
                 mode=original_mode,
                 pending_surfaces=pending_multifile_surfaces,
+                findings=guard_findings,
             )
             if surface_blockers:
                 rejected_changed_paths = changed_paths_between(before_apply, after_apply)
@@ -3145,10 +3415,12 @@ def run(args: argparse.Namespace) -> int:
                 if partial_apply:
                     pending_multifile_surfaces |= pending_surfaces_after_partial(surface_blockers)
                     last_written = [project_root / path for path in rejected_changed_paths]
+                    attempt_snapshot = after_apply
                     snippet_block = multifile_exact_snippets(project_root, rejected_changed_paths)
                 else:
-                    restore_changed_paths(project_root, before_apply, rejected_changed_paths)
+                    rollback_bundle_apply(project_root, before_apply, rejected_changed_paths)
                     last_written = []
+                    attempt_snapshot = before_apply
                 previous_feedback = (
                     "Multifile surface coverage rejected the edit:\n"
                     + "\n".join(f"- {issue}" for issue in surface_blockers)
@@ -3173,6 +3445,15 @@ def run(args: argparse.Namespace) -> int:
                 continue
             pending_multifile_surfaces.clear()
         except Exception as exc:
+            if before_apply is not None and after_apply is not None:
+                rollback_bundle_apply(
+                    project_root,
+                    before_apply,
+                    changed_paths_between(before_apply, after_apply),
+                )
+                attempt_snapshot = before_apply
+            elif before_apply is not None:
+                attempt_snapshot = before_apply
             hint = ""
             if "bundle" in locals():
                 for item in (bundle.get("patches") or []):
@@ -3205,17 +3486,26 @@ def run(args: argparse.Namespace) -> int:
         )
         static_report = format_findings(last_findings)
         write_file(attempt_dir / "static_validation.txt", static_report + "\n")
-        if has_static_errors(last_findings) and not args.skip_static_gate:
+        if should_block_llm_apply_static_gate(last_findings, mode=original_mode) and not args.skip_static_gate:
+            rejected_paths = changed_paths_between(before_apply, after_apply)
+            rollback_bundle_apply(project_root, before_apply, rejected_paths)
+            attempt_snapshot = before_apply
+            last_written = []
             previous_feedback = static_report
+            static_hint = static_validation_retry_feedback(last_findings, active_route)
+            if static_hint:
+                previous_feedback += "\n\n" + static_hint
             record_validation_rejection(
                 attempt=attempt,
                 attempt_dir=attempt_dir,
                 feedback=previous_feedback,
                 bundle=bundle,
-                changed_paths=changed_paths_between(before_apply, after_apply),
+                changed_paths=[],
                 rejection_kind="static_gate",
             )
             continue
+
+        attempt_snapshot = after_apply
 
         if args.skip_build:
             write_file(final_diff_path, diff_snapshots(baseline_snapshot, snapshot_project_files(project_root)) + "\n")
@@ -3458,6 +3748,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-static-gate", action="store_true")
     parser.add_argument("--allow-empty-files", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--autofix-only",
+        action="store_true",
+        help="Run static autofix pipeline and UBT only; skip LM Studio edits.",
+    )
     parser.add_argument("--orchestrate", action="store_true", help="Inject agent orchestrator plan into prompts")
     parser.add_argument("--no-orchestrate", action="store_true", help="Disable orchestrator even when env enabled")
     args = parser.parse_args()

@@ -8,6 +8,18 @@ The forward target remains a Sonnet 4.5-oriented local Unreal workflow. This is 
 
 Sonnet 5 is tracked only as a gap-analysis target for future workflow improvements around long-context agentic coding, tool use, retry judgment, and project memory. This does not claim Sonnet 5 equivalence; see [docs/Sonnet5_Gap_Plan.md](Sonnet5_Gap_Plan.md).
 
+## Eval tier separation (v1.2.5)
+
+Three KPI channels must not be conflated:
+
+| Tier | Command | What it measures |
+|------|---------|------------------|
+| A — dry-run | `eval_pass_at_k.py --dry-run` | Golden oracle applied + UBT; no LLM, no autofix pipeline |
+| A.5 — autofix-only | `eval_pass_at_k.py --autofix-only` | Broken fixture + static autofix pipeline + UBT; no LLM |
+| B — live | `eval_pass_at_k.py --live` | Full wrapper + LM Studio + retry/guards |
+
+Dry-run **36/36** does not imply live **36/36** or autofix-only pass rates.
+
 Compact-model optimization tracks include Qwen 3.5 9B, Qwen3.5-9B-DeepSeek-V4-Flash-GGUF, GPT OSS 20B, and gpt-oss-20b-claude-opus-sonnet-reasoning-i1-GGUF community fine-tunes. See [docs/Model_Profiles.md](Model_Profiles.md).
 
 ## Observed Local Model Ranking
@@ -27,7 +39,7 @@ Within that loop, the current practical ranking is:
 
 | Model profile | Evidence level | Practical behavior in this project | Claude Sonnet workflow proxy estimate |
 |---|---|---|---|
-| `qwen3_6_27b` / `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | Measured on 36-case UE 5.8 live holdout (2026-07-08, v1.2.4 revalidated; artifact `20260708-211549`) | Current primary profile. Latest live: **34/36 Pass@K**, **34/36 Pass@1** (94.4%). Prior peak (2026-07-06): 36/36 Pass@K, 29/36 Pass@1. Dry-run compile gate **36/36** (`20260708-203003`). Failures: `local_multifile_uproperty_type_migration`, `local_multifile_callback_param_expand`. | Lower-to-mid Sonnet 4 for narrow UE compile-fix workflow; not Sonnet 4.5 overall because multifile Pass@1 is **10/12 (83.3%)**. |
+| `qwen3_6_27b` / `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | Measured on 36-case UE 5.8 live holdout (2026-07-08, v1.2.4 baseline `20260708-211549`; v1.2.5 live revalidation pending) | Current primary profile. v1.2.4 live: **34/36 Pass@K**, **34/36 Pass@1** (94.4%). v1.2.5 targets **36/36 Pass@1** via static/autofix/guard fixes for `local_multifile_uproperty_type_migration` and `local_multifile_callback_param_expand`. Dry-run compile gate **36/36** (pre-patch `20260708-203003`). | Lower-to-mid Sonnet 4 for narrow UE compile-fix workflow; multifile Pass@1 **10/12 (83.3%)** at v1.2.4 baseline — pending v1.2.5 revalidation for 12/12 claim. |
 | `qwen3_5_9b_deepseek_v4_flash` | Profiled/observed, not rerun on latest 36-case live suite | Best compact track when VRAM is limited. Usually follows JSON/tool/patch discipline better than base GPT OSS 20B. | Upper Sonnet 3.7-ish for narrow compile-fix loops; below Sonnet 4 for refactor. Needs fresh 36-case live proof. |
 | `qwen3_5_9b` | Profiled/observed, not rerun on latest 36-case live suite | Stable compact baseline for Essential Tools, small patch loops, and focused compile-fix tasks. | Mid-to-upper Sonnet 3.7 for narrow UE compile-fix; below Sonnet 4 on multi-file refactor. |
 | `qwen3_8b` | Profiled only | Smaller compact fallback. Useful for RAG Q&A and small fixes with strict prompts. | Sonnet 3.5 to lower Sonnet 3.7 for narrow tasks. |

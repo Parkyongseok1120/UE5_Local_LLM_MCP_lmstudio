@@ -11,13 +11,15 @@ INTERFACE_VIRTUAL_METHOD_RE = re.compile(
     r"virtual\s+(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?=\s*0\s*;",
 )
 
+_TYPE_TOKEN = r"[\w:,<>&]+(?:[ \t]+[\w:,<>&]+)*"
+
 IMPLEMENTER_OVERRIDE_DECL_RE = re.compile(
-    r"^[\t ]*(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s+)?override\s*;",
+    rf"^[\t ]*(?P<ret>{_TYPE_TOKEN})\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s+)?override\s*;",
     re.MULTILINE,
 )
 
 STATIC_METHOD_DECL_RE = re.compile(
-    r"^[\t ]*(?:static\s+)?(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*;",
+    rf"^[\t ]*(?:static\s+)?(?P<ret>{_TYPE_TOKEN})\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*;",
     re.MULTILINE,
 )
 
@@ -76,13 +78,17 @@ def normalize_signature_params(params: str) -> str:
 
 
 def find_method_decl_in_header(text: str, func_name: str) -> re.Match[str] | None:
-    match = find_implementer_method_decl(text, func_name)
-    if match:
-        return match
+    for match in IMPLEMENTER_OVERRIDE_DECL_RE.finditer(text):
+        if match.group("func") == func_name:
+            return match
     for candidate in STATIC_METHOD_DECL_RE.finditer(text):
         if candidate.group("func") == func_name:
             return candidate
-    return None
+    return re.search(
+        rf"^[\t ]*(?P<ret>(?:[\w:,<>&]+(?:[ \t]+[\w:,<>&]+)*))\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?;",
+        text,
+        re.MULTILINE,
+    )
 
 
 def find_implementer_method_decl(text: str, func_name: str) -> re.Match[str] | None:
@@ -90,7 +96,7 @@ def find_implementer_method_decl(text: str, func_name: str) -> re.Match[str] | N
         if match.group("func") == func_name:
             return match
     return re.search(
-        rf"^[\t ]*(?P<ret>[\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?;",
+        rf"^[\t ]*(?P<ret>(?:[\w:,<>&]+(?:[ \t]+[\w:,<>&]+)*))\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?;",
         text,
         re.MULTILINE,
     )

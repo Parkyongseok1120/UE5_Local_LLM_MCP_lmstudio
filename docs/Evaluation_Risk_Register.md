@@ -76,6 +76,16 @@ Collect 20 unseen errors from the real graduation project and measure:
 
 If unseen real-project Pass@1/Pass@3 reaches roughly 70-80% with no leakage, then the system can be described as practically strong for its target UE workflow.
 
+## v1.2.5 pipeline risks (mitigated)
+
+| Risk | Mitigation |
+|------|------------|
+| Partial LLM apply left disk dirty after patch/static-gate failure | Transactional `apply_bundle` + static_gate restore |
+| Autofix wrote drift but UBT still ran | `autofix_ubt_allowed` / drift-code gate |
+| `golden/` indexed into RAG | `collect_unreal_projects` + wrapper `IGNORED_PROJECT_DIRS` skip `golden/` |
+| Dry-run / autofix-only / live KPI conflation | Separate eval tiers documented in `Evaluation_Claim_Guardrail.md` |
+| MCP write persisted after validation failure | Pre-write snapshot restore in `server.js` |
+
 ## Public Wording
 
 Avoid:

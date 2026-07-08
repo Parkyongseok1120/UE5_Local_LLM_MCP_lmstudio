@@ -18,6 +18,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from eval_e2e_compile import DEFAULT_UBT, run_ubt  # noqa: E402
 from preflight_lmstudio import check_lmstudio  # noqa: E402
+from subkind_policy import effective_mode_for_case  # noqa: E402
 from ubt_utils import split_ubt_target_spec  # noqa: E402
 
 
@@ -248,7 +249,8 @@ def build_metrics_only_results(
                 "id": case_id,
                 "category": case.get("category"),
                 "evalTier": infer_eval_tier(case),
-                "pass": True,
+                "pass": False,
+                "metricsOnly": True,
                 "mode": "metrics-only",
                 "detail": "KPI aggregation smoke only; UBT and LM Studio were not invoked.",
                 "attempts": 0,
@@ -270,9 +272,13 @@ def should_abort_consecutive_failures(results: list[dict], threshold: int) -> bo
 
 def calculate_kpi_metrics(results: list[dict]) -> dict:
     """Calculate extended Pass@K metrics without changing CLI behavior."""
-    total = len(results)
-    attempts_values = [int(row.get("attempts") or 0) for row in results if row.get("attempts") is not None]
-    pass_at_1 = sum(1 for row in results if row.get("passAt1"))
+    eligible = [row for row in results if row.get("mode") != "metrics-only" and not row.get("metricsOnly")]
+    total = len(eligible)
+    attempts_values = [int(row.get("attempts") or 0) for row in eligible if row.get("attempts") is not None]
+    pass_at_1 = sum(1 for row in eligible if row.get("passAt1"))
+    # Patch-coverage metrics come from the full results (including metrics-only
+    # rows), since those carry real expectedPatchTargetMatched/changedSourceFiles
+    # data from artifact-dir aggregation and are not a pass/fail KPI signal.
     patch_metric_rows = [row for row in results if "expectedPatchTargetMatched" in row]
     expected_patch_covered = sum(1 for row in patch_metric_rows if row.get("expectedPatchTargetMatched"))
     histogram: dict[str, int] = {}
@@ -300,16 +306,16 @@ def calculate_kpi_metrics(results: list[dict]) -> dict:
         }
 
     tier_groups: dict[str, list[dict]] = {}
-    for row in results:
+    for row in eligible:
         tier = infer_eval_tier(row)
         tier_groups.setdefault(tier, []).append(row)
     return {
         "passAt1Count": pass_at_1,
         "passAt1Rate": round(pass_at_1 / total, 3) if total else 0.0,
         "averageAttempts": round(sum(attempts_values) / len(attempts_values), 3) if attempts_values else 0.0,
-        "overall": _group_summary(results),
+        "overall": _group_summary(eligible),
         "tiers": {tier: _group_summary(rows) for tier, rows in sorted(tier_groups.items())},
-        "failedCaseIds": [str(row.get("id")) for row in results if not row.get("pass")],
+        "failedCaseIds": [str(row.get("id")) for row in eligible if not row.get("pass")],
         "attemptHistogram": dict(sorted(histogram.items(), key=lambda item: int(item[0]))),
         "sameErrorRepeatedCount": sum(1 for row in results if row.get("sameErrorRepeated")),
         "noOpEditCount": sum(1 for row in results if row.get("noOpEdit")),
@@ -367,6 +373,59 @@ def apply_golden(fixture_dir: Path, work_dir: Path) -> list[str]:
         shutil.copy2(path, dest)
         written.append(str(rel).replace("\\", "/"))
     return written
+
+
+def run_wrapper_autofix_only(
+    work_dir: Path,
+    project_file: Path,
+    request_text: str,
+    mode: str,
+    target: str,
+    ubt_path: Path,
+    wrapper_timeout: int = 0,
+) -> tuple[bool, str]:
+    run_dir = work_dir / "wrapper_run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    request_path = run_dir / "request.txt"
+    request_path.write_text(request_text, encoding="utf-8")
+    target_name, platform, configuration = split_ubt_target_spec(target)
+    cmd = [
+        sys.executable,
+        str(SCRIPTS / "lmstudio_unreal_wrapper.py"),
+        "--request-file",
+        str(request_path),
+        "--project-file",
+        str(project_file),
+        "--allow-direct-project-write",
+        "--mode",
+        mode,
+        "--target",
+        target_name,
+        "--platform",
+        platform,
+        "--configuration",
+        configuration,
+        "--autofix-only",
+        "--run-dir",
+        str(run_dir),
+        "--ubt-path",
+        str(ubt_path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=wrapper_timeout if wrapper_timeout > 0 else None,
+        )
+        tail = (proc.stdout or proc.stderr or "")[-1500:]
+        return proc.returncode == 0, tail
+    except subprocess.TimeoutExpired:
+        return False, f"[TIMEOUT] wrapper killed after {wrapper_timeout}s"
 
 
 def run_wrapper_live(
@@ -437,6 +496,7 @@ def run_case(
     case: dict,
     *,
     dry_run: bool,
+    autofix_only: bool = False,
     ubt_path: Path,
     ubt_timeout: int,
     max_attempts: int,
@@ -446,7 +506,7 @@ def run_case(
     artifact_dir: Path | None = None,
 ) -> dict:
     case_id = case["id"]
-    mode_label = "dry-run" if dry_run else "live"
+    mode_label = "autofix-only" if autofix_only else ("dry-run" if dry_run else "live")
     if not case.get("fixtureDir") or not case.get("projectFile"):
         return {
             "id": case_id,
@@ -475,9 +535,29 @@ def run_case(
         copy_fixture(fixture_dir, work_dir)
         project_file = work_dir / case["projectFile"]
         target = str(case.get("target") or "")
-        mode = str(case.get("mode") or "compile_fix")
+        mode = effective_mode_for_case(case)
         request_path = fixture_dir / str(case.get("requestFile") or "request.txt")
         request_text = request_path.read_text(encoding="utf-8-sig") if request_path.is_file() else ""
+        if autofix_only:
+            ok, detail = run_wrapper_autofix_only(
+                work_dir,
+                project_file,
+                request_text,
+                mode,
+                target,
+                ubt_path,
+                wrapper_timeout=wrapper_timeout,
+            )
+            return {
+                "id": case_id,
+                "category": case.get("category"),
+                "evalTier": infer_eval_tier(case),
+                "pass": ok,
+                "mode": "autofix-only",
+                "detail": detail[:800],
+                "attempts": 1 if ok else 0,
+                "passAt1": ok,
+            }
         if not dry_run:
             request_text = compose_eval_request(case, request_text)
 
@@ -547,6 +627,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Pass@K compile-fix eval")
     parser.add_argument("--config", default="config/rag_eval_pass_at_k_cases.json")
     parser.add_argument("--dry-run", action="store_true", help="Apply golden/ + UBT only")
+    parser.add_argument(
+        "--autofix-only",
+        action="store_true",
+        help="Run wrapper static autofix pipeline + UBT on broken fixtures (no LLM).",
+    )
     parser.add_argument("--live", action="store_true", help="Run wrapper + LM Studio")
     parser.add_argument("--require-live", action="store_true")
     parser.add_argument("--url", default="http://localhost:1234/v1")
@@ -584,9 +669,11 @@ def main() -> int:
     min_pass_rate = float(defaults.get("minPassRate") or 0.67)
     ubt_timeout = int(defaults.get("ubtTimeout") or 900)
 
-    dry_run = args.dry_run or not args.live
+    dry_run = args.dry_run or (not args.live and not args.autofix_only)
     resolved_model = args.model
     if args.metrics_only:
+        dry_run = False
+    elif args.autofix_only:
         dry_run = False
     elif args.live:
         preflight = check_lmstudio(args.url, args.model)
@@ -616,6 +703,7 @@ def main() -> int:
             result = run_case(
                 case,
                 dry_run=dry_run,
+                autofix_only=args.autofix_only,
                 ubt_path=args.ubt_path,
                 ubt_timeout=ubt_timeout,
                 max_attempts=max_attempts,
@@ -641,17 +729,19 @@ def main() -> int:
                         print(f"[early-exit] {passed_so_far}/{done} passed ({passed_so_far/done:.0%} >= {min_pass_rate:.0%}), skipping {remaining} remaining cases")
                         break
 
+    metrics_only_count = sum(1 for r in results if r.get("mode") == "metrics-only" or r.get("metricsOnly"))
     passed = sum(1 for r in results if r.get("pass"))
     env_blocked = sum(1 for r in results if r.get("environmentBlocked"))
     total = len(results)
-    eligible_total = total - env_blocked
+    eligible_total = total - env_blocked - metrics_only_count
     pass_rate = (passed / eligible_total) if eligible_total else 1.0
     extended_metrics = calculate_kpi_metrics(results)
     pass_at_1 = int(extended_metrics["passAt1Count"])
     pass_at_1_rate = float(extended_metrics["passAt1Rate"])
 
     for row in results:
-        status = "PASS" if row.get("pass") else "FAIL"
+        is_metrics_only = row.get("mode") == "metrics-only" or row.get("metricsOnly")
+        status = "METRICS" if is_metrics_only else ("PASS" if row.get("pass") else "FAIL")
         attempts = row.get("attempts")
         attempt_note = f", attempts={attempts}" if attempts is not None else ""
         p1 = " pass@1" if row.get("passAt1") else ""
@@ -660,6 +750,8 @@ def main() -> int:
     print(f"\nPass@K summary: {passed}/{eligible_total} ({pass_rate:.0%}), min {min_pass_rate:.0%}")
     if env_blocked:
         print(f"Environment-blocked (excluded from rate): {env_blocked}/{total}")
+    if metrics_only_count:
+        print(f"Metrics-only (excluded from rate): {metrics_only_count}/{total}")
     if defaults.get("reportPassAt1") or config.get("tier") == "ceiling":
         print(f"Pass@1 summary: {pass_at_1}/{total} ({pass_at_1_rate:.0%})")
 
@@ -673,6 +765,7 @@ def main() -> int:
         "total": eligible_total,
         "totalCases": total,
         "environmentBlockedCount": env_blocked,
+        "metricsOnlyCount": metrics_only_count,
         "passRate": round(pass_rate, 3),
         "minPassRate": min_pass_rate,
         "pass": pass_rate >= min_pass_rate,

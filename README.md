@@ -1,7 +1,7 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.2.4
+# UE5_Local_LLM_MCP_lmstudio 1.2.5
 
 > **Platform: Windows 10/11 only.** All install scripts are PowerShell/BAT. macOS and Linux are not supported.
 
@@ -23,7 +23,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — July 2026**
 >
-> The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. **Latest v1.2.4 live revalidation (2026-07-08):** Pass@K **34/36**, Pass@1 **34/36** on UE 5.8 (`20260708-211549`); dry-run compile gate **36/36** (`20260708-203003`).
+> The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. **Latest v1.2.5 (2026-07-08):** structural fixes for the two remaining multifile holdout failures (`UPROPERTY` return-type drift, callback param expansion); dry-run compile gate **36/36** (post-patch verification pending artifact ID). **Live Pass@1 36/36 revalidation pending** — prior live KPI v1.2.4: **34/36** (`20260708-211549`).
 >
 > Over the next **~4 months**, development will be limited to minor bug fixes and stability improvements due to academic commitments. Broader platform support (macOS, Linux) and additional LLM frontends beyond LM Studio (e.g., Ollama, Open WebUI) are on the roadmap but will not receive active development during this period.
 >
@@ -33,7 +33,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **프로젝트 현황 — 2026년 7월**
 >
-> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. **v1.2.4 라이브 재검증 (2026-07-08):** Pass@K **34/36**, Pass@1 **34/36** (UE 5.8, `20260708-211549`); dry-run **36/36** (`20260708-203003`).
+> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. **v1.2.5 (2026-07-08):** 남은 multifile 2건(`UPROPERTY` return-type, callback param expand) 구조적 수정; dry-run **36/36** (패치 후 검증). **Live Pass@1 36/36 재검증은 사용자 실행 대기** — 이전 live KPI v1.2.4: **34/36** (`20260708-211549`).
 >
 > 학업 일정상 향후 **약 4개월간**은 소소한 버그 수정 및 안정화 위주의 업데이트만 이루어질 예정입니다. macOS·Linux 지원과 LM Studio 외 다른 LLM 프론트엔드(Ollama, Open WebUI 등) 연동은 로드맵에 있지만, 이 기간 동안은 적극적인 개발이 어려울 것 같습니다.
 >
@@ -41,7 +41,16 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 ---
 
-## What's New Since 1.2.4
+## What's New Since 1.2.5
+
+### Multifile Pass@1 stabilization (v1.2.5)
+
+- **`CPP_RETURN_TYPE_MISMATCH`**: static validate now detects header/cpp return-type drift when params match (fixes `local_multifile_uproperty_type_migration` blind spot).
+- **`apply_cpp_return_type_sync_autofix`**: cpp-only return rewrite with `static_cast` when header is authoritative.
+- **Callback autofix hardening**: impl-only cpp target, body stubs for new params, rollback on drift/corruption; fixed `STATIC_METHOD_DECL_RE` false match on `public:` lines.
+- **Retry feedback loop**: `record_validation_rejection` merges escalation hints into `previous_feedback` (fixes empty-files no-op dead-end).
+- **Guard fixes**: cpp-only patch allowed for authoritative header; callback 2-file golden path; consumer callsite gate requires real consumer paths.
+- **`verify_encoding.py`**: UTF-8 BOM/invalid-byte scan for scripts/tests/docs.
 
 ### Compile-loop stabilization (v1.2.4)
 
@@ -100,7 +109,7 @@ As of 2026-07-08, this project is in active KPI-driven local-agent testing for U
 
 ### Latest Internal Live Holdout
 
-> **KPI status (v1.2.4, revalidated 2026-07-08):** Latest live run `20260708-211549`: Pass@K **34/36**, Pass@1 **34/36**. Dry-run compile gate `20260708-203003`: **36/36**. Artifact: `data/baseline/live_holdout/20260708-211549/`.
+> **KPI status (v1.2.5, 2026-07-08):** Code fixes target Live Pass@1 **36/36**; **live revalidation pending**. Prior live run `20260708-211549` (v1.2.4): Pass@K **34/36**, Pass@1 **34/36**. Dry-run compile gate **36/36** post-patch (`pass-at-k-holdout-v125-dryrun.json`).
 
 The strongest measured run on the UE 5.8 local 36-case live holdout is:
 
@@ -110,7 +119,7 @@ qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max
 
 These are internal workflow results, not a public standardized model benchmark.
 
-| Metric | Latest 36-case live run (2026-07-08, v1.2.4) |
+| Metric | Latest 36-case live run (2026-07-08, v1.2.4 baseline) |
 |---|---:|
 | Pass@K | 34/36 = 94.4% |
 | Pass@1 | 34/36 = 94.4% |
@@ -127,9 +136,11 @@ These are internal workflow results, not a public standardized model benchmark.
 | Pass@1 | 29/36 = 80.6% |
 | Average attempts | 1.25 |
 
-> **Hotfix note (v1.2.4):** Reproduce with `scripts/run_live_holdout.ps1` (live) and `scripts/run_dryrun_holdout.ps1` (compile gate, no LM Studio).
+> **Hotfix note (v1.2.5):** Reproduce with `scripts/run_live_holdout.ps1` (live, user-triggered) and `scripts/run_dryrun_holdout.ps1` (compile gate, no LM Studio).
 
-Post-v1.2.4 stabilization improved first-shot Pass@1 (+13.8pp vs 2026-07-06) but left two multifile cases failing on validation/no-op after max attempts. Dry-run 36/36 confirms fixture/golden quality; remaining gap is live LLM patch discipline on `UPROPERTY` type migration and callback param expansion.
+v1.2.5 closes the static/autofix/guard dead-ends for the two failing multifile cases. Live Pass@1 **36/36** requires user revalidation after this release.
+
+**v1.2.5 stability hardening:** unified `autofix_runtime` pipeline (snapshot/rollback), transactional `apply_bundle`, blueprint native-event guards, holdout mode/evalTier alignment, Tier A.5 `--autofix-only` eval, and MCP write rollback on validation failure. See `docs/Evaluation_Claim_Guardrail.md` for dry-run vs autofix-only vs live KPI separation.
 
 ### Improvement Snapshot
 

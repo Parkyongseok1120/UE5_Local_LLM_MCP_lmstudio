@@ -388,7 +388,7 @@
     {
       "id": "holdout_multifile_method_rename_header_cpp_callsite",
       "category": "simple multi-file compile refactor",
-      "mode": "compile_fix",
+      "mode": "multifile_refactor",
       "errorLog": "error C2039: 'StartCharge': is not a member of UHoldoutRefactorComponent",
       "expectedFilesToRead": [
         "header declaration",
@@ -407,7 +407,7 @@
     {
       "id": "holdout_multifile_delegate_signature_update",
       "category": "simple multi-file compile refactor",
-      "mode": "compile_fix",
+      "mode": "multifile_refactor",
       "errorLog": "error C2660: UHoldoutDelegateOwner::HandleScoreChanged: function does not take 1 arguments",
       "expectedFilesToRead": [
         "delegate owner header",
@@ -425,7 +425,7 @@
     {
       "id": "holdout_multifile_interface_signature_update",
       "category": "simple multi-file compile refactor",
-      "mode": "compile_fix",
+      "mode": "multifile_refactor",
       "errorLog": "error C3668: method with override specifier did not override any base class methods",
       "expectedFilesToRead": [
         "interface header",
@@ -444,7 +444,7 @@
     {
       "id": "holdout_multifile_component_api_move",
       "category": "simple multi-file compile refactor",
-      "mode": "compile_fix",
+      "mode": "multifile_refactor",
       "errorLog": "error C2039: 'ApplyMovedValue': is not a member of UHoldoutApiComponent",
       "expectedFilesToRead": [
         "component header",
@@ -649,7 +649,7 @@
     {
       "id": "holdout_editor_runtime_guard_boundary",
       "category": "editor-only include in runtime module",
-      "mode": "compile_fix",
+      "mode": "editor_runtime_fix",
       "errorLog": "Runtime module source references UnrealEd editor API without WITH_EDITOR guard",
       "expectedFilesToRead": [
         "runtime header",
