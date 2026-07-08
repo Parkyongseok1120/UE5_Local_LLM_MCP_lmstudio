@@ -1,4 +1,6 @@
 # Live 36-case holdout runner with progress monitoring.
+# USER-TRIGGERED ONLY: do not auto-start from implementation gates; run when explicitly requested.
+# Default holdout gate is scripts/run_dryrun_holdout.ps1 (golden/ + UBT, no LM Studio).
 param(
     [string]$Model = "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max",
     [int]$AbortAfterConsecutiveFailures = 5,

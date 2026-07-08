@@ -31,8 +31,12 @@ from prompt_history import (
     prepare_messages_for_attempt,
 )
 from symbol_graph import load_symbol_graph, lookup_symbol
-from ubt_utils import build_ubt_command, split_ubt_target_spec
+from ubt_utils import build_ubt_command, sanitize_ubt_target, split_ubt_target_spec
 from apply_patch import apply_patch as apply_single_patch, patch_apply_hint, validate_patch_item
+from multifile_refactor_autofix import (
+    apply_multifile_refactor_autofixes,
+    apply_subsystem_include_autofix,
+)
 
 PATCH_PREFERRED_LINE_THRESHOLD = 200
 REFACTOR_PATCH_ONLY_MODES = {"refactor_r2", "refactor_r3", "refactor_r4"}
@@ -1771,6 +1775,42 @@ def restore_changed_paths(root: Path, snapshot: dict[str, str], changed_paths: l
         write_file(target, old_text)
 
 
+def multifile_required_surface_hint(mode: str, request: str, root: Path) -> str:
+    if str(mode or "") != "multifile_refactor" and not multifile_surface_enforced(mode, request):
+        return ""
+    surfaces: list[str] = []
+    lower = request.lower()
+    if any(term in lower for term in ("delegate", "signature", "declaration", "definition")):
+        surfaces.extend(["matching header declaration", "matching .cpp definition"])
+    if "interface" in lower:
+        surfaces.append("interface + implementer header/cpp")
+    if "callsite" in lower or "call site" in lower or "consumer" in lower:
+        surfaces.append("consumer/callsite .cpp")
+    if "callback" in lower or "registration" in lower:
+        surfaces.append("callback handler + registration site")
+    evidence = refactor_surface_evidence(root, request, max_files=6, max_lines_per_file=3, max_chars=1200)
+    if evidence:
+        surfaces.append("refactor surface evidence below")
+    if not surfaces:
+        return ""
+    return "Required multifile surfaces: " + "; ".join(dict.fromkeys(surfaces))
+
+
+def multifile_exact_snippets(root: Path, paths: list[str], *, context_lines: int = 1) -> str:
+    lines: list[str] = ["Exact current snippets (copy oldText from these):"]
+    for rel in paths[:6]:
+        path = root / rel.replace("/", "\\")
+        if not path.is_file():
+            continue
+        text = read_text(path)
+        file_lines = text.splitlines()
+        if not file_lines:
+            continue
+        preview = "\n".join(file_lines[: min(len(file_lines), context_lines * 2 + 3)])
+        lines.append(f"## {rel}\n{preview}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def edit_scope_blockers(
     request: str,
     before: dict[str, str],
@@ -1779,6 +1819,7 @@ def edit_scope_blockers(
     *,
     route: dict[str, Any] | None = None,
     findings: list[Finding] | None = None,
+    mode: str = "",
 ) -> list[str]:
     issues: list[str] = []
     changed = changed_paths_between(before, after)
@@ -1807,9 +1848,16 @@ def edit_scope_blockers(
             )
     if request_mentions_any(request, ("signature", "시그니처", "declaration", "definition", ".cpp")):
         if changed_header and not changed_cpp:
-            issues.append(
-                "The request appears to require matching the .cpp definition to the header declaration; do not change only the header unless the request explicitly asks for that."
-            )
+            if str(mode or "") == "multifile_refactor" or multifile_surface_enforced(mode, request):
+                hint = multifile_required_surface_hint(mode, request, root)
+                issues.append(
+                    "Multifile fix incomplete: header changed without matching .cpp definition in the same patch. "
+                    + (hint or "Update header and .cpp together, plus any callsite/consumer files.")
+                )
+            else:
+                issues.append(
+                    "The request appears to require matching the .cpp definition to the header declaration; do not change only the header unless the request explicitly asks for that."
+                )
     if request_mentions_any(request, ("lnk2019", "unresolved external", "missing cpp definition", "missing implementation")):
         issues.extend(missing_definition_call_removal_blockers(before, after))
     callsite_only_delegate = delegate_broadcast_callsite_fix_context(request, route, findings)
@@ -1819,6 +1867,13 @@ def edit_scope_blockers(
                 "Delegate handler signature fixes must update the header declaration and .cpp definition together."
             )
     return issues
+
+
+def scope_blocker_allows_partial_apply(mode: str, blockers: list[str]) -> bool:
+    if str(mode or "") != "multifile_refactor":
+        return False
+    joined = "\n".join(blockers).lower()
+    return "multifile fix incomplete" in joined or "header changed without matching .cpp" in joined
 
 
 def apply_bundle(root: Path, bundle: dict[str, Any]) -> list[Path]:
@@ -2682,6 +2737,11 @@ def static_validation_retry_feedback(
     *,
     build_output: str = "",
 ) -> str:
+    if any(finding.code == "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH" for finding in findings or []):
+        return (
+            "Static validation reports interface implementer signature drift.\n"
+            "Read the interface header and update implementer header/cpp together in one patch."
+        )
     if any(finding.code == "CPP_FUNCTION_SIGNATURE_MISMATCH" for finding in findings or []):
         return STATIC_SIGNATURE_RETRY_HINT
     if any(finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for finding in findings or []):
@@ -3319,6 +3379,9 @@ def run(args: argparse.Namespace) -> int:
     project_file = prepared.project_file
     project_name = prepared.project_name
     target = prepared.target
+    target, target_warn = sanitize_ubt_target(target, fallback=f"{project_name}Editor")
+    if target_warn:
+        write_file(run_dir / "target_sanitize.txt", target_warn + "\n")
     project_root = project_file.parent
     baseline_snapshot = snapshot_project_files(project_root)
     final_diff_path = run_dir / "final_diff.patch"
@@ -3463,10 +3526,13 @@ def run(args: argparse.Namespace) -> int:
     if args.mode in {"reflection_fix", "compile_fix"}:
         static_autofix_written.extend(apply_generated_h_missing_autofix(project_root, initial_findings))
         static_autofix_written.extend(apply_generated_h_order_autofix(project_root, initial_findings))
-    if args.mode in {"compile_fix", "module_fix", "editor_runtime_fix"}:
+    if args.mode in {"compile_fix", "module_fix", "editor_runtime_fix", "multifile_refactor"}:
         static_autofix_written.extend(apply_editor_runtime_guard_autofix(project_root, initial_findings))
         static_autofix_written.extend(apply_delegate_broadcast_autofix(project_root, initial_findings))
         static_autofix_written.extend(apply_uobject_newobject_autofix(project_root, initial_findings))
+        static_autofix_written.extend(apply_subsystem_include_autofix(project_root, initial_findings))
+    if args.mode == "multifile_refactor":
+        static_autofix_written.extend(apply_multifile_refactor_autofixes(project_root, initial_findings))
     if args.mode in {"reflection_fix", "compile_fix"}:
         static_autofix_written.extend(apply_blueprint_event_rename_autofix(project_root, initial_findings))
     if static_autofix_written:
@@ -3578,6 +3644,13 @@ def run(args: argparse.Namespace) -> int:
             f"Compile loop attempt {attempt}/{args.max_attempts}. "
             "List at most 3 assumptions; apply one minimal diff this turn.\n\n"
         )
+        if last_recommendation.get("action") == "require_multifile_surfaces":
+            surface_hint = multifile_required_surface_hint(original_mode, request, project_root)
+            snippet_paths = list(dict.fromkeys((last_recommendation.get("blockedRepeatPaths") or []) + changed_files_from_feedback(last_build_records, last_findings)))
+            snippet_block = multifile_exact_snippets(project_root, snippet_paths)
+            extra = "\n".join(part for part in (surface_hint, snippet_block) if part)
+            if extra:
+                previous_feedback = (previous_feedback + "\n\n" + extra).strip()
         if first_attempt_patch_route:
             attempt_prefix += (
                 "Route-specific first attempt: use the patch sampling profile and patch only the exact "
@@ -3606,7 +3679,7 @@ def run(args: argparse.Namespace) -> int:
                 project_root,
                 focus_text,
                 active_route,
-                mode=original_mode if attempt >= 2 else args.mode,
+                mode=original_mode,
             ),
             project_state=project_state,
             project_name=project_name,
@@ -3880,11 +3953,19 @@ def run(args: argparse.Namespace) -> int:
                 project_root,
                 route=active_route,
                 findings=last_findings,
+                mode=original_mode,
             )
             if scope_blockers:
                 rejected_changed_paths = changed_paths_between(before_apply, after_apply)
-                restore_changed_paths(project_root, before_apply, rejected_changed_paths)
-                last_written = []
+                partial_apply = scope_blocker_allows_partial_apply(original_mode, scope_blockers)
+                if partial_apply:
+                    last_written = [
+                        project_root / path for path in rejected_changed_paths
+                    ]
+                    snippet_block = multifile_exact_snippets(project_root, rejected_changed_paths)
+                else:
+                    restore_changed_paths(project_root, before_apply, rejected_changed_paths)
+                    last_written = []
                 retry_tail = BUILD_CS_RETRY_FEEDBACK if any("Build.cs" in issue for issue in scope_blockers) else ""
                 previous_feedback = (
                     (retry_tail + "\n" if retry_tail else "")
@@ -3892,6 +3973,13 @@ def run(args: argparse.Namespace) -> int:
                     + "\n".join(f"- {issue}" for issue in scope_blockers)
                     + "\nUse the current project state as authoritative and change the specific file(s) needed."
                 )
+                if partial_apply:
+                    previous_feedback += (
+                        "\nPartial header change was kept. Next attempt must patch the matching .cpp "
+                        "(and any callsite files) in the same response."
+                    )
+                    if snippet_block:
+                        previous_feedback += "\n\n" + snippet_block
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
                 record_validation_rejection(
                     attempt=attempt,
@@ -3899,7 +3987,7 @@ def run(args: argparse.Namespace) -> int:
                     feedback=previous_feedback,
                     blockers=scope_blockers,
                     bundle=bundle,
-                    changed_paths=[],
+                    changed_paths=[] if not partial_apply else rejected_changed_paths,
                     rejection_kind="edit_scope_blocker",
                 )
                 continue
@@ -3912,13 +4000,24 @@ def run(args: argparse.Namespace) -> int:
             )
             if surface_blockers:
                 rejected_changed_paths = changed_paths_between(before_apply, after_apply)
-                restore_changed_paths(project_root, before_apply, rejected_changed_paths)
-                last_written = []
+                partial_apply = scope_blocker_allows_partial_apply(original_mode, surface_blockers)
+                if partial_apply:
+                    last_written = [project_root / path for path in rejected_changed_paths]
+                    snippet_block = multifile_exact_snippets(project_root, rejected_changed_paths)
+                else:
+                    restore_changed_paths(project_root, before_apply, rejected_changed_paths)
+                    last_written = []
                 previous_feedback = (
                     "Multifile surface coverage rejected the edit:\n"
                     + "\n".join(f"- {issue}" for issue in surface_blockers)
                     + "\nReturn one coherent patch that updates every required declaration, definition, and callsite."
                 )
+                if partial_apply:
+                    previous_feedback += (
+                        "\nPartial change was kept. Next attempt must complete the remaining required surfaces."
+                    )
+                    if snippet_block:
+                        previous_feedback += "\n\n" + snippet_block
                 write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
                 record_validation_rejection(
                     attempt=attempt,
@@ -3926,7 +4025,7 @@ def run(args: argparse.Namespace) -> int:
                     feedback=previous_feedback,
                     blockers=surface_blockers,
                     bundle=bundle,
-                    changed_paths=[],
+                    changed_paths=[] if not partial_apply else rejected_changed_paths,
                     rejection_kind="multifile_incomplete",
                 )
                 continue
@@ -3934,8 +4033,8 @@ def run(args: argparse.Namespace) -> int:
             hint = ""
             if "bundle" in locals():
                 for item in (bundle.get("patches") or []):
-                    target = safe_output_path(project_root, item["path"])
-                    hint = patch_apply_hint(target, str(item.get("oldText") or ""))
+                    patch_path = safe_output_path(project_root, item["path"])
+                    hint = patch_apply_hint(patch_path, str(item.get("oldText") or ""))
                     if hint:
                         break
             previous_feedback = f"File application failed: {exc}{hint}"

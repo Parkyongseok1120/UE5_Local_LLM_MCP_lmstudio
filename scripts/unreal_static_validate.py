@@ -1337,6 +1337,70 @@ def validate_include_paths_exist(path: Path, text: str, root: Path, include_inde
     return findings
 
 
+def validate_interface_implementer_drift(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    interface_specs: dict[str, list[tuple[str, str, str]]] = {}
+    for path in root.rglob("*.h"):
+        text = read_text(path)
+        if not re.search(r"\bclass\s+I[A-Za-z_][A-Za-z0-9_]*\b", text):
+            continue
+        interface_name = ""
+        for match in re.finditer(r"\bclass\s+(I[A-Za-z_][A-Za-z0-9_]*)\b", text):
+            interface_name = match.group(1)
+        if not interface_name:
+            continue
+        methods: list[tuple[str, str, str]] = []
+        for match in re.finditer(
+            r"virtual\s+(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*=\s*0\s*;",
+            text,
+        ):
+            methods.append(
+                (
+                    match.group("func"),
+                    _normalize_signature_params(match.group("params")),
+                    match.group("ret").strip(),
+                )
+            )
+        if methods:
+            interface_specs[interface_name] = methods
+
+    if not interface_specs:
+        return findings
+
+    for path in root.rglob("*.h"):
+        text = read_text(path)
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        for interface_name, methods in interface_specs.items():
+            if interface_name not in text:
+                continue
+            for func_name, iface_params, iface_ret in methods:
+                impl_match = re.search(rf"\b([\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)", text)
+                if not impl_match:
+                    findings.append(
+                        Finding(
+                            "warning",
+                            rel,
+                            line_number(text, 0),
+                            "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH",
+                            f"{interface_name} requires {func_name}({iface_params or 'void'}) but implementer declaration was not found.",
+                        )
+                    )
+                    continue
+                impl_params = _normalize_signature_params(impl_match.group("params"))
+                impl_ret = impl_match.group(1).strip()
+                if impl_params != iface_params or impl_ret.replace("const", "").strip() != iface_ret.replace("const", "").strip():
+                    findings.append(
+                        Finding(
+                            "warning",
+                            rel,
+                            line_number(text, impl_match.start()),
+                            "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH",
+                            f"{func_name} implementer signature does not match {interface_name} ({iface_ret} {func_name} vs {impl_ret} {func_name}).",
+                        )
+                    )
+    return findings
+
+
 def validate_unreal_readiness(
     root: Path,
     module_graph_path: Path | None = None,
@@ -1384,6 +1448,7 @@ def validate_unreal_readiness(
     findings.extend(validate_include_owner_modules(root, build_text_value, include_owner_map))
     findings.extend(validate_duplicate_source_basenames(root))
     findings.extend(validate_rpc_implementations(root))
+    findings.extend(validate_interface_implementer_drift(root))
     return findings
 
 
