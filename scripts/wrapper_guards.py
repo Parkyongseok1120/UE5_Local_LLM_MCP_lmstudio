@@ -297,6 +297,58 @@ def multifile_exact_snippets(root: Path, paths: list[str], *, context_lines: int
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+def resolve_existing_relative_paths(root: Path, candidates: list[str]) -> list[str]:
+    """Filter model-supplied hint strings down to real project-relative file paths.
+
+    A model's diagnosis.requiredReads list can mix actual paths (e.g.
+    "Source/HoldoutFixture/Private/Foo.cpp") with generic descriptions (e.g.
+    "matching cpp definition"). This keeps only entries that resolve to a real
+    file under root, in order, without duplicates.
+    """
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if not value or "/" not in value.replace("\\", "/"):
+            continue
+        try:
+            path = safe_output_path(root, value)
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        normalized = value.replace("\\", "/")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        resolved.append(normalized)
+    return resolved
+
+
+def required_read_file_snippets(
+    root: Path, paths: list[str], *, max_files: int = 3, max_chars_per_file: int = 1600
+) -> str:
+    """Render full (capped) contents of model-requested evidence files.
+
+    Used to break an empty_files_without_evidence deadlock: the model asked to
+    read a file via diagnosis.requiredReads but the wrapper never showed it the
+    content, so it kept resubmitting an empty response.
+    """
+    lines: list[str] = ["Requested file contents (from your previous requiredReads):"]
+    for rel in paths[:max_files]:
+        try:
+            path = safe_output_path(root, rel)
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        text = read_text(path)
+        if len(text) > max_chars_per_file:
+            text = text[:max_chars_per_file] + "\n... (truncated)"
+        lines.append(f"## {rel}\n```\n{text}\n```")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def pending_surfaces_after_partial(blockers: list[str]) -> set[str]:
     joined = "\n".join(blockers).lower()
     if "header changed without matching .cpp" in joined or (

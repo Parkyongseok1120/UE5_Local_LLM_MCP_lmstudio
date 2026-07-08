@@ -134,6 +134,25 @@ def test_callback_param_expand_fixture_autofix(tmp_path: Path) -> None:
     cpp = read_text(next(p for p in tmp_path.rglob("HoldoutCallbackReceiver.cpp") if "golden" not in p.parts))
     assert "OnResult(int32 Value, bool bSuccess)" in header
     assert "OnResult(int32 Value, bool bSuccess)" in cpp
+    # Exact golden comparisons: guards against a regression where a greedy
+    # ret-type regex capture swallows the "public:" access label and/or the
+    # "static" keyword from the header into the rebuilt declaration/definition
+    # (see clean_method_ret in ue_cpp_signatures.py).
+    assert header == (
+        '#pragma once\n\n#include "CoreMinimal.h"\n\n'
+        "class FHoldoutCallbackReceiver\n{\npublic:\n"
+        "\tstatic void OnResult(int32 Value, bool bSuccess);\n};\n"
+    )
+    assert cpp == (
+        '#include "HoldoutCallbackReceiver.h"\n\n'
+        "void FHoldoutCallbackReceiver::OnResult(int32 Value, bool bSuccess)\n"
+        "{\n\t(void)Value;\n\n\t(void)bSuccess;}\n"
+    )
+    # The cpp out-of-class definition must never carry an access-specifier
+    # label or a duplicated "static" keyword (both are C2059/C2724 in MSVC).
+    cpp_def_line = next(line for line in cpp.splitlines() if "FHoldoutCallbackReceiver::OnResult" in line)
+    assert "public:" not in cpp_def_line
+    assert "static" not in cpp_def_line
     assert read_text(tmp_path / "golden" / "Source" / "HoldoutFixture" / "Public" / "HoldoutCallbackReceiver.h") == golden_before
     assert not validate_callback_function_pointer_drift(tmp_path)
 

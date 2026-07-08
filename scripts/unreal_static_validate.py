@@ -13,6 +13,7 @@ from ue_cpp_signatures import (
     FUNCTION_POINTER_TARGET_RE,
     INTERFACE_VIRTUAL_METHOD_RE,
     TYPEDEF_FUNCTION_POINTER_RE,
+    clean_method_ret,
     collect_callback_drifts,
     collect_interface_specs,
     find_implementer_method_decl,
@@ -1552,7 +1553,7 @@ def validate_interface_implementer_drift(root: Path) -> list[Finding]:
                     )
                     continue
                 impl_params = normalize_signature_params(impl_match.group("params"))
-                impl_ret = impl_match.group("ret").strip()
+                impl_ret, _ = clean_method_ret(impl_match.group("ret"))
                 if impl_params != iface_params or impl_ret.replace("const", "").strip() != iface_ret.replace("const", "").strip():
                     findings.append(
                         Finding(

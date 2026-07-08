@@ -76,6 +76,8 @@ from wrapper_guards import (
     multifile_surface_blockers,
     no_change_blockers,
     pending_surfaces_after_partial,
+    required_read_file_snippets,
+    resolve_existing_relative_paths,
     restore_changed_paths,
     route_forbidden_action_blockers,
     safe_output_path,
@@ -92,6 +94,7 @@ from unreal_static_validate import (
     can_run_autofix_ubt,
     declared_build_modules,
     format_findings,
+    has_blocking_static_errors,
     has_static_errors,
     should_block_llm_apply_static_gate,
     include_visibility,
@@ -2687,6 +2690,7 @@ def run(args: argparse.Namespace) -> int:
     active_route: dict[str, Any] = align_route_to_eval_mode(route_error_action(request), original_mode, request)
     pending_multifile_surfaces: set[str] = set()
     attempt_snapshot: dict[str, str] | None = None
+    seen_required_read_paths: set[str] = set()
 
     def record_validation_rejection(
         *,
@@ -3263,6 +3267,23 @@ def run(args: argparse.Namespace) -> int:
                     + ("\nNo-change blockers:\n" + "\n".join(f"- {issue}" for issue in blockers) if blockers else "")
                     + ("\n\n" + "\n\n".join(empty_context_parts) if empty_context_parts else "")
                 )
+                diagnosis = bundle.get("diagnosis") if isinstance(bundle.get("diagnosis"), dict) else {}
+                required_read_hints = [str(item) for item in (diagnosis.get("requiredReads") or [])]
+                resolved_required_reads = resolve_existing_relative_paths(project_root, required_read_hints)
+                is_repeat_empty_files = bool(retry_records) and retry_records[-1].get(
+                    "validationRejectionKind"
+                ) == "empty_files_without_evidence"
+                if is_repeat_empty_files:
+                    seen_required_read_paths.update(resolved_required_reads)
+                else:
+                    seen_required_read_paths.clear()
+                    seen_required_read_paths.update(resolved_required_reads)
+                required_read_paths = (
+                    list(seen_required_read_paths) if is_repeat_empty_files else resolved_required_reads
+                )
+                required_read_block = required_read_file_snippets(project_root, required_read_paths)
+                if required_read_block:
+                    previous_feedback = previous_feedback + "\n\n" + required_read_block
                 record_validation_rejection(
                     attempt=attempt,
                     attempt_dir=attempt_dir,

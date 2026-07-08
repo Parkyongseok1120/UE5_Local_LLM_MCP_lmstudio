@@ -9,9 +9,11 @@ from pathlib import Path
 from unreal_static_validate import Finding, iter_source_files, read_text
 from ue_cpp_signatures import (
     CPP_METHOD_DEFINITION_RE,
+    RET_TYPE_CHAR_CLASS,
     SourceTreeIndex,
     TYPEDEF_FUNCTION_POINTER_RE,
     build_source_tree_index,
+    clean_method_ret,
     collect_callback_drifts,
     collect_interface_specs,
     find_method_decl_in_header,
@@ -158,7 +160,7 @@ def apply_callback_param_expand_autofix(root: Path, *, index: SourceTreeIndex | 
         decl_match = find_method_decl_in_header(header_text, func_name)
         if not decl_match:
             continue
-        ret_type = decl_match.group("ret").strip()
+        ret_type, ret_is_static = clean_method_ret(decl_match.group("ret"))
         current_params = decl_match.group("params").strip()
         registration_text = read_text(drift.cpp_path)
         typedef_match = TYPEDEF_FUNCTION_POINTER_RE.search(registration_text)
@@ -188,8 +190,11 @@ def apply_callback_param_expand_autofix(root: Path, *, index: SourceTreeIndex | 
                 expanded_params.append(part)
                 new_param_names.append(part.split()[-1])
         params_text = ", ".join(expanded_params)
-        static_prefix = "static " if decl_match.group(0).lstrip().startswith("static") else ""
-        new_decl = f"{static_prefix}{ret_type} {func_name}({params_text});"
+        matched_decl_text = decl_match.group(0)
+        is_static = ret_is_static or matched_decl_text.lstrip().startswith("static")
+        leading_ws = matched_decl_text[: len(matched_decl_text) - len(matched_decl_text.lstrip(" \t"))]
+        static_prefix = "static " if is_static else ""
+        new_decl = f"{leading_ws}{static_prefix}{ret_type} {func_name}({params_text});"
         header_path = tree.class_to_path.get(class_name)
         snapshot = _snapshot_paths(root, [p for p in [header_path] + tree.cpps if p])
         updated_header = header_text[: decl_match.start()] + new_decl + header_text[decl_match.end() :]
@@ -416,20 +421,20 @@ def apply_multifile_return_type_sync_autofix(root: Path, *, index: SourceTreeInd
     for cpp_path in tree.cpps:
         text = read_text(cpp_path)
         for match in re.finditer(
-            r"^(?P<ret>[\w:<>,\s*&]+)\s+(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
+            rf"^(?P<ret>{RET_TYPE_CHAR_CLASS}+)\s+(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
             text,
             flags=re.MULTILINE,
         ):
             class_name = match.group("class")
             func_name = match.group("func")
-            cpp_ret = match.group("ret").strip()
+            cpp_ret, _ = clean_method_ret(match.group("ret"))
             header_text = tree.class_to_text.get(class_name)
             if not header_text:
                 continue
             decl_match = find_method_decl_in_header(header_text, func_name)
             if not decl_match:
                 continue
-            header_ret = decl_match.group("ret").strip()
+            header_ret, _ = clean_method_ret(decl_match.group("ret"))
             if header_ret == cpp_ret:
                 continue
             if header_ret == "void" and cpp_ret in {"bool", "int32", "float"}:
