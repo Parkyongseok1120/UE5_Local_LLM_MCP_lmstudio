@@ -1,7 +1,7 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.2.3
+# UE5_Local_LLM_MCP_lmstudio 1.2.4
 
 > **Platform: Windows 10/11 only.** All install scripts are PowerShell/BAT. macOS and Linux are not supported.
 
@@ -41,9 +41,9 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 ---
 
-## What's New Since 1.2.2 (v1.2.3 stabilization)
+## What's New Since 1.2.4 
 
-Post-1.2.2 work focuses on **LM Studio chat safety** and **regression gates**, after local-agent failures such as duplicate `HealthComponent` paths, wrong includes, and unsafe cleanup attempts.
+Post-1.2.2 / 1.2.3 work focuses on **LM Studio chat safety** and **regression gates**, after local-agent failures such as duplicate `HealthComponent` paths, wrong includes, and unsafe cleanup attempts.
 
 ### Agent write safety (`unreal-agent`)
 
@@ -82,7 +82,7 @@ python scripts/patch_mcp_config.py
 # Optional source delete: ALLOW_SOURCE_DELETE=1 (only after propose_file_deletions + user approval)
 ```
 
-> **1.2.2 이후 요약 (v1.2.3)**  
+> **1.2.2 이후 요약 (v1.2.4)**  
 > HealthComponent류 중복 생성·잘못된 include·무분별 삭제를 막기 위한 안정화 패치입니다. 쓰기 시 정적 검증 기본 활성화, basename 충돌 차단, RAG refresh 비동기/타임아웃, Essential/Extended 도구 분리, 회귀 테스트 확장이 포함됩니다. **삭제는 `propose_file_deletions`로 계획 보고 → 사용자 명시 승인 → `delete_file`** 순서만 허용됩니다.
 
 ---
