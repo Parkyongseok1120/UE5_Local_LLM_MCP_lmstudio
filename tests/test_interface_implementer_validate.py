@@ -21,3 +21,17 @@ def test_interface_implementer_drift_detected(tmp_path: Path) -> None:
     )
     findings = validate_interface_implementer_drift(tmp_path)
     assert any(f.code == "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH" for f in findings)
+
+
+def test_interface_return_type_drift_with_const_detected(tmp_path: Path) -> None:
+    (tmp_path / "HoldoutReturnInterface.h").write_text(
+        "#pragma once\nclass IHoldoutReturnInterface { public: virtual bool CanUse() const = 0; };\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "HoldoutReturnImplementer.h").write_text(
+        '#pragma once\n#include "HoldoutReturnInterface.h"\n'
+        "class FHoldoutReturnImplementer : public IHoldoutReturnInterface { public: void CanUse() const override; };\n",
+        encoding="utf-8",
+    )
+    findings = validate_interface_implementer_drift(tmp_path)
+    assert any(f.code == "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH" for f in findings)

@@ -57,6 +57,18 @@ def test_include_path_not_found_detected(tmp_path: Path) -> None:
     assert any(item.code == "INCLUDE_PATH_NOT_FOUND" for item in findings)
 
 
+def test_subsystems_include_not_flagged_as_missing(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "DemoSubsystem.h"
+    header.parent.mkdir(parents=True, exist_ok=True)
+    header.write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n#include "Subsystems/GameInstanceSubsystem.h"\n',
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(project)
+    assert not any(item.code == "INCLUDE_PATH_NOT_FOUND" for item in findings)
+
+
 def test_module_fix_build_cs_patch_skips_include_path_gate(tmp_path: Path) -> None:
     project = tmp_path / "CompileFixTags"
     source_root = FIXTURE / "Source"

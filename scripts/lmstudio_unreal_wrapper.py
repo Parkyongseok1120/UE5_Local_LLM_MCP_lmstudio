@@ -45,6 +45,7 @@ from unreal_static_validate import (
     Finding,
     UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST,
     build_cs_text,
+    can_run_autofix_ubt,
     declared_build_modules,
     format_findings,
     has_static_errors,
@@ -1693,15 +1694,27 @@ def no_change_blockers(request: str, root: Path, findings: list[Finding]) -> lis
             issues.append(
                 "The request is a reflection/generated.h fix, but static validation still reports generated.h issues."
             )
-    if request_mentions_any(request, ("signature", "시그니처", "declaration", "definition", ".cpp")):
+    if request_mentions_any(request, ("signature", "시그니처", "declaration", "definition", ".cpp", "parameter", "callback", "registration")):
         signature_findings = [
             finding
             for finding in findings
-            if finding.code in {"CPP_FUNCTION_NOT_DECLARED_IN_HEADER", "CPP_FUNCTION_SIGNATURE_MISMATCH"}
+            if finding.code
+            in {
+                "CPP_FUNCTION_NOT_DECLARED_IN_HEADER",
+                "CPP_FUNCTION_SIGNATURE_MISMATCH",
+                "CALLBACK_FUNCTION_POINTER_MISMATCH",
+                "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH",
+            }
         ]
         if signature_findings:
             issues.append(
                 "The request appears to be a header/.cpp signature fix, but static validation still reports a .cpp/header mismatch."
+            )
+    callback_findings = [finding for finding in findings if finding.code == "CALLBACK_FUNCTION_POINTER_MISMATCH"]
+    if callback_findings or request_mentions_any(request, ("callback", "registration", "parameter list")):
+        if callback_findings:
+            issues.append(
+                "The callback registration still does not match the handler signature; update header, cpp, and registration together."
             )
     delegate_findings = [finding for finding in findings if finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH"]
     if delegate_findings or request_mentions_any(request, ("broadcast", "delegate")):
@@ -1775,6 +1788,22 @@ def restore_changed_paths(root: Path, snapshot: dict[str, str], changed_paths: l
         write_file(target, old_text)
 
 
+def multifile_pattern_hint(request: str) -> str:
+    lower = str(request or "").lower()
+    hints: list[str] = []
+    if "interface" in lower and ("return type" in lower or "implementer" in lower):
+        hints.append("Pattern: align implementer header + cpp return type/signature with the interface declaration in one patch.")
+    if "subsystem" in lower and ("applydata" in lower or "api move" in lower or "consumer" in lower):
+        hints.append("Pattern: rename cpp definition and consumer callsites to the header-declared method name.")
+    if "callback" in lower or "registration" in lower or "parameter list" in lower:
+        hints.append("Pattern: expand handler header/cpp params to match the callback typedef, then keep registration assignment.")
+    if "prepare" in lower and "commit" in lower:
+        hints.append("Pattern: replace stale combined method with split header methods and update consumer callsites.")
+    if "split" in lower and "callsite" in lower:
+        hints.append("Pattern: update cpp definitions and consumer callsites together; do not reintroduce removed combined methods.")
+    return "\n".join(hints)
+
+
 def multifile_required_surface_hint(mode: str, request: str, root: Path) -> str:
     if str(mode or "") != "multifile_refactor" and not multifile_surface_enforced(mode, request):
         return ""
@@ -1793,7 +1822,11 @@ def multifile_required_surface_hint(mode: str, request: str, root: Path) -> str:
         surfaces.append("refactor surface evidence below")
     if not surfaces:
         return ""
-    return "Required multifile surfaces: " + "; ".join(dict.fromkeys(surfaces))
+    pattern_hint = multifile_pattern_hint(request)
+    parts = ["Required multifile surfaces: " + "; ".join(dict.fromkeys(surfaces))]
+    if pattern_hint:
+        parts.append(pattern_hint)
+    return "\n".join(parts)
 
 
 def multifile_exact_snippets(root: Path, paths: list[str], *, context_lines: int = 1) -> str:
@@ -2742,6 +2775,11 @@ def static_validation_retry_feedback(
             "Static validation reports interface implementer signature drift.\n"
             "Read the interface header and update implementer header/cpp together in one patch."
         )
+    if any(finding.code == "CALLBACK_FUNCTION_POINTER_MISMATCH" for finding in findings or []):
+        return (
+            "Static validation reports callback/function-pointer signature drift.\n"
+            "Update the handler header, cpp definition, and registration assignment together."
+        )
     if any(finding.code == "CPP_FUNCTION_SIGNATURE_MISMATCH" for finding in findings or []):
         return STATIC_SIGNATURE_RETRY_HINT
     if any(finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for finding in findings or []):
@@ -3541,7 +3579,7 @@ def run(args: argparse.Namespace) -> int:
         static_report = format_findings(last_findings)
         write_file(run_dir / "static_autofix.txt", static_report + "\n")
         write_file(final_diff_path, diff_snapshots(baseline_snapshot, snapshot_project_files(project_root)) + "\n")
-        if not has_static_errors(last_findings) and not args.skip_build:
+        if can_run_autofix_ubt(last_findings, autofix_written=True) and not args.skip_build:
             last_build = run_ubt(
                 Path(args.ubt_path),
                 project_file,
@@ -3574,6 +3612,44 @@ def run(args: argparse.Namespace) -> int:
             )
         else:
             previous_feedback = "Safe static generated.h autofix was applied, but static validation still reports issues:\n" + static_report
+
+    if (
+        not static_autofix_written
+        and args.mode == "multifile_refactor"
+        and can_run_autofix_ubt(initial_findings, autofix_written=False)
+        and not args.skip_build
+    ):
+        seed_build = run_ubt(
+            Path(args.ubt_path),
+            project_file,
+            target,
+            args.platform,
+            args.configuration,
+            run_dir / "initial_seed_build.log",
+            args.build_timeout,
+        )
+        if seed_build.ok:
+            summary = final_summary(
+                status="BUILD_OK",
+                run_dir=run_dir,
+                project_file=project_file,
+                source_project_file=prepared.source_project_file,
+                direct_project_write=prepared.direct_project_write,
+                target=target,
+                answer="Project already compiles before model edits.",
+                written=[],
+                build_result=seed_build,
+                findings=initial_findings,
+                final_diff_path=final_diff_path,
+            )
+            write_file(run_dir / "final_answer.md", summary)
+            print(summary)
+            return 0
+        previous_feedback = "Initial compile before model edits failed:\n" + tail_text(
+            seed_build.output,
+            token_budget.feedback_tail_chars("compile_fix"),
+        )
+        last_build = seed_build
 
     edit_limits = edit_limits_for_mode(profile_edit_limits(), original_mode)
     prompt_prefix = system_prompt_static_prefix(rules_text, edit_limits)
@@ -3644,6 +3720,10 @@ def run(args: argparse.Namespace) -> int:
             f"Compile loop attempt {attempt}/{args.max_attempts}. "
             "List at most 3 assumptions; apply one minimal diff this turn.\n\n"
         )
+        if attempt == 1 and original_mode == "multifile_refactor":
+            surface_hint = multifile_required_surface_hint(original_mode, request, project_root)
+            if surface_hint:
+                previous_feedback = (previous_feedback + "\n\n" + surface_hint).strip()
         if last_recommendation.get("action") == "require_multifile_surfaces":
             surface_hint = multifile_required_surface_hint(original_mode, request, project_root)
             snippet_paths = list(dict.fromkeys((last_recommendation.get("blockedRepeatPaths") or []) + changed_files_from_feedback(last_build_records, last_findings)))
