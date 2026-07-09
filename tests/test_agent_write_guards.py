@@ -307,6 +307,99 @@ console.log(JSON.stringify({ defaultMs, customMs, invalidMs }));
     assert payload["invalidMs"] == 45000
 
 
+def test_mutation_history_rejects_consecutive_identical_call() -> None:
+    script = """
+const history = require('./src/mutation-history.js');
+history.clearMutationHistory();
+const first = history.checkAndRecordMutation('replace_in_file', '/tmp/Foo.cpp', 'old\\u0000new\\u0000');
+const second = history.checkAndRecordMutation('replace_in_file', '/tmp/Foo.cpp', 'old\\u0000new\\u0000');
+const message = history.duplicateMutationMessage('replace_in_file', 'Source/Foo.cpp', second);
+console.log(JSON.stringify({
+  firstDuplicate: first.duplicate,
+  secondDuplicate: second.duplicate,
+  secondConsecutive: second.consecutive,
+  message,
+}));
+"""
+    payload = _run_node(script)
+    assert payload["firstDuplicate"] is False
+    assert payload["secondDuplicate"] is True
+    assert payload["secondConsecutive"] is True
+    assert "read_file" in payload["message"]
+    assert "Do NOT repeat" in payload["message"]
+    assert "summarize" in payload["message"]
+
+
+def test_mutation_history_allows_one_interleaved_retry_then_rejects() -> None:
+    # write Foo.cpp -> fix Foo.h -> retry identical Foo.cpp is legitimate once;
+    # the third identical attempt is a loop.
+    script = """
+const history = require('./src/mutation-history.js');
+history.clearMutationHistory();
+const first = history.checkAndRecordMutation('write_file', '/tmp/Foo.cpp', 'content-a');
+const other = history.checkAndRecordMutation('write_file', '/tmp/Foo.h', 'header');
+const retry = history.checkAndRecordMutation('write_file', '/tmp/Foo.cpp', 'content-a');
+const another = history.checkAndRecordMutation('write_file', '/tmp/Bar.h', 'bar');
+const third = history.checkAndRecordMutation('write_file', '/tmp/Foo.cpp', 'content-a');
+console.log(JSON.stringify({
+  first: first.duplicate,
+  other: other.duplicate,
+  retry: retry.duplicate,
+  third: third.duplicate,
+  thirdAttempts: third.attempts,
+}));
+"""
+    payload = _run_node(script)
+    assert payload["first"] is False
+    assert payload["other"] is False
+    assert payload["retry"] is False
+    assert payload["third"] is True
+    assert payload["thirdAttempts"] == 3
+
+
+def test_mutation_history_ttl_and_cap_eviction() -> None:
+    script = """
+const history = require('./src/mutation-history.js');
+history.clearMutationHistory();
+// TTL: identical call after expiry is treated as fresh.
+const t0 = 1000000;
+history.checkAndRecordMutation('write_file', '/tmp/A.cpp', 'x', { now: t0, ttlMs: 5000 });
+const expired = history.checkAndRecordMutation('write_file', '/tmp/A.cpp', 'x', { now: t0 + 6000, ttlMs: 5000 });
+// Cap: oldest entries evicted beyond maxEntries.
+history.clearMutationHistory();
+for (let i = 0; i < 5; i++) {
+  history.checkAndRecordMutation('write_file', '/tmp/file' + i + '.cpp', 'c' + i, { now: t0 + i, maxEntries: 3 });
+}
+const size = history.mutationHistorySize();
+console.log(JSON.stringify({ expiredDuplicate: expired.duplicate, size }));
+"""
+    payload = _run_node(script)
+    assert payload["expiredDuplicate"] is False
+    assert payload["size"] <= 4  # pruned to maxEntries before each insert
+
+
+def test_mutation_history_distinguishes_paths_and_payloads() -> None:
+    script = """
+const history = require('./src/mutation-history.js');
+history.clearMutationHistory();
+history.checkAndRecordMutation('replace_in_file', '/tmp/Foo.cpp', 'old\\u0000new\\u0000');
+const differentPath = history.checkAndRecordMutation('replace_in_file', '/tmp/Bar.cpp', 'old\\u0000new\\u0000');
+const differentPayload = history.checkAndRecordMutation('replace_in_file', '/tmp/Foo.cpp', 'old\\u0000other\\u0000');
+const differentTool = history.checkAndRecordMutation('write_file', '/tmp/Foo.cpp', 'old\\u0000new\\u0000');
+console.log(JSON.stringify({
+  differentPath: differentPath.duplicate,
+  differentPayload: differentPayload.duplicate,
+  differentTool: differentTool.duplicate,
+}));
+"""
+    payload = _run_node(script)
+    assert payload == {
+        "differentPath": False,
+        "differentPayload": False,
+        "differentTool": False,
+    }
+
+
 def test_resolve_validate_on_write_reads_current_allow_write_env() -> None:
     script = """
 const validateWrite = require('./src/validate-write.js');

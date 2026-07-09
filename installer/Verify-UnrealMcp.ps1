@@ -73,6 +73,7 @@ Check "unreal_rag_mcp.py compile" {
 }
 Check "agent server.js" { if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) { throw "missing" } }
 Check "agent write-locks.js" { if (-not (Test-Path (Join-Path $agentRoot "src\write-locks.js"))) { throw "missing write-locks.js (single-flight write guard)" } }
+Check "agent mutation-history.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-history.js"))) { throw "missing mutation-history.js (duplicate-call loop breaker)" } }
 Check "python version" {
     $out = & $py --version 2>&1 | Out-String
     if ($out -notmatch "Python") { throw $out.Trim() }

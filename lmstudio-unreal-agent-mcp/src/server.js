@@ -66,6 +66,10 @@ const {
   tryAcquirePathLock,
   releasePathLock
 } = require("./write-locks.js");
+const {
+  checkAndRecordMutation,
+  duplicateMutationMessage
+} = require("./mutation-history.js");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -706,7 +710,7 @@ function allAgentTools() {
       },
       {
         name: "replace_in_file",
-        description: "Safely replace exact text in a file. Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying.",
+        description: "Safely replace exact text in a file. Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying. Byte-identical repeat calls are rejected as a loop guard.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           oldText: { type: "string", description: "Exact text to replace." },
@@ -1069,6 +1073,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.createDirs) await fsp.mkdir(parent, { recursive: true });
         if (!(await exists(parent))) return fail(`parent directory not found: ${path.relative(WORKSPACE_ROOT, parent)}`);
         const rel = path.relative(WORKSPACE_ROOT, target);
+        const repeat = checkAndRecordMutation("write_file", target, String(args.content || ""));
+        if (repeat.duplicate) {
+          return fail(duplicateMutationMessage("write_file", rel, repeat));
+        }
         const targetExists = await exists(target);
         const priorContent = targetExists ? await fsp.readFile(target, "utf8") : null;
         const contentToWrite = String(args.content || "");
@@ -1145,6 +1153,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return fail("previous write still in progress on this path; verify file state with read_file before retrying.");
       }
       try {
+        const repeat = checkAndRecordMutation(
+          "replace_in_file",
+          target,
+          `${oldText}\u0000${newText}\u0000${args.expectedOccurrences ?? ""}`
+        );
+        if (repeat.duplicate) {
+          return fail(duplicateMutationMessage("replace_in_file", path.relative(WORKSPACE_ROOT, target), repeat));
+        }
         const raw = await readCachedBufferFile(target, s);
         const hasCRLF = raw.includes(Buffer.from("\r\n"));
         // Normalize to LF for matching; preserve original line endings in output
