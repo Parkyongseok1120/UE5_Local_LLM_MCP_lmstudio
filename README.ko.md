@@ -105,6 +105,28 @@ cd UE5_Local_LLM_MCP_lmstudio
 .\rag.ps1 ask -Question "Show me a C++ example of attaching a custom Component to an Actor"
 ```
 
+## 실사용 세션 팁
+
+Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 길게 이어지는 채팅**은 별개 문제입니다. tool 결과, build log, retry가 쌓이면 MCP는 정상인데도 요청이 실패합니다.
+
+| LM Studio 로그 증상 | 대응 |
+|---|---|
+| `request (...) exceeds the available context size (54272)` | **새 채팅 시작.** 진행 상황을 5–10줄로 요약한 뒤 이어가세요. 같은 스레드에서 반복 재시도하지 마세요. |
+| `failed to restore kv cache` / `cache size limit reached` | 위와 동일 — 세션 메모리가 포화된 상태입니다. context만 올리는 것보다 새 채팅이 빠릅니다. |
+| 긴 수정 루프 뒤 `Model failed to generate a tool call` | 멈추고, 변경 파일 + 남은 에러를 요약한 뒤 새 채팅으로. |
+| Unreal 작업 중 로그에 `js-code-sandbox` 등장 | 위 Quick Install 안내대로 비활성화하세요. |
+
+실프로젝트 작업 시 실전 규칙:
+
+- 가능하면 **채팅 하나에 범위를 좁히기** (예: “컴파일 에러 3개 수정”, “dev console 전체 구현”은 한 세션에 넣지 않기).
+- **UBT/linker 전체 로그를 채팅에 붙여넣지 마세요.** `read_unreal_logs` 또는 로그 파일 경로를 쓰고, 첫 번째 의미 있는 에러 구간만 공유하세요.
+- **헤더 → .cpp 순서는 정상입니다.** 새 헤더에 `write_file` 후 `CPP_DEFINITION_MISSING` advisory가 보일 수 있습니다. 매칭 `.cpp`를 쓰기 전까지는 기대되는 동작이며, 그 자체로 롤백 사유가 아닙니다.
+- 모델이 자주 지어내는 **UE API**는 피하세요: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. 대신 `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, 값으로 넘기는 `SpawnTransform`, 소유 actor/subsystem의 `GetWorld()`를 쓰세요.
+
+v1.3.0에서 session handoff artifact와 build-log token diet를 강화할 예정입니다. 그 전까지는 **새 채팅 + 짧은 turn**이 가장 확실합니다.
+
+자세한 내용: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md), [Troubleshooting.md](docs/Troubleshooting.md).
+
 전체 요구사항, Mac remote setup, model profile, security note는 [Project_Overview.md](docs/Project_Overview.md)에 정리되어 있습니다.
 
 ## 주요 문서
@@ -125,6 +147,7 @@ cd UE5_Local_LLM_MCP_lmstudio
 | Safe vs agent mode | [docs/Safe_Agent_Mode.md](docs/Safe_Agent_Mode.md) |
 | Live eval checklist | [docs/Live_Eval_Checklist.md](docs/Live_Eval_Checklist.md) |
 | Model profiles | [docs/Model_Profiles.md](docs/Model_Profiles.md) |
+| LM Studio MCP tool discipline | [docs/LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md) |
 | Troubleshooting | [docs/Troubleshooting.md](docs/Troubleshooting.md) |
 | Security | [SECURITY.md](SECURITY.md) |
 

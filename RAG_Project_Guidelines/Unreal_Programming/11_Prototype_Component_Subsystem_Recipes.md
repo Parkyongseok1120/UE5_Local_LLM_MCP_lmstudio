@@ -45,7 +45,7 @@ Rules:
 
 1. Base class: `UWorldSubsystem`.
 2. Override `ShouldCreateSubsystem` only when needed.
-3. Use `Initialize(FSubsystemCollectionBase&)` / `Deinitialize()` — not `BeginPlay`.
+3. Use `Initialize(FSubsystemCollectionBase&)` for setup — not `BeginPlay`. For teardown that must run while the world is still valid (unregistering from world-scoped delegates, stopping timers), use `OnWorldEndPlay(UWorld&)` and/or `PreDeinitialize()`; `Deinitialize()` alone can run after the world has already been torn down. There is no `OnWorldDestroyed` override on `UWorldSubsystem` — do not invent it.
 4. No `CreateDefaultSubobject`, no `AActor` members without clear lifetime rules.
 5. Do not use `Tick`; use timers, delegates, or world events.
 6. World access flows from the subsystem: use `GetWorld()` on the subsystem itself, never `GEngine->GetWorld()` / `GEngine->GetGameInstance()` (null or wrong world in PIE/multi-world).

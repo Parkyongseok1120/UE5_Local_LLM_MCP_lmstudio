@@ -13,11 +13,16 @@ from unreal_static_validate import (  # noqa: E402
     validate_unreal_readiness,
     validate_generated_h,
     validate_delegate_broadcast_consistency,
+    build_delegate_arity_map,
     validate_uht_macros_in_conditional_blocks,
     validate_gengine_world_context,
     validate_static_mutable_container_members,
+    validate_missing_super_lifecycle_call,
+    validate_replication_setup,
     build_source_include_index,
     has_static_errors,
+    has_blocking_write_errors,
+    normalize_rel_path,
     should_block_llm_apply_static_gate,
 )
 from retry_feedback import static_validation_retry_feedback  # noqa: E402
@@ -431,7 +436,9 @@ public:
     )
 
 
-def test_delegate_broadcast_empty_args_detected(tmp_path: Path) -> None:
+def test_delegate_broadcast_empty_args_silent_when_declaration_unknown(tmp_path: Path) -> None:
+    # No header in the project declares OnScoreChanged's delegate type, so the arity
+    # is unknown: staying silent is the correct (non-blocking) call, not a false error.
     project = tmp_path / "Demo"
     cpp = project / "Source" / "Demo" / "Private" / "Score.cpp"
     _write(
@@ -444,6 +451,190 @@ void Trigger()
 }
 """,
     )
-    findings = validate_delegate_broadcast_consistency(cpp, cpp.read_text(encoding="utf-8"), project)
+    findings = validate_delegate_broadcast_consistency(cpp, cpp.read_text(encoding="utf-8"), project, {})
+    assert not any(item.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for item in findings)
+
+
+def test_delegate_broadcast_zero_param_delegate_not_flagged(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "Score.h"
+    cpp = project / "Source" / "Demo" / "Private" / "Score.cpp"
+    _write(
+        header,
+        """#pragma once
+#include "CoreMinimal.h"
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSomethingHappened);
+
+class UScore
+{
+public:
+	FOnSomethingHappened OnSomethingHappened;
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "Score.h"
+
+void Trigger()
+{
+	OnSomethingHappened.Broadcast();
+}
+""",
+    )
+    arity_map = build_delegate_arity_map(project)
+    findings = validate_delegate_broadcast_consistency(cpp, cpp.read_text(encoding="utf-8"), project, arity_map)
+    assert not any(item.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for item in findings)
+
+
+def test_delegate_broadcast_one_param_delegate_flagged_when_empty(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "Score.h"
+    cpp = project / "Source" / "Demo" / "Private" / "Score.cpp"
+    _write(
+        header,
+        """#pragma once
+#include "CoreMinimal.h"
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnScoreChanged, int32, Score);
+
+class UScore
+{
+public:
+	FOnScoreChanged OnScoreChanged;
+};
+""",
+    )
+    _write(
+        cpp,
+        """#include "Score.h"
+
+void Trigger()
+{
+	OnScoreChanged.Broadcast();
+}
+""",
+    )
+    arity_map = build_delegate_arity_map(project)
+    findings = validate_delegate_broadcast_consistency(cpp, cpp.read_text(encoding="utf-8"), project, arity_map)
     assert any(item.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH" for item in findings)
+
+
+def test_missing_super_lifecycle_call_warns_without_super(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "MyActor.cpp"
+    _write(
+        cpp,
+        """#include "MyActor.h"
+
+void AMyActor::BeginPlay()
+{
+	UE_LOG(LogTemp, Log, TEXT("Started"));
+}
+""",
+    )
+    findings = validate_missing_super_lifecycle_call(cpp, cpp.read_text(encoding="utf-8"), project)
+    assert any(item.code == "MISSING_SUPER_LIFECYCLE_CALL" and item.severity == "warning" for item in findings)
+
+
+def test_missing_super_lifecycle_call_silent_when_super_called(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "MyActor.cpp"
+    _write(
+        cpp,
+        """#include "MyActor.h"
+
+void AMyActor::BeginPlay()
+{
+	Super::BeginPlay();
+	UE_LOG(LogTemp, Log, TEXT("Started"));
+}
+""",
+    )
+    findings = validate_missing_super_lifecycle_call(cpp, cpp.read_text(encoding="utf-8"), project)
+    assert not any(item.code == "MISSING_SUPER_LIFECYCLE_CALL" for item in findings)
+
+
+def test_replication_setup_incomplete_when_props_function_missing(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "Health.cpp"
+    _write(
+        cpp,
+        """#include "Health.h"
+
+void UHealth::SomeOtherFunction()
+{
+	DOREPLIFETIME(UHealth, CurrentHealth);
+}
+""",
+    )
+    findings = validate_replication_setup(project)
+    assert any(item.code == "REPLICATION_SETUP_INCOMPLETE" and item.severity == "warning" for item in findings)
+
+
+def test_replication_setup_incomplete_when_super_missing(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "Health.cpp"
+    _write(
+        cpp,
+        """#include "Health.h"
+
+void UHealth::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	DOREPLIFETIME(UHealth, CurrentHealth);
+}
+""",
+    )
+    findings = validate_replication_setup(project)
+    assert any(item.code == "REPLICATION_SETUP_INCOMPLETE" and item.severity == "warning" for item in findings)
+
+
+def test_replication_setup_complete_is_silent(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "Health.cpp"
+    _write(
+        cpp,
+        """#include "Health.h"
+
+void UHealth::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(UHealth, CurrentHealth);
+}
+""",
+    )
+    findings = validate_replication_setup(project)
+    assert not any(item.code == "REPLICATION_SETUP_INCOMPLETE" for item in findings)
+
+
+def test_normalize_rel_path_handles_slashes_and_case() -> None:
+    assert normalize_rel_path("Source\\Foo\\Bar.h") == normalize_rel_path("Source/foo/BAR.h")
+    assert normalize_rel_path("Source/Foo/Bar.h") == "source/foo/bar.h"
+
+
+def test_has_blocking_write_errors_scopes_to_written_file() -> None:
+    findings = [
+        Finding("error", "Source/Other/Existing.h", 1, "GENERATED_H_NOT_LAST", "pre-existing"),
+        Finding("warning", "Source/Demo/New.h", 2, "STATIC_MUTABLE_CONTAINER_MEMBER", "warn"),
+    ]
+    # Pre-existing error lives in a different file than the one just written.
+    assert not has_blocking_write_errors(findings, "Source/Demo/New.h")
+    # Same file path, but backslash-separated and differently cased, must still match.
+    assert has_blocking_write_errors(findings, "Source\\OTHER\\existing.h")
+
+
+def test_has_blocking_write_errors_defers_counterpart_codes() -> None:
+    findings = [
+        Finding("error", "Source/Demo/New.h", 5, "CPP_DEFINITION_MISSING", "declared but not defined"),
+    ]
+    # Deferred counterpart codes never block, even when the error is on the written file.
+    assert not has_blocking_write_errors(findings, "Source/Demo/New.h")
+
+
+def test_has_blocking_write_errors_blocks_own_file_error() -> None:
+    findings = [
+        Finding("error", "Source/Demo/New.h", 9, "UHT_MACRO_IN_CONDITIONAL_BLOCK", "illegal macro"),
+    ]
+    assert has_blocking_write_errors(findings, "Source/Demo/New.h")
 
