@@ -97,3 +97,4 @@ def test_patch_unreal_agent_sets_validate_on_write_and_timeout(tmp_path) -> None
 
     assert patched["timeout"] == mod.DEFAULT_UNREAL_AGENT_MCP_TIMEOUT_MS
     assert patched["env"]["VALIDATE_ON_WRITE"] == "1"
+    assert patched["env"]["VALIDATE_ON_WRITE_TIMEOUT_MS"] == "45000"

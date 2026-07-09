@@ -72,6 +72,7 @@ Check "unreal_rag_mcp.py compile" {
     finally { Pop-Location }
 }
 Check "agent server.js" { if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) { throw "missing" } }
+Check "agent write-locks.js" { if (-not (Test-Path (Join-Path $agentRoot "src\write-locks.js"))) { throw "missing write-locks.js (single-flight write guard)" } }
 Check "python version" {
     $out = & $py --version 2>&1 | Out-String
     if ($out -notmatch "Python") { throw $out.Trim() }
