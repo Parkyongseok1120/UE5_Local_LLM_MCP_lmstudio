@@ -143,10 +143,18 @@ async function resolveProjectRootForFile(absPath, getActiveProject) {
   return null;
 }
 
+function blockingErrorsOf(payload) {
+  if (payload && Object.prototype.hasOwnProperty.call(payload, "hasBlockingErrors")) {
+    return Boolean(payload.hasBlockingErrors);
+  }
+  return Boolean(payload && payload.hasErrors);
+}
+
 async function runStaticValidation(projectRoot, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
     ? options.timeoutMs
     : STATIC_VALIDATION_TIMEOUT_MS;
+  const writeTarget = options.writeTarget || null;
   const script = path.join(UNREAL58_ROOT, "scripts", "validate_project_sources.py");
   if (!fs.existsSync(script)) {
     return {
@@ -165,10 +173,14 @@ async function runStaticValidation(projectRoot, options = {}) {
   }
 
   const python = resolvePythonExe();
+  const args = [script, "--project-root", projectRoot, "--json"];
+  if (writeTarget) {
+    args.push("--write-target", writeTarget);
+  }
   try {
     const { stdout } = await execFile(
       python,
-      [script, "--project-root", projectRoot, "--json"],
+      args,
       {
         cwd: UNREAL58_ROOT,
         timeout: timeoutMs,
@@ -177,10 +189,13 @@ async function runStaticValidation(projectRoot, options = {}) {
     );
     const payload = JSON.parse(stdout);
     return {
-      ok: !payload.hasErrors,
+      ok: !blockingErrorsOf(payload),
       skipped: false,
       projectRoot,
+      writeTarget,
       findingCount: payload.findingCount,
+      deferredCount: payload.deferredCount || 0,
+      preExistingCount: payload.preExistingCount || 0,
       findings: payload.findings || [],
     };
   } catch (error) {
@@ -192,12 +207,18 @@ async function runStaticValidation(projectRoot, options = {}) {
     } catch {
       parsed = null;
     }
-    if (parsed && parsed.hasErrors) {
+    // The script exits non-zero whenever ANY error exists project-wide, even if it is
+    // pre-existing in another file or a deferred counterpart finding. Use the scoped
+    // hasBlockingErrors field (not the exit code) to decide whether this write is ok.
+    if (parsed) {
       return {
-        ok: false,
+        ok: !blockingErrorsOf(parsed),
         skipped: false,
         projectRoot,
+        writeTarget,
         findingCount: parsed.findingCount,
+        deferredCount: parsed.deferredCount || 0,
+        preExistingCount: parsed.preExistingCount || 0,
         findings: parsed.findings || [],
       };
     }
@@ -278,8 +299,10 @@ async function validateAfterWrite(absPath, getActiveProject) {
   if (!isSourceLike(absPath)) {
     return null;
   }
+  const writeTarget = path.relative(projectRoot, absPath).split(path.sep).join("/");
   const result = await runStaticValidation(projectRoot, {
     timeoutMs: VALIDATE_ON_WRITE_TIMEOUT_MS,
+    writeTarget,
   });
   // Fail OPEN only when validation timed out: the write persists and we flag that
   // validation was skipped so the model runs static_validate_project before building.
@@ -321,6 +344,18 @@ function formatValidationResult(result) {
   }
   if (!result.ok) {
     lines.push("Validation FAILED. Fix findings before claiming compile readiness.");
+  } else if (result.writeTarget && (result.deferredCount || result.preExistingCount)) {
+    lines.push(`Validation passed for this write (no blocking errors on ${result.writeTarget}).`);
+    if (result.deferredCount) {
+      lines.push(
+        `Advisory: ${result.deferredCount} deferred counterpart finding(s) (e.g. add the matching .cpp / _Implementation next).`
+      );
+    }
+    if (result.preExistingCount) {
+      lines.push(
+        `Note: ${result.preExistingCount} pre-existing error(s) in other files — run static_validate_project before claiming compile readiness.`
+      );
+    }
   } else {
     lines.push("Validation passed (no static errors).");
   }
@@ -336,4 +371,5 @@ module.exports = {
   formatValidationResult,
   runStaticValidation,
   resolveProjectRootForFile,
+  blockingErrorsOf,
 };

@@ -276,11 +276,74 @@ def _uclass_line_index(text: str) -> int:
     return len(text.splitlines()) + 1
 
 
-def validate_delegate_broadcast_consistency(path: Path, text: str, root: Path) -> list[Finding]:
+DELEGATE_PARAM_COUNT_WORDS = {
+    "One": 1,
+    "Two": 2,
+    "Three": 3,
+    "Four": 4,
+    "Five": 5,
+    "Six": 6,
+    "Seven": 7,
+    "Eight": 8,
+    "Nine": 9,
+}
+
+DELEGATE_DECLARE_RE = re.compile(
+    r"\bDECLARE_(?:DYNAMIC_)?MULTICAST_DELEGATE(?:_(One|Two|Three|Four|Five|Six|Seven|Eight|Nine)Params?)?"
+    r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+_DELEGATE_MEMBER_DECL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
+
+
+def build_delegate_arity_map(root: Path) -> dict[str, int]:
+    """Map delegate MEMBER variable names to their declared payload arg count.
+
+    Two-pass project-wide scan: first collect delegate TYPE -> param count from
+    DECLARE_(DYNAMIC_)MULTICAST_DELEGATE... macros, then collect MEMBER -> TYPE from
+    plain `TypeName MemberName;` declarations and resolve to MEMBER -> param count.
+    Members whose type can't be resolved this way are simply absent from the map,
+    which callers treat as "unknown" rather than assuming zero arguments.
+    """
+    type_param_counts: dict[str, int] = {}
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        text = read_text(path)
+        for match in DELEGATE_DECLARE_RE.finditer(text):
+            word = match.group(1)
+            delegate_type = match.group(2)
+            type_param_counts[delegate_type] = DELEGATE_PARAM_COUNT_WORDS.get(word or "", 0)
+
+    if not type_param_counts:
+        return {}
+
+    member_arity: dict[str, int] = {}
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        text = read_text(path)
+        for match in _DELEGATE_MEMBER_DECL_RE.finditer(text):
+            type_name, member_name = match.group(1), match.group(2)
+            if type_name in type_param_counts:
+                member_arity[member_name] = type_param_counts[type_name]
+    return member_arity
+
+
+def validate_delegate_broadcast_consistency(
+    path: Path, text: str, root: Path, arity_map: dict[str, int] | None = None
+) -> list[Finding]:
     findings: list[Finding] = []
     if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
         return findings
-    for match in re.finditer(r"\.Broadcast\s*\(\s*\)", text):
+    arity_map = arity_map or {}
+    for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\.Broadcast\s*\(\s*\)", text):
+        member_name = match.group(1)
+        # Unknown delegate declaration or a genuinely zero-param delegate: don't guess.
+        # Blocking a write on an uncertain match would be a worse UX outcome than
+        # missing a real mismatch here (the model still gets caught at UBT build time).
+        if not arity_map.get(member_name):
+            continue
         line_no = text[: match.start()].count("\n") + 1
         findings.append(
             Finding(
@@ -1232,6 +1295,46 @@ def validate_rpc_implementations(root: Path) -> list[Finding]:
     return findings
 
 
+def validate_replication_setup(root: Path) -> list[Finding]:
+    """Warn (never block) when DOREPLIFETIME is used without a matching, complete
+    GetLifetimeReplicatedProps override. Missing the override means the property never
+    replicates; missing the Super:: call silently drops base-class replicated props."""
+    findings: list[Finding] = []
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
+            continue
+        text = read_text(path)
+        if "DOREPLIFETIME" not in text:
+            continue
+        lifecycle_blocks = [
+            block for block in iter_function_blocks(text) if re.search(r"::GetLifetimeReplicatedProps\s*\(", block[0])
+        ]
+        if not lifecycle_blocks:
+            findings.append(
+                Finding(
+                    "warning",
+                    str(path.relative_to(root)),
+                    1,
+                    "REPLICATION_SETUP_INCOMPLETE",
+                    "DOREPLIFETIME is used but no GetLifetimeReplicatedProps override was found in this file.",
+                )
+            )
+            continue
+        for header, start, body in lifecycle_blocks:
+            if re.search(r"\bSuper::GetLifetimeReplicatedProps\s*\(", body):
+                continue
+            findings.append(
+                Finding(
+                    "warning",
+                    str(path.relative_to(root)),
+                    line_number(text, start),
+                    "REPLICATION_SETUP_INCOMPLETE",
+                    "GetLifetimeReplicatedProps does not call Super::GetLifetimeReplicatedProps(...); base-class replicated properties will not be registered.",
+                )
+            )
+    return findings
+
+
 def validate_build_modules(root: Path, source_text: str, build_text_value: str) -> list[Finding]:
     findings: list[Finding] = []
     module_rules = {
@@ -1364,6 +1467,40 @@ def iter_function_blocks(text: str) -> list[tuple[str, int, str]]:
             continue
         blocks.append((header, match.start(), text[open_index + 1 : close_index]))
     return blocks
+
+
+LIFECYCLE_METHODS_REQUIRING_SUPER = frozenset(
+    {"BeginPlay", "EndPlay", "Tick", "Initialize", "Deinitialize"}
+)
+
+
+def validate_missing_super_lifecycle_call(path: Path, text: str, root: Path) -> list[Finding]:
+    """Warn (never block) when a UE lifecycle override's body never calls the matching
+    Super:: method. This is a common LLM omission that silently breaks base-class
+    setup/teardown (e.g. AActor::BeginPlay, UWorldSubsystem::Deinitialize)."""
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
+        return findings
+    for header, start, body in iter_function_blocks(text):
+        name_match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)\s*\(", header)
+        if not name_match:
+            continue
+        class_name, method_name = name_match.group(1), name_match.group(2)
+        if method_name not in LIFECYCLE_METHODS_REQUIRING_SUPER:
+            continue
+        if re.search(rf"\bSuper::{re.escape(method_name)}\s*\(", body):
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                str(path.relative_to(root)),
+                line_number(text, start),
+                "MISSING_SUPER_LIFECYCLE_CALL",
+                f"{class_name}::{method_name} overrides a UE lifecycle hook but never calls "
+                f"Super::{method_name}(...); this can break base-class setup/teardown.",
+            )
+        )
+    return findings
 
 
 ACTION_STAGE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
@@ -1836,6 +1973,7 @@ def validate_unreal_readiness(
     include_index = build_source_include_index(root)
     headers = class_headers(root)
     bases = class_bases(root)
+    delegate_arity_map = build_delegate_arity_map(root)
     all_source_text = []
     for path in iter_source_files(root):
         text = read_text(path)
@@ -1866,12 +2004,14 @@ def validate_unreal_readiness(
             findings.extend(validate_newobject_outer(path, text, root))
             findings.extend(validate_component_timer_manager(path, text, root, bases))
             findings.extend(validate_cpp_declarations(path, text, root, headers))
-            findings.extend(validate_delegate_broadcast_consistency(path, text, root))
+            findings.extend(validate_delegate_broadcast_consistency(path, text, root, delegate_arity_map))
+            findings.extend(validate_missing_super_lifecycle_call(path, text, root))
     findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
     findings.extend(validate_include_owner_modules(root, build_text_value, include_owner_map))
     findings.extend(validate_duplicate_source_basenames(root))
     findings.extend(validate_rpc_implementations(root))
     findings.extend(validate_blueprint_native_event_implementations(root))
+    findings.extend(validate_replication_setup(root))
     findings.extend(validate_cpp_definitions_missing(root))
     findings.extend(validate_interface_implementer_drift(root))
     findings.extend(validate_callback_function_pointer_drift(root))
@@ -1909,6 +2049,41 @@ def format_findings(findings: list[Finding]) -> str:
 
 def has_static_errors(findings: list[Finding]) -> bool:
     return any(finding.severity == "error" for finding in findings)
+
+
+def normalize_rel_path(value: str) -> str:
+    return str(value or "").strip().replace("\\", "/").lower()
+
+
+# Codes whose "error" is really "the counterpart file hasn't been written yet in this
+# multi-turn edit" (declaration without matching .cpp/_Implementation). Blocking a write
+# on these punishes the normal header-then-cpp flow even when the just-written file has
+# no problem of its own; they are deferred rather than treated as write-time blockers.
+DEFERRED_WRITE_COUNTERPART_CODES = frozenset(
+    {
+        "CPP_DEFINITION_MISSING",
+        "RPC_IMPLEMENTATION_MISSING",
+        "BLUEPRINT_NATIVE_EVENT_IMPL_MISSING",
+    }
+)
+
+
+def has_blocking_write_errors(findings: list[Finding], write_target: str) -> bool:
+    """Whether a validate-on-write should roll back the just-written file.
+
+    Only errors that are (a) not a deferred counterpart code and (b) located on the
+    file that was just written count as blocking. Pre-existing errors in other files,
+    and deferred counterpart findings anywhere, are surfaced as advisories instead.
+    """
+    target = normalize_rel_path(write_target)
+    for finding in findings:
+        if finding.severity != "error":
+            continue
+        if finding.code in DEFERRED_WRITE_COUNTERPART_CODES:
+            continue
+        if normalize_rel_path(finding.path) == target:
+            return True
+    return False
 
 
 ACTIONABLE_DRIFT_CODES = frozenset(

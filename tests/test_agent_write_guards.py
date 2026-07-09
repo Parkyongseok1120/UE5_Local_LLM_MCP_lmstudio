@@ -419,3 +419,76 @@ console.log(JSON.stringify({ defaultOn, explicitOff, explicitOn }));
         "explicitOn": True,
     }
 
+
+def test_run_static_validation_scopes_to_write_target(tmp_path: Path) -> None:
+    # Mock validator that always reports a project-wide error (exit 1, matching the
+    # real script's behavior) but scopes hasBlockingErrors to whether --write-target
+    # was passed, so we can exercise both the "ok" and "blocked" JS code paths.
+    mock_root = tmp_path / "mock_root"
+    (mock_root / "scripts").mkdir(parents=True)
+    (mock_root / "scripts" / "validate_project_sources.py").write_text(
+        "import json, sys\n"
+        "has_target = '--write-target' in sys.argv\n"
+        "print(json.dumps({\n"
+        "    'hasErrors': True,\n"
+        "    'hasBlockingErrors': not has_target,\n"
+        "    'findingCount': 1,\n"
+        "    'deferredCount': 1 if has_target else 0,\n"
+        "    'preExistingCount': 0,\n"
+        "    'findings': [{'severity': 'error', 'code': 'CPP_DEFINITION_MISSING', 'path': 'Source/Demo/New.h', 'line': 1, 'message': 'mock'}],\n"
+        "}))\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    script = f"""
+process.env.UNREAL58_ROOT = {json.dumps(str(mock_root))};
+const validateWrite = require('./src/validate-write.js');
+(async () => {{
+  const scoped = await validateWrite.runStaticValidation({json.dumps(str(tmp_path))}, {{ writeTarget: 'Source/Demo/New.h' }});
+  const unscoped = await validateWrite.runStaticValidation({json.dumps(str(tmp_path))});
+  console.log(JSON.stringify({{
+    scopedOk: scoped.ok,
+    scopedDeferred: scoped.deferredCount,
+    unscopedOk: unscoped.ok,
+  }}));
+}})();
+"""
+    payload = _run_node(script)
+    # With a writeTarget, the mock reports hasBlockingErrors=false -> the write stays.
+    assert payload["scopedOk"] is True
+    assert payload["scopedDeferred"] == 1
+    # Without a writeTarget (explicit static_validate_project call), hasBlockingErrors
+    # falls back to hasErrors=true -> unchanged full-project behavior.
+    assert payload["unscopedOk"] is False
+
+
+def test_format_validation_result_shows_advisory_for_scoped_pass() -> None:
+    script = """
+const validateWrite = require('./src/validate-write.js');
+const text = validateWrite.formatValidationResult({
+  ok: true,
+  projectRoot: '/tmp/Demo',
+  writeTarget: 'Source/Demo/New.h',
+  findingCount: 1,
+  deferredCount: 1,
+  preExistingCount: 0,
+  findings: [{ severity: 'error', code: 'CPP_DEFINITION_MISSING', path: 'Source/Demo/New.h', line: 1, message: 'mock' }],
+});
+console.log(JSON.stringify({ text }));
+"""
+    payload = _run_node(script)
+    text = payload["text"]
+    assert "Validation passed for this write" in text
+    assert "Advisory: 1 deferred counterpart finding(s)" in text
+
+
+def test_blocking_errors_of_falls_back_to_has_errors_when_field_missing() -> None:
+    script = """
+const validateWrite = require('./src/validate-write.js');
+const legacy = validateWrite.blockingErrorsOf({ hasErrors: true });
+const modern = validateWrite.blockingErrorsOf({ hasErrors: true, hasBlockingErrors: false });
+console.log(JSON.stringify({ legacy, modern }));
+"""
+    payload = _run_node(script)
+    assert payload == {"legacy": True, "modern": False}
+

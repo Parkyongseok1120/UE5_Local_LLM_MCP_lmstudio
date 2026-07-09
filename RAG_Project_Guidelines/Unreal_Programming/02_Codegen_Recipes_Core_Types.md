@@ -270,3 +270,21 @@ Advice:
 - Call BlueprintNativeEvent methods through `IMyInteractable::Execute_Interact(Object, InstigatorActor)`.
 - Do not assume the C++ interface pointer exists for Blueprint-only implementers.
 
+## Decision: BlueprintNativeEvent vs BlueprintImplementableEvent
+
+Intent: BlueprintNativeEvent BlueprintImplementableEvent choose event UFUNCTION default implementation.
+
+Both let Blueprints override a `UFUNCTION`. The difference is whether C++ also needs a default body:
+
+| Need | Use | C++ requirement |
+|---|---|---|
+| C++ has a default implementation that Blueprints may override | `BlueprintNativeEvent` | Must define `ClassName::FunctionName_Implementation(...)` in the `.cpp`. The plain `FunctionName` is never defined directly. |
+| C++ only declares the hook; only Blueprint (or nothing) implements it | `BlueprintImplementableEvent` | Must **not** define `FunctionName` or `FunctionName_Implementation` in C++ — UHT generates the dispatch, and a manual definition is a link/UHT error. |
+| C++ must call the function from C++ code | Either works, but call through `Execute_FunctionName(this, Args...)`, never the bare name | N/A |
+
+Common mistakes this table prevents:
+
+- Declaring `BlueprintNativeEvent` and forgetting the `_Implementation` definition → `CPP_DEFINITION_MISSING` / `LNK2019` at link time (see `25_LNK2019_Missing_Definition_Recipe.md`).
+- Declaring `BlueprintImplementableEvent` and then defining `FunctionName_Implementation` anyway (there is nothing to override; UHT already provides the implementation) — remove the manual definition.
+- Calling the bare `FunctionName(...)` on either kind from C++ instead of `Execute_FunctionName(...)` — the bare symbol either doesn't exist (`BlueprintImplementableEvent`) or skips the Blueprint override (`BlueprintNativeEvent`).
+
