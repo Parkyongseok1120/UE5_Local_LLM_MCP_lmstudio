@@ -142,6 +142,86 @@ const guards = require('./src/write-guards.js');
     assert "replace_in_file" in payload["existingMdMsg"]
 
 
+def test_exclusive_create_eexist_leaves_original_content_untouched(tmp_path: Path) -> None:
+    existing = tmp_path / "Existing.h"
+    existing.write_text("original content", encoding="utf-8")
+    script = f"""
+const fsp = require('fs').promises;
+(async () => {{
+  const target = {json.dumps(str(existing))};
+  let code = null;
+  try {{
+    await fsp.writeFile(target, 'attacker content', {{ encoding: 'utf8', flag: 'wx' }});
+  }} catch (err) {{
+    code = err.code;
+  }}
+  const content = await fsp.readFile(target, 'utf8');
+  console.log(JSON.stringify({{ code, content }}));
+}})();
+"""
+    payload = _run_node(script)
+    assert payload["code"] == "EEXIST"
+    assert payload["content"] == "original content"
+    assert existing.read_text(encoding="utf-8") == "original content"
+
+
+def test_validate_after_write_fail_open_on_timeout_fail_closed_on_findings(tmp_path: Path) -> None:
+    # Mock UNREAL58_ROOT with a slow validator and a failing validator to check
+    # both the time-budget fail-open path and the real-findings fail-closed path.
+    slow_root = tmp_path / "slow_root"
+    (slow_root / "scripts").mkdir(parents=True)
+    (slow_root / "scripts" / "validate_project_sources.py").write_text(
+        "import time\ntime.sleep(30)\n", encoding="utf-8"
+    )
+    failing_root = tmp_path / "failing_root"
+    (failing_root / "scripts").mkdir(parents=True)
+    (failing_root / "scripts" / "validate_project_sources.py").write_text(
+        "import json\n"
+        "print(json.dumps({'hasErrors': True, 'findingCount': 1, 'findings': ["
+        "{'severity': 'error', 'code': 'MOCK_FINDING', 'path': 'x', 'line': 1, "
+        "'message': 'mock'}]}))\n",
+        encoding="utf-8",
+    )
+    project = tmp_path / "Demo"
+    source_file = project / "Source" / "Demo" / "Private" / "Thing.cpp"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("// x", encoding="utf-8")
+    (project / "Demo.uproject").write_text("{}", encoding="utf-8")
+
+    script = f"""
+process.env.VALIDATE_ON_WRITE = '1';
+process.env.VALIDATE_ON_WRITE_TIMEOUT_MS = '2000';
+process.env.UNREAL58_ROOT = {json.dumps(str(slow_root))};
+const validateWrite = require('./src/validate-write.js');
+(async () => {{
+  const absPath = {json.dumps(str(source_file))};
+  const timedOut = await validateWrite.validateAfterWrite(absPath, () => null);
+
+  // Point the module at the failing validator for the fail-closed check.
+  delete require.cache[require.resolve('./src/validate-write.js')];
+  process.env.UNREAL58_ROOT = {json.dumps(str(failing_root))};
+  const validateWrite2 = require('./src/validate-write.js');
+  const failed = await validateWrite2.validateAfterWrite(absPath, () => null);
+
+  console.log(JSON.stringify({{
+    timedOutOk: timedOut.ok,
+    timedOutSkipped: timedOut.skipped,
+    timedOutFlag: timedOut.timedOut,
+    note: timedOut.note || '',
+    failedOk: failed.ok,
+    failedCodes: (failed.findings || []).map((f) => f.code),
+  }}));
+}})();
+"""
+    payload = _run_node(script)
+    assert payload["timedOutOk"] is True
+    assert payload["timedOutSkipped"] is True
+    assert payload["timedOutFlag"] is True
+    assert "validation skipped (time budget)" in payload["note"]
+    assert payload["failedOk"] is False
+    assert "MOCK_FINDING" in payload["failedCodes"]
+
+
 def test_should_rollback_only_when_content_matches_own_write() -> None:
     script = """
 const guards = require('./src/write-guards.js');

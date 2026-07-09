@@ -66,6 +66,8 @@ Validation on write runs under a time budget (`VALIDATE_ON_WRITE_TIMEOUT_MS`, de
 
 `write_file` is **create-only**. It creates brand-new files and refuses to overwrite any file that already exists (every extension, not just source). To modify an existing file, use `replace_in_file`.
 
+The only override is the server env var `ALLOW_EXISTING_SOURCE_WRITE=1` in `%USERPROFILE%\.lmstudio\mcp.json`. It is a deliberate human-set escape hatch for one-off manual operations: the model cannot enable it through any tool argument, the server logs a startup warning while it is on, and `get_workspace_info` reports `allowExistingSourceWrite=true`. Unset it immediately after use.
+
 - If `write_file` returns `blocked because file already exists`: switch to `replace_in_file`. **Do not retry `write_file`** on that path.
 - On a tool timeout (`MCP error -32001`): never immediately retry the same write. First verify state with `list_directory` / `read_file`. If the file now exists, switch to `replace_in_file`; if the situation is unclear, stop and summarize for the user. A timeout is a hard-stop signal.
 - After a successful `write_file` / `replace_in_file`: report the changed file in one line, then continue to the next planned step automatically. Do not ask "continue?" after every file — successful work never waits for the user.
