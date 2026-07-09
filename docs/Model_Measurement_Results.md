@@ -8,10 +8,10 @@ These results are internal UE 5.8 RAG/MCP/UBT workflow measurements. They are no
 
 ### Latest 36-Case Live Holdout
 
-| Model loaded in LM Studio | Profile | Artifact | Pass@K | Pass@1 | Notes |
-|---|---|---|---:|---:|---|
-| `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | `qwen3_6_27b` | `20260709-144441-pass1-target` | 36/36 | 36/36 | Current v1.2.5 best run. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
-| `qwen3.5` | `qwen3_5_9b` | `20260709-153021-qwen35-9b` | 35/36 | 33/36 | Strong compact result. Failed `local_lnk2019_missing_cpp_definition`; single-file compile-fix tier was the weak point. |
+| Model loaded in LM Studio | Profile | Artifact | Live time | Pass@K | Pass@1 | Notes |
+|---|---|---|---:|---:|---:|---|
+| `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | `qwen3_6_27b` | `20260709-144441-pass1-target` | ~33m 37s | 36/36 | 36/36 | Current v1.2.5 best run. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
+| `qwen3.5` | `qwen3_5_9b` | `20260709-153021-qwen35-9b` | ~27m 22s | 35/36 | 33/36 | Strong compact result. Failed `local_lnk2019_missing_cpp_definition`; single-file compile-fix tier was the weak point. |
 
 ### Tier Breakdown
 
@@ -33,10 +33,10 @@ These results are internal UE 5.8 RAG/MCP/UBT workflow measurements. They are no
 
 ### 최신 36-case Live Holdout
 
-| LM Studio 로드 모델 | Profile | Artifact | Pass@K | Pass@1 | 비고 |
-|---|---|---|---:|---:|---|
-| `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | `qwen3_6_27b` | `20260709-144441-pass1-target` | 36/36 | 36/36 | 현재 v1.2.5 최고 결과. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
-| `qwen3.5` | `qwen3_5_9b` | `20260709-153021-qwen35-9b` | 35/36 | 33/36 | compact 모델치고 강한 결과. `local_lnk2019_missing_cpp_definition` 실패; single-file compile-fix tier가 약점. |
+| LM Studio 로드 모델 | Profile | Artifact | Live 시간 | Pass@K | Pass@1 | 비고 |
+|---|---|---|---:|---:|---:|---|
+| `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | `qwen3_6_27b` | `20260709-144441-pass1-target` | 약 33분 37초 | 36/36 | 36/36 | 현재 v1.2.5 최고 결과. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
+| `qwen3.5` | `qwen3_5_9b` | `20260709-153021-qwen35-9b` | 약 27분 22초 | 35/36 | 33/36 | compact 모델치고 강한 결과. `local_lnk2019_missing_cpp_definition` 실패; single-file compile-fix tier가 약점. |
 
 ### 세부 Tier 결과
 

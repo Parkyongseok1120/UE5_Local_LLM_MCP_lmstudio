@@ -51,6 +51,15 @@ If this project has been useful to you, please consider sponsoring — it helps 
 | Qwen 3.6 27B | 36/36 | 36/36 | `20260709-144441-pass1-target` |
 | Qwen 3.5 9B | 35/36 | 33/36 | `20260709-153021-qwen35-9b` |
 
+| Model / run | Live wall-clock time |
+|---|---:|
+| Qwen 3.6 27B | ~33m 37s |
+| Qwen 3.5 9B | ~27m 22s |
+
+<p>
+  <a href="docs/Holdout_Case_Difficulty.md"><img alt="Holdout Difficulty" src="https://img.shields.io/badge/Docs-36%20Case%20Difficulty-red?logo=gitbook"></a>
+</p>
+
 These are internal UE 5.8 RAG/MCP/UBT workflow measurements, not public standardized model benchmarks.
 
 > `Harness average attempts=0.389` in the best run means many cases were solved by deterministic static autofix before an LLM edit attempt. It is not a general model reasoning-depth metric.
@@ -100,8 +109,12 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 | Detailed project overview | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | Model measurement results | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | Version performance history | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
+| 36-case holdout difficulty | [docs/Holdout_Case_Difficulty.md](docs/Holdout_Case_Difficulty.md) |
 | v1.3.0 roadmap | [docs/Roadmap_1_3_0.md](docs/Roadmap_1_3_0.md) |
 | Evaluation claims and guardrails | [docs/Evaluation_Claim_Guardrail.md](docs/Evaluation_Claim_Guardrail.md) |
+| Sonnet 5 gap plan | [docs/Sonnet5_Gap_Plan.md](docs/Sonnet5_Gap_Plan.md) |
+| Eval metrics / telemetry | [docs/Eval_Metrics_Sonnet5_Gap.md](docs/Eval_Metrics_Sonnet5_Gap.md) |
+| Holdout eval guide | [docs/Holdout_Eval_Guide.md](docs/Holdout_Eval_Guide.md) |
 | RAG setup reference | [docs/RAG_Setup.md](docs/RAG_Setup.md) |
 | Mac mini / Mac Studio remote setup | [docs/Mac_Remote_Setup.md](docs/Mac_Remote_Setup.md) |
 | Safe vs agent mode | [docs/Safe_Agent_Mode.md](docs/Safe_Agent_Mode.md) |
