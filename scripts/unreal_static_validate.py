@@ -87,6 +87,7 @@ REFLECTED_TYPE_RE = re.compile(r"\b(UCLASS|USTRUCT|UENUM|UINTERFACE)\s*\(")
 REFLECTION_RE = re.compile(r"\b(UCLASS|USTRUCT|UENUM|UINTERFACE|GENERATED_BODY)\s*\(")
 EDITOR_ONLY_INCLUDES = (
     "UnrealEd.h",
+    "UEditorEngine.h",
     "Editor.h",
     "EditorUtilityWidget.h",
     "EditorUtilitySubsystem.h",
@@ -94,6 +95,16 @@ EDITOR_ONLY_INCLUDES = (
     "AssetToolsModule.h",
     "LevelEditor.h",
 )
+UE_DECLARATION_MACROS = {
+    "UCLASS",
+    "USTRUCT",
+    "UENUM",
+    "UINTERFACE",
+    "UFUNCTION",
+    "UPROPERTY",
+    "GENERATED_BODY",
+    "GENERATED_UCLASS_BODY",
+}
 RAW_UOBJECT_MEMBER_RE = re.compile(
     r"\b(?:UObject|AActor|APawn|AController|UActorComponent|USceneComponent|UDataAsset|"
     r"UTexture(?:2D)?|UMaterial(?:Interface|Instance)?|USoundBase|UAnimMontage)\s*\*\s*"
@@ -646,6 +657,16 @@ def validate_constructor_lifecycle_usage(path: Path, text: str, root: Path) -> l
 def validate_newobject_outer(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
     rel = str(path.relative_to(root))
+    for match in re.finditer(r"^\s*#\s*define\s+NewObject\b.*$", text, re.MULTILINE):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "NEWOBJECT_MACRO_SHADOW",
+                "A local NewObject macro shadows the UObject factory API; remove the macro and include UObject/UObjectGlobals.h.",
+            )
+        )
     for match in re.finditer(r"\bNewObject\s*<[^>]+>\s*\(\s*\)", text):
         findings.append(
             Finding(
@@ -1022,7 +1043,8 @@ def validate_cpp_definitions_missing(root: Path) -> list[Finding]:
         return findings
     all_cpp = "\n".join(read_text(path) for path in cpp_paths)
     method_decl_re = re.compile(
-        r"^\s*(?:virtual\s+)?[\w:<>,~*&\s]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*(?:const\s*)?(?:override\s*)?;",
+        r"^[ \t]*(?:virtual[ \t]+)?[\w:<>,~*& \t]+[ \t]+(?P<func>~?[A-Za-z_][A-Za-z0-9_]*)"
+        r"\s*\([^;{}]*\)\s*(?:const\s*)?(?:override\s*)?;",
         re.MULTILINE,
     )
     for class_name, header_text in headers.items():
@@ -1034,8 +1056,8 @@ def validate_cpp_definitions_missing(root: Path) -> list[Finding]:
                 header_path = path
                 break
         for match in method_decl_re.finditer(header_text):
-            func_name = match.group(1)
-            if func_name.startswith("~"):
+            func_name = match.group("func")
+            if func_name.startswith("~") or func_name in UE_DECLARATION_MACROS:
                 continue
             window = header_text[max(0, match.start() - 240) : match.start()]
             if "BlueprintImplementableEvent" in window:

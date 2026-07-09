@@ -30,6 +30,15 @@ def test_route_missing_include_to_module_fix():
     assert "explaining dependency without Build.cs patch" in route["forbiddenActions"]
 
 
+def test_route_ueditorengine_c1083_prefers_editor_boundary_over_module_fix():
+    route = error_taxonomy.route_error_action(
+        "fatal error C1083: Cannot open include file: 'UEditorEngine.h': No such file or directory"
+    )
+
+    assert route["errorSubkind"] == "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE"
+    assert "adding UnrealEd to runtime module as default fix" in route["forbiddenActions"]
+
+
 def test_route_link_error_avoids_build_cs_first():
     route = error_taxonomy.route_error_action(
         "error LNK2019: unresolved external symbol Foo plus declaration definition mismatch"

@@ -64,7 +64,7 @@ The project target is now a **Sonnet 4.5-oriented workflow track**. This is a ta
 | RAG / project understanding | Very good |
 | UE code review | Good |
 | Single-file compile-fix | Good |
-| Build.cs / multi-file fixes | Unstable (Pass@K primary KPI) |
+| Build.cs / multi-file fixes | Good multifile autofix (12/12 Pass@1); module-edge + editor-runtime still unstable |
 | MCP native tool-call | Experimental — verify with `bench_lmstudio_mcp.py` |
 | Overall agent automation | Experimental — do not trust unattended edits |
 

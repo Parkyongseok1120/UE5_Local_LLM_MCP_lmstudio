@@ -17,6 +17,11 @@ SUBKIND_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("BLUEPRINT_NATIVE_EVENT_IMPL_MISSING", "reflection_fix", re.compile(r"_Implementation.*not found|native event", re.I)),
     ("BLUEPRINT_NATIVE_EVENT_DUPLICATE_VIRTUAL", "reflection_fix", re.compile(r"duplicate.*virtual.*_Implementation", re.I)),
     ("BLUEPRINT_IMPLEMENTABLE_EVENT_INVALID_IMPL", "reflection_fix", re.compile(r"BlueprintImplementableEvent.*_Implementation|C2039.*_Implementation", re.I)),
+    (
+        "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE",
+        "module_fix",
+        re.compile(r"UnrealEd|UEditorEngine|GEditor|Editor.*runtime module", re.I),
+    ),
     ("MISSING_INCLUDE_OWNER_MODULE", "module_fix", re.compile(r"cannot open include|C1083", re.I)),
     ("PUBLIC_HEADER_PRIVATE_MODULE", "module_fix", re.compile(r"PublicDependencyModuleNames|private header.*public", re.I)),
     ("C1083_MISSING_INCLUDE", "module_fix", re.compile(r"C1083.*cannot open include", re.I)),
@@ -42,7 +47,6 @@ SUBKIND_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("LNK_MISSING_MODULE", "link_fix", re.compile(r"LNK.*module|undefined reference", re.I)),
     ("RPC_IMPLEMENTATION_MISSING", "compile_fix", re.compile(r"RPC|Server_|Client_|NetMulticast", re.I)),
     ("ENHANCED_INPUT_BINDING_ERROR", "compile_fix", re.compile(r"EnhancedInput|ETriggerEvent|BindAction", re.I)),
-    ("EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE", "module_fix", re.compile(r"UnrealEd|Editor.*runtime module", re.I)),
     (
         "DELEGATE_BROADCAST_SIGNATURE_MISMATCH",
         "compile_fix",

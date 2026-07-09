@@ -961,7 +961,7 @@ def align_route_to_eval_mode(route: dict[str, Any], mode: str, request: str) -> 
     elif mode == "reflection_fix":
         aligned["broadMode"] = "reflection_fix"
     elif mode in {"editor_runtime_fix", "editor_runtime_boundary"}:
-        aligned["broadMode"] = "module_fix"
+        aligned["broadMode"] = "editor_runtime_fix"
         aligned["errorSubkind"] = "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE"
     elif mode == "multifile_refactor":
         aligned["broadMode"] = "multifile_refactor"
@@ -1192,16 +1192,18 @@ def apply_editor_runtime_guard_autofix(root: Path, findings: list[Finding]) -> l
     editor_findings = [
         finding for finding in findings if finding.code == "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE"
     ]
+    editor_headers = {"UnrealEd.h", "UEditorEngine.h", "Editor.h"}
+    editor_symbol_re = re.compile(r"\b(?:GEditor|UEditorEngine::)\b")
     targets: set[Path] = set()
     for finding in editor_findings:
         target = (root / finding.path).resolve()
         if target.is_file():
             targets.add(target)
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
+        if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".cc", ".c", ".cxx", ".inl"}:
             continue
         text = read_text(path)
-        if "UnrealEd.h" in text and "WITH_EDITOR" not in text:
+        if any(header in text for header in editor_headers) or editor_symbol_re.search(text):
             targets.add(path)
     for target in sorted(targets, key=lambda p: str(p)):
         text = read_text(target)
@@ -1210,15 +1212,11 @@ def apply_editor_runtime_guard_autofix(root: Path, findings: list[Finding]) -> l
         idx = 0
         while idx < len(lines):
             line = lines[idx]
-            stripped = line.strip()
-            if '#include "UnrealEd.h"' in line or "#include <UnrealEd.h>" in line:
+            include_match = re.match(r'\s*#\s*include\s+[<"]([^>"]+)[>"]', line)
+            if include_match and include_match.group(1) in editor_headers:
                 idx += 1
                 continue
-            if "GEditor->" in line:
-                if not out or out[-1] != "#if WITH_EDITOR":
-                    out.append("#if WITH_EDITOR")
-                out.append(line)
-                out.append("#endif")
+            if editor_symbol_re.search(line):
                 idx += 1
                 continue
             out.append(line)
@@ -2117,6 +2115,8 @@ def build_retry_state_payload(
     static_findings: list[Finding] | None = None,
     build_output: str = "",
     attempt_history: list[dict[str, Any]] | None = None,
+    mode: str = "",
+    request: str = "",
 ) -> dict[str, Any]:
     first = records[0] if records else {}
     metadata = first.get("metadata") or {}
@@ -2131,6 +2131,8 @@ def build_retry_state_payload(
         build_log_path=build_log_path,
     )
     parsed_route = route_error_action(message, str(metadata.get("error_code") or ""))
+    if mode:
+        parsed_route = align_route_to_eval_mode(parsed_route, mode, request)
     route, route_preserved = preserve_specific_route(
         parsed_route,
         previous_route,
@@ -3652,6 +3654,8 @@ def run(args: argparse.Namespace) -> int:
             static_findings=last_findings,
             build_output=last_build.output,
             attempt_history=retry_records,
+            mode=original_mode,
+            request=request,
         )
         module_block = module_resolver_feedback(
             "\n".join([request, build_error_query(parsed_feedback.records, last_build.output)]),

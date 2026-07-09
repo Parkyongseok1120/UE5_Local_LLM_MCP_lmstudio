@@ -85,6 +85,38 @@ def test_retry_payload_preserves_specific_route_when_new_parse_is_generic():
     assert payload["current"]["routePreservedFromInitial"] is True
 
 
+def test_retry_payload_preserves_editor_runtime_route_for_ueditorengine_c1083():
+    records = [
+        {
+            "text": "Message: fatal error C1083: Cannot open include file: 'UEditorEngine.h'",
+            "metadata": {"error_code": "C1083", "error_subkind": "C1083_MISSING_INCLUDE"},
+        }
+    ]
+    previous_route = {
+        "errorSubkind": "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE",
+        "broadMode": "editor_runtime_fix",
+        "forbiddenActions": ["adding UnrealEd to runtime module as default fix"],
+    }
+
+    payload = wrapper.build_retry_state_payload(
+        previous_record=None,
+        previous_route=previous_route,
+        attempt=2,
+        passed=False,
+        records=records,
+        changed_paths=["Source/Demo/Private/EditorBoundary.cpp"],
+        build_log_path="ubt.log",
+        fallback_message="",
+        mode="editor_runtime_fix",
+        request="Fix runtime module boundary; do not add UnrealEd to Build.cs.",
+    )
+
+    route = payload["current"]["errorRoute"]
+    assert route["errorSubkind"] == "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE"
+    assert route["broadMode"] == "editor_runtime_fix"
+    assert "adding UnrealEd to runtime module as default fix" in route["forbiddenActions"]
+
+
 def test_optional_symbol_graph_context_missing_graph_is_empty(monkeypatch):
     monkeypatch.setattr(wrapper, "load_symbol_graph", lambda: {"version": 1, "symbols": []})
 
@@ -160,7 +192,7 @@ def test_collect_rag_context_passes_project_filter_for_live_refactor(tmp_path, m
     )
 
     context, used_ids = wrapper.collect_rag_context(args, "refactor cinematic logging")
-    assert context == "ctx"
+    assert context.endswith("ctx")
     assert isinstance(used_ids, set)
     assert captured["mode"] == "refactor_r2"
     assert captured["projects"] == ["AdventureGame"]

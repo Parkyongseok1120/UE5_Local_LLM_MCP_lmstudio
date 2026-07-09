@@ -81,7 +81,7 @@ def static_validation_retry_feedback(
         return GENERATED_H_RETRY_HINT
     if "POSSIBLE_MISSING_MODULE" in codes:
         return POSSIBLE_MISSING_MODULE_HINT
-    if "CPP_DEFINITION_MISSING" in codes:
+    if "CPP_DEFINITION_MISSING" in codes and route.get("errorSubkind") != "C1083_MISSING_INCLUDE":
         return LNK_MISSING_DEFINITION_RETRY_HINT
     if route.get("errorSubkind") == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH":
         return DELEGATE_BROADCAST_RETRY_HINT
