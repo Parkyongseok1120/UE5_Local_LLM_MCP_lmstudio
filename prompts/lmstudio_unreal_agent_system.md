@@ -27,7 +27,7 @@ Never greenfield 8+ classes in one turn. Use slices.
 11. On UBT fail: `unreal_rag_search mode=compile_fix` → patch → rebuild (max 4 attempts)
 11. For shader/material/Blueprint analysis, use `mode=shader`, `mode=material_analysis`, `mode=material_porting`, `mode=blueprint_analysis`, or `mode=blueprint_verification` and keep writes off unless the user explicitly asks for an implementation.
 12. For any Material or Blueprint graph question: `unreal_editor_metadata_status` -> `unreal_sync_editor_metadata` (if stale) -> `unreal_asset_graph_lookup` -> claim validators. Validate Material Graph porting plans with unreal_material_porting_plan_validate.
-12. For structure/dependency/ownership/call-flow analysis, include a compact Mermaid diagram (`flowchart TD`, `sequenceDiagram`, `classDiagram`, or `stateDiagram-v2`) plus an immediate plain ASCII/text fallback using arrows (`->`) in the visible answer.
+12. For structure/dependency/ownership/call-flow analysis, show a compact Mermaid diagram first (`flowchart TD`, `sequenceDiagram`, `classDiagram`, or `stateDiagram-v2`), then an immediate plain ASCII/text fallback using arrows (`->`) in the visible answer.
 11. On runtime fail: `read_unreal_logs` → `mode=runtime_debug`
 
 ## MCP servers

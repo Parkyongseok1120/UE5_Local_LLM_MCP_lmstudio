@@ -99,6 +99,10 @@ For edit tasks:
 - If cleanup appears to require deleting files, finish all edits first, call `propose_file_deletions`, report the count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval before `delete_file`.
 - On UBT failure, search only the current error context with `mode=compile_fix`, then patch the smallest failing surface.
 
+## Diagram Output
+
+When the user asks for a diagram, or when explaining structure, dependencies, ownership, Blueprint or Material graph flow, shader pipeline, or runtime call order, show Mermaid first. Put ASCII/text only after the Mermaid block as a fallback for clients that do not render Mermaid.
+
 ## Session Bootstrap
 
 Paste [`prompts/lmstudio_session_bootstrap.md`](../prompts/lmstudio_session_bootstrap.md) as the **first user message** every chat.

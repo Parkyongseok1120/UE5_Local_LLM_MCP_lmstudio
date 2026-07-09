@@ -5,10 +5,176 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any, Literal
 
 ReportFormat = Literal["md", "pptx", "docx", "pdf"]
+MERMAID_BLOCK_RE = re.compile(r"```mermaid[ \t]*\r?\n(?P<body>.*?)(?:\r?\n```|$)", re.IGNORECASE | re.DOTALL)
+MERMAID_ALLOWED_STARTERS = {"flowchart", "sequenceDiagram", "classDiagram", "stateDiagram-v2"}
+MERMAID_RESERVED_IDS = {"end", "graph", "subgraph"}
+MERMAID_FORBIDDEN_DIRECTIVES = ("style ", "classDef ", "click ", "class ")
+
+
+def _line_number(text: str, index: int) -> int:
+    return text.count("\n", 0, index) + 1
+
+
+def _mermaid_issue(
+    *,
+    block: int,
+    line: int,
+    severity: str,
+    code: str,
+    message: str,
+    snippet: str = "",
+) -> dict[str, Any]:
+    issue: dict[str, Any] = {
+        "block": block,
+        "line": line,
+        "severity": severity,
+        "code": code,
+        "message": message,
+    }
+    if snippet:
+        issue["snippet"] = snippet[:160]
+    return issue
+
+
+def _first_mermaid_statement(lines: list[str]) -> tuple[int, str] | None:
+    for idx, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("%%"):
+            continue
+        return idx, stripped
+    return None
+
+
+def _looks_like_raw_path_id(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("%%"):
+        return False
+    first = re.split(r"\s+", stripped, maxsplit=1)[0]
+    if first.startswith(("http://", "https://")):
+        return False
+    return bool(re.search(r"(?:^|[A-Za-z]:)[\w.-]+[\\/][\w./\\-]+$", first))
+
+
+def _validate_mermaid_block(body: str, *, block_index: int, start_line: int) -> dict[str, Any]:
+    lines = body.splitlines()
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    first_statement = _first_mermaid_statement(lines)
+    diagram_type = ""
+
+    if first_statement is None:
+        errors.append(
+            _mermaid_issue(
+                block=block_index,
+                line=start_line,
+                severity="error",
+                code="empty_mermaid_block",
+                message="Mermaid block is empty.",
+            )
+        )
+    else:
+        first_idx, first_line = first_statement
+        diagram_type = first_line.split()[0]
+        if diagram_type not in MERMAID_ALLOWED_STARTERS:
+            errors.append(
+                _mermaid_issue(
+                    block=block_index,
+                    line=start_line + first_idx - 1,
+                    severity="error",
+                    code="unsupported_diagram_type",
+                    message=(
+                        "Use one of: flowchart, sequenceDiagram, classDiagram, "
+                        "or stateDiagram-v2."
+                    ),
+                    snippet=first_line,
+                )
+            )
+
+    for idx, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("%%"):
+            continue
+        absolute_line = start_line + idx - 1
+        lowered = stripped.lower()
+        if any(lowered.startswith(directive.lower()) for directive in MERMAID_FORBIDDEN_DIRECTIVES):
+            errors.append(
+                _mermaid_issue(
+                    block=block_index,
+                    line=absolute_line,
+                    severity="error",
+                    code="forbidden_directive",
+                    message="Avoid style/class/click directives; renderer theme and security settings should control presentation.",
+                    snippet=stripped,
+                )
+            )
+        if re.search(r"\[[^\]\"']*[():,][^\]]*\]", stripped):
+            errors.append(
+                _mermaid_issue(
+                    block=block_index,
+                    line=absolute_line,
+                    severity="error",
+                    code="unquoted_special_label",
+                    message="Wrap labels containing parentheses, brackets, commas, or colons in double quotes.",
+                    snippet=stripped,
+                )
+            )
+        reserved_match = re.match(r"^(end|graph|subgraph)(?:\b|\[|\(|\{|--|---|==|-->)", stripped, re.IGNORECASE)
+        if reserved_match and reserved_match.group(1).lower() in MERMAID_RESERVED_IDS:
+            errors.append(
+                _mermaid_issue(
+                    block=block_index,
+                    line=absolute_line,
+                    severity="error",
+                    code="reserved_node_id",
+                    message="Do not use Mermaid reserved keywords as node IDs.",
+                    snippet=stripped,
+                )
+            )
+        if _looks_like_raw_path_id(stripped):
+            warnings.append(
+                _mermaid_issue(
+                    block=block_index,
+                    line=absolute_line,
+                    severity="warning",
+                    code="raw_path_node_id",
+                    message="Do not use raw file paths as node IDs; put paths in quoted labels or nearby text.",
+                    snippet=stripped,
+                )
+            )
+
+    return {
+        "index": block_index,
+        "startLine": start_line,
+        "diagramType": diagram_type,
+        "ok": not errors,
+        "errorCount": len(errors),
+        "warningCount": len(warnings),
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def validate_mermaid_diagrams(text: str) -> dict[str, Any]:
+    """Extract Mermaid fences and flag CI-safe render risks without rendering."""
+    blocks: list[dict[str, Any]] = []
+    for index, match in enumerate(MERMAID_BLOCK_RE.finditer(text or ""), start=1):
+        body = match.group("body")
+        start_line = _line_number(text, match.start("body"))
+        blocks.append(_validate_mermaid_block(body, block_index=index, start_line=start_line))
+    error_count = sum(block["errorCount"] for block in blocks)
+    warning_count = sum(block["warningCount"] for block in blocks)
+    return {
+        "ok": error_count == 0,
+        "blockCount": len(blocks),
+        "errorCount": error_count,
+        "warningCount": warning_count,
+        "blocks": blocks,
+    }
 
 
 def render_report(
@@ -30,6 +196,9 @@ def render_report(
         "outputPath": "",
         "notes": [],
     }
+    mermaid_validation = validate_mermaid_diagrams(text)
+    if mermaid_validation["blockCount"] > 0:
+        result["mermaidValidation"] = mermaid_validation
 
     if output_path is None:
         suffix = {"md": ".md", "pptx": ".pptx", "docx": ".docx", "pdf": ".pdf"}[fmt]
