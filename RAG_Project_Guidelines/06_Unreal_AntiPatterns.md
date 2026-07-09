@@ -28,7 +28,7 @@
 
 로컬 AI가 자주 만드는 Unreal C++ 위험 패턴을 금지하고, 대체 패턴을 제시한다.
 
-검색 키워드: Unreal anti-pattern, bad pattern, God Actor, duplicated state, Tick, GetAllActorsOfClass, raw pointer, RPC, Blueprint, namespace, AI code quality
+검색 키워드: Unreal anti-pattern, bad pattern, God Actor, duplicated state, Tick, GetAllActorsOfClass, raw pointer, RPC, Blueprint, namespace, AI code quality, UHT preprocessor conditional, UE_BUILD_SHIPPING reflection macro, GEngine GetWorld, world context, static registry, dev command dispatcher
 
 ## 구조 안티패턴
 
@@ -49,6 +49,11 @@
    - 대체: UI는 PlayerController/Component/Ability에 Command를 요청한다.
 
 ## Unreal C++ 안티패턴
+
+0. Reflection 매크로를 전처리 조건문 안에 배치
+   - 증상: `#if !UE_BUILD_SHIPPING`, `#ifdef MY_FEATURE` 같은 조건 블록 안에 `UCLASS`, `UPROPERTY`, `UFUNCTION`, `GENERATED_BODY`를 선언한다.
+   - 문제: UHT는 `WITH_EDITOR` / `WITH_EDITORONLY_DATA` 조건만 해석한다. 그 외 조건 안의 reflection 매크로는 UHT 파싱/빌드 오류를 내며, 오류 메시지가 원인을 직접 가리키지 않아 수정 루프에 빠지기 쉽다.
+   - 대체: reflection 선언은 헤더에 무조건 선언하고, dev 전용 동작은 `.cpp` 구현부만 `#if !UE_BUILD_SHIPPING`으로 감싸거나 런타임 체크로 분기한다. (정적 검증 코드: `UHT_MACRO_IN_CONDITIONAL_BLOCK`)
 
 1. UObject를 `new`로 생성
    - 대체: `NewObject`, `CreateDefaultSubobject`, SpawnActor 등 Unreal 생성 API를 사용한다.
@@ -85,6 +90,16 @@
 4. Constructor에서 World 접근
    - 증상: CDO 생성 중 World/PlayerController/GameInstance 접근.
    - 대체: BeginPlay, Init, OnRegister 등 적절한 생명주기에서 접근한다.
+
+5. GEngine으로 World/GameInstance 해석
+   - 증상: 명령어 람다, 유틸 함수, dispatcher가 `GEngine->GetWorld()` / `GEngine->GetGameInstance()`로 월드를 얻는다.
+   - 문제: `UEngine::GetWorld()`는 설계상 nullptr을 반환하고, PIE/Editor world/멀티 월드 상황에서 엉뚱한 월드를 잡는다. (정적 검증 코드: `GENGINE_WORLD_CONTEXT`)
+   - 대체: 소유 객체 기준으로 월드를 흘려보낸다. `UWorldSubsystem`이면 자신의 `GetWorld()`, Actor/Component면 `GetWorld()`, 자유 함수면 `UWorld*` 또는 world-context 파라미터를 받는다. GameInstance는 `World->GetGameInstance()`로 얻는다.
+
+6. static 전역 컨테이너 레지스트리
+   - 증상: dispatcher류 클래스가 `static TMap<FString, TFunction<...>> Commands`를 들고, 서브시스템 `Initialize()`마다 재등록한다.
+   - 문제: 프로세스 전역 상태가 월드/PIE 세션 간에 공유된다. 람다가 월드별 상태를 캡처하는 순간 파괴된 월드를 참조하거나 다른 월드에 명령이 실행된다. (정적 검증 코드: `STATIC_MUTABLE_CONTAINER_MEMBER`)
+   - 대체: 레지스트리를 등록 주체인 `UWorldSubsystem`의 인스턴스 멤버로 소유시킨다. 등록은 `Initialize()`, 해제는 `Deinitialize()`에서 수행하고, 람다는 `TWeakObjectPtr` 캡처 + 실행 시 유효성 검사를 지킨다.
 
 ## 네트워크 안티패턴
 

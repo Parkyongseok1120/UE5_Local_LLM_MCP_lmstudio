@@ -48,6 +48,13 @@ Rules:
 3. Use `Initialize(FSubsystemCollectionBase&)` / `Deinitialize()` — not `BeginPlay`.
 4. No `CreateDefaultSubobject`, no `AActor` members without clear lifetime rules.
 5. Do not use `Tick`; use timers, delegates, or world events.
+6. World access flows from the subsystem: use `GetWorld()` on the subsystem itself, never `GEngine->GetWorld()` / `GEngine->GetGameInstance()` (null or wrong world in PIE/multi-world).
+7. Registries (command maps, handler tables) are **instance members** of the subsystem, not `static` containers on a helper class. Register in `Initialize()`, unregister in `Deinitialize()`, and capture `TWeakObjectPtr` in lambdas so entries never outlive their world.
+
+Dispatcher pattern (dev console, command routing):
+
+- The dispatcher receives its world context from the owning `UWorldSubsystem` — either store the subsystem pointer or pass `UWorld*` per call. Command lambdas resolve world state from that context, never from globals.
+- A `static TMap<FString, TFunction<...>> Commands` shared across worlds is an anti-pattern: two PIE worlds overwrite each other's registrations and captured lambdas run against the wrong (or destroyed) world.
 
 ## Recipe: Prototype UGameInstanceSubsystem
 

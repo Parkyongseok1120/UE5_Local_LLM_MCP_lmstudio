@@ -1,5 +1,5 @@
 {
-  "_comment": "Example MCP config for lmstudio-unreal-agent-mcp. Copy relevant entries to %USERPROFILE%\\.lmstudio\\mcp.json. ALLOW_WRITE/COMMANDS/UNREAL_BUILD default to 0 (read-only safe mode). Enable only for trusted projects via installer\\Enable-AgentMode.ps1.",
+  "_comment": "Example MCP config for lmstudio-unreal-agent-mcp. Copy relevant entries to %USERPROFILE%\\.lmstudio\\mcp.json. ALLOW_WRITE/COMMANDS/UNREAL_BUILD default to 0 (read-only safe mode). Enable only for trusted projects via installer\\Enable-AgentMode.ps1. write_file is create-only: it never overwrites an existing file (use replace_in_file to edit). Do NOT set ALLOW_EXISTING_SOURCE_WRITE unless you deliberately need a one-off manual overwrite; unset it right after.",
   "mcpServers": {
     "unreal-agent": {
       "command": "node",

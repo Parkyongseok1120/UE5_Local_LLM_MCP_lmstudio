@@ -45,6 +45,7 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 - After roughly every 3 files in a multi-file task, emit a one-line progress summary (files done / next step) and keep going — this re-anchors tool-call formatting without interrupting the user.
 - If a write response says `rollback skipped ... (conflict)`, another operation changed the file: stop, `read_file` the current content, reconcile, then continue.
 - If validation returns `validation skipped (time budget)`, run `static_validate_project` before `build_unreal_project`.
+- The server rejects byte-identical repeated `write_file`/`replace_in_file` calls (loop guard). If you see `identical ... call already attempted`, do **not** send the same call again: `read_file` the current state, change your patch, or stop and summarize for the user. During build-fix loops, never re-edit a file without re-reading it first.
 
 ## Shader / Material / Blueprint analysis
 
@@ -93,6 +94,8 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 - If `likelyErrors` is empty, do not invent missing modules or dependencies.
 - Only change `Build.cs` when a real compiler/UHT/linker error or requested task points to a missing module.
 - UHT/reflection fixes: direct base-class header in reflected headers, matching `.generated.h` last, no duplicate generated include, and no reflected type guesses without UHT evidence.
+- **Reflection macros never inside preprocessor conditionals** except `#if WITH_EDITOR` / `#if WITH_EDITORONLY_DATA`. For dev-only features (`UE_BUILD_SHIPPING` etc.) declare `UCLASS`/`UPROPERTY`/`UFUNCTION`/`GENERATED_BODY` unconditionally and guard only the function body in the `.cpp`.
+- **World access:** never `GEngine->GetWorld()` or `GEngine->GetGameInstance()` — null or wrong world in PIE/editor/multi-world. Use the owning subsystem/actor `GetWorld()` or pass an explicit `UWorld*`/world-context parameter; get the game instance via `World->GetGameInstance()`. Keep command/registry state instance-owned (inside the subsystem), not in static containers.
 - Codegen fixes: smallest compile-ready slice, existing project naming/module style, no broad manager architecture unless requested.
 
 ## MCP servers

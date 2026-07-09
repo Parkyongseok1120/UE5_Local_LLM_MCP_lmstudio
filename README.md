@@ -78,6 +78,9 @@ cd UE5_Local_LLM_MCP_lmstudio
 
 Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unreal-agent`, and build your index:
 
+> **Required — disable LM Studio's built-in `js-code-sandbox` (JavaScript/TypeScript Code Sandbox).**  
+> In LM Studio, turn off or hide the default **JavaScript/TypeScript Code Sandbox** plugin for Unreal coding chats. That sandbox uses a different working directory and is **not** rooted at your active `.uproject`; letting the model use it for file I/O causes wrong paths, broken edits, and conflicts with `unreal-agent`. Use only `unreal-rag` + `unreal-agent` MCP tools (`read_file`, `replace_in_file`, `write_file` for new files). If auto-approval is enabled, remove `lmstudio/js-code-sandbox:*` from `%USERPROFILE%\.lmstudio\settings.json` `chat.skipToolConfirmationPatterns` and restart LM Studio. Details: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md).
+
 ```powershell
 .\rag.ps1 collect-source
 .\rag.ps1 collect-projects -CopyProjectText

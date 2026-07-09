@@ -80,6 +80,9 @@ cd UE5_Local_LLM_MCP_lmstudio
 
 그 다음 LM Studio에서 모델을 로드하고 Local Server를 시작한 뒤, `unreal-rag` / `unreal-agent` MCP를 활성화하고 index를 빌드합니다.
 
+> **필수 — LM Studio 기본 도구 `js-code-sandbox`(JavaScript/TypeScript Code Sandbox)는 반드시 끄세요.**  
+> Unreal 코딩 채팅에서는 LM Studio 기본 **JavaScript/TypeScript Code Sandbox** 플러그인을 비활성화하거나 숨기세요. 이 샌드박스는 별도 작업 디렉터리를 쓰며 활성 `.uproject` 루트와 **연결되지 않습니다**. 모델이 여기서 파일 I/O를 하면 경로 오류, 잘못된 편집, `unreal-agent`와의 충돌이 납니다. 프로젝트 파일 작업은 `unreal-rag` + `unreal-agent` MCP만 사용하세요 (`read_file`, `replace_in_file`, 신규 파일만 `write_file`). 자동 승인을 쓰는 경우 `%USERPROFILE%\.lmstudio\settings.json`의 `chat.skipToolConfirmationPatterns`에서 `lmstudio/js-code-sandbox:*` 항목을 제거하고 LM Studio를 재시작하세요. 자세한 내용: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md).
+
 ```powershell
 .\rag.ps1 collect-source
 .\rag.ps1 collect-projects -CopyProjectText

@@ -143,6 +143,9 @@ def patch_unreal_agent(entry: dict[str, Any], workspace: Path, node_exe: Path) -
     env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
     if env.get("ALLOW_WRITE", "").strip().lower() in {"1", "true", "yes", "on"}:
         env.setdefault("VALIDATE_ON_WRITE", "1")
+        # Time budget for validation-on-write; fail-open past this to avoid the
+        # -32001 client-timeout retry spiral on slow validators.
+        env.setdefault("VALIDATE_ON_WRITE_TIMEOUT_MS", "45000")
     entry["env"] = env
     entry["timeout"] = DEFAULT_UNREAL_AGENT_MCP_TIMEOUT_MS
     return entry

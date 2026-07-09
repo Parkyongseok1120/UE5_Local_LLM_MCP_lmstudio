@@ -326,6 +326,97 @@ def validate_reflected_namespace(path: Path, text: str, root: Path) -> list[Find
     return findings
 
 
+UHT_REFLECTION_MACROS = (
+    "UCLASS",
+    "USTRUCT",
+    "UENUM",
+    "UINTERFACE",
+    "UDELEGATE",
+    "UPROPERTY",
+    "UFUNCTION",
+    "GENERATED_BODY",
+    "GENERATED_UCLASS_BODY",
+    "GENERATED_USTRUCT_BODY",
+    "GENERATED_IINTERFACE_BODY",
+)
+UHT_REFLECTION_MACRO_LINE_RE = re.compile(r"^\s*(" + "|".join(UHT_REFLECTION_MACROS) + r")\s*\(")
+# UHT only understands conditional compilation blocks built from these macros.
+UHT_CONDITION_ALLOWED_TOKENS = frozenset({"WITH_EDITOR", "WITH_EDITORONLY_DATA", "defined"})
+INCLUDE_GUARD_MACRO_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*_H_{0,2}$")
+
+
+def uht_condition_is_allowlisted(directive: str, condition: str) -> bool:
+    condition = condition.split("//", 1)[0]
+    condition = re.sub(r"/\*.*?\*/", " ", condition).strip()
+    if directive == "ifndef" and INCLUDE_GUARD_MACRO_RE.match(condition):
+        return True
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", condition)
+    if not tokens:
+        return False
+    return all(token in UHT_CONDITION_ALLOWED_TOKENS for token in tokens)
+
+
+def validate_uht_macros_in_conditional_blocks(path: Path, text: str, root: Path) -> list[Finding]:
+    """Flag reflection macros inside preprocessor conditionals that UHT cannot parse.
+
+    UHT only evaluates WITH_EDITOR / WITH_EDITORONLY_DATA blocks (including their
+    #else branches). Reflection macros inside anything else -- most commonly
+    `#if !UE_BUILD_SHIPPING` -- fail at build time with confusing UHT errors.
+    """
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    # Each frame: (is_allowlisted, condition_text, directive_line)
+    stack: list[tuple[bool, str, int]] = []
+    reported_frame_lines: set[int] = set()
+    for index, raw_line in enumerate(text.splitlines(), start=1):
+        stripped = raw_line.strip()
+        directive_match = re.match(r"#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$", stripped)
+        if directive_match:
+            directive = directive_match.group(1)
+            remainder = directive_match.group(2).strip()
+            if directive in {"if", "ifdef", "ifndef"}:
+                stack.append((uht_condition_is_allowlisted(directive, remainder), remainder, index))
+            elif directive == "elif" and stack:
+                allowed, _, start_line = stack[-1]
+                stack[-1] = (
+                    allowed and uht_condition_is_allowlisted("if", remainder),
+                    remainder,
+                    start_line,
+                )
+            elif directive == "endif" and stack:
+                stack.pop()
+            # #else keeps the frame's allow status: UHT parses both branches of
+            # WITH_EDITOR blocks, and the else-branch of a disallowed block is
+            # just as illegal for reflection macros.
+            continue
+        if not stack or all(frame[0] for frame in stack):
+            continue
+        macro_match = UHT_REFLECTION_MACRO_LINE_RE.match(stripped)
+        if not macro_match:
+            continue
+        offending = next(frame for frame in stack if not frame[0])
+        if offending[2] in reported_frame_lines:
+            continue
+        reported_frame_lines.add(offending[2])
+        condition_display = offending[1] or "(no condition)"
+        findings.append(
+            Finding(
+                "error",
+                rel,
+                index,
+                "UHT_MACRO_IN_CONDITIONAL_BLOCK",
+                (
+                    f"{macro_match.group(1)} is inside the preprocessor block opened at line {offending[2]} "
+                    f"(`{condition_display}`). UHT only parses WITH_EDITOR / WITH_EDITORONLY_DATA conditionals. "
+                    "Declare reflection macros (UCLASS/UPROPERTY/UFUNCTION/GENERATED_BODY) unconditionally in the "
+                    "header and guard only the implementation in the .cpp (e.g. wrap the function body in "
+                    "#if !UE_BUILD_SHIPPING, or use a runtime check)."
+                ),
+            )
+        )
+    return findings
+
+
 def validate_blueprint_native_event_declarations(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
     lines = text.splitlines()
@@ -1408,6 +1499,73 @@ def validate_component_subsystem_patterns(path: Path, text: str, root: Path) -> 
     return findings
 
 
+GENGINE_WORLD_ACCESS_RE = re.compile(r"\bGEngine\s*->\s*(GetWorld|GetGameInstance)\s*\(")
+
+
+def validate_gengine_world_context(path: Path, text: str, root: Path) -> list[Finding]:
+    """Flag world/game-instance resolution through GEngine.
+
+    UEngine::GetWorld() returns nullptr by design and UEngine has no
+    GetGameInstance(); both patterns grab the wrong world (or null) in PIE,
+    editor, and multi-world scenarios. World access must flow from an owning
+    object (subsystem/actor GetWorld()) or an explicit world-context parameter.
+    """
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in GENGINE_WORLD_ACCESS_RE.finditer(text):
+        accessor = match.group(1)
+        findings.append(
+            Finding(
+                "error",
+                rel,
+                line_number(text, match.start()),
+                "GENGINE_WORLD_CONTEXT",
+                (
+                    f"GEngine->{accessor}() does not resolve a usable world context (null or wrong world in "
+                    "PIE/editor/multi-world). Use the owning object's world instead: subsystem/actor GetWorld(), "
+                    "an explicit UWorld*/world-context parameter, or "
+                    "UWorld::GetGameInstance()/UWorld::GetSubsystem on a known world."
+                ),
+            )
+        )
+    return findings
+
+
+STATIC_MUTABLE_CONTAINER_RE = re.compile(
+    r"^\s*(?:inline\s+)?static\s+(?!const\b|constexpr\b)(?:inline\s+)?(TMap|TArray|TSet|TMultiMap)\s*<"
+)
+
+
+def validate_static_mutable_container_members(path: Path, text: str, root: Path) -> list[Finding]:
+    """Flag static mutable container members in headers (global registry smell).
+
+    A static TMap/TArray held by a class (e.g. a command dispatcher registry
+    re-populated on every subsystem Initialize) shares state across worlds and
+    PIE sessions; captured lambdas then act on the wrong world. Prefer instance
+    state owned by the subsystem, keyed per world when needed.
+    """
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for index, line in enumerate(text.splitlines(), start=1):
+        match = STATIC_MUTABLE_CONTAINER_RE.match(line)
+        if not match:
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                index,
+                "STATIC_MUTABLE_CONTAINER_MEMBER",
+                (
+                    f"static mutable {match.group(1)} member is process-global state shared across worlds and PIE "
+                    "sessions. Own the container as instance state (e.g. inside the UWorldSubsystem that registers "
+                    "into it) so registrations and captured lambdas stay scoped to one world lifetime."
+                ),
+            )
+        )
+    return findings
+
+
 def validate_typo_includes(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
     if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc", ".inl"}:
@@ -1685,9 +1843,12 @@ def validate_unreal_readiness(
         if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
             findings.extend(validate_typo_includes(path, text, root))
             findings.extend(validate_component_subsystem_patterns(path, text, root))
+            findings.extend(validate_gengine_world_context(path, text, root))
         if path.suffix.lower() in {".h", ".hpp"}:
             findings.extend(validate_generated_h(path, text, root))
             findings.extend(validate_reflected_namespace(path, text, root))
+            findings.extend(validate_uht_macros_in_conditional_blocks(path, text, root))
+            findings.extend(validate_static_mutable_container_members(path, text, root))
             findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
             findings.extend(validate_blueprint_native_event_declarations(path, text, root))
             findings.extend(validate_private_blueprint_access(path, text, root))
