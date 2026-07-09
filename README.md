@@ -8,13 +8,9 @@
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
 <p align="center">
-  <a href="#english"><img alt="English" src="https://img.shields.io/badge/Language-English-blue"></a>
-  <a href="#korean"><img alt="Korean" src="https://img.shields.io/badge/Language-%ED%95%9C%EA%B5%AD%EC%96%B4-green"></a>
+  <a href="README.md"><img alt="English" src="https://img.shields.io/badge/Language-English-blue"></a>
+  <a href="README.ko.md"><img alt="Korean" src="https://img.shields.io/badge/Language-%ED%95%9C%EA%B5%AD%EC%96%B4-green"></a>
 </p>
-
-<a id="english"></a>
-
-## English
 
 ---
 
@@ -37,22 +33,6 @@ If this project has been useful to you, please consider sponsoring — it helps 
 > v1.2.5 is the final planned minor release in the 1.2 line. Future 1.2.x updates, if any, will be limited to simple bug fixes, documentation corrections, and low-risk stability patches. v1.3.0 is expected roughly **3 months later** and will focus on separated C++ capability, semantic-refactor, runtime-debug, and negative-control scorecards.
 >
 > I appreciate your patience and understanding.
-
----
-
-<a id="korean"></a>
-
-## Korean
-
-> **프로젝트 현황 — 2026년 7월**
->
-> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. **v1.2.5 (2026-07-09):** multifile 2건(`UPROPERTY` return-type, callback param expand) 수정 반영 후 NavigationSystem module routing, editor-runtime boundary, UObject lifecycle autofix 회귀를 안정화했습니다. dry-run **36/36** (`20260709-142052`). Live 재검증 **Pass@K 36/36**, **Pass@1 36/36** (`20260709-144441-pass1-target`); multifile tier **12/12 Pass@1**.
->
-> v1.2.5는 1.2 라인의 마지막 minor release로 봅니다. 앞으로 1.2.x에는 추가적인 minor feature update를 계획하지 않고, 간단한 bug fix, 문서 수정, 낮은 위험도의 안정화 patch만 예정합니다. v1.3.0은 약 **3개월 뒤**를 목표로 하며, C++ capability, semantic-refactor, runtime-debug, negative-control scorecard를 분리하는 방향입니다.
->
-> 넓은 양해 부탁드립니다.
-
----
 
 ## Documentation Hub
 
