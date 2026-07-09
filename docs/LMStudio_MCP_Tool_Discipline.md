@@ -73,6 +73,7 @@ The only override is the server env var `ALLOW_EXISTING_SOURCE_WRITE=1` in `%USE
 - After a successful `write_file` / `replace_in_file`: report the changed file in one line, then continue to the next planned step automatically. Do not ask "continue?" after every file — successful work never waits for the user.
 - Hard-stop checkpoints (report status, then wait for the user) trigger only on risk signals: (a) any tool timeout, (b) static validation failure / rollback, (c) "Model failed to generate a tool call", (d) the same failure repeating. Successful writes are not a stop signal.
 - If a write response says `rollback skipped ... (conflict)`: another operation changed the file. Stop, `read_file` the current content, and reconcile before editing again.
+- **Duplicate-call loop breaker:** the server rejects byte-identical repeated `write_file` / `replace_in_file` calls. A consecutive identical repeat is rejected immediately; a non-consecutive identical retry is allowed once (e.g. retry after fixing a dependency file) and rejected from the third attempt within ~15 minutes. The rejection message (`identical ... call already attempted`) means the model is looping: re-read the file, change the patch, or stop and summarize for the user.
 
 ## Forbidden Tools
 
@@ -163,6 +164,9 @@ Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_
 | Tool not in list | Essential mode hides advanced tools; use wrapper/Cline for clangd/graph |
 | `unreal_rag_refresh` times out | Re-run `python scripts/patch_mcp_config.py` so `unreal-rag` has `"timeout": 420000` (7 minutes, ms) and `unreal-agent` has `"timeout": 720000` in `%USERPROFILE%\.lmstudio\mcp.json`, then restart LM Studio. Prefer `unreal_start_rag_refresh` + `unreal_rag_refresh_status` for long refresh. Use `scope=project_source` when Editor metadata is not needed. |
 | Write blocked for basename collision | Use `search_files` to find the existing file; patch with `replace_in_file` on that path. Extended mode: after duplicate cleanup, call `propose_file_deletions`, get approval, then `delete_file` with `ALLOW_SOURCE_DELETE=1`. |
+| `identical ... call already attempted` | The model repeated a byte-identical edit (stuck loop). `read_file` the current content, change the patch, or checkpoint and summarize. If loops persist, start a fresh chat with the session bootstrap. |
+| `UHT_MACRO_IN_CONDITIONAL_BLOCK` on write | Reflection macros (`UCLASS`/`UPROPERTY`/`UFUNCTION`/`GENERATED_BODY`) sit inside a preprocessor conditional UHT cannot parse (e.g. `#if !UE_BUILD_SHIPPING`). Declare them unconditionally in the header; guard only the `.cpp` implementation. `WITH_EDITOR` / `WITH_EDITORONLY_DATA` blocks are allowed. |
+| `GENGINE_WORLD_CONTEXT` on write | Code resolves worlds via `GEngine->GetWorld()` / `GEngine->GetGameInstance()`. Use the owning subsystem/actor `GetWorld()` or an explicit `UWorld*` parameter; get the game instance from `World->GetGameInstance()`. |
 
 ## Sampling Metadata
 
