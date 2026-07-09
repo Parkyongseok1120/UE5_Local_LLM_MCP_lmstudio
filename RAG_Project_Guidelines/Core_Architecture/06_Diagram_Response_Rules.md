@@ -6,10 +6,10 @@ When analyzing project structure, ownership, dependencies, graph nodes, Blueprin
 
 Use diagrams to make structure visible to small local models and to the user. The diagram is evidence-backed explanation, not proof that code or assets were changed.
 
-Output both:
+Output in this order:
 
-1. A Mermaid diagram for clients that render Mermaid.
-2. A plain ASCII/text fallback so LM Studio or other non-rendering chat windows still show the structure immediately.
+1. A Mermaid diagram first, for clients that render Mermaid.
+2. A plain ASCII/text fallback second, so LM Studio or other non-rendering chat windows still show the structure immediately.
 
 ## When To Include A Diagram
 
@@ -40,7 +40,8 @@ Skip the diagram only when the answer is a tiny factual answer, a single compile
 - Put Korean or long labels inside quoted Mermaid labels, for example `A["State Owner"]`.
 - Do not use raw file paths as node IDs. Put paths in labels or a text list below the diagram.
 - Do not show uncertain relationships as facts. Use dashed arrows for inferred or proposed relationships.
-- Always include a plain ASCII/text fallback after the Mermaid block. Do not rely on Mermaid rendering.
+- Always put the Mermaid block before the plain ASCII/text fallback. Do not rely on Mermaid rendering alone.
+- In `sequenceDiagram`, do not use Mermaid keywords such as `participant`, `actor`, or `end` as participant IDs. Use short IDs like `P`, `CinePart`, or `TargetActor`, and quote aliases with parentheses or slashes.
 
 ## Plain Text Fallback Rules
 

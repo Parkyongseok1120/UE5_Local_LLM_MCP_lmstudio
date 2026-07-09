@@ -270,7 +270,7 @@ def build_mcp_tool_registry() -> McpToolRegistry:
         ToolSpec(
             name="unreal_render_report",
             schema_dict={
-                "text": {"type": "string", "description": "Markdown report body."},
+                "text": {"type": "string", "description": "Markdown report body. Mermaid fences are validated when present."},
                 "format": {
                     "type": "string",
                     "enum": ["md", "pptx", "docx", "pdf"],
@@ -1070,11 +1070,12 @@ class McpServer:
                 "title": "Render Markdown Report",
                 "description": (
                     "Render markdown report text to md/pptx/docx/pdf. Markdown always works as UTF-8; "
-                    "other formats degrade gracefully when optional deps are missing."
+                    "other formats degrade gracefully when optional deps are missing. "
+                    "Mermaid fences are validated when present."
                 ),
                 "inputSchema": self._schema(
                     {
-                        "text": {"type": "string", "description": "Markdown report body."},
+                        "text": {"type": "string", "description": "Markdown report body. Mermaid fences are validated when present."},
                         "format": {
                             "type": "string",
                             "enum": ["md", "pptx", "docx", "pdf"],

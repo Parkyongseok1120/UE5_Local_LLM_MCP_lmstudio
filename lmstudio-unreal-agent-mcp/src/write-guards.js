@@ -146,6 +146,7 @@ async function validateWriteTarget({
   activeProjectPath,
   createDirs,
   fileExists,
+  allowExistingWrite,
 }) {
   if (isDeniedPath(targetAbsPath)) {
     return {
@@ -168,6 +169,17 @@ async function validateWriteTarget({
     return {
       ok: false,
       message: `write_file blocked for existing protected file: ${rel}. Use replace_in_file instead.`
+    };
+  }
+
+  // Create-only: block ALL other existing files regardless of extension.
+  // write_file is for creating new files; use replace_in_file to modify existing ones.
+  // ALLOW_EXISTING_SOURCE_WRITE=1 is the only deliberate manual override.
+  if (targetExists && !allowExistingWrite) {
+    const rel = path.relative(workspaceRoot, targetAbsPath);
+    return {
+      ok: false,
+      message: `write_file blocked because file already exists: ${rel}. Use replace_in_file. Do not retry write_file.`
     };
   }
 
@@ -195,6 +207,13 @@ async function validateWriteTarget({
   }
 
   return { ok: true };
+}
+
+// Stale-safe rollback decision: only revert a write if the file on disk still holds
+// exactly what this request wrote. If it differs, a newer operation owns the file and
+// rolling back would clobber it, so the caller must skip rollback and report a conflict.
+function shouldRollback(currentContent, ownWriteContent) {
+  return currentContent === ownWriteContent;
 }
 
 function isDeleteAllowedPath(targetAbsPath, workspaceRoot, activeProjectPath) {
@@ -227,6 +246,7 @@ module.exports = {
   isDeniedPath,
   findSourceBasenameCollisions,
   validateWriteTarget,
+  shouldRollback,
   isDeleteAllowedPath,
   resolveProjectRootFromTarget,
 };

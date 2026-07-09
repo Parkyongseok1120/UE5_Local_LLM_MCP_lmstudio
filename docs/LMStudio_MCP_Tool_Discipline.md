@@ -60,6 +60,18 @@ With `MCP_ESSENTIAL_TOOLS=1` alone, extended tools stay hidden to reduce model c
 
 When agent mode enables writes, `patch_mcp_config.py` sets `VALIDATE_ON_WRITE=1` by default. `write_file` / `replace_in_file` run static validation and fail closed on project-wide errors (duplicate basenames, bad includes, etc.). Fix findings before `build_unreal_project`.
 
+Validation on write runs under a time budget (`VALIDATE_ON_WRITE_TIMEOUT_MS`, default 45000). If validation exceeds the budget it fails **open**: the write succeeds and the response notes `validation skipped (time budget); run static_validate_project before build`. When you see that note, run `static_validate_project` before building. Real findings still fail closed and roll back.
+
+## Write Safety and Flow
+
+`write_file` is **create-only**. It creates brand-new files and refuses to overwrite any file that already exists (every extension, not just source). To modify an existing file, use `replace_in_file`.
+
+- If `write_file` returns `blocked because file already exists`: switch to `replace_in_file`. **Do not retry `write_file`** on that path.
+- On a tool timeout (`MCP error -32001`): never immediately retry the same write. First verify state with `list_directory` / `read_file`. If the file now exists, switch to `replace_in_file`; if the situation is unclear, stop and summarize for the user. A timeout is a hard-stop signal.
+- After a successful `write_file` / `replace_in_file`: report the changed file in one line, then continue to the next planned step automatically. Do not ask "continue?" after every file — successful work never waits for the user.
+- Hard-stop checkpoints (report status, then wait for the user) trigger only on risk signals: (a) any tool timeout, (b) static validation failure / rollback, (c) "Model failed to generate a tool call", (d) the same failure repeating. Successful writes are not a stop signal.
+- If a write response says `rollback skipped ... (conflict)`: another operation changed the file. Stop, `read_file` the current content, and reconcile before editing again.
+
 ## Forbidden Tools
 
 Do not use LM Studio's JavaScript/code sandbox for Unreal project file work:
@@ -98,6 +110,10 @@ For edit tasks:
 - Run `build_unreal_project` after C++ or `Build.cs` edits.
 - If cleanup appears to require deleting files, finish all edits first, call `propose_file_deletions`, report the count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval before `delete_file`.
 - On UBT failure, search only the current error context with `mode=compile_fix`, then patch the smallest failing surface.
+
+## Diagram Output
+
+When the user asks for a diagram, or when explaining structure, dependencies, ownership, Blueprint or Material graph flow, shader pipeline, or runtime call order, show Mermaid first. Put ASCII/text only after the Mermaid block as a fallback for clients that do not render Mermaid.
 
 ## Session Bootstrap
 

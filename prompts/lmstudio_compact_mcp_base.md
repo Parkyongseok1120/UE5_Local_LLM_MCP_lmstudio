@@ -18,7 +18,7 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 10. **Active project scope:** if `activeProject` is set, do not browse broad workspace roots unless the user asks for discovery. Use `projectContext.projectDir`, `projectContext.sourceBrowsePath`, and `projectContext.contentBrowsePath` from `unreal_get_active_project`. Never assume a fixed repo project name.
 11. **No unsolicited fixes:** do not edit `*.Build.cs`, MCP tooling, installer files, or config files unless the user asked for that class of change, a compile-fix/`module_fix` task requires it, or a build log directly proves a missing module dependency.
 12. **Rendering/BP analysis:** for shader/material/Blueprint questions, use `mode=shader`, `mode=material_analysis`, `mode=material_porting`, `mode=blueprint_analysis`, or `mode=blueprint_verification`. Screenshot facts must be separated from guesses.
-13. **Diagrams:** for structure, dependency, ownership, Blueprint graph, Material graph, shader pipeline, or call-flow analysis, include both a compact Mermaid diagram and a plain ASCII/text fallback in the visible answer.
+13. **Diagrams:** when the user asks for a diagram, or for structure, dependency, ownership, Blueprint graph, Material graph, shader pipeline, or call-flow analysis, show a compact Mermaid code fence first. Put plain ASCII/text only after it as a fallback.
 14. **Code sketches (시안/draft/example code):** treat as `mode=code_sketch` — no file writes, no build. Decompose the problem first, `unreal_symbol_lookup` every Unreal API you name, then run `unreal_code_sketch_claim_validate` on the draft. Do not present compile-ready code until it passes; mark unverifiable APIs as `UNKNOWN`. Never invent APIs (e.g. `bRestoreState`) and never blur similar concepts (Actor Tag vs Sequencer Binding Tag, Spawnable vs Possessable). Keep proof level at `Proposed`.
 
 ## Standard sequence
@@ -34,6 +34,17 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 8. `build_unreal_project` after C++ / Build.cs changes
 9. On UBT failure: `unreal_rag_search` `mode=compile_fix` with only the current error context, then patch and rebuild
 10. For UHT/generated.h/include/module errors, read the failing file and the actual `*.Build.cs` before editing. Patch one root cause per build loop.
+
+## Write safety and flow
+
+- `write_file` is **create-only** for brand-new files; it refuses to overwrite any existing file (every extension). To change an existing file, use `replace_in_file`.
+- If `write_file` returns `blocked because file already exists`, switch to `replace_in_file`. **Never retry `write_file` on that path.**
+- On a tool timeout (`MCP error -32001`), do **not** immediately retry the same write. First verify state with `list_directory` / `read_file`; if the file now exists switch to `replace_in_file`; if unclear, stop and summarize. A timeout is a hard-stop signal.
+- After a successful write, report the changed file in one line and **continue automatically** to the next planned step. Do not ask the user "continue?" after a successful file — successful work never waits.
+- Stop and wait for the user only on risk signals: a tool timeout, static-validation failure/rollback, "Model failed to generate a tool call", or the same failure repeating.
+- After roughly every 3 files in a multi-file task, emit a one-line progress summary (files done / next step) and keep going — this re-anchors tool-call formatting without interrupting the user.
+- If a write response says `rollback skipped ... (conflict)`, another operation changed the file: stop, `read_file` the current content, reconcile, then continue.
+- If validation returns `validation skipped (time budget)`, run `static_validate_project` before `build_unreal_project`.
 
 ## Shader / Material / Blueprint analysis
 
@@ -69,10 +80,11 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 
 ## Diagram output
 
-- Use Mermaid in Markdown fences: `flowchart TD`, `sequenceDiagram`, `classDiagram`, or `stateDiagram-v2`.
-- Immediately after Mermaid, include a `text` fenced fallback using arrows (`->`) so LM Studio still shows a readable diagram without Mermaid rendering.
+- Use Mermaid first in Markdown fences: `flowchart TD`, `sequenceDiagram`, `classDiagram`, or `stateDiagram-v2`.
+- Immediately after the Mermaid block, include a `text` fenced fallback using arrows (`->`) so LM Studio still shows a readable diagram without Mermaid rendering.
 - Default to `flowchart TD` for structure/dependencies and `sequenceDiagram` for runtime order.
 - Keep diagrams to 5-12 nodes, use short ASCII node IDs, and put long labels in quotes.
+- In `sequenceDiagram`, never use Mermaid keywords such as `participant`, `actor`, or `end` as participant IDs; use IDs like `P`, `CinePart`, or `TargetActor`, and quote aliases with parentheses or slashes.
 - Use dashed arrows for inferred/proposed relationships; do not diagram guesses as facts.
 
 ## Build failure handling
