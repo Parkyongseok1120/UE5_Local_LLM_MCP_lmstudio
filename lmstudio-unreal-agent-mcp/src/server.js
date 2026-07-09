@@ -83,6 +83,13 @@ const ALLOW_UNREAL_BUILD = process.env.ALLOW_UNREAL_BUILD === "1" || process.env
 const ALLOW_EXISTING_SOURCE_WRITE = ["1", "true", "yes", "on"].includes(
   String(process.env.ALLOW_EXISTING_SOURCE_WRITE || "").trim().toLowerCase()
 );
+if (ALLOW_EXISTING_SOURCE_WRITE) {
+  // stderr only: stdout carries the MCP stdio protocol.
+  console.error(
+    "[unreal-agent] WARNING: ALLOW_EXISTING_SOURCE_WRITE=1 — write_file may OVERWRITE existing files. "
+    + "This is a manual override; unset it in mcp.json after the one-off operation."
+  );
+}
 const MAX_READ_BYTES = Number(process.env.MAX_READ_BYTES || 64 * 1024);
 const FILE_CACHE_MAX_ENTRIES = numberEnv("FILE_CACHE_MAX_ENTRIES", 20, 0);
 const FILE_CACHE_MAX_BYTES = numberEnv("FILE_CACHE_MAX_BYTES", MAX_READ_BYTES, 0);
@@ -1126,7 +1133,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!ALLOW_WRITE) return fail("replace_in_file blocked. Set ALLOW_WRITE=1 to enable.");
       const target = normalizeRelPath(args.path);
       const s = await statSafe(target);
-      if (!s || !s.isFile()) return fail(`not found or not file: ${args.path}`);
+      if (!s || !s.isFile()) {
+        return fail(`not found or not file: ${args.path}. replace_in_file only edits existing files; to create a brand-new file, use write_file.`);
+      }
       const oldText = String(args.oldText ?? "");
       const newText = String(args.newText ?? "");
       if (!oldText) return fail("oldText must not be empty");
