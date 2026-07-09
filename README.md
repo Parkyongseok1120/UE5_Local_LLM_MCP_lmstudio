@@ -30,9 +30,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 >
 > The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. **Latest v1.2.5 (2026-07-09):** multifile holdout fixes landed (`UPROPERTY` return-type drift, callback param expansion), followed by regression hardening for NavigationSystem module routing, editor-runtime boundaries, and UObject lifecycle autofix. Dry-run compile gate **36/36** (`20260709-142052`). Live revalidation **36/36 Pass@K**, **36/36 Pass@1** (`20260709-144441-pass1-target`); multifile tier **12/12 Pass@1**.
 >
-> v1.2.5 is the final planned minor release in the 1.2 line. Future 1.2.x updates, if any, will be limited to simple bug fixes, documentation corrections, and low-risk stability patches. v1.3.0 development is expected to **start roughly 4 months after v1.2.5** and will focus on separated C++ capability, semantic-refactor, runtime-debug, and negative-control scorecards.
->
-> I appreciate your patience and understanding.
+> v1.2.5 is the final planned minor release in the 1.2 line. Future 1.2.x updates, if any, will be limited to simple bug fixes, documentation corrections, and low-risk stability patches. v1.3.0 development is expected to **start roughly 4 months after v1.2.5** and will focus on separated C++ capability, semantic-refactor, runtime-debug, and negative-control scorecards. **The project itself isn't stopping** — I just need to **focus on university coursework and my graduation project** for now, so development is on a brief pause. I'll wrap that up as quickly as I can and see you again in **v1.3.0**!
 
 ## Documentation Hub
 
