@@ -103,6 +103,28 @@ Ask a question:
 .\rag.ps1 ask -Question "Show me a C++ example of attaching a custom Component to an Actor"
 ```
 
+## Real-Use Session Tips
+
+Holdout evals run in fresh, bounded turns. **Long LM Studio chats** are a different problem: context grows with every tool result, build log, and retry until requests fail even when MCP is healthy.
+
+| Symptom in LM Studio logs | What to do |
+|---|---|
+| `request (...) exceeds the available context size (54272)` | **Start a new chat.** Summarize progress in 5–10 lines first. Do not keep retrying in the same thread. |
+| `failed to restore kv cache` / `cache size limit reached` | Same as above — session memory is saturated. New chat is faster than raising context alone. |
+| `Model failed to generate a tool call` after a long edit loop | Stop, summarize changed files + remaining errors, new chat. |
+| `js-code-sandbox` appears in logs during Unreal work | Disable it (see Quick Install note above). |
+
+Practical rules for day-to-day Unreal project work:
+
+- **One bounded task per chat** when possible (e.g. “fix these 3 compile errors”, not “implement the whole dev console”).
+- **Do not paste full UBT/linker logs** into chat. Use `read_unreal_logs` or the log file path; share only the first meaningful error slice.
+- **Header-then-.cpp is normal.** `write_file` on a new header may show advisory `CPP_DEFINITION_MISSING` until the matching `.cpp` is written — that is expected, not a rollback trigger on its own.
+- **Avoid invented UE APIs** the model often hallucinates: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. Prefer `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, `SpawnTransform` by value, and the owning actor/subsystem's `GetWorld()`.
+
+v1.3.0 will add session handoff artifacts and tighter build-log token diet. Until then, **new chat + short turns** is the most reliable fix.
+
+Details: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md), [Troubleshooting.md](docs/Troubleshooting.md).
+
 Full requirements, Mac remote setup, model profiles, and security notes are in [Project_Overview.md](docs/Project_Overview.md).
 
 ## More Docs
@@ -123,6 +145,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 | Safe vs agent mode | [docs/Safe_Agent_Mode.md](docs/Safe_Agent_Mode.md) |
 | Live eval checklist | [docs/Live_Eval_Checklist.md](docs/Live_Eval_Checklist.md) |
 | Model profiles | [docs/Model_Profiles.md](docs/Model_Profiles.md) |
+| LM Studio MCP tool discipline | [docs/LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md) |
 | Troubleshooting | [docs/Troubleshooting.md](docs/Troubleshooting.md) |
 | Security | [SECURITY.md](SECURITY.md) |
 
