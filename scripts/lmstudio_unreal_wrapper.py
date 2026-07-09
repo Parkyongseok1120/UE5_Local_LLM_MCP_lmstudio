@@ -2262,7 +2262,7 @@ def system_prompt_dynamic_suffix(
     parts.extend(
         [
             file_mode_rule,
-            f"For LARGE existing files, prefer patches[] with exact oldText/newText (expectedOccurrences required).",
+            "For LARGE existing files, prefer patches[] with exact oldText/newText (expectedOccurrences required).",
             patch_hint,
             f"Maximum edits per response: {max_files} (files + patches combined).",
             "Omit unchanged files. patches and files may both be empty if no edit is needed.",

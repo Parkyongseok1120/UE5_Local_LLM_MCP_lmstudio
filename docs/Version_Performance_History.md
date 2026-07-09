@@ -6,6 +6,51 @@
 
 This page summarizes the evolution from v1.0.0 to v1.2.5. The test suites changed over time, so numbers should be read as saved milestone evidence, not as a perfectly controlled apples-to-apples benchmark.
 
+## Visual Scorecards
+
+The charts below intentionally avoid using Pass@K/Pass@1 as the cross-version score, because the suite changed across releases. Instead:
+
+- **Version workflow maturity score** is a qualitative 0-100 score for evaluation maturity, safety guardrails, compile-fix coverage, multifile handling, and repeatability.
+- **Model live score** is only used inside the same v1.2.5 36-case live suite, where the two measured models ran against the same case set.
+
+| Version | Workflow maturity score | Why |
+|---|---:|---|
+| v1.0.0 | 20 | Initial RAG/MCP proof of concept; no stable live KPI. |
+| v1.1.x | 35 | Better project routing and setup, but weak write/eval guardrails. |
+| v1.2.0 | 45 | First live UBT direction with a small 5-case baseline. |
+| v1.2.2 | 60 | Major safety gains: static validation, write guards, deletion flow. |
+| v1.2.4 | 82 | 36-case live loop became strong; multifile still had two blockers. |
+| v1.2.5 | 100 | Final 1.2.x compile-fix baseline: 36-case live Pass@1 36/36 with zero wrong-file/Build.cs/no-op counters in the best run. |
+
+```mermaid
+xychart-beta
+    title "Version Workflow Maturity Score (Not Pass@K/Pass@1)"
+    x-axis ["v1.0.0", "v1.1.x", "v1.2.0", "v1.2.2", "v1.2.4", "v1.2.5"]
+    y-axis "Score" 0 --> 100
+    bar [20, 35, 45, 60, 82, 100]
+```
+
+| Model / run | Same-suite model score | Basis |
+|---|---:|---|
+| Community fine-tuned Qwen 3.6 27B (`20260709-144441-pass1-target`) | 100 | 36/36 Pass@K, 36/36 Pass@1, zero wrong-file/Build.cs/no-op counters. |
+| Qwen 3.5 9B (`20260709-153021-qwen35-9b`) | 94 | 35/36 Pass@K, 33/36 Pass@1; strong compact run, one missing-definition failure. |
+
+```mermaid
+xychart-beta
+    title "v1.2.5 Same-Suite Model Score"
+    x-axis ["Qwen 3.6 27B FT", "Qwen 3.5 9B"]
+    y-axis "Score" 0 --> 100
+    bar [100, 94]
+```
+
+```mermaid
+xychart-beta
+    title "Qwen 3.5 9B v1.2.5 Tier Pass@1 Profile"
+    x-axis ["Module", "Multifile", "Editor", "Single-file", "UHT"]
+    y-axis "Pass@1 %" 0 --> 100
+    bar [100, 100, 100, 67, 100]
+```
+
 ## Summary Table
 
 | Version | Main Focus | Saved Measurement / Evidence | Strengths | Weaknesses / Risks |
@@ -15,7 +60,7 @@ This page summarizes the evolution from v1.0.0 to v1.2.5. The test suites change
 | v1.2.0 | Real-project validation direction | 5-case early live baseline: 3/5 Pass@K, 3/5 Pass@1 | Began measurable live UBT loop instead of chat-only claims. | Small suite; compile-fix behavior still inconsistent. |
 | v1.2.2 | Agent write safety | Static validation and deletion-safety hardening | Safer file writes, basename collision prevention, protected path checks, explicit deletion approval flow. | Safety improved faster than model success rate; still needed broader compile-fix regression gates. |
 | v1.2.4 | Compile-loop stabilization | 36-case live `20260708-211549`: 34/36 Pass@K, 34/36 Pass@1 | Strong single-file/module/reflection baseline; extracted wrapper guard/evidence modules; improved retry state. | Multifile tier still had two failures: `local_multifile_uproperty_type_migration`, `local_multifile_callback_param_expand`. |
-| v1.2.5 | Final 1.2.x compile-fix stabilization | Qwen 3.6 27B live `20260709-144441-pass1-target`: 36/36 Pass@K, 36/36 Pass@1. Qwen 3.5 9B live `20260709-153021-qwen35-9b`: 35/36 Pass@K, 33/36 Pass@1. | 12/12 multifile Pass@1; NavigationSystem false-positive fixed; editor-runtime boundary fixed; UObject lifecycle deterministic autofix; zero wrong-file edits / Build.cs false positives / no-op edits in the 27B run. | v1.2.x is now in maintenance. It is still a compile-fix suite, not a full semantic-refactor/runtime-debug benchmark. Average attempts is harness-specific because static autofix can count as attempt 0. |
+| v1.2.5 | Final 1.2.x compile-fix stabilization | Community fine-tuned Qwen 3.6 27B live `20260709-144441-pass1-target`: 36/36 Pass@K, 36/36 Pass@1. Qwen 3.5 9B live `20260709-153021-qwen35-9b`: 35/36 Pass@K, 33/36 Pass@1. | 12/12 multifile Pass@1; NavigationSystem false-positive fixed; editor-runtime boundary fixed; UObject lifecycle deterministic autofix; zero wrong-file edits / Build.cs false positives / no-op edits in the 27B run. | v1.2.x is now in maintenance. It is still a compile-fix suite, not a full semantic-refactor/runtime-debug benchmark. Average attempts is harness-specific because static autofix can count as attempt 0. |
 
 ## Field-Level Notes
 
@@ -31,11 +76,56 @@ This page summarizes the evolution from v1.0.0 to v1.2.5. The test suites change
 
 v1.2.x is considered feature-complete for the compile-fix line. There will be no additional minor feature releases in the 1.2 series. Future 1.2.x changes should be limited to small bug fixes, documentation corrections, and low-risk stability patches.
 
-The next feature track is v1.3.0, expected roughly three months later, with separate scorecards for compile-fix, semantic refactor, runtime debug, negative control, and advanced Unreal C++ capability.
+The next feature track is v1.3.0, with development expected to start roughly four months after v1.2.5. It will use separate scorecards for compile-fix, semantic refactor, runtime debug, negative control, and advanced Unreal C++ capability.
 
 ## Korean
 
 이 문서는 v1.0.0부터 v1.2.5까지의 발전 과정을 정리합니다. 중간에 테스트 suite가 바뀌었기 때문에, 수치는 완전히 동일 조건의 벤치마크가 아니라 저장된 milestone 근거로 읽어야 합니다.
+
+## 시각화 점수표
+
+아래 그래프는 버전 간 점수로 Pass@K/Pass@1을 직접 사용하지 않습니다. 버전마다 suite가 달라졌기 때문입니다. 대신 다음처럼 분리합니다.
+
+- **Version workflow maturity score**: 평가 성숙도, safety guardrail, compile-fix coverage, multifile handling, repeatability를 기준으로 한 정성적 0-100 점수입니다.
+- **Model live score**: 동일한 v1.2.5 36-case live suite에서 실행한 모델끼리만 비교합니다.
+
+| 버전 | Workflow maturity score | 이유 |
+|---|---:|---|
+| v1.0.0 | 20 | 초기 RAG/MCP proof of concept; 안정된 live KPI 없음. |
+| v1.1.x | 35 | project routing과 setup 개선, 하지만 write/eval guardrail은 약함. |
+| v1.2.0 | 45 | 작은 5-case baseline으로 live UBT 측정을 시작. |
+| v1.2.2 | 60 | static validation, write guard, deletion flow 등 safety가 크게 개선. |
+| v1.2.4 | 82 | 36-case live loop가 강해짐; multifile blocker 2건은 남음. |
+| v1.2.5 | 100 | 최종 1.2.x compile-fix baseline. 최고 run에서 36-case live Pass@1 36/36 및 wrong-file/Build.cs/no-op counter 0. |
+
+```mermaid
+xychart-beta
+    title "Version Workflow Maturity Score (Pass@K/Pass@1 아님)"
+    x-axis ["v1.0.0", "v1.1.x", "v1.2.0", "v1.2.2", "v1.2.4", "v1.2.5"]
+    y-axis "Score" 0 --> 100
+    bar [20, 35, 45, 60, 82, 100]
+```
+
+| 모델 / run | Same-suite model score | 기준 |
+|---|---:|---|
+| Community fine-tuned Qwen 3.6 27B (`20260709-144441-pass1-target`) | 100 | 36/36 Pass@K, 36/36 Pass@1, wrong-file/Build.cs/no-op counter 0. |
+| Qwen 3.5 9B (`20260709-153021-qwen35-9b`) | 94 | 35/36 Pass@K, 33/36 Pass@1. compact 모델 기준 강한 결과이나 missing-definition 1건 실패. |
+
+```mermaid
+xychart-beta
+    title "v1.2.5 Same-Suite Model Score"
+    x-axis ["Qwen 3.6 27B FT", "Qwen 3.5 9B"]
+    y-axis "Score" 0 --> 100
+    bar [100, 94]
+```
+
+```mermaid
+xychart-beta
+    title "Qwen 3.5 9B v1.2.5 Tier Pass@1 Profile"
+    x-axis ["Module", "Multifile", "Editor", "Single-file", "UHT"]
+    y-axis "Pass@1 %" 0 --> 100
+    bar [100, 100, 100, 67, 100]
+```
 
 ## 요약 표
 
@@ -46,7 +136,7 @@ The next feature track is v1.3.0, expected roughly three months later, with sepa
 | v1.2.0 | real-project validation 방향 전환 | 초기 5-case live baseline: 3/5 Pass@K, 3/5 Pass@1 | chat-only 주장이 아니라 live UBT loop로 측정하기 시작. | suite가 작고 compile-fix 안정성이 아직 낮음. |
 | v1.2.2 | agent write safety | static validation과 deletion-safety 강화 | 안전한 파일 쓰기, basename collision 방지, protected path 검사, 명시적 삭제 승인 flow. | 안전성은 좋아졌지만 compile-fix 성공률 측정과 regression gate는 더 필요했음. |
 | v1.2.4 | compile-loop stabilization | 36-case live `20260708-211549`: 34/36 Pass@K, 34/36 Pass@1 | single-file/module/reflection baseline 강화; wrapper guard/evidence 모듈 분리; retry state 개선. | multifile tier에서 `local_multifile_uproperty_type_migration`, `local_multifile_callback_param_expand` 2건 실패. |
-| v1.2.5 | 최종 1.2.x compile-fix 안정화 | Qwen 3.6 27B live `20260709-144441-pass1-target`: 36/36 Pass@K, 36/36 Pass@1. Qwen 3.5 9B live `20260709-153021-qwen35-9b`: 35/36 Pass@K, 33/36 Pass@1. | 12/12 multifile Pass@1; NavigationSystem false-positive 수정; editor-runtime boundary 수정; UObject lifecycle deterministic autofix; 27B run에서 wrong-file edit / Build.cs false positive / no-op edit 0. | v1.2.x는 maintenance 단계. 여전히 compile-fix suite이며 semantic-refactor/runtime-debug 전체 benchmark는 아님. Average attempts는 static autofix가 attempt 0으로 기록될 수 있어 해석 주의. |
+| v1.2.5 | 최종 1.2.x compile-fix 안정화 | Community fine-tuned Qwen 3.6 27B live `20260709-144441-pass1-target`: 36/36 Pass@K, 36/36 Pass@1. Qwen 3.5 9B live `20260709-153021-qwen35-9b`: 35/36 Pass@K, 33/36 Pass@1. | 12/12 multifile Pass@1; NavigationSystem false-positive 수정; editor-runtime boundary 수정; UObject lifecycle deterministic autofix; 27B run에서 wrong-file edit / Build.cs false positive / no-op edit 0. | v1.2.x는 maintenance 단계. 여전히 compile-fix suite이며 semantic-refactor/runtime-debug 전체 benchmark는 아님. Average attempts는 static autofix가 attempt 0으로 기록될 수 있어 해석 주의. |
 
 ## 분야별 메모
 
@@ -62,4 +152,4 @@ The next feature track is v1.3.0, expected roughly three months later, with sepa
 
 v1.2.x는 compile-fix 라인 기준 feature-complete로 봅니다. 1.2 series에 추가적인 minor feature release는 예정하지 않습니다. 이후 1.2.x 변경은 간단한 bug fix, 문서 수정, 낮은 위험도의 안정화 patch로 제한합니다.
 
-다음 feature track은 v1.3.0이며, 약 3개월 뒤 업데이트를 목표로 합니다. v1.3.0에서는 compile-fix, semantic refactor, runtime debug, negative control, advanced Unreal C++ capability를 분리된 scorecard로 측정합니다.
+다음 feature track은 v1.3.0이며, v1.2.5 이후 약 4개월 뒤부터 개발 시작을 목표로 합니다. v1.3.0에서는 compile-fix, semantic refactor, runtime debug, negative control, advanced Unreal C++ capability를 분리된 scorecard로 측정합니다.

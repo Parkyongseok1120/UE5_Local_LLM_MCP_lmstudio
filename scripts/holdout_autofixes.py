@@ -195,7 +195,6 @@ def apply_include_path_autofix(root: Path, findings: list[Finding]) -> list[Path
         for bare in ("BoxComponent.h", "SphereComponent.h"):
             if bare not in text:
                 continue
-            component = bare.replace(".h", "")
             updated = updated.replace(f'#include "{bare}"', f'#include "Components/{bare}"')
             updated = updated.replace(f"#include <{bare}>", f'#include "Components/{bare}"')
         if updated != text:

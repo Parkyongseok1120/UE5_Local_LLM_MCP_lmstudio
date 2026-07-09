@@ -60,7 +60,7 @@ def invalidate_project_caches(workspace: Path, project_names: list[str], project
     root = cache_dir(workspace)
     for path in root.glob("*.json"):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
         # Cache files do not store project names directly; key includes sorted projects.

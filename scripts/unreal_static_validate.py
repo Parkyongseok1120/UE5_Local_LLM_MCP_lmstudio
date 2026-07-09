@@ -898,7 +898,7 @@ def validate_cpp_declarations(path: Path, text: str, root: Path, headers: dict[s
         if func_name.endswith(("_Implementation", "_Validate")):
             base_name = re.sub(r"_(?:Implementation|Validate)$", "", func_name)
             if header and "BlueprintImplementableEvent" in header and func_name.endswith("_Implementation"):
-                if re.search(rf"UFUNCTION\s*\([^)]*BlueprintImplementableEvent", header):
+                if re.search(r"UFUNCTION\s*\([^)]*BlueprintImplementableEvent", header):
                     findings.append(
                         Finding(
                             "error",

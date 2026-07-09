@@ -14,7 +14,7 @@ Latest measured results:
 
 | Run | Artifact | Wall-clock time | Pass@K | Pass@1 | Notes |
 |---|---|---:|---:|---:|---|
-| Qwen 3.6 27B live holdout | `20260709-144441-pass1-target` | ~33m 37s | 36/36 | 36/36 | Best v1.2.5 result. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
+| Qwen 3.6 27B community fine-tune live holdout | `20260709-144441-pass1-target` | ~33m 37s | 36/36 | 36/36 | Best v1.2.5 result. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
 | Qwen 3.5 9B live holdout | `20260709-153021-qwen35-9b` | ~27m 22s | 35/36 | 33/36 | Strong compact-model result. Failed one LNK missing-definition case. |
 | Dry-run compile gate | `20260709-142052` | ~23m 29s | 36/36 | 36/36 | Golden oracle + UBT; no LM Studio model. |
 
@@ -121,7 +121,7 @@ v1.2.5는 1.2 라인의 마지막 minor release로 봅니다. 앞으로 1.2.x에
 
 | Run | Artifact | 측정 시간 | Pass@K | Pass@1 | 비고 |
 |---|---|---:|---:|---:|---|
-| Qwen 3.6 27B live holdout | `20260709-144441-pass1-target` | 약 33분 37초 | 36/36 | 36/36 | v1.2.5 최고 결과. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
+| Qwen 3.6 27B community fine-tune live holdout | `20260709-144441-pass1-target` | 약 33분 37초 | 36/36 | 36/36 | v1.2.5 최고 결과. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
 | Qwen 3.5 9B live holdout | `20260709-153021-qwen35-9b` | 약 27분 22초 | 35/36 | 33/36 | compact 모델 기준 강한 결과. LNK missing-definition 1건 실패. |
 | Dry-run compile gate | `20260709-142052` | 약 23분 29초 | 36/36 | 36/36 | Golden oracle + UBT; LM Studio 모델 없음. |
 

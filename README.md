@@ -30,7 +30,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 >
 > The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. **Latest v1.2.5 (2026-07-09):** multifile holdout fixes landed (`UPROPERTY` return-type drift, callback param expansion), followed by regression hardening for NavigationSystem module routing, editor-runtime boundaries, and UObject lifecycle autofix. Dry-run compile gate **36/36** (`20260709-142052`). Live revalidation **36/36 Pass@K**, **36/36 Pass@1** (`20260709-144441-pass1-target`); multifile tier **12/12 Pass@1**.
 >
-> v1.2.5 is the final planned minor release in the 1.2 line. Future 1.2.x updates, if any, will be limited to simple bug fixes, documentation corrections, and low-risk stability patches. v1.3.0 is expected roughly **3 months later** and will focus on separated C++ capability, semantic-refactor, runtime-debug, and negative-control scorecards.
+> v1.2.5 is the final planned minor release in the 1.2 line. Future 1.2.x updates, if any, will be limited to simple bug fixes, documentation corrections, and low-risk stability patches. v1.3.0 development is expected to **start roughly 4 months after v1.2.5** and will focus on separated C++ capability, semantic-refactor, runtime-debug, and negative-control scorecards.
 >
 > I appreciate your patience and understanding.
 
@@ -48,12 +48,12 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 | Model / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
-| Qwen 3.6 27B | 36/36 | 36/36 | `20260709-144441-pass1-target` |
+| Qwen 3.6 27B community fine-tune | 36/36 | 36/36 | `20260709-144441-pass1-target` |
 | Qwen 3.5 9B | 35/36 | 33/36 | `20260709-153021-qwen35-9b` |
 
 | Model / run | Live wall-clock time |
 |---|---:|
-| Qwen 3.6 27B | ~33m 37s |
+| Qwen 3.6 27B community fine-tune | ~33m 37s |
 | Qwen 3.5 9B | ~27m 22s |
 
 <p>
@@ -127,7 +127,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 Still experimental, but now measured more tightly.
 
-For narrow UE 5.8 compile-fix work, the current Qwen 3.6 27B local workflow is strong in live UBT validation (36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B also has a saved compact-model result (35/36 Pass@K, 33/36 Pass@1). Treat these as internal workflow results, not general model equivalence to Claude or GPT-class systems.
+For narrow UE 5.8 compile-fix work, the current community fine-tuned Qwen 3.6 27B local workflow is strong in live UBT validation (36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B also has a saved compact-model result (35/36 Pass@K, 33/36 Pass@1). Treat these as internal workflow results, not general model equivalence to Claude or GPT-class systems.
 
 If you want local LLMs for Unreal C++ with less hallucination, search evidence first, then answer or patch. Improve RAG, routing, validation, and failure analysis first; use fine-tuning later only when the workflow is already measured on real project errors.
 

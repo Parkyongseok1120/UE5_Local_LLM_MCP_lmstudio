@@ -263,4 +263,5 @@ def test_stop_diagnosis_report_includes_prompt_hints():
         )
     recommendation = retry_state.recommend_retry_action(attempts[-2], attempts[-1], attempts=attempts[:-1])
     hints = retry_state._prompt_hints("stop_diagnosis_report")
+    assert recommendation["action"] == "stop_diagnosis_report"
     assert any("diagnosis" in hint.lower() or "stop" in hint.lower() for hint in hints)

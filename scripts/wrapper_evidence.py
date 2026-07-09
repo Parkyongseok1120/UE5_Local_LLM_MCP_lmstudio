@@ -167,7 +167,6 @@ def _resolve_focus_path(root: Path, raw: str) -> Path | None:
 
 def project_summary_focus_paths(root: Path, focus_text: str, snapshot: dict[str, str] | None = None) -> list[str]:
     snapshot = snapshot if snapshot is not None else snapshot_project_files(root)
-    root_resolved = root.resolve()
     rels: list[str] = []
 
     def add_relative(relative: str) -> None:
