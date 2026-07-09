@@ -40,7 +40,7 @@ The project target is now a **Sonnet 4.5-oriented workflow track**. The latest Q
 | Profile | Use case |
 |---------|----------|
 | `qwen3_6_27b` | **Primary** — wrapper + MCP chat; current 36-case live Pass@1/Pass@K KPI track; Essential Tools |
-| `qwen3_5_9b` | Qwen 3.5 9B compact MCP; ctx 24576, Essential Tools |
+| `qwen3_5_9b` | Qwen 3.5 9B compact MCP; ctx 24576, Essential Tools; measured 35/36 Pass@K, 33/36 Pass@1 on latest live holdout |
 | `qwen3_5_9b_deepseek_v4_flash` | Community flash GGUF; compact MCP |
 | `qwen3_8b` | Small compact; ctx 24576, 2-file cap |
 | `gpt_oss_20b` | **Variable stability** — ctx 32768, 2-file cap; experimental MCP |
@@ -71,6 +71,10 @@ The project target is now a **Sonnet 4.5-oriented workflow track**. The latest Q
 **Compact alternative:** `qwen3_5_9b` — generally more stable than GPT OSS 20B.
 
 **Main local track (wrapper + Pass@1/Pass@K):** `qwen3_6_27b` when VRAM allows. Latest saved 36-case live holdout: `20260709-144441-pass1-target` with **36/36 Pass@1** and **36/36 Pass@K**.
+
+**Measured compact track:** `qwen3_5_9b` / `qwen3.5` reached **35/36 Pass@K** and **33/36 Pass@1** in `20260709-153021-qwen35-9b`. It remained strong on module, multifile, reflection, and editor-runtime tiers, but failed one LNK missing-definition case due to JSON/patch discipline.
+
+See [Model_Measurement_Results.md](Model_Measurement_Results.md) for the full bilingual measurement summary.
 
 Small and 20B-class models improve most from:
 

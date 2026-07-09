@@ -20,7 +20,7 @@ Three KPI channels must not be conflated:
 
 Dry-run **36/36** does not imply live **36/36** or autofix-only pass rates unless a separate live run is saved and cited.
 
-Compact-model optimization tracks include Qwen 3.5 9B, Qwen3.5-9B-DeepSeek-V4-Flash-GGUF, GPT OSS 20B, and gpt-oss-20b-claude-opus-sonnet-reasoning-i1-GGUF community fine-tunes. See [docs/Model_Profiles.md](Model_Profiles.md).
+Compact-model optimization tracks include Qwen 3.5 9B, Qwen3.5-9B-DeepSeek-V4-Flash-GGUF, GPT OSS 20B, and gpt-oss-20b-claude-opus-sonnet-reasoning-i1-GGUF community fine-tunes. See [Model measurement results](Model_Measurement_Results.md) and [Model profiles](Model_Profiles.md).
 
 ## Observed Local Model Ranking
 
@@ -40,11 +40,11 @@ Within that loop, the current practical ranking is:
 | Model / workflow proxy | Evidence level | Measured or estimated behavior in this UE loop | Claude / GPT workflow proxy (not a global benchmark) |
 |---|---|---|---|
 | `qwen3_6_27b` / `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | **Measured** — 36-case UE 5.8 live holdout `20260709-144441-pass1-target` (v1.2.5) | Pass@K **36/36** (100%), Pass@1 **36/36** (100%). Multifile tier **12/12 Pass@1**. Dry-run **36/36** (`20260709-142052`). wrong-file edits **0**, Build.cs false positives **0**, no-op edits **0**. | **Upper Sonnet 4 / Sonnet 4.5-oriented** for this narrow compile-fix + static-autofix workflow; not a global model benchmark. |
+| `qwen3_5_9b` / `qwen3.5` | **Measured** — 36-case UE 5.8 live holdout `20260709-153021-qwen35-9b` (v1.2.5) | Pass@K **35/36** (97.2%), Pass@1 **33/36** (91.7%). Multifile tier **12/12 Pass@1**, module_fix **10/10 Pass@1**, editor_runtime_boundary **1/1 Pass@1**. Failed `local_lnk2019_missing_cpp_definition`. | **Upper Sonnet 3.7 / lower Sonnet 4 workflow band** for this narrow loop; compact but weaker on exact JSON/patch discipline for missing-definition cases. |
 | Claude Sonnet 4 (cloud, estimated) | Not head-to-head measured on this 36-case suite | Estimated **34–36/36 Pass@1** with the same RAG/MCP/UBT wrapper if tool discipline holds. | **Mid–upper Sonnet 4** workflow reference for this narrow UE automation loop. |
 | Claude Sonnet 4.5 (cloud, estimated) | Gap-analysis target only | Estimated **36/36-class Pass@1** on this suite with stronger general retry judgment, broader refactor ability, and lower dependence on deterministic autofixes. | **Sonnet 4.5** workflow target for this repo. |
 | GPT-5 / GPT-5.x class (cloud, estimated) | Not measured | Estimated similar or higher band than Sonnet 4.5 for agentic tool loops; may excel on long-context refactor but unproven here. | **Sonnet 4.5+ / GPT-5.x-class** agentic coding proxy; treat as forward target, not current local equivalence. |
 | `qwen3_5_9b_deepseek_v4_flash` | Profiled/observed, not rerun on latest 36-case live suite | Best compact track when VRAM is limited. Usually follows JSON/tool/patch discipline better than base GPT OSS 20B. | **Upper Sonnet 3.7** for narrow compile-fix loops; below Sonnet 4 for refactor. Needs fresh 36-case live proof. |
-| `qwen3_5_9b` | Profiled/observed, not rerun on latest 36-case live suite | Stable compact baseline for Essential Tools, small patch loops, and focused compile-fix tasks. | **Mid–upper Sonnet 3.7** for narrow UE compile-fix; below Sonnet 4 on multi-file refactor. |
 | `qwen3_8b` | Profiled only | Smaller compact fallback. Useful for RAG Q&A and small fixes with strict prompts. | **Sonnet 3.5 – lower Sonnet 3.7** for narrow tasks. |
 | `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | Profiled/experimental | Community reasoning fine-tune profile. Better theoretical reasoning budget than base GPT OSS 20B, but still needs stable MCP/JSON verification. | **Upper Sonnet 3.7** estimate if tool discipline holds; not proven on 36-case live. |
 | `gpt_oss_20b` | Profiled/observed variable stability | Useful, but more variable in MCP/JSON/tool-call loops; prefer Qwen 9B or Qwen 27B when available. | **Around Sonnet 3.5** for this workflow. |
@@ -62,7 +62,7 @@ Within that loop, the current practical ranking is:
 | Sonnet 4.5 | **Qwen 3.6 27B latest measured workflow band for this narrow suite**; still not a global equivalence claim |
 | GPT-5.x class | Estimated Sonnet 4.5+ agentic coding; not measured here |
 
-In short: **Qwen 3.6 27B is currently the only profile with a saved 36-case UE 5.8 live holdout result in this README.** Qwen 3.5 9B-family models remain valuable because this agent stack rewards tool-call, patch, symbol-lookup, and validation discipline. This does **not** mean a smaller model is generally smarter than a larger model; it means it may fit this Unreal RAG/MCP/UBT automation loop better.
+In short: **Qwen 3.6 27B is the current best saved 36-case UE 5.8 live holdout result, and Qwen 3.5 9B now also has a saved compact-model live result.** Qwen 3.5 9B-family models remain valuable because this agent stack rewards tool-call, patch, symbol-lookup, and validation discipline. This does **not** mean a smaller model is generally smarter than a larger model; it means it may fit parts of this Unreal RAG/MCP/UBT automation loop surprisingly well.
 
 Old name: **Unreal58-RAG**. Officially tested on **UE 5.8**. Other 5.x versions can work, but build your own index from **your** licensed UE install (BYOI).
 
