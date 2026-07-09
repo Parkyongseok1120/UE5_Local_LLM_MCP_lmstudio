@@ -11,7 +11,7 @@ python scripts/load_sampling_preset.py --show-profile
 
 ## Project Target
 
-The project target is now a **Sonnet 4.5-oriented workflow track**. This is a target for the RAG/MCP/UBT system, not a claim that any local model is already Sonnet 4.5-grade.
+The project target is now a **Sonnet 4.5-oriented workflow track**. The latest Qwen 3.6 27B run reaches the target on this narrow internal 36-case UE 5.8 holdout, but this remains a RAG/MCP/UBT workflow result, not a claim that the local model is generally Sonnet 4.5-grade.
 
 ## Agent Policy Fields
 
@@ -39,7 +39,7 @@ The project target is now a **Sonnet 4.5-oriented workflow track**. This is a ta
 
 | Profile | Use case |
 |---------|----------|
-| `qwen3_6_27b` | **Primary** — wrapper + MCP chat; Pass@K KPI track; Essential Tools |
+| `qwen3_6_27b` | **Primary** — wrapper + MCP chat; current 36-case live Pass@1/Pass@K KPI track; Essential Tools |
 | `qwen3_5_9b` | Qwen 3.5 9B compact MCP; ctx 24576, Essential Tools |
 | `qwen3_5_9b_deepseek_v4_flash` | Community flash GGUF; compact MCP |
 | `qwen3_8b` | Small compact; ctx 24576, 2-file cap |
@@ -64,13 +64,13 @@ The project target is now a **Sonnet 4.5-oriented workflow track**. This is a ta
 | RAG / project understanding | Very good |
 | UE code review | Good |
 | Single-file compile-fix | Good |
-| Build.cs / multi-file fixes | Good multifile autofix (12/12 Pass@1); module-edge + editor-runtime still unstable |
+| Build.cs / multi-file fixes | Strong on current measured holdout: 36/36 live Pass@1, 12/12 multifile Pass@1, 0 Build.cs false positives |
 | MCP native tool-call | Experimental — verify with `bench_lmstudio_mcp.py` |
 | Overall agent automation | Experimental — do not trust unattended edits |
 
 **Compact alternative:** `qwen3_5_9b` — generally more stable than GPT OSS 20B.
 
-**Main local track (wrapper + Pass@K):** `qwen3_6_27b` when VRAM allows.
+**Main local track (wrapper + Pass@1/Pass@K):** `qwen3_6_27b` when VRAM allows. Latest saved 36-case live holdout: `20260709-144441-pass1-target` with **36/36 Pass@1** and **36/36 Pass@K**.
 
 Small and 20B-class models improve most from:
 

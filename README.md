@@ -23,7 +23,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — July 2026**
 >
-> The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. **Latest v1.2.5 (2026-07-09):** multifile holdout fixes landed (`UPROPERTY` return-type drift, callback param expansion); dry-run compile gate **36/36** (`20260709-035933`). Live revalidation **34/36 Pass@K**, **30/36 Pass@1** (`20260709-042338`); multifile tier **12/12 Pass@1**. Remaining live failures: `local_navigation_system_missing_module`, `local_editor_runtime_guard_boundary`.
+> The initial goal of this project — building a local Unreal Engine agent workflow capable of approaching Claude Sonnet 4-level code assistance — has been substantially achieved. **Latest v1.2.5 (2026-07-09):** multifile holdout fixes landed (`UPROPERTY` return-type drift, callback param expansion), followed by regression hardening for NavigationSystem module routing, editor-runtime boundaries, and UObject lifecycle autofix. Dry-run compile gate **36/36** (`20260709-142052`). Live revalidation **36/36 Pass@K**, **36/36 Pass@1** (`20260709-144441-pass1-target`); multifile tier **12/12 Pass@1**.
 >
 > Over the next **~4 months**, development will be limited to minor bug fixes and stability improvements due to academic commitments. Broader platform support (macOS, Linux) and additional LLM frontends beyond LM Studio (e.g., Ollama, Open WebUI) are on the roadmap but will not receive active development during this period.
 >
@@ -33,7 +33,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **프로젝트 현황 — 2026년 7월**
 >
-> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. **v1.2.5 (2026-07-09):** multifile 2건(`UPROPERTY` return-type, callback param expand) 수정 반영; dry-run **36/36** (`20260709-035933`). Live 재검증 **Pass@K 34/36**, **Pass@1 30/36** (`20260709-042338`); multifile tier **12/12 Pass@1**. 남은 live 실패: `local_navigation_system_missing_module`, `local_editor_runtime_guard_boundary`.
+> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로우 구축"은 상당 부분 달성되었습니다. **v1.2.5 (2026-07-09):** multifile 2건(`UPROPERTY` return-type, callback param expand) 수정 반영 후 NavigationSystem module routing, editor-runtime boundary, UObject lifecycle autofix 회귀를 안정화했습니다. dry-run **36/36** (`20260709-142052`). Live 재검증 **Pass@K 36/36**, **Pass@1 36/36** (`20260709-144441-pass1-target`); multifile tier **12/12 Pass@1**.
 >
 > 학업 일정상 향후 **약 4개월간**은 소소한 버그 수정 및 안정화 위주의 업데이트만 이루어질 예정입니다. macOS·Linux 지원과 LM Studio 외 다른 LLM 프론트엔드(Ollama, Open WebUI 등) 연동은 로드맵에 있지만, 이 기간 동안은 적극적인 개발이 어려울 것 같습니다.
 >
@@ -109,7 +109,7 @@ As of 2026-07-08, this project is in active KPI-driven local-agent testing for U
 
 ### Latest Internal Live Holdout
 
-> **KPI status (v1.2.5, 2026-07-09):** Live revalidation complete — Pass@K **34/36** (94.4%), Pass@1 **30/36** (83.3%), artifact `20260709-042338`. Dry-run compile gate **36/36** (`20260709-035933`). Prior v1.2.4 live baseline: Pass@K **34/36**, Pass@1 **34/36** (`20260708-211549`).
+> **KPI status (v1.2.5, 2026-07-09):** Live revalidation complete — Pass@K **36/36** (100%), Pass@1 **36/36** (100%), artifact `20260709-144441-pass1-target`. Dry-run compile gate **36/36** (`20260709-142052`). Prior v1.2.5 regression run: Pass@K **34/36**, Pass@1 **30/36** (`20260709-042338`).
 
 The strongest measured run on the UE 5.8 local 36-case live holdout is:
 
@@ -119,16 +119,17 @@ qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max
 
 These are internal workflow results, not a public standardized model benchmark.
 
-| Metric | Latest 36-case live run (2026-07-09, v1.2.5 `20260709-042338`) |
+| Metric | Latest 36-case live run (2026-07-09, v1.2.5 `20260709-144441-pass1-target`) |
 |---|---:|
-| Pass@K | 34/36 = 94.4% |
-| Pass@1 | 30/36 = 83.3% |
-| Failed cases | `local_navigation_system_missing_module`, `local_editor_runtime_guard_boundary` |
+| Pass@K | 36/36 = 100% |
+| Pass@1 | 36/36 = 100% |
+| Failed cases | none |
 | multifile_refactor tier | Pass@1 12/12 = 100%, Pass@K 12/12 |
-| Same-error repeated | 1 |
-| no-op edit cases | 2 |
-| wrong-file edit cases | 1 |
-| Build.cs false positive cases | 1 |
+| Average attempts | 0.389 |
+| Same-error repeated | 0 |
+| no-op edit cases | 0 |
+| wrong-file edit cases | 0 |
+| Build.cs false positive cases | 0 |
 
 | Metric | Prior live run (2026-07-08, v1.2.4 `20260708-211549`) |
 |---|---:|
@@ -145,7 +146,7 @@ These are internal workflow results, not a public standardized model benchmark.
 
 > **Hotfix note (v1.2.5):** Reproduce with `scripts/run_live_holdout.ps1` (live, user-triggered) and `scripts/run_dryrun_holdout.ps1` (compile gate, no LM Studio).
 
-v1.2.5 fixes the prior multifile dead-ends (`UPROPERTY` return-type drift, callback param expansion) and reaches **12/12 multifile Pass@1**. Overall live Pass@K stays **34/36**; Pass@1 is **30/36** because two different cases (`navigation_system` module fix, `editor_runtime_guard_boundary`) failed in this run.
+v1.2.5 fixes the prior multifile dead-ends (`UPROPERTY` return-type drift, callback param expansion) and the follow-up live regressions (`navigation_system` static false positive, `editor_runtime_guard_boundary`, `uobject_lifecycle` first-shot stability). The latest live holdout reaches **36/36 Pass@K** and **36/36 Pass@1**, with **12/12 multifile Pass@1**.
 
 **v1.2.5 stability hardening:** unified `autofix_runtime` pipeline (snapshot/rollback), transactional `apply_bundle`, blueprint native-event guards, holdout mode/evalTier alignment, Tier A.5 `--autofix-only` eval, and MCP write rollback on validation failure. See `docs/Evaluation_Claim_Guardrail.md` for dry-run vs autofix-only vs live KPI separation.
 
@@ -155,18 +156,18 @@ Compared with the earliest saved 5-case live baseline in this repo:
 
 | Metric | Early 5-case live baseline | Latest 36-case live run (2026-07-09) | Change |
 |---|---:|---:|---:|
-| Pass@K | 3/5 = 60% | 34/36 = 94.4% | +34.4 percentage points |
-| Pass@1 | 3/5 = 60% | 30/36 = 83.3% | +23.3 percentage points |
+| Pass@K | 3/5 = 60% | 36/36 = 100% | +40.0 percentage points |
+| Pass@1 | 3/5 = 60% | 36/36 = 100% | +40.0 percentage points |
 | Suite size | 5 cases | 36 cases | 7.2x larger |
 
 Compared with the prior 36-case live peak (2026-07-06):
 
 | Metric | 2026-07-06 | 2026-07-09 (v1.2.5) | Change |
 |---|---:|---:|---:|
-| Pass@K | 36/36 = 100% | 34/36 = 94.4% | −5.6 pp |
-| Pass@1 | 29/36 = 80.6% | 30/36 = 83.3% | +2.7 pp |
+| Pass@K | 36/36 = 100% | 36/36 = 100% | 0 pp |
+| Pass@1 | 29/36 = 80.6% | 36/36 = 100% | +19.4 pp |
 
-The biggest win in v1.2.5 is `multifile_refactor`: **12/12 Pass@1** (was 10/12). The remaining live gaps are module-fix no-op on `navigation_system` and an editor-runtime guard case that touched `Build.cs` with `UnrealEd` instead of `WITH_EDITOR` guards. Compile-fix, UHT/reflection Pass@K, and most module-dependency cases remain strong.
+The biggest wins in v1.2.5 are `multifile_refactor`: **12/12 Pass@1** (was 10/12), deterministic editor-runtime/source-boundary handling, and first-shot static autofixes for cases that previously entered no-op or retry loops.
 
 ### Agent Trust
 
@@ -409,7 +410,7 @@ Maintainers: run `.\installer\Verify-Oss-Ready.ps1` before publishing a fork.
 
 Still experimental, but now measured more tightly.
 
-For narrow UE 5.8 compile-fix work, the current Qwen 3.6 27B local workflow is strong in live UBT validation (34/36 Pass@K, 12/12 multifile Pass@1). For module-edge no-ops and editor-runtime boundary cases, it still trails a Sonnet 4.5-oriented workflow target.
+For narrow UE 5.8 compile-fix work, the current Qwen 3.6 27B local workflow is strong in live UBT validation (36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Treat this as an internal workflow result, not general model equivalence to Claude or GPT-class systems.
 
 If you want local LLMs for Unreal C++ with less hallucination, search evidence first, then answer or patch. Improve RAG, routing, validation, and failure analysis first; use fine-tuning later only when the workflow is already measured on real project errors.
 
