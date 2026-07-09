@@ -41,6 +41,7 @@ Skip the diagram only when the answer is a tiny factual answer, a single compile
 - Do not use raw file paths as node IDs. Put paths in labels or a text list below the diagram.
 - Do not show uncertain relationships as facts. Use dashed arrows for inferred or proposed relationships.
 - Always put the Mermaid block before the plain ASCII/text fallback. Do not rely on Mermaid rendering alone.
+- In `sequenceDiagram`, do not use Mermaid keywords such as `participant`, `actor`, or `end` as participant IDs. Use short IDs like `P`, `CinePart`, or `TargetActor`, and quote aliases with parentheses or slashes.
 
 ## Plain Text Fallback Rules
 

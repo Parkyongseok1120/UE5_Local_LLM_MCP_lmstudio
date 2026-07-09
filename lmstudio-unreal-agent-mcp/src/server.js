@@ -53,13 +53,19 @@ const {
   validateAfterWrite,
   formatValidationResult,
   runStaticValidation,
-  resolveValidateOnWrite
+  resolveValidateOnWrite,
+  VALIDATE_ON_WRITE_TIMEOUT_MS
 } = require("./validate-write.js");
 const {
   validateWriteTarget,
+  shouldRollback,
   isDeleteAllowedPath,
   isPatchOnlyExistingFile: isPatchOnlyFile
 } = require("./write-guards.js");
+const {
+  tryAcquirePathLock,
+  releasePathLock
+} = require("./write-locks.js");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -139,10 +145,18 @@ const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc
 const fileCache = new Map();
 let workspaceInfoCache = null;
 
+const SERVER_VERSION = (() => {
+  try {
+    return String(require("../package.json").version || "unknown");
+  } catch {
+    return "unknown";
+  }
+})();
+
 const server = new Server(
   {
     name: "lmstudio-unreal-agent-mcp",
-    version: "0.3.0"
+    version: SERVER_VERSION
   },
   {
     capabilities: {
@@ -532,12 +546,16 @@ async function buildWorkspaceInfo() {
   const payload = {
     workspaceRoot: WORKSPACE_ROOT,
     configPath: CONFIG_PATH,
+    serverEntry: __filename,
+    serverVersion: SERVER_VERSION,
     activeProject,
     projectContext,
     allowWrite: ALLOW_WRITE,
     allowCommands: ALLOW_COMMANDS,
     allowUnrealBuild: ALLOW_UNREAL_BUILD,
     validateOnWrite: VALIDATE_ON_WRITE,
+    validateOnWriteTimeoutMs: VALIDATE_ON_WRITE_TIMEOUT_MS,
+    allowExistingSourceWrite: ALLOW_EXISTING_SOURCE_WRITE,
     allowSourceDelete: ALLOW_SOURCE_DELETE,
     mcpEssentialTools: MCP_ESSENTIAL_TOOLS,
     mcpExtendedTools: MCP_EXTENDED_TOOLS,
@@ -672,7 +690,7 @@ function allAgentTools() {
       },
       {
         name: "write_file",
-        description: "Write a UTF-8 file inside WORKSPACE_ROOT. Requires ALLOW_WRITE=1. Use for brand-new files. Existing source files (.h/.cpp/.cs) are blocked by default; use replace_in_file instead.",
+        description: "Create a brand-new UTF-8 file inside WORKSPACE_ROOT. Requires ALLOW_WRITE=1. Create-only: any file that already exists is blocked (every extension, not just source). Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           content: { type: "string", description: "Full file content to write." },
@@ -1025,53 +1043,83 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const target = normalizeRelPath(args.path);
       const parent = path.dirname(target);
       const activeProject = getActiveProject(CONFIG_PATH);
-      const targetExists = await exists(target);
       const guard = await validateWriteTarget({
         targetAbsPath: target,
         workspaceRoot: WORKSPACE_ROOT,
         activeProjectPath: activeProject,
         createDirs: Boolean(args.createDirs),
-        fileExists: async (p) => exists(p)
+        fileExists: async (p) => exists(p),
+        allowExistingWrite: ALLOW_EXISTING_SOURCE_WRITE
       });
       if (!guard.ok) {
         return fail(guard.message);
       }
-      if (args.createDirs) await fsp.mkdir(parent, { recursive: true });
-      if (!(await exists(parent))) return fail(`parent directory not found: ${path.relative(WORKSPACE_ROOT, parent)}`);
-      if (targetExists && isPatchOnlyExistingFile(target) && !ALLOW_EXISTING_SOURCE_WRITE) {
-        const rel = path.relative(WORKSPACE_ROOT, target);
-        return fail(
-          `write_file blocked for existing source file: ${rel}. `
-          + "Use replace_in_file with exact oldText/newText. "
-          + "If oldText does not match, re-read a smaller range and retry. "
-          + "Set ALLOW_EXISTING_SOURCE_WRITE=1 only for a deliberate manual override."
-        );
+      const lock = tryAcquirePathLock(target, "write_file");
+      if (!lock.ok) {
+        return fail("previous write still in progress on this path; verify file state with read_file before retrying.");
       }
-      const priorContent = targetExists ? await fsp.readFile(target, "utf8") : null;
-      await fsp.writeFile(target, String(args.content || ""), "utf8");
-      invalidateFileCache(target);
-      const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
-      const rel = path.relative(WORKSPACE_ROOT, target);
-      if (validationFailed(validation)) {
-        if (priorContent === null) {
-          await fsp.unlink(target);
-        } else {
-          await fsp.writeFile(target, priorContent, "utf8");
+      try {
+        if (args.createDirs) await fsp.mkdir(parent, { recursive: true });
+        if (!(await exists(parent))) return fail(`parent directory not found: ${path.relative(WORKSPACE_ROOT, parent)}`);
+        const rel = path.relative(WORKSPACE_ROOT, target);
+        const targetExists = await exists(target);
+        const priorContent = targetExists ? await fsp.readFile(target, "utf8") : null;
+        const contentToWrite = String(args.content || "");
+        try {
+          if (ALLOW_EXISTING_SOURCE_WRITE) {
+            await fsp.writeFile(target, contentToWrite, "utf8");
+          } else {
+            // Exclusive create: atomically fail if the file already exists (guards the
+            // TOCTOU window between the existence check above and this write).
+            await fsp.writeFile(target, contentToWrite, { encoding: "utf8", flag: "wx" });
+          }
+        } catch (err) {
+          if (err && err.code === "EEXIST") {
+            return fail(`write_file blocked because file already exists: ${rel}. Use replace_in_file. Do not retry write_file.`);
+          }
+          throw err;
         }
         invalidateFileCache(target);
-        return {
-          content: [{
-            type: "text",
-            text: `ERROR: wrote ${rel} but static validation failed.${formatValidationResult(validation)}`
-          }],
-          isError: true
-        };
+        const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
+        if (validationFailed(validation)) {
+          // Stale-safe rollback: only revert if the file still holds exactly what this
+          // request wrote. A newer operation's content must never be clobbered.
+          let current = null;
+          try { current = await fsp.readFile(target, "utf8"); } catch { current = null; }
+          if (shouldRollback(current, contentToWrite)) {
+            if (priorContent === null) {
+              await fsp.unlink(target);
+            } else {
+              await fsp.writeFile(target, priorContent, "utf8");
+            }
+            invalidateFileCache(target);
+            return {
+              content: [{
+                type: "text",
+                text: `ERROR: wrote ${rel} but static validation failed.${formatValidationResult(validation)}`
+              }],
+              isError: true
+            };
+          }
+          invalidateFileCache(target);
+          return {
+            content: [{
+              type: "text",
+              text: `ERROR: static validation failed for ${rel}, but rollback skipped: file was modified by another operation (conflict). Verify file state with read_file before further edits.${formatValidationResult(validation)}`
+            }],
+            isError: true
+          };
+        }
+        let message = `OK: wrote ${rel}`;
+        if (validation && validation.timedOut) {
+          message += `\n${validation.note || "validation skipped (time budget); run static_validate_project before build"}`;
+        } else if (validation && !validation.skipped) {
+          message += formatValidationResult(validation);
+        }
+        return text(message);
+      } finally {
+        releasePathLock(target);
       }
-      let message = `OK: wrote ${rel}`;
-      if (validation && !validation.skipped) {
-        message += formatValidationResult(validation);
-      }
-      return text(message);
     }
 
     if (name === "replace_in_file") {
@@ -1083,57 +1131,81 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const newText = String(args.newText ?? "");
       if (!oldText) return fail("oldText must not be empty");
 
-      const raw = await readCachedBufferFile(target, s);
-      const hasCRLF = raw.includes(Buffer.from("\r\n"));
-      // Normalize to LF for matching; preserve original line endings in output
-      const content = raw.toString("utf8");
-      const contentNorm = content.replace(/\r\n/g, "\n");
-      const oldTextNorm = oldText.replace(/\r\n/g, "\n");
+      const lock = tryAcquirePathLock(target, "replace_in_file");
+      if (!lock.ok) {
+        return fail("previous write still in progress on this path; verify file state with read_file before retrying.");
+      }
+      try {
+        const raw = await readCachedBufferFile(target, s);
+        const hasCRLF = raw.includes(Buffer.from("\r\n"));
+        // Normalize to LF for matching; preserve original line endings in output
+        const content = raw.toString("utf8");
+        const contentNorm = content.replace(/\r\n/g, "\n");
+        const oldTextNorm = oldText.replace(/\r\n/g, "\n");
 
-      const occurrences = contentNorm.split(oldTextNorm).length - 1;
-      if (occurrences === 0) {
-        // Provide actionable diagnostic: show up to 3 lines around nearest partial match
-        const firstLine = oldTextNorm.split("\n")[0].trim().slice(0, 60);
-        const nearIdx = firstLine ? contentNorm.indexOf(firstLine) : -1;
-        let hint = "";
-        if (nearIdx !== -1) {
-          const before = contentNorm.lastIndexOf("\n", nearIdx - 1);
-          const snippetStart = Math.max(0, before);
-          const snippet = contentNorm.slice(snippetStart, nearIdx + 200).split("\n").slice(0, 5).join("\n");
-          hint = `\n\nNearest partial match context:\n${snippet}\n\nHint: read the file with read_file_range to get the exact text, then retry with the exact content shown.`;
-        } else {
-          hint = "\n\nHint: the first line of oldText was not found anywhere in the file. Use read_file or search_files to verify the exact content before retrying.";
+        const occurrences = contentNorm.split(oldTextNorm).length - 1;
+        if (occurrences === 0) {
+          // Provide actionable diagnostic: show up to 3 lines around nearest partial match
+          const firstLine = oldTextNorm.split("\n")[0].trim().slice(0, 60);
+          const nearIdx = firstLine ? contentNorm.indexOf(firstLine) : -1;
+          let hint = "";
+          if (nearIdx !== -1) {
+            const before = contentNorm.lastIndexOf("\n", nearIdx - 1);
+            const snippetStart = Math.max(0, before);
+            const snippet = contentNorm.slice(snippetStart, nearIdx + 200).split("\n").slice(0, 5).join("\n");
+            hint = `\n\nNearest partial match context:\n${snippet}\n\nHint: read the file with read_file_range to get the exact text, then retry with the exact content shown.`;
+          } else {
+            hint = "\n\nHint: the first line of oldText was not found anywhere in the file. Use read_file or search_files to verify the exact content before retrying.";
+          }
+          return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`);
         }
-        return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`);
-      }
-      if (args.expectedOccurrences !== undefined && occurrences !== Number(args.expectedOccurrences)) {
-        return fail(`occurrence mismatch: expected ${args.expectedOccurrences}, found ${occurrences}`);
-      }
+        if (args.expectedOccurrences !== undefined && occurrences !== Number(args.expectedOccurrences)) {
+          return fail(`occurrence mismatch: expected ${args.expectedOccurrences}, found ${occurrences}`);
+        }
 
-      // Apply replacement on normalized content, then restore original line endings if needed
-      const priorContent = content;
-      const updatedNorm = contentNorm.split(oldTextNorm).join(newText.replace(/\r\n/g, "\n"));
-      const updated = hasCRLF ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
-      await fsp.writeFile(target, updated, "utf8");
-      invalidateFileCache(target);
-      const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
-      const rel = path.relative(WORKSPACE_ROOT, target);
-      if (validationFailed(validation)) {
-        await fsp.writeFile(target, priorContent, "utf8");
+        // Apply replacement on normalized content, then restore original line endings if needed
+        const priorContent = content;
+        const updatedNorm = contentNorm.split(oldTextNorm).join(newText.replace(/\r\n/g, "\n"));
+        const updated = hasCRLF ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
+        await fsp.writeFile(target, updated, "utf8");
         invalidateFileCache(target);
-        return {
-          content: [{
-            type: "text",
-            text: `ERROR: replaced text in ${rel} but static validation failed.${formatValidationResult(validation)}`
-          }],
-          isError: true
-        };
+        const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
+        const rel = path.relative(WORKSPACE_ROOT, target);
+        if (validationFailed(validation)) {
+          // Stale-safe rollback: only restore if the file still holds exactly what this
+          // request wrote; otherwise a newer operation owns the file — skip and warn.
+          let current = null;
+          try { current = await fsp.readFile(target, "utf8"); } catch { current = null; }
+          if (shouldRollback(current, updated)) {
+            await fsp.writeFile(target, priorContent, "utf8");
+            invalidateFileCache(target);
+            return {
+              content: [{
+                type: "text",
+                text: `ERROR: replaced text in ${rel} but static validation failed.${formatValidationResult(validation)}`
+              }],
+              isError: true
+            };
+          }
+          invalidateFileCache(target);
+          return {
+            content: [{
+              type: "text",
+              text: `ERROR: static validation failed for ${rel}, but rollback skipped: file was modified by another operation (conflict). Verify file state with read_file before further edits.${formatValidationResult(validation)}`
+            }],
+            isError: true
+          };
+        }
+        let message = `OK: replaced ${occurrences} occurrence(s) in ${rel}`;
+        if (validation && validation.timedOut) {
+          message += `\n${validation.note || "validation skipped (time budget); run static_validate_project before build"}`;
+        } else if (validation && !validation.skipped) {
+          message += formatValidationResult(validation);
+        }
+        return text(message);
+      } finally {
+        releasePathLock(target);
       }
-      let message = `OK: replaced ${occurrences} occurrence(s) in ${rel}`;
-      if (validation && !validation.skipped) {
-        message += formatValidationResult(validation);
-      }
-      return text(message);
     }
 
     if (name === "propose_file_deletions") {
@@ -1172,25 +1244,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           + "and pass the matching per-file approvalToken only after approval."
         );
       }
-      const delStat = await statSafe(target);
-      if (!delStat || !delStat.isFile()) return fail(`not found or not file: ${args.path}`);
-      if (args.expectedContent !== undefined) {
-        const content = await fsp.readFile(target, "utf8");
-        if (content !== String(args.expectedContent)) {
-          return fail("expectedContent mismatch; delete aborted.");
-        }
+      const lock = tryAcquirePathLock(target, "delete_file");
+      if (!lock.ok) {
+        return fail("previous write still in progress on this path; verify file state with read_file before retrying.");
       }
-      await fsp.unlink(target);
-      invalidateFileCache(target);
-      return text(JSON.stringify({
-        ok: true,
-        deleted: rel,
-        fileName: path.basename(target),
-        completedEditsSummary,
-        reason,
-        ifNotDeleted,
-        ifDeleted,
-      }, null, 2));
+      try {
+        const delStat = await statSafe(target);
+        if (!delStat || !delStat.isFile()) return fail(`not found or not file: ${args.path}`);
+        if (args.expectedContent !== undefined) {
+          const content = await fsp.readFile(target, "utf8");
+          if (content !== String(args.expectedContent)) {
+            return fail("expectedContent mismatch; delete aborted.");
+          }
+        }
+        await fsp.unlink(target);
+        invalidateFileCache(target);
+        return text(JSON.stringify({
+          ok: true,
+          deleted: rel,
+          fileName: path.basename(target),
+          completedEditsSummary,
+          reason,
+          ifNotDeleted,
+          ifDeleted,
+        }, null, 2));
+      } finally {
+        releasePathLock(target);
+      }
     }
 
     if (name === "static_validate_project") {

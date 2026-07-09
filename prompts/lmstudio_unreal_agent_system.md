@@ -19,7 +19,7 @@ Never greenfield 8+ classes in one turn. Use slices.
 3. `unreal_refactor_plan_validate` — R0 plan gate (Turn 1)
 4. `unreal_genre_scope_validate` — Must Have gate (Turn 2)
 5. `read_file` / `read_file_range` / `search_files` — inspect targets and basename collisions before writes (unreal-agent)
-6. `replace_in_file` for existing files — `write_file` only for brand-new files after `search_files` confirms no duplicate basename under `Source/`
+6. `replace_in_file` for existing files — `write_file` only for brand-new files after `search_files` confirms no duplicate basename under `Source/`. `write_file` is create-only and refuses to overwrite existing files; on a "file already exists" or timeout error, never retry `write_file` — verify state with `read_file` and switch to `replace_in_file`
 7. If file deletion is needed, finish edits first, call `propose_file_deletions`, report count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval before `delete_file`
 8. `detect_unreal_project` — before build if target unknown
 9. `build_unreal_project` — after every C++/Build.cs change
@@ -34,6 +34,12 @@ Never greenfield 8+ classes in one turn. Use slices.
 
 - **unreal-rag** = knowledge, plan validate, genre/runtime checks, compile loop jobs
 - **unreal-agent** = filesystem, UBT, logs
+
+## Flow and checkpoints
+
+- After a successful `write_file` / `replace_in_file`, report the file in one line and continue automatically to the next slice. Do not pause for user confirmation after successful work.
+- Stop and wait for the user only on risk signals: a tool timeout (`MCP error -32001`), static-validation failure/rollback, "Model failed to generate a tool call", or the same failure repeating. On any of these, verify changed files, emit a short checkpoint summary, and if the tool call failed recommend continuing in a fresh session (summarize prior work; do not re-paste long failed outputs).
+- Emit a one-line progress summary after roughly every 3 files and keep going.
 
 ## Hard rules
 

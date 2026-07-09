@@ -77,3 +77,69 @@ flowchart TD
     assert Path(payload["outputPath"]).is_file()
     assert payload["mermaidValidation"]["ok"] is False
     assert payload["mermaidValidation"]["blockCount"] == 1
+
+
+def test_sequence_diagram_reports_reserved_participant_actor_id() -> None:
+    report = """# Sequence
+
+```mermaid
+sequenceDiagram
+    participant Director as UCinematicDirectorSubsystem
+    participant Participant as ICinematicParticipant (e.g. ACPlayerCharacter)
+    Director->>Participant: NotifyStarted()
+```
+"""
+
+    payload = validate_mermaid_diagrams(report)
+    codes = {
+        issue["code"]
+        for block in payload["blocks"]
+        for issue in block["errors"]
+    }
+
+    assert payload["ok"] is False
+    assert "reserved_sequence_actor_id" in codes
+    assert "unquoted_sequence_alias" in codes
+
+
+def test_sequence_diagram_reports_reserved_message_endpoint_and_unquoted_slash_alias() -> None:
+    report = """# Sequence
+
+```mermaid
+sequenceDiagram
+    participant Trigger as CinematicTriggerActor / USkillComponent
+    Director->>Participant: NotifyStarted()
+```
+"""
+
+    payload = validate_mermaid_diagrams(report)
+    codes = {
+        issue["code"]
+        for block in payload["blocks"]
+        for issue in block["errors"]
+    }
+
+    assert payload["ok"] is False
+    assert "reserved_sequence_actor_id" in codes
+    assert "unquoted_sequence_alias" in codes
+
+
+def test_sequence_diagram_accepts_safe_actor_id_and_quoted_alias() -> None:
+    report = """# Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Trigger as "CinematicTriggerActor / USkillComponent"
+    participant Director as UCinematicDirectorSubsystem
+    participant CinePart as "ICinematicParticipant (e.g. ACPlayerCharacter)"
+    Trigger->>Director: PlayCinematic
+    Director->>CinePart: NotifyStarted
+```
+"""
+
+    payload = validate_mermaid_diagrams(report)
+
+    assert payload["ok"] is True
+    assert payload["blockCount"] == 1
+    assert payload["blocks"][0]["diagramType"] == "sequenceDiagram"

@@ -13,7 +13,35 @@ ReportFormat = Literal["md", "pptx", "docx", "pdf"]
 MERMAID_BLOCK_RE = re.compile(r"```mermaid[ \t]*\r?\n(?P<body>.*?)(?:\r?\n```|$)", re.IGNORECASE | re.DOTALL)
 MERMAID_ALLOWED_STARTERS = {"flowchart", "sequenceDiagram", "classDiagram", "stateDiagram-v2"}
 MERMAID_RESERVED_IDS = {"end", "graph", "subgraph"}
+MERMAID_SEQUENCE_RESERVED_IDS = {
+    "actor",
+    "activate",
+    "alt",
+    "and",
+    "autonumber",
+    "box",
+    "break",
+    "critical",
+    "create",
+    "deactivate",
+    "destroy",
+    "else",
+    "end",
+    "loop",
+    "note",
+    "opt",
+    "par",
+    "participant",
+    "rect",
+}
 MERMAID_FORBIDDEN_DIRECTIVES = ("style ", "classDef ", "click ", "class ")
+MERMAID_SEQUENCE_DECL_RE = re.compile(
+    r"^\s*(?:participant|actor)\s+(?P<actor>[A-Za-z_][\w.-]*)(?:\s+as\s+(?P<alias>.+?))?\s*$",
+    re.IGNORECASE,
+)
+MERMAID_SEQUENCE_MESSAGE_RE = re.compile(
+    r"^\s*(?P<from>[A-Za-z_][\w.-]*)\s*[-=]+[)>xX-]*\+?\s*(?P<to>[A-Za-z_][\w.-]*)\s*:",
+)
 
 
 def _line_number(text: str, index: int) -> int:
@@ -58,6 +86,37 @@ def _looks_like_raw_path_id(line: str) -> bool:
     if first.startswith(("http://", "https://")):
         return False
     return bool(re.search(r"(?:^|[A-Za-z]:)[\w.-]+[\\/][\w./\\-]+$", first))
+
+
+def _is_quoted_mermaid_label(value: str) -> bool:
+    stripped = value.strip()
+    return len(stripped) >= 2 and stripped.startswith('"') and stripped.endswith('"')
+
+
+def _sequence_alias_needs_quotes(alias: str) -> bool:
+    return bool(re.search(r"[()/,:]", alias))
+
+
+def _add_sequence_actor_issue(
+    errors: list[dict[str, Any]],
+    *,
+    block_index: int,
+    line: int,
+    actor_id: str,
+    snippet: str,
+) -> None:
+    if actor_id.lower() not in MERMAID_SEQUENCE_RESERVED_IDS:
+        return
+    errors.append(
+        _mermaid_issue(
+            block=block_index,
+            line=line,
+            severity="error",
+            code="reserved_sequence_actor_id",
+            message="Do not use Mermaid sequence keywords as participant or actor IDs; use short IDs like CinePart or TargetActor.",
+            snippet=snippet,
+        )
+    )
 
 
 def _validate_mermaid_block(body: str, *, block_index: int, start_line: int) -> dict[str, Any]:
@@ -146,6 +205,39 @@ def _validate_mermaid_block(body: str, *, block_index: int, start_line: int) -> 
                     snippet=stripped,
                 )
             )
+        if diagram_type == "sequenceDiagram":
+            decl_match = MERMAID_SEQUENCE_DECL_RE.match(stripped)
+            if decl_match:
+                actor_id = decl_match.group("actor")
+                alias = decl_match.group("alias") or ""
+                _add_sequence_actor_issue(
+                    errors,
+                    block_index=block_index,
+                    line=absolute_line,
+                    actor_id=actor_id,
+                    snippet=stripped,
+                )
+                if alias and _sequence_alias_needs_quotes(alias) and not _is_quoted_mermaid_label(alias):
+                    errors.append(
+                        _mermaid_issue(
+                            block=block_index,
+                            line=absolute_line,
+                            severity="error",
+                            code="unquoted_sequence_alias",
+                            message="Quote sequence participant aliases that contain parentheses, slashes, commas, or colons.",
+                            snippet=stripped,
+                        )
+                    )
+            message_match = MERMAID_SEQUENCE_MESSAGE_RE.match(stripped)
+            if message_match:
+                for actor_id in (message_match.group("from"), message_match.group("to")):
+                    _add_sequence_actor_issue(
+                        errors,
+                        block_index=block_index,
+                        line=absolute_line,
+                        actor_id=actor_id,
+                        snippet=stripped,
+                    )
 
     return {
         "index": block_index,

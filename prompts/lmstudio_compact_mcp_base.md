@@ -35,6 +35,17 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 9. On UBT failure: `unreal_rag_search` `mode=compile_fix` with only the current error context, then patch and rebuild
 10. For UHT/generated.h/include/module errors, read the failing file and the actual `*.Build.cs` before editing. Patch one root cause per build loop.
 
+## Write safety and flow
+
+- `write_file` is **create-only** for brand-new files; it refuses to overwrite any existing file (every extension). To change an existing file, use `replace_in_file`.
+- If `write_file` returns `blocked because file already exists`, switch to `replace_in_file`. **Never retry `write_file` on that path.**
+- On a tool timeout (`MCP error -32001`), do **not** immediately retry the same write. First verify state with `list_directory` / `read_file`; if the file now exists switch to `replace_in_file`; if unclear, stop and summarize. A timeout is a hard-stop signal.
+- After a successful write, report the changed file in one line and **continue automatically** to the next planned step. Do not ask the user "continue?" after a successful file — successful work never waits.
+- Stop and wait for the user only on risk signals: a tool timeout, static-validation failure/rollback, "Model failed to generate a tool call", or the same failure repeating.
+- After roughly every 3 files in a multi-file task, emit a one-line progress summary (files done / next step) and keep going — this re-anchors tool-call formatting without interrupting the user.
+- If a write response says `rollback skipped ... (conflict)`, another operation changed the file: stop, `read_file` the current content, reconcile, then continue.
+- If validation returns `validation skipped (time budget)`, run `static_validate_project` before `build_unreal_project`.
+
 ## Shader / Material / Blueprint analysis
 
 - Shader work: search `mode=shader`; inspect `.usf`, `.ush`, plugin files, C++ registrations, and module evidence before edits.
@@ -73,6 +84,7 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 - Immediately after the Mermaid block, include a `text` fenced fallback using arrows (`->`) so LM Studio still shows a readable diagram without Mermaid rendering.
 - Default to `flowchart TD` for structure/dependencies and `sequenceDiagram` for runtime order.
 - Keep diagrams to 5-12 nodes, use short ASCII node IDs, and put long labels in quotes.
+- In `sequenceDiagram`, never use Mermaid keywords such as `participant`, `actor`, or `end` as participant IDs; use IDs like `P`, `CinePart`, or `TargetActor`, and quote aliases with parentheses or slashes.
 - Use dashed arrows for inferred/proposed relationships; do not diagram guesses as facts.
 
 ## Build failure handling

@@ -26,6 +26,22 @@ function resolveValidateOnWrite() {
 
 const VALIDATE_ON_WRITE = resolveValidateOnWrite();
 
+// Full static validation timeout for explicit static_validate_project calls.
+const STATIC_VALIDATION_TIMEOUT_MS = 120000;
+
+// Tighter time budget for validation that runs synchronously inside write_file /
+// replace_in_file. Kept well under any client tool timeout so the write tool always
+// responds before the client gives up (which caused -32001 + the timeout-retry spiral).
+function resolveValidateOnWriteTimeoutMs() {
+  const raw = Number(process.env.VALIDATE_ON_WRITE_TIMEOUT_MS);
+  if (Number.isFinite(raw) && raw > 0) {
+    return raw;
+  }
+  return 45000;
+}
+
+const VALIDATE_ON_WRITE_TIMEOUT_MS = resolveValidateOnWriteTimeoutMs();
+
 function resolvePythonExe() {
   const bundled = path.join(
     os.homedir(),
@@ -127,7 +143,10 @@ async function resolveProjectRootForFile(absPath, getActiveProject) {
   return null;
 }
 
-async function runStaticValidation(projectRoot) {
+async function runStaticValidation(projectRoot, options = {}) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+    ? options.timeoutMs
+    : STATIC_VALIDATION_TIMEOUT_MS;
   const script = path.join(UNREAL58_ROOT, "scripts", "validate_project_sources.py");
   if (!fs.existsSync(script)) {
     return {
@@ -152,7 +171,7 @@ async function runStaticValidation(projectRoot) {
       [script, "--project-root", projectRoot, "--json"],
       {
         cwd: UNREAL58_ROOT,
-        timeout: 120000,
+        timeout: timeoutMs,
         maxBuffer: 4 * 1024 * 1024,
       }
     );
@@ -180,6 +199,25 @@ async function runStaticValidation(projectRoot) {
         projectRoot,
         findingCount: parsed.findingCount,
         findings: parsed.findings || [],
+      };
+    }
+    // execFile sets killed=true when the timeout budget is exceeded. Surface this
+    // distinctly so validateAfterWrite can fail OPEN instead of blocking the write.
+    if (error.killed === true) {
+      return {
+        ok: false,
+        skipped: false,
+        timedOut: true,
+        projectRoot,
+        reason: `validation exceeded time budget (${timeoutMs}ms)`,
+        findingCount: 1,
+        findings: [{
+          severity: "warning",
+          code: "VALIDATOR_TIMEOUT",
+          path: projectRoot,
+          line: 0,
+          message: `validation exceeded time budget (${timeoutMs}ms)`,
+        }],
       };
     }
     return {
@@ -240,7 +278,24 @@ async function validateAfterWrite(absPath, getActiveProject) {
   if (!isSourceLike(absPath)) {
     return null;
   }
-  return runStaticValidation(projectRoot);
+  const result = await runStaticValidation(projectRoot, {
+    timeoutMs: VALIDATE_ON_WRITE_TIMEOUT_MS,
+  });
+  // Fail OPEN only when validation timed out: the write persists and we flag that
+  // validation was skipped so the model runs static_validate_project before building.
+  // Real findings still fail CLOSED exactly as before.
+  if (result && result.timedOut) {
+    return {
+      ok: true,
+      skipped: true,
+      timedOut: true,
+      projectRoot,
+      findingCount: 0,
+      findings: [],
+      note: "validation skipped (time budget); run static_validate_project before build",
+    };
+  }
+  return result;
 }
 
 function formatValidationResult(result) {
@@ -274,7 +329,9 @@ function formatValidationResult(result) {
 
 module.exports = {
   VALIDATE_ON_WRITE,
+  VALIDATE_ON_WRITE_TIMEOUT_MS,
   resolveValidateOnWrite,
+  resolveValidateOnWriteTimeoutMs,
   validateAfterWrite,
   formatValidationResult,
   runStaticValidation,
