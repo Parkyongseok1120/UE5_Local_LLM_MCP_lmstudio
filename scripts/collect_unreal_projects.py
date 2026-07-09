@@ -42,6 +42,7 @@ SKIP_DIRS = {
     ".vs",
     "Binaries",
     "DerivedDataCache",
+    "golden",
     "Intermediate",
     "Saved",
     "text_snapshot",

@@ -13,6 +13,7 @@ from ue_cpp_signatures import (
     FUNCTION_POINTER_TARGET_RE,
     INTERFACE_VIRTUAL_METHOD_RE,
     TYPEDEF_FUNCTION_POINTER_RE,
+    clean_method_ret,
     collect_callback_drifts,
     collect_interface_specs,
     find_implementer_method_decl,
@@ -86,6 +87,7 @@ REFLECTED_TYPE_RE = re.compile(r"\b(UCLASS|USTRUCT|UENUM|UINTERFACE)\s*\(")
 REFLECTION_RE = re.compile(r"\b(UCLASS|USTRUCT|UENUM|UINTERFACE|GENERATED_BODY)\s*\(")
 EDITOR_ONLY_INCLUDES = (
     "UnrealEd.h",
+    "UEditorEngine.h",
     "Editor.h",
     "EditorUtilityWidget.h",
     "EditorUtilitySubsystem.h",
@@ -93,6 +95,16 @@ EDITOR_ONLY_INCLUDES = (
     "AssetToolsModule.h",
     "LevelEditor.h",
 )
+UE_DECLARATION_MACROS = {
+    "UCLASS",
+    "USTRUCT",
+    "UENUM",
+    "UINTERFACE",
+    "UFUNCTION",
+    "UPROPERTY",
+    "GENERATED_BODY",
+    "GENERATED_UCLASS_BODY",
+}
 RAW_UOBJECT_MEMBER_RE = re.compile(
     r"\b(?:UObject|AActor|APawn|AController|UActorComponent|USceneComponent|UDataAsset|"
     r"UTexture(?:2D)?|UMaterial(?:Interface|Instance)?|USoundBase|UAnimMontage)\s*\*\s*"
@@ -200,6 +212,8 @@ CPP_SYMBOL_INCLUDES = {
     "DrawDebug": "DrawDebugHelpers.h",
     "DOREPLIFETIME": "Net/UnrealNetwork.h",
     "FObjectInitializer": "UObject/ObjectMacros.h",
+    "UBoxComponent": "Components/BoxComponent.h",
+    "USphereComponent": "Components/SphereComponent.h",
 }
 
 
@@ -643,6 +657,16 @@ def validate_constructor_lifecycle_usage(path: Path, text: str, root: Path) -> l
 def validate_newobject_outer(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
     rel = str(path.relative_to(root))
+    for match in re.finditer(r"^\s*#\s*define\s+NewObject\b.*$", text, re.MULTILINE):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "NEWOBJECT_MACRO_SHADOW",
+                "A local NewObject macro shadows the UObject factory API; remove the macro and include UObject/UObjectGlobals.h.",
+            )
+        )
     for match in re.finditer(r"\bNewObject\s*<[^>]+>\s*\(\s*\)", text):
         findings.append(
             Finding(
@@ -847,17 +871,24 @@ def _header_has_matching_signature(header: str, func_name: str, params: str) -> 
     return False
 
 
+def _normalize_return_type(ret: str) -> str:
+    value = re.sub(r"\s+", " ", str(ret or "").strip())
+    return value.replace(" const", "").strip()
+
+
 def validate_cpp_declarations(path: Path, text: str, root: Path, headers: dict[str, str]) -> list[Finding]:
     findings: list[Finding] = []
     rel = str(path.relative_to(root))
     definition_re = re.compile(
-        r"^[\w:<>,~*&\s]+\b(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<func>~?[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)",
+        r"^(?P<ret>[\w:<>,~*&\s]+?)\s+(?P<class>[A-Za-z_][A-Za-z0-9_]*)::"
+        r"(?P<func>~?[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)",
         flags=re.MULTILINE,
     )
     for match in definition_re.finditer(text):
         class_name = match.group("class")
         func_name = match.group("func")
         params = match.group("params")
+        cpp_ret = _normalize_return_type(match.group("ret"))
         header = headers.get(class_name)
         if not header:
             continue
@@ -866,9 +897,40 @@ def validate_cpp_declarations(path: Path, text: str, root: Path, headers: dict[s
             continue
         if func_name.endswith(("_Implementation", "_Validate")):
             base_name = re.sub(r"_(?:Implementation|Validate)$", "", func_name)
+            if header and "BlueprintImplementableEvent" in header and func_name.endswith("_Implementation"):
+                if re.search(r"UFUNCTION\s*\([^)]*BlueprintImplementableEvent", header):
+                    findings.append(
+                        Finding(
+                            "error",
+                            rel,
+                            line_number(text, match.start()),
+                            "BLUEPRINT_IMPLEMENTABLE_EVENT_INVALID_IMPL",
+                            (
+                                f"{class_name}::{func_name} must not be defined in .cpp for "
+                                "BlueprintImplementableEvent; remove the invalid _Implementation body."
+                            ),
+                        )
+                    )
+                    continue
             if re.search(rf"\b{re.escape(base_name)}\s*\(", header):
                 continue
         if _header_has_matching_signature(header, func_name, params):
+            decl_match = find_method_decl_in_header(header, func_name)
+            if decl_match:
+                header_ret = _normalize_return_type(decl_match.group("ret"))
+                if header_ret and cpp_ret and header_ret != cpp_ret:
+                    findings.append(
+                        Finding(
+                            "warning",
+                            rel,
+                            line_number(text, match.start()),
+                            "CPP_RETURN_TYPE_MISMATCH",
+                            (
+                                f"{class_name}::{func_name} return type in .cpp ({cpp_ret}) does not match "
+                                f"the header declaration ({header_ret})."
+                            ),
+                        )
+                    )
             continue
         if re.search(rf"\b{re.escape(func_name)}\s*\(", header):
             findings.append(
@@ -890,6 +952,133 @@ def validate_cpp_declarations(path: Path, text: str, root: Path, headers: dict[s
                 f"{class_name}::{func_name} is implemented in .cpp but was not found in the matching header.",
             )
         )
+    return findings
+
+
+def collect_blueprint_native_event_declarations(root: Path) -> list[tuple[str, str, Path, int]]:
+    declarations: list[tuple[str, str, Path, int]] = []
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        text = read_text(path)
+        current_class = ""
+        lines = text.splitlines()
+        index = 0
+        while index < len(lines):
+            class_match = re.search(
+                r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b",
+                lines[index],
+            )
+            if class_match:
+                current_class = class_match.group(1)
+            if "BlueprintNativeEvent" in lines[index]:
+                declaration_parts: list[str] = []
+                cursor = index + 1
+                while cursor < len(lines) and len(declaration_parts) < 8:
+                    candidate = lines[cursor].strip()
+                    cursor += 1
+                    if not candidate or candidate.startswith("UFUNCTION") or candidate.startswith("UPROPERTY"):
+                        continue
+                    declaration_parts.append(candidate)
+                    if ";" in candidate:
+                        break
+                declaration = " ".join(declaration_parts)
+                name_match = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", declaration)
+                if current_class and name_match:
+                    declarations.append((current_class, name_match.group(1), path, index + 1))
+                index = cursor
+                continue
+            index += 1
+    return declarations
+
+
+def validate_blueprint_native_event_implementations(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+    if not cpp_paths:
+        return findings
+    cpp_text = "\n".join(read_text(path) for path in cpp_paths)
+    for class_name, event_name, path, line in collect_blueprint_native_event_declarations(root):
+        rel = str(path.relative_to(root))
+        header_text = read_text(path)
+        manual_decl = re.search(
+            rf"\b(?:virtual\s+)?void\s+{re.escape(event_name)}_Implementation\s*\([^;]*\)\s*(?:override\s*)?;",
+            header_text,
+        )
+        if manual_decl:
+            findings.append(
+                Finding(
+                    "error",
+                    rel,
+                    line_number(header_text, manual_decl.start()),
+                    "BLUEPRINT_NATIVE_EVENT_MANUAL_IMPL_DECL",
+                    (
+                        f"Do not declare {event_name}_Implementation in the header for BlueprintNativeEvent; "
+                        "UHT generates it. Implement only in .cpp."
+                    ),
+                )
+            )
+        implementation = rf"\b{re.escape(class_name)}::{re.escape(event_name)}_Implementation\s*\("
+        if not re.search(implementation, cpp_text):
+            findings.append(
+                Finding(
+                    "error",
+                    rel,
+                    line,
+                    "BLUEPRINT_NATIVE_EVENT_IMPL_MISSING",
+                    (
+                        f"{class_name}::{event_name} is BlueprintNativeEvent and needs "
+                        f"{event_name}_Implementation in the matching .cpp file."
+                    ),
+                )
+            )
+    return findings
+
+
+def validate_cpp_definitions_missing(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    headers = class_headers(root)
+    cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+    if not cpp_paths:
+        return findings
+    all_cpp = "\n".join(read_text(path) for path in cpp_paths)
+    method_decl_re = re.compile(
+        r"^[ \t]*(?:virtual[ \t]+)?[\w:<>,~*& \t]+[ \t]+(?P<func>~?[A-Za-z_][A-Za-z0-9_]*)"
+        r"\s*\([^;{}]*\)\s*(?:const\s*)?(?:override\s*)?;",
+        re.MULTILINE,
+    )
+    for class_name, header_text in headers.items():
+        if not class_name.startswith("U"):
+            continue
+        header_path = None
+        for path in iter_source_files(root):
+            if path.suffix.lower() in {".h", ".hpp"} and class_name in read_text(path):
+                header_path = path
+                break
+        for match in method_decl_re.finditer(header_text):
+            func_name = match.group("func")
+            if func_name.startswith("~") or func_name in UE_DECLARATION_MACROS:
+                continue
+            window = header_text[max(0, match.start() - 240) : match.start()]
+            if "BlueprintImplementableEvent" in window:
+                continue
+            impl_name = func_name
+            if "BlueprintNativeEvent" in window:
+                impl_name = f"{func_name}_Implementation"
+            impl = rf"\b{re.escape(class_name)}::{re.escape(impl_name)}\s*\("
+            if re.search(impl, all_cpp):
+                continue
+            if header_path is None:
+                continue
+            findings.append(
+                Finding(
+                    "error",
+                    str(header_path.relative_to(root)),
+                    line_number(header_text, match.start()),
+                    "CPP_DEFINITION_MISSING",
+                    f"{class_name}::{impl_name} is declared in the header but has no matching .cpp definition.",
+                )
+            )
     return findings
 
 
@@ -1386,7 +1575,7 @@ def validate_interface_implementer_drift(root: Path) -> list[Finding]:
                     )
                     continue
                 impl_params = normalize_signature_params(impl_match.group("params"))
-                impl_ret = impl_match.group("ret").strip()
+                impl_ret, _ = clean_method_ret(impl_match.group("ret"))
                 if impl_params != iface_params or impl_ret.replace("const", "").strip() != iface_ret.replace("const", "").strip():
                     findings.append(
                         Finding(
@@ -1521,6 +1710,8 @@ def validate_unreal_readiness(
     findings.extend(validate_include_owner_modules(root, build_text_value, include_owner_map))
     findings.extend(validate_duplicate_source_basenames(root))
     findings.extend(validate_rpc_implementations(root))
+    findings.extend(validate_blueprint_native_event_implementations(root))
+    findings.extend(validate_cpp_definitions_missing(root))
     findings.extend(validate_interface_implementer_drift(root))
     findings.extend(validate_callback_function_pointer_drift(root))
     findings.extend(validate_multifile_callsite_drift(root))
@@ -1559,8 +1750,35 @@ def has_static_errors(findings: list[Finding]) -> bool:
     return any(finding.severity == "error" for finding in findings)
 
 
+ACTIONABLE_DRIFT_CODES = frozenset(
+    {
+        "CPP_RETURN_TYPE_MISMATCH",
+        "CALLBACK_FUNCTION_POINTER_MISMATCH",
+        "CPP_FUNCTION_SIGNATURE_MISMATCH",
+        "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH",
+        "DELEGATE_BROADCAST_SIGNATURE_MISMATCH",
+        "MULTIFILE_CALLSITE_DRIFT",
+    }
+)
+
+
+def has_actionable_static_findings(findings: list[Finding], *, mode: str = "") -> bool:
+    if has_static_errors(findings):
+        return True
+    if str(mode or "") != "multifile_refactor":
+        return False
+    return any(str(finding.code) in ACTIONABLE_DRIFT_CODES for finding in findings)
+
+
+def should_block_llm_apply_static_gate(findings: list[Finding], *, mode: str = "") -> bool:
+    return has_actionable_static_findings(findings, mode=mode)
+
+
 BLOCKING_STATIC_ERROR_CODES = {
     "DUPLICATE_SOURCE_BASENAME",
+    "BLUEPRINT_NATIVE_EVENT_IMPL_MISSING",
+    "BLUEPRINT_NATIVE_EVENT_MANUAL_IMPL_DECL",
+    "BLUEPRINT_IMPLEMENTABLE_EVENT_INVALID_IMPL",
 }
 
 
@@ -1581,6 +1799,15 @@ def can_run_autofix_ubt(findings: list[Finding], *, autofix_written: bool = Fals
     if has_blocking_static_errors(findings):
         return False
     if autofix_written:
+        drift_codes = {
+            "CPP_RETURN_TYPE_MISMATCH",
+            "CALLBACK_FUNCTION_POINTER_MISMATCH",
+            "BLUEPRINT_NATIVE_EVENT_IMPL_MISSING",
+            "BLUEPRINT_NATIVE_EVENT_MANUAL_IMPL_DECL",
+            "CPP_DEFINITION_MISSING",
+        }
+        if any(str(finding.code) in drift_codes for finding in findings):
+            return False
         return True
     if not findings:
         return True

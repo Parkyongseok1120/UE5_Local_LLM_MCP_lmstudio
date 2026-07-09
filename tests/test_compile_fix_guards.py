@@ -11,6 +11,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from lmstudio_unreal_wrapper import (  # noqa: E402
     answer_claims_build_cs_edit,
+    apply_editor_runtime_guard_autofix,
+    apply_uobject_newobject_autofix,
     bundle_includes_build_cs,
     declaration_definition_evidence,
     edit_scope_blockers,
@@ -27,6 +29,8 @@ from lmstudio_unreal_wrapper import (  # noqa: E402
     unresolved_build_cs_modules,
     validate_unreal_readiness,
 )
+from bootstrap_local_holdout import write_fixture_case  # noqa: E402
+from unreal_static_validate import Finding  # noqa: E402
 
 
 def test_gameplaytags_missing_module_is_static_error():
@@ -285,6 +289,62 @@ def test_route_forbidden_action_rejects_unrealed_build_cs_runtime_fix():
 
     assert issues
     assert "UnrealEd" in issues[0]
+
+
+def test_editor_runtime_autofix_removes_editor_symbols_without_build_cs(tmp_path):
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "EditorBoundary.cpp"
+    build_cs = tmp_path / "Source" / "Demo" / "Demo.Build.cs"
+    cpp.parent.mkdir(parents=True)
+    build_cs.parent.mkdir(parents=True, exist_ok=True)
+    cpp.write_text(
+        """#include "CoreMinimal.h"
+#include "UEditorEngine.h"
+
+void RefreshEditorViewports()
+{
+#if WITH_EDITOR
+	if (GEditor)
+	{
+		GEditor->RedrawAllViewports();
+		UEditorEngine::RedrawAllViewports(false);
+	}
+#endif
+}
+""",
+        encoding="utf-8",
+    )
+    build_cs.write_text(
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });\n',
+        encoding="utf-8",
+    )
+
+    written = apply_editor_runtime_guard_autofix(
+        tmp_path,
+        [Finding("error", str(cpp.relative_to(tmp_path)), 2, "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE", "editor-only")],
+    )
+
+    updated = cpp.read_text(encoding="utf-8")
+    assert cpp in written
+    assert "UEditorEngine.h" not in updated
+    assert "GEditor" not in updated
+    assert "UEditorEngine::" not in updated
+    assert "UnrealEd" not in build_cs.read_text(encoding="utf-8")
+
+
+def test_uobject_newobject_autofix_removes_shadow_macro_and_adds_globals(tmp_path):
+    fixture = write_fixture_case("local_uobject_lifecycle_missing_include", tmp_path)
+    cpp = fixture / "Source" / "HoldoutFixture" / "Private" / "HoldoutObjectFactoryComponent.cpp"
+
+    findings = validate_unreal_readiness(fixture, None)
+    assert any(finding.code == "NEWOBJECT_MACRO_SHADOW" for finding in findings)
+
+    written = apply_uobject_newobject_autofix(fixture, findings)
+
+    updated = cpp.read_text(encoding="utf-8")
+    assert cpp in written
+    assert "#define NewObject" not in updated
+    assert '#include "UObject/UObjectGlobals.h"' in updated
+    assert "return NewObject<UObject>(this);" in updated
 
 
 def test_missing_definition_fix_rejects_removed_existing_call_site(tmp_path):

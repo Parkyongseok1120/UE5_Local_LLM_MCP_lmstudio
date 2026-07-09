@@ -231,6 +231,57 @@ def delegate_broadcast_callsite_fix_context(
     return False
 
 
+def blueprint_native_event_impl_fix_context(
+    request: str,
+    route: dict[str, Any] | None = None,
+    findings: list[Finding] | None = None,
+) -> bool:
+    if route and str(route.get("errorSubkind") or "") in {
+        "BLUEPRINT_NATIVE_EVENT_IMPL_MISSING",
+        "BLUEPRINT_NATIVE_EVENT_MANUAL_IMPL_DECL",
+    }:
+        return True
+    if any(
+        finding.code in {"BLUEPRINT_NATIVE_EVENT_IMPL_MISSING", "BLUEPRINT_NATIVE_EVENT_MANUAL_IMPL_DECL"}
+        for finding in (findings or [])
+    ):
+        return True
+    lower = request.lower()
+    return "blueprintnativeevent" in lower or (
+        "_implementation" in lower and "matching cpp" in lower
+    )
+
+
+def blueprint_native_event_dual_surface_blockers(bundle: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    header_impl = False
+    cpp_impl = False
+    for item in list(bundle.get("patches") or []) + [
+        {"path": entry.get("path"), "newText": entry.get("content", "")} for entry in (bundle.get("files") or [])
+    ]:
+        path = str(item.get("path") or "").replace("\\", "/")
+        text = str(item.get("newText") or item.get("content") or "")
+        if not text:
+            continue
+        if path.lower().endswith((".h", ".hpp")) and re.search(
+            r"\b\w+_Implementation\s*\([^;]*\)\s*(?:override\s*)?;",
+            text,
+            re.MULTILINE,
+        ):
+            header_impl = True
+        if path.lower().endswith((".cpp", ".c", ".cc")) and re.search(
+            r"\b\w+::\w+_Implementation\s*\(",
+            text,
+        ):
+            cpp_impl = True
+    if header_impl and cpp_impl:
+        issues.append(
+            "BlueprintNativeEvent fixes must not add manual _Implementation declarations to headers "
+            "while also patching the .cpp body. Add only the cpp stub."
+        )
+    return issues
+
+
 def multifile_exact_snippets(root: Path, paths: list[str], *, context_lines: int = 1) -> str:
     lines: list[str] = ["Exact current snippets (copy oldText from these):"]
     for rel in paths[:6]:
@@ -243,6 +294,58 @@ def multifile_exact_snippets(root: Path, paths: list[str], *, context_lines: int
             continue
         preview = "\n".join(file_lines[: min(len(file_lines), context_lines * 2 + 3)])
         lines.append(f"## {rel}\n{preview}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def resolve_existing_relative_paths(root: Path, candidates: list[str]) -> list[str]:
+    """Filter model-supplied hint strings down to real project-relative file paths.
+
+    A model's diagnosis.requiredReads list can mix actual paths (e.g.
+    "Source/HoldoutFixture/Private/Foo.cpp") with generic descriptions (e.g.
+    "matching cpp definition"). This keeps only entries that resolve to a real
+    file under root, in order, without duplicates.
+    """
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if not value or "/" not in value.replace("\\", "/"):
+            continue
+        try:
+            path = safe_output_path(root, value)
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        normalized = value.replace("\\", "/")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        resolved.append(normalized)
+    return resolved
+
+
+def required_read_file_snippets(
+    root: Path, paths: list[str], *, max_files: int = 3, max_chars_per_file: int = 1600
+) -> str:
+    """Render full (capped) contents of model-requested evidence files.
+
+    Used to break an empty_files_without_evidence deadlock: the model asked to
+    read a file via diagnosis.requiredReads but the wrapper never showed it the
+    content, so it kept resubmitting an empty response.
+    """
+    lines: list[str] = ["Requested file contents (from your previous requiredReads):"]
+    for rel in paths[:max_files]:
+        try:
+            path = safe_output_path(root, rel)
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        text = read_text(path)
+        if len(text) > max_chars_per_file:
+            text = text[:max_chars_per_file] + "\n... (truncated)"
+        lines.append(f"## {rel}\n```\n{text}\n```")
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
@@ -341,6 +444,7 @@ def no_change_blockers(request: str, root: Path, findings: list[Finding]) -> lis
             in {
                 "CPP_FUNCTION_NOT_DECLARED_IN_HEADER",
                 "CPP_FUNCTION_SIGNATURE_MISMATCH",
+                "CPP_RETURN_TYPE_MISMATCH",
                 "CALLBACK_FUNCTION_POINTER_MISMATCH",
                 "INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH",
             }
@@ -400,7 +504,8 @@ def edit_scope_blockers(
                 "The request targets Build.cs/module dependencies, but this edit did not change any *.Build.cs file."
             )
     if request_mentions_any(request, ("signature", "시그니처", "declaration", "definition", ".cpp")):
-        if changed_header and not changed_cpp:
+        blueprint_impl = blueprint_native_event_impl_fix_context(request, route, findings)
+        if changed_header and not changed_cpp and not blueprint_impl:
             if str(mode or "") == "multifile_refactor" or multifile_surface_enforced(mode, request):
                 hint = multifile_required_surface_hint(mode, request, root)
                 issues.append(
@@ -430,6 +535,7 @@ def multifile_surface_blockers(
     *,
     mode: str,
     pending_surfaces: set[str] | None = None,
+    findings: list | None = None,
 ) -> list[str]:
     if not multifile_surface_enforced(mode, request):
         return []
@@ -441,15 +547,33 @@ def multifile_surface_blockers(
     lower = request.lower()
     issues: list[str] = []
     pending = pending_surfaces or set()
+    finding_codes = {str(getattr(finding, "code", "")) for finding in (findings or [])}
+    cpp_only_return_drift = (
+        "CPP_RETURN_TYPE_MISMATCH" in finding_codes
+        and changed_cpp
+        and not changed_headers
+    )
+    uproperty_authoritative_header = (
+        cpp_only_return_drift
+        or blueprint_native_event_impl_fix_context(request, findings=findings)
+        or (
+            any(term in lower for term in ("uproperty", "ufunction", "reflected score"))
+            and changed_cpp
+            and not changed_headers
+        )
+    )
 
     if any(term in lower for term in ("delegate", "signature", "declaration", "definition", "interface")):
         if changed_headers and not changed_cpp:
-            issues.append(
-                "Multifile fix incomplete: header declaration changed without matching .cpp definition. "
-                f"Changed: {', '.join(changed_headers)}"
-            )
+            if blueprint_native_event_impl_fix_context(request, findings=findings):
+                pass
+            elif PENDING_HEADER_FOLLOWUP not in pending:
+                issues.append(
+                    "Multifile fix incomplete: header declaration changed without matching .cpp definition. "
+                    f"Changed: {', '.join(changed_headers)}"
+                )
         elif changed_cpp and not changed_headers:
-            if PENDING_CPP_FOLLOWUP not in pending:
+            if PENDING_CPP_FOLLOWUP not in pending and not uproperty_authoritative_header:
                 issues.append(
                     "Multifile fix incomplete: .cpp definition changed without matching header declaration. "
                     f"Changed: {', '.join(changed_cpp)}"
@@ -463,16 +587,36 @@ def multifile_surface_blockers(
 
     if any(term in lower for term in ("callback", "registration", "parameter list")) and len(changed) < 2:
         if not (PENDING_CPP_FOLLOWUP in pending and changed_cpp):
-            issues.append(
-                "Callback parameter expansion requires declaration, definition, and registration updates together. "
-                f"Changed only: {', '.join(changed)}"
-            )
+            if not (changed_headers and changed_cpp):
+                issues.append(
+                    "Callback parameter expansion requires declaration and definition updates together. "
+                    f"Changed only: {', '.join(changed)}"
+                )
 
     surface = refactor_surface_evidence(root, request, max_files=8, max_lines_per_file=4, max_chars=2000)
-    if surface and len(changed) == 1 and ("callsite" in surface.lower() or "consumer" in lower):
+    consumer_paths = _consumer_source_paths(root, request)
+    if (
+        surface
+        and len(changed) == 1
+        and consumer_paths
+        and any(path.lower() in surface.lower() for path in consumer_paths)
+    ):
         if PENDING_CPP_FOLLOWUP not in pending:
             issues.append(
                 "Multifile refactor likely needs callsite/consumer updates in addition to "
                 f"{changed[0]}."
             )
     return issues
+
+
+def _consumer_source_paths(root: Path, request: str) -> list[str]:
+    lower = request.lower()
+    if "consumer" not in lower and "callsite" not in lower and "split" not in lower:
+        return []
+    paths: list[str] = []
+    for path in iter_source_files(root):
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        name_lower = path.name.lower()
+        if "consumer" in name_lower or "callsite" in name_lower:
+            paths.append(rel)
+    return paths

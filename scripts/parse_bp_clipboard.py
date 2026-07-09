@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 BEGIN_OBJECT_RE = re.compile(r"^\s*Begin Object Class=(?P<class>[^\s]+)\s+Name=\"(?P<name>[^\"]+)\"", re.M)

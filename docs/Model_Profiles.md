@@ -11,7 +11,7 @@ python scripts/load_sampling_preset.py --show-profile
 
 ## Project Target
 
-The project target is now a **Sonnet 4.5-oriented workflow track**. This is a target for the RAG/MCP/UBT system, not a claim that any local model is already Sonnet 4.5-grade.
+The project target is now a **Sonnet 4.5-oriented workflow track**. The latest community fine-tuned Qwen 3.6 27B run reaches the target on this narrow internal 36-case UE 5.8 holdout, but this remains a RAG/MCP/UBT workflow result, not a claim that the base model or local model family is generally Sonnet 4.5-grade.
 
 ## Agent Policy Fields
 
@@ -39,8 +39,8 @@ The project target is now a **Sonnet 4.5-oriented workflow track**. This is a ta
 
 | Profile | Use case |
 |---------|----------|
-| `qwen3_6_27b` | **Primary** — wrapper + MCP chat; Pass@K KPI track; Essential Tools |
-| `qwen3_5_9b` | Qwen 3.5 9B compact MCP; ctx 24576, Essential Tools |
+| `qwen3_6_27b` | **Primary** — community fine-tuned Qwen 3.6 27B local model; wrapper + MCP chat; current 36-case live Pass@1/Pass@K KPI track; Essential Tools |
+| `qwen3_5_9b` | Qwen 3.5 9B compact MCP; ctx 24576, Essential Tools; measured 35/36 Pass@K, 33/36 Pass@1 on latest live holdout |
 | `qwen3_5_9b_deepseek_v4_flash` | Community flash GGUF; compact MCP |
 | `qwen3_8b` | Small compact; ctx 24576, 2-file cap |
 | `gpt_oss_20b` | **Variable stability** — ctx 32768, 2-file cap; experimental MCP |
@@ -64,13 +64,17 @@ The project target is now a **Sonnet 4.5-oriented workflow track**. This is a ta
 | RAG / project understanding | Very good |
 | UE code review | Good |
 | Single-file compile-fix | Good |
-| Build.cs / multi-file fixes | Unstable (Pass@K primary KPI) |
+| Build.cs / multi-file fixes | Strong on current measured holdout: 36/36 live Pass@1, 12/12 multifile Pass@1, 0 Build.cs false positives |
 | MCP native tool-call | Experimental — verify with `bench_lmstudio_mcp.py` |
 | Overall agent automation | Experimental — do not trust unattended edits |
 
 **Compact alternative:** `qwen3_5_9b` — generally more stable than GPT OSS 20B.
 
-**Main local track (wrapper + Pass@K):** `qwen3_6_27b` when VRAM allows.
+**Main local track (wrapper + Pass@1/Pass@K):** `qwen3_6_27b` when VRAM allows. The saved KPI used a community fine-tuned Qwen 3.6 27B model, not a base release. Latest saved 36-case live holdout: `20260709-144441-pass1-target` with **36/36 Pass@1** and **36/36 Pass@K**.
+
+**Measured compact track:** `qwen3_5_9b` / `qwen3.5` reached **35/36 Pass@K** and **33/36 Pass@1** in `20260709-153021-qwen35-9b`. It remained strong on module, multifile, reflection, and editor-runtime tiers, but failed one LNK missing-definition case due to JSON/patch discipline.
+
+See [Model_Measurement_Results.md](Model_Measurement_Results.md) for the full bilingual measurement summary.
 
 Small and 20B-class models improve most from:
 

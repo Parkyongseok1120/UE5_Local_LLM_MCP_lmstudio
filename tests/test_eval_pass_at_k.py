@@ -289,9 +289,13 @@ def test_holdout_config_metrics_only_cli_loads_without_ubt(tmp_path):
     )
 
     assert proc.returncode == 0
-    assert "Pass@K summary: 36/36" in proc.stdout
-    assert "holdout_gameplaytags_missing_module" in proc.stdout
+    assert "Pass@K summary: 0/0 (100%)" in proc.stdout
+    assert "Metrics-only (excluded from rate): 36/36" in proc.stdout
+    assert "[METRICS] holdout_gameplaytags_missing_module" in proc.stdout
     assert output_path.is_file()
+    kpi = json.loads(output_path.read_text(encoding="utf-8"))
+    assert kpi["metricsOnlyCount"] == 36
+    assert kpi["totalCases"] == 36
 
 
 def test_fixture_only_holdout_case_reports_not_live_applicable(tmp_path):

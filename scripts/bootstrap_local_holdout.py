@@ -95,7 +95,7 @@ EXPANSION_CASES_12: list[dict[str, Any]] = [
     {
         "id": "local_editor_only_runtime_boundary",
         "category": "editor-only include in runtime module",
-        "mode": "module_fix",
+        "mode": "editor_runtime_fix",
         "errorLog": "Editor-only UnrealEd include is referenced from a runtime module source file",
         "expectedFilesToRead": ["failing runtime source/header", "module Build.cs"],
         "expectedPatchTargets": ["failing file", "module boundary files"],

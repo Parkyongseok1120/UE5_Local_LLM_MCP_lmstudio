@@ -167,7 +167,6 @@ def _resolve_focus_path(root: Path, raw: str) -> Path | None:
 
 def project_summary_focus_paths(root: Path, focus_text: str, snapshot: dict[str, str] | None = None) -> list[str]:
     snapshot = snapshot if snapshot is not None else snapshot_project_files(root)
-    root_resolved = root.resolve()
     rels: list[str] = []
 
     def add_relative(relative: str) -> None:
@@ -697,6 +696,33 @@ def _should_include_refactor_surface(mode: str) -> bool:
     return normalized == "multifile_refactor" or normalized.startswith("refactor_")
 
 
+def callback_registration_evidence(root: Path, focus_text: str, *, max_chars: int = 1200) -> str:
+    lower = str(focus_text or "").lower()
+    if not any(term in lower for term in ("callback", "registration", "parameter list")):
+        return ""
+    lines = ["Callback registration evidence:"]
+    added = False
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
+            continue
+        text = read_text(path)
+        if "using " not in text or "&" not in text:
+            continue
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        file_lines: list[str] = []
+        for line_no, raw_line in enumerate(text.splitlines(), start=1):
+            compact = re.sub(r"\s+", " ", raw_line).strip()
+            if re.search(r"using\s+\w+\s*=\s*.*\(\*\)", compact) or re.search(r"&\w+::\w+", compact):
+                file_lines.append(f"- line {line_no}: {compact}")
+        if file_lines:
+            lines.append(f"## {rel}")
+            lines.extend(file_lines)
+            added = True
+        if len("\n".join(lines)) >= max_chars:
+            break
+    return "\n".join(lines)[:max_chars] if added else ""
+
+
 def focused_current_source_evidence(
     root: Path,
     focus_text: str,
@@ -707,8 +733,11 @@ def focused_current_source_evidence(
 ) -> str:
     declaration_evidence = declaration_definition_evidence(root, focus_text, route)
     refactor_evidence = refactor_surface_evidence(root, focus_text) if _should_include_refactor_surface(mode) else ""
-    pair_context = "" if (declaration_evidence or refactor_evidence) else focused_source_pair_context(root, focus_text)
-    return "\n".join(part for part in (declaration_evidence, refactor_evidence, pair_context) if part.strip())[:max_chars]
+    registration_evidence = callback_registration_evidence(root, focus_text)
+    pair_context = "" if (declaration_evidence or refactor_evidence or registration_evidence) else focused_source_pair_context(root, focus_text)
+    return "\n".join(
+        part for part in (declaration_evidence, refactor_evidence, registration_evidence, pair_context) if part.strip()
+    )[:max_chars]
 
 
 def multifile_surface_enforced(mode: str, request: str) -> bool:
@@ -738,6 +767,11 @@ def multifile_pattern_hint(request: str) -> str:
         hints.append("Pattern: rename cpp definition and consumer callsites to the header-declared method name.")
     if "callback" in lower or "registration" in lower or "parameter list" in lower:
         hints.append("Pattern: expand handler header/cpp params to match the callback typedef, then keep registration assignment.")
+    if any(term in lower for term in ("uproperty", "ufunction", "reflected score", "type migration")):
+        hints.append(
+            "Pattern: when the header UFUNCTION return type is already authoritative, fix only the .cpp "
+            "definition return type and cast the stored member value."
+        )
     if "prepare" in lower and "commit" in lower:
         hints.append("Pattern: replace stale combined method with split header methods and update consumer callsites.")
     if "split" in lower and "callsite" in lower:
@@ -757,7 +791,9 @@ def multifile_required_surface_hint(mode: str, request: str, root: Path) -> str:
     if "callsite" in lower or "call site" in lower or "consumer" in lower:
         surfaces.append("consumer/callsite .cpp")
     if "callback" in lower or "registration" in lower:
-        surfaces.append("callback handler + registration site")
+        surfaces.append("callback handler header + .cpp definition (registration typedef unchanged if already correct)")
+    if any(term in lower for term in ("uproperty", "ufunction", "reflected score", "type migration")):
+        surfaces.append("authoritative header declaration + matching .cpp return type")
     evidence = refactor_surface_evidence(root, request, max_files=6, max_lines_per_file=3, max_chars=1200)
     if evidence:
         surfaces.append("refactor surface evidence below")

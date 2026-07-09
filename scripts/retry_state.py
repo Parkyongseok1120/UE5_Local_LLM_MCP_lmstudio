@@ -135,6 +135,10 @@ def recommend_retry_action(
         action = "require_multifile_surfaces"
         reason = "multifile patch did not cover all required declaration/definition/callsite surfaces"
         escalation_level = 1
+    elif str(rejection_kind or "") == "edit_scope_blocker":
+        action = "require_multifile_surfaces"
+        reason = "edit rejected by compile-fix scope guard; widen the patch to required surfaces"
+        escalation_level = 1
     elif noop and no_op_guard and validation_repeat >= 1:
         action = "require_exact_oldtext"
         reason = "no-op edit with noOpGuard enabled; copy exact oldText from project state"
@@ -145,11 +149,11 @@ def recommend_retry_action(
         escalation_level = 2 if validation_repeat >= 2 else 1
     elif str(rejection_kind or "") == "empty_files_without_evidence":
         action = "force_patch_with_evidence" if validation_repeat >= 2 else "force_new_evidence"
-        reason = "empty response without evidence while static validation still reports actionable errors"
+        reason = "empty response without evidence while compile context still requires a patch"
         escalation_level = 2 if validation_repeat >= 2 else 1
-    elif str(rejection_kind or "") == "edit_scope_blocker":
-        action = "require_multifile_surfaces" if validation_repeat >= 1 else "force_new_evidence"
-        reason = "edit rejected by compile-fix scope guard; widen the patch to required surfaces"
+    elif str(rejection_kind or "") == "repeat_patch_blocked":
+        action = "require_different_surface"
+        reason = "repeat patch blocked; choose a different file surface or revert the bad header change"
         escalation_level = 1
     elif validation_repeat >= 4:
         action = "stop_diagnosis_report"
@@ -202,9 +206,32 @@ def _blocked_repeat_paths(
     if escalation_level < 2:
         return []
     paths: list[str] = []
+
+    def _is_validation_record(record: dict[str, Any]) -> bool:
+        return bool(record.get("validationRejected") or record.get("validationRejectionKind"))
+
+    def _proposed_paths(record: dict[str, Any]) -> list[str]:
+        return [str(path) for path in (record.get("proposedChangedPaths") or []) if str(path).strip()]
+
     for record in attempts[-2:]:
-        paths.extend(str(path) for path in (record.get("changedPaths") or []) if str(path).strip())
-    paths.extend(str(path) for path in (current.get("changedPaths") or []) if str(path).strip())
+        if _is_validation_record(record) or record.get("noOpEdit"):
+            paths.extend(_proposed_paths(record))
+    if _is_validation_record(current) or current.get("noOpEdit"):
+        paths.extend(_proposed_paths(current))
+
+    # UBT-applied attempts (not validation rejections) block a path only when
+    # it recurs across consecutive attempts sharing the same errorKey, i.e.
+    # the model kept patching the same file without resolving the error.
+    recent = (list(attempts) + [current])[-3:]
+    for earlier, later in zip(recent, recent[1:]):
+        if _is_validation_record(earlier) or _is_validation_record(later):
+            continue
+        if not earlier.get("errorKey") or earlier.get("errorKey") != later.get("errorKey"):
+            continue
+        earlier_paths = {str(path) for path in (earlier.get("changedPaths") or []) if str(path).strip()}
+        later_paths = {str(path) for path in (later.get("changedPaths") or []) if str(path).strip()}
+        paths.extend(sorted(earlier_paths & later_paths))
+
     return list(dict.fromkeys(path.replace("\\", "/") for path in paths))[:6]
 
 

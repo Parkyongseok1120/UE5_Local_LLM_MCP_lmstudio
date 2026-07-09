@@ -1047,11 +1047,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           + "Set ALLOW_EXISTING_SOURCE_WRITE=1 only for a deliberate manual override."
         );
       }
+      const priorContent = targetExists ? await fsp.readFile(target, "utf8") : null;
       await fsp.writeFile(target, String(args.content || ""), "utf8");
       invalidateFileCache(target);
       const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
       const rel = path.relative(WORKSPACE_ROOT, target);
       if (validationFailed(validation)) {
+        if (priorContent === null) {
+          await fsp.unlink(target);
+        } else {
+          await fsp.writeFile(target, priorContent, "utf8");
+        }
+        invalidateFileCache(target);
         return {
           content: [{
             type: "text",
@@ -1104,6 +1111,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Apply replacement on normalized content, then restore original line endings if needed
+      const priorContent = content;
       const updatedNorm = contentNorm.split(oldTextNorm).join(newText.replace(/\r\n/g, "\n"));
       const updated = hasCRLF ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
       await fsp.writeFile(target, updated, "utf8");
@@ -1111,6 +1119,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
       const rel = path.relative(WORKSPACE_ROOT, target);
       if (validationFailed(validation)) {
+        await fsp.writeFile(target, priorContent, "utf8");
+        invalidateFileCache(target);
         return {
           content: [{
             type: "text",

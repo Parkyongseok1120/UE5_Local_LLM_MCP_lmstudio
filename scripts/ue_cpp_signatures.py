@@ -7,22 +7,32 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Note: return-type capture groups intentionally use "[ \t]" instead of "\s" so
+# they cannot cross a newline. Without this, a greedy match starting on an
+# access-specifier line (e.g. "public:") can swallow the label plus a
+# "static"/"void" token from the next line into the ret group, which then
+# corrupts any autofix that rebuilds a declaration/definition from it. See
+# clean_method_ret() for a second layer of defense against stray labels.
+RET_TYPE_CHAR_CLASS = r"[\w:<>,\t *&]"
+
 INTERFACE_VIRTUAL_METHOD_RE = re.compile(
-    r"virtual\s+(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?=\s*0\s*;",
+    rf"virtual\s+(?P<ret>{RET_TYPE_CHAR_CLASS}+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?=\s*0\s*;",
 )
 
+_TYPE_TOKEN = r"[\w:,<>&]+(?:[ \t]+[\w:,<>&]+)*"
+
 IMPLEMENTER_OVERRIDE_DECL_RE = re.compile(
-    r"^[\t ]*(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s+)?override\s*;",
+    rf"^[\t ]*(?P<ret>{_TYPE_TOKEN})\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*(?:const\s+)?override\s*;",
     re.MULTILINE,
 )
 
 STATIC_METHOD_DECL_RE = re.compile(
-    r"^[\t ]*(?:static\s+)?(?P<ret>[\w:<>,\s*&]+)\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*;",
+    rf"^[\t ]*(?:static\s+)?(?P<ret>{_TYPE_TOKEN})\s+(?P<func>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<params>[^)]*)\)\s*;",
     re.MULTILINE,
 )
 
 TYPEDEF_FUNCTION_POINTER_RE = re.compile(
-    r"using\s+(?P<alias>\w+)\s*=\s*(?P<ret>[\w:<>,\s*&]+)\s*\(\s*\*\s*\)\s*\((?P<params>[^)]*)\)\s*;",
+    rf"using\s+(?P<alias>\w+)\s*=\s*(?P<ret>{RET_TYPE_CHAR_CLASS}+)\s*\(\s*\*\s*\)\s*\((?P<params>[^)]*)\)\s*;",
 )
 
 FUNCTION_POINTER_TARGET_RE = re.compile(
@@ -61,6 +71,31 @@ class SourceTreeIndex:
     class_to_path: dict[str, Path] = field(default_factory=dict)
 
 
+_ACCESS_LABEL_PREFIX_RE = re.compile(r"^\s*(?:public|private|protected)\s*:\s*", re.MULTILINE)
+
+
+def clean_method_ret(ret: str) -> tuple[str, bool]:
+    """Sanitize a captured return-type string.
+
+    Regex-captured "ret" groups can end up containing a stray leading
+    access-specifier label (e.g. "public:") and/or a "static" keyword when a
+    declaration is preceded by an access-specifier line. This strips both so
+    callers rebuilding a declaration/definition never re-emit an access label
+    or duplicate "static" inside a function body signature.
+
+    Returns (cleaned_ret, is_static).
+    """
+    value = _ACCESS_LABEL_PREFIX_RE.sub("", str(ret or ""))
+    value = re.sub(r"\s+", " ", value).strip()
+    is_static = False
+    if value == "static":
+        return "", True
+    if value.startswith("static "):
+        is_static = True
+        value = value[len("static ") :].strip()
+    return value, is_static
+
+
 def normalize_signature_params(params: str) -> str:
     value = re.sub(r"\s+", " ", str(params or "").strip())
     if not value or value == "void":
@@ -76,13 +111,17 @@ def normalize_signature_params(params: str) -> str:
 
 
 def find_method_decl_in_header(text: str, func_name: str) -> re.Match[str] | None:
-    match = find_implementer_method_decl(text, func_name)
-    if match:
-        return match
+    for match in IMPLEMENTER_OVERRIDE_DECL_RE.finditer(text):
+        if match.group("func") == func_name:
+            return match
     for candidate in STATIC_METHOD_DECL_RE.finditer(text):
         if candidate.group("func") == func_name:
             return candidate
-    return None
+    return re.search(
+        rf"^[\t ]*(?P<ret>(?:[\w:,<>&]+(?:[ \t]+[\w:,<>&]+)*))\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?;",
+        text,
+        re.MULTILINE,
+    )
 
 
 def find_implementer_method_decl(text: str, func_name: str) -> re.Match[str] | None:
@@ -90,7 +129,7 @@ def find_implementer_method_decl(text: str, func_name: str) -> re.Match[str] | N
         if match.group("func") == func_name:
             return match
     return re.search(
-        rf"^[\t ]*(?P<ret>[\w:<>,\s*&]+)\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?;",
+        rf"^[\t ]*(?P<ret>(?:[\w:,<>&]+(?:[ \t]+[\w:,<>&]+)*))\s+{re.escape(func_name)}\s*\((?P<params>[^)]*)\)\s*(?:const\s*)?(?:override\s*)?;",
         text,
         re.MULTILINE,
     )
@@ -99,11 +138,12 @@ def find_implementer_method_decl(text: str, func_name: str) -> re.Match[str] | N
 def parse_interface_virtual_methods(text: str) -> list[tuple[str, str, str]]:
     methods: list[tuple[str, str, str]] = []
     for match in INTERFACE_VIRTUAL_METHOD_RE.finditer(text):
+        ret, _ = clean_method_ret(match.group("ret"))
         methods.append(
             (
                 match.group("func"),
                 normalize_signature_params(match.group("params")),
-                match.group("ret").strip(),
+                ret,
             )
         )
     return methods
@@ -158,12 +198,13 @@ def collect_interface_specs(
         if methods:
             specs[interface_name] = []
             for match in INTERFACE_VIRTUAL_METHOD_RE.finditer(text):
+                ret, _ = clean_method_ret(match.group("ret"))
                 specs[interface_name].append(
                     InterfaceMethod(
                         func=match.group("func"),
                         params_normalized=normalize_signature_params(match.group("params")),
                         params_raw=match.group("params").strip(),
-                        ret=match.group("ret").strip(),
+                        ret=ret,
                     )
                 )
     return specs

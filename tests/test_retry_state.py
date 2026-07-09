@@ -208,6 +208,47 @@ def test_continue_first_error_loop_on_new_error_surface():
     assert recommendation["action"] == "continue_first_error_loop"
 
 
+def test_blocked_repeat_paths_use_proposed_not_ubt_applied():
+    ubt_record = retry_state.make_attempt_record(
+        attempt=1,
+        passed=False,
+        error_message="UBT failed",
+        changed_paths=["Source/Game/Holdout.cpp", "Source/Game/Holdout.h"],
+    )
+    rejection = retry_state.make_validation_rejection_record(
+        attempt=2,
+        rejection_kind="edit_scope_blocker",
+        feedback="scope",
+    )
+    rejection["proposedChangedPaths"] = ["Source/Game/Holdout.h"]
+    blocked = retry_state._blocked_repeat_paths([ubt_record, rejection], rejection, 2)
+    assert "Source/Game/Holdout.h" in blocked
+    assert "Source/Game/Holdout.cpp" not in blocked
+
+
+def test_edit_scope_blocker_outranks_noop_guard():
+    attempts = [
+        retry_state.make_validation_rejection_record(
+            attempt=1,
+            rejection_kind="empty_files_without_evidence",
+            feedback="empty",
+        )
+    ]
+    current = retry_state.make_validation_rejection_record(
+        attempt=2,
+        rejection_kind="edit_scope_blocker",
+        feedback="scope",
+    )
+    recommendation = retry_state.recommend_retry_action(
+        attempts[-1],
+        current,
+        attempts=attempts,
+        no_op_guard=True,
+        rejection_kind="edit_scope_blocker",
+    )
+    assert recommendation["action"] == "require_multifile_surfaces"
+
+
 def test_stop_diagnosis_report_includes_prompt_hints():
     attempts = []
     for idx in range(1, 5):
@@ -222,4 +263,5 @@ def test_stop_diagnosis_report_includes_prompt_hints():
         )
     recommendation = retry_state.recommend_retry_action(attempts[-2], attempts[-1], attempts=attempts[:-1])
     hints = retry_state._prompt_hints("stop_diagnosis_report")
+    assert recommendation["action"] == "stop_diagnosis_report"
     assert any("diagnosis" in hint.lower() or "stop" in hint.lower() for hint in hints)

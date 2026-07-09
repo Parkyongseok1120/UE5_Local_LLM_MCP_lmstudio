@@ -177,6 +177,14 @@ def main() -> int:
         ("test_delegate_broadcast_autofix", [python, "-m", "pytest", "tests/test_delegate_broadcast_autofix.py", "-q"]),
         ("test_ubt_target_sanitize", [python, "-m", "pytest", "tests/test_ubt_target_sanitize.py", "-q"]),
         ("test_wrapper_evidence_paths", [python, "-m", "pytest", "tests/test_wrapper_evidence_paths.py", "-q"]),
+        ("test_apply_patch_single_line", [python, "-m", "pytest", "tests/test_apply_patch_single_line.py", "-q"]),
+        ("test_validate_holdout_cases", [python, "-m", "pytest", "tests/test_validate_holdout_cases.py", "-q"]),
+        ("test_wrapper_retry_feedback", [python, "-m", "pytest", "tests/test_wrapper_retry_feedback.py", "-q"]),
+        ("test_apply_bundle_transaction", [python, "-m", "pytest", "tests/test_apply_bundle_transaction.py", "-q"]),
+        ("test_blueprint_native_event_guards", [python, "-m", "pytest", "tests/test_blueprint_native_event_guards.py", "-q"]),
+        ("test_can_run_autofix_ubt", [python, "-m", "pytest", "tests/test_can_run_autofix_ubt.py", "-q"]),
+        ("test_should_block_static_gate", [python, "-m", "pytest", "tests/test_should_block_static_gate.py", "-q"]),
+        ("test_autofix_holdout_matrix", [python, "-m", "pytest", "tests/test_autofix_holdout_matrix.py", "-q"]),
     ]
     if not args.skip_pytest:
         steps_spec.extend(pytest_steps)

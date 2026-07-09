@@ -37,6 +37,9 @@ jobs:
             Write-Error ("UTF-8 BOM detected:`n" + ($bomFiles -join "`n"))
           }
 
+      - name: Verify UTF-8 encoding (scripts/tests/docs)
+        run: python scripts/verify_encoding.py
+
       - name: Run tests
         run: pytest --tb=short -q
         working-directory: ${{ github.workspace }}

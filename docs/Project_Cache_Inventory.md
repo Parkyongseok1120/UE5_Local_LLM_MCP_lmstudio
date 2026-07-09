@@ -7,11 +7,16 @@ When `activeProject` changes, some state must be invalidated immediately; other 
 | State | Location | Key includes project? | Action |
 |-------|----------|----------------------|--------|
 | Project context cache | `project_context._PROJECT_CONTEXT_CACHE` | Yes (path + mtime) | `clear_project_context_cache()` |
-| Wrapper file snapshots | `lmstudio_unreal_wrapper._PROJECT_SNAPSHOT_CACHE` | Yes (root path) | Clear dict on switch |
+| Wrapper file snapshots | `wrapper_evidence._PROJECT_SNAPSHOT_CACHE` | Yes (root path) | `clear_all_project_snapshot_caches()` |
+| Refactor surface cache | `wrapper_evidence._REFACTOR_SURFACE_CACHE` | Yes (root + terms hash) | `clear_refactor_surface_cache()` |
 | Index staleness probe | `index_staleness._STALE_CACHE` | N/A | `invalidate_stale_cache()` |
 | Symbol disk cache (best-effort) | `data/cache/*.json` | Yes (in cache key) | TTL expiry; optional purge via `invalidate_project_caches()` |
 
 Hook: `project_switch_invalidate.on_project_switch_invalidate()` — called from MCP `unreal_set_active_project`.
+
+Additional invalidation path: `rag_refresh.py` clears project context, wrapper snapshot caches, and index staleness during explicit RAG refresh.
+
+Per-apply compile loop: `invalidate_project_snapshot_cache(project_root, relative_paths=...)` in `lmstudio_unreal_wrapper.py` after bundle apply.
 
 ## Safe to keep (global / engine-wide)
 

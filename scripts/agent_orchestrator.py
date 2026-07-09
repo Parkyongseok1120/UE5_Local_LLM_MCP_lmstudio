@@ -237,9 +237,11 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         if resolved_mode == "reflection_fix":
             plan.rag_modes = ["reflection_fix", "compile_fix", "module_fix"]
         elif resolved_mode == "module_fix":
-            plan.rag_modes = ["module_fix", "compile_fix", "reflection_fix"]
+            plan.rag_modes = ["module_fix", "compile_fix", "reflection_fix", "multifile_refactor"]
+        elif resolved_mode == "multifile_refactor":
+            plan.rag_modes = ["multifile_refactor", "compile_fix", "module_fix", "reflection_fix"]
         else:
-            plan.rag_modes = ["compile_fix", "module_fix", "reflection_fix"]
+            plan.rag_modes = ["compile_fix", "module_fix", "reflection_fix", "multifile_refactor"]
         plan.gates = ["static_validate", "ubt_build"]
         plan.writes_allowed = True
         plan.confidence = 0.7
