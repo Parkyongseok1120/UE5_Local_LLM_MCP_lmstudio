@@ -572,7 +572,9 @@ def validate_raw_uobject_members(path: Path, text: str, root: Path) -> list[Find
         if not match:
             continue
         nearby = "\n".join(lines[max(0, index - 5) : index])
-        if "UPROPERTY" in nearby or "TObjectPtr" in line:
+        if "UPROPERTY" in nearby:
+            continue
+        if "TObjectPtr" in line:
             continue
         findings.append(
             Finding(
@@ -1637,6 +1639,15 @@ def validate_component_subsystem_patterns(path: Path, text: str, root: Path) -> 
 
 
 GENGINE_WORLD_ACCESS_RE = re.compile(r"\bGEngine\s*->\s*(GetWorld|GetGameInstance)\s*\(")
+DISABLE_GRAVITY_RE = re.compile(r"(?:->|\.)\s*DisableGravity\s*\(")
+WORLD_GET_URL_RE = re.compile(
+    r"\b(?:GetWorld\s*\(\s*\)|(?:[A-Za-z_]\w*)?World)\s*->\s*GetURL\s*\(",
+    re.IGNORECASE,
+)
+SPAWN_ACTOR_TRANSFORM_POINTER_RE = re.compile(
+    r"\bSpawnActor\s*(?:<[^;{}]+?>)?\s*\([^;{}]*?,\s*&\s*[A-Za-z_]\w*Transform\b",
+    re.DOTALL,
+)
 
 
 def validate_gengine_world_context(path: Path, text: str, root: Path) -> list[Finding]:
@@ -1662,6 +1673,57 @@ def validate_gengine_world_context(path: Path, text: str, root: Path) -> list[Fi
                     "PIE/editor/multi-world). Use the owning object's world instead: subsystem/actor GetWorld(), "
                     "an explicit UWorld*/world-context parameter, or "
                     "UWorld::GetGameInstance()/UWorld::GetSubsystem on a known world."
+                ),
+            )
+        )
+    return findings
+
+
+def validate_known_bad_api_patterns(path: Path, text: str, root: Path) -> list[Finding]:
+    """Warn on high-confidence Unreal API mistakes seen in live project use.
+
+    These stay advisory because static text matching cannot always recover the
+    receiver type or selected SpawnActor overload. GEngine world access remains
+    a separate blocking rule because that pattern is unambiguously unusable.
+    """
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in DISABLE_GRAVITY_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "INVENTED_MOVEMENT_API",
+                (
+                    "UCharacterMovementComponent has no DisableGravity(). Use GravityScale = 0.0f "
+                    "or an intentional movement mode such as MOVE_Flying."
+                ),
+            )
+        )
+    for match in WORLD_GET_URL_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "INVENTED_WORLD_API",
+                (
+                    "UWorld has no GetURL(). Use GetMapName() or "
+                    "UGameplayStatics::GetCurrentLevelName(), then OpenLevel/ServerTravel as appropriate."
+                ),
+            )
+        )
+    for match in SPAWN_ACTOR_TRANSFORM_POINTER_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "SPAWNACTOR_TRANSFORM_POINTER",
+                (
+                    "A Transform pointer selects a different/legacy SpawnActor overload and is easy to misuse. "
+                    "Prefer the typed overload with SpawnTransform by const reference/value and explicit Params."
                 ),
             )
         )
@@ -1958,6 +2020,335 @@ def validate_multifile_callsite_drift(root: Path) -> list[Finding]:
     return findings
 
 
+def has_uproperty_nearby(lines: list[str], line_index: int, radius: int = 8) -> bool:
+    start = max(0, line_index - radius)
+    return "UPROPERTY" in "\n".join(lines[start:line_index])
+
+
+UOBJECT_CONTAINER_MEMBER_RE = re.compile(
+    r"\b(?:TArray|TMap|TSet)\s*<[^>]*(?:U|A)[A-Za-z_][A-Za-z0-9_<>]*\s*\*[^>]*>"
+    r"\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*[^;]+)?;"
+)
+TOBJECTPTR_MEMBER_RE = re.compile(
+    r"\bTObjectPtr\s*<\s*(?:const\s+)?[^>]+>\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*[^;]+)?;"
+)
+DELEGATE_BIND_RE = re.compile(r"\b(?:AddDynamic|AddUObject|BindUObject)\s*\(")
+DELEGATE_UNBIND_RE = re.compile(r"\b(?:RemoveDynamic|RemoveAll|Unbind|Clear)\s*\(")
+TIMER_SET_RE = re.compile(r"\b(?:SetTimer|SetTimerForNextTick|SetTimerDelegate)\s*\(")
+TIMER_CLEAR_RE = re.compile(r"\b(?:ClearTimer|ClearAllTimersForObject)\s*\(")
+TEARDOWN_METHOD_RE = re.compile(r"\b(?:EndPlay|Deinitialize|BeginDestroy|Shutdown)\s*\(")
+UNCHECKED_CAST_RE = re.compile(
+    r"\bCast\s*<[^>]+>\s*\([^)]+\)\s*->",
+    re.MULTILINE,
+)
+REPLICATED_UPROPERTY_RE = re.compile(
+    r"UPROPERTY\s*\([^)]*\bReplicated(?:Using)?\b[^)]*\)\s*\n\s*[^;]+?\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;",
+    re.MULTILINE,
+)
+RAW_NEW_UOBJECT_RE = re.compile(r"\bnew\s+(?:U|A)[A-Za-z_][A-Za-z0-9_]*\b")
+RAW_DELETE_RE = re.compile(r"\bdelete\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*;|[A-Za-z_][A-Za-z0-9_]*\s*\.)")
+SYNC_LOAD_RE = re.compile(r"\b(?:LoadObject|StaticLoadObject|LoadSynchronous)\s*<")
+HOT_PATH_RE = re.compile(r"\b(?:Tick(?:Component)?|BeginPlay|NativeTick)\s*\(")
+HARDCODED_GAME_PATH_RE = re.compile(r'"(?:/Game/[^"]+|/Engine/[^"]+)"')
+FVECTOR_FLOAT_PRECISION_RE = re.compile(
+    r"\bFVector\s*\([^)]*(?:\d+(?:\.\d+)?f|\(\s*float\s*\))[^)]*\)"
+)
+BLUEPRINTPURE_NON_CONST_RE = re.compile(
+    r"UFUNCTION\s*\([^)]*BlueprintPure[^)]*\)\s*\n\s*(?!.*\bconst\b)[^;]+?\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
+    re.MULTILINE,
+)
+
+
+def validate_uobject_container_without_uproperty(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return findings
+    lines = text.splitlines()
+    for index, line in enumerate(lines, start=1):
+        if "(" in line and "TMap" not in line and "TSet" not in line and "TArray" not in line:
+            continue
+        match = UOBJECT_CONTAINER_MEMBER_RE.search(line)
+        if not match or has_uproperty_nearby(lines, index - 1):
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                str(path.relative_to(root)),
+                index,
+                "UOBJECT_CONTAINER_WITHOUT_UPROPERTY",
+                f'UObject container member "{match.group("name")}" lacks UPROPERTY(); GC may collect retained objects.',
+            )
+        )
+    return findings
+
+
+def validate_tobjectptr_without_uproperty(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return findings
+    lines = text.splitlines()
+    for index, line in enumerate(lines, start=1):
+        match = TOBJECTPTR_MEMBER_RE.search(line)
+        if not match or has_uproperty_nearby(lines, index - 1):
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                str(path.relative_to(root)),
+                index,
+                "TOBJECTPTR_WITHOUT_UPROPERTY",
+                f'TObjectPtr member "{match.group("name")}" lacks UPROPERTY(); GC tracking is incomplete.',
+            )
+        )
+    return findings
+
+
+def validate_delegate_bind_without_unbind(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if not DELEGATE_BIND_RE.search(text):
+        return findings
+    teardown_blocks = [
+        body for header, _, body in iter_function_blocks(text) if TEARDOWN_METHOD_RE.search(header)
+    ]
+    teardown_text = "\n".join(teardown_blocks)
+    if DELEGATE_UNBIND_RE.search(teardown_text):
+        return findings
+    rel = str(path.relative_to(root))
+    for match in DELEGATE_BIND_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "DELEGATE_BIND_WITHOUT_UNBIND",
+                "Delegate bind found without matching RemoveDynamic/RemoveAll/Unbind in EndPlay/Deinitialize.",
+            )
+        )
+        break
+    return findings
+
+
+def validate_timer_set_without_clear(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if not TIMER_SET_RE.search(text):
+        return findings
+    teardown_blocks = [
+        body for header, _, body in iter_function_blocks(text) if TEARDOWN_METHOD_RE.search(header)
+    ]
+    teardown_text = "\n".join(teardown_blocks)
+    if TIMER_CLEAR_RE.search(teardown_text):
+        return findings
+    rel = str(path.relative_to(root))
+    for match in TIMER_SET_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "TIMER_SET_WITHOUT_CLEAR",
+                "SetTimer found without ClearTimer/ClearAllTimersForObject in teardown.",
+            )
+        )
+        break
+    return findings
+
+
+def validate_interrupt_param_ignored(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    for header, start, body in iter_function_blocks(text):
+        if not re.search(r"\bb(?:Interrupted|WasCancelled)\b", header):
+            continue
+        for param in ("bInterrupted", "bWasCancelled"):
+            if param in header and re.search(rf"\b{param}\b", body):
+                break
+        else:
+            name_match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)\s*\(", header)
+            method = name_match.group(2) if name_match else "callback"
+            findings.append(
+                Finding(
+                    "warning",
+                    str(path.relative_to(root)),
+                    line_number(text, start),
+                    "INTERRUPT_PARAM_IGNORED",
+                    f'{method} receives an interrupt/cancel flag but never references it in the body.',
+                )
+            )
+    return findings
+
+
+def validate_unchecked_cast_result(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in UNCHECKED_CAST_RE.finditer(text):
+        window = text[max(0, match.start() - 120) : match.start()]
+        if re.search(r"\bif\s*\(\s*(?:IsValid\s*\(|Cast<|\w+\s*!=\s*nullptr)", window):
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "UNCHECKED_CAST_RESULT",
+                "Cast<> result is dereferenced without a visible null/IsValid check.",
+            )
+        )
+    return findings
+
+
+def validate_replicated_uproperty_without_doreplifetime(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    cpp_text_by_stem: dict[str, str] = {}
+    for path in iter_source_files(root):
+        if path.suffix.lower() in {".cpp", ".c", ".cc"}:
+            cpp_text_by_stem[path.stem.lower()] = read_text(path)
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        header_text = read_text(path)
+        cpp_text = cpp_text_by_stem.get(path.stem.lower(), "")
+        for match in REPLICATED_UPROPERTY_RE.finditer(header_text):
+            prop = match.group("name")
+            if re.search(rf"\bDOREPLIFETIME\s*\([^)]*\b{re.escape(prop)}\b", cpp_text):
+                continue
+            if "GetLifetimeReplicatedProps" in cpp_text and "DOREPLIFETIME" in cpp_text:
+                continue
+            findings.append(
+                Finding(
+                    "warning",
+                    str(path.relative_to(root)),
+                    line_number(header_text, match.start()),
+                    "REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME",
+                    f'Replicated property "{prop}" has no visible DOREPLIFETIME registration in the matching .cpp.',
+                )
+            )
+    return findings
+
+
+def validate_raw_new_delete_uobject(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in RAW_NEW_UOBJECT_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "RAW_NEW_DELETE_UOBJECT",
+                "Avoid new on UObject-derived types; use NewObject<> with an explicit outer.",
+            )
+        )
+    for match in RAW_DELETE_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "RAW_NEW_DELETE_UOBJECT",
+                "Avoid delete on UObject types; let GC manage lifetime.",
+            )
+        )
+    return findings
+
+
+def validate_actor_ctor_getworld(path: Path, text: str, root: Path, bases: dict[str, str]) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
+        return findings
+    rel = str(path.relative_to(root))
+    for class_name, func_name, _, _, body in iter_cpp_definition_blocks(text):
+        if class_name != func_name:
+            continue
+        base = bases.get(class_name, "")
+        if base != "AActor" and not base.startswith("A"):
+            continue
+        if "GetWorld()" not in body:
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                0,
+                "ACTOR_CTOR_GETWORLD",
+                f"Avoid GetWorld() in {class_name} constructor; defer world access to BeginPlay.",
+            )
+        )
+    return findings
+
+
+def validate_sync_load_in_gameplay(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for header, start, body in iter_function_blocks(text):
+        if not SYNC_LOAD_RE.search(body):
+            continue
+        if not HOT_PATH_RE.search(header):
+            continue
+        for match in SYNC_LOAD_RE.finditer(body):
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, start + match.start()),
+                    "SYNC_LOAD_IN_GAMEPLAY",
+                    "Synchronous LoadObject/LoadSynchronous in gameplay hot path; prefer async/streaming.",
+                )
+            )
+            break
+    return findings
+
+
+def validate_hardcoded_asset_path(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in HARDCODED_GAME_PATH_RE.finditer(text):
+        window = text[max(0, match.start() - 200) : match.start()]
+        if "ConstructorHelpers" in window:
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "HARDCODED_ASSET_PATH",
+                "Hardcoded /Game/ or /Engine/ asset path; prefer soft references or ConstructorHelpers in ctor.",
+            )
+        )
+    return findings
+
+
+def validate_fvector_float_precision(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in FVECTOR_FLOAT_PRECISION_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "FVECTOR_FLOAT_PRECISION",
+                "FVector initialized with float literals/casts; UE5 FVector is double-precision.",
+            )
+        )
+    return findings
+
+
+def validate_blueprintpure_missing_const(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return findings
+    for match in BLUEPRINTPURE_NON_CONST_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                str(path.relative_to(root)),
+                line_number(text, match.start()),
+                "BLUEPRINTPURE_MISSING_CONST",
+                f'BlueprintPure function "{match.group("name")}" should be const.',
+            )
+        )
+    return findings
+
+
 def validate_unreal_readiness(
     root: Path,
     module_graph_path: Path | None = None,
@@ -1982,6 +2373,7 @@ def validate_unreal_readiness(
             findings.extend(validate_typo_includes(path, text, root))
             findings.extend(validate_component_subsystem_patterns(path, text, root))
             findings.extend(validate_gengine_world_context(path, text, root))
+            findings.extend(validate_known_bad_api_patterns(path, text, root))
         if path.suffix.lower() in {".h", ".hpp"}:
             findings.extend(validate_generated_h(path, text, root))
             findings.extend(validate_reflected_namespace(path, text, root))
@@ -1991,6 +2383,9 @@ def validate_unreal_readiness(
             findings.extend(validate_blueprint_native_event_declarations(path, text, root))
             findings.extend(validate_private_blueprint_access(path, text, root))
             findings.extend(validate_raw_uobject_members(path, text, root))
+            findings.extend(validate_uobject_container_without_uproperty(path, text, root))
+            findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
+            findings.extend(validate_blueprintpure_missing_const(path, text, root))
             findings.extend(validate_required_includes(path, text, root))
         if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
             findings.extend(validate_editor_only_runtime_includes(path, text, root))
@@ -2006,12 +2401,22 @@ def validate_unreal_readiness(
             findings.extend(validate_cpp_declarations(path, text, root, headers))
             findings.extend(validate_delegate_broadcast_consistency(path, text, root, delegate_arity_map))
             findings.extend(validate_missing_super_lifecycle_call(path, text, root))
+            findings.extend(validate_delegate_bind_without_unbind(path, text, root))
+            findings.extend(validate_timer_set_without_clear(path, text, root))
+            findings.extend(validate_interrupt_param_ignored(path, text, root))
+            findings.extend(validate_unchecked_cast_result(path, text, root))
+            findings.extend(validate_raw_new_delete_uobject(path, text, root))
+            findings.extend(validate_actor_ctor_getworld(path, text, root, bases))
+            findings.extend(validate_sync_load_in_gameplay(path, text, root))
+            findings.extend(validate_hardcoded_asset_path(path, text, root))
+            findings.extend(validate_fvector_float_precision(path, text, root))
     findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
     findings.extend(validate_include_owner_modules(root, build_text_value, include_owner_map))
     findings.extend(validate_duplicate_source_basenames(root))
     findings.extend(validate_rpc_implementations(root))
     findings.extend(validate_blueprint_native_event_implementations(root))
     findings.extend(validate_replication_setup(root))
+    findings.extend(validate_replicated_uproperty_without_doreplifetime(root))
     findings.extend(validate_cpp_definitions_missing(root))
     findings.extend(validate_interface_implementer_drift(root))
     findings.extend(validate_callback_function_pointer_drift(root))
@@ -2032,6 +2437,8 @@ def validate_unreal_readiness_lightweight(root: Path) -> list[Finding]:
             findings.extend(validate_reflected_namespace(path, text, root))
             findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
             findings.extend(validate_blueprint_native_event_declarations(path, text, root))
+            findings.extend(validate_uobject_container_without_uproperty(path, text, root))
+            findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
         if path.suffix.lower() in {".cpp", ".c", ".cc"}:
             findings.extend(validate_cpp_declarations(path, text, root, headers))
     return findings

@@ -120,8 +120,9 @@ Practical rules for day-to-day Unreal project work:
 - **Do not paste full UBT/linker logs** into chat. Use `read_unreal_logs` or the log file path; share only the first meaningful error slice.
 - **Header-then-.cpp is normal.** `write_file` on a new header may show advisory `CPP_DEFINITION_MISSING` until the matching `.cpp` is written — that is expected, not a rollback trigger on its own.
 - **Avoid invented UE APIs** the model often hallucinates: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. Prefer `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, `SpawnTransform` by value, and the owning actor/subsystem's `GetWorld()`.
+- **Compact tool responses (v1.2.5):** `build_unreal_project` returns a one-line summary + up to 40 likely errors + `.agent/logs/latest-build.log` path (not full stdout/stderr). `read_unreal_logs` defaults to the newest log and first error cluster. If context pressure builds up, call `write_session_handoff`, start a fresh chat, and resume from `.agent/handoff/latest.md`.
 
-v1.3.0 will add session handoff artifacts and tighter build-log token diet. Until then, **new chat + short turns** is the most reliable fix.
+When a long session hits context/KV-cache limits, **new chat + short turns** is still the most reliable recovery. v1.3.0 will add stronger automatic session budgeting.
 
 Details: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md), [Troubleshooting.md](docs/Troubleshooting.md).
 

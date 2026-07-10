@@ -26,7 +26,7 @@ def test_compact_base_has_timeout_retry_ban_and_create_only() -> None:
     # Risk-triggered checkpoint wording (continue on success, stop on risk signals).
     assert "continue automatically" in lowered
     assert "model failed to generate a tool call" in lowered
-    assert "progress summary" in lowered
+    assert "re-anchors tool-call" in lowered
 
 
 def test_compact_base_has_no_stop_after_every_write_rule() -> None:
@@ -62,6 +62,15 @@ def test_tool_discipline_documents_write_safety_and_budget() -> None:
     assert "-32001" in _read(TOOL_DISCIPLINE)
     assert "validate_on_write_timeout_ms" in lowered
     assert "rollback skipped" in lowered
+    assert "3-tier" in lowered
+    assert "advisory" in lowered
+
+
+def test_compact_base_documents_built_stale_and_plan_trigger() -> None:
+    text = _read(COMPACT_BASE).lower()
+    assert "builtstale" in text
+    assert "unreal_agent_plan" in text
+    assert "3-tier" in text or "tier a" in text
 
 
 def test_compact_base_has_loop_guard_and_uht_conditional_rules() -> None:
@@ -107,3 +116,30 @@ def test_subsystem_recipe_has_world_context_dispatcher_rules() -> None:
     assert "Deinitialize()" in text
     assert "TWeakObjectPtr" in text
     assert "static TMap" in text
+
+
+def test_compact_base_documents_sketch_verdict_and_handoff() -> None:
+    lowered = _read(COMPACT_BASE).lower()
+    assert "verdictsummary" in lowered
+    assert "replacement" in lowered
+    assert "write_session_handoff" in lowered
+    assert "proposed" in lowered
+    assert "lookup tools" in lowered
+    assert "character ceiling" in lowered
+
+
+def test_agent_system_documents_summary_first_scope() -> None:
+    lowered = _read(AGENT_SYSTEM).lower()
+    assert "build/log/write/validation" in lowered
+    assert "lookup tools" in lowered
+    assert "character ceiling" in lowered
+
+
+def test_tool_discipline_documents_compact_build_and_handoff() -> None:
+    text = _read(TOOL_DISCIPLINE)
+    lowered = text.lower()
+    assert "compact by default" in lowered
+    assert "write_session_handoff" in lowered
+    assert ".agent/handoff/latest.md" in text
+    assert "mcp_agent_result_max_chars" in lowered
+    assert "overwrites that file on every call" in lowered

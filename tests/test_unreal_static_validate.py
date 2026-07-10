@@ -16,6 +16,7 @@ from unreal_static_validate import (  # noqa: E402
     build_delegate_arity_map,
     validate_uht_macros_in_conditional_blocks,
     validate_gengine_world_context,
+    validate_known_bad_api_patterns,
     validate_static_mutable_container_members,
     validate_missing_super_lifecycle_call,
     validate_replication_setup,
@@ -403,6 +404,39 @@ void ShowMessage(UWorld* World)
     assert findings == []
 
 
+def test_known_bad_unreal_api_patterns_are_advisory(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "DevConsole.cpp"
+    _write(
+        cpp,
+        """void Run(UWorld* World, UCharacterMovementComponent* MoveComp)
+{
+    MoveComp->DisableGravity();
+    FString Name = World->GetURL();
+    FTransform SpawnTransform;
+    World->SpawnActor<AActor>(AActor::StaticClass(), &SpawnTransform, FActorSpawnParameters());
+}
+""",
+    )
+
+    findings = validate_known_bad_api_patterns(cpp, cpp.read_text(encoding="utf-8"), project)
+    assert {item.code for item in findings} == {
+        "INVENTED_MOVEMENT_API",
+        "INVENTED_WORLD_API",
+        "SPAWNACTOR_TRANSFORM_POINTER",
+    }
+    assert all(item.severity == "warning" for item in findings)
+
+
+def test_geturl_on_http_request_is_not_flagged_as_world_api(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "Http.cpp"
+    _write(cpp, "FString Url = HttpRequest->GetURL();\n")
+
+    findings = validate_known_bad_api_patterns(cpp, cpp.read_text(encoding="utf-8"), project)
+    assert all(item.code != "INVENTED_WORLD_API" for item in findings)
+
+
 def test_static_mutable_container_member_warned(tmp_path: Path) -> None:
     project = tmp_path / "Demo"
     header = project / "Source" / "Demo" / "Public" / "DevCommandDispatcher.h"
@@ -637,4 +671,52 @@ def test_has_blocking_write_errors_blocks_own_file_error() -> None:
         Finding("error", "Source/Demo/New.h", 9, "UHT_MACRO_IN_CONDITIONAL_BLOCK", "illegal macro"),
     ]
     assert has_blocking_write_errors(findings, "Source/Demo/New.h")
+
+
+def test_tobjectptr_without_uproperty_warns(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "WidgetOwner.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class UDemoWidget;\n"
+        "class UWidgetOwner {\n"
+        "  TObjectPtr<UDemoWidget> HiddenWidget;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    codes = {item.code for item in findings}
+    assert "TOBJECTPTR_WITHOUT_UPROPERTY" in codes
+
+
+def test_delegate_bind_without_unbind_warns(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Listener.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void UListener::BeginPlay() {\n"
+        "  Source->AddDynamic(this, &UListener::OnChanged);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "DELEGATE_BIND_WITHOUT_UNBIND" for item in findings)
+
+
+def test_interrupt_param_ignored_warns(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Skill.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void USkill::OnMontageEnded(UAnimMontage* Montage, bool bInterrupted) {\n"
+        "  FinishSkill();\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "INTERRUPT_PARAM_IGNORED" for item in findings)
+
+
+def test_gc_advisory_findings_do_not_block_writes() -> None:
+    findings = [
+        Finding("warning", "Source/Demo/A.h", 3, "TOBJECTPTR_WITHOUT_UPROPERTY", "missing uproperty"),
+    ]
+    assert not has_blocking_write_errors(findings, "Source/Demo/A.h")
 

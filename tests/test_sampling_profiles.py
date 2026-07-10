@@ -69,6 +69,13 @@ def test_qwen36_profile_mcp_meta(monkeypatch):
     assert limits["candidateLimitScale"] == 16
 
 
+def test_qwen36_plan_turn_max_tokens_is_3072(monkeypatch):
+    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
+    sampling.set_sampling_profile("qwen3_6_27b")
+    preset = sampling.load_sampling_preset(mode="refactor_r0")
+    assert preset["maxTokens"] == 3072
+
+
 def test_module_fix_mode_uses_compile_fix_patch_preset(monkeypatch):
     monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
     sampling.set_sampling_profile("qwen3_6_27b")

@@ -11,7 +11,8 @@ Report the highest proof level reached:
 - `Proposed`: plan only; no file or asset mutation.
 - `Patched`: text files were changed, or an Editor-side command reported an attempted asset change.
 - `StaticChecked`: syntax/static validators passed, but Unreal Build Tool or Editor did not run.
-- `Built`: Unreal Build Tool completed successfully for the target.
+- `Built`: Unreal Build Tool completed successfully for the target with compile actions executed (`run N action(s)` where N > 0, or no up-to-date marker).
+- `BuiltStale`: UBT exit 0 but `Target is up to date` / `run 0 action(s)` — not proof recent edits were compiled.
 - `ShaderCompiled`: shader compile or editor shader recompile completed without reported errors.
 - `EditorVerified`: Unreal Editor loaded or saved the relevant asset and metadata was re-exported or validated.
 - `PIEVerified`: PIE/runtime smoke test or relevant log check passed.

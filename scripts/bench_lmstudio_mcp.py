@@ -47,6 +47,11 @@ SCENARIOS = (
         "user": "Call unreal_agent_plan with mode=compile_fix and request='missing generated.h in header'. One tool only.",
         "expect_tool": "unreal_agent_plan",
     },
+    {
+        "id": "agent_plan_korean_trigger",
+        "user": "구현 계획을 세워줘. Turn 1에서는 unreal_agent_plan만 호출하고 답변은 하지 마.",
+        "expect_tool": "unreal_agent_plan",
+    },
 )
 
 

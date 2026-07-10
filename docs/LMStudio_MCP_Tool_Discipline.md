@@ -39,12 +39,13 @@ Restart LM Studio after changes.
 - `unreal_rag_capabilities`
 - `unreal_code_sketch_claim_validate` - verify drafted APIs before showing code sketches
 
-### unreal-agent (10 tools)
+### unreal-agent (11 tools)
 
 - `get_workspace_info`, `get_active_project`
 - `list_directory`, `read_file`, `read_file_range`
 - `replace_in_file`, `write_file`, `search_files`
 - `build_unreal_project`, `read_unreal_logs`
+- `write_session_handoff` - save a compact resume note before a fresh chat; safe-mode allowed; overwrites only `.agent/handoff/latest.md`
 
 ### Extended tools (`MCP_EXTENDED_TOOLS=1`)
 
@@ -63,6 +64,21 @@ When agent mode enables writes, `patch_mcp_config.py` sets `VALIDATE_ON_WRITE=1`
 Validation on write runs under a time budget (`VALIDATE_ON_WRITE_TIMEOUT_MS`, default 45000). If validation exceeds the budget it fails **open**: the write succeeds and the response notes `validation skipped (time budget); run static_validate_project before build`. When you see that note, run `static_validate_project` before building. Real findings still fail closed and roll back.
 
 ## Write Safety and Flow
+
+### 3-Tier write blocking
+
+| Tier | Scope | Blocks write? | Rollback? |
+|------|-------|---------------|-----------|
+| A — structural | `write_file` create-only, patch-only source, basename collision, protected paths | Yes | N/A (disk not written) |
+| B — compile-readiness | static validator `severity=error` on the written file | Yes | Yes |
+| B-deferred | counterpart-file flow (`CPP_DEFINITION_MISSING`, RPC/native-event impl missing) | No (intentional) | No |
+| C — GC/runtime quality | new advisory warnings (UPROPERTY, delegate/timer teardown, Cast null, etc.) | **No** | No |
+
+**Advisory ≠ write permission:** Tier C warnings never override Tier A/B. GC/runtime advisories do not allow `write_file` on existing paths.
+
+### Generation self-check (non-blocking)
+
+Before introducing new UObject/Component/Subsystem APIs in a write turn, call `unreal_code_sketch_claim_validate` on the draft surface. Fix `known_bad` findings before writing; the tool does not auto-block writes.
 
 `write_file` is **create-only**. It creates brand-new files and refuses to overwrite any file that already exists (every extension, not just source). To modify an existing file, use `replace_in_file`.
 
@@ -121,6 +137,20 @@ When the user asks for a diagram, or when explaining structure, dependencies, ow
 ## Session Bootstrap
 
 Paste [`prompts/lmstudio_session_bootstrap.md`](../prompts/lmstudio_session_bootstrap.md) as the **first user message** every chat.
+
+## Context Budget and Session Handoff
+
+`build_unreal_project` is compact by default: it returns a one-line `summary`, up to 40 likely error lines, and `.agent/logs/latest-build.log` as `fullLogPath`. Raw stdout/stderr is omitted unless `verboseOutput=true`. `read_unreal_logs` defaults to the first error cluster from the newest log (one file, 60 tail lines).
+
+All unreal-agent results have a final `MCP_AGENT_RESULT_MAX_CHARS` safety ceiling (default 32000 characters). Narrow the tool arguments when a response reports truncation; do not immediately request verbose output.
+
+Before context/KV-cache overflow, a failed tool-call loop, or a risky stop:
+
+1. Call `write_session_handoff` with changed files, open errors, next steps, and failed approaches.
+2. Start a fresh chat and paste [`prompts/lmstudio_session_bootstrap.md`](../prompts/lmstudio_session_bootstrap.md).
+3. Ask the model to read `.agent/handoff/latest.md` and continue from the smallest next step.
+
+The handoff tool writes only to the fixed `.agent/handoff/latest.md` artifact path under `WORKSPACE_ROOT`. It overwrites that file on every call, does not require `ALLOW_WRITE=1`, and never writes project source files. Safe mode still performs this one artifact write by design.
 
 ## Model and System Prompt
 

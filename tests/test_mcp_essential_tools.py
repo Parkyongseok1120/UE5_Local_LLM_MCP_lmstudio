@@ -44,6 +44,7 @@ AGENT_ESSENTIAL = {
     "search_files",
     "build_unreal_project",
     "read_unreal_logs",
+    "write_session_handoff",
 }
 
 

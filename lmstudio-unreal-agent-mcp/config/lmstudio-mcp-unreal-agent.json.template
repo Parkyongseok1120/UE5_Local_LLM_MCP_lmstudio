@@ -14,6 +14,8 @@
         "VALIDATE_ON_WRITE": "1",
         "MAX_READ_BYTES": "524288",
         "MAX_OUTPUT_BYTES": "262144",
+        "MCP_AGENT_RESULT_MAX_CHARS": "32000",
+        "BUILD_VERBOSE_OUTPUT": "0",
         "COMMAND_TIMEOUT_MS": "600000",
         "MCP_ESSENTIAL_TOOLS": "1"
       },

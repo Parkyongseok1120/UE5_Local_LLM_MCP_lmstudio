@@ -51,7 +51,6 @@ const {
 } = require("./refactor-tools.js");
 const {
   validateAfterWrite,
-  formatValidationResult,
   runStaticValidation,
   resolveValidateOnWrite,
   VALIDATE_ON_WRITE_TIMEOUT_MS
@@ -70,6 +69,19 @@ const {
   checkAndRecordMutation,
   duplicateMutationMessage
 } = require("./mutation-history.js");
+const {
+  buildResponsePayload,
+  compactLogPayload,
+  compactMcpContent,
+  compactValidationPayload,
+  errorPayload,
+  firstErrorCluster,
+  formatSessionHandoff,
+  resolveAgentResultMaxChars,
+  slimWriteSuccessPayload,
+  writeDisciplineOptions,
+  writeTextArtifact
+} = require("./context-ux.js");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -116,6 +128,10 @@ function resolveCodeDetail(raw) {
   return Object.prototype.hasOwnProperty.call(CODE_DETAIL_READ_BYTES, key) ? key : "compact";
 }
 const MAX_OUTPUT_BYTES = Number(process.env.MAX_OUTPUT_BYTES || 1024 * 256);
+const MCP_AGENT_RESULT_MAX_CHARS = resolveAgentResultMaxChars();
+const BUILD_VERBOSE_OUTPUT = ["1", "true", "yes", "on"].includes(
+  String(process.env.BUILD_VERBOSE_OUTPUT || "").trim().toLowerCase()
+);
 const COMMAND_TIMEOUT_MS = Number(process.env.COMMAND_TIMEOUT_MS || 1000 * 60 * 10);
 const SEARCH_MAX_FILES = Number(process.env.SEARCH_MAX_FILES || 5000);
 const ALLOW_SOURCE_DELETE = ["1", "true", "yes", "on"].includes(
@@ -138,7 +154,8 @@ const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
   "write_file",
   "search_files",
   "build_unreal_project",
-  "read_unreal_logs"
+  "read_unreal_logs",
+  "write_session_handoff"
 ]);
 const EXTENDED_AGENT_TOOL_NAMES = new Set([
   "set_active_project",
@@ -208,11 +225,36 @@ function launchProjectPicker(explorer = false) {
 }
 
 function text(content) {
-  return { content: [{ type: "text", text: String(content) }] };
+  return {
+    content: [{
+      type: "text",
+      text: compactMcpContent(content, MCP_AGENT_RESULT_MAX_CHARS)
+    }]
+  };
 }
 
-function fail(message) {
-  return text(`ERROR: ${message}`);
+function fail(message, options = {}) {
+  return text(JSON.stringify(errorPayload(message, options), null, 2));
+}
+
+function validationToolResult(summary, validation, options = {}) {
+  const payload = options.ok === false
+    ? {
+      summary,
+      ok: false,
+      path: options.path || null,
+      operation: options.operation || null,
+      replacements: options.replacements ?? null,
+      rolledBack: options.rolledBack ?? null,
+      conflict: options.conflict ?? null,
+      error: options.error || null,
+      validation: compactValidationPayload(validation),
+      nextSteps: options.nextSteps || []
+    }
+    : slimWriteSuccessPayload(summary, validation, options);
+  const result = text(JSON.stringify(payload, null, 2));
+  if (options.isError) result.isError = true;
+  return result;
 }
 
 function normalizeForToken(value) {
@@ -429,24 +471,6 @@ function execCommand(commandLine, cwd = WORKSPACE_ROOT, timeoutMs = COMMAND_TIME
   });
 }
 
-function extractLikelyCompileErrors(stdout, stderr) {
-  const combined = `${stdout || ""}\n${stderr || ""}`;
-  const lines = combined.split(/\r?\n/);
-
-  const interesting = lines.filter((line) => {
-    return (
-      /\berror\s+(C\d+|LNK\d+|MSB\d+|UHT\d*)\b/i.test(line) ||
-      /\bfatal error\b/i.test(line) ||
-      /\bUnrealHeaderTool failed\b/i.test(line) ||
-      /\bUBT ERROR\b/i.test(line) ||
-      /\bBuild failed\b/i.test(line) ||
-      /\berror:/i.test(line)
-    );
-  });
-
-  return interesting.slice(0, 120).join("\n");
-}
-
 function makeJsonSchema(properties, required = []) {
   return {
     type: "object",
@@ -572,7 +596,24 @@ async function buildWorkspaceInfo() {
     mcpExtendedTools: MCP_EXTENDED_TOOLS,
     maxReadBytes: MAX_READ_BYTES,
     maxOutputBytes: MAX_OUTPUT_BYTES,
+    maxAgentResultChars: MCP_AGENT_RESULT_MAX_CHARS,
     commandTimeoutMs: COMMAND_TIMEOUT_MS,
+    contextHygiene: {
+      recommendedMaxTurnsPerChat: 12,
+      freshSessionTriggers: [
+        "request exceeds the available context size",
+        "failed to restore kv cache",
+        "Model failed to generate a tool call"
+      ],
+      toolBudgetDefaults: {
+        readFileDetailLevel: "compact",
+        readUnrealLogsMaxLines: 60,
+        readUnrealLogsMaxFiles: 1,
+        buildResponseMode: BUILD_VERBOSE_OUTPUT ? "verbose" : "compact"
+      },
+      handoffTemplatePath: "prompts/lmstudio_session_handoff.md",
+      handoffArtifactPath: ".agent/handoff/latest.md"
+    },
     defaultPlatform: defaultPlatform(),
     projectSearchRoots: discovery.roots,
     discoveredProjectCount: discovery.projects.length,
@@ -658,11 +699,40 @@ function allAgentTools() {
       },
       {
         name: "read_unreal_logs",
-        description: "Read recent Unreal Editor or build logs from the active project's Saved/Logs folder.",
+        description: "Read a compact error-focused slice from the newest Unreal log. Defaults to one file and 60 tail lines to protect chat context.",
         inputSchema: makeJsonSchema({
-          maxLines: { type: "number", description: "Max tail lines per log file. Default 120." },
-          filter: { type: "string", description: "Optional case-insensitive substring filter (Error, Assert, etc.)." }
+          maxLines: { type: "number", description: "Max tail lines per log file. Default 60, max 500." },
+          maxFiles: { type: "number", description: "Newest log files to inspect. Default 1, max 3." },
+          filter: { type: "string", description: "Optional case-insensitive substring filter (Error, Assert, etc.)." },
+          summaryOnly: { type: "boolean", description: "Return the first error cluster instead of the full tail. Default true." }
         })
+      },
+      {
+        name: "write_session_handoff",
+        description: "Save a compact cross-chat resume note to the fixed artifact path .agent/handoff/latest.md under WORKSPACE_ROOT. Safe-mode utility: does not require ALLOW_WRITE=1, overwrites only that artifact file, and never writes project source.",
+        inputSchema: makeJsonSchema({
+          summary: { type: "string", description: "One-sentence current task state." },
+          changedFiles: {
+            type: "array",
+            items: { type: "string" },
+            description: "Changed project-relative files, max 12."
+          },
+          openErrors: {
+            type: "array",
+            items: { type: "string" },
+            description: "Remaining actionable errors, max 5."
+          },
+          nextSteps: {
+            type: "array",
+            items: { type: "string" },
+            description: "Next steps in order, max 3."
+          },
+          avoidRepeating: {
+            type: "array",
+            items: { type: "string" },
+            description: "Failed calls or approaches not to repeat, max 3."
+          }
+        }, ["summary"])
       },
       {
         name: "list_directory",
@@ -779,7 +849,7 @@ function allAgentTools() {
       },
       {
         name: "build_unreal_project",
-        description: "Run Unreal Build.bat for the active .uproject after C++ or Build.cs edits. Requires ALLOW_UNREAL_BUILD=1. Use likelyErrors/build output as compile evidence; do not patch MCP tooling based on discovery or permission errors.",
+        description: "Run Unreal Build.bat after C++ or Build.cs edits. Compact by default: returns summary, up to 40 likely error lines, and a fullLogPath. Set verboseOutput=true only when compact evidence is insufficient.",
         inputSchema: makeJsonSchema({
           hint: { type: "string", description: "Optional project folder or .uproject name fragment for auto-detection." },
           engineRoot: { type: "string", description: "Optional UE engine root. Auto-detected from EngineAssociation when omitted." },
@@ -788,7 +858,8 @@ function allAgentTools() {
           platform: { type: "string", description: "Optional platform. Default Win64 on Windows." },
           configuration: { type: "string", description: "Optional configuration. Default Development." },
           allowAbsoluteProject: { type: "boolean", description: "Allow absolute .uproject path outside workspace. Default false." },
-          timeoutMs: { type: "number", description: "Build timeout in ms. Default COMMAND_TIMEOUT_MS." }
+          timeoutMs: { type: "number", description: "Build timeout in ms. Default COMMAND_TIMEOUT_MS." },
+          verboseOutput: { type: "boolean", description: "Include truncated stdout/stderr inline. Default false; prefer fullLogPath." }
         })
       }
   ];
@@ -938,14 +1009,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "read_unreal_logs") {
       const activeProject = getActiveProject(CONFIG_PATH);
       if (!activeProject) {
-        return fail("activeProject is not set. Use set_active_project first.");
+        return fail("activeProject is not set. Use set_active_project first.", {
+          nextSteps: ["Select the target .uproject, then read logs again."],
+          suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+        });
       }
       const projectDir = path.dirname(path.resolve(activeProject));
       const logsDir = path.join(projectDir, "Saved", "Logs");
       if (!(await exists(logsDir))) {
-        return fail(`logs directory not found: ${logsDir}`);
+        return fail(`logs directory not found: ${logsDir}`, {
+          nextSteps: ["Run the project or build once so Unreal creates Saved/Logs."]
+        });
       }
-      const maxLines = Math.max(20, Math.min(Number(args.maxLines || 120), 500));
+      const maxLines = Math.max(20, Math.min(Number(args.maxLines || 60), 500));
+      const maxFiles = Math.max(1, Math.min(Number(args.maxFiles || 1), 3));
+      const summaryOnly = args.summaryOnly !== false;
       const filterText = String(args.filter || "").toLowerCase();
       const entries = await fsp.readdir(logsDir, { withFileTypes: true });
       const logFiles = entries
@@ -956,35 +1034,80 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const sb = fs.statSync(b);
         return sb.mtimeMs - sa.mtimeMs;
       });
-      const picked = logFiles.slice(0, 3);
+      const picked = logFiles.slice(0, maxFiles);
       const chunks = [];
       for (const logPath of picked) {
         const content = await fsp.readFile(logPath, "utf8");
         const lines = content.split(/\r?\n/);
         const tail = lines.slice(-maxLines);
-        const filtered = filterText
+        let filtered = filterText
           ? tail.filter((line) => line.toLowerCase().includes(filterText))
           : tail;
+        if (summaryOnly) {
+          filtered = firstErrorCluster(filtered, 4, 30);
+        }
         chunks.push({
           file: path.basename(logPath),
           lineCount: filtered.length,
           lines: filtered
         });
       }
-      return text(JSON.stringify({
+      const firstLine = chunks.flatMap((chunk) => chunk.lines).find((line) => String(line).trim()) || "";
+      const payload = compactLogPayload({
+        summary: chunks.length
+          ? `LOGS READY — ${chunks.length} file(s), ${chunks.reduce((n, chunk) => n + chunk.lineCount, 0)} line(s)${firstLine ? `; first: ${firstLine}` : ""}`
+          : "NO LOG FILES — Saved/Logs contains no .log files.",
+        ok: chunks.length > 0,
         projectDir,
         logsDir,
+        responseMode: summaryOnly ? "summary" : "tail",
         suggestedRagMode: filterText.includes("error") || filterText.includes("fatal")
           ? "compile_fix"
           : "runtime_debug",
-        logs: chunks
+        logs: chunks,
+        nextSteps: chunks.length
+          ? ["Use only the first actionable error or assertion for the next fix."]
+          : ["Run the project or build once, then read logs again."]
+      });
+      return text(JSON.stringify(payload, null, 2));
+    }
+
+    if (name === "write_session_handoff") {
+      const handoff = formatSessionHandoff(args);
+      const artifactPath = await writeTextArtifact(
+        WORKSPACE_ROOT,
+        path.join(".agent", "handoff", "latest.md"),
+        handoff
+      );
+      return text(JSON.stringify({
+        summary: `HANDOFF SAVED — ${artifactPath}`,
+        ok: true,
+        artifactPath,
+        writeMode: "artifact_only",
+        overwritten: true,
+        safeModeAllowed: true,
+        note: "Writes only the fixed .agent/handoff/latest.md artifact under WORKSPACE_ROOT. Project source files are never modified.",
+        lineCount: handoff.trimEnd().split(/\r?\n/).length,
+        nextSteps: [
+          "Start a fresh LM Studio chat.",
+          "Paste prompts/lmstudio_session_bootstrap.md.",
+          `Ask the model to read ${artifactPath} and continue from the smallest next step.`
+        ]
       }, null, 2));
     }
 
     if (name === "read_file") {
       const target = normalizeRelPath(args.path);
       const s = await statSafe(target);
-      if (!s) return fail(`not found: ${args.path}`);
+      if (!s) {
+        return fail(`not found: ${args.path}`, {
+          nextSteps: ["Search for the basename inside the active project before guessing a new path."],
+          suggestedToolCalls: [{
+            tool: "search_files",
+            args: { query: path.basename(String(args.path || "")), path: "." }
+          }]
+        });
+      }
       if (!s.isFile()) return fail(`not a file: ${args.path}`);
 
       const detail = resolveCodeDetail(args.detailLevel);
@@ -1063,7 +1186,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         allowExistingWrite: ALLOW_EXISTING_SOURCE_WRITE
       });
       if (!guard.ok) {
-        return fail(guard.message);
+        const rel = path.relative(WORKSPACE_ROOT, target).replace(/\\/g, "/");
+        const fileExists = await exists(target);
+        const discipline = writeDisciplineOptions(fileExists);
+        return fail(guard.message, {
+          ...discipline,
+          suggestedToolCalls: fileExists ? [
+            { tool: "read_file", args: { path: rel, detailLevel: "compact" } },
+            { tool: "replace_in_file", args: { path: rel, oldText: "<exact text from read_file>", newText: "<replacement>", expectedOccurrences: 1 } }
+          ] : discipline.suggestedToolCalls
+        });
       }
       const lock = tryAcquirePathLock(target, "write_file");
       if (!lock.ok) {
@@ -1090,7 +1222,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         } catch (err) {
           if (err && err.code === "EEXIST") {
-            return fail(`write_file blocked because file already exists: ${rel}. Use replace_in_file. Do not retry write_file.`);
+            const discipline = writeDisciplineOptions(true);
+            return fail(`write_file blocked because file already exists: ${rel}. Use replace_in_file. Do not retry write_file.`, {
+              ...discipline,
+              suggestedToolCalls: [
+                { tool: "read_file", args: { path: rel, detailLevel: "compact" } },
+                { tool: "replace_in_file", args: { path: rel, oldText: "<exact text from read_file>", newText: "<replacement>", expectedOccurrences: 1 } }
+              ]
+            });
           }
           throw err;
         }
@@ -1108,30 +1247,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               await fsp.writeFile(target, priorContent, "utf8");
             }
             invalidateFileCache(target);
-            return {
-              content: [{
-                type: "text",
-                text: `ERROR: wrote ${rel} but static validation failed.${formatValidationResult(validation)}`
-              }],
-              isError: true
-            };
+            return validationToolResult(
+              `WRITE ROLLED BACK — ${rel} failed static validation.`,
+              validation,
+              {
+                ok: false,
+                path: rel,
+                operation: "create",
+                rolledBack: true,
+                isError: true,
+                error: "Static validation failed after create; the write was reverted.",
+                nextSteps: ["Fix the first blocking finding, then submit a corrected write_file call."]
+              }
+            );
           }
           invalidateFileCache(target);
-          return {
-            content: [{
-              type: "text",
-              text: `ERROR: static validation failed for ${rel}, but rollback skipped: file was modified by another operation (conflict). Verify file state with read_file before further edits.${formatValidationResult(validation)}`
-            }],
-            isError: true
-          };
+          return validationToolResult(
+            `WRITE CONFLICT — ${rel} failed validation and rollback was skipped.`,
+            validation,
+            {
+              ok: false,
+              path: rel,
+              operation: "create",
+              rolledBack: false,
+              conflict: true,
+              isError: true,
+              error: "Another operation changed the file after this write.",
+              nextSteps: ["Read the current file before any further edit and reconcile the conflict."]
+            }
+          );
         }
-        let message = `OK: wrote ${rel}`;
+        let summary = `OK — ${rel} created.`;
+        const nextSteps = ["Continue the planned edit set, then run build_unreal_project for C++/Build.cs changes."];
         if (validation && validation.timedOut) {
-          message += `\n${validation.note || "validation skipped (time budget); run static_validate_project before build"}`;
-        } else if (validation && !validation.skipped) {
-          message += formatValidationResult(validation);
+          summary += " Static validation exceeded its time budget.";
+          nextSteps.unshift("Run static_validate_project before build.");
         }
-        return text(message);
+        return validationToolResult(summary, validation, {
+          path: rel,
+          operation: "create",
+          bytesWritten: Buffer.byteLength(contentToWrite, "utf8"),
+          nextSteps
+        });
       } finally {
         releasePathLock(target);
       }
@@ -1142,7 +1299,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const target = normalizeRelPath(args.path);
       const s = await statSafe(target);
       if (!s || !s.isFile()) {
-        return fail(`not found or not file: ${args.path}. replace_in_file only edits existing files; to create a brand-new file, use write_file.`);
+        return fail(`not found or not file: ${args.path}. replace_in_file only edits existing files; to create a brand-new file, use write_file.`, {
+          nextSteps: ["Search for the correct path. Use write_file only if this is intentionally a brand-new file."],
+          suggestedToolCalls: [{
+            tool: "search_files",
+            args: { query: path.basename(String(args.path || "")), path: "." }
+          }]
+        });
       }
       const oldText = String(args.oldText ?? "");
       const newText = String(args.newText ?? "");
@@ -1204,30 +1367,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (shouldRollback(current, updated)) {
             await fsp.writeFile(target, priorContent, "utf8");
             invalidateFileCache(target);
-            return {
-              content: [{
-                type: "text",
-                text: `ERROR: replaced text in ${rel} but static validation failed.${formatValidationResult(validation)}`
-              }],
-              isError: true
-            };
+            return validationToolResult(
+              `PATCH ROLLED BACK — ${rel} failed static validation.`,
+              validation,
+              {
+                ok: false,
+                path: rel,
+                operation: "replace",
+                replacements: occurrences,
+                rolledBack: true,
+                isError: true,
+                error: "Static validation failed after replace; the file was restored.",
+                nextSteps: ["Fix the first blocking finding, re-read the target, then submit a corrected patch."]
+              }
+            );
           }
           invalidateFileCache(target);
-          return {
-            content: [{
-              type: "text",
-              text: `ERROR: static validation failed for ${rel}, but rollback skipped: file was modified by another operation (conflict). Verify file state with read_file before further edits.${formatValidationResult(validation)}`
-            }],
-            isError: true
-          };
+          return validationToolResult(
+            `PATCH CONFLICT — ${rel} failed validation and rollback was skipped.`,
+            validation,
+            {
+              ok: false,
+              path: rel,
+              operation: "replace",
+              replacements: occurrences,
+              rolledBack: false,
+              conflict: true,
+              isError: true,
+              error: "Another operation changed the file after this patch.",
+              nextSteps: ["Read the current file before any further edit and reconcile the conflict."]
+            }
+          );
         }
-        let message = `OK: replaced ${occurrences} occurrence(s) in ${rel}`;
+        let summary = `OK — ${rel} patched (${occurrences} replacement(s)).`;
+        const nextSteps = ["Continue the plan, or run build_unreal_project when the C++/Build.cs edit set is complete."];
         if (validation && validation.timedOut) {
-          message += `\n${validation.note || "validation skipped (time budget); run static_validate_project before build"}`;
-        } else if (validation && !validation.skipped) {
-          message += formatValidationResult(validation);
+          summary += " Static validation exceeded its time budget.";
+          nextSteps.unshift("Run static_validate_project before build.");
         }
-        return text(message);
+        return validationToolResult(summary, validation, {
+          path: rel,
+          operation: "replace",
+          replacements: occurrences,
+          nextSteps
+        });
       } finally {
         releasePathLock(target);
       }
@@ -1305,7 +1488,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectRoot = path.dirname(path.resolve(activeProject));
       }
       if (!projectRoot) {
-        return fail("No active project and no projectRoot provided.");
+        return fail("No active project and no projectRoot provided.", {
+          nextSteps: ["Select an active .uproject, then run static validation again."],
+          suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+        });
       }
       const resolved = path.resolve(projectRoot);
       if (resolved.toLowerCase().endsWith(".uproject")) {
@@ -1314,16 +1500,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectRoot = resolved;
       }
       const validation = await runStaticValidation(projectRoot);
+      const severityCounts = (validation.findings || []).reduce((counts, finding) => {
+        const key = String(finding.severity || "unknown").toLowerCase();
+        counts[key] = (counts[key] || 0) + 1;
+        return counts;
+      }, {});
+      const validationSummary = validationFailed(validation)
+        ? `STATIC VALIDATION FAILED — ${severityCounts.error || 0} error(s), ${severityCounts.warning || 0} warning(s)`
+        : `STATIC VALIDATION PASSED — ${severityCounts.warning || 0} warning(s)`;
       if (validationFailed(validation)) {
-        return {
-          content: [{
-            type: "text",
-            text: `Static validation failed.${formatValidationResult(validation)}`
-          }],
-          isError: true
-        };
+        return validationToolResult(validationSummary, validation, {
+          ok: false,
+          operation: "static_validate",
+          isError: true,
+          nextSteps: ["Fix the first blocking error, then run static_validate_project again."]
+        });
       }
-      return text(`Static validation passed.${formatValidationResult(validation)}`);
+      return validationToolResult(validationSummary, validation, {
+        operation: "static_validate",
+        nextSteps: ["Run build_unreal_project if C++ or Build.cs changed."]
+      });
     }
 
     if (name === "search_files") {
@@ -1402,11 +1598,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "build_unreal_project") {
-      if (!ALLOW_UNREAL_BUILD) return fail("build_unreal_project blocked. Set ALLOW_UNREAL_BUILD=1 to enable.");
+      if (!ALLOW_UNREAL_BUILD) {
+        return fail("build_unreal_project blocked. Set ALLOW_UNREAL_BUILD=1 to enable.", {
+          nextSteps: ["Run installer/Enable-AgentMode.ps1 for a trusted project, restart LM Studio, then retry."]
+        });
+      }
 
       const planResult = await resolveBuildPlan(WORKSPACE_ROOT, CONFIG_PATH, args);
       if (!planResult.ok || !planResult.build) {
         return text(JSON.stringify({
+          summary: `BUILD PLAN FAILED — ${planResult.error || "Could not resolve Unreal build plan."}`,
           ok: false,
           error: planResult.error || "Could not resolve Unreal build plan.",
           selectionReason: planResult.selectionReason,
@@ -1447,30 +1648,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const command = `"${build.buildBat}" ${target} ${platform} ${configuration} -Project="${projectPath}" -WaitMutex -NoHotReloadFromIDE`;
       const buildTimeout = Number(args.timeoutMs || COMMAND_TIMEOUT_MS);
       const result = await execCommand(command, path.dirname(projectPath), buildTimeout);
-      const likelyErrors = extractLikelyCompileErrors(result.stdout, result.stderr);
-
-      return text(JSON.stringify({
-        autoDetected: {
-          selectionReason: planResult.selectionReason,
-          engineRoot: build.engineRoot,
-          engineSource: build.engineSource,
-          engineWarning: build.engineWarning || null,
-          requestedEngineAssociation: build.requestedEngineAssociation || null,
-          projectPath,
-          projectFile: path.basename(projectPath),
-          target,
-          platform,
-          configuration,
-          allTargets: build.allTargets
-        },
+      const fullLog = [
+        `Command: ${command}`,
+        `ExitCode: ${result.exitCode}`,
+        "",
+        "===== STDOUT =====",
+        result.stdout || "",
+        "",
+        "===== STDERR =====",
+        result.stderr || "",
+        "",
+        "===== EXEC ERROR =====",
+        result.error || ""
+      ].join("\n");
+      const logPath = await writeTextArtifact(
+        WORKSPACE_ROOT,
+        path.join(".agent", "logs", "latest-build.log"),
+        fullLog
+      );
+      const verbose = args.verboseOutput === true || BUILD_VERBOSE_OUTPUT;
+      const payload = buildResponsePayload({
+        result,
+        build: { ...build, target, platform, configuration },
+        planResult,
+        projectPath,
         command,
-        ok: result.ok,
-        exitCode: result.exitCode,
-        likelyErrors,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        error: result.error
-      }, null, 2));
+        logPath,
+        verbose
+      });
+      return text(JSON.stringify(payload, null, 2));
     }
 
     return fail(`unknown tool: ${name}`);

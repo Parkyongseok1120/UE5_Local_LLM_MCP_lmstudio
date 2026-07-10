@@ -1644,6 +1644,9 @@ def rerank_row(row: dict[str, Any], query_terms: list[str], mode: str) -> dict[s
             score -= 2.0
     if "lnk2019" in query_lower and error_code.upper() == "LNK2019":
         score -= 8.0
+    if any(token in query_lower for token in ("정의 없음", "선언만", "missing definition", "unresolved external")):
+        if "lnk" in identity_lower or "25_lnk" in identity_lower or "missing cpp" in identity_lower:
+            score -= 10.0
     if "build" in query_lower and "cs" in query_lower and symbol_kind == "module":
         score -= 5.0
     if "module" in query_lower and symbol_kind == "module" and mode == "module_fix":

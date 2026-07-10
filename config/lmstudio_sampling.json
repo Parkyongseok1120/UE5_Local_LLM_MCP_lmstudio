@@ -93,7 +93,7 @@
           "thinking": "on",
           "temperature": 0.6,
           "topP": 0.95,
-          "maxTokens": 6144,
+          "maxTokens": 3072,
           "notes": "R0 / refactor_r0 / Turn1 plan — no code writes"
         },
         "critique": {
@@ -214,7 +214,7 @@
       "quantDefault": "Q4_K_M",
       "agentPolicy": {
         "ragBudgetScale": 0.70,
-        "maxFilesPerEdit": 1,
+        "maxFilesPerEdit": 2,
         "preferPatch": true,
         "planningRequired": true,
         "deepSearch": false,

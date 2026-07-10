@@ -16,7 +16,7 @@ Never greenfield 8+ classes in one turn. Use slices.
 
 1. `unreal_agent_session` — genre + RAG context (e.g. `action_combat` for soulslike)
 2. `unreal_rag_search` / `unreal_symbol_lookup` — evidence before any edit
-3. `unreal_refactor_plan_validate` — R0 plan gate (Turn 1)
+3. `unreal_refactor_plan_validate` — R0 plan gate (Turn 1; **Extended tools** / refactor modes only — not required in Essential Tools chat)
 4. `unreal_genre_scope_validate` — Must Have gate (Turn 2)
 5. `read_file` / `read_file_range` / `search_files` — inspect targets and basename collisions before writes (unreal-agent)
 6. `replace_in_file` for existing files — `write_file` only for brand-new files after `search_files` confirms no duplicate basename under `Source/`. `write_file` is create-only and refuses to overwrite existing files; on a "file already exists" or timeout error, never retry `write_file` — verify state with `read_file` and switch to `replace_in_file`
@@ -38,8 +38,10 @@ Never greenfield 8+ classes in one turn. Use slices.
 ## Flow and checkpoints
 
 - After a successful `write_file` / `replace_in_file`, report the file in one line and continue automatically to the next slice. Do not pause for user confirmation after successful work.
-- Stop and wait for the user only on risk signals: a tool timeout (`MCP error -32001`), static-validation failure/rollback, "Model failed to generate a tool call", or the same failure repeating. On any of these, verify changed files, emit a short checkpoint summary, and if the tool call failed recommend continuing in a fresh session (summarize prior work; do not re-paste long failed outputs).
-- Emit a one-line progress summary after roughly every 3 files and keep going.
+- Stop and wait for the user only on risk signals: a tool timeout (`MCP error -32001`), static-validation failure/rollback, "Model failed to generate a tool call", context/KV-cache overflow, or the same failure repeating. On any of these, verify changed files, call `write_session_handoff`, and recommend a fresh session. Never re-paste long failed outputs.
+- Emit a one-line progress summary after roughly every 3 files in the form `[2/5] Source/.../Foo.cpp patched`, then keep going.
+- Treat build/log/write/validation tool responses as summary-first: quote the `summary` field, follow `nextSteps` / `suggestedToolCalls`, and never dump raw JSON or full build output to the user. Lookup tools may return raw JSON, but they still share the same MCP result character ceiling.
+- Final response order: outcome first, changed files second, verification evidence third, one next step only when needed.
 
 ## Hard rules
 
