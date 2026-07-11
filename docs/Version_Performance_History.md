@@ -33,7 +33,8 @@ xychart-beta
 | Model / run | Same-suite model score | Basis |
 |---|---:|---|
 | Community fine-tuned Qwen 3.6 27B (`20260709-144441-pass1-target`) | 100 | 36/36 Pass@K, 36/36 Pass@1, zero wrong-file/Build.cs/no-op counters. |
-| Qwen 3.5 9B (`20260709-153021-qwen35-9b`) | 94 | 35/36 Pass@K, 33/36 Pass@1; strong compact run, one missing-definition failure. |
+| Qwen 3.5 9B deepseek-v4-flash (`20260711-090534-qwen35-9b`) | 97 | 36/36 Pass@K, 35/36 Pass@1; post scoped-write-stabilization revalidation. |
+| Qwen 3.5 9B (`20260709-153021-qwen35-9b`) | 94 | 35/36 Pass@K, 33/36 Pass@1; prior compact baseline, one missing-definition failure. |
 
 ```mermaid
 xychart-beta
@@ -70,7 +71,7 @@ xychart-beta
 | Multifile refactor compile fixes | 12/12 Pass@1 in both measured runs | Strongest v1.2.5 gain. Deterministic autofix now protects callback and return-type drift cases. |
 | Editor/runtime boundary | 1/1 Pass@1 in both measured runs | Hardened against adding `UnrealEd` to runtime Build.cs as a fake fix. |
 | UHT / reflection | 4/4 Pass@1 in both measured runs | Strong with deterministic blueprint/native event autofixes. |
-| Single-file compile fix | 9/9 Pass@1 on Qwen 3.6 27B; 6/9 Pass@1 and 8/9 Pass@K on Qwen 3.5 9B | Main remaining gap for compact models: exact patch/JSON discipline on missing-definition cases. |
+| Single-file compile fix | 9/9 Pass@1 on Qwen 3.6 27B; 8/9 Pass@1 and 9/9 Pass@K on Qwen 3.5 9B (20260711); 6/9 Pass@1 on prior 9B baseline | Compact gap narrowed; remaining Pass@1 miss is one include-registration retry case. |
 
 ## Maintenance Policy After v1.2.5
 
@@ -109,7 +110,8 @@ xychart-beta
 | 모델 / run | Same-suite model score | 기준 |
 |---|---:|---|
 | Community fine-tuned Qwen 3.6 27B (`20260709-144441-pass1-target`) | 100 | 36/36 Pass@K, 36/36 Pass@1, wrong-file/Build.cs/no-op counter 0. |
-| Qwen 3.5 9B (`20260709-153021-qwen35-9b`) | 94 | 35/36 Pass@K, 33/36 Pass@1. compact 모델 기준 강한 결과이나 missing-definition 1건 실패. |
+| Qwen 3.5 9B deepseek-v4-flash (`20260711-090534-qwen35-9b`) | 97 | 36/36 Pass@K, 35/36 Pass@1. scoped write stabilization 이후 재검증. |
+| Qwen 3.5 9B (`20260709-153021-qwen35-9b`) | 94 | 35/36 Pass@K, 33/36 Pass@1. 이전 compact baseline, missing-definition 1건 실패. |
 
 ```mermaid
 xychart-beta
@@ -146,7 +148,7 @@ xychart-beta
 | Multifile refactor compile fix | 두 측정 run 모두 12/12 Pass@1 | v1.2.5의 가장 큰 개선점. callback/return-type drift deterministic autofix로 보호. |
 | Editor/runtime boundary | 두 측정 run 모두 1/1 Pass@1 | runtime Build.cs에 `UnrealEd`를 추가하는 fake fix를 차단. |
 | UHT / reflection | 두 측정 run 모두 4/4 Pass@1 | blueprint/native event deterministic autofix 경로가 강함. |
-| Single-file compile fix | Qwen 3.6 27B는 9/9 Pass@1; Qwen 3.5 9B는 6/9 Pass@1, 8/9 Pass@K | compact 모델의 남은 약점은 missing-definition 케이스의 exact patch/JSON discipline. |
+| Single-file compile fix | Qwen 3.6 27B는 9/9 Pass@1; Qwen 3.5 9B (20260711)는 8/9 Pass@1, 9/9 Pass@K; 이전 9B baseline은 6/9 Pass@1 | compact gap 축소; 남은 Pass@1 miss는 include-registration retry 1건. |
 
 ## v1.2.5 이후 유지보수 정책
 
