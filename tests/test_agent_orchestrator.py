@@ -56,7 +56,8 @@ def test_cinematic_analysis_plan_source_first():
     assert "read_file" in tools or any("read_file" in str(c) for c in payload["suggestedToolCalls"])
 
 
-def test_refactor_r0_no_edit():
+def test_refactor_r0_no_edit(monkeypatch):
+    monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
     plan = build_agent_plan("Discover impact for UMySubsystem refactor R0", "refactor_r0")
     payload = plan.to_dict()
     assert plan.task_kind == "refactor"
@@ -188,7 +189,8 @@ def test_shader_material_blueprint_analysis_blocks_edits():
         assert mode in plan.evidence.rag_modes
 
 
-def test_asset_metadata_modes_use_metadata_tool_policy():
+def test_asset_metadata_modes_use_metadata_tool_policy(monkeypatch):
+    monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
     plan = build_agent_plan("Analyze M_Blackhole_Core material graph wires", "material_analysis")
     assert "unreal_editor_metadata_status" in plan.tool_policy
     assert "unreal_run_editor_export" in plan.tool_policy

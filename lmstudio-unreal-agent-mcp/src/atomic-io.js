@@ -2,11 +2,15 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+
+let tempCounter = 0;
 
 const STALE_TEMP_AGE_MS = 60_000;
 
 function uniqueTempPath(resolved) {
-  return `${resolved}.${process.pid}.${Date.now()}.tmp`;
+  tempCounter += 1;
+  return `${resolved}.${process.pid}.${crypto.randomUUID()}.${tempCounter}.tmp`;
 }
 
 function cleanupStaleTempFiles(resolved) {

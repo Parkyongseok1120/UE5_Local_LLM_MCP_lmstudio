@@ -14,12 +14,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-TERMINAL_STATUSES = frozenset({"completed", "failed", "timed_out", "cancelled"})
+TERMINAL_STATUSES = frozenset({"completed", "failed", "timed_out", "cancelled", "cancellation_uncertain"})
 VALID_TRANSITIONS: dict[str, frozenset[str]] = {
-    "created": frozenset({"queued", "cancelled"}),
-    "starting": frozenset({"queued", "running", "cancelled"}),
-    "queued": frozenset({"running", "cancelled"}),
-    "running": frozenset({"completed", "failed", "timed_out", "cancelled"}),
+    "created": frozenset({"queued", "cancelled", "cancel_requested"}),
+    "starting": frozenset({"queued", "running", "cancelled", "cancel_requested"}),
+    "queued": frozenset({"starting", "running", "cancelled", "cancel_requested"}),
+    "running": frozenset({"completed", "failed", "timed_out", "cancelled", "cancel_requested", "cancellation_uncertain"}),
+    "cancel_requested": frozenset({"cancelled", "cancellation_uncertain"}),
 }
 
 _JOB_LOCKS: dict[str, threading.Lock] = {}
@@ -63,6 +64,15 @@ def _read_json_with_retry(path: Path, *, attempts: int = 8, delay_sec: float = 0
 
 
 def read_job(workspace: Path, job_id: str) -> dict[str, Any] | None:
+    try:
+        from job_store import read_job_record, validate_job_id
+
+        validate_job_id(job_id)
+        record = read_job_record(job_id, workspace=workspace)
+        if record:
+            return record
+    except Exception:
+        pass
     path = job_path(workspace, job_id)
     if not path.exists():
         return None
@@ -89,6 +99,13 @@ def _atomic_replace_with_retry(temp: Path, path: Path, *, attempts: int = 8, del
 
 def write_job(workspace: Path, job: dict[str, Any], *, expected_revision: int | None = None) -> bool:
     job_id = str(job["jobId"])
+    try:
+        from job_store import validate_job_id, write_job_record
+
+        validate_job_id(job_id)
+        return write_job_record(job, expected_revision=expected_revision, workspace=workspace)
+    except Exception:
+        pass
     lock = _job_lock(job_id)
     with lock:
         current = read_job(workspace, job_id)
@@ -208,6 +225,7 @@ def compact_job_status(job: dict[str, Any], *, since_progress_sequence: int = 0)
         "status": job.get("status"),
         "phase": job.get("currentAttempt") or job.get("status"),
         "attempt": job.get("currentAttempt"),
+        "runDir": job.get("runDir"),
         "stateRevision": int(job.get("revision") or 0),
         "progressSequence": int(job.get("progressSequence") or 0),
         "progressDelta": delta,
@@ -250,6 +268,26 @@ def _prune_stale_jobs(workspace: Path, ttl_hours: int = 24) -> None:
                 continue
 
 
+def _process_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        stdout = getattr(result, "stdout", None) or ""
+        return str(pid) in stdout
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _kill_process_tree(pid: int) -> bool:
     if sys.platform == "win32":
         result = subprocess.run(
@@ -268,7 +306,15 @@ def _kill_process_tree(pid: int) -> bool:
 
 def _is_cancelled(workspace: Path, job_id: str) -> bool:
     job = read_job(workspace, job_id)
-    return bool(job and str(job.get("status") or "") == "cancelled")
+    return bool(job and str(job.get("status") or "") in {"cancelled", "cancel_requested"})
+
+
+def _finalize_cancelled_worker(workspace: Path, job_id: str, current: dict[str, Any], *, message: str) -> None:
+    latest = read_job(workspace, job_id) or current
+    if str(latest.get("status") or "") == "cancel_requested":
+        transition_job_status(latest, "cancelled")
+        append_progress(latest, message)
+        save_job(workspace, latest)
 
 
 def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
@@ -276,22 +322,36 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     if not job:
         return {"ok": False, "error": f"Unknown job: {job_id}"}
     if str(job.get("status") or "") in TERMINAL_STATUSES:
-        return {"ok": True, "job": job}
-    pid = job.get("pid")
-    orphan_suspected = False
-    if pid and job.get("status") in {"starting", "running", "queued"}:
-        orphan_suspected = not _kill_process_tree(int(pid))
-    transition_job_status(job, "cancelled")
-    append_progress(job, "Job cancelled by request.")
-    if orphan_suspected:
-        job["orphanProcessSuspected"] = True
+        return {"ok": True, "job": compact_job_status(job), "processTreeKilled": False}
+    if not transition_job_status(job, "cancel_requested"):
+        job["status"] = "cancel_requested"
+    append_progress(job, "Cancel requested.")
     if not save_job(workspace, job):
+        return {"ok": False, "error": "Failed to persist cancel_requested", "jobId": job_id}
+
+    fresh = read_job(workspace, job_id) or job
+    pid = fresh.get("pid")
+    orphan_suspected = False
+    process_tree_killed = False
+    next_status = "cancelled"
+    if pid and _process_alive(int(pid)):
+        process_tree_killed = _kill_process_tree(int(pid))
+        orphan_suspected = not process_tree_killed
+        if not process_tree_killed:
+            next_status = "cancellation_uncertain"
+    if not transition_job_status(fresh, next_status):
+        fresh["status"] = next_status
+    append_progress(fresh, "Job cancelled by request.")
+    if orphan_suspected:
+        fresh["orphanProcessSuspected"] = True
+    if not save_job(workspace, fresh):
         return {"ok": False, "error": "Failed to persist cancelled job state", "jobId": job_id}
     return {
         "ok": True,
-        "job": compact_job_status(job),
-        "processTreeKilled": not orphan_suspected,
+        "job": compact_job_status(read_job(workspace, job_id) or fresh),
+        "processTreeKilled": process_tree_killed,
         "orphanProcessSuspected": orphan_suspected,
+        "cancellationState": str((read_job(workspace, job_id) or fresh).get("status") or ""),
     }
 
 
@@ -370,6 +430,12 @@ def start_job(
     def worker() -> None:
         current = read_job(workspace, job_id) or job
         if _is_cancelled(workspace, job_id):
+            _finalize_cancelled_worker(
+                workspace,
+                job_id,
+                current,
+                message="Job cancelled before wrapper subprocess start.",
+            )
             return
         transition_job_status(current, "running")
         append_progress(current, "Wrapper subprocess started.")
@@ -518,6 +584,12 @@ def start_rag_refresh_job(
     def worker() -> None:
         current = read_job(workspace, job_id) or job
         if _is_cancelled(workspace, job_id):
+            _finalize_cancelled_worker(
+                workspace,
+                job_id,
+                current,
+                message="Job cancelled before RAG refresh subprocess start.",
+            )
             return
         transition_job_status(current, "running")
         save_job(workspace, current)

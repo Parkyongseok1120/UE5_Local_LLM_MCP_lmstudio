@@ -6,7 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node test/run-tests.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"

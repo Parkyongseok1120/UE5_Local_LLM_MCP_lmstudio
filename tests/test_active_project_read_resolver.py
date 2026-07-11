@@ -47,7 +47,9 @@ def test_junction_escape_is_blocked_when_supported(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     project = tmp_path / "project"
     outside = tmp_path / "outside"
-    workspace.mkdir(); project.mkdir(); outside.mkdir()
+    workspace.mkdir()
+    project.mkdir()
+    outside.mkdir()
     (project / "Demo.uproject").write_text("{}", encoding="utf-8")
     script = f"""
 const fs=require('fs'); const path=require('path'); const r=require({json.dumps(str(RESOLVER))});

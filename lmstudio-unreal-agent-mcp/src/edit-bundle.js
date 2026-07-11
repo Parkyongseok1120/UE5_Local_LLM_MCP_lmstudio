@@ -3,226 +3,378 @@
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
+const crypto = require("crypto");
 const { atomicWriteText, atomicCreateText } = require("./atomic-io");
 const { sha256File, sha256Text, replaceWithCAS, createExclusive } = require("./safe-write");
-const { tryAcquirePathLock, releasePathLock } = require("./write-locks");
+const { tryAcquirePathLock, releasePathLock, canonicalLockKey } = require("./write-locks");
+const {
+  createJournal,
+  upsertEntry,
+  completedEntries,
+  archiveJournal,
+  saveJournal,
+} = require("./transaction-journal");
+const { ensureStateRootLayout, resolveAgentStateRoot } = require("./state-root");
 
 const MAX_BUNDLE_FILES = 32;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_FILES_PER_EDIT = 2;
+
+const PROTECTED_OVERWRITE_EXT = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs", ".json", ".ini", ".uplugin", ".uproject"]);
 
 function bundlePaths(bundle) {
   const paths = [];
   for (const item of bundle?.patches || []) {
-    if (item?.path) {
-      paths.push(String(item.path).replace(/\\/g, "/"));
-    }
+    if (item?.path) paths.push(String(item.path).replace(/\\/g, "/"));
   }
   for (const item of bundle?.files || []) {
-    if (item?.path) {
-      paths.push(String(item.path).replace(/\\/g, "/"));
-    }
+    if (item?.path) paths.push(String(item.path).replace(/\\/g, "/"));
   }
   return paths;
 }
 
-function validateBundleLimits(bundle) {
+function entryByteSize(item) {
+  return Buffer.byteLength(String(item.content || ""), "utf8")
+    + Buffer.byteLength(String(item.newText || ""), "utf8")
+    + Buffer.byteLength(String(item.oldText || ""), "utf8");
+}
+
+function validateBundleLimits(bundle, maxFilesPerEdit = DEFAULT_MAX_FILES_PER_EDIT) {
   const relPaths = bundlePaths(bundle);
   const unique = new Set(relPaths);
   if (unique.size !== relPaths.length) {
     throw new Error("apply_edit_bundle: duplicate paths in bundle are not allowed");
+  }
+  if (unique.size > maxFilesPerEdit) {
+    throw new Error(`apply_edit_bundle: too many files (max ${maxFilesPerEdit})`);
   }
   if (unique.size > MAX_BUNDLE_FILES) {
     throw new Error(`apply_edit_bundle: too many files (max ${MAX_BUNDLE_FILES})`);
   }
   let bytes = 0;
   for (const item of [...(bundle?.patches || []), ...(bundle?.files || [])]) {
-    bytes += Buffer.byteLength(String(item.content ?? item.newText ?? item.oldText ?? ""), "utf8");
+    bytes += entryByteSize(item);
   }
   if (bytes > MAX_BUNDLE_BYTES) {
     throw new Error(`apply_edit_bundle: bundle payload too large (max ${MAX_BUNDLE_BYTES} bytes)`);
   }
 }
 
-async function stageBundle(bundle, resolvePathFn) {
+async function canonicalizeTargets(bundle, resolvePathFn) {
   validateBundleLimits(bundle);
   const relPaths = [...new Set(bundlePaths(bundle))];
-  const validated = [];
+  const targets = {};
+  const canonicalKeys = new Map();
   for (const rel of relPaths) {
     const resolution = await resolvePathFn(rel);
     if (!resolution?.ok) {
       throw new Error(resolution?.error || `Invalid bundle path: ${rel}`);
     }
-    validated.push({ rel, abs: resolution.absolutePath });
+    const abs = path.resolve(resolution.absolutePath);
+    let canonicalAbs = abs;
+    try {
+      canonicalAbs = fs.realpathSync.native ? fs.realpathSync.native(abs) : fs.realpathSync(abs);
+    } catch {
+      canonicalAbs = abs;
+    }
+    const key = canonicalLockKey(canonicalAbs);
+    if (canonicalKeys.has(key) && canonicalKeys.get(key).rel !== rel) {
+      throw new Error(`apply_edit_bundle: alias paths resolve to same file: ${rel} and ${canonicalKeys.get(key).rel}`);
+    }
+    canonicalKeys.set(key, { rel, abs: canonicalAbs });
+    targets[rel] = {
+      rel,
+      abs: canonicalAbs,
+      canonicalKey: key,
+    };
   }
+  return { relPaths, targets };
+}
 
-  const preHashes = {};
-  const staged = {};
-  const absByRel = {};
-  for (const { rel, abs } of validated) {
-    absByRel[rel] = abs;
+function backupPath(stateRoot, transactionId, rel) {
+  const digest = crypto.createHash("sha256").update(rel).digest("hex").slice(0, 16);
+  return path.join(stateRoot, "backups", `${transactionId}-${digest}.bak`);
+}
+
+async function captureBaseline(targets, journal, stateRoot) {
+  const baseline = {};
+  for (const rel of Object.keys(targets)) {
+    const { abs } = targets[rel];
+    let existedBefore = false;
+    let preHash = "";
+    let preContent = null;
+    let statError = null;
     try {
       const st = await fsp.stat(abs);
       if (st.isFile()) {
-        staged[rel] = await fsp.readFile(abs, "utf8");
-        preHashes[rel] = await sha256File(abs);
-      } else {
-        staged[rel] = null;
+        existedBefore = true;
+        preContent = await fsp.readFile(abs, "utf8");
+        preHash = sha256Text(preContent);
+      } else if (st.isDirectory()) {
+        throw new Error(`Path is a directory: ${rel}`);
       }
-    } catch {
-      staged[rel] = null;
+    } catch (err) {
+      if (err && err.code === "ENOENT") {
+        existedBefore = false;
+      } else {
+        statError = String(err.message || err);
+        throw new Error(`Cannot stat ${rel}: ${statError}`);
+      }
     }
+    let preContentBackupPath = null;
+    if (existedBefore && preContent != null) {
+      preContentBackupPath = backupPath(stateRoot, journal.transactionId, rel);
+      atomicWriteText(preContentBackupPath, preContent);
+    }
+    baseline[rel] = { existedBefore, preHash, preContent, preContentBackupPath };
+    upsertEntry(journal, {
+      relativePath: rel,
+      canonicalAbsolutePath: abs,
+      operation: "baseline",
+      existedBefore,
+      preHash,
+      preContentBackupPath,
+      writeStarted: false,
+      writeCompleted: false,
+    });
   }
-  return { relPaths, preHashes, staged, absByRel };
+  journal.status = "locked";
+  saveJournal(journal);
+  return baseline;
 }
 
-async function commitBundleEntries(bundle, preHashes, absByRel, resolvePathFn) {
-  const postWriteHashes = {};
+async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) {
   const writtenAbs = [];
+  const postWriteHashes = {};
 
   for (const item of bundle?.patches || []) {
     const rel = String(item.path).replace(/\\/g, "/");
-    const resolution = await resolvePathFn(rel);
-    if (!resolution?.ok) {
-      throw new Error(resolution?.error || `Invalid patch path: ${rel}`);
-    }
-    const abs = resolution.absolutePath;
-    const expectedHash = item.readHash || preHashes[rel] || "";
-    const priorContent = fs.existsSync(abs) ? await fsp.readFile(abs, "utf8") : "";
+    const target = targets[rel];
+    if (!target) throw new Error(`Unknown patch path: ${rel}`);
+    const abs = target.abs;
+    const base = baseline[rel];
+    upsertEntry(journal, {
+      relativePath: rel,
+      canonicalAbsolutePath: abs,
+      operation: "patch",
+      existedBefore: base.existedBefore,
+      preHash: base.preHash,
+      preContentBackupPath: base.preContentBackupPath,
+      writeStarted: true,
+    });
+    const priorContent = base.existedBefore ? await fsp.readFile(abs, "utf8") : "";
     const result = await replaceWithCAS({
       targetPath: abs,
       priorContent,
       oldText: String(item.oldText || ""),
       newText: String(item.newText || ""),
       expectedOccurrences: Number(item.expectedOccurrences ?? 1),
-      readHash: expectedHash || preHashes[rel] || null,
+      readHash: item.readHash || base.preHash || null,
     });
     if (!result.ok) {
       throw new Error(result.error || `Patch failed for ${rel}`);
     }
-    postWriteHashes[rel] = sha256Text(result.updated);
+    const postHash = sha256Text(result.updated);
+    postWriteHashes[rel] = postHash;
+    upsertEntry(journal, {
+      relativePath: rel,
+      postHash,
+      writeCompleted: true,
+      restored: false,
+    });
     writtenAbs.push(abs);
   }
 
   for (const item of bundle?.files || []) {
     const rel = String(item.path).replace(/\\/g, "/");
-    const resolution = await resolvePathFn(rel);
-    if (!resolution?.ok) {
-      throw new Error(resolution?.error || `Invalid file path: ${rel}`);
-    }
-    const abs = resolution.absolutePath;
-    const expectedHash = item.readHash || preHashes[rel] || "";
-    const exists = fs.existsSync(abs);
-    if (exists) {
-      const priorContent = await fsp.readFile(abs, "utf8");
-      const result = await replaceWithCAS({
-        targetPath: abs,
-        priorContent,
-        oldText: priorContent,
-        newText: String(item.content || ""),
-        expectedOccurrences: 1,
-        readHash: expectedHash || preHashes[rel] || null,
-      });
-      if (!result.ok) {
-        throw new Error(result.error || `Overwrite failed for ${rel}`);
+    const target = targets[rel];
+    if (!target) throw new Error(`Unknown file path: ${rel}`);
+    const abs = target.abs;
+    const base = baseline[rel];
+    if (base.existedBefore) {
+      const ext = path.extname(rel).toLowerCase();
+      if (PROTECTED_OVERWRITE_EXT.has(ext) || base.existedBefore) {
+        throw new Error(`files[] cannot overwrite existing file ${rel}; use patches`);
       }
-      postWriteHashes[rel] = sha256Text(result.updated);
-    } else {
-      await createExclusive(abs, String(item.content || ""));
-      postWriteHashes[rel] = sha256Text(String(item.content || ""));
     }
+    upsertEntry(journal, {
+      relativePath: rel,
+      canonicalAbsolutePath: abs,
+      operation: "create",
+      existedBefore: base.existedBefore,
+      preHash: base.preHash,
+      writeStarted: true,
+    });
+    if (base.existedBefore) {
+      throw new Error(`files[] create-only violation for existing path: ${rel}`);
+    }
+    await createExclusive(abs, String(item.content || ""));
+    const postHash = sha256Text(String(item.content || ""));
+    postWriteHashes[rel] = postHash;
+    upsertEntry(journal, {
+      relativePath: rel,
+      postHash,
+      writeCompleted: true,
+      restored: false,
+    });
     writtenAbs.push(abs);
   }
 
+  journal.status = "committed";
+  saveJournal(journal);
   return { writtenAbs, postWriteHashes };
 }
 
-async function rollbackBundle(staged, absByRel, postWriteHashes = {}) {
+async function rollbackJournal(journal) {
   const restored = [];
-  const skipped = [];
+  const unrestored = [];
   const errors = [];
+  const externalChangeDetected = [];
 
-  for (const [rel, prior] of Object.entries(staged || {})) {
-    const abs = absByRel[rel] || rel;
-    const expectedPost = postWriteHashes[rel];
+  for (const entry of completedEntries(journal)) {
+    const abs = entry.canonicalAbsolutePath;
+    const rel = entry.relativePath;
     try {
-      if (prior === null) {
-        if (!fs.existsSync(abs)) {
-          restored.push(rel);
-          continue;
-        }
-        const current = await fsp.readFile(abs, "utf8");
-        const currentHash = sha256Text(current);
-        if (expectedPost && currentHash !== expectedPost) {
-          skipped.push({ path: rel, reason: "external_change_detected" });
-          continue;
-        }
-        await fsp.unlink(abs);
-        restored.push(rel);
-      } else {
-        let currentHash = "";
-        if (fs.existsSync(abs)) {
-          currentHash = sha256Text(await fsp.readFile(abs, "utf8"));
-        }
-        if (expectedPost && currentHash && currentHash !== expectedPost) {
-          skipped.push({ path: rel, reason: "external_change_detected" });
-          continue;
-        }
-        await fsp.mkdir(path.dirname(abs), { recursive: true });
-        atomicWriteText(abs, prior);
-        restored.push(rel);
+      let currentHash = "";
+      if (fs.existsSync(abs)) {
+        currentHash = sha256Text(await fsp.readFile(abs, "utf8"));
       }
+      if (entry.postHash && currentHash && currentHash !== entry.postHash) {
+        externalChangeDetected.push(rel);
+        unrestored.push(rel);
+        upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
+        continue;
+      }
+      if (entry.existedBefore) {
+        const backup = entry.preContentBackupPath;
+        if (backup && fs.existsSync(backup)) {
+          atomicWriteText(abs, fs.readFileSync(backup, "utf8"));
+        } else {
+          throw new Error(`missing backup for ${rel}`);
+        }
+      } else if (fs.existsSync(abs)) {
+        await fsp.unlink(abs);
+      }
+      restored.push(rel);
+      upsertEntry(journal, { relativePath: rel, restored: true });
     } catch (err) {
       errors.push({ path: rel, error: String(err.message || err) });
+      unrestored.push(rel);
     }
   }
 
-  const rolledBack = skipped.length === 0 && errors.length === 0;
+  const rolledBack = unrestored.length === 0 && errors.length === 0;
+  journal.status = rolledBack ? "rolled_back" : "rollback_incomplete";
+  saveJournal(journal);
   return {
     rolledBack,
     rollbackIncomplete: !rolledBack,
     restoredPaths: restored,
-    unrestoredPaths: skipped.map((item) => item.path),
+    unrestoredPaths: unrestored,
     rollbackErrors: errors,
-    rollbackSkipped: skipped,
+    externalChangeDetected,
   };
 }
 
-async function applyBundleTransaction(bundle, resolvePathFn) {
-  const staged = await stageBundle(bundle, resolvePathFn);
-  const lockOrder = [...staged.relPaths].sort((a, b) => staged.absByRel[a].localeCompare(staged.absByRel[b]));
+async function applyBundleTransaction(bundle, resolvePathFn, options = {}) {
+  const maxFilesPerEdit = Number(options.maxFilesPerEdit || DEFAULT_MAX_FILES_PER_EDIT);
+  validateBundleLimits(bundle, maxFilesPerEdit);
+  const stateRoot = ensureStateRootLayout(resolveAgentStateRoot());
+  const journal = createJournal({ operation: "apply_edit_bundle" });
   const acquired = [];
-  let postWriteHashes = {};
+  let wroteAny = false;
+
   try {
+    const { relPaths, targets } = await canonicalizeTargets(bundle, resolvePathFn);
+    const lockOrder = [...relPaths].sort((a, b) => targets[a].abs.localeCompare(targets[b].abs));
     for (const rel of lockOrder) {
-      const lock = tryAcquirePathLock(staged.absByRel[rel], "apply_edit_bundle");
+      const lock = tryAcquirePathLock(targets[rel].abs, "apply_edit_bundle");
       if (!lock.ok) {
-        throw new Error(`previous write still in progress on ${rel}`);
+        return {
+          ok: false,
+          error: `previous write still in progress on ${rel}`,
+          transactionId: journal.transactionId,
+          rolledBack: false,
+          rollbackIncomplete: false,
+          lockFailure: true,
+        };
       }
-      acquired.push(staged.absByRel[rel]);
+      acquired.push(targets[rel].abs);
     }
-    const commitResult = await commitBundleEntries(
-      bundle,
-      staged.preHashes,
-      staged.absByRel,
-      resolvePathFn
-    );
-    postWriteHashes = commitResult.postWriteHashes;
+
+    const baseline = await captureBaseline(targets, journal, stateRoot);
+    const commitResult = await commitFromTargets(bundle, targets, baseline, journal, stateRoot);
+    wroteAny = commitResult.writtenAbs.length > 0;
+
+    let validationResult = { ok: true };
+    if (typeof options.onCommitted === "function") {
+      validationResult = await options.onCommitted({
+        writtenAbs: commitResult.writtenAbs,
+        postWriteHashes: commitResult.postWriteHashes,
+        journal,
+        targets,
+        baseline,
+        preChangeHashes: Object.fromEntries(Object.entries(baseline).map(([rel, b]) => [rel, b.preHash])),
+      }) || { ok: true };
+    }
+
+    if (!validationResult.ok) {
+      const rollback = await rollbackJournal(journal);
+      return {
+        ok: false,
+        error: validationResult.error || "validation failed",
+        transactionId: journal.transactionId,
+        rollback,
+        rolledBack: rollback.rolledBack,
+        rollbackIncomplete: rollback.rollbackIncomplete,
+        restoredPaths: rollback.restoredPaths,
+        unrestoredPaths: rollback.unrestoredPaths,
+        externalChangeDetected: rollback.externalChangeDetected,
+        validation: validationResult.validation,
+      };
+    }
+
+    journal.status = "completed";
+    saveJournal(journal);
+    await archiveJournal(journal.transactionId, stateRoot);
+
     return {
       ok: true,
-      staged,
+      transactionId: journal.transactionId,
+      journal,
+      targets,
+      baseline,
       writtenAbs: commitResult.writtenAbs,
-      postWriteHashes,
-      preChangeHashes: staged.preHashes,
+      postWriteHashes: commitResult.postWriteHashes,
+      preChangeHashes: Object.fromEntries(Object.entries(baseline).map(([rel, b]) => [rel, b.preHash])),
+      validation: validationResult.validation,
     };
   } catch (error) {
-    const rollback = await rollbackBundle(staged.staged, staged.absByRel, postWriteHashes);
+    let rollback = {
+      rolledBack: true,
+      rollbackIncomplete: false,
+      restoredPaths: [],
+      unrestoredPaths: [],
+      rollbackErrors: [],
+      externalChangeDetected: [],
+    };
+    const anyCompleted = (journal.entries || []).some((entry) => entry.writeCompleted);
+    if (anyCompleted || wroteAny) {
+      rollback = await rollbackJournal(journal);
+    } else {
+      journal.status = "aborted";
+      saveJournal(journal);
+    }
     return {
       ok: false,
       error: String(error.message || error),
-      staged,
-      postWriteHashes: {},
-      preChangeHashes: staged.preHashes,
+      transactionId: journal.transactionId,
       rollback,
+      rolledBack: rollback.rolledBack,
+      rollbackIncomplete: rollback.rollbackIncomplete,
+      restoredPaths: rollback.restoredPaths,
+      unrestoredPaths: rollback.unrestoredPaths,
+      externalChangeDetected: rollback.externalChangeDetected,
     };
   } finally {
     for (const abs of acquired.reverse()) {
@@ -231,12 +383,26 @@ async function applyBundleTransaction(bundle, resolvePathFn) {
   }
 }
 
+async function finalizeTransaction(journal, validationOk) {
+  if (validationOk) {
+    journal.status = "completed";
+    saveJournal(journal);
+    await archiveJournal(journal.transactionId);
+    return { ok: true };
+  }
+  const rollback = await rollbackJournal(journal);
+  return { ok: false, rollback };
+}
+
 module.exports = {
   bundlePaths,
-  stageBundle,
-  commitBundleEntries,
-  rollbackBundle,
+  validateBundleLimits,
+  canonicalizeTargets,
+  commitFromTargets,
+  rollbackJournal,
   applyBundleTransaction,
+  finalizeTransaction,
   MAX_BUNDLE_FILES,
   MAX_BUNDLE_BYTES,
+  DEFAULT_MAX_FILES_PER_EDIT,
 };

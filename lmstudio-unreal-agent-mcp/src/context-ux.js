@@ -154,6 +154,14 @@ function errorPayload(message, options = {}) {
       ? options.suggestedToolCalls
       : []
   };
+  const reserved = new Set([
+    "userMessage", "nextSteps", "suggestedToolCalls", "writeToolPolicy",
+    "requiredNextTool", "errorCode", "retryable", "doNotRetry", "agentInstruction",
+  ]);
+  for (const [key, value] of Object.entries(options)) {
+    if (reserved.has(key) || value === undefined) continue;
+    payload[key] = value;
+  }
   if (options.writeToolPolicy) payload.writeToolPolicy = options.writeToolPolicy;
   if (options.requiredNextTool) payload.requiredNextTool = options.requiredNextTool;
   if (options.errorCode) payload.errorCode = options.errorCode;

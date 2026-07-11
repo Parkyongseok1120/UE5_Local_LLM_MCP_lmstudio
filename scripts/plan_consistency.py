@@ -193,7 +193,6 @@ def validate_plan_consistency(plan: Any) -> list[str]:
                 issues.append(f"plan slice {slice_.get('slice_id')} exceeds maxFilesPerEdit")
 
     if essential_tools_enabled():
-        allowed = exposed_rag_tools()
         from tool_policy import TERMINAL_ACTIONS, normalize_tool_entry
 
         for tool in tool_policy:

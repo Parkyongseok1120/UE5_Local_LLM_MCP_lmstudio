@@ -21,16 +21,19 @@ SUITES = [
     "tests/test_cross_language_tool_contract.py",
     "tests/test_rag_staleness_search.py",
     "tests/test_compile_fix_plan_separation.py",
+    "tests/test_job_cancel_deterministic.py",
 ]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repeat", type=int, default=REPEAT)
+    parser.add_argument("--suite", action="append", default=[], help="Run only these suite paths (repeatable)")
     args = parser.parse_args()
-    report = {"repeat": args.repeat, "runs": {}, "ok": True}
+    suites = list(args.suite) if args.suite else SUITES
+    report = {"repeat": args.repeat, "suites": suites, "runs": {}, "ok": True}
     py = sys.executable
-    for suite in SUITES:
+    for suite in suites:
         for idx in range(args.repeat):
             key = f"{suite}#{idx + 1}"
             proc = subprocess.run([py, "-m", "pytest", suite, "-q"], cwd=ROOT)

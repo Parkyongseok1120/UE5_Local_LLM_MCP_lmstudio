@@ -5,7 +5,7 @@ atomic-io.js: exit=0
 bootstrap-cache.js: exit=0 
 build-proof.js: exit=0 
 context-ux.js: exit=0 
-edit-bundle.js: exit=1 C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-unreal-agent-mcp\src\edit-bundle.js:29       const st = await fsp.stat(abs);                  ^^^^^ System.Management.Automation.RemoteException SyntaxError: await is only valid in async functions and the top level bodies of modules     at wrapSafe (node:internal/modules/cjs/loader:1787:18)     at checkSyntax (node:internal/main/check_syntax:76:3) System.Management.Automation.RemoteException Node.js v24.17.0
+edit-bundle.js: exit=1 lmstudio-unreal-agent-mcp/src/edit-bundle.js:29       const st = await fsp.stat(abs);                  ^^^^^ SyntaxError: await is only valid in async functions and the top level bodies of modules
 mutation-history.js: exit=0 
 read-path-resolver.js: exit=0 
 refactor-tools.js: exit=0 

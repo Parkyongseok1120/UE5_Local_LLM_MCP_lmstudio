@@ -29,13 +29,13 @@ def _validate_task_session_id(task_session_id: str) -> str:
     return value
 
 
+from state_root import ensure_state_root_layout, resolve_agent_state_root, task_state_dir
+
+
 def task_root(workspace: Path, task_session_id: str) -> Path:
     safe_id = _validate_task_session_id(task_session_id)
-    root = (workspace / ".agent" / "tasks" / safe_id).resolve()
-    tasks_root = (workspace / ".agent" / "tasks").resolve()
-    if root != tasks_root and tasks_root not in root.parents:
-        raise ValueError("taskSessionId resolves outside .agent/tasks")
-    return root
+    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+    return task_state_dir(safe_id, state_root)
 
 
 def _state_path(workspace: Path, task_session_id: str) -> Path:
@@ -177,17 +177,19 @@ def task_status(workspace: Path, task_session_id: str) -> dict[str, Any]:
         return {"ok": False, "error": f"Unknown task: {task_session_id}"}
 
     job = _active_job(workspace, state)
-    if job and str(job.get("status") or "") in {"completed", "failed", "timed_out", "cancelled"}:
+    if job and str(job.get("status") or "") in {"completed", "failed", "timed_out", "cancelled", "cancellation_uncertain"}:
         terminal = str(job.get("status") or "")
-        if terminal == "completed":
-            state["status"] = "completed"
-        elif terminal == "cancelled":
-            state["status"] = "cancelled"
-        else:
-            state["status"] = "failed"
-        state["updatedAt"] = _utc_now()
-        _write_state(workspace, task_session_id, state)
-        _append_log(workspace, task_session_id, f"Job {job.get('jobId')} finished: {terminal}")
+        if not state.get("terminalLogged"):
+            if terminal == "completed":
+                state["status"] = "completed"
+            elif terminal == "cancelled":
+                state["status"] = "cancelled"
+            else:
+                state["status"] = "failed"
+            state["updatedAt"] = _utc_now()
+            _append_log(workspace, task_session_id, f"Job {job.get('jobId')} finished: {terminal}")
+            state["terminalLogged"] = True
+            _write_state(workspace, task_session_id, state)
 
     return _task_response(workspace, state)
 
@@ -219,6 +221,13 @@ def task_cancel(workspace: Path, task_session_id: str) -> dict[str, Any]:
             task_session_id,
             f"Cancelled job {job_id}: {cancel_result.get('ok')}",
         )
+        if not cancel_result.get("ok"):
+            return {
+                "ok": False,
+                "error": cancel_result.get("error") or "cancel_job failed",
+                "taskSessionId": task_session_id,
+                "jobId": job_id,
+            }
 
     state["status"] = "cancelled"
     state["updatedAt"] = _utc_now()
@@ -231,8 +240,12 @@ def task_resume(workspace: Path, task_session_id: str) -> dict[str, Any]:
     state = _read_state(workspace, task_session_id)
     if not state:
         return {"ok": False, "error": f"Unknown task: {task_session_id}"}
-    if state.get("status") in {"cancelled", "failed"}:
-        state["status"] = "running"
+    if state.get("status") in {"cancelled", "failed", "cancellation_uncertain"}:
+        return {
+            "ok": False,
+            "error": "Resume rejected: start a new task instead of resuming a terminal session.",
+            "taskSessionId": task_session_id,
+        }
     state["updatedAt"] = _utc_now()
     _write_state(workspace, task_session_id, state)
     _append_log(workspace, task_session_id, "Task resumed")

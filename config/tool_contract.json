@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "description": "Authoritative MCP tool contract registry for runtime soak and exposure coherence checks.",
+  "sourceManifest": "config/stable_tool_manifest.json",
+  "timeoutClasses": {
+    "fast": 15000,
+    "read": 60000,
+    "validate": 120000,
+    "build": 900000,
+    "background": 3600000
+  },
+  "sideEffectClasses": {
+    "read_only": ["read_file", "read_file_range", "search_files", "unreal_rag_search"],
+    "write": ["write_file", "replace_in_file", "apply_edit_bundle"],
+    "build": ["build_unreal_project", "unreal_start_compile_loop"],
+    "control_plane": ["unreal_task_start", "unreal_task_cancel", "unreal_task_status"]
+  },
+  "servers": {
+    "rag": {
+      "essential": "ragEssential",
+      "hiddenUntilControlPlane": "ragHiddenUntilControlPlane"
+    },
+    "agent": {
+      "essential": "agentEssential",
+      "hiddenUntilControlPlane": "agentHiddenUntilControlPlane"
+    }
+  },
+  "malformedArgsPolicy": {
+    "errorCode": "INVALID_ARGUMENTS",
+    "retryable": false
+  }
+}

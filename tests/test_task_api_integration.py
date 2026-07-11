@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from task_api import task_cancel, task_start, task_status  # noqa: E402
+from task_api import task_cancel, task_root, task_start, task_status  # noqa: E402
 from wrapper_job_manager import job_path, read_job  # noqa: E402
 
 
@@ -18,12 +18,12 @@ def _wait_for_job_file(workspace: Path, job_id: str, *, timeout_sec: float = 10.
     last_error = ""
     while time.time() < deadline:
         try:
-            if path.is_file() and read_job(workspace, job_id) is not None:
+            if read_job(workspace, job_id) is not None:
                 return
         except OSError as exc:
             last_error = str(exc)
         time.sleep(0.05)
-    raise AssertionError(f"Timed out waiting for job file: {path} ({last_error})")
+    raise AssertionError(f"Timed out waiting for job record: {path} ({last_error})")
 
 
 def test_task_start_and_status_phase_fields(tmp_path: Path) -> None:
@@ -35,7 +35,7 @@ def test_task_start_and_status_phase_fields(tmp_path: Path) -> None:
     task_id = started["taskSessionId"]
     status = task_status(tmp_path, task_id)
     assert status["phase"] == "planning"
-    assert (tmp_path / ".agent" / "tasks" / task_id / "logs" / "task.log").is_file()
+    assert (task_root(tmp_path, task_id) / "logs" / "task.log").is_file()
 
 
 def test_task_cancel_stops_background_job(tmp_path: Path) -> None:
@@ -59,7 +59,7 @@ def test_task_cancel_stops_background_job(tmp_path: Path) -> None:
 def test_task_state_persisted(tmp_path: Path) -> None:
     started = task_start(tmp_path, request="Read-only plan")
     task_id = started["taskSessionId"]
-    state_path = tmp_path / ".agent" / "tasks" / task_id / "state.json"
+    state_path = task_root(tmp_path, task_id) / "state.json"
     assert state_path.is_file()
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["authToken"]

@@ -66,8 +66,12 @@ const { requireCleanOrFail } = require("./validation-dirty");
 const { validateMutationAuth } = require("./task-auth");
 const {
   applyBundleTransaction,
-  rollbackBundle,
+  finalizeTransaction,
+  rollbackJournal,
+  DEFAULT_MAX_FILES_PER_EDIT,
 } = require("./edit-bundle");
+const { recoverIncompleteJournals } = require("./transaction-journal");
+const { resolveAgentStateRoot, ensureStateRootLayout } = require("./state-root");
 const {
   validateWriteTarget,
   shouldRollback,
@@ -97,7 +101,9 @@ const {
 } = require("./context-ux.js");
 const { callableAgentToolNames, toolNotCallablePayload } = require("./tool-exposure");
 const { atomicWriteText, atomicWriteJson } = require("./atomic-io");
-const { sha256Text, sha256File, createExclusive, replaceWithCAS, sha256Buffer } = require("./safe-write");
+const { sha256Buffer } = require("./safe-write");
+const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
+const { beginBuild, finishBuild, beginValidation, finishValidation, recordMutation } = require("./mutation-generation");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -261,11 +267,20 @@ function text(content) {
 
 function fail(message, options = {}) {
   const payload = errorPayload(message, options);
-  if (options.errorCode) payload.errorCode = options.errorCode;
-  if (options.retryable !== undefined) payload.retryable = options.retryable;
   const result = text(JSON.stringify(payload, null, 2));
   result.isError = true;
   return result;
+}
+
+async function bumpProjectMutationGeneration(relPath, content) {
+  try {
+    const uproject = getActiveProject(CONFIG_PATH);
+    if (!uproject) return null;
+    const projectDir = path.dirname(path.resolve(uproject));
+    return await recordMutation(projectDir, relPath, content);
+  } catch {
+    return null;
+  }
 }
 
 async function agentNotify(message, level = "info") {
@@ -288,15 +303,21 @@ function enforceTaskAuth(args, options = {}) {
   if (requireSession && !taskSessionId) {
     return fail("taskSessionId is required for control-plane write tools.", { errorCode: "TASK_SESSION_REQUIRED" });
   }
-  const auth = validateMutationAuth(WORKSPACE_ROOT, args || {});
-  if (!auth.ok && !auth.skipped) {
-    return fail(auth.error || "Task authorization failed.", { taskSessionId: auth.taskSessionId });
+  if (!taskSessionId) {
+    return null;
   }
-  return null;
+  const auth = validateMutationAuth(WORKSPACE_ROOT, args || {}, { requireAll: true });
+  if (!auth.ok) {
+    return fail(auth.error || "Task authorization failed.", {
+      taskSessionId: auth.taskSessionId,
+      errorCode: auth.errorCode || "TASK_AUTH_FAILED",
+    });
+  }
+  return auth;
 }
 
 function validationToolResult(summary, validation, options = {}) {
-  const payload = options.ok === false
+  const base = options.ok === false
     ? {
       summary,
       ok: false,
@@ -304,13 +325,25 @@ function validationToolResult(summary, validation, options = {}) {
       operation: options.operation || null,
       replacements: options.replacements ?? null,
       rolledBack: options.rolledBack ?? null,
+      rollbackIncomplete: options.rollbackIncomplete ?? null,
+      restoredPaths: options.restoredPaths ?? null,
+      unrestoredPaths: options.unrestoredPaths ?? null,
+      externalChangeDetected: options.externalChangeDetected ?? null,
+      rollbackErrors: options.rollbackErrors ?? null,
       conflict: options.conflict ?? null,
       error: options.error || null,
       validation: compactValidationPayload(validation),
-      nextSteps: options.nextSteps || []
+      nextSteps: options.nextSteps || [],
     }
     : slimWriteSuccessPayload(summary, validation, options);
-  const result = text(JSON.stringify(payload, null, 2));
+  const passthrough = [
+    "mutationGeneration", "validatedGeneration", "validationStale", "proofLevel",
+    "commandSucceeded", "proofSatisfied", "recoveryRequired",
+  ];
+  for (const key of passthrough) {
+    if (options[key] !== undefined) base[key] = options[key];
+  }
+  const result = text(JSON.stringify(base, null, 2));
   if (options.isError) result.isError = true;
   return result;
 }
@@ -803,6 +836,7 @@ async function buildWorkspaceInfo() {
   }
   const payload = {
     workspaceRoot: WORKSPACE_ROOT,
+    stateRoot: ensureStateRootLayout(resolveAgentStateRoot()),
     configPath: CONFIG_PATH,
     serverEntry: __filename,
     serverVersion: SERVER_VERSION,
@@ -1692,11 +1726,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           summary += " Static validation exceeded its time budget.";
           nextSteps.unshift("Run static_validate_project before build.");
         }
+        const mutation = await bumpProjectMutationGeneration(rel, contentToWrite);
         return validationToolResult(summary, validation, {
           path: rel,
           operation: "create",
           bytesWritten: Buffer.byteLength(contentToWrite, "utf8"),
-          nextSteps
+          nextSteps,
+          ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
         });
       } finally {
         releasePathLock(target);
@@ -1851,11 +1887,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           summary += " Static validation exceeded its time budget.";
           nextSteps.unshift("Run static_validate_project before build.");
         }
+        const mutation = await bumpProjectMutationGeneration(rel, newText);
         return validationToolResult(summary, validation, {
           path: rel,
           operation: "replace",
           replacements: occurrences,
-          nextSteps
+          nextSteps,
+          ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
         });
       } finally {
         releasePathLock(target);
@@ -1933,7 +1971,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       if (!ALLOW_WRITE) return fail("apply_edit_bundle blocked. Set ALLOW_WRITE=1 to enable.");
       const authFail = enforceTaskAuth(args, { requireSession: true });
-      if (authFail) return authFail;
+      if (authFail && authFail.isError) return authFail;
+      const auth = authFail || validateMutationAuth(WORKSPACE_ROOT, args, { requireAll: true });
       await agentNotify("Applying edit bundle…");
       const bundle = {
         files: Array.isArray(args.files) ? args.files : [],
@@ -1959,39 +1998,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
 
-      const tx = await applyBundleTransaction(bundle, resolveBundlePath);
+      const tx = await applyBundleTransaction(bundle, resolveBundlePath, {
+        maxFilesPerEdit: auth.maxFilesPerEdit || DEFAULT_MAX_FILES_PER_EDIT,
+        onCommitted: async (commit) => {
+          const validationResults = [];
+          for (const absPath of commit.writtenAbs) {
+            validationResults.push(await validateAfterWrite(absPath, () => getActiveProject(CONFIG_PATH)));
+          }
+          const failed = validationResults.find((item) => validationFailed(item));
+          if (failed) {
+            return { ok: false, error: "static validation failed", validation: failed, validationResults };
+          }
+          return { ok: true, validationResults };
+        },
+      });
       if (!tx.ok) {
         await agentNotify(`apply_edit_bundle failed: ${tx.error}`, "error");
         return fail(`apply_edit_bundle failed: ${tx.error}`, {
-          rolledBack: tx.rollback?.rolledBack ?? false,
-          rollbackIncomplete: tx.rollback?.rollbackIncomplete ?? true,
-          unrestoredPaths: tx.rollback?.unrestoredPaths || [],
-          preChangeHashes: tx.preChangeHashes,
+          rolledBack: tx.rollback?.rolledBack ?? tx.rolledBack ?? false,
+          rollbackIncomplete: tx.rollback?.rollbackIncomplete ?? tx.rollbackIncomplete ?? true,
+          restoredPaths: tx.rollback?.restoredPaths || tx.restoredPaths || [],
+          unrestoredPaths: tx.rollback?.unrestoredPaths || tx.unrestoredPaths || [],
+          externalChangeDetected: tx.rollback?.externalChangeDetected || tx.externalChangeDetected || [],
+          rollbackErrors: tx.rollback?.rollbackErrors || [],
+          recoveryRequired: Boolean(tx.lockFailure),
         });
       }
 
-      const validationResults = [];
-      for (const absPath of tx.writtenAbs) {
-        validationResults.push(await validateAfterWrite(absPath, () => getActiveProject(CONFIG_PATH)));
-      }
-      const failed = validationResults.find((item) => validationFailed(item));
-      if (failed) {
-        const rollback = await rollbackBundle(tx.staged.staged, tx.staged.absByRel, tx.postWriteHashes);
-        return validationToolResult("BUNDLE ROLLED BACK — static validation failed.", failed, {
-          ok: false,
-          operation: "apply_edit_bundle",
-          rolledBack: rollback.rolledBack,
-          rollbackIncomplete: rollback.rollbackIncomplete,
-          unrestoredPaths: rollback.unrestoredPaths,
-          isError: true,
-          preChangeHashes: tx.preChangeHashes,
-          nextSteps: ["Fix blocking findings and resubmit the bundle."],
-        });
-      }
-      return validationToolResult(`OK — applied ${tx.writtenAbs.length} file(s) from bundle.`, validationResults[0] || null, {
+      const primaryValidation = Array.isArray(tx.validation?.validationResults)
+        ? tx.validation.validationResults[0]
+        : null;
+      return validationToolResult(`OK — applied ${tx.writtenAbs.length} file(s) from bundle.`, primaryValidation, {
         operation: "apply_edit_bundle",
         writtenCount: tx.writtenAbs.length,
         preChangeHashes: tx.preChangeHashes,
+        transactionId: tx.transactionId,
         nextSteps: ["Run build_unreal_project after C++ edits."],
         phase: "editing",
         userMessage: `Applied ${tx.writtenAbs.length} file(s) from bundle`,
@@ -2197,28 +2238,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!/^[A-Za-z0-9_]+$/.test(platform)) return fail("invalid platform");
       if (!/^[A-Za-z0-9_]+$/.test(configuration)) return fail("invalid configuration");
 
-      const command = `"${build.buildBat}" ${target} ${platform} ${configuration} -Project="${projectPath}" -WaitMutex -NoHotReloadFromIDE`;
       const buildTimeout = Number(args.timeoutMs || COMMAND_TIMEOUT_MS);
+      const logRel = path.join(".agent", "logs", "latest-build.log");
+      const logAbs = path.join(WORKSPACE_ROOT, logRel);
+      const buildGen = await beginBuild(path.dirname(projectPath));
       await agentNotify(`Building ${target} ${platform} ${configuration}…`);
-      const result = await execCommand(command, path.dirname(projectPath), buildTimeout);
-      const fullLog = [
-        `Command: ${command}`,
-        `ExitCode: ${result.exitCode}`,
-        "",
-        "===== STDOUT =====",
-        result.stdout || "",
-        "",
-        "===== STDERR =====",
-        result.stderr || "",
-        "",
-        "===== EXEC ERROR =====",
-        result.error || ""
-      ].join("\n");
-      const logPath = await writeTextArtifact(
-        WORKSPACE_ROOT,
-        path.join(".agent", "logs", "latest-build.log"),
-        fullLog
-      );
+      const execResult = await runUnrealBuildFromPlan({
+        workspaceRoot: path.dirname(projectPath),
+        build: { ...build, target, platform, configuration, projectPath },
+        allowEngineFallback: args.allowEngineFallback === true,
+        expectedEngineVersion: DEFAULT_EXPECTED_ENGINE,
+        timeoutMs: buildTimeout,
+        logPath: logAbs,
+      });
+      if (execResult.errorCode === "ENGINE_VERSION_MISMATCH") {
+        return fail(execResult.error, {
+          errorCode: execResult.errorCode,
+          resolvedEngineVersion: execResult.resolvedEngineVersion,
+          resolvedUbtPath: execResult.resolvedUbtPath,
+          engineMismatch: true,
+          retryable: false,
+          nextSteps: ["Install UE 5.8 or pass allowEngineFallback=true with audit note."],
+        });
+      }
+      const endGen = await finishBuild(path.dirname(projectPath), buildGen.buildStartGeneration);
+      const result = {
+        exitCode: execResult.exitCode ?? 1,
+        stdout: execResult.stdout || "",
+        stderr: execResult.stderr || "",
+        error: execResult.error || "",
+      };
+      const command = `${execResult.executable} ${(execResult.args || []).join(" ")}`;
+      const logPath = execResult.fullLogPath || logAbs;
       const verbose = args.verboseOutput === true || BUILD_VERBOSE_OUTPUT;
       const payload = buildResponsePayload({
         result,
@@ -2227,8 +2278,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectPath,
         command,
         logPath,
-        verbose
+        verbose,
       });
+      payload.resolvedEngineVersion = execResult.resolvedEngineVersion;
+      payload.resolvedUbtPath = execResult.resolvedUbtPath;
+      payload.commandSucceeded = execResult.commandSucceeded;
+      payload.mutationGeneration = endGen.mutationGeneration;
+      payload.buildStartGeneration = buildGen.buildStartGeneration;
+      payload.buildEndGeneration = endGen.buildEndGeneration;
+      if (endGen.buildStale) {
+        payload.proofLevel = "BuiltStale";
+        payload.phase = "stale";
+        payload.ok = false;
+      }
       await agentNotify(payload.userMessage || payload.summary, payload.ok ? "info" : "error");
       return text(JSON.stringify(payload, null, 2));
     }
@@ -2246,6 +2308,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main() {
+  try {
+    const recovery = await recoverIncompleteJournals(resolveAgentStateRoot());
+    if (recovery.recoveryRequired?.length) {
+      console.error(`[unreal-agent] transaction recovery required: ${JSON.stringify(recovery.recoveryRequired)}`);
+    }
+  } catch (err) {
+    console.error(`[unreal-agent] transaction recovery scan failed: ${err.message || err}`);
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

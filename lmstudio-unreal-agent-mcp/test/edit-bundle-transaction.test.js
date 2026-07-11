@@ -6,70 +6,78 @@ const os = require("os");
 const path = require("path");
 const test = require("node:test");
 const {
-  stageBundle,
-  commitBundleEntries,
-  rollbackBundle,
   applyBundleTransaction,
+  rollbackJournal,
+  DEFAULT_MAX_FILES_PER_EDIT,
 } = require("../src/edit-bundle");
+const { ensureStateRootLayout } = require("../src/state-root");
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "bundle-tx-"));
 }
 
-test("rollback restores existing file when post-write hash matches", async () => {
+test("lock failure before write returns without rollback", async () => {
+  process.env.AGENT_STATE_ROOT = tmpDir();
   const dir = tmpDir();
-  const target = path.join(dir, "Sample.cpp");
-  fs.writeFileSync(target, "alpha\n", "utf8");
-  const absByRel = { "Sample.cpp": target };
-  const staged = { "Sample.cpp": "alpha\n" };
-  const { postWriteHashes } = await commitBundleEntries(
-    { patches: [{ path: "Sample.cpp", oldText: "alpha", newText: "beta", expectedOccurrences: 1 }] },
-    { "Sample.cpp": require("../src/safe-write").sha256Text("alpha\n") },
-    absByRel,
+  const target = path.join(dir, "A.cpp");
+  fs.writeFileSync(target, "a\n", "utf8");
+  const { tryAcquirePathLock } = require("../src/write-locks");
+  tryAcquirePathLock(target, "blocker");
+  const result = await applyBundleTransaction(
+    { patches: [{ path: "A.cpp", oldText: "a", newText: "b", expectedOccurrences: 1 }] },
     async (rel) => ({ ok: true, absolutePath: path.join(dir, rel) })
   );
-  const rollback = await rollbackBundle(staged, absByRel, postWriteHashes);
-  assert.strictEqual(rollback.rolledBack, true);
-  assert.strictEqual(fs.readFileSync(target, "utf8"), "alpha\n");
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.lockFailure, true);
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "a\n");
 });
 
-test("rollback skips existing file when post-write hash mismatches pre-hash guard", async () => {
-  const dir = tmpDir();
-  const target = path.join(dir, "Sample.cpp");
-  fs.writeFileSync(target, "alpha\n", "utf8");
-  const absByRel = { "Sample.cpp": target };
-  const staged = { "Sample.cpp": "alpha\n" };
-  const rollback = await rollbackBundle(staged, absByRel, {
-    "Sample.cpp": require("../src/safe-write").sha256Text("beta\n"),
-  });
-  assert.strictEqual(rollback.rolledBack, false);
-  assert.strictEqual(rollback.rollbackIncomplete, true);
-  assert.deepStrictEqual(rollback.unrestoredPaths, ["Sample.cpp"]);
-});
-
-test("duplicate bundle paths rejected at stage", async () => {
+test("maxFilesPerEdit=2 enforced", async () => {
+  process.env.AGENT_STATE_ROOT = tmpDir();
   await assert.rejects(
-    () => stageBundle(
-      { files: [{ path: "a.txt", content: "x" }, { path: "a.txt", content: "y" }] },
-      async () => ({ ok: true, absolutePath: "/tmp/a.txt" })
+    () => applyBundleTransaction(
+      {
+        files: [
+          { path: "a.txt", content: "1" },
+          { path: "b.txt", content: "2" },
+          { path: "c.txt", content: "3" },
+        ],
+      },
+      async (rel) => ({ ok: true, absolutePath: path.join(tmpDir(), rel) }),
+      { maxFilesPerEdit: 2 }
     ),
-    /duplicate paths/i
+    /too many files/i
   );
 });
 
-test("applyBundleTransaction reports failure without claiming full rollback on commit error", async () => {
+test("partial write rolls back completed journal entry", async () => {
+  process.env.AGENT_STATE_ROOT = ensureStateRootLayout(tmpDir());
   const dir = tmpDir();
-  const target = path.join(dir, "Only.cpp");
-  fs.writeFileSync(target, "keep\n", "utf8");
+  const first = path.join(dir, "One.cpp");
+  const second = path.join(dir, "Two.cpp");
+  fs.writeFileSync(first, "one\n", "utf8");
+  fs.writeFileSync(second, "two\n", "utf8");
   const result = await applyBundleTransaction(
     {
-      patches: [{
-        path: "Only.cpp",
-        oldText: "missing",
-        newText: "beta",
-        expectedOccurrences: 1,
-      }],
+      patches: [
+        { path: "One.cpp", oldText: "one", newText: "ONE", expectedOccurrences: 1 },
+        { path: "Two.cpp", oldText: "missing", newText: "TWO", expectedOccurrences: 1 },
+      ],
     },
+    async (rel) => ({ ok: true, absolutePath: path.join(dir, rel) })
+  );
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(fs.readFileSync(first, "utf8"), "one\n");
+  assert.strictEqual(fs.readFileSync(second, "utf8"), "two\n");
+});
+
+test("files[] cannot overwrite existing source file", async () => {
+  process.env.AGENT_STATE_ROOT = tmpDir();
+  const dir = tmpDir();
+  const target = path.join(dir, "Existing.cpp");
+  fs.writeFileSync(target, "keep\n", "utf8");
+  const result = await applyBundleTransaction(
+    { files: [{ path: "Existing.cpp", content: "new" }] },
     async (rel) => ({ ok: true, absolutePath: path.join(dir, rel) })
   );
   assert.strictEqual(result.ok, false);

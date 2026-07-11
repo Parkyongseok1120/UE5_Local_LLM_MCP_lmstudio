@@ -90,6 +90,9 @@ SKETCH_MARKERS = (
     "시안", "초안", "예시 코드", "예시코드", "샘플 코드", "샘플코드",
     "코드 예시", "코드예시", "코드 샘플", "코드 초안", "코드초안",
     "대략적인 코드", "간단한 코드 예", "코드 스케치",
+    "코드로 짜면 어떻게 돼", "코드로 보여줘", "구현 예제", "구현 예시",
+    "파일에 적용하지 말", "파일 수정 없이", "채팅창에만", "코드만 작성해줘",
+    "대략 어떻게 구현할지", "c++로 표현해줘", "apply하지 말", "draft only",
 )
 from rag_modes import ASSET_METADATA_MODES  # single source of truth
 from tool_policy import tool_sequence_for_task, writes_allowed_for_task

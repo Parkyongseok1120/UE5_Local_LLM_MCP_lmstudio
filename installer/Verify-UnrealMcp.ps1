@@ -24,16 +24,16 @@ $fail = 0
 function Check([string]$Label, [scriptblock]$Test) {
     try {
         & $Test
-        Write-Host "[PASS] $Label" -ForegroundColor Green
+        Write-Host ('[PASS] ' + $Label) -ForegroundColor Green
     }
     catch {
-        Write-Host "[FAIL] $Label — $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host ('[FAIL] ' + $Label + ' - ' + $_.Exception.Message) -ForegroundColor Red
         $script:fail++
     }
 }
 
 function Warn([string]$Message) {
-    Write-Host "[WARN] $Message" -ForegroundColor Yellow
+    Write-Host ('[WARN] ' + $Message) -ForegroundColor Yellow
 }
 
 $engineRoot = Get-WorkspaceEngineRootPath -RagRoot $ragRoot
@@ -56,10 +56,10 @@ Check "workspace.json rootPath" {
     $cfg = Read-JsonObject (Join-Path $ragRoot "config\workspace.json")
     if (-not $cfg -or [string]::IsNullOrWhiteSpace([string]$cfg.rootPath)) {
         if ($RepoOnly) {
-            Warn "rootPath empty — expected for OSS clone until Sync-InstallMachinePaths.ps1"
+            Warn "rootPath empty - expected for OSS clone until Sync-InstallMachinePaths.ps1"
             return
         }
-        throw "rootPath empty — run installer or Sync-InstallMachinePaths.ps1"
+        throw "rootPath empty - run installer or Sync-InstallMachinePaths.ps1"
     }
     if ([string]$cfg.rootPath -like "*\\Users\\*\\Users\\*") {
         throw "rootPath looks malformed: $($cfg.rootPath)"
@@ -76,7 +76,7 @@ Check "agent-mcp.json search roots" {
             Warn "projectSearchRoots missing in agent-mcp.json template"
             return
         }
-        throw "projectSearchRoots missing — run INSTALL-*.bat"
+        throw "projectSearchRoots missing - run INSTALL-*.bat"
     }
     if ($RepoOnly) { return }
     foreach ($searchRoot in @($agentCfg.projectSearchRoots)) {
@@ -109,6 +109,9 @@ Check "agent MCP startup smoke" {
     if ($stdout -notmatch '"tools"') { throw "tools/list did not return tools array" }
     if ($stdout -notmatch 'read_file') { throw "essential tool read_file missing from tools/list" }
 }
+Check "agent state-root module" { if (-not (Test-Path (Join-Path $agentRoot "src\state-root.js"))) { throw "missing state-root.js" } }
+Check "rag shared state_root.py" { if (-not (Test-Path (Join-Path $root "scripts\state_root.py"))) { throw "missing scripts/state_root.py" } }
+Check "tool contract registry" { if (-not (Test-Path (Join-Path $root "config\tool_contract.json"))) { throw "missing config/tool_contract.json" } }
 Check "agent write-locks.js" { if (-not (Test-Path (Join-Path $agentRoot "src\write-locks.js"))) { throw "missing write-locks.js (single-flight write guard)" } }
 Check "agent mutation-history.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-history.js"))) { throw "missing mutation-history.js (duplicate-call loop breaker)" } }
 Check "python version" {
@@ -133,7 +136,7 @@ Check "Unreal Engine install" {
 if (-not $RepoOnly) {
 Check "mcp.json unreal-rag python" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
-    if (-not (Test-Path $mcp)) { throw "mcp.json missing — run INSTALL-SAFE-MODE.bat" }
+    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run INSTALL-SAFE-MODE.bat" }
     $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $cfg.mcpServers."unreal-rag") { throw "unreal-rag not in mcp.json" }
     $cmd = [string]$cfg.mcpServers."unreal-rag".command
@@ -159,7 +162,7 @@ Check "node.js version" {
 }
 Check "mcp.json unreal-rag entry" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
-    if (-not (Test-Path $mcp)) { throw "mcp.json missing — run INSTALL-SAFE-MODE.bat" }
+    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run INSTALL-SAFE-MODE.bat" }
     $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $cfg.mcpServers."unreal-rag") { throw "unreal-rag not in mcp.json" }
 }
@@ -178,7 +181,7 @@ Check "Cline MCP settings" {
         if (-not (Test-Path $p)) { continue }
         $raw = Get-Content -LiteralPath $p -Raw -Encoding UTF8
         if (Test-ClineMcpHasUnresolvedPlaceholders $raw) {
-            throw "unresolved placeholders in $p — re-run Install-ClineUnrealMcp.ps1"
+            throw "unresolved placeholders in $p - re-run Install-ClineUnrealMcp.ps1"
         }
         $cfg = $raw | ConvertFrom-Json
         foreach ($name in @("unreal-rag", "unreal-agent")) {
@@ -213,8 +216,10 @@ Check "validate-write hook" {
 }
 
 if ($fail -gt 0) {
-    Write-Host "`n$fail check(s) failed."
+    Write-Host ""
+    Write-Host ($fail.ToString() + " check(s) failed.")
     exit 1
 }
-Write-Host "`nAll checks passed."
+Write-Host ""
+Write-Host "All checks passed."
 exit 0

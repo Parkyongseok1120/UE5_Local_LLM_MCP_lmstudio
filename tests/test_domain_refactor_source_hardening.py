@@ -70,7 +70,8 @@ def test_nested_plugin_pair_and_module_name(tmp_path: Path) -> None:
     plugin = root / "Plugins" / "Local" / "Source" / "Local"
     header = plugin / "Public" / "Cinematic" / "Thing.h"
     cpp = plugin / "Private" / "Cinematic" / "Thing.cpp"
-    header.parent.mkdir(parents=True); cpp.parent.mkdir(parents=True)
+    header.parent.mkdir(parents=True)
+    cpp.parent.mkdir(parents=True)
     (root / "Demo.uproject").write_text("{}", encoding="utf-8")
     (root / "Plugins" / "Local" / "Local.uplugin").write_text(
         '{"Installed":false,"Modules":[{"Name":"Local","Type":"Runtime"}]}', encoding="utf-8"
@@ -82,7 +83,8 @@ def test_nested_plugin_pair_and_module_name(tmp_path: Path) -> None:
 
 
 def test_slice_requires_exact_built_proof(tmp_path: Path) -> None:
-    target = tmp_path / "Thing.cpp"; target.write_text("void X() {}", encoding="utf-8")
+    target = tmp_path / "Thing.cpp"
+    target.write_text("void X() {}", encoding="utf-8")
     plan = [{"slice_id": "s1", "slice_kind": "compile"}]
     stale = mark_slice_complete(
         init_slice_state(plan), project_root=tmp_path, written_paths=[target],

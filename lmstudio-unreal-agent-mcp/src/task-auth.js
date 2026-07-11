@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { taskStateDir, resolveAgentStateRoot, ensureStateRootLayout } = require("./state-root");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -22,29 +23,25 @@ function sanitizeTaskSessionId(taskSessionId) {
   return { ok: true, taskSessionId: value };
 }
 
-function taskDir(workspaceRoot, taskSessionId) {
-  const sanitized = sanitizeTaskSessionId(taskSessionId);
-  if (!sanitized.ok) {
-    throw new Error(sanitized.error);
-  }
-  const root = path.resolve(workspaceRoot);
-  const dir = path.resolve(root, ".agent", "tasks", sanitized.taskSessionId);
-  const tasksRoot = path.resolve(root, ".agent", "tasks");
-  if (!dir.startsWith(tasksRoot + path.sep) && dir !== tasksRoot) {
-    throw new Error("taskSessionId resolves outside .agent/tasks");
-  }
-  return dir;
+function taskDir(workspaceRoot, taskSessionId, stateRoot = resolveAgentStateRoot(workspaceRoot)) {
+  ensureStateRootLayout(stateRoot);
+  return taskStateDir(taskSessionId, stateRoot);
 }
 
-function readTaskState(workspaceRoot, taskSessionId) {
+function readTaskState(_workspaceRoot, taskSessionId, stateRoot = resolveAgentStateRoot()) {
   let dir;
   try {
-    dir = taskDir(workspaceRoot, taskSessionId);
+    dir = taskDir(_workspaceRoot, taskSessionId, stateRoot);
   } catch (error) {
     return null;
   }
   const statePath = path.join(dir, "state.json");
   if (!fs.existsSync(statePath)) {
+    const legacyRoot = path.resolve(_workspaceRoot || process.cwd());
+    const legacyPath = path.join(legacyRoot, ".agent", "tasks", taskSessionId, "state.json");
+    if (fs.existsSync(legacyPath)) {
+      return JSON.parse(fs.readFileSync(legacyPath, "utf8"));
+    }
     return null;
   }
   try {
@@ -54,46 +51,67 @@ function readTaskState(workspaceRoot, taskSessionId) {
   }
 }
 
-function validateMutationAuth(workspaceRoot, args = {}) {
-  const taskSessionId = String(args.taskSessionId || args.task_session_id || "").trim();
-  if (!taskSessionId) {
-    return { ok: true, skipped: true, reason: "no taskSessionId provided" };
+function requiredFields(args = {}) {
+  return {
+    taskSessionId: String(args.taskSessionId || args.task_session_id || "").trim(),
+    authToken: String(args.authToken || args.auth_token || args.token || "").trim(),
+    planId: String(args.planId || args.plan_id || "").trim(),
+    planRevision: String(args.planRevision || args.plan_revision || "").trim(),
+    activeSliceId: String(args.activeSliceId || args.active_slice_id || "").trim(),
+  };
+}
+
+function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
+  const requireAll = options.requireAll !== false;
+  const fields = requiredFields(args);
+  const missing = Object.entries(fields).filter(([, value]) => !value).map(([key]) => key);
+  if (requireAll && missing.length) {
+    return {
+      ok: false,
+      error: `Task authorization missing required fields: ${missing.join(", ")}`,
+      errorCode: "TASK_AUTH_INCOMPLETE",
+    };
   }
-  const sanitized = sanitizeTaskSessionId(taskSessionId);
+  if (!fields.taskSessionId) {
+    return { ok: false, error: "taskSessionId is required", errorCode: "TASK_SESSION_REQUIRED" };
+  }
+  const sanitized = sanitizeTaskSessionId(fields.taskSessionId);
   if (!sanitized.ok) {
-    return { ok: false, error: sanitized.error, taskSessionId };
+    return { ok: false, error: sanitized.error };
   }
   const state = readTaskState(workspaceRoot, sanitized.taskSessionId);
   if (!state) {
     return { ok: false, error: `Unknown task session: ${sanitized.taskSessionId}` };
   }
-  const expected = {
-    planId: String(args.planId || args.plan_id || "").trim(),
-    planRevision: String(args.planRevision || args.plan_revision || "").trim(),
-    activeSliceId: String(args.activeSliceId || args.active_slice_id || "").trim(),
-    authToken: String(args.authToken || args.auth_token || args.token || "").trim(),
-  };
   const mismatches = [];
-  for (const [key, value] of Object.entries(expected)) {
-    if (!value) {
-      continue;
-    }
+  for (const [key, expected] of Object.entries(fields)) {
+    if (key === "taskSessionId" || !expected) continue;
     const actual = String(state[key] || state[key.charAt(0).toLowerCase() + key.slice(1)] || "");
-    if (actual !== value) {
+    if (actual !== expected) {
       mismatches.push(key);
     }
-  }
-  if (state.authToken && expected.authToken && state.authToken !== expected.authToken) {
-    mismatches.push("authToken");
   }
   if (mismatches.length) {
     return {
       ok: false,
       error: `Task authorization mismatch: ${mismatches.join(", ")}`,
+      errorCode: "TASK_AUTH_MISMATCH",
       taskSessionId: sanitized.taskSessionId,
     };
   }
-  return { ok: true, taskSessionId: sanitized.taskSessionId, state };
+  if (String(state.status || "") === "cancelled") {
+    return { ok: false, error: "Task session is cancelled", errorCode: "TASK_CANCELLED" };
+  }
+  const writeGate = state.writeGate || state.writesAllowed;
+  if (writeGate === false || writeGate === "false") {
+    return { ok: false, error: "Task writeGate denies writes", errorCode: "WRITE_GATE_DENIED" };
+  }
+  return {
+    ok: true,
+    taskSessionId: sanitized.taskSessionId,
+    state,
+    maxFilesPerEdit: Number(state.maxFilesPerEdit || 2),
+  };
 }
 
 module.exports = {
@@ -102,4 +120,5 @@ module.exports = {
   taskDir,
   readTaskState,
   validateMutationAuth,
+  requiredFields,
 };
