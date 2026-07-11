@@ -158,6 +158,82 @@ def test_build_response_normal_success_is_built_proof_level() -> None:
     assert payload["proofLevel"] == "Built"
 
 
+def test_build_response_up_to_date_with_actions_is_built() -> None:
+    payload = run_node(
+        "ux.buildResponsePayload({"
+        "result:{ok:true,exitCode:0,stdout:'Target is up to date\\n------ Building 1 action(s) ------',stderr:'',error:''},"
+        "build:{target:'GameEditor',platform:'Win64',configuration:'Development'},"
+        "planResult:{selectionReason:'active'},projectPath:'C:/Game/Game.uproject',"
+        "command:'Build.bat',logPath:'.agent/logs/latest-build.log',verbose:false})"
+    )
+    assert payload["upToDate"] is True
+    assert payload["actionsExecuted"] == 1
+    assert payload["proofLevel"] == "Built"
+    assert "0 files recompiled" not in payload["summary"].lower()
+
+
+def test_build_response_failure_is_not_success_proof_level() -> None:
+    payload = run_node(
+        "ux.buildResponsePayload({"
+        "result:{ok:false,exitCode:1,stdout:'error C2039',stderr:'',error:''},"
+        "build:{target:'GameEditor',platform:'Win64',configuration:'Development'},"
+        "planResult:{selectionReason:'active'},projectPath:'C:/Game/Game.uproject',"
+        "command:'Build.bat',logPath:'.agent/logs/latest-build.log',verbose:false})"
+    )
+    assert payload["proofLevel"] == "Failed"
+    assert payload["ok"] is False
+
+
+def test_build_response_unknown_action_count_is_built_unverified() -> None:
+    payload = run_node(
+        "ux.buildResponsePayload({"
+        "result:{ok:true,exitCode:0,stdout:'BUILD SUCCEEDED',stderr:'',error:''},"
+        "build:{target:'GameEditor',platform:'Win64',configuration:'Development'},"
+        "planResult:{selectionReason:'active'},projectPath:'C:/Game/Game.uproject',"
+        "command:'Build.bat',logPath:'.agent/logs/latest-build.log',verbose:false})"
+    )
+    assert payload["proofLevel"] == "BuiltUnverified"
+    assert "unverified" in payload["summary"].lower()
+
+
+def test_parse_build_execution_summary_variants() -> None:
+    twelve = run_node(
+        "ux.parseBuildExecutionSummary('------ Building 12 action(s) started ------', '')"
+    )
+    assert twelve["actionsExecuted"] == 12
+
+    with_processes = run_node(
+        "ux.parseBuildExecutionSummary('Building 12 action(s) with 24 processes...', '')"
+    )
+    assert with_processes["actionsExecuted"] == 12
+
+    parallel_capacity = run_node(
+        "ux.parseBuildExecutionSummary('Executing up to 24 actions, one per physical core', '')"
+    )
+    assert parallel_capacity["actionsExecuted"] is None
+
+
+def test_slim_write_success_payload_includes_replacements() -> None:
+    payload = run_node(
+        "ux.slimWriteSuccessPayload('patched', {findings:[], ok:true}, "
+        "{operation:'replace', replacements:1, path:'Source/A.cpp'})"
+    )
+    assert payload["operation"] == "replace"
+    assert payload["replacements"] == 1
+    assert payload["validationSummary"] is not None
+
+
+def test_slim_write_success_payload_includes_scan_mode_and_elapsed() -> None:
+    payload = run_node(
+        "ux.slimWriteSuccessPayload('patched', "
+        "{findings:[], ok:true, scanMode:'scoped', elapsedMs:318}, "
+        "{operation:'replace', path:'Source/A.cpp'})"
+    )
+    assert payload["validationSummary"]["scanMode"] == "scoped"
+    assert payload["validationSummary"]["elapsedMs"] == 318
+
+
+
 def test_write_discipline_options_for_existing_paths() -> None:
     payload = run_node("ux.writeDisciplineOptions(true)")
     assert payload["writeToolPolicy"] == "create_only"
@@ -177,3 +253,19 @@ def test_compact_validation_payload_groups_and_caps_findings() -> None:
     assert len(payload["findings"]) == 2
     assert payload["findings"][0]["group"] == "GC/Ownership"
     assert payload["findings"][0]["fixHint"]
+
+
+def test_compact_validation_payload_advisory_only_false_with_errors() -> None:
+    findings = [
+        {"severity": "error", "code": "GENERATED_H_NOT_LAST", "path": "A.h", "line": 1, "message": "bad"},
+        {"severity": "warning", "code": "DELEGATE_BIND_WITHOUT_UNBIND", "path": "B.cpp", "line": 2, "message": "warn"},
+    ]
+    payload = run_node(f"ux.compactValidationPayload({json.dumps({'findings': findings, 'ok': False})})")
+    assert payload["advisoryOnly"] is False
+    assert payload["blockingErrorCount"] == 1
+    assert payload["warningCount"] == 1
+
+
+def test_validation_finding_meta_replication_before_uproperty() -> None:
+    replication = run_node("ux.validationFindingMeta('REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME')")
+    assert replication["group"] == "Networking"

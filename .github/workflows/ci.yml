@@ -79,6 +79,12 @@ jobs:
         run: npm.cmd install --no-fund --no-audit
         working-directory: lmstudio-unreal-agent-mcp
 
+      - name: Node syntax check (server + context-ux)
+        run: |
+          node --check src/server.js
+          node --check src/context-ux.js
+        working-directory: lmstudio-unreal-agent-mcp
+
   oss-ready:
     name: OSS readiness check
     runs-on: windows-latest

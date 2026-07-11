@@ -174,17 +174,25 @@ function parseBuildExecutionSummary(stdout, stderr) {
   const combined = `${stdout || ""}\n${stderr || ""}`;
   const upToDate = /Target is up to date/i.test(combined);
   let actionsExecuted = null;
-  const actionMatch = combined.match(/(?:run|building)\s+(\d+)\s+action\(s\)/i);
-  if (actionMatch) {
-    actionsExecuted = Number.parseInt(actionMatch[1], 10);
+  const executedPatterns = [
+    /(?:^|\n)\s*(?:run|building)\s+(\d+)\s+action\(s\)/i,
+    /------\s*Building\s+(\d+)\s+action\(s\)/i,
+    /Building\s+(\d+)\s+action\(s\)\s+with\s+\d+\s+process/i
+  ];
+  for (const pattern of executedPatterns) {
+    const match = combined.match(pattern);
+    if (match) {
+      actionsExecuted = Number.parseInt(match[1], 10);
+      break;
+    }
   }
   return { upToDate, actionsExecuted };
 }
 
 function validationFindingMeta(code) {
   const value = String(code || "");
-  if (value.includes("UPROPERTY") || value.includes("UOBJECT") || value.includes("TOBJECTPTR")) {
-    return VALIDATION_CATEGORY_HINTS.UPROPERTY;
+  if (value.includes("REPLICAT")) {
+    return VALIDATION_CATEGORY_HINTS.REPLICAT;
   }
   if (value.includes("DELEGATE") || value.includes("MONTAGE")) {
     return VALIDATION_CATEGORY_HINTS.DELEGATE;
@@ -198,17 +206,17 @@ function validationFindingMeta(code) {
   if (value.includes("CAST")) {
     return VALIDATION_CATEGORY_HINTS.CAST;
   }
-  if (value.includes("REPLICAT")) {
-    return VALIDATION_CATEGORY_HINTS.REPLICAT;
-  }
   if (value.includes("NEW_DELETE")) {
     return VALIDATION_CATEGORY_HINTS.NEW_DELETE;
   }
-  if (value.includes("SYNC_LOAD") || value.includes("LOAD")) {
+  if (value.includes("SYNC_LOAD") || (value.includes("LOAD") && !value.includes("UPROPERTY"))) {
     return VALIDATION_CATEGORY_HINTS.LOAD;
   }
   if (value.includes("ASSET_PATH")) {
     return VALIDATION_CATEGORY_HINTS.ASSET_PATH;
+  }
+  if (value.includes("UPROPERTY") || value.includes("UOBJECT") || value.includes("TOBJECTPTR")) {
+    return VALIDATION_CATEGORY_HINTS.UPROPERTY;
   }
   return VALIDATION_CATEGORY_HINTS.DEFAULT;
 }
@@ -236,13 +244,19 @@ function compactValidationPayload(validation, maxFindings = DEFAULT_VALIDATION_F
   }
   const findings = grouped.slice(0, maxFindings);
   const omittedFindingCount = Math.max(0, grouped.length - findings.length);
-  const groups = [...new Set(findings.map((item) => item.group))];
+  const blockingErrorCount = grouped.filter((item) => item.severity === "error").length;
+  const warningCount = grouped.filter((item) => item.severity === "warning").length;
+  const infoCount = grouped.filter((item) => item.severity === "info").length;
+  const groups = [...new Set(grouped.map((item) => item.group))];
   return {
     ok: validation.ok !== false,
     findingCount: validation.findingCount || grouped.length,
     findings,
     omittedFindingCount,
-    advisoryOnly: true,
+    blockingErrorCount,
+    warningCount,
+    infoCount,
+    advisoryOnly: blockingErrorCount === 0,
     groups,
     deferredCount: validation.deferredCount || 0,
     preExistingCount: validation.preExistingCount || 0,
@@ -263,13 +277,20 @@ function slimWriteSuccessPayload(summary, validation, options = {}) {
     validationSummary: null,
     nextSteps: options.nextSteps || []
   };
+  if (options.replacements != null) {
+    payload.replacements = options.replacements;
+  }
   const compact = compactValidationPayload(validation);
   if (compact) {
     payload.validationSummary = {
       ok: compact.ok,
       findingCount: compact.findingCount,
-      advisoryCount: compact.findings.filter((item) => item.severity === "warning").length,
+      blockingErrorCount: compact.blockingErrorCount,
+      warningCount: compact.warningCount,
+      infoCount: compact.infoCount,
       groups: compact.groups,
+      scanMode: validation.scanMode || null,
+      elapsedMs: validation.elapsedMs ?? null,
       topFindings: compact.findings.slice(0, 5).map((item) => ({
         code: item.code,
         path: item.path,
@@ -312,16 +333,22 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
   const upToDate = Boolean(result.ok && execSummary.upToDate);
   const actionsExecuted = execSummary.actionsExecuted;
   const proofLevel = !result.ok
-    ? "Proposed"
-    : (upToDate || actionsExecuted === 0 ? "BuiltStale" : "Built");
+    ? "Failed"
+    : (actionsExecuted != null && actionsExecuted > 0)
+      ? "Built"
+      : (actionsExecuted === 0 || upToDate)
+        ? "BuiltStale"
+        : "BuiltUnverified";
 
   let summary;
   if (!result.ok) {
     summary = `BUILD FAILED — ${errorLines.length} likely error line(s)${firstError ? `; first: ${firstError}` : ""}`;
+  } else if (actionsExecuted != null && actionsExecuted > 0) {
+    summary = `BUILD SUCCEEDED — ${actionsExecuted} action(s) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
   } else if (upToDate || actionsExecuted === 0) {
     summary = `BUILD SUCCEEDED (up to date — 0 files recompiled) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
   } else {
-    summary = `BUILD SUCCEEDED — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
+    summary = `BUILD SUCCEEDED (compile proof unverified — action count not detected) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
   }
 
   const payload = {
@@ -359,9 +386,11 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
     ];
   } else {
     payload.nextSteps = [
-      `Report proofLevel=${proofLevel} with fullLogPath as evidence.`,
-      actionsExecuted != null ? `UBT executed ${actionsExecuted} action(s).` : "Check fullLogPath for compile actions."
-    ].filter(Boolean);
+      "Compile action count was not detected in the build summary.",
+      "Inspect fullLogPath manually; if you find action count > 0, you may report proofLevel=Built.",
+      "Otherwise stay at proofLevel=BuiltUnverified until compile proof is visible.",
+      `Report proofLevel=${proofLevel} with fullLogPath as evidence.`
+    ];
   }
 
   if (verbose) {

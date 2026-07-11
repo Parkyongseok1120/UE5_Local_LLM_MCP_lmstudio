@@ -27,10 +27,7 @@ Do not claim these are available unless a cited project file, engine symbol, off
 - Project subsystem/component types used without their declaring header. Before `GetSubsystem<UMySubsystem>()` or a member call, include the matching project header and verify the type exists; do not create a placeholder API to silence the compiler.
 - Editor-only world access (`GEditor`, `GetEditorWorldContext`, `FEditorDelegates`) in runtime game/dev-console code. Keep editor APIs in editor modules or `WITH_EDITOR` code paths; runtime level operations must start from the caller's `UWorld*`.
 - Invented replication helpers (`ReplicateVariable`, `SetReplicated`) — use `GetLifetimeReplicatedProps` + `DOREPLIFETIME`.
-- Invented GAS helpers (`GiveAbility` as free function, wrong `TryActivateAbility` signature) — grant/activate through the owning `UAbilitySystemComponent`.
-- World-less `GetPlayerController()` / wrong `SpawnEmitterAtLocation` overload — pass explicit world context and verify `UGameplayStatics` signatures.
-- UMG `CreateWidget` / `AddToViewport` without owning player — construct widgets with valid player/world context.
-- Free `HasAuthority()` / `IsServer()` / global `GetNetMode()` — resolve authority from an `AActor` or `UWorld::GetNetMode()`.
+- **Context-sensitive (not token-only):** real UE APIs used in invalid shapes — free `GiveAbility()`, zero-arg `GetPlayerController()`, `CreateWidget()` without owner, unguarded `GEditor`/`FEditorDelegates` outside `WITH_EDITOR`. Valid member/static calls such as `ASC->GiveAbility(Spec)`, `UGameplayStatics::GetPlayerController(World, 0)`, and `Widget->AddToViewport()` are allowed.
 - Wrong physics helpers (`SetGravityEnabled`, `EnablePhysicsSimulation` on wrong types) — use component-specific APIs such as `SetSimulatePhysics` / `SetEnableGravity`.
 
 ## Verified Replacement Snippets

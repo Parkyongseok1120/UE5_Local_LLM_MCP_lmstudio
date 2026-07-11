@@ -56,6 +56,18 @@ def test_bootstrap_mentions_create_only_and_flow() -> None:
     assert "continue automatically" in lowered
 
 
+def test_bootstrap_prompt_has_newline_before_allowed_tools() -> None:
+    text = _read(BOOTSTRAP)
+    assert "steps 1–2.\n\nAllowed project file tools" in text
+
+
+def test_compact_base_documents_built_unverified_upgrade_path() -> None:
+    text = _read(COMPACT_BASE).lower()
+    assert "builtunverified" in text
+    assert "fulllogpath" in text.replace(" ", "")
+    assert "action count > 0" in text
+
+
 def test_tool_discipline_documents_write_safety_and_budget() -> None:
     lowered = _read(TOOL_DISCIPLINE).lower()
     assert "create-only" in lowered
@@ -71,6 +83,14 @@ def test_compact_base_documents_built_stale_and_plan_trigger() -> None:
     assert "builtstale" in text
     assert "unreal_agent_plan" in text
     assert "3-tier" in text or "tier a" in text
+    assert "unreal_rag_health" in text
+    assert "prooflevel=built" in text.replace(" ", "")
+
+
+def test_compact_base_finish_criteria_requires_built_proof() -> None:
+    text = _read(COMPACT_BASE).lower()
+    assert "prooflevel=built" in text.replace(" ", "")
+    assert "must not be reported as recent c++ edits successfully compiled" in text
 
 
 def test_compact_base_has_loop_guard_and_uht_conditional_rules() -> None:

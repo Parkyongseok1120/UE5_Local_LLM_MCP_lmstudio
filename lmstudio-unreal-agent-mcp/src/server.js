@@ -155,7 +155,8 @@ const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
   "search_files",
   "build_unreal_project",
   "read_unreal_logs",
-  "write_session_handoff"
+  "write_session_handoff",
+  "record_bootstrap_step"
 ]);
 const EXTENDED_AGENT_TOOL_NAMES = new Set([
   "set_active_project",
@@ -549,6 +550,36 @@ function invalidateWorkspaceInfoCache() {
   workspaceInfoCache = null;
 }
 
+const {
+  evaluateBootstrapCache,
+  mergeBootstrapCache,
+} = require("./bootstrap-cache");
+
+function bootstrapCachePath() {
+  return path.join(WORKSPACE_ROOT, ".agent", "session", "bootstrap_cache.json");
+}
+
+async function readBootstrapCache() {
+  try {
+    const raw = await fsp.readFile(bootstrapCachePath(), "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function writeBootstrapCache(patch) {
+  const cachePath = bootstrapCachePath();
+  await fsp.mkdir(path.dirname(cachePath), { recursive: true });
+  const existing = await readBootstrapCache();
+  const next = mergeBootstrapCache(existing, patch);
+  const tmpPath = `${cachePath}.tmp`;
+  await fsp.writeFile(tmpPath, JSON.stringify(next, null, 2), "utf8");
+  await fsp.rename(tmpPath, cachePath);
+  invalidateWorkspaceInfoCache();
+  return next;
+}
+
 async function buildWorkspaceInfo() {
   const activeProject = getActiveProject(CONFIG_PATH);
   const cacheKey = `${WORKSPACE_ROOT}|${CONFIG_PATH}|${activeProject || ""}`;
@@ -625,8 +656,21 @@ async function buildWorkspaceInfo() {
       allTargets: p.allTargets,
       engineAssociation: p.engineAssociation,
       modifiedAt: p.modifiedAt
-    }))
+    })),
   };
+  if (activeProject) {
+    const bootstrapCache = evaluateBootstrapCache(await readBootstrapCache(), activeProject);
+    if (!bootstrapCache.canSkipSteps || !bootstrapCache.valid) {
+      await writeBootstrapCache({
+        projectPath: activeProject,
+        stepsCompleted: ["get_workspace_info"],
+        workspaceHash: cacheKey,
+      });
+    }
+    payload.bootstrapCache = evaluateBootstrapCache(await readBootstrapCache(), activeProject);
+  } else {
+    payload.bootstrapCache = evaluateBootstrapCache(await readBootstrapCache(), activeProject);
+  }
   if (WORKSPACE_INFO_CACHE_TTL_MS > 0) {
     workspaceInfoCache = {
       key: cacheKey,
@@ -733,6 +777,18 @@ function allAgentTools() {
             description: "Failed calls or approaches not to repeat, max 3."
           }
         }, ["summary"])
+      },
+      {
+        name: "record_bootstrap_step",
+        description: "Record completion of a bootstrap step in .agent/session/bootstrap_cache.json so a fresh chat can skip bootstrap when the cache is still valid.",
+        inputSchema: makeJsonSchema({
+          step: {
+            type: "string",
+            description: "One of unreal_get_active_project, unreal_rag_health, get_workspace_info.",
+          },
+          projectPath: { type: "string", description: "Active .uproject path when known." },
+          ragHealthOk: { type: "boolean", description: "Set true after unreal_rag_health succeeds." },
+        }, ["step"])
       },
       {
         name: "list_directory",
@@ -1093,6 +1149,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "Paste prompts/lmstudio_session_bootstrap.md.",
           `Ask the model to read ${artifactPath} and continue from the smallest next step.`
         ]
+      }, null, 2));
+    }
+
+    if (name === "record_bootstrap_step") {
+      const step = String(args.step || "").trim();
+      const allowed = new Set(["unreal_get_active_project", "unreal_rag_health", "get_workspace_info"]);
+      if (!allowed.has(step)) {
+        return fail(`unsupported bootstrap step: ${step}`, {
+          nextSteps: [`Use one of: ${Array.from(allowed).join(", ")}`],
+        });
+      }
+      const cache = await writeBootstrapCache({
+        projectPath: args.projectPath || getActiveProject(CONFIG_PATH) || "",
+        stepsCompleted: [step],
+        ragHealthOk: args.ragHealthOk === true ? true : undefined,
+      });
+      const bootstrapCache = evaluateBootstrapCache(cache, getActiveProject(CONFIG_PATH));
+      return text(JSON.stringify({
+        summary: `BOOTSTRAP STEP RECORDED — ${step}`,
+        ok: true,
+        step,
+        bootstrapCache,
       }, null, 2));
     }
 
