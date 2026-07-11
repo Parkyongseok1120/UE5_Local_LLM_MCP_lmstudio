@@ -98,3 +98,24 @@ def test_patch_unreal_agent_sets_validate_on_write_and_timeout(tmp_path) -> None
     assert patched["timeout"] == mod.DEFAULT_UNREAL_AGENT_MCP_TIMEOUT_MS
     assert patched["env"]["VALIDATE_ON_WRITE"] == "1"
     assert patched["env"]["VALIDATE_ON_WRITE_TIMEOUT_MS"] == "45000"
+    assert patched["env"]["MCP_AGENT_RESULT_MAX_CHARS"] == "32000"
+    assert patched["env"]["BUILD_VERBOSE_OUTPUT"] == "0"
+
+
+def test_patch_unreal_agent_preserves_existing_context_env_values(tmp_path) -> None:
+    mod = load_module()
+    node = tmp_path / "node.exe"
+    node.write_text("", encoding="utf-8")
+    entry = {
+        "command": "node",
+        "args": [],
+        "env": {
+            "MCP_AGENT_RESULT_MAX_CHARS": "12000",
+            "BUILD_VERBOSE_OUTPUT": "1",
+        },
+    }
+
+    patched = mod.patch_unreal_agent(entry, ROOT, node)
+
+    assert patched["env"]["MCP_AGENT_RESULT_MAX_CHARS"] == "12000"
+    assert patched["env"]["BUILD_VERBOSE_OUTPUT"] == "1"

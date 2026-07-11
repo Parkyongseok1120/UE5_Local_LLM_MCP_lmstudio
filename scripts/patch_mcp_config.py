@@ -141,6 +141,8 @@ def patch_unreal_agent(entry: dict[str, Any], workspace: Path, node_exe: Path) -
     env["SHARED_UNREAL_CONFIG"] = str(SHARED_CONFIG)
     env["UNREAL58_ROOT"] = str(workspace)
     env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
+    env.setdefault("MCP_AGENT_RESULT_MAX_CHARS", "32000")
+    env.setdefault("BUILD_VERBOSE_OUTPUT", "0")
     if env.get("ALLOW_WRITE", "").strip().lower() in {"1", "true", "yes", "on"}:
         env.setdefault("VALIDATE_ON_WRITE", "1")
         # Time budget for validation-on-write; fail-open past this to avoid the

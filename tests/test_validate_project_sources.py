@@ -103,9 +103,9 @@ def test_cli_write_target_defers_own_missing_definition(tmp_path: Path) -> None:
     )
     payload = json.loads(result.stdout)
     assert payload["writeTarget"] == "Source/Demo/New.h"
-    # CPP_DEFINITION_MISSING for the just-written header is deferred, not blocking.
+    # Header-only scoped write skips cpp-missing checks when no paired .cpp is in scope.
     assert payload["hasBlockingErrors"] is False
-    assert payload["deferredCount"] >= 1
+    assert payload["deferredCount"] == 0
 
 
 def test_cli_write_target_ignores_pre_existing_error_in_other_file(tmp_path: Path) -> None:
@@ -132,9 +132,189 @@ def test_cli_write_target_ignores_pre_existing_error_in_other_file(tmp_path: Pat
         check=False,
     )
     payload = json.loads(result.stdout)
-    # The full-project exit code still reflects the pre-existing error...
-    assert result.returncode == 1
-    assert payload["hasErrors"] is True
-    # ...but the write to New.h itself is not blocked by it.
+    assert payload["scanMode"] == "scoped"
+    assert payload["scopedFileCount"] >= 1
+    assert payload["elapsedMs"] >= 0
+    # Scoped write exits 0 when the write-target itself has no blocking errors.
+    assert result.returncode == 0
+    # Pre-existing errors in unscanned files are not surfaced on the write path.
     assert payload["hasBlockingErrors"] is False
-    assert payload["preExistingCount"] >= 1
+    assert payload["preExistingCount"] == 0
+
+
+def test_cli_write_target_scoped_scan_is_fast(tmp_path: Path) -> None:
+    project = _write_two_file_project(tmp_path)
+    script = SCRIPTS / "validate_project_sources.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--project-root",
+            str(project),
+            "--json",
+            "--write-target",
+            "Source/Demo/New.h",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["scanMode"] == "scoped"
+    assert payload["scopedFileCount"] <= 3
+    assert payload["elapsedMs"] < 2000
+
+
+def test_cli_write_target_blocks_error_on_written_file(tmp_path: Path) -> None:
+    project = _write_two_file_project(tmp_path)
+    (project / "Source" / "Demo" / "New.h").write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n\nUCLASS()\nclass DEMO_API UNew : public UObject\n{\n\tGENERATED_BODY()\n};\n#include "New.generated.h"\n',
+        encoding="utf-8",
+    )
+    script = SCRIPTS / "validate_project_sources.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--project-root",
+            str(project),
+            "--json",
+            "--write-target",
+            "Source/Demo/New.h",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["hasBlockingErrors"] is True
+    assert result.returncode == 1
+
+
+def _write_mjs_like_project(tmp_path: Path) -> Path:
+    project = tmp_path / "Project_MJS"
+    public_dir = project / "Source" / "Game" / "Public" / "Character" / "Player" / "Component"
+    private_dir = project / "Source" / "Game" / "Private" / "Character" / "Player" / "Component"
+    other_public = project / "Source" / "Game" / "Public" / "Character" / "Player"
+    other_public.mkdir(parents=True, exist_ok=True)
+    public_dir.mkdir(parents=True, exist_ok=True)
+    private_dir.mkdir(parents=True, exist_ok=True)
+    (project / "Source" / "Game" / "Game.Build.cs").write_text(
+        'using UnrealBuildTool;\npublic class Game : ModuleRules { public Game(ReadOnlyTargetRules Target) : base(Target) {} }\n',
+        encoding="utf-8",
+    )
+    (other_public / "TargetingTypes.h").write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n',
+        encoding="utf-8",
+    )
+    (public_dir / "SkillComponent.h").write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n#include "Components/ActorComponent.h"\n'
+        '#include "TimerManager.h"\n'
+        'class USphereComponent;\n'
+        '#include "SkillComponent.generated.h"\n\n'
+        'UCLASS()\nclass GAME_API USkillComponent : public UActorComponent\n{\n'
+        '\tGENERATED_BODY()\npublic:\n\tvoid BeginPlay();\n};\n',
+        encoding="utf-8",
+    )
+    (private_dir / "SkillComponent.cpp").write_text(
+        '#include "Character/Player/Component/SkillComponent.h"\n#include "Engine/World.h"\n\n'
+        'void USkillComponent::BeginPlay()\n{\n\tSuper::BeginPlay();\n}\n',
+        encoding="utf-8",
+    )
+    (public_dir / "TargetingComponent.h").write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n#include "Components/ActorComponent.h"\n'
+        '#include "Character/Player/TargetingTypes.h"\n#include "TargetingComponent.generated.h"\n\n'
+        'UCLASS()\nclass GAME_API UTargetingComponent : public UActorComponent\n{\n'
+        '\tGENERATED_BODY()\npublic:\n\tvoid BeginPlay();\n};\n',
+        encoding="utf-8",
+    )
+    (private_dir / "TargetingComponent.cpp").write_text(
+        '#include "Character/Player/Component/TargetingComponent.h"\n\n'
+        'void UTargetingComponent::BeginPlay()\n{\n\tSuper::BeginPlay();\n}\n',
+        encoding="utf-8",
+    )
+    return project
+
+
+def test_cli_write_target_public_private_pair_scopes_both_files(tmp_path: Path) -> None:
+    project = _write_mjs_like_project(tmp_path)
+    script = SCRIPTS / "validate_project_sources.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--project-root",
+            str(project),
+            "--json",
+            "--write-target",
+            "Source/Game/Public/Character/Player/Component/SkillComponent.h",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["scopedFileCount"] >= 2
+    assert payload["hasBlockingErrors"] is False
+    assert result.returncode == 0
+    assert payload["elapsedMs"] < 2000
+
+
+def test_cli_write_target_cpp_public_private_pair(tmp_path: Path) -> None:
+    project = _write_mjs_like_project(tmp_path)
+    script = SCRIPTS / "validate_project_sources.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--project-root",
+            str(project),
+            "--json",
+            "--write-target",
+            "Source/Game/Private/Character/Player/Component/SkillComponent.cpp",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["scopedFileCount"] >= 2
+    assert payload["hasBlockingErrors"] is False
+    assert result.returncode == 0
+
+
+def test_cli_write_target_header_only_skips_cpp_definition_missing(tmp_path: Path) -> None:
+    project = _write_mjs_like_project(tmp_path)
+    header = project / "Source" / "Game" / "Public" / "Character" / "Player" / "Component" / "NewOnly.h"
+    header.write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n#include "NewOnly.generated.h"\n\n'
+        'UCLASS()\nclass GAME_API UNewOnly : public UObject\n{\n\tGENERATED_BODY()\npublic:\n\tvoid DoThing();\n};\n',
+        encoding="utf-8",
+    )
+    script = SCRIPTS / "validate_project_sources.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--project-root",
+            str(project),
+            "--json",
+            "--write-target",
+            "Source/Game/Public/Character/Player/Component/NewOnly.h",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["hasBlockingErrors"] is False
+    assert not any(
+        item.get("code") == "CPP_DEFINITION_MISSING" and item.get("severity") == "error"
+        for item in payload.get("findings", [])
+    )
+

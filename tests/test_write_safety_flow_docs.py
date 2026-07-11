@@ -26,7 +26,7 @@ def test_compact_base_has_timeout_retry_ban_and_create_only() -> None:
     # Risk-triggered checkpoint wording (continue on success, stop on risk signals).
     assert "continue automatically" in lowered
     assert "model failed to generate a tool call" in lowered
-    assert "progress summary" in lowered
+    assert "re-anchors tool-call" in lowered
 
 
 def test_compact_base_has_no_stop_after_every_write_rule() -> None:
@@ -56,12 +56,41 @@ def test_bootstrap_mentions_create_only_and_flow() -> None:
     assert "continue automatically" in lowered
 
 
+def test_bootstrap_prompt_has_newline_before_allowed_tools() -> None:
+    text = _read(BOOTSTRAP)
+    assert "steps 1–2.\n\nAllowed project file tools" in text
+
+
+def test_compact_base_documents_built_unverified_upgrade_path() -> None:
+    text = _read(COMPACT_BASE).lower()
+    assert "builtunverified" in text
+    assert "fulllogpath" in text.replace(" ", "")
+    assert "action count > 0" in text
+
+
 def test_tool_discipline_documents_write_safety_and_budget() -> None:
     lowered = _read(TOOL_DISCIPLINE).lower()
     assert "create-only" in lowered
     assert "-32001" in _read(TOOL_DISCIPLINE)
     assert "validate_on_write_timeout_ms" in lowered
     assert "rollback skipped" in lowered
+    assert "3-tier" in lowered
+    assert "advisory" in lowered
+
+
+def test_compact_base_documents_built_stale_and_plan_trigger() -> None:
+    text = _read(COMPACT_BASE).lower()
+    assert "builtstale" in text
+    assert "unreal_agent_plan" in text
+    assert "3-tier" in text or "tier a" in text
+    assert "unreal_rag_health" in text
+    assert "prooflevel=built" in text.replace(" ", "")
+
+
+def test_compact_base_finish_criteria_requires_built_proof() -> None:
+    text = _read(COMPACT_BASE).lower()
+    assert "prooflevel=built" in text.replace(" ", "")
+    assert "must not be reported as recent c++ edits successfully compiled" in text
 
 
 def test_compact_base_has_loop_guard_and_uht_conditional_rules() -> None:
@@ -107,3 +136,30 @@ def test_subsystem_recipe_has_world_context_dispatcher_rules() -> None:
     assert "Deinitialize()" in text
     assert "TWeakObjectPtr" in text
     assert "static TMap" in text
+
+
+def test_compact_base_documents_sketch_verdict_and_handoff() -> None:
+    lowered = _read(COMPACT_BASE).lower()
+    assert "verdictsummary" in lowered
+    assert "replacement" in lowered
+    assert "write_session_handoff" in lowered
+    assert "proposed" in lowered
+    assert "lookup tools" in lowered
+    assert "character ceiling" in lowered
+
+
+def test_agent_system_documents_summary_first_scope() -> None:
+    lowered = _read(AGENT_SYSTEM).lower()
+    assert "build/log/write/validation" in lowered
+    assert "lookup tools" in lowered
+    assert "character ceiling" in lowered
+
+
+def test_tool_discipline_documents_compact_build_and_handoff() -> None:
+    text = _read(TOOL_DISCIPLINE)
+    lowered = text.lower()
+    assert "compact by default" in lowered
+    assert "write_session_handoff" in lowered
+    assert ".agent/handoff/latest.md" in text
+    assert "mcp_agent_result_max_chars" in lowered
+    assert "overwrites that file on every call" in lowered

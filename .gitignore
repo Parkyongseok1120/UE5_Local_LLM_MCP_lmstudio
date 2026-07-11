@@ -22,3 +22,4 @@ lmstudio-unreal-agent-mcp/config/agent-mcp.json
 lmstudio-unreal-agent-mcp/config/lmstudio-mcp-unreal-agent.json
 PORTABLE_ROOT.txt
 docs/internal/
+.agent/

@@ -16,6 +16,7 @@ from unreal_static_validate import (  # noqa: E402
     build_delegate_arity_map,
     validate_uht_macros_in_conditional_blocks,
     validate_gengine_world_context,
+    validate_known_bad_api_patterns,
     validate_static_mutable_container_members,
     validate_missing_super_lifecycle_call,
     validate_replication_setup,
@@ -403,6 +404,39 @@ void ShowMessage(UWorld* World)
     assert findings == []
 
 
+def test_known_bad_unreal_api_patterns_are_advisory(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "DevConsole.cpp"
+    _write(
+        cpp,
+        """void Run(UWorld* World, UCharacterMovementComponent* MoveComp)
+{
+    MoveComp->DisableGravity();
+    FString Name = World->GetURL();
+    FTransform SpawnTransform;
+    World->SpawnActor<AActor>(AActor::StaticClass(), &SpawnTransform, FActorSpawnParameters());
+}
+""",
+    )
+
+    findings = validate_known_bad_api_patterns(cpp, cpp.read_text(encoding="utf-8"), project)
+    assert {item.code for item in findings} == {
+        "INVENTED_MOVEMENT_API",
+        "INVENTED_WORLD_API",
+        "SPAWNACTOR_TRANSFORM_POINTER",
+    }
+    assert all(item.severity == "warning" for item in findings)
+
+
+def test_geturl_on_http_request_is_not_flagged_as_world_api(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "Http.cpp"
+    _write(cpp, "FString Url = HttpRequest->GetURL();\n")
+
+    findings = validate_known_bad_api_patterns(cpp, cpp.read_text(encoding="utf-8"), project)
+    assert all(item.code != "INVENTED_WORLD_API" for item in findings)
+
+
 def test_static_mutable_container_member_warned(tmp_path: Path) -> None:
     project = tmp_path / "Demo"
     header = project / "Source" / "Demo" / "Public" / "DevCommandDispatcher.h"
@@ -637,4 +671,472 @@ def test_has_blocking_write_errors_blocks_own_file_error() -> None:
         Finding("error", "Source/Demo/New.h", 9, "UHT_MACRO_IN_CONDITIONAL_BLOCK", "illegal macro"),
     ]
     assert has_blocking_write_errors(findings, "Source/Demo/New.h")
+
+
+def test_tobjectptr_without_uproperty_warns(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "WidgetOwner.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class UDemoWidget;\n"
+        "class UWidgetOwner {\n"
+        "  TObjectPtr<UDemoWidget> HiddenWidget;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    codes = {item.code for item in findings}
+    assert "TOBJECTPTR_WITHOUT_UPROPERTY" in codes
+
+
+def test_delegate_bind_without_unbind_warns(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Listener.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void UListener::BeginPlay() {\n"
+        "  Source->OnChanged.AddDynamic(this, &UListener::OnChanged);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "DELEGATE_BIND_WITHOUT_UNBIND" for item in findings)
+
+
+def test_interrupt_param_ignored_warns(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Skill.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void USkill::OnMontageEnded(UAnimMontage* Montage, bool bInterrupted) {\n"
+        "  FinishSkill();\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "INTERRUPT_PARAM_IGNORED" for item in findings)
+
+
+def test_gc_advisory_findings_do_not_block_writes() -> None:
+    findings = [
+        Finding("warning", "Source/Demo/A.h", 3, "TOBJECTPTR_WITHOUT_UPROPERTY", "missing uproperty"),
+    ]
+    assert not has_blocking_write_errors(findings, "Source/Demo/A.h")
+
+
+def test_uproperty_on_previous_member_does_not_protect_next(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Owner.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class UDemoObject;\n"
+        "class UOwner {\n"
+        "  UPROPERTY()\n"
+        "  int32 Count;\n\n"
+        "  TObjectPtr<UDemoObject> UntrackedObject;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "TOBJECTPTR_WITHOUT_UPROPERTY" for item in findings)
+
+
+def test_direct_uproperty_annotation_is_recognized(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Owner.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class UDemoObject;\n"
+        "class UOwner {\n"
+        "  UPROPERTY()\n"
+        "  TObjectPtr<UDemoObject> TrackedObject;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert not any(item.code == "TOBJECTPTR_WITHOUT_UPROPERTY" for item in findings)
+
+
+def test_tobjectptr_container_without_uproperty_warns(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Owner.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class UDemoObject;\n"
+        "class UOwner {\n"
+        "  TArray<TObjectPtr<UDemoObject>> Objects;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "UOBJECT_CONTAINER_WITHOUT_UPROPERTY" for item in findings)
+
+
+def test_tmap_tobjectptr_container_without_uproperty_warns(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Owner.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class UDemoObject;\n"
+        "class UOwner {\n"
+        "  TMap<FName, TObjectPtr<UDemoObject>> ObjectMap;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "UOBJECT_CONTAINER_WITHOUT_UPROPERTY" for item in findings)
+
+
+def test_native_delete_is_not_flagged(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Worker.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "class FNativeWorker {};\n"
+        "void Run() {\n"
+        "  FNativeWorker* Worker = new FNativeWorker();\n"
+        "  delete Worker;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert not any(item.code == "RAW_NEW_DELETE_UOBJECT" and "delete" in item.message.lower() for item in findings)
+
+
+def test_uobject_pointer_delete_is_flagged(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Obj.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "class UMyObject;\n"
+        "void Cleanup() {\n"
+        "  UMyObject* Obj = nullptr;\n"
+        "  delete Obj;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "RAW_NEW_DELETE_UOBJECT" and "Obj" in item.message for item in findings)
+
+
+def test_replicated_property_missing_doreplifetime_per_property(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Actor.h"
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    header.parent.mkdir(parents=True)
+    cpp.parent.mkdir(parents=True)
+    header.write_text(
+        "class AMyActor {\n"
+        "  UPROPERTY(Replicated)\n"
+        "  int32 Health;\n"
+        "  UPROPERTY(ReplicatedUsing=OnRep_Mana)\n"
+        "  int32 Mana;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    cpp.write_text(
+        "void AMyActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const {\n"
+        "  Super::GetLifetimeReplicatedProps(OutLifetimeProps);\n"
+        "  DOREPLIFETIME(AMyActor, Health);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(
+        item.code == "REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME" and "Mana" in item.message
+        for item in findings
+    )
+    assert not any("Health" in item.message for item in findings if item.code == "REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME")
+
+
+def test_doreplifetime_condition_counts_as_registered(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Actor.h"
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    header.parent.mkdir(parents=True)
+    cpp.parent.mkdir(parents=True)
+    header.write_text(
+        "class AMyActor {\n"
+        "  UPROPERTY(Replicated)\n"
+        "  int32 Score;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    cpp.write_text(
+        "void AMyActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const {\n"
+        "  DOREPLIFETIME_CONDITION(AMyActor, Score, COND_OwnerOnly);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert not any(item.code == "REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME" for item in findings)
+
+
+def test_array_clear_is_not_delegate_unbind(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Listener.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void UListener::BeginPlay() {\n"
+        "  Source->OnChanged.AddDynamic(this, &UListener::OnChanged);\n"
+        "}\n"
+        "void UListener::EndPlay(const EEndPlayReason::Type Reason) {\n"
+        "  Items.Clear();\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "DELEGATE_BIND_WITHOUT_UNBIND" for item in findings)
+
+
+def test_delegate_remove_dynamic_pair_passes(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Listener.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void UListener::BeginPlay() {\n"
+        "  Source->OnChanged.AddDynamic(this, &UListener::OnChanged);\n"
+        "}\n"
+        "void UListener::EndPlay(const EEndPlayReason::Type Reason) {\n"
+        "  Source->OnChanged.RemoveDynamic(this, &UListener::OnChanged);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert not any(item.code == "DELEGATE_BIND_WITHOUT_UNBIND" for item in findings)
+
+
+def test_set_timer_for_next_tick_is_not_flagged(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void AActorDemo::BeginPlay() {\n"
+        "  GetWorld()->GetTimerManager().SetTimerForNextTick(this, &AActorDemo::TickOnce);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert not any(item.code == "TIMER_SET_WITHOUT_CLEAR" for item in findings)
+
+
+def test_interrupt_params_checked_independently(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Skill.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void USkill::Finish(bool bInterrupted, bool bWasCancelled) {\n"
+        "  if (bInterrupted) {}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    interrupt = [item for item in findings if item.code == "INTERRUPT_PARAM_IGNORED"]
+    assert len(interrupt) == 1
+    assert "bWasCancelled" in interrupt[0].message
+
+
+def test_fvector_precision_is_info_severity(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Move.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text("FVector V = FVector(1.0f, 2.0f, 3.0f);\n", encoding="utf-8")
+    findings = validate_unreal_readiness(tmp_path)
+    fvector = [item for item in findings if item.code == "FVECTOR_FLOAT_PRECISION"]
+    assert fvector and fvector[0].severity == "info"
+
+
+def test_clear_all_timers_for_object_in_teardown_passes(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void AActorDemo::BeginPlay() {\n"
+        "  GetWorld()->GetTimerManager().SetTimer(TickHandle, this, &AActorDemo::TickOnce, 1.0f, true);\n"
+        "}\n"
+        "void AActorDemo::EndPlay(const EEndPlayReason::Type Reason) {\n"
+        "  GetWorld()->GetTimerManager().ClearAllTimersForObject(this);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert not any(item.code == "TIMER_SET_WITHOUT_CLEAR" for item in findings)
+
+
+def test_clear_all_timers_does_not_hide_unrelated_class_timer(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actors.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void AActorDemo::BeginPlay() {\n"
+        "  GetWorld()->GetTimerManager().SetTimer(TickHandle, this, &AActorDemo::TickOnce, 1.0f, true);\n"
+        "}\n"
+        "void AOtherActor::EndPlay(const EEndPlayReason::Type Reason) {\n"
+        "  GetWorld()->GetTimerManager().ClearAllTimersForObject(this);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "TIMER_SET_WITHOUT_CLEAR" for item in findings)
+
+
+def test_looping_timer_without_any_clear_still_warns(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void AActorDemo::BeginPlay() {\n"
+        "  GetWorld()->GetTimerManager().SetTimer(TickHandle, this, &AActorDemo::TickOnce, 1.0f, true);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "TIMER_SET_WITHOUT_CLEAR" for item in findings)
+
+
+def test_uproperty_macro_gap_is_not_direct_annotation(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Owner.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class UDemoObject;\n"
+        "class UOwner {\n"
+        "  UPROPERTY()\n"
+        "  SOME_METADATA_MACRO()\n"
+        "  TObjectPtr<UDemoObject> Value;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "TOBJECTPTR_WITHOUT_UPROPERTY" and "Value" in item.message for item in findings)
+
+
+def test_multiline_uproperty_annotation_still_recognized(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Owner.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class UDemoObject;\n"
+        "class UOwner {\n"
+        "  UPROPERTY(EditAnywhere, meta=(AllowPrivateAccess=\"true\"))\n"
+        "  TObjectPtr<UDemoObject> TrackedObject;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert not any(item.code == "TOBJECTPTR_WITHOUT_UPROPERTY" for item in findings)
+
+
+def test_one_shot_timer_with_bloop_false_not_flagged(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void AActorDemo::BeginPlay() {\n"
+        "  GetWorld()->GetTimerManager().SetTimer(TickHandle, this, &AActorDemo::TickOnce, 1.0f, false);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert not any(item.code == "TIMER_SET_WITHOUT_CLEAR" for item in findings)
+
+
+def test_timer_handles_indexed_separately(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void AActorDemo::BeginPlay() {\n"
+        "  GetWorld()->GetTimerManager().SetTimer(Handles[0], this, &AActorDemo::TickA, 1.0f, true);\n"
+        "}\n"
+        "void AActorDemo::EndPlay(const EEndPlayReason::Type Reason) {\n"
+        "  GetWorld()->GetTimerManager().ClearTimer(Handles[1]);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "TIMER_SET_WITHOUT_CLEAR" for item in findings)
+
+
+def test_clear_all_timers_for_other_object_does_not_clear_class_timers(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void AActorDemo::BeginPlay() {\n"
+        "  GetWorld()->GetTimerManager().SetTimer(TickHandle, this, &AActorDemo::TickOnce, 1.0f, true);\n"
+        "}\n"
+        "void AActorDemo::EndPlay(const EEndPlayReason::Type Reason) {\n"
+        "  GetWorld()->GetTimerManager().ClearAllTimersForObject(OtherObject);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "TIMER_SET_WITHOUT_CLEAR" for item in findings)
+
+
+def test_doreplifetime_other_class_does_not_satisfy_property(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Actor.h"
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    header.parent.mkdir(parents=True)
+    cpp.parent.mkdir(parents=True)
+    header.write_text(
+        '#include "CoreMinimal.h"\n'
+        "UCLASS()\n"
+        "class AActorDemo : public AActor {\n"
+        "  GENERATED_BODY()\n"
+        "  UPROPERTY(Replicated)\n"
+        "  float Health;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    cpp.write_text(
+        "void AActorDemo::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const {\n"
+        "  Super::GetLifetimeReplicatedProps(OutLifetimeProps);\n"
+        "  DOREPLIFETIME(AOtherActor, Health);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME" for item in findings)
+
+
+def test_timer_clear_in_endplay_before_beginplay_in_source_still_passes(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void AActorDemo::EndPlay(const EEndPlayReason::Type Reason) {\n"
+        "  GetWorld()->GetTimerManager().ClearTimer(TickHandle);\n"
+        "}\n"
+        "void AActorDemo::BeginPlay() {\n"
+        "  GetWorld()->GetTimerManager().SetTimer(TickHandle, this, &AActorDemo::TickOnce, 1.0f, true);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert not any(item.code == "TIMER_SET_WITHOUT_CLEAR" for item in findings)
+
+
+def test_delegate_different_receiver_chains_do_not_cancel(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Listener.cpp"
+    cpp.parent.mkdir(parents=True)
+    cpp.write_text(
+        "void UListener::BeginPlay() {\n"
+        "  A->OnChanged.AddDynamic(this, &UListener::OnChanged);\n"
+        "}\n"
+        "void UListener::EndPlay(const EEndPlayReason::Type Reason) {\n"
+        "  B->OnChanged.RemoveDynamic(this, &UListener::OnChanged);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "DELEGATE_BIND_WITHOUT_UNBIND" for item in findings)
+
+
+def test_uproperty_in_comment_does_not_mask_missing_annotation(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Owner.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class UDemoObject;\n"
+        "class UOwner {\n"
+        "  // UPROPERTY()\n"
+        "  TObjectPtr<UDemoObject> Value;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    findings = validate_unreal_readiness(tmp_path)
+    assert any(item.code == "TOBJECTPTR_WITHOUT_UPROPERTY" and "Value" in item.message for item in findings)
+
+
+def test_write_mode_include_external_header_is_warning_not_error(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "Actor.h"
+    header.parent.mkdir(parents=True)
+    header.write_text('#include "ExternalPluginHeader.h"\n', encoding="utf-8")
+    index = build_source_include_index(tmp_path)
+    findings = validate_include_paths_exist(
+        header,
+        header.read_text(encoding="utf-8"),
+        tmp_path,
+        index,
+        write_mode=True,
+        include_owner_map={},
+    )
+    assert findings
+    assert all(item.severity == "warning" for item in findings)
 

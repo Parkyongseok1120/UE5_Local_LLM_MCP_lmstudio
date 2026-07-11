@@ -4,11 +4,12 @@ Paste as the **first user message** in every new LM Studio MCP chat before any c
 
 ---
 
-Session start. Perform **only** these steps, then reply `ready`:
+Session start. One tool per turn. Perform **only** these steps, then reply `ready`:
 
-1. `unreal_get_active_project` (unreal-rag)
-2. `unreal_rag_health` (unreal-rag)
-3. `get_workspace_info` (unreal-agent)
+0. `get_workspace_info` (unreal-agent). If `bootstrapCache.canSkipSteps === true`, reply `ready` immediately.
+1. `unreal_get_active_project` (unreal-rag) — then `record_bootstrap_step` with `step=unreal_get_active_project` and the active project path.
+2. `unreal_rag_health` (unreal-rag) — then `record_bootstrap_step` with `step=unreal_rag_health` and `ragHealthOk=true` when healthy.
+3. `get_workspace_info` (unreal-agent) again if step 0 did not already run after steps 1–2.
 
 Allowed project file tools are only the `unreal-rag` and `unreal-agent` MCP tools. Never call `run_javascript`, `js-code-sandbox`, `Deno.readTextFile`, `Deno.writeTextFile`, Node `fs`, or browser/code-sandbox tools for project file I/O. Those tools are not rooted at the active Unreal project. Use `read_file_range`, `read_file`, and `replace_in_file`; use `write_file` only for brand-new files.
 
@@ -19,3 +20,5 @@ If the active project is not your target `.uproject`, call `unreal_set_active_pr
 If `unreal_rag_health` returns `okForChat=false` or `chatAction=stop_and_report_rag_rebuild_required`, do **not** search project files for RAG repair scripts. Reply `rag_blocked` plus the reported `recommendedCommand` / `recommendedDoctorCommand`.
 
 Do not analyze or answer coding questions until bootstrap is done. One tool per turn. Never print raw reasoning/control tokens such as `<|channel>thought`, `<channel|>`, or `<|tool_call>`.
+
+**Resume from handoff:** if continuing a prior session, read `.agent/handoff/latest.md` (see `prompts/lmstudio_session_handoff.md`) and perform the smallest next step after bootstrap.

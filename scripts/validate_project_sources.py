@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from unreal_static_validate import (
     has_blocking_write_errors,
     has_static_errors,
     normalize_rel_path,
+    resolve_write_scope_paths,
     validate_unreal_readiness,
 )
 
@@ -47,7 +49,8 @@ def main() -> int:
         default=None,
         help=(
             "Relative path (from project root) of the file that was just written. "
-            "When set, hasBlockingErrors is scoped to errors on this file (excluding "
+            "When set, runs a scoped scan (write-target + paired header/cpp) and "
+            "hasBlockingErrors is limited to errors on this file (excluding "
             "deferred counterpart codes); other findings are reported as advisories."
         ),
     )
@@ -64,9 +67,20 @@ def main() -> int:
         default_graph = Path(__file__).resolve().parent.parent / "data" / "unreal58" / "raw_module_graph.jsonl"
         module_graph = default_graph if default_graph.is_file() else None
 
-    findings = validate_unreal_readiness(root, module_graph)
-    has_errors = has_static_errors(findings)
     write_target = args.write_target
+    scan_mode = "full"
+    scoped_file_count = 0
+    started = time.perf_counter()
+    if write_target:
+        scope = resolve_write_scope_paths(root, write_target)
+        scoped_file_count = len(scope)
+        scan_mode = "scoped"
+        findings = validate_unreal_readiness(root, module_graph, scope_paths=scope)
+    else:
+        findings = validate_unreal_readiness(root, module_graph)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+    has_errors = has_static_errors(findings)
     if write_target:
         has_blocking_errors = has_blocking_write_errors(findings, write_target)
         target_norm = normalize_rel_path(write_target)
@@ -89,6 +103,9 @@ def main() -> int:
         "projectRoot": str(root),
         "sourceDir": str(source_dir),
         "writeTarget": write_target,
+        "scanMode": scan_mode,
+        "scopedFileCount": scoped_file_count,
+        "elapsedMs": elapsed_ms,
         "findingCount": len(findings),
         "hasErrors": has_errors,
         "hasBlockingErrors": has_blocking_errors,
@@ -111,6 +128,8 @@ def main() -> int:
     else:
         print(format_findings(findings))
 
+    if write_target:
+        return 1 if has_blocking_errors else 0
     if payload["hasErrors"]:
         return 1
     return 0

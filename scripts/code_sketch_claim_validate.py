@@ -140,6 +140,7 @@ def validate_sketch(
                 "verdict": "known_bad",
                 "evidence": [],
                 "note": hit["message"],
+                "replacement": hit.get("replacement") or "",
             }
         )
 
@@ -176,7 +177,7 @@ def validate_sketch(
             {
                 "symbol": symbol,
                 "verdict": verdict,
-                "evidence": evidence,
+                "evidence": [] if verdict == "verified" else evidence,
                 "note": note,
             }
         )
@@ -189,19 +190,36 @@ def validate_sketch(
     known_bad = sum(1 for r in results if r["verdict"] == "known_bad")
     unverified = sum(1 for r in results if r["verdict"] == "unverified")
     weak = sum(1 for r in results if r["verdict"] == "weak")
+    verified = sum(1 for r in results if r["verdict"] == "verified")
+    known_bad_terms = [
+        str(result["symbol"])
+        for result in results
+        if result["verdict"] == "known_bad"
+    ]
+    known_bad_suffix = f" ({', '.join(known_bad_terms[:4])})" if known_bad_terms else ""
+    verdict_summary = (
+        f"{verified} verified, {weak} weak, {known_bad} known_bad"
+        f"{known_bad_suffix}, "
+        f"{unverified} unverified"
+    )
+    verdict_order = {"known_bad": 0, "unverified": 1, "weak": 2, "verified": 3}
+    results.sort(key=lambda item: (verdict_order.get(str(item.get("verdict")), 9), str(item.get("symbol"))))
 
     return {
         "ok": known_bad == 0 and unverified == 0,
+        "verdictSummary": verdict_summary,
         "indexPath": str(index_path),
         "indexExists": index_exists,
         "symbolCount": len(results),
+        "verifiedCount": verified,
         "knownBadCount": known_bad,
         "unverifiedCount": unverified,
         "weakCount": weak,
         "results": results,
         "guidance": (
-            "Remove or downgrade every known_bad/unverified symbol before presenting "
-            "compile-ready code. Keep proof level at Proposed."
+            "Replace every known_bad item using its replacement, downgrade unverified "
+            "symbols to UNKNOWN, then validate the revised draft once before presenting it. "
+            "Keep proof level at Proposed."
         ),
     }
 

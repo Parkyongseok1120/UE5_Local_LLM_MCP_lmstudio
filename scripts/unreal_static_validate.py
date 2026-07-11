@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from cpp_parse_utils import extract_macro_blocks, find_balanced_parens, mask_comments_and_strings
 from parse_build_cs import declared_modules_from_text, public_modules_from_text
 from ue_cpp_signatures import (
     FUNCTION_POINTER_TARGET_RE,
@@ -31,7 +33,27 @@ IGNORED_PROJECT_DIRS = {
     "golden",
     "Intermediate",
     "Saved",
+    "Marketplace",
+    "ThirdParty",
+    "Engine",
 }
+
+
+def resolve_scan_roots(root: Path) -> list[Path]:
+    roots: list[Path] = []
+    source = root / "Source"
+    if source.is_dir():
+        roots.append(source)
+    allowlist = os.environ.get("PLUGIN_SCAN_ALLOWLIST", "").strip()
+    if allowlist:
+        for name in allowlist.split(","):
+            plugin = name.strip()
+            if not plugin:
+                continue
+            plugin_source = root / "Plugins" / plugin / "Source"
+            if plugin_source.is_dir():
+                roots.append(plugin_source)
+    return roots or [root]
 
 
 @dataclass
@@ -58,16 +80,158 @@ def should_ignore_project_path(path: Path) -> bool:
     return any(part in IGNORED_PROJECT_DIRS for part in path.parts)
 
 
-def iter_source_files(root: Path) -> list[Path]:
+def iter_source_files(root: Path, *, scan_roots: list[Path] | None = None) -> list[Path]:
     suffixes = {".h", ".hpp", ".cpp", ".c", ".cc", ".cs"}
     files: list[Path] = []
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in suffixes:
+    roots = scan_roots if scan_roots is not None else resolve_scan_roots(root)
+    for scan_root in roots:
+        if not scan_root.is_dir():
             continue
-        if should_ignore_project_path(path):
+        for path in scan_root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in suffixes:
+                continue
+            if should_ignore_project_path(path):
+                continue
+            files.append(path)
+    return sorted(set(files))
+
+
+def resolve_write_scope_paths(root: Path, write_target: str) -> list[Path]:
+    """Minimal file set for validate-on-write: target, paired header/cpp, local includes."""
+    root = root.resolve()
+    rel = str(write_target or "").strip().replace("\\", "/")
+    if not rel:
+        return []
+    target_path = (root / rel).resolve()
+    scope: dict[Path, None] = {}
+    if target_path.is_file():
+        scope[target_path] = None
+    parent = target_path.parent if target_path.is_file() else (root / Path(rel).parent).resolve()
+    stem = target_path.stem if target_path.is_file() else Path(rel).stem
+    suffix = target_path.suffix.lower() if target_path.is_file() else Path(rel).suffix.lower()
+    if suffix in {".cpp", ".c", ".cc"}:
+        for ext in (".h", ".hpp"):
+            paired = parent / f"{stem}{ext}"
+            if paired.is_file():
+                scope[paired.resolve()] = None
+        for paired in _find_module_paired_files(target_path, root, stem, (".h", ".hpp")):
+            scope[paired] = None
+    elif suffix in {".h", ".hpp"}:
+        for ext in (".cpp", ".c", ".cc"):
+            paired = parent / f"{stem}{ext}"
+            if paired.is_file():
+                scope[paired.resolve()] = None
+        for paired in _find_module_paired_files(target_path, root, stem, (".cpp", ".c", ".cc")):
+            scope[paired] = None
+    if target_path.is_file():
+        include_index = build_source_include_index(root)
+        for _, include_name in include_lines(read_text(target_path)):
+            normalized = include_name.replace("\\", "/")
+            if normalized in include_index:
+                for candidate in include_index[normalized]:
+                    candidate_path = Path(candidate)
+                    if candidate_path.is_file():
+                        scope[candidate_path.resolve()] = None
+                continue
+            if "/" not in normalized and "\\" not in normalized:
+                local = parent / include_name
+                if local.is_file() and local.suffix.lower() in SOURCE_ONLY_SUFFIXES:
+                    scope[local.resolve()] = None
+    return sorted(scope.keys())
+
+
+def _source_module_root(path: Path, project_root: Path) -> Path | None:
+    try:
+        rel = path.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        return None
+    parts = rel.parts
+    if len(parts) < 2 or parts[0].lower() != "source":
+        return None
+    return (project_root / "Source" / parts[1]).resolve()
+
+
+def module_relative_key(path: Path, project_root: Path) -> str | None:
+    try:
+        rel = path.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        return None
+    parts = rel.parts
+    if len(parts) < 3 or parts[0].lower() != "source":
+        return None
+    tail = list(parts[2:])
+    if tail and tail[0].lower() in {"public", "private"}:
+        tail = tail[1:]
+    if not tail:
+        return None
+    return "/".join(tail).replace("\\", "/")
+
+
+def _find_module_paired_files(
+    path: Path,
+    project_root: Path,
+    stem: str,
+    paired_exts: tuple[str, ...],
+) -> list[Path]:
+    module_root = _source_module_root(path, project_root)
+    source_key = module_relative_key(path, project_root)
+    if module_root is None or not module_root.is_dir() or not source_key:
+        return []
+    key_dir = source_key.rsplit("/", 1)[0] if "/" in source_key else ""
+    found: list[Path] = []
+    for candidate in module_root.rglob(f"{stem}.*"):
+        if candidate.suffix.lower() not in paired_exts:
             continue
-        files.append(path)
-    return files
+        candidate_key = module_relative_key(candidate, project_root)
+        if not candidate_key or candidate.stem != stem:
+            continue
+        candidate_dir = candidate_key.rsplit("/", 1)[0] if "/" in candidate_key else ""
+        if candidate_dir == key_dir:
+            found.append(candidate.resolve())
+    return found
+
+
+def class_headers_from_paths(paths: list[Path], texts: dict[Path, str]) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for path in paths:
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        text = texts.get(path, read_text(path))
+        for match in re.finditer(r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b", text):
+            if not _is_class_definition(text, match.start()):
+                continue
+            headers.setdefault(match.group(1), text)
+    return headers
+
+
+def class_bases_from_paths(paths: list[Path], texts: dict[Path, str]) -> dict[str, str]:
+    bases: dict[str, str] = {}
+    for path in paths:
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        bases.update(class_base_names(texts.get(path, read_text(path))))
+    return bases
+
+
+def build_source_include_index_for_paths(paths: list[Path]) -> dict[str, list[str]]:
+    index: dict[str, list[str]] = {}
+    for path in paths:
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        parts = path.parts
+        rel = path.name
+        if "Public" in parts:
+            rel = "/".join(parts[parts.index("Public") + 1 :])
+        elif "Private" in parts:
+            rel = "/".join(parts[parts.index("Private") + 1 :])
+        rel = rel.replace("\\", "/")
+        index.setdefault(rel, []).append(str(path))
+        index.setdefault(path.name, []).append(str(path))
+    return index
+
+
+def _read_scope_texts(paths: list[Path]) -> dict[Path, str]:
+    return {path: read_text(path) for path in paths if path.is_file()}
 
 
 def line_number(text: str, offset: int) -> int:
@@ -330,6 +494,30 @@ def build_delegate_arity_map(root: Path) -> dict[str, int]:
     return member_arity
 
 
+def build_delegate_arity_map_from_texts(paths: list[Path], texts: dict[Path, str]) -> dict[str, int]:
+    type_param_counts: dict[str, int] = {}
+    for path in paths:
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        text = texts.get(path, read_text(path))
+        for match in DELEGATE_DECLARE_RE.finditer(text):
+            word = match.group(1)
+            delegate_type = match.group(2)
+            type_param_counts[delegate_type] = DELEGATE_PARAM_COUNT_WORDS.get(word or "", 0)
+    if not type_param_counts:
+        return {}
+    member_arity: dict[str, int] = {}
+    for path in paths:
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        text = texts.get(path, read_text(path))
+        for match in _DELEGATE_MEMBER_DECL_RE.finditer(text):
+            type_name, member_name = match.group(1), match.group(2)
+            if type_name in type_param_counts:
+                member_arity[member_name] = type_param_counts[type_name]
+    return member_arity
+
+
 def validate_delegate_broadcast_consistency(
     path: Path, text: str, root: Path, arity_map: dict[str, int] | None = None
 ) -> list[Finding]:
@@ -572,7 +760,9 @@ def validate_raw_uobject_members(path: Path, text: str, root: Path) -> list[Find
         if not match:
             continue
         nearby = "\n".join(lines[max(0, index - 5) : index])
-        if "UPROPERTY" in nearby or "TObjectPtr" in line:
+        if "UPROPERTY" in nearby:
+            continue
+        if "TObjectPtr" in line:
             continue
         findings.append(
             Finding(
@@ -1001,6 +1191,15 @@ def validate_enhanced_input(path: Path, text: str, root: Path, build_text: str) 
     return findings
 
 
+def _is_class_definition(text: str, class_start: int) -> bool:
+    snippet = text[class_start : class_start + 800]
+    brace = snippet.find("{")
+    semi = snippet.find(";")
+    if brace == -1:
+        return False
+    return semi == -1 or brace < semi
+
+
 def class_headers(root: Path) -> dict[str, str]:
     headers: dict[str, str] = {}
     for path in iter_source_files(root):
@@ -1008,7 +1207,8 @@ def class_headers(root: Path) -> dict[str, str]:
             continue
         text = read_text(path)
         for match in re.finditer(r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b", text):
-            headers.setdefault(match.group(1), text)
+            if _is_class_definition(text, match.start()):
+                headers.setdefault(match.group(1), text)
     return headers
 
 
@@ -1027,6 +1227,9 @@ def _header_has_matching_signature(header: str, func_name: str, params: str) -> 
 
 def _normalize_return_type(ret: str) -> str:
     value = re.sub(r"\s+", " ", str(ret or "").strip())
+    for prefix in ("virtual ", "static ", "inline ", "FORCEINLINE ", "constexpr "):
+        if value.startswith(prefix):
+            value = value[len(prefix) :].lstrip()
     return value.replace(" const", "").strip()
 
 
@@ -1189,13 +1392,24 @@ def validate_blueprint_native_event_implementations(root: Path) -> list[Finding]
     return findings
 
 
-def validate_cpp_definitions_missing(root: Path) -> list[Finding]:
+def validate_cpp_definitions_missing(
+    root: Path,
+    *,
+    scope_headers: dict[str, str] | None = None,
+    scope_header_paths: dict[str, Path] | None = None,
+    scope_cpp_paths: list[Path] | None = None,
+    scope_texts: dict[Path, str] | None = None,
+) -> list[Finding]:
     findings: list[Finding] = []
-    headers = class_headers(root)
-    cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
-    if not cpp_paths:
-        return findings
-    all_cpp = "\n".join(read_text(path) for path in cpp_paths)
+    headers = scope_headers if scope_headers is not None else class_headers(root)
+    if scope_cpp_paths is not None:
+        cpp_paths = scope_cpp_paths
+        all_cpp = "\n".join(scope_texts.get(path, read_text(path)) for path in cpp_paths)
+    else:
+        cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+        if not cpp_paths:
+            return findings
+        all_cpp = "\n".join(read_text(path) for path in cpp_paths)
     method_decl_re = re.compile(
         r"^[ \t]*(?:virtual[ \t]+)?[\w:<>,~*& \t]+[ \t]+(?P<func>~?[A-Za-z_][A-Za-z0-9_]*)"
         r"\s*\([^;{}]*\)\s*(?:const\s*)?(?:override\s*)?;",
@@ -1205,10 +1419,13 @@ def validate_cpp_definitions_missing(root: Path) -> list[Finding]:
         if not class_name.startswith("U"):
             continue
         header_path = None
-        for path in iter_source_files(root):
-            if path.suffix.lower() in {".h", ".hpp"} and class_name in read_text(path):
-                header_path = path
-                break
+        if scope_header_paths and class_name in scope_header_paths:
+            header_path = scope_header_paths[class_name]
+        elif scope_header_paths is None:
+            for path in iter_source_files(root):
+                if path.suffix.lower() in {".h", ".hpp"} and class_name in read_text(path):
+                    header_path = path
+                    break
         for match in method_decl_re.finditer(header_text):
             func_name = match.group("func")
             if func_name.startswith("~") or func_name in UE_DECLARATION_MACROS:
@@ -1295,15 +1512,21 @@ def validate_rpc_implementations(root: Path) -> list[Finding]:
     return findings
 
 
-def validate_replication_setup(root: Path) -> list[Finding]:
+def validate_replication_setup(
+    root: Path,
+    *,
+    scope_cpp_paths: list[Path] | None = None,
+    scope_texts: dict[Path, str] | None = None,
+) -> list[Finding]:
     """Warn (never block) when DOREPLIFETIME is used without a matching, complete
     GetLifetimeReplicatedProps override. Missing the override means the property never
     replicates; missing the Super:: call silently drops base-class replicated props."""
     findings: list[Finding] = []
-    for path in iter_source_files(root):
-        if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
-            continue
-        text = read_text(path)
+    cpp_paths = scope_cpp_paths
+    if cpp_paths is None:
+        cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+    for path in cpp_paths:
+        text = scope_texts.get(path, read_text(path)) if scope_texts else read_text(path)
         if "DOREPLIFETIME" not in text:
             continue
         lifecycle_blocks = [
@@ -1637,6 +1860,15 @@ def validate_component_subsystem_patterns(path: Path, text: str, root: Path) -> 
 
 
 GENGINE_WORLD_ACCESS_RE = re.compile(r"\bGEngine\s*->\s*(GetWorld|GetGameInstance)\s*\(")
+DISABLE_GRAVITY_RE = re.compile(r"(?:->|\.)\s*DisableGravity\s*\(")
+WORLD_GET_URL_RE = re.compile(
+    r"\b(?:GetWorld\s*\(\s*\)|(?:[A-Za-z_]\w*)?World)\s*->\s*GetURL\s*\(",
+    re.IGNORECASE,
+)
+SPAWN_ACTOR_TRANSFORM_POINTER_RE = re.compile(
+    r"\bSpawnActor\s*(?:<[^;{}]+?>)?\s*\([^;{}]*?,\s*&\s*[A-Za-z_]\w*Transform\b",
+    re.DOTALL,
+)
 
 
 def validate_gengine_world_context(path: Path, text: str, root: Path) -> list[Finding]:
@@ -1662,6 +1894,57 @@ def validate_gengine_world_context(path: Path, text: str, root: Path) -> list[Fi
                     "PIE/editor/multi-world). Use the owning object's world instead: subsystem/actor GetWorld(), "
                     "an explicit UWorld*/world-context parameter, or "
                     "UWorld::GetGameInstance()/UWorld::GetSubsystem on a known world."
+                ),
+            )
+        )
+    return findings
+
+
+def validate_known_bad_api_patterns(path: Path, text: str, root: Path) -> list[Finding]:
+    """Warn on high-confidence Unreal API mistakes seen in live project use.
+
+    These stay advisory because static text matching cannot always recover the
+    receiver type or selected SpawnActor overload. GEngine world access remains
+    a separate blocking rule because that pattern is unambiguously unusable.
+    """
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in DISABLE_GRAVITY_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "INVENTED_MOVEMENT_API",
+                (
+                    "UCharacterMovementComponent has no DisableGravity(). Use GravityScale = 0.0f "
+                    "or an intentional movement mode such as MOVE_Flying."
+                ),
+            )
+        )
+    for match in WORLD_GET_URL_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "INVENTED_WORLD_API",
+                (
+                    "UWorld has no GetURL(). Use GetMapName() or "
+                    "UGameplayStatics::GetCurrentLevelName(), then OpenLevel/ServerTravel as appropriate."
+                ),
+            )
+        )
+    for match in SPAWN_ACTOR_TRANSFORM_POINTER_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "SPAWNACTOR_TRANSFORM_POINTER",
+                (
+                    "A Transform pointer selects a different/legacy SpawnActor overload and is easy to misuse. "
+                    "Prefer the typed overload with SpawnTransform by const reference/value and explicit Params."
                 ),
             )
         )
@@ -1808,9 +2091,18 @@ def validate_duplicate_source_basenames(root: Path) -> list[Finding]:
     return findings
 
 
-def validate_include_paths_exist(path: Path, text: str, root: Path, include_index: dict[str, list[str]]) -> list[Finding]:
+def validate_include_paths_exist(
+    path: Path,
+    text: str,
+    root: Path,
+    include_index: dict[str, list[str]],
+    *,
+    write_mode: bool = False,
+    include_owner_map: dict[str, list[str]] | None = None,
+) -> list[Finding]:
     findings: list[Finding] = []
     rel = str(path.relative_to(root)).replace("\\", "/")
+    owner_map = include_owner_map or {}
     for line, include_path in include_lines(text):
         normalized = include_path.replace("\\", "/")
         if normalized.startswith("Game/Framework/"):
@@ -1822,16 +2114,22 @@ def validate_include_paths_exist(path: Path, text: str, root: Path, include_inde
         candidates = include_index.get(normalized, [])
         if candidates:
             continue
-        if normalized.endswith(".h") or normalized.endswith(".hpp"):
-            findings.append(
-                Finding(
-                    "error",
-                    rel,
-                    line,
-                    "INCLUDE_PATH_NOT_FOUND",
-                    f'Include "{include_path}" was not found under the project Source/ tree.',
-                )
+        if write_mode and find_include_owner(normalized, owner_map):
+            continue
+        if not (normalized.endswith(".h") or normalized.endswith(".hpp")):
+            continue
+        severity = "error"
+        if write_mode and "/" not in normalized and "\\" not in normalized:
+            severity = "warning"
+        findings.append(
+            Finding(
+                severity,
+                rel,
+                line,
+                "INCLUDE_PATH_NOT_FOUND",
+                f'Include "{include_path}" was not found under the project Source/ tree.',
             )
+        )
     return findings
 
 
@@ -1958,17 +2256,821 @@ def validate_multifile_callsite_drift(root: Path) -> list[Finding]:
     return findings
 
 
+def has_direct_uproperty_annotation(lines: list[str], line_index: int) -> bool:
+    """Backward-compatible wrapper around member_has_uproperty()."""
+    text = "\n".join(lines)
+    line_starts = [0]
+    for line in lines:
+        line_starts.append(line_starts[-1] + len(line) + 1)
+    if line_index < 0 or line_index >= len(line_starts) - 1:
+        return False
+    return member_has_uproperty(text, line_starts[line_index])
+
+
+def member_has_uproperty(text: str, member_offset: int) -> bool:
+    masked = mask_comments_and_strings(text)
+    gap_macro_re = re.compile(
+        r"\b(UFUNCTION|GENERATED_BODY|UCLASS|UINTERFACE|USTRUCT|UENUM|UPROPERTY|[A-Z][A-Z0-9_]*)\s*\("
+    )
+    for start, end, _block in extract_macro_blocks(masked, "UPROPERTY"):
+        if end > member_offset:
+            continue
+        gap = masked[end:member_offset]
+        if gap_macro_re.search(gap):
+            continue
+        stripped = re.sub(r"//[^\n]*", "", gap)
+        stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL)
+        if not stripped.strip():
+            return True
+        if ";" not in stripped and not re.search(r"\b(class|struct|enum)\b", stripped):
+            return True
+    return False
+
+
+def extract_replicated_member_names(text: str) -> list[tuple[int, str]]:
+    members: list[tuple[int, str]] = []
+    for start, end, block in extract_macro_blocks(text, "UPROPERTY"):
+        if not re.search(r"\bReplicated(?:Using\b|\b)", block):
+            continue
+        tail = text[end : end + 400]
+        match = re.search(
+            r"(?:^|\n)\s*(?:virtual\s+)?(?:static\s+)?(?:inline\s+)?"
+            r"(?:[\w:<>,~*&]+\s+)+\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=|;|\()",
+            tail,
+        )
+        if match:
+            members.append((end + match.start("name"), match.group("name")))
+    return members
+
+
+def _split_top_level_args(arg_text: str) -> list[str]:
+    args: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for ch in arg_text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            args.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    tail = "".join(current).strip()
+    if tail:
+        args.append(tail)
+    return args
+
+
+def normalize_timer_handle(expr: str) -> str:
+    return re.sub(r"\s+", "", str(expr or "").strip())
+
+
+def _set_timer_is_looping(call_args: str) -> bool:
+    args = _split_top_level_args(call_args)
+    if not args:
+        return False
+    joined = " ".join(args)
+    if re.search(r"\bbLoop\s*=\s*false\b", joined, re.IGNORECASE):
+        return False
+    if re.search(r"\bbLoop\s*=\s*true\b", joined, re.IGNORECASE):
+        return True
+    for arg in reversed(args):
+        lowered = arg.strip().lower()
+        if lowered in {"true", "false"}:
+            return lowered == "true"
+    return False
+
+
+def _extract_set_timer_calls(body: str) -> list[tuple[int, str, bool]]:
+    calls: list[tuple[int, str, bool]] = []
+    for match in re.finditer(r"\bSetTimer(?:Delegate)?\s*\(", body):
+        open_index = match.end() - 1
+        close_index = find_balanced_parens(body, open_index)
+        if close_index == -1:
+            continue
+        args_text = body[open_index + 1 : close_index]
+        args = _split_top_level_args(args_text)
+        if not args:
+            continue
+        handle = normalize_timer_handle(args[0])
+        if not handle or handle == "this":
+            continue
+        calls.append((match.start(), handle, _set_timer_is_looping(args_text)))
+    return calls
+
+
+def _extract_clear_timer_calls(body: str) -> tuple[set[str], set[str]]:
+    cleared: set[str] = set()
+    clear_all_objects: set[str] = set()
+    for match in re.finditer(r"\bClearTimer\s*\(\s*", body):
+        open_index = match.end() - 1
+        close_index = find_balanced_parens(body, open_index)
+        if close_index == -1:
+            continue
+        expr = body[open_index + 1 : close_index].strip()
+        cleared.add(normalize_timer_handle(expr))
+    for match in re.finditer(r"\bClearAllTimersForObject\s*\(\s*", body):
+        open_index = match.end() - 1
+        close_index = find_balanced_parens(body, open_index)
+        if close_index == -1:
+            continue
+        expr = body[open_index + 1 : close_index].strip()
+        clear_all_objects.add(normalize_timer_handle(expr))
+    return cleared, clear_all_objects
+
+
+def _extract_delegate_receiver(body: str, bind_start: int) -> str | None:
+    prefix = body[max(0, bind_start - 200) : bind_start]
+    match = re.search(
+        r"([\w:>\[\]\.\*]+(?:->|\.)\s*[\w]+)\s*\.\s*$",
+        prefix,
+    )
+    if not match:
+        return None
+    return normalize_timer_handle(match.group(1))
+
+
+def _parse_delegate_bind(body: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for match in re.finditer(r"\b(?:AddDynamic|AddUObject|BindUObject)\s*\(", body):
+        open_index = match.end() - 1
+        close_index = find_balanced_parens(body, open_index)
+        if close_index == -1:
+            continue
+        receiver = _extract_delegate_receiver(body, match.start())
+        if not receiver:
+            continue
+        args = _split_top_level_args(body[open_index + 1 : close_index])
+        handler = args[1].strip() if len(args) > 1 else ""
+        if handler.startswith("&"):
+            pairs.append((receiver, normalize_timer_handle(handler)))
+    return pairs
+
+
+def _parse_delegate_unbind(body: str) -> list[tuple[str, str | None]]:
+    pairs: list[tuple[str, str | None]] = []
+    for match in re.finditer(r"\b(?:RemoveDynamic|RemoveAll|Unbind)\s*\(", body):
+        open_index = match.end() - 1
+        close_index = find_balanced_parens(body, open_index)
+        if close_index == -1:
+            continue
+        receiver = _extract_delegate_receiver(body, match.start())
+        if not receiver:
+            continue
+        args = _split_top_level_args(body[open_index + 1 : close_index])
+        handler = args[1].strip() if len(args) > 1 else None
+        if handler and handler.startswith("&"):
+            handler = normalize_timer_handle(handler)
+        pairs.append((receiver, handler))
+    return pairs
+
+
+def _find_enclosing_class_name(text: str, offset: int) -> str | None:
+    matches = list(
+        re.finditer(r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b", text[:offset])
+    )
+    for match in reversed(matches):
+        if _is_class_definition(text, match.start()):
+            return match.group(1)
+    return None
+
+
+DOREPLIFETIME_PROP_RES: dict[str, re.Pattern[str]] = {}
+
+
+def doreplifetime_prop_pattern(prop: str, class_name: str | None = None) -> re.Pattern[str]:
+    key = f"{(class_name or '*').lower()}:{prop.lower()}"
+    cached = DOREPLIFETIME_PROP_RES.get(key)
+    if cached is not None:
+        return cached
+    if class_name:
+        compiled = re.compile(
+            rf"\bDOREPLIFETIME(?:_CONDITION(?:_NOTIFY)?)?\s*\(\s*{re.escape(class_name)}\s*,\s*{re.escape(prop)}\b",
+            re.MULTILINE | re.IGNORECASE,
+        )
+    else:
+        compiled = re.compile(
+            rf"\bDOREPLIFETIME(?:_CONDITION(?:_NOTIFY)?)?\s*\([^)]*\b{re.escape(prop)}\b",
+            re.MULTILINE,
+        )
+    DOREPLIFETIME_PROP_RES[key] = compiled
+    return compiled
+
+
+def iter_class_method_blocks(text: str) -> list[tuple[str, str, int, str]]:
+    blocks: list[tuple[str, str, int, str]] = []
+    seen: set[tuple[str, str, int]] = set()
+    for header, start, body in iter_function_blocks(text):
+        match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)\s*\(", header)
+        if match:
+            key = (match.group(1), match.group(2), start)
+            if key not in seen:
+                seen.add(key)
+                blocks.append((match.group(1), match.group(2), start, body))
+            continue
+        name_match = re.search(
+            r"(?:^|\s)(~?[A-Za-z_][A-Za-z0-9_]*)\s*\(",
+            header,
+        )
+        if not name_match:
+            continue
+        method_name = name_match.group(1)
+        if method_name in {"if", "for", "while", "switch", "catch"}:
+            continue
+        class_name = _find_enclosing_class_name(text, start)
+        if not class_name:
+            continue
+        key = (class_name, method_name, start)
+        if key not in seen:
+            seen.add(key)
+            blocks.append((class_name, method_name, start, body))
+    return blocks
+
+
+def lines_in_function_blocks(text: str) -> set[int]:
+    """Line numbers inside function bodies (not signatures)."""
+    blocked: set[int] = set()
+    pattern = re.compile(
+        r"(?:[\w:<>,~*&]+\s+)+(?P<name>[A-Za-z_][A-Za-z0-9_:~]*)\s*\([^;{}]*\)\s*(?:const\s*)?\{",
+        flags=re.MULTILINE,
+    )
+    for match in pattern.finditer(text):
+        name = match.group("name")
+        if name in {"if", "for", "while", "switch", "catch"}:
+            continue
+        open_index = match.end() - 1
+        close_index = find_matching_brace(text, open_index)
+        if close_index == -1:
+            continue
+        start_line = text.count("\n", 0, open_index) + 1
+        end_line = text.count("\n", 0, close_index) + 1
+        blocked.update(range(start_line + 1, end_line))
+    return blocked
+
+
+UOBJECT_CONTAINER_MEMBER_RE = re.compile(
+    r"\b(?:TArray|TMap|TSet)\s*<[^>]*(?:TObjectPtr\s*<\s*[^>]+>|[UA][A-Za-z_][A-Za-z0-9_<>]*\s*\*)[^>]*>"
+    r"\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*[^;]+)?;"
+)
+TOBJECTPTR_MEMBER_RE = re.compile(
+    r"\bTObjectPtr\s*<\s*(?:const\s+)?[^>]+>\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*[^;]+)?;"
+)
+DELEGATE_BIND_RE = re.compile(r"\b(?:AddDynamic|AddUObject|BindUObject)\s*\(")
+DELEGATE_RAW_BIND_RE = re.compile(r"\b(?:AddRaw|BindRaw)\s*\(")
+DELEGATE_UNBIND_RE = re.compile(r"\b(?:RemoveDynamic|RemoveAll|Unbind)\s*\(")
+TIMER_LOOP_SET_RE = re.compile(r"\bSetTimer(?:Delegate)?\s*\(")
+TIMER_CLEAR_RE = re.compile(r"\b(?:ClearTimer|ClearAllTimersForObject)\s*\(")
+CLEAR_ALL_TIMERS_RE = re.compile(r"\bClearAllTimersForObject\s*\(")
+TIMER_SET_HANDLE_RE = re.compile(r"\bSetTimer(?:Delegate)?\s*\(\s*(?P<handle>[A-Za-z_][A-Za-z0-9_]*)")
+TIMER_CLEAR_HANDLE_RE = re.compile(r"\bClearTimer\s*\(\s*(?P<handle>[A-Za-z_][A-Za-z0-9_]*)")
+TEARDOWN_METHOD_RE = re.compile(
+    r"\b(?:EndPlay|Deinitialize|PreDeinitialize|OnWorldEndPlay|OnUnregister|"
+    r"UninitializeComponent|OnComponentDestroyed|Destroyed|BeginDestroy|Shutdown)\b"
+)
+UNCHECKED_CAST_RE = re.compile(
+    r"\bCast\s*<[^>]+>\s*\([^)]+\)\s*->",
+    re.MULTILINE,
+)
+REPLICATED_UPROPERTY_RE = re.compile(
+    r"UPROPERTY\s*\([^)]*\bReplicated(?:Using\b[^)]*)?\)[^;]*?"
+    r"\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;",
+    re.MULTILINE | re.DOTALL,
+)
+RAW_NEW_UOBJECT_RE = re.compile(r"\bnew\s+(?:U|A)[A-Za-z_][A-Za-z0-9_]*\b")
+UOBJECT_PTR_DECL_RE = re.compile(
+    r"\b(?:U|A)[A-Za-z_][A-Za-z0-9_]*\s*\*\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+)
+DELETE_VAR_RE = re.compile(r"\bdelete\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;")
+SYNC_LOAD_RE = re.compile(
+    r"\b(?:LoadObject|StaticLoadObject)\s*[<(]|(?:->|\.)LoadSynchronous\s*\("
+)
+HOT_PATH_RE = re.compile(r"\b(?:Tick(?:Component)?|NativeTick)\s*\(")
+RUNTIME_CALLBACK_RE = re.compile(r"\b(?:BeginPlay|OnRep_\w+)\s*\(")
+HARDCODED_GAME_PATH_RE = re.compile(r'"(?:/Game/[^"]+|/Engine/[^"]+)"')
+FVECTOR_FLOAT_PRECISION_RE = re.compile(
+    r"\bFVector\s*\([^)]*(?:\d+(?:\.\d+)?f|\(\s*float\s*\))[^)]*\)"
+)
+BLUEPRINTPURE_NON_CONST_RE = re.compile(
+    r"UFUNCTION\s*\([^)]*BlueprintPure[^)]*\)\s*\n\s*(?!.*\bconst\b)[^;]+?\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
+    re.MULTILINE,
+)
+
+
+def validate_uobject_container_without_uproperty(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return findings
+    lines = text.splitlines()
+    local_lines = lines_in_function_blocks(text)
+    for index, line in enumerate(lines, start=1):
+        if index in local_lines:
+            continue
+        if "(" in line and "TMap" not in line and "TSet" not in line and "TArray" not in line:
+            continue
+        match = UOBJECT_CONTAINER_MEMBER_RE.search(line)
+        if not match or member_has_uproperty(text, text.find(line)):
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                str(path.relative_to(root)),
+                index,
+                "UOBJECT_CONTAINER_WITHOUT_UPROPERTY",
+                f'UObject container member "{match.group("name")}" lacks UPROPERTY(); GC may collect retained objects.',
+            )
+        )
+    return findings
+
+
+def validate_tobjectptr_without_uproperty(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return findings
+    lines = text.splitlines()
+    local_lines = lines_in_function_blocks(text)
+    for index, line in enumerate(lines, start=1):
+        if index in local_lines:
+            continue
+        match = TOBJECTPTR_MEMBER_RE.search(line)
+        if not match or member_has_uproperty(text, text.find(line)):
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                str(path.relative_to(root)),
+                index,
+                "TOBJECTPTR_WITHOUT_UPROPERTY",
+                f'TObjectPtr member "{match.group("name")}" lacks UPROPERTY(); GC tracking is incomplete.',
+            )
+        )
+    return findings
+
+
+def validate_delegate_bind_without_unbind(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    class_methods = iter_class_method_blocks(text)
+    if not class_methods:
+        return findings
+    by_class: dict[str, list[tuple[str, int, str]]] = {}
+    for class_name, method_name, start, body in class_methods:
+        by_class.setdefault(class_name, []).append((method_name, start, body))
+    for class_name, methods in by_class.items():
+        binds: set[tuple[str, str]] = set()
+        unbinds: set[tuple[str, str | None]] = set()
+        first_bind_start: int | None = None
+        for method_name, start, body in methods:
+            for delegate, handler in _parse_delegate_bind(body):
+                binds.add((delegate, handler))
+                if first_bind_start is None:
+                    first_bind_start = start
+            for delegate, handler in _parse_delegate_unbind(body):
+                unbinds.add((delegate, handler))
+        missing = [
+            pair
+            for pair in binds
+            if (pair[0], pair[1]) not in unbinds and (pair[0], None) not in unbinds
+        ]
+        if missing:
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, first_bind_start or methods[0][1]),
+                    "DELEGATE_BIND_WITHOUT_UNBIND",
+                    f"{class_name} binds delegates without matching RemoveDynamic/RemoveAll/Unbind in teardown"
+                    f" ({len(missing)} unmatched).",
+                )
+            )
+    for class_name, method_name, start, body in class_methods:
+        if not DELEGATE_RAW_BIND_RE.search(body):
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, start),
+                "DELEGATE_RAW_BIND_LIFETIME",
+                f"{class_name}::{method_name} uses AddRaw/BindRaw; verify UObject lifetime is safe.",
+            )
+        )
+    return findings
+
+
+def validate_timer_set_without_clear(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    class_methods = iter_class_method_blocks(text)
+    if not class_methods:
+        return findings
+    by_class: dict[str, list[tuple[str, int, str]]] = {}
+    for class_name, method_name, start, body in class_methods:
+        by_class.setdefault(class_name, []).append((method_name, start, body))
+    for class_name, methods in by_class.items():
+        set_handles: set[str] = set()
+        cleared_handles: set[str] = set()
+        clear_all_this = False
+        first_set_start: int | None = None
+        for method_name, start, body in methods:
+            for call_start, handle, looping in _extract_set_timer_calls(body):
+                if not looping:
+                    continue
+                if first_set_start is None:
+                    first_set_start = start
+                set_handles.add(handle)
+        for method_name, start, body in methods:
+            if TEARDOWN_METHOD_RE.search(method_name):
+                cleared, clear_all_objects = _extract_clear_timer_calls(body)
+                cleared_handles.update(cleared)
+                if "this" in clear_all_objects:
+                    clear_all_this = True
+        if not set_handles:
+            continue
+        if clear_all_this:
+            continue
+        missing_handles = set_handles - cleared_handles
+        if missing_handles:
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, first_set_start or methods[0][1]),
+                    "TIMER_SET_WITHOUT_CLEAR",
+                    f"{class_name} sets repeating timer(s) without matching ClearTimer in teardown"
+                    f" (missing: {', '.join(sorted(missing_handles))}).",
+                )
+            )
+    return findings
+
+
+def validate_interrupt_param_ignored(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for header, start, body in iter_function_blocks(text):
+        if not re.search(r"\bb(?:Interrupted|WasCancelled)\b", header):
+            continue
+        for param in ("bInterrupted", "bWasCancelled"):
+            if param not in header:
+                continue
+            if re.search(rf"\b{param}\b", body):
+                continue
+            name_match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)\s*\(", header)
+            method = name_match.group(2) if name_match else "callback"
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, start),
+                    "INTERRUPT_PARAM_IGNORED",
+                    f'{method} receives "{param}" but never references it in the body.',
+                )
+            )
+    return findings
+
+
+def validate_unchecked_cast_result(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in UNCHECKED_CAST_RE.finditer(text):
+        window = text[max(0, match.start() - 120) : match.start()]
+        if re.search(r"\bif\s*\(\s*(?:IsValid\s*\(|Cast<|\w+\s*!=\s*nullptr)", window):
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "UNCHECKED_CAST_RESULT",
+                "Cast<> result is dereferenced without a visible null/IsValid check.",
+            )
+        )
+    return findings
+
+
+def validate_replicated_uproperty_without_doreplifetime(
+    root: Path,
+    *,
+    scope_header_paths: list[Path] | None = None,
+    scope_texts: dict[Path, str] | None = None,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    header_paths = scope_header_paths
+    if header_paths is None:
+        header_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".h", ".hpp"}]
+    cpp_text_by_stem: dict[str, str] = {}
+    if scope_texts is not None:
+        for path, text in scope_texts.items():
+            if path.suffix.lower() in {".cpp", ".c", ".cc"}:
+                cpp_text_by_stem[path.stem.lower()] = text
+    else:
+        for path in iter_source_files(root):
+            if path.suffix.lower() in {".cpp", ".c", ".cc"}:
+                cpp_text_by_stem[path.stem.lower()] = read_text(path)
+    for path in header_paths:
+        header_text = scope_texts.get(path, read_text(path)) if scope_texts else read_text(path)
+        cpp_text = mask_comments_and_strings(cpp_text_by_stem.get(path.stem.lower(), ""))
+        class_names = [
+            match.group(1)
+            for match in re.finditer(
+                r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b",
+                header_text,
+            )
+            if _is_class_definition(header_text, match.start())
+        ]
+        for offset, prop in extract_replicated_member_names(header_text):
+            class_name = _find_enclosing_class_name(header_text, offset) or (class_names[0] if class_names else None)
+            if class_name and doreplifetime_prop_pattern(prop, class_name).search(cpp_text):
+                continue
+            if not class_name and doreplifetime_prop_pattern(prop).search(cpp_text):
+                continue
+            findings.append(
+                Finding(
+                    "warning",
+                    str(path.relative_to(root)),
+                    line_number(header_text, offset),
+                    "REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME",
+                    f'Replicated property "{prop}" has no visible DOREPLIFETIME registration in the matching .cpp.',
+                )
+            )
+    return findings
+
+
+def validate_raw_new_delete_uobject(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in RAW_NEW_UOBJECT_RE.finditer(text):
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "RAW_NEW_DELETE_UOBJECT",
+                "Avoid new on UObject-derived types; use NewObject<> with an explicit outer.",
+            )
+        )
+    for header, start, body in iter_function_blocks(text):
+        uobject_ptrs = {match.group("name") for match in UOBJECT_PTR_DECL_RE.finditer(body)}
+        if not uobject_ptrs:
+            continue
+        for match in DELETE_VAR_RE.finditer(body):
+            name = match.group("name")
+            if name not in uobject_ptrs:
+                continue
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, start + match.start()),
+                    "RAW_NEW_DELETE_UOBJECT",
+                    f"Avoid delete on UObject pointer '{name}'; let GC manage lifetime.",
+                )
+            )
+    return findings
+
+
+def validate_actor_ctor_getworld(path: Path, text: str, root: Path, bases: dict[str, str]) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
+        return findings
+    rel = str(path.relative_to(root))
+    for class_name, func_name, _, _, body in iter_cpp_definition_blocks(text):
+        if class_name != func_name:
+            continue
+        base = bases.get(class_name, "")
+        if base != "AActor" and not base.startswith("A"):
+            continue
+        if "GetWorld()" not in body:
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                0,
+                "ACTOR_CTOR_GETWORLD",
+                f"Avoid GetWorld() in {class_name} constructor; defer world access to BeginPlay.",
+            )
+        )
+    return findings
+
+
+def validate_sync_load_in_gameplay(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for header, start, body in iter_function_blocks(text):
+        if not SYNC_LOAD_RE.search(body):
+            continue
+        is_hot = bool(HOT_PATH_RE.search(header))
+        is_runtime = bool(RUNTIME_CALLBACK_RE.search(header))
+        if not is_hot and not is_runtime:
+            continue
+        label = "hot path" if is_hot else "runtime callback"
+        for match in SYNC_LOAD_RE.finditer(body):
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, start + match.start()),
+                    "SYNC_LOAD_IN_GAMEPLAY",
+                    f"Synchronous load in {label}; prefer async/streaming or preloaded assets.",
+                )
+            )
+            break
+    return findings
+
+
+def validate_hardcoded_asset_path(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in HARDCODED_GAME_PATH_RE.finditer(text):
+        window = text[max(0, match.start() - 200) : match.start()]
+        if "ConstructorHelpers" in window:
+            continue
+        findings.append(
+            Finding(
+                "warning",
+                rel,
+                line_number(text, match.start()),
+                "HARDCODED_ASSET_PATH",
+                "Hardcoded /Game/ or /Engine/ asset path; prefer soft references or ConstructorHelpers in ctor.",
+            )
+        )
+    return findings
+
+
+def validate_fvector_float_precision(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    for match in FVECTOR_FLOAT_PRECISION_RE.finditer(text):
+        findings.append(
+            Finding(
+                "info",
+                rel,
+                line_number(text, match.start()),
+                "FVECTOR_FLOAT_PRECISION",
+                "FVector initialized with float literals/casts; UE5 FVector is double-precision.",
+            )
+        )
+    return findings
+
+
+def validate_blueprintpure_missing_const(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return findings
+    for match in BLUEPRINTPURE_NON_CONST_RE.finditer(text):
+        findings.append(
+            Finding(
+                "info",
+                str(path.relative_to(root)),
+                line_number(text, match.start()),
+                "BLUEPRINTPURE_MISSING_CONST",
+                f'BlueprintPure function "{match.group("name")}" should be const.',
+            )
+        )
+    return findings
+
+
+def _run_per_file_validators(
+    findings: list[Finding],
+    path: Path,
+    text: str,
+    root: Path,
+    *,
+    headers: dict[str, str],
+    bases: dict[str, str],
+    delegate_arity_map: dict[str, int],
+    include_index: dict[str, list[str]],
+    build_text_value: str,
+    skip_include_path_checks: bool,
+    write_mode: bool = False,
+    include_owner_map: dict[str, list[str]] | None = None,
+) -> None:
+    if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+        findings.extend(validate_typo_includes(path, text, root))
+        findings.extend(validate_component_subsystem_patterns(path, text, root))
+        findings.extend(validate_gengine_world_context(path, text, root))
+        findings.extend(validate_known_bad_api_patterns(path, text, root))
+    if path.suffix.lower() in {".h", ".hpp"}:
+        findings.extend(validate_generated_h(path, text, root))
+        findings.extend(validate_reflected_namespace(path, text, root))
+        findings.extend(validate_uht_macros_in_conditional_blocks(path, text, root))
+        findings.extend(validate_static_mutable_container_members(path, text, root))
+        findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
+        findings.extend(validate_blueprint_native_event_declarations(path, text, root))
+        findings.extend(validate_private_blueprint_access(path, text, root))
+        findings.extend(validate_raw_uobject_members(path, text, root))
+        findings.extend(validate_uobject_container_without_uproperty(path, text, root))
+        findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
+        findings.extend(validate_blueprintpure_missing_const(path, text, root))
+        findings.extend(validate_required_includes(path, text, root))
+    if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+        findings.extend(validate_editor_only_runtime_includes(path, text, root))
+        findings.extend(validate_enhanced_input(path, text, root, build_text_value))
+        findings.extend(validate_action_request_order(path, text, root))
+        if not skip_include_path_checks:
+            findings.extend(
+                validate_include_paths_exist(
+                    path,
+                    text,
+                    root,
+                    include_index,
+                    write_mode=write_mode,
+                    include_owner_map=include_owner_map,
+                )
+            )
+    if path.suffix.lower() in {".cpp", ".c", ".cc"}:
+        findings.extend(validate_required_includes(path, text, root))
+        findings.extend(validate_constructor_lifecycle_usage(path, text, root))
+        findings.extend(validate_newobject_outer(path, text, root))
+        findings.extend(validate_component_timer_manager(path, text, root, bases))
+        findings.extend(validate_cpp_declarations(path, text, root, headers))
+        findings.extend(validate_delegate_broadcast_consistency(path, text, root, delegate_arity_map))
+        findings.extend(validate_missing_super_lifecycle_call(path, text, root))
+        findings.extend(validate_delegate_bind_without_unbind(path, text, root))
+        findings.extend(validate_timer_set_without_clear(path, text, root))
+        findings.extend(validate_interrupt_param_ignored(path, text, root))
+        findings.extend(validate_unchecked_cast_result(path, text, root))
+        findings.extend(validate_raw_new_delete_uobject(path, text, root))
+        findings.extend(validate_actor_ctor_getworld(path, text, root, bases))
+        findings.extend(validate_sync_load_in_gameplay(path, text, root))
+        findings.extend(validate_hardcoded_asset_path(path, text, root))
+        findings.extend(validate_fvector_float_precision(path, text, root))
+
+
 def validate_unreal_readiness(
     root: Path,
     module_graph_path: Path | None = None,
     *,
     lightweight: bool = False,
     skip_include_path_checks: bool = False,
+    scope_paths: list[Path] | None = None,
 ) -> list[Finding]:
     if lightweight:
         return validate_unreal_readiness_lightweight(root)
     findings: list[Finding] = []
     build_text_value = build_cs_text(root)
+    if scope_paths is not None:
+        scope = sorted({path.resolve() for path in scope_paths if path.is_file()})
+        texts = _read_scope_texts(scope)
+        headers = class_headers_from_paths(scope, texts)
+        header_paths: dict[str, Path] = {}
+        for path in scope:
+            if path.suffix.lower() not in {".h", ".hpp"}:
+                continue
+            header_text = texts.get(path, "")
+            for match in re.finditer(
+                r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b",
+                header_text,
+            ):
+                if _is_class_definition(header_text, match.start()):
+                    header_paths.setdefault(match.group(1), path)
+        bases = class_bases_from_paths(scope, texts)
+        delegate_arity_map = build_delegate_arity_map_from_texts(scope, texts)
+        include_index = build_source_include_index(root)
+        include_owner_map = load_include_owner_map(module_graph_path) if module_graph_path else {}
+        all_source_text = [texts[path] for path in scope]
+        cpp_scope = [path for path in scope if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+        header_scope = [path for path in scope if path.suffix.lower() in {".h", ".hpp"}]
+        for path in scope:
+            _run_per_file_validators(
+                findings,
+                path,
+                texts[path],
+                root,
+                headers=headers,
+                bases=bases,
+                delegate_arity_map=delegate_arity_map,
+                include_index=include_index,
+                build_text_value=build_text_value,
+                skip_include_path_checks=skip_include_path_checks,
+                write_mode=True,
+                include_owner_map=include_owner_map,
+            )
+        findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
+        if cpp_scope:
+            findings.extend(
+                validate_cpp_definitions_missing(
+                    root,
+                    scope_headers=headers,
+                    scope_header_paths=header_paths,
+                    scope_cpp_paths=cpp_scope,
+                    scope_texts=texts,
+                )
+            )
+        findings.extend(
+            validate_replication_setup(root, scope_cpp_paths=cpp_scope, scope_texts=texts)
+        )
+        findings.extend(
+            validate_replicated_uproperty_without_doreplifetime(
+                root,
+                scope_header_paths=header_scope,
+                scope_texts=texts,
+            )
+        )
+        return findings
+
     include_owner_map = load_include_owner_map(module_graph_path) if module_graph_path else {}
     include_index = build_source_include_index(root)
     headers = class_headers(root)
@@ -1978,40 +3080,25 @@ def validate_unreal_readiness(
     for path in iter_source_files(root):
         text = read_text(path)
         all_source_text.append(text)
-        if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
-            findings.extend(validate_typo_includes(path, text, root))
-            findings.extend(validate_component_subsystem_patterns(path, text, root))
-            findings.extend(validate_gengine_world_context(path, text, root))
-        if path.suffix.lower() in {".h", ".hpp"}:
-            findings.extend(validate_generated_h(path, text, root))
-            findings.extend(validate_reflected_namespace(path, text, root))
-            findings.extend(validate_uht_macros_in_conditional_blocks(path, text, root))
-            findings.extend(validate_static_mutable_container_members(path, text, root))
-            findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
-            findings.extend(validate_blueprint_native_event_declarations(path, text, root))
-            findings.extend(validate_private_blueprint_access(path, text, root))
-            findings.extend(validate_raw_uobject_members(path, text, root))
-            findings.extend(validate_required_includes(path, text, root))
-        if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
-            findings.extend(validate_editor_only_runtime_includes(path, text, root))
-            findings.extend(validate_enhanced_input(path, text, root, build_text_value))
-            findings.extend(validate_action_request_order(path, text, root))
-            if not skip_include_path_checks:
-                findings.extend(validate_include_paths_exist(path, text, root, include_index))
-        if path.suffix.lower() in {".cpp", ".c", ".cc"}:
-            findings.extend(validate_required_includes(path, text, root))
-            findings.extend(validate_constructor_lifecycle_usage(path, text, root))
-            findings.extend(validate_newobject_outer(path, text, root))
-            findings.extend(validate_component_timer_manager(path, text, root, bases))
-            findings.extend(validate_cpp_declarations(path, text, root, headers))
-            findings.extend(validate_delegate_broadcast_consistency(path, text, root, delegate_arity_map))
-            findings.extend(validate_missing_super_lifecycle_call(path, text, root))
+        _run_per_file_validators(
+            findings,
+            path,
+            text,
+            root,
+            headers=headers,
+            bases=bases,
+            delegate_arity_map=delegate_arity_map,
+            include_index=include_index,
+            build_text_value=build_text_value,
+            skip_include_path_checks=skip_include_path_checks,
+        )
     findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
     findings.extend(validate_include_owner_modules(root, build_text_value, include_owner_map))
     findings.extend(validate_duplicate_source_basenames(root))
     findings.extend(validate_rpc_implementations(root))
     findings.extend(validate_blueprint_native_event_implementations(root))
     findings.extend(validate_replication_setup(root))
+    findings.extend(validate_replicated_uproperty_without_doreplifetime(root))
     findings.extend(validate_cpp_definitions_missing(root))
     findings.extend(validate_interface_implementer_drift(root))
     findings.extend(validate_callback_function_pointer_drift(root))
@@ -2032,6 +3119,8 @@ def validate_unreal_readiness_lightweight(root: Path) -> list[Finding]:
             findings.extend(validate_reflected_namespace(path, text, root))
             findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
             findings.extend(validate_blueprint_native_event_declarations(path, text, root))
+            findings.extend(validate_uobject_container_without_uproperty(path, text, root))
+            findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
         if path.suffix.lower() in {".cpp", ".c", ".cc"}:
             findings.extend(validate_cpp_declarations(path, text, root, headers))
     return findings

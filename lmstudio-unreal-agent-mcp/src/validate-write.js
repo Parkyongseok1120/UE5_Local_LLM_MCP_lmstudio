@@ -193,6 +193,9 @@ async function runStaticValidation(projectRoot, options = {}) {
       skipped: false,
       projectRoot,
       writeTarget,
+      scanMode: payload.scanMode || "full",
+      scopedFileCount: payload.scopedFileCount || 0,
+      elapsedMs: payload.elapsedMs || 0,
       findingCount: payload.findingCount,
       deferredCount: payload.deferredCount || 0,
       preExistingCount: payload.preExistingCount || 0,
@@ -216,6 +219,9 @@ async function runStaticValidation(projectRoot, options = {}) {
         skipped: false,
         projectRoot,
         writeTarget,
+        scanMode: parsed.scanMode || "full",
+        scopedFileCount: parsed.scopedFileCount || 0,
+        elapsedMs: parsed.elapsedMs || 0,
         findingCount: parsed.findingCount,
         deferredCount: parsed.deferredCount || 0,
         preExistingCount: parsed.preExistingCount || 0,
@@ -332,6 +338,8 @@ function formatValidationResult(result) {
     "",
     "Static validation:",
     `projectRoot=${result.projectRoot}`,
+    `scanMode=${result.scanMode || "full"}`,
+    `elapsedMs=${result.elapsedMs || 0}`,
     `findingCount=${result.findingCount}`,
   ];
   for (const finding of (result.findings || []).slice(0, 20)) {
