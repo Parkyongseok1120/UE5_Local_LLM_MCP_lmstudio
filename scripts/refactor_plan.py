@@ -307,6 +307,82 @@ def detect_refactor_risks(path: Path, text: str) -> list[str]:
     return risks
 
 
+def _mask_comments_and_strings(text: str) -> str:
+    """Replace comment and string literals so identifier scans skip false positives."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            out.append(" ")
+            i += 1
+            while i < n:
+                if text[i] == "\\" and i + 1 < n:
+                    out.extend([" ", " "])
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    out.append(" ")
+                    i += 1
+                    break
+                out.append(" ")
+                i += 1
+            continue
+        if ch == "'" and i + 1 < n:
+            out.append(" ")
+            i += 1
+            while i < n:
+                if text[i] == "\\" and i + 1 < n:
+                    out.extend([" ", " "])
+                    i += 2
+                    continue
+                if text[i] == "'":
+                    out.append(" ")
+                    i += 1
+                    break
+                out.append(" ")
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            out.extend([" ", " "])
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                out.append(" ")
+                i += 1
+            if i + 1 < n:
+                out.extend([" ", " "])
+                i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _identifier_pattern(symbol: str) -> re.Pattern[str]:
+    return re.compile(rf"\b{re.escape(symbol)}\b")
+
+
+def extract_refactor_symbols(text: str) -> list[str]:
+    """Extract class, method, delegate, and property symbols from refactor requests."""
+    symbols: list[str] = []
+    for match in re.finditer(r"\bU[A-Z][A-Za-z0-9_]+\b", text or ""):
+        symbols.append(match.group(0))
+    for match in re.finditer(r"\b(?:On[A-Z][A-Za-z0-9_]+|[A-Z][a-z][A-Za-z0-9_]+(?:Changed|Updated)?)\b", text or ""):
+        candidate = match.group(0)
+        if candidate.startswith("U") and candidate[1:2].isupper():
+            continue
+        symbols.append(candidate)
+    for match in re.finditer(r"\bF[A-Z][A-Za-z0-9_]+\b", text or ""):
+        symbols.append(match.group(0))
+    return _unique_items(symbols)[:8]
+
+
 def _source_candidates(root: Path) -> list[Path]:
     skip = {"Binaries", "Intermediate", "Saved", "DerivedDataCache", ".git"}
     suffixes = {".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"}
@@ -359,29 +435,31 @@ def scan_symbol_impact(project_root: str, symbol: str, *, max_files: int = 40) -
     matches: list[dict[str, Any]] = []
     role_counts: dict[str, int] = {}
     risk_counts: dict[str, int] = {}
-    pattern = re.compile(re.escape(query))
+    pattern = _identifier_pattern(query)
 
     for path in _source_candidates(root):
         try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
+            raw_text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
+        text = _mask_comments_and_strings(raw_text)
         if not pattern.search(text):
             continue
         line_hits: list[dict[str, Any]] = []
         for index, line in enumerate(text.splitlines()):
             if not pattern.search(line):
                 continue
-            role = classify_impact_role(path, line, query)
+            raw_line = raw_text.splitlines()[index] if index < len(raw_text.splitlines()) else line
+            role = classify_impact_role(path, raw_line, query)
             role_counts[role] = role_counts.get(role, 0) + 1
             line_hits.append(
                 {
                     "line": index + 1,
                     "role": role,
-                    "snippet": line.strip()[:180],
+                    "snippet": raw_line.strip()[:180],
                 }
             )
-        risks = detect_refactor_risks(path, text)
+        risks = detect_refactor_risks(path, raw_text)
         for risk in risks:
             risk_counts[risk] = risk_counts.get(risk, 0) + 1
         matches.append(
@@ -422,14 +500,20 @@ def _aggregate_scan_counts(scans: list[dict[str, Any]], key: str) -> dict[str, i
     return dict(sorted(totals.items()))
 
 
-def _required_impact_roles(scope_name: str, role_counts: dict[str, int]) -> list[str]:
+def _required_impact_roles(
+    scope_name: str,
+    role_counts: dict[str, int],
+    *,
+    include_rename: bool = False,
+) -> list[str]:
     roles = ["declaration", "definition"]
     if scope_name != "small_single_surface_refactor":
-        roles.extend(["callsite", "include_owner"])
+        if role_counts.get("callsite", 0) > 0:
+            roles.append("callsite")
+        if include_rename or role_counts.get("include_owner", 0) > 0:
+            roles.append("include_owner")
     if role_counts.get("delegate_binding") or role_counts.get("delegate_surface"):
         roles.extend(["delegate_surface", "delegate_binding"])
-    else:
-        roles.append("delegate_binding")
     if role_counts.get("override_or_virtual"):
         roles.append("override_or_virtual")
     if role_counts.get("module_owner"):
@@ -604,7 +688,7 @@ def build_refactor_manager_plan(
         "writePolicy": {
             "managerOwnsWriteDecision": True,
             "writesAllowedNow": writes_allowed_now,
-            "autonomousPatchLimitFiles": 5 if scope_name.startswith("small") else 0,
+            "autonomousPatchLimitFiles": 2 if scope_name.startswith("small") else 0,
             "largeMigrationAutonomousWritesAllowed": False,
             "requiresStagedPatch": scope_name != "small_single_surface_refactor",
         },
@@ -641,3 +725,33 @@ def build_refactor_manager_plan(
             "Do not use compile-fix-only reasoning for API, Blueprint, asset, module, or system boundary refactors.",
         ],
     }
+
+
+def main() -> int:
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(description="Refactor plan SSOT CLI for Node adapter.")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    validate_parser = sub.add_parser("validate")
+    validate_parser.add_argument("--stage", default="R0")
+    validate_parser.add_argument("--plan-text", default="")
+
+    scan_parser = sub.add_parser("scan")
+    scan_parser.add_argument("--project-root", required=True)
+    scan_parser.add_argument("--symbol", required=True)
+    scan_parser.add_argument("--max-files", type=int, default=40)
+
+    args = parser.parse_args()
+    if args.command == "validate":
+        payload = validate_refactor_plan(args.stage, args.plan_text)
+    else:
+        payload = scan_symbol_impact(args.project_root, args.symbol, max_files=args.max_files)
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+    return 0 if payload.get("ok", True) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

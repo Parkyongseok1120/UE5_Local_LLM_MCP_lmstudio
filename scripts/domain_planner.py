@@ -55,25 +55,61 @@ def _text_lower(text: str) -> str:
     return str(text or "").lower()
 
 
-def detect_domain_kind(request: str, mode: str = "auto") -> DomainKind:
+DOMAIN_SIGNALS: dict[DomainKind, tuple[str, ...]] = {
+    "component": ("component", "createdefaultsubobject", "uactorcomponent", "컴포넌트"),
+    "subsystem": ("subsystem", "ugameinstancesubsystem", "uworldsubsystem", "서브시스템"),
+    "replication": ("replication", "onrep", "rpc", "doreplicated", "복제"),
+    "gas": ("gameplay ability", "gas", "abilitysystem", "gameplayeffect", "attribute set"),
+    "animation": ("animinstance", "animnotify", "notifystate", "animation blueprint", "애니"),
+    "architecture": ("architecture", "ownership", "lifetime", "authority", "아키텍처"),
+}
+
+
+@dataclass
+class DomainProfile:
+    primary: DomainKind
+    scores: dict[str, float]
+    mixed: bool = False
+    architecture_required: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "primary": self.primary,
+            "scores": self.scores,
+            "mixed": self.mixed,
+            "architectureRequired": self.architecture_required,
+        }
+
+
+def build_domain_profile(request: str, mode: str = "auto") -> DomainProfile:
     text = _text_lower(f"{mode} {request}")
-    if mode in {"prototype_component"} or (
-        "component" in text and any(m in text for m in ("createdefaultsubobject", "uactorcomponent", "컴포넌트"))
-    ):
-        return "component"
-    if mode in {"prototype_subsystem"} or any(
-        m in text for m in ("subsystem", "ugameinstancesubsystem", "uworldsubsystem", "서브시스템")
-    ):
-        return "subsystem"
-    if any(m in text for m in ("replication", "onrep", "rpc", "doreplicated", "복제")):
-        return "replication"
-    if any(m in text for m in ("gameplay ability", "gas", "abilitysystem", "gameplayeffect", "attribute set")):
-        return "gas"
-    if any(m in text for m in ("animinstance", "animnotify", "notifystate", "animation blueprint", "애니")):
-        return "animation"
-    if any(m in text for m in ("architecture", "ownership", "lifetime", "authority", "아키텍처")):
-        return "architecture"
-    return "generic"
+    scores: dict[str, float] = {"generic": 0.1}
+    for kind, markers in DOMAIN_SIGNALS.items():
+        hits = sum(1 for marker in markers if marker in text)
+        if hits:
+            scores[kind] = min(0.35 + hits * 0.2, 1.0)
+    if mode in {"prototype_component"}:
+        scores["component"] = max(scores.get("component", 0), 0.9)
+    if mode in {"prototype_subsystem"}:
+        scores["subsystem"] = max(scores.get("subsystem", 0), 0.9)
+
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    primary = ranked[0][0] if ranked else "generic"
+    if primary == "generic" and len(ranked) > 1 and ranked[1][1] >= 0.45:
+        primary = ranked[1][0]  # type: ignore[assignment]
+    top = [score for _, score in ranked[:2]]
+    mixed = len(top) == 2 and top[0] >= 0.45 and top[1] >= 0.45 and abs(top[0] - top[1]) < 0.15
+    architecture_required = mixed or scores.get("architecture", 0) >= 0.45 or primary == "architecture"
+    return DomainProfile(
+        primary=primary,  # type: ignore[arg-type]
+        scores=scores,
+        mixed=mixed,
+        architecture_required=architecture_required,
+    )
+
+
+def detect_domain_kind(request: str, mode: str = "auto") -> DomainKind:
+    return build_domain_profile(request, mode).primary
 
 
 def select_subsystem_lifetime(request: str) -> dict[str, Any]:
@@ -274,20 +310,51 @@ def build_fix_evidence(
 def architecture_ambiguity_gate(request: str) -> dict[str, Any]:
     text = _text_lower(request)
     score = 0.35
-    if any(m in text for m in ("maybe", "either", "or", "unclear", "ambiguous", "아마", "불명확")):
+    if any(m in text for m in ("maybe", "either", " or ", "unclear", "ambiguous", "아마", "불명확")):
         score += 0.25
     if any(m in text for m in ("across", "multiple modules", "whole project", "전체", "여러 모듈")):
         score += 0.2
     if any(m in text for m in ("ownership", "lifetime", "authority", "소유", "수명")):
         score += 0.1
+    if any(m in text for m in ("subsystem", "replication", "gas", "game instance", "world subsystem")):
+        score += 0.05
     score = min(score, 1.0)
-    if score > 0.7:
+
+    if score >= 0.85:
+        action = "human_approval"
+    elif score > 0.7:
         action = "ask_user_once"
     elif score > 0.5:
         action = "plan_only"
     else:
         action = "bounded_assumption"
-    return {"ambiguityScore": round(score, 2), "recommendedAction": action}
+
+    questions: list[str] = []
+    if action == "ask_user_once":
+        if any(m in text for m in ("lifetime", "수명", "subsystem", "game instance", "world")):
+            questions.append("Which lifetime scope should own this state (World, GameInstance, LocalPlayer, or Engine)?")
+        if any(m in text for m in ("ownership", "authority", "소유", "ssot")):
+            questions.append("Which module/class should be the single source of truth for this state?")
+        if any(m in text for m in ("replication", "rpc", "onrep", "복제")):
+            questions.append("Should this run on server authority only, or also replicate to clients?")
+        if not questions:
+            questions.append("Which architectural boundary (module, subsystem, or actor) should own this change?")
+        questions = questions[:3]
+
+    assumptions: list[str] = []
+    if action == "bounded_assumption":
+        if "world" in text or "level" in text:
+            assumptions.append("Assume per-world ownership via UWorldSubsystem unless contradicted.")
+        elif "game instance" in text or "session" in text:
+            assumptions.append("Assume session ownership via UGameInstanceSubsystem unless contradicted.")
+
+    return {
+        "architectureRequired": True,
+        "ambiguityScore": round(score, 2),
+        "recommendedAction": action,
+        "clarificationQuestions": questions,
+        "assumptions": assumptions,
+    }
 
 
 def _first_symbol(text: str) -> str:

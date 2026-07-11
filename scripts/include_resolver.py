@@ -79,23 +79,36 @@ def project_relative_include(declaring_file: Path, project_root: Path) -> str:
     return "/".join(parts).replace("\\", "/")
 
 
-def _scan_declaring_file(root: Path, symbol: str) -> Path | None:
+def _declaring_scan_roots(root: Path) -> list[Path]:
+    try:
+        from plugin_project_context import resolve_scan_roots
+
+        return resolve_scan_roots(root)
+    except Exception:
+        source = root / "Source"
+        return [source] if source.is_dir() else [root]
+
+
+def _scan_declaring_file(scan_roots: list[Path], symbol: str) -> Path | None:
     class_pattern = re.compile(
         rf"\bclass\s+(?:[A-Z0-9_]+_API\s+)?{re.escape(symbol)}\b[^;{{]*\{{",
         re.MULTILINE,
     )
     uclass_pattern = re.compile(r"\bUCLASS\b")
-    for path in root.rglob("*"):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+    for scan_root in scan_roots:
+        if not scan_root.is_dir():
             continue
-        if "Intermediate" in path.parts or "ThirdParty" in path.parts:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8-sig", errors="replace")
-        except OSError:
-            continue
-        if class_pattern.search(text) and uclass_pattern.search(text):
-            return path
+        for path in scan_root.rglob("*.h"):
+            if path.suffix.lower() not in {".h", ".hpp"}:
+                continue
+            if "Intermediate" in path.parts or "ThirdParty" in path.parts:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                continue
+            if class_pattern.search(text) and uclass_pattern.search(text):
+                return path
     return None
 
 
@@ -109,7 +122,7 @@ def _resolve_declaring_file(root: Path, symbol: str) -> tuple[Path | None, float
                 candidate = root / file_path
             if candidate.is_file():
                 return candidate.resolve(), 0.9
-    scanned = _scan_declaring_file(root / "Source", symbol)
+    scanned = _scan_declaring_file(_declaring_scan_roots(root), symbol)
     if scanned:
         return scanned.resolve(), 0.75
     return None, 0.0

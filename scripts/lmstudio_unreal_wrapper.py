@@ -656,8 +656,6 @@ def merge_missing_definition_full_file_edits(
 
 def enforce_edit_limits(bundle: dict[str, Any], limits: dict[str, Any], *, mode: str = "") -> None:
     max_files = int(limits.get("maxFilesPerEdit") or 0)
-    if str(mode or "") == "multifile_refactor":
-        max_files = max(max_files, 4)
     file_count = len(bundle.get("files") or [])
     patch_count = len(bundle.get("patches") or [])
     total = file_count + patch_count

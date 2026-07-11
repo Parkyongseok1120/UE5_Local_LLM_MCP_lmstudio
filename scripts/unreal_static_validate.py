@@ -40,6 +40,12 @@ IGNORED_PROJECT_DIRS = {
 
 
 def resolve_scan_roots(root: Path) -> list[Path]:
+    try:
+        from plugin_project_context import resolve_scan_roots as plugin_scan_roots
+
+        return plugin_scan_roots(root)
+    except Exception:
+        pass
     roots: list[Path] = []
     source = root / "Source"
     if source.is_dir():
@@ -3006,25 +3012,29 @@ def _run_per_file_validators(
     write_mode: bool = False,
     include_owner_map: dict[str, list[str]] | None = None,
 ) -> None:
+    if path.name.endswith(".uplugin"):
+        try:
+            from plugin_project_context import validate_uplugin_descriptor
+
+            rel = str(path.relative_to(root))
+            for item in validate_uplugin_descriptor(path):
+                findings.append(
+                    Finding(
+                        str(item.get("severity") or "error"),
+                        rel,
+                        1,
+                        str(item.get("code") or "UPLUGIN_INVALID"),
+                        str(item.get("message") or "Invalid .uplugin descriptor."),
+                    )
+                )
+        except Exception:
+            pass
+        return
     if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
         findings.extend(validate_typo_includes(path, text, root))
         findings.extend(validate_component_subsystem_patterns(path, text, root))
         findings.extend(validate_gengine_world_context(path, text, root))
         findings.extend(validate_known_bad_api_patterns(path, text, root))
-    if path.suffix.lower() in {".h", ".hpp"}:
-        findings.extend(validate_generated_h(path, text, root))
-        findings.extend(validate_reflected_namespace(path, text, root))
-        findings.extend(validate_uht_macros_in_conditional_blocks(path, text, root))
-        findings.extend(validate_static_mutable_container_members(path, text, root))
-        findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
-        findings.extend(validate_blueprint_native_event_declarations(path, text, root))
-        findings.extend(validate_private_blueprint_access(path, text, root))
-        findings.extend(validate_raw_uobject_members(path, text, root))
-        findings.extend(validate_uobject_container_without_uproperty(path, text, root))
-        findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
-        findings.extend(validate_blueprintpure_missing_const(path, text, root))
-        findings.extend(validate_required_includes(path, text, root))
-        findings.extend(validate_component_registration_includes(path, text, root))
         try:
             from domain_validators import (
                 validate_animation_notify_lifecycle,
@@ -3041,6 +3051,20 @@ def _run_per_file_validators(
             findings.extend(validate_animation_notify_lifecycle(path, text, root))
         except Exception:
             pass
+    if path.suffix.lower() in {".h", ".hpp"}:
+        findings.extend(validate_generated_h(path, text, root))
+        findings.extend(validate_reflected_namespace(path, text, root))
+        findings.extend(validate_uht_macros_in_conditional_blocks(path, text, root))
+        findings.extend(validate_static_mutable_container_members(path, text, root))
+        findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
+        findings.extend(validate_blueprint_native_event_declarations(path, text, root))
+        findings.extend(validate_private_blueprint_access(path, text, root))
+        findings.extend(validate_raw_uobject_members(path, text, root))
+        findings.extend(validate_uobject_container_without_uproperty(path, text, root))
+        findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
+        findings.extend(validate_blueprintpure_missing_const(path, text, root))
+        findings.extend(validate_required_includes(path, text, root))
+        findings.extend(validate_component_registration_includes(path, text, root))
     if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
         findings.extend(validate_editor_only_runtime_includes(path, text, root))
         findings.extend(validate_enhanced_input(path, text, root, build_text_value))

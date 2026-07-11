@@ -55,7 +55,7 @@ def test_subsystem_lifetime_selector():
 
 def test_architecture_ambiguity_gate_plan_only():
     gate = architecture_ambiguity_gate("Maybe refactor ownership across multiple modules whole project")
-    assert gate["recommendedAction"] in {"plan_only", "ask_user_once"}
+    assert gate["recommendedAction"] in {"plan_only", "ask_user_once", "human_approval"}
 
 
 def test_include_fingerprint_retry_escalation():

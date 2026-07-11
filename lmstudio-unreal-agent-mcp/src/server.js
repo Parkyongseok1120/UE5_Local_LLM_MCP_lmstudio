@@ -659,14 +659,6 @@ async function buildWorkspaceInfo() {
     })),
   };
   if (activeProject) {
-    const bootstrapCache = evaluateBootstrapCache(await readBootstrapCache(), activeProject);
-    if (!bootstrapCache.canSkipSteps || !bootstrapCache.valid) {
-      await writeBootstrapCache({
-        projectPath: activeProject,
-        stepsCompleted: ["get_workspace_info"],
-        workspaceHash: cacheKey,
-      });
-    }
     payload.bootstrapCache = evaluateBootstrapCache(await readBootstrapCache(), activeProject);
   } else {
     payload.bootstrapCache = evaluateBootstrapCache(await readBootstrapCache(), activeProject);

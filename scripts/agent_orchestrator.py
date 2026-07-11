@@ -445,11 +445,21 @@ def build_symbol_graph_hints(request: str) -> list[dict[str, Any]]:
     return hints
 
 
-def build_write_gate(task_kind: TaskKind, evidence: EvidencePlan, policy: dict[str, Any]) -> dict[str, Any]:
+def build_write_gate(
+    task_kind: TaskKind,
+    evidence: EvidencePlan,
+    policy: dict[str, Any],
+    *,
+    edit_strategy: str = "",
+    gate_extras: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     max_files = int(policy.get("maxFilesPerEdit") or 0)
     requires_human_approval = "human_approval_gate" in set(evidence.gates or [])
-    return {
-        "writesAllowed": bool(evidence.writes_allowed) and not requires_human_approval,
+    writes_allowed = bool(evidence.writes_allowed) and not requires_human_approval
+    if edit_strategy == "no_edit":
+        writes_allowed = False
+    gate: dict[str, Any] = {
+        "writesAllowed": writes_allowed,
         "requiresHumanApproval": requires_human_approval,
         "maxFilesPerEdit": max_files,
         "preferPatch": bool(policy.get("preferPatch", True)),
@@ -462,6 +472,13 @@ def build_write_gate(task_kind: TaskKind, evidence: EvidencePlan, policy: dict[s
             "human_approval_gate is required and has not been satisfied",
         ],
     }
+    if gate_extras:
+        gate.update(gate_extras)
+        if gate_extras.get("requiresHumanApproval"):
+            gate["writesAllowed"] = False
+        if gate_extras.get("requiresUserClarification"):
+            gate["writesAllowed"] = False
+    return gate
 
 
 def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "auto") -> list[str]:
@@ -761,10 +778,81 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     if policy.get("promptContract"):
         notes.append(f"Prompt contract: {policy['promptContract']}")
     if not policy.get("allowRefactorModes", True) and task_kind == "refactor":
-        strategy = "no_edit"
-        evidence.writes_allowed = False
-        notes.append("Refactor modes disabled for active model profile.")
-    write_gate = build_write_gate(task_kind, evidence, policy)
+        scope_name = str((refactor_manager.get("scope") or {}).get("scope") or "")
+        small_ok = bool(policy.get("allowSmallRefactor")) and scope_name in {
+            "small_single_surface_refactor",
+            "small_multifile_refactor",
+        }
+        if not small_ok:
+            strategy = "no_edit"
+            evidence.writes_allowed = False
+            notes.append("Refactor modes disabled for active model profile.")
+        else:
+            notes.append(
+                "Small refactor exception active: bounded refactor allowed despite allowRefactorModes=false."
+            )
+            small_max = int(policy.get("smallRefactorMaxFiles") or 2)
+            if small_max > 0:
+                policy = dict(policy)
+                policy["maxFilesPerEdit"] = min(int(policy.get("maxFilesPerEdit") or small_max), small_max)
+
+    from domain_planner import (
+        architecture_ambiguity_gate,
+        build_domain_slices,
+        build_fix_evidence,
+        build_domain_profile,
+        detect_domain_kind,
+        select_subsystem_lifetime,
+    )
+
+    domain_kind = detect_domain_kind(request, resolved_mode if resolved_mode != "auto" else mode)
+    domain_profile = build_domain_profile(request, resolved_mode if resolved_mode != "auto" else mode)
+    plan_slices = [slice_.to_dict() for slice_ in build_domain_slices(domain_kind, request)]
+    fix_evidence = build_fix_evidence(
+        request,
+        error_route,
+        project_root=Path(str(project_context.get("projectDir") or "")) if project_context.get("projectDir") else None,
+    ) or {}
+    ambiguity_gate: dict[str, Any] = {}
+    architecture_required = domain_profile.architecture_required or domain_kind == "architecture"
+    if architecture_required:
+        ambiguity_gate = architecture_ambiguity_gate(request)
+        action = str(ambiguity_gate.get("recommendedAction") or "")
+        if action == "plan_only":
+            notes.append("Architecture ambiguity gate: plan-only until ownership checklist is satisfied.")
+        elif action == "ask_user_once":
+            notes.append("Architecture ambiguity gate: user clarification required before writes.")
+        elif action == "human_approval":
+            notes.append("Architecture ambiguity gate: human approval required before writes.")
+
+    from plan_consistency import (
+        apply_ambiguity_write_policy,
+        apply_consistency_fallback,
+        essential_tools_enabled,
+        sanitize_tools_for_exposure,
+        validate_plan_consistency,
+    )
+
+    gate_extras: dict[str, Any] = {}
+    if ambiguity_gate:
+        strategy, evidence_writes, gate_extras = apply_ambiguity_write_policy(
+            ambiguity_gate=ambiguity_gate,
+            strategy=strategy,
+            evidence_writes_allowed=evidence.writes_allowed,
+        )
+        evidence.writes_allowed = evidence_writes
+
+    if domain_kind == "subsystem" and plan_slices:
+        lifetime = select_subsystem_lifetime(request)
+        notes.append(
+            f"Subsystem lifetime: requested={lifetime.get('requestedLifetime')} "
+            f"recommended={lifetime.get('recommendedBase')}"
+        )
+    if fix_evidence:
+        notes.append("fixEvidence populated from error route/resolver.")
+    if plan_slices:
+        notes.append(f"Domain plan slices ({domain_kind}): {len(plan_slices)} slice(s), max 2 files per slice.")
+
     suggested = build_suggested_tool_calls(request, task_kind, mode, project_context)
     checkpoints = build_checkpoints(task_kind, evidence, mode)
     if error_route:
@@ -782,40 +870,25 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         notes.append(str(project_context.get("error") or "Set activeProject before browse or asset lookup."))
     notes.append("Copy suggestedToolCalls args exactly; never hardcode project paths.")
 
-    from domain_planner import (
-        architecture_ambiguity_gate,
-        build_domain_slices,
-        build_fix_evidence,
-        detect_domain_kind,
-        select_subsystem_lifetime,
+    refactor_embedded = bool(refactor_manager)
+    tool_policy, suggested, exposure_notes = sanitize_tools_for_exposure(
+        tool_policy,
+        suggested,
+        refactor_manager_embedded=refactor_embedded,
+    )
+    notes.extend(exposure_notes)
+    if refactor_embedded and essential_tools_enabled():
+        notes.append("Refactor manager results are embedded in refactorManager; do not call hidden refactor tools.")
+
+    write_gate = build_write_gate(
+        task_kind,
+        evidence,
+        policy,
+        edit_strategy=strategy,
+        gate_extras=gate_extras,
     )
 
-    domain_kind = detect_domain_kind(request, resolved_mode if resolved_mode != "auto" else mode)
-    plan_slices = [slice_.to_dict() for slice_ in build_domain_slices(domain_kind, request)]
-    fix_evidence = build_fix_evidence(
-        request,
-        error_route,
-        project_root=Path(str(project_context.get("projectDir") or "")) if project_context.get("projectDir") else None,
-    ) or {}
-    ambiguity_gate: dict[str, Any] = {}
-    if domain_kind == "architecture" or task_kind == "inspect_only" and "architecture" in request.lower():
-        ambiguity_gate = architecture_ambiguity_gate(request)
-        if ambiguity_gate.get("recommendedAction") == "plan_only":
-            strategy = "no_edit"
-            evidence.writes_allowed = False
-            notes.append("Architecture ambiguity gate: plan-only until ownership checklist is satisfied.")
-    if domain_kind == "subsystem" and plan_slices:
-        lifetime = select_subsystem_lifetime(request)
-        notes.append(
-            f"Subsystem lifetime: requested={lifetime.get('requestedLifetime')} "
-            f"recommended={lifetime.get('recommendedBase')}"
-        )
-    if fix_evidence:
-        notes.append("fixEvidence populated from error route/resolver.")
-    if plan_slices:
-        notes.append(f"Domain plan slices ({domain_kind}): {len(plan_slices)} slice(s), max 2 files per slice.")
-
-    return AgentPlan(
+    plan = AgentPlan(
         request=request,
         task_kind=task_kind,
         evidence=evidence,
@@ -837,6 +910,10 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         fix_evidence=fix_evidence,
         ambiguity_gate=ambiguity_gate,
     )
+    consistency_issues = validate_plan_consistency(plan)
+    if consistency_issues:
+        apply_consistency_fallback(plan, consistency_issues)
+    return plan
 
 
 def orchestrator_enabled() -> bool:
