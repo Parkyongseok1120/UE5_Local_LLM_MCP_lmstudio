@@ -71,8 +71,8 @@ def test_fingerprint_mismatch_resets_state() -> None:
     state = init_slice_state(plan)
     state["planFingerprint"] = "deadbeefdeadbeef"
     validated = validate_loaded_state(state, plan, expected_fingerprint=plan_fingerprint(plan))
-    assert validated.get("failed") is True
-    assert "fingerprint mismatch" in str(validated.get("lastError") or "")
+    assert validated.get("failed") is False
+    assert validated.get("planMigrationReason")
 
 
 def test_architecture_slice_requires_evidence(tmp_path: Path) -> None:

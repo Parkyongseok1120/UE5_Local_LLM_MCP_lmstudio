@@ -51,6 +51,7 @@ class AutofixResult:
     findings: list[Finding] = field(default_factory=list)
     restored: bool = False
     static_report: str = ""
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
 
 def snapshot_paths(paths: list[Path]) -> dict[Path, str]:
@@ -116,6 +117,9 @@ def run_autofix_pipeline(
     *,
     module_graph: Path | None = None,
 ) -> AutofixResult:
+    from autofix_diagnostics import clear_autofix_diagnostics, take_autofix_diagnostics
+
+    clear_autofix_diagnostics()
     initial_snapshot = snapshot_source_tree(root)
     written: list[Path] = []
     step_names: list[str] = []
@@ -152,6 +156,7 @@ def run_autofix_pipeline(
             findings=restored_findings,
             restored=True,
             static_report=format_findings(restored_findings),
+            diagnostics=take_autofix_diagnostics(),
         )
 
     return AutofixResult(
@@ -159,6 +164,7 @@ def run_autofix_pipeline(
         step_names=step_names,
         findings=final_findings,
         static_report=format_findings(final_findings),
+        diagnostics=take_autofix_diagnostics(),
     )
 
 

@@ -73,9 +73,11 @@ def main() -> int:
         default="all",
     )
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--workspace", default="")
     args = parser.parse_args()
-    payload = refresh_active_project(scope=args.scope, force=args.force)
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    workspace = Path(args.workspace).resolve() if args.workspace else None
+    payload = refresh_active_project(scope=args.scope, force=args.force, workspace=workspace)
+    print(json.dumps(payload, ensure_ascii=False))
     return 0 if payload.get("ok") else 1
 
 

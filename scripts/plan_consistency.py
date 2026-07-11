@@ -27,6 +27,17 @@ RAG_ESSENTIAL_TOOLS = frozenset(
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
         "unreal_diagram_validate",
+        "unreal_task_start",
+        "unreal_task_status",
+        "unreal_task_cancel",
+        "unreal_task_resume",
+        "unreal_task_approve",
+        "unreal_project_prepare",
+        "unreal_project_status",
+        "unreal_job_log_read",
+        "unreal_architecture_decision_status",
+        "unreal_architecture_decision_approve",
+        "unreal_architecture_decision_revoke",
     }
 )
 

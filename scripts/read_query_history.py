@@ -13,8 +13,10 @@ from typing import Any
 _HISTORY: dict[str, dict[str, Any]] = {}
 _HISTORY_ORDER: list[str] = []
 _SEMANTIC_INDEX: dict[str, list[str]] = {}
+_CONTINUATION_TOKENS: dict[str, str] = {}
 TTL_SECONDS = 30 * 60
 MAX_ENTRIES = 128
+CONTINUATION_TTL_SECONDS = 15 * 60
 
 
 def _normalize_query(query: str) -> str:
@@ -159,8 +161,11 @@ def check_repeat_query(
     previous_detail: str | None = None,
     current_detail: str | None = None,
     semantic_key: str = "",
+    continuation_token: str = "",
 ) -> dict[str, Any]:
     _prune_expired()
+    if continuation_token and consume_continuation_token(continuation_token, fingerprint):
+        return {"repeatDetected": False, "doNotRetry": False, "fullContextSuppressed": False, "continuationConsumed": True}
     if allow_detail_escalation and previous_detail and current_detail:
         order = ("compact", "medium", "large", "full")
         try:
@@ -213,6 +218,22 @@ def check_repeat_query(
     return {"repeatDetected": False, "doNotRetry": False, "fullContextSuppressed": False}
 
 
+def issue_continuation_token(delivery_key: str) -> str:
+    import hashlib
+    import uuid
+
+    token = hashlib.sha256(f"{delivery_key}:{uuid.uuid4().hex}".encode("utf-8")).hexdigest()[:24]
+    _CONTINUATION_TOKENS[token] = delivery_key
+    return token
+
+
+def consume_continuation_token(token: str, delivery_key: str) -> bool:
+    if not token:
+        return False
+    expected = _CONTINUATION_TOKENS.pop(str(token), "")
+    return bool(expected) and expected == delivery_key
+
+
 def record_query_delivery(
     fingerprint: str,
     *,
@@ -226,8 +247,10 @@ def record_query_delivery(
 ) -> None:
     _prune_expired()
     semantic = semantic_key or fingerprint
+    delivered_full = int(match_count) > 0
     _HISTORY[fingerprint] = {
-        "deliveredFullContext": True,
+        "deliveredFullContext": delivered_full,
+        "zeroResult": not delivered_full,
         "detailLevel": detail_level,
         "matchCount": match_count,
         "activeProject": active_project or "",
@@ -249,6 +272,7 @@ def reset_query_history() -> None:
     _HISTORY.clear()
     _HISTORY_ORDER.clear()
     _SEMANTIC_INDEX.clear()
+    _CONTINUATION_TOKENS.clear()
 
 
 def reset_query_history_for_index(index_path: Path) -> int:

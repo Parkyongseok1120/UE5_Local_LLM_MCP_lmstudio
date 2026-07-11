@@ -4,6 +4,10 @@ const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
 const os = require("os");
+const cp = require("child_process");
+const { promisify } = require("util");
+
+const execFile = promisify(cp.execFile);
 
 const IGNORE_DIRS = new Set([
   ".git",
@@ -74,13 +78,34 @@ function getActiveProject(configPath) {
   return config.activeProject || null;
 }
 
+function ragRootPath() {
+  if (process.env.UNREAL58_ROOT) {
+    return path.resolve(process.env.UNREAL58_ROOT);
+  }
+  return path.join(os.homedir(), ".lmstudio", "Unreal58-RAG");
+}
+
+async function invokeProjectController(argv) {
+  const script = path.join(ragRootPath(), "scripts", "project_controller.py");
+  const python = process.env.PYTHON_EXE || "python";
+  try {
+    const { stdout } = await execFile(python, [script, ...argv], {
+      timeout: Number(process.env.PROJECT_CONTROLLER_TIMEOUT_MS || 600000),
+      maxBuffer: 8 * 1024 * 1024
+    });
+    return JSON.parse(stdout);
+  } catch (error) {
+    return { ok: false, error: error.message || String(error) };
+  }
+}
+
 async function setActiveProject(workspaceRoot, configPath, options = {}) {
-  const config = loadMergedConfig(configPath);
   if (options.clear === true || options.projectPath === null) {
-    config.activeProject = null;
-    saveSharedConfig({ activeProject: null });
-    saveConfig(configPath, { ...loadConfig(configPath), activeProject: null });
-    return {
+    const controller = await invokeProjectController(["--clear"]);
+    if (controller.ok) {
+      saveConfig(configPath, { ...loadConfig(configPath), activeProject: null });
+    }
+    return controller.ok ? controller : {
       ok: true,
       activeProject: null,
       message: "Active project cleared. Auto-detection will use hint or single-project heuristics again."
@@ -96,17 +121,26 @@ async function setActiveProject(workspaceRoot, configPath, options = {}) {
     if (!resolved.toLowerCase().endsWith(".uproject")) {
       return { ok: false, error: "activeProject must be a .uproject file path." };
     }
-    config.activeProject = resolved;
-    saveSharedConfig({ activeProject: resolved });
+    const argv = ["--switch", resolved];
+    if (options.prepare === true) {
+      argv.push("--prepare");
+    }
+    if (options.force === true) {
+      argv.push("--force-prepare");
+    }
+    const controller = await invokeProjectController(argv);
+    if (!controller.ok) {
+      return controller;
+    }
     saveConfig(configPath, { ...loadConfig(configPath), activeProject: resolved });
     const info = await readUProject(resolved);
     const targets = await findTargetNames(info.projectDir, info.projectName);
     return {
-      ok: true,
+      ...controller,
       activeProject: resolved,
       projectName: info.projectName,
       preferredTarget: targets.preferredTarget,
-      message: `Active project set to ${path.basename(resolved)}`
+      readiness: controller.readiness || null
     };
   }
 
@@ -124,16 +158,24 @@ async function setActiveProject(workspaceRoot, configPath, options = {}) {
     };
   }
 
-  config.activeProject = selection.selected.projectPath;
-  saveSharedConfig({ activeProject: selection.selected.projectPath });
+  const argv = ["--switch", selection.selected.projectPath];
+  if (options.prepare === true) {
+    argv.push("--prepare");
+  }
+  const controller = await invokeProjectController(argv);
+  if (!controller.ok) {
+    return controller;
+  }
   saveConfig(configPath, { ...loadConfig(configPath), activeProject: selection.selected.projectPath });
   return {
+    ...controller,
     ok: true,
     activeProject: selection.selected.projectPath,
     projectName: selection.selected.projectName,
     preferredTarget: selection.selected.preferredTarget,
     selectionReason: selection.selectionReason,
-    message: `Active project set to ${selection.selected.projectFile}`
+    message: `Active project set to ${selection.selected.projectFile}`,
+    readiness: controller.readiness || null
   };
 }
 

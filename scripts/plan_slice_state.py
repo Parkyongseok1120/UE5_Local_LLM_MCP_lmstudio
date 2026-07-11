@@ -112,17 +112,76 @@ def _reject_slice(
     return state
 
 
+def _fingerprint_entry(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sliceId": str(item.get("slice_id") or item.get("sliceId") or ""),
+        "sliceKind": _slice_kind(item),
+        "files": _expected_files(item),
+        "postconditions": [str(v) for v in (item.get("postconditions") or [])],
+        "requiredIncludes": [
+            str(v)
+            for v in (item.get("required_includes") or item.get("requiredIncludes") or [])
+        ],
+        "requiredValidators": [
+            str(v)
+            for v in (item.get("required_validators") or item.get("requiredValidators") or [])
+        ],
+        "dependsOn": [str(v) for v in (item.get("depends_on") or item.get("dependsOn") or [])],
+        "domain": str(item.get("domain") or "generic"),
+        "approvalScope": str(item.get("approval_scope") or item.get("approvalScope") or ""),
+    }
+
+
 def plan_fingerprint(plan_slices: list[dict[str, Any]]) -> str:
-    payload = [
-        {
-            "sliceId": str(item.get("slice_id") or item.get("sliceId") or ""),
-            "sliceKind": _slice_kind(item),
-            "files": _expected_files(item),
-        }
-        for item in plan_slices
-    ]
+    payload = [_fingerprint_entry(item) for item in plan_slices]
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def normalize_slice_state(state: dict[str, Any]) -> dict[str, Any]:
+    if state.get("completed"):
+        state["failed"] = False
+        state["activeNodeId"] = ""
+    if state.get("failed"):
+        state["completed"] = False
+    return state
+
+
+def migrate_slice_state_on_fingerprint_change(
+    state: dict[str, Any],
+    plan_slices: list[dict[str, Any]],
+    *,
+    expected_fingerprint: str,
+) -> dict[str, Any]:
+    if state.get("corrupt"):
+        return state
+    stored = str(state.get("planFingerprint") or "")
+    if not expected_fingerprint or not stored or stored == expected_fingerprint:
+        return normalize_slice_state(state)
+    fresh = init_slice_state(
+        plan_slices,
+        plan_id=str(state.get("planId") or ""),
+        plan_revision=int(state.get("planRevision") or 1) + 1,
+    )
+    fresh["planMigrationReason"] = f"plan fingerprint changed ({stored} -> {expected_fingerprint})"
+    fresh["previousPlanFingerprint"] = stored
+    fresh["planFingerprint"] = expected_fingerprint
+    return normalize_slice_state(fresh)
+
+
+def _bundle_mutation_paths(bundle: dict[str, Any] | None) -> list[str]:
+    if not isinstance(bundle, dict):
+        return []
+    paths: list[str] = []
+    for item in bundle.get("patches") or []:
+        rel = str(item.get("path") or "").replace("\\", "/").strip()
+        if rel:
+            paths.append(rel)
+    for item in bundle.get("files") or []:
+        rel = str(item.get("path") or "").replace("\\", "/").strip()
+        if rel:
+            paths.append(rel)
+    return list(dict.fromkeys(paths))
 
 
 def capture_pre_change_hashes(
@@ -130,16 +189,18 @@ def capture_pre_change_hashes(
     *,
     project_root: Path,
     plan_slices: list[dict[str, Any]],
+    bundle: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     idx = int(state.get("activeSliceIndex") or 0)
     slices = list(state.get("slices") or [])
     if idx >= len(slices) or idx >= len(plan_slices):
         return state
-    if slices[idx].get("preChangeHashes"):
-        return state
     plan = plan_slices[idx]
-    pre: dict[str, str] = {}
-    for rel in _expected_files(plan):
+    pre: dict[str, str] = dict(slices[idx].get("preChangeHashes") or {})
+    rel_paths = list(_bundle_mutation_paths(bundle))
+    if not rel_paths:
+        rel_paths = [rel for rel in _expected_files(plan) if not _is_placeholder_path(rel)]
+    for rel in rel_paths:
         if _is_placeholder_path(rel):
             continue
         candidate = project_root / rel.replace("\\", "/")
@@ -166,12 +227,11 @@ def validate_loaded_state(
     if state.get("corrupt"):
         return state
     if expected_fingerprint and str(state.get("planFingerprint") or "") not in {"", expected_fingerprint}:
-        return {
-            **init_slice_state(plan_slices),
-            "failed": True,
-            "lastError": "plan slice state fingerprint mismatch",
-            "planFingerprint": expected_fingerprint,
-        }
+        state = migrate_slice_state_on_fingerprint_change(
+            state,
+            plan_slices,
+            expected_fingerprint=expected_fingerprint,
+        )
     idx = int(state.get("activeSliceIndex") or 0)
     if plan_slices and idx > len(plan_slices):
         return {
@@ -180,7 +240,7 @@ def validate_loaded_state(
             "lastError": "plan slice index out of range",
             "planFingerprint": expected_fingerprint,
         }
-    return state
+    return normalize_slice_state(state)
 
 
 def active_slice_status(state: dict[str, Any]) -> str:
@@ -198,10 +258,15 @@ def slice_completion_accepted(state: dict[str, Any], idx: int) -> bool:
     return str(slices[idx].get("status") or "") == "complete"
 
 
-def retry_or_total_cap_exceeded(state: dict[str, Any]) -> bool:
+def retry_or_total_cap_exceeded(
+    state: dict[str, Any],
+    *,
+    max_retries_per_slice: int = DEFAULT_MAX_RETRIES_PER_SLICE,
+    max_total_model_calls: int = DEFAULT_MAX_TOTAL_MODEL_CALLS,
+) -> bool:
     retries = int(state.get("retryWithinSlice") or 0)
     total = int(state.get("totalModelCalls") or 0)
-    return retries >= DEFAULT_MAX_RETRIES_PER_SLICE or total >= DEFAULT_MAX_TOTAL_MODEL_CALLS
+    return retries >= max_retries_per_slice or total >= max_total_model_calls
 
 
 def init_slice_state(
@@ -268,8 +333,8 @@ def load_slice_state(path: Path) -> dict[str, Any]:
             "slices": [],
         }
     if int(data.get("version") or 0) < 3:
-        return _migrate_v2_to_v3(data)
-    return data
+        return normalize_slice_state(_migrate_v2_to_v3(data))
+    return normalize_slice_state(data)
 
 
 def _migrate_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
@@ -442,6 +507,8 @@ def mark_slice_complete(
     }
     state["slices"] = slices
     state["retryWithinSlice"] = 0
+    state["lastError"] = ""
+    state["failed"] = False
 
     if idx + 1 >= len(plan_slices):
         state["activeSliceIndex"] = len(plan_slices)
@@ -472,22 +539,9 @@ def mark_slice_complete(
 
 
 def proof_level_from_build_output(ok: bool, output: str) -> str:
-    if not ok:
-        return "Failed"
-    text = str(output or "")
-    action_patterns = (
-        r"Executing up to \d+ processes, one per physical core",
-        r"Building \d+ action(?:s)? with \d+ process(?:es)?",
-        r"\[(\d+)/(\d+)\] Compile",
-    )
-    if re.search(action_patterns[0], text, re.IGNORECASE) or re.search(action_patterns[1], text, re.IGNORECASE):
-        return "Built"
-    action_matches = list(re.finditer(action_patterns[2], text, re.IGNORECASE))
-    if action_matches and any(int(match.group(2)) > 0 for match in action_matches):
-        return "Built"
-    if re.search(r"Target is up to date|0 action(?:s)?", text, re.IGNORECASE):
-        return "BuiltStale"
-    return "BuiltUnverified"
+    from build_proof import proof_level_from_build_output as _canonical_proof_level
+
+    return _canonical_proof_level(ok, output)
 
 
 def next_slice_prompt(state: dict[str, Any], plan_slices: list[dict[str, Any]]) -> str:
@@ -501,9 +555,12 @@ def next_slice_prompt(state: dict[str, Any], plan_slices: list[dict[str, Any]]) 
     slices = state.get("slices") or []
     if idx < len(slices):
         slice_status = str(slices[idx].get("status") or "")
+    total = len(plan_slices)
+    user_message = f"Editing slice {idx + 1}/{total}: {plan.get('title') or plan.get('slice_id')}"
     return (
         f"Continue plan slice {plan.get('slice_id') or plan.get('sliceId')}: {plan.get('title')}. "
-        f"Status={slice_status or 'active'}. Edit at most 2 files ({files}). Postconditions: {post}."
+        f"Status={slice_status or 'active'}. Edit at most 2 files ({files}). Postconditions: {post}. "
+        f"phase=editing userMessage={user_message!r} cancellable=true resumeAction=unreal_task_cancel"
     )
 
 

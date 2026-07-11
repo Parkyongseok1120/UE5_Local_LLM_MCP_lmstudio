@@ -45,18 +45,25 @@ def test_delegate_handler_still_requires_header_and_cpp() -> None:
 def test_apply_delegate_broadcast_autofix(tmp_path: Path) -> None:
     cpp = tmp_path / "Source" / "Demo" / "Private" / "Score.cpp"
     cpp.parent.mkdir(parents=True)
-    cpp.write_text(
-        """#include "Score.h"
+    original = """#include "Score.h"
 
 void Trigger()
 {
 \tOnScoreChanged.Broadcast();
 }
-""",
-        encoding="utf-8",
+"""
+    cpp.write_text(original, encoding="utf-8")
+    written = apply_delegate_broadcast_autofix(
+        tmp_path,
+        [
+            Finding(
+                "error",
+                "Source/Demo/Private/Score.cpp",
+                4,
+                "DELEGATE_BROADCAST_SIGNATURE_MISMATCH",
+                "missing payload",
+            )
+        ],
     )
-    written = apply_delegate_broadcast_autofix(tmp_path, [])
-    assert written
-    assert "Broadcast(0)" in cpp.read_text(encoding="utf-8")
-    findings = validate_delegate_broadcast_consistency(cpp, cpp.read_text(encoding="utf-8"), tmp_path)
-    assert not findings
+    assert written == []
+    assert cpp.read_text(encoding="utf-8") == original

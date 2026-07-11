@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -10,7 +13,50 @@ from plan_consistency import RAG_ESSENTIAL_TOOLS  # noqa: E402
 from tool_policy import exposure_inventory  # noqa: E402
 
 
+def _node_essential_tools() -> set[str]:
+    server = ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js"
+    text = server.read_text(encoding="utf-8")
+    match = re.search(r"ESSENTIAL_AGENT_TOOL_NAMES = new Set\(\[(.*?)\]\)", text, re.S)
+    assert match, "Could not parse ESSENTIAL_AGENT_TOOL_NAMES from server.js"
+    raw = match.group(1)
+    return {item.strip().strip('"').strip("'") for item in raw.split(",") if item.strip()}
+
+
 def test_essential_tools_subset_of_inventory() -> None:
     inventory = exposure_inventory()
     essential = set(inventory["essentialProfile"])
     assert essential.issubset(set(RAG_ESSENTIAL_TOOLS))
+
+
+def test_python_exposure_inventory_has_task_tools() -> None:
+    inventory = exposure_inventory()
+    names = set(inventory.get("ragMcpTools") or [])
+    for tool in (
+        "unreal_task_start",
+        "unreal_task_status",
+        "unreal_project_status",
+        "unreal_job_log_read",
+    ):
+        assert tool in names
+
+
+def test_node_syntax_check() -> None:
+    for rel in ("src/server.js", "src/context-ux.js", "src/build-proof.js"):
+        subprocess.run(
+            ["node", "--check", str(ROOT / "lmstudio-unreal-agent-mcp" / rel)],
+            check=True,
+            cwd=ROOT,
+        )
+
+
+def test_node_build_proof_unit() -> None:
+    result = subprocess.run(
+        ["npm", "test"],
+        cwd=ROOT / "lmstudio-unreal-agent-mcp",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        shell=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

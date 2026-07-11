@@ -59,8 +59,17 @@ const {
   validateAfterWrite,
   runStaticValidation,
   resolveValidateOnWrite,
-  VALIDATE_ON_WRITE_TIMEOUT_MS
+  VALIDATE_ON_WRITE_TIMEOUT_MS,
+  clearValidated
 } = require("./validate-write.js");
+const { requireCleanOrFail } = require("./validation-dirty");
+const { validateMutationAuth } = require("./task-auth");
+const {
+  stageBundle,
+  commitBundle,
+  rollbackBundle,
+  capturePreHashes
+} = require("./edit-bundle");
 const {
   validateWriteTarget,
   shouldRollback,
@@ -197,7 +206,8 @@ const server = new Server(
   },
   {
     capabilities: {
-      tools: {}
+      tools: {},
+      logging: {}
     }
   }
 );
@@ -244,6 +254,25 @@ function text(content) {
 
 function fail(message, options = {}) {
   return text(JSON.stringify(errorPayload(message, options), null, 2));
+}
+
+async function agentNotify(message, level = "info") {
+  try {
+    await server.notification({
+      method: "notifications/message",
+      params: { level, logger: "unreal-agent", data: String(message) }
+    });
+  } catch {
+    // Client may not subscribe to logging notifications.
+  }
+}
+
+function enforceTaskAuth(args) {
+  const auth = validateMutationAuth(WORKSPACE_ROOT, args || {});
+  if (!auth.ok && !auth.skipped) {
+    return fail(auth.error || "Task authorization failed.", { taskSessionId: auth.taskSessionId });
+  }
+  return null;
 }
 
 function validationToolResult(summary, validation, options = {}) {
@@ -949,6 +978,39 @@ function allAgentTools() {
         }, ["path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"])
       },
       {
+        name: "apply_edit_bundle",
+        description: "Apply a multi-file edit bundle atomically with pre-hash capture, scoped validation, and rollback on failure. Requires ALLOW_WRITE=1.",
+        inputSchema: makeJsonSchema({
+          files: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                content: { type: "string" }
+              }
+            }
+          },
+          patches: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                oldText: { type: "string" },
+                newText: { type: "string" },
+                expectedOccurrences: { type: "number" }
+              }
+            }
+          },
+          taskSessionId: { type: "string" },
+          planId: { type: "string" },
+          planRevision: { type: "string" },
+          activeSliceId: { type: "string" },
+          authToken: { type: "string" }
+        })
+      },
+      {
         name: "static_validate_project",
         description: "Run static Unreal compile-readiness validation on the active project Source tree. Extended mode. Call before build_unreal_project when validation findings from writes need a full-project check.",
         inputSchema: makeJsonSchema({
@@ -986,7 +1048,9 @@ function allAgentTools() {
           configuration: { type: "string", description: "Optional configuration. Default Development." },
           allowAbsoluteProject: { type: "boolean", description: "Allow absolute .uproject path outside workspace. Default false." },
           timeoutMs: { type: "number", description: "Build timeout in ms. Default COMMAND_TIMEOUT_MS." },
-          verboseOutput: { type: "boolean", description: "Include truncated stdout/stderr inline. Default false; prefer fullLogPath." }
+          verboseOutput: { type: "boolean", description: "Include truncated stdout/stderr inline. Default false; prefer fullLogPath." },
+          validationOverride: { type: "boolean", description: "Allow build despite validation-dirty state (audit trail only)." },
+          validationOverrideNote: { type: "string", description: "Reason recorded when validationOverride=true." }
         })
       }
   ];
@@ -1393,6 +1457,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "write_file") {
       if (!ALLOW_WRITE) return fail("write_file blocked. Set ALLOW_WRITE=1 to enable.");
+      const authFail = enforceTaskAuth(args);
+      if (authFail) return authFail;
       const writeResolution = await resolveWriteToolPath(args.path);
       const target = writeResolution.absolutePath;
       const parent = path.dirname(target);
@@ -1516,6 +1582,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "replace_in_file") {
       if (!ALLOW_WRITE) return fail("replace_in_file blocked. Set ALLOW_WRITE=1 to enable.");
+      const authFail = enforceTaskAuth(args);
+      if (authFail) return authFail;
       const writeResolution = await resolveWriteToolPath(args.path);
       const target = writeResolution.absolutePath;
       const s = await statSafe(target);
@@ -1574,13 +1642,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
           return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`);
         }
-        if (args.expectedOccurrences !== undefined && occurrences !== Number(args.expectedOccurrences)) {
-          return fail(`occurrence mismatch: expected ${args.expectedOccurrences}, found ${occurrences}`);
+        const isSourcePath = [".h", ".hpp", ".cpp", ".c", ".cc", ".cs"].includes(path.extname(target).toLowerCase());
+        const expectedOccurrences = args.expectedOccurrences !== undefined
+          ? Number(args.expectedOccurrences)
+          : (isSourcePath ? 1 : undefined);
+        if (isSourcePath && args.expectedOccurrences === undefined && occurrences > 1) {
+          const snippets = contentNorm.split("\n")
+            .map((line, index) => ({ line, index }))
+            .filter(({ line }) => line.includes(oldTextNorm.split("\n")[0]))
+            .slice(0, 3)
+            .map(({ line, index }) => `L${index + 1}: ${line.slice(0, 120)}`)
+            .join("\n");
+          return fail(
+            `ambiguous replace in ${args.path}: found ${occurrences} matches; specify expectedOccurrences or narrow oldText.${snippets ? `\n\nMatches:\n${snippets}` : ""}`
+          );
+        }
+        if (expectedOccurrences !== undefined && occurrences !== expectedOccurrences) {
+          return fail(`occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`);
         }
 
         // Apply replacement on normalized content, then restore original line endings if needed
         const priorContent = content;
-        const updatedNorm = contentNorm.split(oldTextNorm).join(newText.replace(/\r\n/g, "\n"));
+        const replacement = newText.replace(/\r\n/g, "\n");
+        const updatedNorm = expectedOccurrences === 1
+          ? contentNorm.replace(oldTextNorm, replacement)
+          : contentNorm.split(oldTextNorm).join(replacement);
         const updated = hasCRLF ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
         await fsp.writeFile(target, updated, "utf8");
         invalidateFileCache(target);
@@ -1708,7 +1794,57 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    if (name === "apply_edit_bundle") {
+      if (!ALLOW_WRITE) return fail("apply_edit_bundle blocked. Set ALLOW_WRITE=1 to enable.");
+      const authFail = enforceTaskAuth(args);
+      if (authFail) return authFail;
+      await agentNotify("Applying edit bundle…");
+      const bundle = {
+        files: Array.isArray(args.files) ? args.files : [],
+        patches: Array.isArray(args.patches) ? args.patches : []
+      };
+      if (!bundle.files.length && !bundle.patches.length) {
+        return fail("apply_edit_bundle requires at least one file or patch entry.");
+      }
+      const writeResolution = await resolveWriteToolPath((bundle.files[0] || bundle.patches[0] || {}).path || ".");
+      const projectRoot = path.dirname(path.resolve(getActiveProject(CONFIG_PATH) || writeResolution.absolutePath));
+      const staged = await stageBundle(projectRoot, bundle);
+      try {
+        const written = await commitBundle(projectRoot, bundle);
+        const validationResults = [];
+        for (const absPath of written) {
+          validationResults.push(await validateAfterWrite(absPath, () => getActiveProject(CONFIG_PATH)));
+        }
+        const failed = validationResults.find((item) => validationFailed(item));
+        if (failed) {
+          await rollbackBundle(projectRoot, staged.staged);
+          return validationToolResult("BUNDLE ROLLED BACK — static validation failed.", failed, {
+            ok: false,
+            operation: "apply_edit_bundle",
+            rolledBack: true,
+            isError: true,
+            preChangeHashes: capturePreHashes(projectRoot, staged.relPaths),
+            nextSteps: ["Fix blocking findings and resubmit the bundle."]
+          });
+        }
+        return validationToolResult(`OK — applied ${written.length} file(s) from bundle.`, validationResults[0] || null, {
+          operation: "apply_edit_bundle",
+          writtenCount: written.length,
+          preChangeHashes: capturePreHashes(projectRoot, staged.relPaths),
+          nextSteps: ["Run build_unreal_project after C++ edits."],
+          phase: "editing",
+          userMessage: `Applied ${written.length} file(s) from bundle`,
+          cancellable: false
+        });
+      } catch (error) {
+        await rollbackBundle(projectRoot, staged.staged);
+        await agentNotify(`apply_edit_bundle failed: ${error.message || error}`, "error");
+        return fail(`apply_edit_bundle failed: ${error.message || error}`, { rolledBack: true });
+      }
+    }
+
     if (name === "static_validate_project") {
+      await agentNotify("Running static validation…");
       const activeProject = getActiveProject(CONFIG_PATH);
       let projectRoot = String(args.projectRoot || "").trim();
       if (!projectRoot && activeProject) {
@@ -1743,9 +1879,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Fix the first blocking error, then run static_validate_project again."]
         });
       }
+      clearValidated(projectRoot);
+      await agentNotify(validationSummary);
       return validationToolResult(validationSummary, validation, {
         operation: "static_validate",
-        nextSteps: ["Run build_unreal_project if C++ or Build.cs changed."]
+        nextSteps: ["Run build_unreal_project if C++ or Build.cs changed."],
+        phase: "validating",
+        userMessage: validationSummary,
+        cancellable: false
       });
     }
 
@@ -1865,6 +2006,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!(await exists(projectPath))) return fail(`uproject not found: ${projectPath}`);
       if (!projectPath.toLowerCase().endsWith(".uproject")) return fail("project must be a .uproject file");
 
+      const projectRoot = path.dirname(projectPath);
+      const dirtyGate = requireCleanOrFail(projectRoot, {
+        override: args.validationOverride === true,
+        auditNote: String(args.validationOverrideNote || "")
+      });
+      if (!dirtyGate.ok) {
+        return fail(dirtyGate.error, {
+          validationDirty: dirtyGate.state,
+          nextSteps: dirtyGate.nextSteps
+        });
+      }
+
       const target = String(build.target || "").trim();
       if (!/^[A-Za-z0-9_]+$/.test(target)) return fail("target must be a simple target name, e.g. MyGameEditor");
 
@@ -1876,6 +2029,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const command = `"${build.buildBat}" ${target} ${platform} ${configuration} -Project="${projectPath}" -WaitMutex -NoHotReloadFromIDE`;
       const buildTimeout = Number(args.timeoutMs || COMMAND_TIMEOUT_MS);
+      await agentNotify(`Building ${target} ${platform} ${configuration}…`);
       const result = await execCommand(command, path.dirname(projectPath), buildTimeout);
       const fullLog = [
         `Command: ${command}`,
@@ -1905,6 +2059,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         logPath,
         verbose
       });
+      await agentNotify(payload.userMessage || payload.summary, payload.ok ? "info" : "error");
       return text(JSON.stringify(payload, null, 2));
     }
 

@@ -60,9 +60,13 @@ def project_source_stale_status(
     index_dir = resolve_index_dir()
     cache_key = _staleness_cache_key(active or Path("_none_"), index_dir, search_mode)
     cached_entry = _STALE_CACHE.get(cache_key)
-    if not force and cached_entry and now - float(cached_entry.get("checkedAt") or 0.0) < _STALE_TTL_SECONDS:
+    if not force and cached_entry:
+        manifest_fp = _index_mtime_fingerprint(index_dir)
+        age = now - float(cached_entry.get("checkedAt") or 0.0)
         payload = cached_entry.get("payload")
-        if isinstance(payload, dict):
+        if isinstance(payload, dict) and cached_entry.get("manifestFp") == manifest_fp and age < _STALE_TTL_SECONDS:
+            return payload
+        if isinstance(payload, dict) and cached_entry.get("manifestFp") == manifest_fp and age < 300.0:
             return payload
 
     if not active:
@@ -84,6 +88,7 @@ def project_source_stale_status(
         return payload
 
     caps = project_index_sync_capabilities(active, index_dir)
+    manifest_fp = _index_mtime_fingerprint(index_dir)
     mode = (search_mode or "auto").strip().lower()
 
     # Blueprint/asset graph claims need fresh editor metadata; C++ review does not.
@@ -106,7 +111,7 @@ def project_source_stale_status(
         "recommendedCommand": ".\\rag.ps1 sync-active-project" if caps.get("refreshRecommended") else None,
         **caps,
     }
-    _STALE_CACHE[cache_key] = {"checkedAt": now, "payload": payload}
+    _STALE_CACHE[cache_key] = {"checkedAt": now, "payload": payload, "manifestFp": manifest_fp}
     return payload
 
 

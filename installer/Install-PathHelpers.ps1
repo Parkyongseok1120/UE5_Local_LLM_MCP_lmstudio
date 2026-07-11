@@ -273,6 +273,18 @@ function Sync-InstallMachinePaths {
             -SearchRoots $searchRoots
     }
 
+    $clinePaths = Get-ClineMcpSettingsPaths
+    $writeVsCode = Test-Path -LiteralPath $clinePaths.VsCode
+    $writeCli = Test-Path -LiteralPath $clinePaths.Cli
+    $cline = Sync-ClineMcpSettings `
+        -RagRoot $RagRoot `
+        -AgentRoot $AgentRoot `
+        -DocumentsRoot $DocumentsRoot `
+        -SharedConfigPath $SharedConfigPath `
+        -PortableRoot (Split-Path -Parent $RagRoot) `
+        -WriteVsCode:$writeVsCode `
+        -WriteCli:$writeCli
+
     return [ordered]@{
         EngineRoot  = $engine.Root
         EngineVersion = $engine.Version
@@ -280,6 +292,161 @@ function Sync-InstallMachinePaths {
         Workspace   = $workspace
         AgentConfig = $agent
         SharedConfig = $sharedConfig
+        Cline       = $cline
+    }
+}
+
+function Write-JsonUtf8NoBom([string]$Path, $Object) {
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $json = $Object | ConvertTo-Json -Depth 40
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $utf8)
+}
+
+function Get-ClineMcpSettingsPaths {
+    return [ordered]@{
+        VsCode = Join-Path $env:APPDATA "Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json"
+        Cli    = Join-Path $HOME ".cline\data\settings\cline_mcp_settings.json"
+    }
+}
+
+function Test-ClineMcpHasUnresolvedPlaceholders([string]$JsonText) {
+    return ($JsonText -match '\{PYTHON_EXE\}' -or
+        $JsonText -match '\{REPO_ROOT\}' -or
+        $JsonText -match '\{NODE_EXE\}' -or
+        $JsonText -match '\{AGENT_MCP_ROOT\}' -or
+        $JsonText -match '\{LMSTUDIO_HOME\}' -or
+        $JsonText -match '\{USER_DOCUMENTS\}')
+}
+
+function Build-ClineMcpConfig {
+    param(
+        [string]$RagRoot,
+        [string]$AgentRoot,
+        [string]$DocumentsRoot,
+        [string]$SharedConfigPath,
+        [string]$AgentConfigPath,
+        [string]$PythonExe,
+        [string]$NodeExe,
+        [string]$PortableRoot,
+        [switch]$EnableAgentMode
+    )
+
+    $ragServer = Join-Path $RagRoot "scripts\unreal_rag_mcp.py"
+    $ragIndex = Join-Path $RagRoot "data\unreal58\rag.sqlite"
+    $agentServer = Join-Path $AgentRoot "src\server.js"
+    $allowWrite = if ($EnableAgentMode) { "1" } else { "0" }
+    $allowCommands = if ($EnableAgentMode) { "1" } else { "0" }
+    $allowBuild = if ($EnableAgentMode) { "1" } else { "0" }
+    $validateOnWrite = if ($EnableAgentMode) { "1" } else { "0" }
+
+    return [ordered]@{
+        mcpServers = [ordered]@{
+            "unreal-rag" = [ordered]@{
+                command = $PythonExe
+                args    = @($ragServer, "--index", $ragIndex)
+                timeout = 420000
+                env     = [ordered]@{
+                    SHARED_UNREAL_CONFIG   = $SharedConfigPath
+                    UNREAL58_ROOT          = $RagRoot
+                    UNREAL58_PORTABLE_ROOT = $PortableRoot
+                    PYTHONUTF8             = "1"
+                    PYTHONIOENCODING       = "utf-8"
+                    MCP_ESSENTIAL_TOOLS    = "1"
+                }
+            }
+            "unreal-agent" = [ordered]@{
+                command = $NodeExe
+                args    = @($agentServer)
+                timeout = 720000
+                env     = [ordered]@{
+                    WORKSPACE_ROOT              = $DocumentsRoot
+                    AGENT_MCP_CONFIG            = $AgentConfigPath
+                    SHARED_UNREAL_CONFIG        = $SharedConfigPath
+                    UNREAL58_ROOT               = $RagRoot
+                    UNREAL58_PORTABLE_ROOT      = $PortableRoot
+                    ALLOW_WRITE                 = $allowWrite
+                    ALLOW_COMMANDS              = $allowCommands
+                    ALLOW_UNREAL_BUILD          = $allowBuild
+                    VALIDATE_ON_WRITE           = $validateOnWrite
+                    VALIDATE_ON_WRITE_TIMEOUT_MS = "45000"
+                    MAX_READ_BYTES              = "524288"
+                    MAX_OUTPUT_BYTES            = "262144"
+                    COMMAND_TIMEOUT_MS          = "600000"
+                    MCP_ESSENTIAL_TOOLS         = "1"
+                }
+            }
+        }
+    }
+}
+
+function Sync-ClineMcpSettings {
+    param(
+        [string]$RagRoot,
+        [string]$AgentRoot,
+        [string]$DocumentsRoot = "",
+        [string]$SharedConfigPath = "",
+        [string]$PythonExe = "",
+        [string]$NodeExe = "",
+        [string]$PortableRoot = "",
+        [switch]$EnableAgentMode,
+        [switch]$WriteVsCode,
+        [switch]$WriteCli
+    )
+
+    if (-not $DocumentsRoot) {
+        $DocumentsRoot = Join-Path $HOME "Documents"
+    }
+    if (-not $SharedConfigPath) {
+        $SharedConfigPath = Join-Path $HOME ".lmstudio\config\unreal-workspace.json"
+    }
+    if (-not $PortableRoot) {
+        $PortableRoot = Split-Path -Parent $RagRoot
+    }
+    $agentConfigPath = Join-Path $AgentRoot "config\agent-mcp.json"
+
+    if (-not $PythonExe) {
+        $bundled = Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+        if (Test-Path $bundled) { $PythonExe = $bundled }
+        else {
+            $cmd = Get-Command python -ErrorAction SilentlyContinue
+            if ($cmd -and $cmd.Source -notlike "*\WindowsApps\*") { $PythonExe = $cmd.Source }
+        }
+    }
+    if (-not $NodeExe) {
+        $cmd = Get-Command node -ErrorAction SilentlyContinue
+        if ($cmd) { $NodeExe = $cmd.Source }
+    }
+
+    $config = Build-ClineMcpConfig `
+        -RagRoot $RagRoot `
+        -AgentRoot $AgentRoot `
+        -DocumentsRoot $DocumentsRoot `
+        -SharedConfigPath $SharedConfigPath `
+        -AgentConfigPath $agentConfigPath `
+        -PythonExe $PythonExe `
+        -NodeExe $NodeExe `
+        -PortableRoot $PortableRoot `
+        -EnableAgentMode:$EnableAgentMode
+
+    $paths = Get-ClineMcpSettingsPaths
+    $vscodePath = $null
+    $cliPath = $null
+
+    if ($WriteVsCode) {
+        $vscodePath = $paths.VsCode
+        Write-JsonUtf8NoBom $vscodePath $config
+    }
+    if ($WriteCli) {
+        $cliPath = $paths.Cli
+        Write-JsonUtf8NoBom $cliPath $config
+    }
+
+    return [ordered]@{
+        VsCodePath = $vscodePath
+        CliPath    = $cliPath
+        Config     = $config
     }
 }
 

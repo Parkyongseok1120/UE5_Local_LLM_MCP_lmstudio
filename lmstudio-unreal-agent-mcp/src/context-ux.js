@@ -309,6 +309,8 @@ function slimWriteSuccessPayload(summary, validation, options = {}) {
   return payload;
 }
 
+const { parseBuildProof } = require("./build-proof");
+
 function extractLikelyCompileErrors(stdout, stderr, maxLines = DEFAULT_BUILD_ERROR_LINES) {
   const combined = `${stdout || ""}\n${stderr || ""}`;
   const interesting = combined.split(/\r?\n/).filter((line) => (
@@ -330,25 +332,22 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
   const errorLines = extractLikelyCompileErrors(result.stdout, result.stderr);
   const firstError = firstUsefulLine(errorLines);
   const execSummary = parseBuildExecutionSummary(result.stdout, result.stderr);
-  const upToDate = Boolean(result.ok && execSummary.upToDate);
-  const actionsExecuted = execSummary.actionsExecuted;
-  const proofLevel = !result.ok
-    ? "Failed"
-    : (actionsExecuted != null && actionsExecuted > 0)
-      ? "Built"
-      : (actionsExecuted === 0 || upToDate)
-        ? "BuiltStale"
-        : "BuiltUnverified";
+  const proof = parseBuildProof(result.ok, `${result.stdout || ""}\n${result.stderr || ""}`, { logPath });
+  const upToDate = proof.targetUpToDate;
+  const actionsExecuted = proof.actionCount;
+  const proofLevel = proof.proofLevel;
 
   let summary;
   if (!result.ok) {
     summary = `BUILD FAILED — ${errorLines.length} likely error line(s)${firstError ? `; first: ${firstError}` : ""}`;
   } else if (actionsExecuted != null && actionsExecuted > 0) {
     summary = `BUILD SUCCEEDED — ${actionsExecuted} action(s) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
-  } else if (upToDate || actionsExecuted === 0) {
+  } else if (upToDate && actionsExecuted === 0) {
     summary = `BUILD SUCCEEDED (up to date — 0 files recompiled) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
-  } else {
+  } else if (actionsExecuted === 0) {
     summary = `BUILD SUCCEEDED (compile proof unverified — action count not detected) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
+  } else {
+    summary = `BUILD SUCCEEDED — ${actionsExecuted} action(s) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
   }
 
   const payload = {
@@ -363,7 +362,19 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
     fullLogPath: logPath,
     error: result.error || "",
     nextSteps: [],
-    suggestedToolCalls: []
+    suggestedToolCalls: [],
+    phase: result.ok ? "complete" : "failed",
+    userMessage: result.ok
+      ? (upToDate && actionsExecuted === 0
+        ? "Build finished (up to date — no files recompiled)"
+        : `Build succeeded (${actionsExecuted ?? "?"} action(s))`)
+      : `Build failed${firstError ? `: ${firstError}` : ""}`,
+    userMessageKo: result.ok
+      ? (upToDate && actionsExecuted === 0
+        ? "빌드 완료 (최신 상태 — 재컴파일 없음)"
+        : `빌드 성공 (${actionsExecuted ?? "?"} action(s))`)
+      : `빌드 실패${firstError ? `: ${firstError}` : ""}`,
+    cancellable: false
   };
 
   if (!result.ok) {
@@ -378,7 +389,7 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
         args: { query: firstError.slice(0, 800), mode: "compile_fix", hybrid: false, top_k: 4 }
       }];
     }
-  } else if (upToDate || actionsExecuted === 0) {
+  } else if (upToDate && actionsExecuted === 0) {
     payload.nextSteps = [
       "upToDate=true means UBT did not recompile any files — this is not proof your recent edit was built.",
       "If you just edited C++, confirm the file was saved, then rebuild and check fullLogPath for action count > 0.",

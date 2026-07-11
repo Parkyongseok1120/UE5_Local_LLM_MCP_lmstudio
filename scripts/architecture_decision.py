@@ -110,3 +110,31 @@ def approval_is_valid(path: Path, decision: ArchitectureDecision) -> bool:
         if str(stored.get(key) or "") != str(expected.get(key) or ""):
             return False
     return True
+
+
+def revoke_approval(path: Path, decision_id: str) -> bool:
+    store = load_approval_store(path)
+    decisions = dict(store.get("decisions") or {})
+    if decision_id not in decisions:
+        return False
+    decisions.pop(decision_id, None)
+    store["decisions"] = decisions
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
+    return True
+
+
+def revoke_approval(path: Path, decision_id: str) -> bool:
+    store = load_approval_store(path)
+    decisions = dict(store.get("decisions") or {})
+    if decision_id not in decisions:
+        return False
+    decisions.pop(decision_id, None)
+    store["decisions"] = decisions
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
+    return True

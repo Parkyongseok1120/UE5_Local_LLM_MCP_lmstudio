@@ -22,6 +22,7 @@ function evaluateBootstrapCache(cache, activeProject) {
   return {
     valid: canSkipSteps,
     canSkipSteps,
+    skipBootstrapPrompt: canSkipSteps,
     missingSteps,
     projectPath: cache.projectPath || null,
     cachedAt: cache.cachedAt || null,

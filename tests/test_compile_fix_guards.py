@@ -324,11 +324,10 @@ void RefreshEditorViewports()
     )
 
     updated = cpp.read_text(encoding="utf-8")
-    assert cpp in written
-    assert "UEditorEngine.h" not in updated
-    assert "GEditor" not in updated
-    assert "UEditorEngine::" not in updated
-    assert "UnrealEd" not in build_cs.read_text(encoding="utf-8")
+    assert written == []
+    assert "UEditorEngine.h" in updated
+    assert "GEditor" in updated
+    assert "UEditorEngine::" in updated
 
 
 def test_uobject_newobject_autofix_removes_shadow_macro_and_adds_globals(tmp_path):

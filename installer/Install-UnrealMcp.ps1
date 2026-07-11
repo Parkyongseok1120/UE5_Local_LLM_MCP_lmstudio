@@ -5,7 +5,8 @@ param(
     [switch]$SkipNpm,
     [switch]$SkipPythonDeps,
     [switch]$EnableAgentMode,
-    [switch]$SkipProjectSetup
+    [switch]$SkipProjectSetup,
+    [switch]$InstallCline
 )
 
 $ErrorActionPreference = "Stop"
@@ -305,6 +306,20 @@ $pathSync = Sync-InstallMachinePaths `
     -DocumentsRoot $docsRoot `
     -SharedConfigPath $sharedConfigPath
 Write-Host "Machine-local paths synced (engine: $($pathSync.EngineRoot))."
+
+if ($InstallCline) {
+    Write-Host ""
+    Write-Host "Installing Cline MCP settings..."
+    $clineArgs = @{
+        PortableRoot = $root
+        LmStudioHome = $lmHome
+        DocumentsRoot = $docsRoot
+    }
+    if ($EnableAgentMode) {
+        $clineArgs.EnableAgentMode = $true
+    }
+    & (Join-Path $PSScriptRoot "Install-ClineUnrealMcp.ps1") @clineArgs
+}
 
 Write-Host ""
 Write-Host "=== Install complete ==="

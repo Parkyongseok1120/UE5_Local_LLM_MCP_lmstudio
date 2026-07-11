@@ -1132,27 +1132,34 @@ def _uclass_line_index(lines: list[str]) -> int:
 
 
 def reorder_generated_h_header_text(text: str) -> str | None:
+    """Move only .generated.h include lines after other includes; preserve all other bytes."""
     lines = text.splitlines()
     uclass_idx = _uclass_line_index(lines)
     prefix = lines[:uclass_idx]
     suffix = lines[uclass_idx:]
-    include_positions = [index for index, line in enumerate(prefix) if line.strip().startswith("#include ")]
-    if not include_positions:
+
+    gen_lines = [
+        line
+        for line in prefix
+        if line.strip().startswith("#include") and ".generated.h" in line
+    ]
+    if not gen_lines:
         return None
-    first_inc = include_positions[0]
-    last_inc = include_positions[-1]
-    before = prefix[:first_inc]
-    after = prefix[last_inc + 1 :]
-    middle = [prefix[index] for index in include_positions]
-    generated = [line for line in middle if ".generated.h" in line]
-    others = [line for line in middle if ".generated.h" not in line]
-    if not generated:
+
+    without_gen = [line for line in prefix if line not in gen_lines]
+    insert_at = 0
+    seen_non_gen = 0
+    for index, line in enumerate(without_gen):
+        if line.strip().startswith("#include") and ".generated.h" not in line:
+            seen_non_gen += 1
+            insert_at = index + 1
+    if seen_non_gen == 0:
         return None
-    reordered = others + generated
-    if reordered == middle:
+
+    new_prefix = without_gen[:insert_at] + gen_lines + without_gen[insert_at:]
+    if new_prefix == prefix:
         return None
-    new_lines = before + reordered + after + suffix
-    updated = "\n".join(new_lines)
+    updated = "\n".join(new_prefix + suffix)
     if text.endswith("\n"):
         updated += "\n"
     return updated
@@ -1186,70 +1193,51 @@ def apply_generated_h_order_autofix(root: Path, findings: list[Finding]) -> list
 
 
 def apply_editor_runtime_guard_autofix(root: Path, findings: list[Finding]) -> list[Path]:
-    written: list[Path] = []
-    editor_findings = [
-        finding for finding in findings if finding.code == "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE"
-    ]
-    editor_headers = {"UnrealEd.h", "UEditorEngine.h", "Editor.h"}
-    editor_symbol_re = re.compile(r"\b(?:GEditor|UEditorEngine::)\b")
-    targets: set[Path] = set()
-    for finding in editor_findings:
-        target = (root / finding.path).resolve()
-        if target.is_file():
-            targets.add(target)
-    for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".cc", ".c", ".cxx", ".inl"}:
-            continue
-        text = read_text(path)
-        if any(header in text for header in editor_headers) or editor_symbol_re.search(text):
-            targets.add(path)
-    for target in sorted(targets, key=lambda p: str(p)):
-        text = read_text(target)
-        lines = text.splitlines()
-        out: list[str] = []
-        idx = 0
-        while idx < len(lines):
-            line = lines[idx]
-            include_match = re.match(r'\s*#\s*include\s+[<"]([^>"]+)[>"]', line)
-            if include_match and include_match.group(1) in editor_headers:
-                idx += 1
-                continue
-            if editor_symbol_re.search(line):
-                idx += 1
-                continue
-            out.append(line)
-            idx += 1
-        updated = "\n".join(out)
-        if text.endswith("\n"):
-            updated += "\n"
-        if updated != text:
-            write_file(target, updated)
-            written.append(target)
-    return written
+    from autofix_diagnostics import record_autofix_diagnostic
+
+    if findings:
+        for finding in findings:
+            if finding.code == "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE":
+                record_autofix_diagnostic(
+                    step="editor_runtime_guard",
+                    code="AUTOFIX_DISABLED",
+                    reason=(
+                        "Editor/runtime boundary autofix is disabled; preserve editor includes and "
+                        "GEditor/UEditorEngine usage for model or human repair."
+                    ),
+                    path=str(finding.path),
+                    finding_codes=["EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE"],
+                )
+                break
+    else:
+        record_autofix_diagnostic(
+            step="editor_runtime_guard",
+            code="AUTOFIX_DISABLED",
+            reason="Editor/runtime boundary autofix is disabled.",
+        )
+    return []
 
 
 def apply_delegate_broadcast_autofix(root: Path, findings: list[Finding]) -> list[Path]:
-    written: list[Path] = []
-    targets: set[Path] = set()
-    for finding in findings:
-        if finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH":
-            target = (root / finding.path).resolve()
-            if target.is_file():
-                targets.add(target)
-    for path in iter_source_files(root):
-        if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
-            continue
-        text = read_text(path)
-        if re.search(r"\.Broadcast\s*\(\s*\)", text):
-            targets.add(path)
-    for target in sorted(targets, key=lambda p: str(p)):
-        text = read_text(target)
-        updated = re.sub(r"\.Broadcast\s*\(\s*\)", ".Broadcast(0)", text)
-        if updated == text:
-            continue
-        write_file(target, updated)
-        written.append(target)
-    return written
+    from autofix_diagnostics import record_autofix_diagnostic
+
+    broadcast_findings = [
+        finding for finding in findings if finding.code == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH"
+    ]
+    if not broadcast_findings:
+        return []
+    for finding in broadcast_findings:
+        record_autofix_diagnostic(
+            step="delegate_broadcast",
+            code="AUTOFIX_DISABLED",
+            reason=(
+                "Delegate Broadcast autofix is disabled without a proven delegate signature and "
+                "argument expression; repair via model/human edit."
+            ),
+            path=str(finding.path),
+            finding_codes=["DELEGATE_BROADCAST_SIGNATURE_MISMATCH"],
+        )
+    return []
 
 
 def apply_uobject_newobject_autofix(root: Path, findings: list[Finding]) -> list[Path]:
@@ -1278,41 +1266,28 @@ def apply_uobject_newobject_autofix(root: Path, findings: list[Finding]) -> list
 
 
 def apply_blueprint_event_rename_autofix(root: Path, findings: list[Finding]) -> list[Path]:
-    written: list[Path] = []
-    for header_path in iter_source_files(root):
-        if header_path.suffix.lower() not in {".h", ".hpp"}:
-            continue
-        header_text = read_text(header_path)
-        event_names = re.findall(
-            r"UFUNCTION\s*\([^)]*BlueprintNativeEvent[^)]*\)[^\n;]*\n\s*(?:virtual\s+)?void\s+(\w+)\s*\(",
-            header_text,
+    from autofix_diagnostics import record_autofix_diagnostic
+
+    rename_findings = [
+        finding for finding in findings if finding.code == "CPP_FUNCTION_NOT_DECLARED_IN_HEADER"
+    ]
+    if not rename_findings:
+        return []
+    for finding in rename_findings:
+        record_autofix_diagnostic(
+            step="blueprint_event_rename",
+            code="AUTOFIX_DISABLED",
+            reason=(
+                "BlueprintNativeEvent implementation rename autofix is disabled without a uniquely "
+                "proven owner class, event name, and signature pair."
+            ),
+            path=str(finding.path),
+            finding_codes=["CPP_FUNCTION_NOT_DECLARED_IN_HEADER"],
         )
-        if not event_names:
-            continue
-        cpp_path = header_path.with_suffix(".cpp")
-        if not cpp_path.is_file():
-            module_private = header_path.parent.parent / "Private" / f"{header_path.stem}.cpp"
-            cpp_path = module_private if module_private.is_file() else cpp_path
-        if not cpp_path.is_file():
-            continue
-        cpp_text = read_text(cpp_path)
-        updated = cpp_text
-        for event_name in event_names:
-            expected_impl = f"{event_name}_Implementation"
-            for wrong in set(re.findall(r"(\w+_Implementation)\s*\(", updated)):
-                if wrong != expected_impl:
-                    updated = updated.replace(f"::{wrong}(", f"::{expected_impl}(")
-        if updated != cpp_text:
-            write_file(cpp_path, updated)
-            written.append(cpp_path)
-    return written
+    return []
 
 
 def build_static_autofix_steps(mode: str) -> list[AutofixStep]:
-    multifile_codes: set[str] = set()
-    for codes in FINDING_STEP_CODES.values():
-        multifile_codes |= codes
-
     steps: list[AutofixStep] = []
     if mode in {"reflection_fix", "compile_fix"}:
         steps.extend(
@@ -1355,12 +1330,12 @@ def build_static_autofix_steps(mode: str) -> list[AutofixStep]:
                 ),
             ]
         )
-    if mode == "multifile_refactor" or multifile_codes:
+    if mode == "multifile_refactor":
         steps.append(
             AutofixStep(
                 "multifile_refactor",
                 apply_multifile_refactor_autofixes,
-                multifile_codes,
+                set().union(*FINDING_STEP_CODES.values()),
             )
         )
     steps.extend(
@@ -2761,6 +2736,23 @@ def run(args: argparse.Namespace) -> int:
         if not executable_slices and not fix_only:
             executable_slices = list(agent_plan.plan_slices or [])
 
+    placeholder_blocked: list[dict[str, Any]] = []
+    if executable_slices:
+        from plan_placeholder_resolution import resolve_plan_slices
+
+        placeholder_hints = {
+            "owner": str(active_route.get("ownerClass") or active_route.get("className") or ""),
+            "actor": str(active_route.get("actorClass") or active_route.get("className") or ""),
+            "class": str(active_route.get("className") or ""),
+        }
+        executable_slices, placeholder_blocked = resolve_plan_slices(
+            executable_slices,
+            project_root=project_root,
+            hints=placeholder_hints,
+        )
+        if placeholder_blocked:
+            write_json(run_dir / "placeholder_blocked_slices.json", placeholder_blocked)
+
     if agent_plan is not None and executable_slices:
         from plan_slice_state import (
             capture_pre_change_hashes,
@@ -2829,7 +2821,7 @@ def run(args: argparse.Namespace) -> int:
             decision = build_architecture_decision(
                 ambiguity_gate=ambiguity_gate,
                 project_path=str(project_file),
-                plan_revision="1",
+                plan_revision=str(getattr(agent_plan, "plan_revision", None) or write_gate.get("planRevision") or "1"),
             )
             return approval_is_valid(store_path, decision)
         return False
@@ -3000,8 +2992,15 @@ def run(args: argparse.Namespace) -> int:
     last_written: list[Path] = []
     last_build: BuildResult | None = None
     diagnosis_feedback = ""
+    attempt = 0
+    max_total_model_calls = int(getattr(args, "max_total_model_calls", 0) or 40)
+    max_retries_per_slice = int(getattr(args, "max_retries_per_slice", 0) or 5)
+    use_slice_budgets = bool(slice_path is not None and executable_slices)
 
-    for attempt in range(1, args.max_attempts + 1):
+    while True:
+        attempt += 1
+        if not use_slice_budgets and attempt > args.max_attempts:
+            break
         before_apply = None
         after_apply = None
         clear_refactor_surface_cache()
@@ -3011,9 +3010,15 @@ def run(args: argparse.Namespace) -> int:
             attempt_slice_state = load_slice_state(slice_path)
             if attempt_slice_state.get("corrupt"):
                 break
+            if use_slice_budgets and attempt_slice_state.get("completed"):
+                break
             attempt_slice_state = increment_model_call(attempt_slice_state)
             save_slice_state(slice_path, attempt_slice_state)
-            if retry_or_total_cap_exceeded(attempt_slice_state):
+            if retry_or_total_cap_exceeded(
+                attempt_slice_state,
+                max_retries_per_slice=max_retries_per_slice,
+                max_total_model_calls=max_total_model_calls,
+            ):
                 previous_feedback = (
                     "Slice retry or total model-call budget exceeded. "
                     f"retryWithinSlice={attempt_slice_state.get('retryWithinSlice')} "
@@ -3068,8 +3073,9 @@ def run(args: argparse.Namespace) -> int:
         attempt_dir.mkdir(parents=True, exist_ok=True)
         first_attempt_patch_route = attempt == 1 and should_use_patch_preset_on_first_attempt(active_route, args.mode)
         attempt_prefix = (
-            f"Compile loop attempt {attempt}/{args.max_attempts}. "
-            "List at most 3 assumptions; apply one minimal diff this turn.\n\n"
+            f"Compile loop attempt {attempt}"
+            + (f"/{args.max_attempts}" if not use_slice_budgets else f" (slice budgets: retries<{max_retries_per_slice}, modelCalls<{max_total_model_calls})")
+            + ". List at most 3 assumptions; apply one minimal diff this turn.\n\n"
         )
         if attempt == 1 and original_mode == "multifile_refactor":
             surface_hint = multifile_required_surface_hint(original_mode, request, project_root)
@@ -3440,6 +3446,17 @@ def run(args: argparse.Namespace) -> int:
 
         try:
             before_apply = attempt_snapshot if attempt_snapshot is not None else snapshot_project_files(project_root)
+            if slice_path is not None and executable_slices:
+                from plan_slice_state import capture_pre_change_hashes, load_slice_state, save_slice_state
+
+                pre_hash_state = load_slice_state(slice_path)
+                pre_hash_state = capture_pre_change_hashes(
+                    pre_hash_state,
+                    project_root=project_root,
+                    plan_slices=executable_slices,
+                    bundle=bundle,
+                )
+                save_slice_state(slice_path, pre_hash_state)
             last_written = apply_bundle(project_root, bundle, before_apply=before_apply)
             after_apply = snapshot_project_files(project_root)
             applied_paths = changed_paths_between(before_apply, after_apply)
@@ -3819,7 +3836,11 @@ def run(args: argparse.Namespace) -> int:
                     reject_reason = str(slice_state.get("lastError") or "slice completion rejected")
                     previous_feedback = reject_reason + "\n\n" + next_slice_prompt(slice_state, executable_slices)
                     write_file(run_dir / "validation_feedback.txt", previous_feedback)
-                    if retry_or_total_cap_exceeded(slice_state):
+                    if retry_or_total_cap_exceeded(
+                        slice_state,
+                        max_retries_per_slice=max_retries_per_slice,
+                        max_total_model_calls=max_total_model_calls,
+                    ):
                         summary = final_summary(
                             status="FAILED",
                             run_dir=run_dir,
@@ -3972,7 +3993,7 @@ def run(args: argparse.Namespace) -> int:
         static_retry_hint = str(retry_payload["current"].get("staticValidationRetryHint") or "")
         retry_block = retry_feedback_block(retry_payload["recommendation"])
         failure_rag_note = ""
-        if parsed_feedback.rag_context and attempt < args.max_attempts:
+        if parsed_feedback.rag_context and (use_slice_budgets or attempt < args.max_attempts):
             failure_rag_note = (
                 "Failure-specific RAG context was written to failure_rag_context.md in this attempt folder."
             )
@@ -4029,6 +4050,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--max-tokens", type=int, default=0)
     parser.add_argument("--max-attempts", type=int, default=4)
+    parser.add_argument("--max-total-model-calls", type=int, default=40)
+    parser.add_argument("--max-retries-per-slice", type=int, default=5)
     parser.add_argument("--feedback-chars", type=int, default=12000)
     parser.add_argument("--scratch-root", default="data/wrapper_runs")
     parser.add_argument("--run-dir", default="")

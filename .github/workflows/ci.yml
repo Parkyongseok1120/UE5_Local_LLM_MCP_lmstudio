@@ -44,6 +44,12 @@ jobs:
         run: pytest --tb=short -q
         working-directory: ${{ github.workspace }}
 
+      - name: Domain contract gate
+        run: python scripts/eval_domain_contract.py --pytest-only
+
+      - name: Repetition gate
+        run: python scripts/run_repetition_gate.py --repeat 3
+
   python-lint:
     name: Python lint (ruff)
     runs-on: windows-latest
@@ -60,8 +66,7 @@ jobs:
         run: python -m pip install ruff
 
       - name: Lint scripts/ and tests/
-        run: ruff check scripts/ tests/ --select=E,F,W --ignore=E501,E402,F401 --exit-zero
-        # --exit-zero: warn-only for now; change to failing once baseline is clean
+        run: ruff check scripts/ tests/ --select=E,F,W --ignore=E501,E402,F401
 
   node-install:
     name: Node.js npm install
@@ -83,6 +88,11 @@ jobs:
         run: |
           node --check src/server.js
           node --check src/context-ux.js
+          node --check src/build-proof.js
+        working-directory: lmstudio-unreal-agent-mcp
+
+      - name: npm test
+        run: npm.cmd test
         working-directory: lmstudio-unreal-agent-mcp
 
   oss-ready:

@@ -130,6 +130,7 @@ Check "shared workspace config" {
     if (-not (Test-Path $p)) { throw "missing" }
 }
 Check "Cline MCP settings" {
+    . (Join-Path $PSScriptRoot "Install-PathHelpers.ps1")
     $paths = @(
         (Join-Path $HOME ".cline\data\settings\cline_mcp_settings.json"),
         (Join-Path $env:APPDATA "Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json")
@@ -137,7 +138,11 @@ Check "Cline MCP settings" {
     $found = $false
     foreach ($p in $paths) {
         if (-not (Test-Path $p)) { continue }
-        $cfg = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json
+        $raw = Get-Content -LiteralPath $p -Raw -Encoding UTF8
+        if (Test-ClineMcpHasUnresolvedPlaceholders $raw) {
+            throw "unresolved placeholders in $p — re-run Install-ClineUnrealMcp.ps1"
+        }
+        $cfg = $raw | ConvertFrom-Json
         if ($cfg.mcpServers."unreal-rag" -and $cfg.mcpServers."unreal-agent") {
             $found = $true
             break

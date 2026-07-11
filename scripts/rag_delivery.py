@@ -29,6 +29,7 @@ def deliver_rag_result(
     rows: list[Any] | None = None,
     allow_detail_escalation: bool = False,
     previous_detail: str | None = None,
+    continuation_token: str = "",
 ) -> dict[str, Any]:
     """Apply repeat-query guard and record successful full-context delivery."""
     semantic_key = semantic_query_key(
@@ -58,6 +59,7 @@ def deliver_rag_result(
         previous_detail=previous_detail,
         current_detail=detail_level,
         semantic_key=semantic_key,
+        continuation_token=continuation_token,
     )
     if repeat.get("repeatDetected"):
         return {
@@ -78,6 +80,7 @@ def deliver_rag_result(
         "repeat": repeat,
         "rows": list(rows or []),
         "suppressed": False,
+        "deliveredFullContext": len(rows or []) > 0,
     }
     if rows is not None:
         record_query_delivery(
@@ -90,4 +93,8 @@ def deliver_rag_result(
             session_id=session_id,
             semantic_key=semantic_key,
         )
+        if rows:
+            from read_query_history import issue_continuation_token
+
+            payload["continuationToken"] = issue_continuation_token(delivery_key)
     return payload

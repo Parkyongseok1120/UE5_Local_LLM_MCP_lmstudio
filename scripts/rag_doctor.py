@@ -378,11 +378,30 @@ def main() -> int:
         / "settings"
         / "cline_mcp_settings.json",
     ]
+    placeholder_tokens = (
+        "{PYTHON_EXE}",
+        "{REPO_ROOT}",
+        "{NODE_EXE}",
+        "{AGENT_MCP_ROOT}",
+        "{LMSTUDIO_HOME}",
+        "{USER_DOCUMENTS}",
+    )
     for cline_path in cline_paths:
         if not cline_path.is_file():
             continue
         try:
-            cline = json.loads(cline_path.read_text(encoding="utf-8-sig"))
+            raw = cline_path.read_text(encoding="utf-8-sig")
+            if any(token in raw for token in placeholder_tokens):
+                checks.append(
+                    check(
+                        "cline_placeholders",
+                        False,
+                        f"{cline_path} has unresolved install placeholders",
+                    )
+                )
+                fail_count += 1
+                continue
+            cline = json.loads(raw)
             servers = cline.get("mcpServers") or {}
             if servers.get("unreal-rag") and servers.get("unreal-agent"):
                 cline_ok = True

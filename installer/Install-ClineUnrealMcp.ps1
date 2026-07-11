@@ -1,7 +1,11 @@
 param(
+    [string]$PortableRoot = "",
+    [string]$LmStudioHome = "",
+    [string]$DocumentsRoot = "",
     [switch]$VsCode,
     [switch]$Cli,
-    [switch]$All
+    [switch]$All,
+    [switch]$EnableAgentMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,46 +14,75 @@ if (-not $VsCode -and -not $Cli) {
     $All = $true
 }
 
-$ragRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$templatePath = Join-Path $ragRoot "config\cline_mcp_settings.template.json"
-if (-not (Test-Path $templatePath)) {
-    throw "Template not found: $templatePath"
-}
+. (Join-Path $PSScriptRoot "Resolve-StackLayout.ps1")
+. (Join-Path $PSScriptRoot "Install-PathHelpers.ps1")
 
-$template = Get-Content $templatePath -Raw -Encoding UTF8 | ConvertFrom-Json
-
-function Merge-McpSettings($targetPath) {
-    $dir = Split-Path $targetPath -Parent
-    if (-not (Test-Path $dir)) {
-        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+function Find-PythonExe {
+    $bundled = Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+    if (Test-Path $bundled) { return $bundled }
+    foreach ($path in @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe")
+        )) {
+        if (Test-Path $path) { return $path }
     }
-
-    $existing = @{ mcpServers = @{} }
-    if (Test-Path $targetPath) {
-        $existing = Get-Content $targetPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $existing.mcpServers) {
-            $existing | Add-Member -NotePropertyName mcpServers -NotePropertyValue @{}
-        }
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -notlike "*\WindowsApps\*" -and (Test-Path $cmd.Source)) {
+        return $cmd.Source
     }
+    throw "Python 3.10+ not found."
+}
 
-    foreach ($name in $template.mcpServers.PSObject.Properties.Name) {
-        $existing.mcpServers | Add-Member -NotePropertyName $name -NotePropertyValue $template.mcpServers.$name -Force
+function Find-NodeExe {
+    foreach ($path in @(
+            (Join-Path $env:ProgramFiles "nodejs\node.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "nodejs\node.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\nodejs\node.exe")
+        )) {
+        if (Test-Path $path) { return (Resolve-Path $path).Path }
     }
-
-    $json = $existing | ConvertTo-Json -Depth 20
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($targetPath, $json + [Environment]::NewLine, $utf8NoBom)
-    Write-Host "Updated: $targetPath"
+    $cmd = Get-Command node -ErrorAction SilentlyContinue
+    if ($cmd -and (Test-Path $cmd.Source)) { return $cmd.Source }
+    throw "Node.js 20+ not found."
 }
 
-if ($All -or $VsCode) {
-    $vscodePath = Join-Path $env:APPDATA "Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json"
-    Merge-McpSettings $vscodePath
+$layout = Resolve-StackLayout $PortableRoot
+$ragRoot = $layout.RagRoot
+$agentRoot = $layout.AgentRoot
+$root = $layout.Root
+$python = Find-PythonExe
+$node = Find-NodeExe
+$lmHome = if ($LmStudioHome) { (Resolve-Path $LmStudioHome).Path } else { Join-Path $HOME ".lmstudio" }
+$docsRoot = if ($DocumentsRoot) { $DocumentsRoot } else { Join-Path $HOME "Documents" }
+$sharedConfigPath = Join-Path $lmHome "config\unreal-workspace.json"
+$agentConfigPath = Join-Path $agentRoot "config\agent-mcp.json"
+
+if (-not (Test-Path $sharedConfigPath)) {
+    throw "Shared config missing: $sharedConfigPath — run Install-UnrealMcp.ps1 first."
 }
 
-if ($All -or $Cli) {
-    $cliPath = Join-Path $HOME ".cline\data\settings\cline_mcp_settings.json"
-    Merge-McpSettings $cliPath
+$result = Sync-ClineMcpSettings `
+    -RagRoot $ragRoot `
+    -AgentRoot $agentRoot `
+    -DocumentsRoot $docsRoot `
+    -SharedConfigPath $sharedConfigPath `
+    -PythonExe $python `
+    -NodeExe $node `
+    -PortableRoot $root `
+    -EnableAgentMode:$EnableAgentMode `
+    -WriteVsCode:($All -or $VsCode) `
+    -WriteCli:($All -or $Cli)
+
+foreach ($path in @($result.VsCodePath, $result.CliPath)) {
+    if ($path) {
+        Write-Host "Updated: $path" -ForegroundColor Green
+    }
 }
 
-Write-Host "Done. Restart Cline and confirm unreal-rag / unreal-agent appear in MCP Servers."
+Write-Host ""
+Write-Host "=== Cline MCP install complete ==="
+Write-Host "Restart Cline and confirm unreal-rag + unreal-agent appear in MCP Servers."
+if (-not $EnableAgentMode) {
+    Write-Host "Safe mode (read-only agent). Re-run with -EnableAgentMode for writes/builds." -ForegroundColor Cyan
+}

@@ -206,11 +206,20 @@ def _parse_uplugin(path: Path) -> dict[str, Any]:
     }
 
 
-def build_plugin_project_context(project_root: Path | str) -> PluginProjectContext:
+def build_plugin_project_context(
+    project_root: Path | str,
+    *,
+    include_disabled_plugins: bool = False,
+) -> PluginProjectContext:
     root = Path(project_root)
     uproject_files = list(root.glob("*.uproject"))
     project_name = uproject_files[0].stem if uproject_files else root.name
     uproject = _read_json(uproject_files[0]) if uproject_files else {}
+    disabled_plugins = {
+        str(item.get("Name") or "")
+        for item in (uproject.get("Plugins") or [])
+        if isinstance(item, dict) and item.get("Enabled") is False and item.get("Name")
+    }
     enabled_modules = {
         str(item.get("Name") or ""): str(item.get("Type") or "Runtime")
         for item in (uproject.get("Modules") or [])
@@ -243,6 +252,19 @@ def build_plugin_project_context(project_root: Path | str) -> PluginProjectConte
                 continue
             meta = _parse_uplugin(uplugin)
             plugin_name = uplugin.parent.name
+            disabled_in_uproject = plugin_name in disabled_plugins
+            if disabled_in_uproject and not include_disabled_plugins:
+                ctx.plugins.append(
+                    {
+                        "name": plugin_name,
+                        "path": str(uplugin.parent.relative_to(root)).replace("\\", "/"),
+                        "descriptor": str(uplugin.relative_to(root)).replace("\\", "/"),
+                        **meta,
+                        "enabled": False,
+                        "disabledInUproject": True,
+                    }
+                )
+                continue
             plugin_rel = str(uplugin.parent.relative_to(root)).replace("\\", "/")
             ctx.plugins.append(
                 {
@@ -295,8 +317,16 @@ def build_plugin_project_context(project_root: Path | str) -> PluginProjectConte
     return ctx
 
 
-def resolve_scan_roots(project_root: Path | str, *, include_vendor: bool = False) -> list[Path]:
-    ctx = build_plugin_project_context(project_root)
+def resolve_scan_roots(
+    project_root: Path | str,
+    *,
+    include_vendor: bool = False,
+    include_disabled_plugins: bool = False,
+) -> list[Path]:
+    ctx = build_plugin_project_context(
+        project_root,
+        include_disabled_plugins=include_disabled_plugins,
+    )
     roots = ctx.scan_roots(include_vendor=include_vendor)
     if roots:
         return roots

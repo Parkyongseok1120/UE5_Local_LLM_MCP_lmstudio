@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -95,7 +95,8 @@ def test_slice_requires_exact_built_proof(tmp_path: Path) -> None:
     )
     assert built["slices"][0]["status"] == "complete"
     assert proof_level_from_build_output(True, "Target is up to date") == "BuiltStale"
-    assert proof_level_from_build_output(True, "Building 4 actions with 4 processes") == "Built"
+    assert proof_level_from_build_output(True, "Building 4 actions with 4 processes") == "BuiltUnverified"
+    assert proof_level_from_build_output(True, "[1/3] Compile Demo.cpp") == "Built"
 
 
 def test_architecture_approval_invalidates_on_authority_or_scope(tmp_path: Path) -> None:
