@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,8 +17,25 @@ def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+TASK_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def _validate_task_session_id(task_session_id: str) -> str:
+    value = str(task_session_id or "").strip()
+    if ".." in value or "/" in value or "\\" in value:
+        raise ValueError("taskSessionId must not contain path separators or traversal")
+    if not TASK_SESSION_ID_RE.fullmatch(value):
+        raise ValueError("taskSessionId must match [A-Za-z0-9_-]{8,64}")
+    return value
+
+
 def task_root(workspace: Path, task_session_id: str) -> Path:
-    return workspace / ".agent" / "tasks" / task_session_id
+    safe_id = _validate_task_session_id(task_session_id)
+    root = (workspace / ".agent" / "tasks" / safe_id).resolve()
+    tasks_root = (workspace / ".agent" / "tasks").resolve()
+    if root != tasks_root and tasks_root not in root.parents:
+        raise ValueError("taskSessionId resolves outside .agent/tasks")
+    return root
 
 
 def _state_path(workspace: Path, task_session_id: str) -> Path:

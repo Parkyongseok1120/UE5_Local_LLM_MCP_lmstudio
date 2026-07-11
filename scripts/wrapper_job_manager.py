@@ -107,6 +107,18 @@ def write_job(workspace: Path, job: dict[str, Any], *, expected_revision: int | 
         return True
 
 
+def save_job(workspace: Path, job: dict[str, Any]) -> bool:
+    job_id = str(job.get("jobId") or "")
+    if not job_id:
+        return False
+    current = read_job(workspace, job_id)
+    if current is None:
+        return write_job(workspace, job)
+    expected = int(current.get("revision") or 0)
+    payload = dict(job)
+    return write_job(workspace, payload, expected_revision=expected)
+
+
 def transition_job_status(job: dict[str, Any], next_status: str) -> bool:
     current = str(job.get("status") or "created")
     if current in TERMINAL_STATUSES:
@@ -225,19 +237,20 @@ def _prune_stale_jobs(workspace: Path, ttl_hours: int = 24) -> None:
                 continue
 
 
-def _kill_process_tree(pid: int) -> None:
+def _kill_process_tree(pid: int) -> bool:
     if sys.platform == "win32":
-        subprocess.run(
+        result = subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
         )
-        return
+        return result.returncode == 0
     try:
         os.kill(pid, 15)
+        return True
     except OSError:
-        pass
+        return False
 
 
 def _is_cancelled(workspace: Path, job_id: str) -> bool:
@@ -252,15 +265,21 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     if str(job.get("status") or "") in TERMINAL_STATUSES:
         return {"ok": True, "job": job}
     pid = job.get("pid")
+    orphan_suspected = False
     if pid and job.get("status") in {"starting", "running", "queued"}:
-        _kill_process_tree(int(pid))
+        orphan_suspected = not _kill_process_tree(int(pid))
     transition_job_status(job, "cancelled")
     append_progress(job, "Job cancelled by request.")
-    write_job(workspace, job)
-    return {"ok": True, "job": compact_job_status(job)}
+    if orphan_suspected:
+        job["orphanProcessSuspected"] = True
+    save_job(workspace, job)
+    return {"ok": True, "job": compact_job_status(job), "processTreeKilled": not orphan_suspected}
 
 
 def build_wrapper_command(workspace: Path, run_dir: Path, arguments: dict[str, Any]) -> list[str]:
+    from workspace_paths import resolve_index_dir
+
+    index_dir = resolve_index_dir()
     script = workspace / "scripts" / "lmstudio_unreal_wrapper.py"
     command = [
         sys.executable,
@@ -268,9 +287,9 @@ def build_wrapper_command(workspace: Path, run_dir: Path, arguments: dict[str, A
         "--request",
         str(arguments.get("request") or ""),
         "--index",
-        str((workspace / "data" / "unreal58" / "rag.sqlite").resolve()),
+        str((index_dir / "rag.sqlite").resolve()),
         "--module-graph",
-        str((workspace / "data" / "unreal58" / "raw_module_graph.jsonl").resolve()),
+        str((index_dir / "raw_module_graph.jsonl").resolve()),
         "--project-name",
         str(arguments.get("project_name") or "ScratchPrototype"),
         "--mode",
@@ -335,7 +354,7 @@ def start_job(
             return
         transition_job_status(current, "running")
         append_progress(current, "Wrapper subprocess started.")
-        write_job(workspace, current)
+        save_job(workspace, current)
         if on_progress:
             on_progress(current, "Wrapper subprocess started.")
 
@@ -353,7 +372,7 @@ def start_job(
                 text=True,
             )
             current["pid"] = process.pid
-            write_job(workspace, current)
+            save_job(workspace, current)
 
             stop_polling = threading.Event()
 
@@ -372,7 +391,8 @@ def start_job(
                         if on_progress:
                             on_progress(polled, f"In progress: {after}")
                     polled["updatedAt"] = _utc_now()
-                    write_job(workspace, polled)
+                    if not save_job(workspace, polled):
+                        return
                     stop_polling.wait(5)
 
             poller = threading.Thread(target=metadata_poller, name=f"wrapper-poller-{job_id}", daemon=True)
@@ -406,7 +426,7 @@ def start_job(
             f"Wrapper finished with exit code {returncode}.",
             level="error" if returncode != 0 else "info",
         )
-        write_job(workspace, current)
+        save_job(workspace, current)
         if on_progress:
             on_progress(current, f"Wrapper finished with exit code {returncode}.")
 
@@ -481,7 +501,7 @@ def start_rag_refresh_job(
         if _is_cancelled(workspace, job_id):
             return
         transition_job_status(current, "running")
-        write_job(workspace, current)
+        save_job(workspace, current)
         command = [
             sys.executable,
             str(script),
@@ -500,7 +520,7 @@ def start_rag_refresh_job(
             text=True,
         )
         current["pid"] = process.pid
-        write_job(workspace, current)
+        save_job(workspace, current)
         try:
             stdout, stderr = process.communicate(timeout=timeout_sec if timeout_sec > 0 else None)
         except subprocess.TimeoutExpired:
@@ -510,7 +530,7 @@ def start_rag_refresh_job(
             if not _is_cancelled(workspace, job_id):
                 transition_job_status(current, "timed_out")
                 append_progress(current, f"RAG refresh timed out after {timeout_sec}s.", level="error")
-            write_job(workspace, current)
+            save_job(workspace, current)
             return
         if _is_cancelled(workspace, job_id):
             return
@@ -527,7 +547,7 @@ def start_rag_refresh_job(
         else:
             transition_job_status(current, "failed")
             append_progress(current, stderr or "RAG refresh failed.", level="error")
-        write_job(workspace, current)
+        save_job(workspace, current)
         if on_progress:
             on_progress(current, f"RAG refresh job {current['status']}.")
 

@@ -43,7 +43,7 @@ function Get-DetectedUnrealEngineInstalls {
                 }
             }
         } |
-        Sort-Object Version -Descending
+        Sort-Object { [version]$_.Version } -Descending
 }
 
 function Get-DefaultProjectSearchRoots {
@@ -122,11 +122,110 @@ function Index-NamespaceFromVersion {
     return "unreal$digits"
 }
 
+function Get-RagDataPaths {
+    param(
+        [string]$RagRoot,
+        [string]$NamespaceOverride = ""
+    )
+    $configPath = Join-Path $RagRoot "config\workspace.json"
+    $cfg = Read-JsonObject $configPath
+    $ns = if ($NamespaceOverride) {
+        $NamespaceOverride
+    }
+    elseif ($cfg -and $cfg.indexNamespace) {
+        [string]$cfg.indexNamespace
+    }
+    else {
+        if ($cfg -and $cfg.engineVersion) {
+            Index-NamespaceFromVersion ([string]$cfg.engineVersion)
+        }
+        else {
+            "unreal58"
+        }
+    }
+    $dir = Join-Path $RagRoot ("data\" + $ns)
+    return [PSCustomObject]@{
+        Namespace       = $ns
+        DataDir         = $dir
+        IndexPath       = Join-Path $dir "rag.sqlite"
+        ModuleGraphPath = Join-Path $dir "raw_module_graph.jsonl"
+    }
+}
+
+function Resolve-RagIndexPath {
+    param([string]$RagRoot)
+    $configPath = Join-Path $RagRoot "config\workspace.json"
+    $cfg = Read-JsonObject $configPath
+    if ($cfg -and $cfg.indexPath) {
+        $rel = ([string]$cfg.indexPath) -replace "/", "\"
+        return Join-Path $RagRoot $rel
+    }
+    if ($cfg -and $cfg.indexNamespace) {
+        return Join-Path $RagRoot ("data\$($cfg.indexNamespace)\rag.sqlite")
+    }
+    return Join-Path $RagRoot "data\unreal58\rag.sqlite"
+}
+
+function Assert-SafePackagePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string[]]$SourceRoots = @(),
+        [switch]$ForceUnsafePath
+    )
+
+    if (-not $Path) {
+        throw "Package path is required."
+    }
+
+    $resolved = [System.IO.Path]::GetFullPath($Path)
+    if ($resolved -match '^[A-Za-z]:\\?$') {
+        throw "Unsafe package path (drive root): $resolved"
+    }
+
+    if (-not $ForceUnsafePath) {
+        $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
+        if (-not $resolved.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Package path must be under `$env:TEMP ($tempRoot) or pass -ForceUnsafePath. Got: $resolved"
+        }
+    }
+
+    foreach ($src in @($SourceRoots)) {
+        if (-not $src) { continue }
+        $srcFull = [System.IO.Path]::GetFullPath($src)
+        if ($srcFull.Equals($resolved, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Package path must not equal source root: $resolved"
+        }
+        $srcPrefix = $srcFull.TrimEnd('\') + '\'
+        $outPrefix = $resolved.TrimEnd('\') + '\'
+        if ($resolved.StartsWith($srcPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Package path is nested inside source root: $resolved"
+        }
+        if ($srcFull.StartsWith($outPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Package path contains source root: $resolved"
+        }
+    }
+
+    return $resolved
+}
+
+function Get-PortablePackageRobocopyExcludes {
+    return [PSCustomObject]@{
+        ExcludeDirs = @(
+            ".git", ".agent", "node_modules", "wrapper_runs", "local_holdout_fixtures",
+            "text_snapshot", "editor_export_jobs", "LyraStarterGame", "StackOBot",
+            "AdvancedPuzzleConstructor", ".pytest_cache", ".pytest_tmp", ".venv",
+            "DerivedDataCache", "Intermediate", "Saved", "Binaries"
+        )
+        ExcludeFiles = @("*.bak*", "PORTABLE_ROOT.txt", "raw_source.jsonl", "chunks.jsonl", "rag.staging.sqlite")
+    }
+}
+
 function Sync-WorkspaceJson {
     param(
         [string]$RagRoot,
         [string]$EngineRoot,
-        [string]$EngineVersion
+        [string]$EngineVersion,
+        [switch]$ForceEngineResync
     )
 
     $configPath = Join-Path $RagRoot "config\workspace.json"
@@ -140,12 +239,19 @@ function Sync-WorkspaceJson {
     }
 
     $namespace = Index-NamespaceFromVersion $EngineVersion
+    if ($existing.indexNamespace -and -not $ForceEngineResync) {
+        $namespace = [string]$existing.indexNamespace
+    }
+    $resolvedEngineVersion = $EngineVersion
+    if ($existing.engineVersion -and -not $ForceEngineResync) {
+        $resolvedEngineVersion = [string]$existing.engineVersion
+    }
     $workspace = [ordered]@{}
     foreach ($prop in $existing.PSObject.Properties) {
         $workspace[$prop.Name] = $prop.Value
     }
     $workspace.rootPath = (Resolve-Path -LiteralPath $RagRoot).Path
-    $workspace.engineVersion = $EngineVersion
+    $workspace.engineVersion = $resolvedEngineVersion
     $workspace.indexNamespace = $namespace
     $workspace.indexPath = ("data/$namespace/rag.sqlite" -replace "\\", "/")
     $workspace.embeddingsPath = ("data/$namespace/embeddings" -replace "\\", "/")
@@ -158,7 +264,7 @@ function Sync-WorkspaceJson {
         }
     }
 
-    Write-JsonUtf8 $configPath $workspace
+    Write-JsonUtf8Atomic -Path $configPath -Object $workspace | Out-Null
     return $workspace
 }
 
@@ -184,10 +290,6 @@ function Sync-AgentMcpJson {
             [void]$roots.Add($root)
         }
     }
-    $dataRoot = Join-Path $RagRoot "data"
-    if ((Test-Path -LiteralPath $dataRoot) -and -not $roots.Contains($dataRoot)) {
-        [void]$roots.Add((Resolve-Path -LiteralPath $dataRoot).Path)
-    }
 
     $payload = [ordered]@{
         projectSearchRoots    = @($roots)
@@ -196,7 +298,7 @@ function Sync-AgentMcpJson {
         defaultConfiguration  = "Development"
         activeProject         = $null
     }
-    Write-JsonUtf8 $configPath $payload
+    Write-JsonUtf8Atomic -Path $configPath -Object $payload | Out-Null
     return $payload
 }
 
@@ -342,7 +444,7 @@ function Build-ClineMcpConfig {
     )
 
     $ragServer = Join-Path $RagRoot "scripts\unreal_rag_mcp.py"
-    $ragIndex = Join-Path $RagRoot "data\unreal58\rag.sqlite"
+    $ragIndex = Resolve-RagIndexPath -RagRoot $RagRoot
     $agentServer = Join-Path $AgentRoot "src\server.js"
     $allowWrite = if ($EnableAgentMode) { "1" } else { "0" }
     $allowCommands = if ($EnableAgentMode) { "1" } else { "0" }
@@ -439,16 +541,34 @@ function Write-JsonUtf8Atomic {
         [switch]$WhatIf
     )
 
-    $dir = Split-Path -Parent $Path
-    if (-not (Test-Path $dir)) {
-        New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    }
-    $json = $Object | ConvertTo-Json -Depth 40
+    $json = ($Object | ConvertTo-Json -Depth 40) + [Environment]::NewLine
     if ($WhatIf) {
         return [ordered]@{
             Path    = $Path
             Changed = $true
             Preview = $json
+        }
+    }
+
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+
+    if (Test-Path -LiteralPath $Path) {
+        try {
+            $existingRaw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+            $existingObj = $existingRaw | ConvertFrom-Json
+            $existingNorm = ($existingObj | ConvertTo-Json -Depth 40) + [Environment]::NewLine
+            if ($existingNorm -eq $json) {
+                return [ordered]@{
+                    Path    = $Path
+                    Changed = $false
+                }
+            }
+        }
+        catch {
+            # Existing file unreadable — proceed with replace.
         }
     }
 
@@ -461,7 +581,7 @@ function Write-JsonUtf8Atomic {
     $tempPath = "$Path.tmp"
     try {
         $utf8 = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($tempPath, $json + [Environment]::NewLine, $utf8)
+        [System.IO.File]::WriteAllText($tempPath, $json, $utf8)
         $null = Get-Content -LiteralPath $tempPath -Raw -Encoding UTF8 | ConvertFrom-Json
         Move-Item -LiteralPath $tempPath -Destination $Path -Force
     }
@@ -480,6 +600,35 @@ function Write-JsonUtf8Atomic {
         BackupPath = $backupPath
         Changed    = $true
     }
+}
+
+function Write-McpConfigBatch {
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$Entries
+    )
+
+    $completed = [System.Collections.Generic.List[object]]::new()
+    try {
+        foreach ($entry in $Entries) {
+            $result = Write-JsonUtf8Atomic -Path $entry.Path -Object $entry.Object
+            $completed.Add([ordered]@{
+                Path       = $entry.Path
+                BackupPath = $result.BackupPath
+                Changed    = $result.Changed
+            })
+        }
+    }
+    catch {
+        for ($i = $completed.Count - 1; $i -ge 0; $i--) {
+            $item = $completed[$i]
+            if ($item.BackupPath -and (Test-Path -LiteralPath $item.BackupPath)) {
+                Copy-Item -LiteralPath $item.BackupPath -Destination $item.Path -Force
+            }
+        }
+        throw
+    }
+    return @($completed)
 }
 
 function Sync-ClineMcpSettings {

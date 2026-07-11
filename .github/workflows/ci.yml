@@ -44,6 +44,18 @@ jobs:
         run: pytest --tb=short -q
         working-directory: ${{ github.workspace }}
 
+      - name: Hardening fault-injection gate
+        run: >
+          pytest tests/test_tool_manifest_contract.py
+          tests/test_tool_call_authorization.py
+          tests/test_project_cache_generation.py
+          tests/test_atomic_io.py
+          tests/test_mcp_envelope.py
+          tests/test_mcp_stable_subprocess_e2e.py
+          tests/test_installer_gates.py
+          -q --tb=short
+        working-directory: ${{ github.workspace }}
+
       - name: Domain contract gate
         run: python scripts/eval_domain_contract.py --pytest-only
 
@@ -107,3 +119,47 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           powershell -NoProfile -ExecutionPolicy Bypass -File installer\Verify-Oss-Ready.ps1
+
+  installer-gates:
+    name: Installer verify and WhatIf
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Repo layout verify
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Verify-UnrealMcp.ps1 -RepoOnly
+
+      - name: Cline install WhatIf
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Install-ClineUnrealMcp.ps1 -WhatIf
+
+      - name: Main install WhatIf
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Install-UnrealMcp.ps1 -WhatIf -SkipNpm -SkipPythonDeps
+
+      - name: Portable package build and content scan
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:TEMP ('Unreal58-RAG-Portable-CI-' + [guid]::NewGuid().ToString('n'))
+          $zip = Join-Path $env:TEMP ('Unreal58-RAG-Portable-CI-' + [guid]::NewGuid().ToString('n') + '.zip')
+          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Build-PortablePackage.ps1 -OutputDir $out -ZipPath $zip -SourceRoot $PWD
+          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Test-PortablePackageContents.ps1 -ZipPath $zip

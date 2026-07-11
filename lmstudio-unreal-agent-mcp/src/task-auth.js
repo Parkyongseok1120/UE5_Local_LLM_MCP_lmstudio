@@ -3,12 +3,47 @@
 const fs = require("fs");
 const path = require("path");
 
+const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+function sanitizeTaskSessionId(taskSessionId) {
+  const value = String(taskSessionId || "").trim();
+  if (!value) {
+    return { ok: false, error: "taskSessionId is required" };
+  }
+  if (value.includes("..") || value.includes("/") || value.includes("\\")) {
+    return { ok: false, error: "taskSessionId must not contain path separators or traversal" };
+  }
+  if (!TASK_SESSION_ID_RE.test(value)) {
+    return {
+      ok: false,
+      error: "taskSessionId must match [A-Za-z0-9_-]{8,64}",
+    };
+  }
+  return { ok: true, taskSessionId: value };
+}
+
 function taskDir(workspaceRoot, taskSessionId) {
-  return path.join(workspaceRoot, ".agent", "tasks", String(taskSessionId || ""));
+  const sanitized = sanitizeTaskSessionId(taskSessionId);
+  if (!sanitized.ok) {
+    throw new Error(sanitized.error);
+  }
+  const root = path.resolve(workspaceRoot);
+  const dir = path.resolve(root, ".agent", "tasks", sanitized.taskSessionId);
+  const tasksRoot = path.resolve(root, ".agent", "tasks");
+  if (!dir.startsWith(tasksRoot + path.sep) && dir !== tasksRoot) {
+    throw new Error("taskSessionId resolves outside .agent/tasks");
+  }
+  return dir;
 }
 
 function readTaskState(workspaceRoot, taskSessionId) {
-  const statePath = path.join(taskDir(workspaceRoot, taskSessionId), "state.json");
+  let dir;
+  try {
+    dir = taskDir(workspaceRoot, taskSessionId);
+  } catch (error) {
+    return null;
+  }
+  const statePath = path.join(dir, "state.json");
   if (!fs.existsSync(statePath)) {
     return null;
   }
@@ -24,9 +59,13 @@ function validateMutationAuth(workspaceRoot, args = {}) {
   if (!taskSessionId) {
     return { ok: true, skipped: true, reason: "no taskSessionId provided" };
   }
-  const state = readTaskState(workspaceRoot, taskSessionId);
+  const sanitized = sanitizeTaskSessionId(taskSessionId);
+  if (!sanitized.ok) {
+    return { ok: false, error: sanitized.error, taskSessionId };
+  }
+  const state = readTaskState(workspaceRoot, sanitized.taskSessionId);
   if (!state) {
-    return { ok: false, error: `Unknown task session: ${taskSessionId}` };
+    return { ok: false, error: `Unknown task session: ${sanitized.taskSessionId}` };
   }
   const expected = {
     planId: String(args.planId || args.plan_id || "").trim(),
@@ -51,13 +90,15 @@ function validateMutationAuth(workspaceRoot, args = {}) {
     return {
       ok: false,
       error: `Task authorization mismatch: ${mismatches.join(", ")}`,
-      taskSessionId,
+      taskSessionId: sanitized.taskSessionId,
     };
   }
-  return { ok: true, taskSessionId, state };
+  return { ok: true, taskSessionId: sanitized.taskSessionId, state };
 }
 
 module.exports = {
+  TASK_SESSION_ID_RE,
+  sanitizeTaskSessionId,
   taskDir,
   readTaskState,
   validateMutationAuth,

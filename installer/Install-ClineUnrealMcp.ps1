@@ -70,17 +70,40 @@ $layout = Resolve-StackLayout $PortableRoot
 $ragRoot = $layout.RagRoot
 $agentRoot = $layout.AgentRoot
 $root = $layout.Root
-$python = Find-PythonExe
-$node = Find-NodeExe
-Assert-PythonVersion $python
-Assert-NodeVersion $node
-$lmHome = if ($LmStudioHome) { (Resolve-Path $LmStudioHome).Path } else { Join-Path $HOME ".lmstudio" }
+if ($WhatIf) {
+    $python = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $python) { $python = "python.exe" }
+    $node = (Get-Command node -ErrorAction SilentlyContinue).Source
+    if (-not $node) { $node = "node.exe" }
+}
+else {
+    $python = Find-PythonExe
+    $node = Find-NodeExe
+    Assert-PythonVersion $python
+    Assert-NodeVersion $node
+}
+$lmHome = if ($LmStudioHome) {
+    if (Test-Path -LiteralPath $LmStudioHome) {
+        (Resolve-Path -LiteralPath $LmStudioHome).Path
+    }
+    else {
+        $LmStudioHome
+    }
+}
+else {
+    Join-Path $HOME ".lmstudio"
+}
 $docsRoot = if ($DocumentsRoot) { $DocumentsRoot } else { Join-Path $HOME "Documents" }
 $sharedConfigPath = Join-Path $lmHome "config\unreal-workspace.json"
 $agentConfigPath = Join-Path $agentRoot "config\agent-mcp.json"
 
 if (-not (Test-Path $sharedConfigPath)) {
-    throw "Shared config missing: $sharedConfigPath — run Install-UnrealMcp.ps1 first."
+    if ($WhatIf) {
+        Write-Host "[WhatIf] Shared config missing at $sharedConfigPath — preview only." -ForegroundColor Cyan
+    }
+    else {
+        throw "Shared config missing: $sharedConfigPath — run Install-UnrealMcp.ps1 first."
+    }
 }
 
 $result = Sync-ClineMcpSettings `

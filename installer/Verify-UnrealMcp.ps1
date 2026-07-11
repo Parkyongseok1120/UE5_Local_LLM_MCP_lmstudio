@@ -1,5 +1,6 @@
 param(
-    [string]$PortableRoot = ""
+    [string]$PortableRoot = "",
+    [switch]$RepoOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,10 +41,24 @@ $ubtPath = Get-WorkspaceUbtPath -RagRoot $ragRoot
 
 Check "Portable root" { if (-not (Test-Path $root)) { throw "missing $root" } }
 Check "RAG workspace" { if (-not (Test-Path (Join-Path $ragRoot "rag.ps1"))) { throw "missing rag.ps1" } }
-Check "RAG index" { if (-not (Test-Path (Join-Path $ragRoot "data\unreal58\rag.sqlite"))) { throw "missing rag.sqlite" } }
+Check "RAG index" {
+    . (Join-Path $PSScriptRoot "Install-PathHelpers.ps1")
+    $indexPath = Resolve-RagIndexPath -RagRoot $ragRoot
+    if (-not (Test-Path $indexPath)) {
+        if ($RepoOnly) {
+            Warn "RAG index missing (BYOI): $indexPath"
+            return
+        }
+        throw "missing $indexPath"
+    }
+}
 Check "workspace.json rootPath" {
     $cfg = Read-JsonObject (Join-Path $ragRoot "config\workspace.json")
     if (-not $cfg -or [string]::IsNullOrWhiteSpace([string]$cfg.rootPath)) {
+        if ($RepoOnly) {
+            Warn "rootPath empty — expected for OSS clone until Sync-InstallMachinePaths.ps1"
+            return
+        }
         throw "rootPath empty — run installer or Sync-InstallMachinePaths.ps1"
     }
     if ([string]$cfg.rootPath -like "*\\Users\\*\\Users\\*") {
@@ -57,8 +72,13 @@ Check "workspace.json rootPath" {
 Check "agent-mcp.json search roots" {
     $agentCfg = Read-JsonObject (Join-Path $agentRoot "config\agent-mcp.json")
     if (-not $agentCfg -or -not $agentCfg.projectSearchRoots -or $agentCfg.projectSearchRoots.Count -eq 0) {
+        if ($RepoOnly) {
+            Warn "projectSearchRoots missing in agent-mcp.json template"
+            return
+        }
         throw "projectSearchRoots missing — run INSTALL-*.bat"
     }
+    if ($RepoOnly) { return }
     foreach ($searchRoot in @($agentCfg.projectSearchRoots)) {
         $text = [string]$searchRoot
         if ($text -match '\\Users\\' -and -not $text.StartsWith($HOME, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -93,6 +113,7 @@ Check "Unreal Engine install" {
         Warn "UBT not found: $ubtPath"
     }
 }
+if (-not $RepoOnly) {
 Check "mcp.json unreal-rag python" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
     if (-not (Test-Path $mcp)) { throw "mcp.json missing — run INSTALL-SAFE-MODE.bat" }
@@ -171,6 +192,7 @@ Check "clinerules" {
 }
 Check "validate-write hook" {
     if (-not (Test-Path (Join-Path $agentRoot "src\validate-write.js"))) { throw "missing validate-write.js" }
+}
 }
 
 if ($fail -gt 0) {

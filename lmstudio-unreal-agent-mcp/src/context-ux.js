@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { atomicWriteText } = require("./atomic-io");
 
 const DEFAULT_AGENT_RESULT_MAX_CHARS = 32_000;
 const DEFAULT_BUILD_ERROR_LINES = 20;
@@ -141,10 +142,13 @@ function compactMcpContent(content, maxChars = resolveAgentResultMaxChars()) {
 
 function errorPayload(message, options = {}) {
   const error = String(message || "Unknown error");
+  const firstLine = error.split(/\r?\n/, 1)[0];
   const payload = {
-    summary: `ERROR — ${error.split(/\r?\n/, 1)[0]}`,
+    summary: `ERROR — ${firstLine}`,
     ok: false,
     error,
+    phase: "failed",
+    userMessage: options.userMessage || firstLine,
     nextSteps: Array.isArray(options.nextSteps) ? options.nextSteps : [],
     suggestedToolCalls: Array.isArray(options.suggestedToolCalls)
       ? options.suggestedToolCalls
@@ -152,7 +156,13 @@ function errorPayload(message, options = {}) {
   };
   if (options.writeToolPolicy) payload.writeToolPolicy = options.writeToolPolicy;
   if (options.requiredNextTool) payload.requiredNextTool = options.requiredNextTool;
+  if (options.errorCode) payload.errorCode = options.errorCode;
+  if (options.retryable !== undefined) payload.retryable = options.retryable;
   if (options.doNotRetry) payload.doNotRetry = options.doNotRetry;
+  if (options.agentInstruction) payload.agentInstruction = options.agentInstruction;
+  else if (Array.isArray(options.nextSteps) && options.nextSteps.length) {
+    payload.agentInstruction = options.nextSteps.join(" ");
+  }
   return payload;
 }
 
@@ -271,6 +281,8 @@ function slimWriteSuccessPayload(summary, validation, options = {}) {
   const payload = {
     summary,
     ok: true,
+    phase: "complete",
+    userMessage: summary,
     path: options.path || null,
     operation: options.operation || null,
     bytesWritten: options.bytesWritten ?? null,
@@ -334,8 +346,9 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
   const execSummary = parseBuildExecutionSummary(result.stdout, result.stderr);
   const proof = parseBuildProof(result.ok, `${result.stdout || ""}\n${result.stderr || ""}`, { logPath });
   const upToDate = proof.targetUpToDate;
-  const actionsExecuted = proof.actionCount;
+  const actionsExecuted = proof.highestObservedActionIndex || proof.actionCount;
   const proofLevel = proof.proofLevel;
+  const hasCompileEvidence = Number(proof.compileLineCount || 0) > 0 || Number(proof.linkLineCount || 0) > 0;
 
   let summary;
   if (!result.ok) {
@@ -356,6 +369,10 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
     exitCode: result.exitCode,
     upToDate,
     actionsExecuted,
+    declaredTotalActions: proof.declaredTotalActions,
+    observedCompileLines: proof.compileLineCount,
+    observedLinkLines: proof.linkLineCount,
+    highestObservedActionIndex: proof.highestObservedActionIndex,
     proofLevel,
     responseMode: verbose ? "verbose" : "compact",
     likelyErrors: errorLines,
@@ -395,10 +412,16 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
       "If you just edited C++, confirm the file was saved, then rebuild and check fullLogPath for action count > 0.",
       `Report proofLevel=${proofLevel} with fullLogPath as evidence.`
     ];
+  } else if (hasCompileEvidence) {
+    payload.nextSteps = [
+      `Compile/link evidence detected (${proof.compileLineCount || 0} compile, ${proof.linkLineCount || 0} link lines).`,
+      "Inspect fullLogPath if runtime verification is still required.",
+      `Report proofLevel=${proofLevel} with fullLogPath as evidence.`
+    ];
   } else {
     payload.nextSteps = [
       "Compile action count was not detected in the build summary.",
-      "Inspect fullLogPath manually; if you find action count > 0, you may report proofLevel=Built.",
+      "Inspect fullLogPath manually; if you find compile/link lines, you may report proofLevel=Built.",
       "Otherwise stay at proofLevel=BuiltUnverified until compile proof is visible.",
       `Report proofLevel=${proofLevel} with fullLogPath as evidence.`
     ];
@@ -479,8 +502,7 @@ function compactLogPayload(payload, maxChars = DEFAULT_LOG_RESULT_MAX_CHARS) {
 
 async function writeTextArtifact(workspaceRoot, relativePath, text) {
   const target = path.join(workspaceRoot, relativePath);
-  await fs.promises.mkdir(path.dirname(target), { recursive: true });
-  await fs.promises.writeFile(target, String(text || ""), "utf8");
+  atomicWriteText(target, String(text || ""));
   return path.relative(workspaceRoot, target).replace(/\\/g, "/");
 }
 

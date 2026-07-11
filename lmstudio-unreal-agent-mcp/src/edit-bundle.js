@@ -3,7 +3,8 @@
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
-const crypto = require("crypto");
+const { atomicWriteText, atomicWriteTextExclusive } = require("./atomic-io");
+const { sha256File, sha256Text, assertPreCommitHash, replaceWithCAS } = require("./safe-write");
 
 function bundlePaths(bundle) {
   const paths = [];
@@ -20,81 +21,136 @@ function bundlePaths(bundle) {
   return [...new Set(paths)];
 }
 
-function hashFile(absPath) {
-  try {
-    const data = fs.readFileSync(absPath);
-    return crypto.createHash("sha256").update(data).digest("hex").slice(0, 16);
-  } catch {
-    return "";
-  }
-}
-
 function capturePreHashes(projectRoot, paths) {
   const pre = {};
   for (const rel of paths) {
     const abs = path.join(projectRoot, rel);
-    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-      pre[rel] = hashFile(abs);
+    try {
+      const st = await fsp.stat(abs);
+      if (st.isFile()) {
+        pre[rel] = await sha256File(abs);
+      }
+    } catch {
+      // missing file
     }
   }
   return pre;
 }
 
-async function stageBundle(projectRoot, bundle) {
+async function stageBundle(projectRoot, bundle, resolvePathFn) {
   const relPaths = bundlePaths(bundle);
-  const preHashes = capturePreHashes(projectRoot, relPaths);
-  const staged = {};
+  const validated = [];
   for (const rel of relPaths) {
-    const abs = path.join(projectRoot, rel);
-    if (fs.existsSync(abs)) {
-      staged[rel] = await fsp.readFile(abs, "utf8");
-    } else {
+    const resolution = await resolvePathFn(rel);
+    if (!resolution?.ok) {
+      throw new Error(resolution?.error || `Invalid bundle path: ${rel}`);
+    }
+    validated.push({ rel, abs: resolution.absolutePath });
+  }
+
+  const preHashes = {};
+  const staged = {};
+  for (const { rel, abs } of validated) {
+    try {
+      const st = await fsp.stat(abs);
+      if (st.isFile()) {
+        staged[rel] = await fsp.readFile(abs, "utf8");
+        preHashes[rel] = await sha256File(abs);
+      } else {
+        staged[rel] = null;
+      }
+    } catch {
       staged[rel] = null;
     }
   }
-  return { relPaths, preHashes, staged };
+  return { relPaths, preHashes, staged, validated };
 }
 
-async function commitBundle(projectRoot, bundle) {
+async function commitBundle(projectRoot, bundle, preHashes, resolvePathFn) {
   const written = [];
   for (const item of bundle?.patches || []) {
     const rel = String(item.path).replace(/\\/g, "/");
-    const abs = path.join(projectRoot, rel);
-    const oldText = String(item.oldText || "");
-    const newText = String(item.newText || "");
-    const expected = Number(item.expectedOccurrences || 1);
-    let content = fs.existsSync(abs) ? await fsp.readFile(abs, "utf8") : "";
-    const count = oldText ? content.split(oldText).length - 1 : 0;
-    if (count !== expected) {
-      throw new Error(`patch occurrence mismatch for ${rel}: expected ${expected}, found ${count}`);
+    const resolution = await resolvePathFn(rel);
+    if (!resolution?.ok) {
+      throw new Error(resolution?.error || `Invalid patch path: ${rel}`);
     }
-    content = content.split(oldText).join(newText);
-    await fsp.mkdir(path.dirname(abs), { recursive: true });
-    await fsp.writeFile(abs, content, "utf8");
+    const abs = resolution.absolutePath;
+    const expectedHash = item.readHash || preHashes[rel] || "";
+    const check = await assertPreCommitHash(abs, expectedHash);
+    if (!check.ok) {
+      throw new Error(check.error || `Pre-commit CAS failed for ${rel}`);
+    }
+    const priorContent = fs.existsSync(abs) ? await fsp.readFile(abs, "utf8") : "";
+    const result = await replaceWithCAS({
+      targetPath: abs,
+      priorContent,
+      oldText: String(item.oldText || ""),
+      newText: String(item.newText || ""),
+      expectedOccurrences: Number(item.expectedOccurrences ?? 1),
+      readHash: expectedHash,
+    });
+    if (!result.ok) {
+      throw new Error(result.error || `Patch failed for ${rel}`);
+    }
     written.push(abs);
   }
+
   for (const item of bundle?.files || []) {
     const rel = String(item.path).replace(/\\/g, "/");
-    const abs = path.join(projectRoot, rel);
-    await fsp.mkdir(path.dirname(abs), { recursive: true });
-    await fsp.writeFile(abs, String(item.content || ""), "utf8");
+    const resolution = await resolvePathFn(rel);
+    if (!resolution?.ok) {
+      throw new Error(resolution?.error || `Invalid file path: ${rel}`);
+    }
+    const abs = resolution.absolutePath;
+    const expectedHash = item.readHash || preHashes[rel] || "";
+    const exists = fs.existsSync(abs);
+    if (exists) {
+      const check = await assertPreCommitHash(abs, expectedHash);
+      if (!check.ok) {
+        throw new Error(check.error || `Pre-commit CAS failed for ${rel}`);
+      }
+      const priorContent = await fsp.readFile(abs, "utf8");
+      const result = await replaceWithCAS({
+        targetPath: abs,
+        priorContent,
+        oldText: priorContent,
+        newText: String(item.content || ""),
+        expectedOccurrences: 1,
+        readHash: expectedHash,
+      });
+      if (!result.ok) {
+        throw new Error(result.error || `Overwrite failed for ${rel}`);
+      }
+    } else {
+      atomicWriteTextExclusive(abs, String(item.content || ""));
+    }
     written.push(abs);
   }
   return written;
 }
 
-async function rollbackBundle(projectRoot, staged) {
+async function rollbackBundle(projectRoot, staged, postWriteHashes = {}) {
   for (const [rel, prior] of Object.entries(staged || {})) {
     const abs = path.join(projectRoot, rel);
     if (prior === null) {
       try {
+        const current = fs.existsSync(abs) ? await fsp.readFile(abs, "utf8") : null;
+        const expected = postWriteHashes[rel];
+        if (expected && current && sha256Text(current) !== expected) {
+          continue;
+        }
         await fsp.unlink(abs);
       } catch {
         /* ignore */
       }
     } else {
+      const current = fs.existsSync(abs) ? await fsp.readFile(abs, "utf8") : null;
+      const expected = postWriteHashes[rel];
+      if (expected && current && sha256Text(current) !== expected) {
+        continue;
+      }
       await fsp.mkdir(path.dirname(abs), { recursive: true });
-      await fsp.writeFile(abs, prior, "utf8");
+      atomicWriteText(abs, prior);
     }
   }
 }

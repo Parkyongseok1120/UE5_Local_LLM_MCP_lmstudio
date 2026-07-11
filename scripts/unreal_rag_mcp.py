@@ -426,21 +426,28 @@ class McpServer:
         from project_switch_invalidate import read_cache_generation
 
         self._cache_generation = read_cache_generation(self.workspace)
+        self._cache_refresh_required = False
+        self._cache_partial_clear: list[str] = []
 
     def _maybe_refresh_project_caches(self) -> None:
-        from project_switch_invalidate import on_project_switch_invalidate, read_cache_generation
+        from project_switch_invalidate import clear_local_project_caches, read_cache_generation
 
         current = read_cache_generation(self.workspace)
         if current == self._cache_generation:
             return
-        self._cache_generation = current
+        self._cache_refresh_required = False
+        self._cache_partial_clear = []
         try:
             from workspace_paths import resolve_active_project_path
 
             active = resolve_active_project_path()
-            on_project_switch_invalidate(None, active, workspace=self.workspace)
+            result = clear_local_project_caches(self.workspace, previous_project=None, new_project=active)
+            if not result.get("ok"):
+                self._cache_refresh_required = True
+                self._cache_partial_clear = list(result.get("partialClear") or [])
         except Exception:
-            pass
+            self._cache_refresh_required = True
+        self._cache_generation = current
 
     def run(self) -> None:
         for line in sys.stdin:
@@ -491,7 +498,18 @@ class McpServer:
             "isError": is_error,
         }
         if structured is not None:
-            payload["structuredContent"] = structured
+            from mcp_tool_compact import compact_json_text
+
+            cap = max(8_000, min(limit // 2, 32_000))
+            try:
+                serialized = json.dumps(structured, ensure_ascii=False)
+                if len(serialized) > cap:
+                    payload["structuredContent"] = json.loads(compact_json_text(structured, limit=cap))
+                    payload["structuredContentTruncated"] = True
+                else:
+                    payload["structuredContent"] = structured
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload["structuredContent"] = {"error": "structuredContent could not be serialized"}
         self.result(message_id, payload)
 
     def handle_message(self, message: dict[str, Any]) -> None:
@@ -537,17 +555,12 @@ class McpServer:
         }
 
     def all_tool_definitions(self) -> list[dict[str, Any]]:
+        from tool_exposure import callable_rag_tool_names
+
         tools = self._all_tool_definitions_unfiltered()
-        if not control_plane_tools_enabled():
-            tools = [tool for tool in tools if tool["name"] not in STABLE_HIDDEN_TOOL_NAMES]
-        if extended_tools_enabled():
-            return tools
-        if essential_tools_enabled():
-            allowed = ESSENTIAL_TOOL_NAMES
-            if control_plane_tools_enabled():
-                allowed = ESSENTIAL_TOOL_NAMES | STABLE_HIDDEN_TOOL_NAMES
-            return [tool for tool in tools if tool["name"] in allowed]
-        return [tool for tool in tools if tool["name"] not in EXTENDED_TOOL_NAMES]
+        all_names = [tool["name"] for tool in tools]
+        allowed = callable_rag_tool_names(all_names)
+        return [tool for tool in tools if tool["name"] in allowed]
 
     def _all_tool_definitions_unfiltered(self) -> list[dict[str, Any]]:
         return [
@@ -1580,6 +1593,13 @@ class McpServer:
             self.tool_result(message_id, payload.get("error") or "Project switch failed.", is_error=True)
             return
 
+        if payload.get("ok"):
+            from project_switch_invalidate import read_cache_generation
+
+            invalidation = payload.get("cacheInvalidation") or {}
+            generation = invalidation.get("cacheGeneration")
+            self._cache_generation = int(generation) if generation is not None else read_cache_generation(self.workspace)
+
         self.tool_result(
             message_id,
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -1590,6 +1610,19 @@ class McpServer:
         self._maybe_refresh_project_caches()
         name = params.get("name")
         arguments = params.get("arguments") or {}
+
+        from tool_exposure import callable_rag_tool_names, tool_not_callable_payload
+
+        all_names = [tool["name"] for tool in self._all_tool_definitions_unfiltered()]
+        if name not in callable_rag_tool_names(all_names):
+            payload = tool_not_callable_payload(str(name or ""))
+            self.tool_result(
+                message_id,
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                structured=payload,
+                is_error=True,
+            )
+            return
 
         try:
             if _MCP_TOOL_REGISTRY.dispatch(self, message_id, name, arguments):
@@ -1622,9 +1655,33 @@ class McpServer:
                 payload = ensure_active_project_ready(project, force=arguments.get("force") is True)
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_project_status":
+                import os
+
+                from mcp_tool_compact import envelope_fields
                 from project_controller import active_project_readiness
+                from workspace_paths import resolve_index_path
 
                 payload = active_project_readiness(self.workspace)
+                blocking: list[str] = []
+                if not payload.get("ready"):
+                    blocking.append(str(payload.get("reason") or "project_not_ready"))
+                if os.environ.get("ALLOW_WRITE", "").strip().lower() not in {"1", "true", "yes", "on"}:
+                    blocking.append("agent_write_mode_disabled")
+                index_path = resolve_index_path(self.workspace)
+                if not index_path.is_file():
+                    blocking.append("rag_index_missing")
+                else:
+                    payload["ragIndexPath"] = str(index_path)
+                    payload["ragIndexExists"] = True
+                    payload["ragIndexMtime"] = index_path.stat().st_mtime
+                payload.update(
+                    envelope_fields(
+                        phase="status",
+                        user_message="Project status snapshot for the active workspace.",
+                    )
+                )
+                if blocking:
+                    payload["blockingReasons"] = blocking
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_task_start":
                 from task_api import task_start

@@ -160,3 +160,26 @@ def compact_asset_graph_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if primary.get("nextDetailLevel"):
         compact["nextDetailLevel"] = primary.get("nextDetailLevel")
     return compact
+
+
+def envelope_fields(
+    *,
+    phase: str | None = None,
+    user_message: str | None = None,
+    agent_instruction: str | None = None,
+    error_code: str | None = None,
+    retryable: bool | None = None,
+) -> dict[str, Any]:
+    """Shared response envelope fields for stable MCP tool payloads."""
+    payload: dict[str, Any] = {}
+    if phase:
+        payload["phase"] = phase
+    if user_message:
+        payload["userMessage"] = user_message
+    if agent_instruction:
+        payload["agentInstruction"] = agent_instruction
+    if error_code:
+        payload["errorCode"] = error_code
+    if retryable is not None:
+        payload["retryable"] = retryable
+    return payload

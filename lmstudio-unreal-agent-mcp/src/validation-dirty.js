@@ -1,8 +1,8 @@
 "use strict";
 
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { atomicWriteJson } = require("./atomic-io");
 
 const dirtyByProject = new Map();
 
@@ -17,7 +17,7 @@ function stateFilePath(projectRoot) {
 function hashFile(absPath) {
   try {
     const data = fs.readFileSync(absPath);
-    return crypto.createHash("sha256").update(data).digest("hex");
+    return require("crypto").createHash("sha256").update(data).digest("hex");
   } catch {
     return "";
   }
@@ -31,16 +31,12 @@ function loadPersisted(projectRoot) {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch {
-    return null;
+    return { validationRequired: true, unvalidatedPaths: [], reason: "state_corrupt", corrupt: true };
   }
 }
 
 function savePersisted(projectRoot, entry) {
-  const filePath = stateFilePath(projectRoot);
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temp = `${filePath}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify(entry, null, 2), "utf8");
-  fs.renameSync(temp, filePath);
+  atomicWriteJson(stateFilePath(projectRoot), entry);
 }
 
 function hydrateFromDisk(projectRoot) {
@@ -55,6 +51,7 @@ function hydrateFromDisk(projectRoot) {
       unvalidatedPaths: [...(persisted.unvalidatedPaths || [])],
       fileHashes: { ...(persisted.fileHashes || {}) },
       reason: persisted.reason || "validation skipped",
+      corrupt: Boolean(persisted.corrupt),
     });
   }
 }
@@ -66,6 +63,7 @@ function getDirtyState(projectRoot) {
   return {
     validationRequired: Boolean(entry.validationRequired),
     unvalidatedPaths: [...(entry.unvalidatedPaths || [])],
+    reason: entry.reason || null,
   };
 }
 

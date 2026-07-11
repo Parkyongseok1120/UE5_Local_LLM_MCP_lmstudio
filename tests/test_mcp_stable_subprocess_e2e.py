@@ -203,3 +203,106 @@ def test_dual_mcp_project_switch_and_read(tmp_path: Path, monkeypatch) -> None:
 
     saved = json.loads(shared_config.read_text(encoding="utf-8"))
     assert Path(str(saved["activeProject"])).name == "DemoGame.uproject"
+
+
+def test_rag_subprocess_rejects_hidden_tool_call(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env["MCP_ESSENTIAL_TOOLS"] = "1"
+    env.pop("ALLOW_CONTROL_PLANE_TOOLS", None)
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"")
+    client = _StdioJsonRpc([_python_exe(), str(RAG_SCRIPT), "--index", str(index)], env=env)
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
+            },
+            req_id=1,
+        )
+        result = client.request(
+            "tools/call",
+            {"name": "unreal_task_start", "arguments": {"request": "hidden bypass"}},
+            req_id=2,
+        )
+        assert result["result"].get("isError") is True
+        text = result["result"]["content"][0]["text"]
+        assert "TOOL_NOT_CALLABLE" in text
+    finally:
+        client.close()
+
+
+def test_agent_subprocess_rejects_apply_edit_bundle(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(tmp_path),
+            "ALLOW_WRITE": "1",
+        }
+    )
+    env.pop("ALLOW_CONTROL_PLANE_TOOLS", None)
+    client = _StdioJsonRpc([_node_exe(), str(AGENT_SERVER)], env=env, cwd=ROOT / "lmstudio-unreal-agent-mcp")
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
+            },
+            req_id=1,
+        )
+        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        result = client.request(
+            "tools/call",
+            {"name": "apply_edit_bundle", "arguments": {"files": []}},
+            req_id=2,
+        )
+        assert result["result"].get("isError") is True
+        assert "TOOL_NOT_CALLABLE" in result["result"]["content"][0]["text"]
+    finally:
+        client.close()
+
+
+def test_agent_build_plan_fail_is_error(tmp_path: Path) -> None:
+    if not AGENT_SERVER.is_file():
+        pytest.skip("agent server missing")
+    shared = tmp_path / "shared.json"
+    shared.write_text(json.dumps({"activeProject": None}), encoding="utf-8")
+    agent_config = tmp_path / "agent-mcp.json"
+    agent_config.write_text(json.dumps({"projectSearchRoots": [str(tmp_path)]}), encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(tmp_path),
+            "SHARED_UNREAL_CONFIG": str(shared),
+            "AGENT_MCP_CONFIG": str(agent_config),
+            "ALLOW_UNREAL_BUILD": "1",
+        }
+    )
+    client = _StdioJsonRpc([_node_exe(), str(AGENT_SERVER)], env=env, cwd=ROOT / "lmstudio-unreal-agent-mcp")
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
+            },
+            req_id=1,
+        )
+        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        result = client.request(
+            "tools/call",
+            {"name": "build_unreal_project", "arguments": {}},
+            req_id=2,
+        )
+        assert result["result"].get("isError") is True
+        text = result["result"]["content"][0]["text"]
+        assert "BUILD_PLAN_RESOLUTION_FAILED" in text
+    finally:
+        client.close()

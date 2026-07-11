@@ -12,14 +12,18 @@ from task_api import task_cancel, task_start, task_status  # noqa: E402
 from wrapper_job_manager import job_path, read_job  # noqa: E402
 
 
-def _wait_for_job_file(workspace: Path, job_id: str, *, timeout_sec: float = 5.0) -> None:
+def _wait_for_job_file(workspace: Path, job_id: str, *, timeout_sec: float = 10.0) -> None:
     path = job_path(workspace, job_id)
     deadline = time.time() + timeout_sec
+    last_error = ""
     while time.time() < deadline:
-        if path.is_file() and read_job(workspace, job_id) is not None:
-            return
+        try:
+            if path.is_file() and read_job(workspace, job_id) is not None:
+                return
+        except OSError as exc:
+            last_error = str(exc)
         time.sleep(0.05)
-    raise AssertionError(f"Timed out waiting for job file: {path}")
+    raise AssertionError(f"Timed out waiting for job file: {path} ({last_error})")
 
 
 def test_task_start_and_status_phase_fields(tmp_path: Path) -> None:

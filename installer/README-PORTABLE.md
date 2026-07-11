@@ -1,5 +1,7 @@
 # Unreal58-RAG Portable MCP — 설치 안내
 
+> **Note:** This document describes the **Portable ZIP** distribution. The GitHub OSS clone is BYOI (no pre-built index). See [`../README.md`](../README.md).
+
 이 패키지는 **LM Studio MCP** (`unreal-rag`, `unreal-agent`, `current-datetime`)를  
 다른 Windows PC에서도 동일하게 쓰기 위한 **이식형 번들**입니다.
 

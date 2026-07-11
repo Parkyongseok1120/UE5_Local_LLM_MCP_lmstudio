@@ -22,7 +22,11 @@ const IGNORE_DIRS = new Set([
   ".cache",
   ".pytest_cache",
   ".pytest_tmp",
-  "wrapper_runs"
+  "wrapper_runs",
+  "data",
+  "local_holdout_fixtures",
+  "text_snapshot",
+  "editor_export_jobs"
 ]);
 
 const DEFAULT_EPIC_ROOT = path.join("C:", "Program Files", "Epic Games");
@@ -401,7 +405,17 @@ async function findTargetNames(projectDir, projectName) {
 
 function shouldIgnoreDirName(name) {
   const lower = String(name || "").toLowerCase();
-  return IGNORE_DIRS.has(name) || lower.startsWith("pytest-") || lower.startsWith("pytest-of-");
+  return IGNORE_DIRS.has(name) || IGNORE_DIRS.has(lower) || lower.startsWith("pytest-") || lower.startsWith("pytest-of-");
+}
+
+function isFixtureProjectPath(projectPath) {
+  const normalized = String(projectPath || "").replace(/\\/g, "/").toLowerCase();
+  return (
+    normalized.includes("/local_holdout_fixtures/")
+    || normalized.includes("/data/local_holdout_fixtures/")
+    || normalized.includes("/text_snapshot/")
+    || /\/data\/[^/]+\/holdout/i.test(normalized)
+  );
 }
 
 async function walkForUProjects(root, maxDepth, depth = 0, results = []) {
@@ -475,6 +489,9 @@ async function discoverProjects(workspaceRoot, configPath, options = {}) {
 
   const projects = [];
   for (const uprojectPath of found.values()) {
+    if (isFixtureProjectPath(uprojectPath)) {
+      continue;
+    }
     try {
       const info = await readUProject(uprojectPath);
       const targets = await findTargetNames(info.projectDir, info.projectName);
@@ -490,41 +507,74 @@ async function discoverProjects(workspaceRoot, configPath, options = {}) {
     }
   }
 
-  projects.sort((a, b) => {
+  const byName = new Map();
+  for (const project of projects) {
+    const key = String(project.projectName || "").toLowerCase();
+    const existing = byName.get(key);
+    if (!existing) {
+      byName.set(key, project);
+      continue;
+    }
+    const existingFixture = isFixtureProjectPath(existing.projectPath);
+    const candidateFixture = isFixtureProjectPath(project.projectPath);
+    if (existingFixture && !candidateFixture) {
+      byName.set(key, project);
+      continue;
+    }
+    if (!existingFixture && candidateFixture) {
+      continue;
+    }
+    const existingTime = existing.modifiedAt || "";
+    const candidateTime = project.modifiedAt || "";
+    if (candidateTime.localeCompare(existingTime) > 0) {
+      byName.set(key, project);
+    }
+  }
+
+  const deduped = Array.from(byName.values());
+  deduped.sort((a, b) => {
     const timeA = a.modifiedAt || "";
     const timeB = b.modifiedAt || "";
     return timeB.localeCompare(timeA);
   });
 
-  return { config, roots, projects };
+  return { config, roots, projects: deduped };
 }
 
 async function resolveProjectSelection(workspaceRoot, configPath, options = {}) {
-  const hint = options.hint || options.project || "";
+  const explicitProject = String(options.project || "").trim();
+  const hint = String(options.hint || "").trim();
   const { config, roots } = resolveSearchRoots(workspaceRoot, configPath);
 
-  if (config.activeProject) {
-    const activePath = path.resolve(config.activeProject);
-    if (await exists(activePath)) {
+  async function projectFromPath(projectPath, score = 1000) {
+    const activePath = path.resolve(projectPath);
+    const info = await readUProject(activePath);
+    const targets = await findTargetNames(info.projectDir, info.projectName);
+    const st = await statSafe(info.projectPath);
+    return {
+      ...info,
+      ...targets,
+      modifiedAt: st ? st.mtime.toISOString() : null,
+      score,
+    };
+  }
+
+  if (explicitProject && explicitProject.toLowerCase().endsWith(".uproject")) {
+    const resolved = path.isAbsolute(explicitProject)
+      ? path.resolve(explicitProject)
+      : path.resolve(workspaceRoot, explicitProject);
+    if (await exists(resolved)) {
       try {
-        const info = await readUProject(activePath);
-        const targets = await findTargetNames(info.projectDir, info.projectName);
-        const st = await statSafe(info.projectPath);
-        const active = {
-          ...info,
-          ...targets,
-          modifiedAt: st ? st.mtime.toISOString() : null,
-          score: 1000
+        const selected = await projectFromPath(resolved, 3000);
+        return {
+          config,
+          roots,
+          projects: [selected],
+          selected,
+          selectionReason: "explicit.project",
         };
-      return {
-        config,
-        roots,
-          projects: [active],
-        selected: active,
-        selectionReason: "config.activeProject"
-      };
       } catch {
-        // Fall through to discovery if the configured active project is unreadable.
+        // Fall through to discovery.
       }
     }
   }
@@ -533,6 +583,23 @@ async function resolveProjectSelection(workspaceRoot, configPath, options = {}) 
   const projects = discovery.projects;
 
   if (projects.length === 0) {
+    if (config.activeProject) {
+      const activePath = path.resolve(config.activeProject);
+      if (await exists(activePath)) {
+        try {
+          const selected = await projectFromPath(activePath, 1000);
+          return {
+            config,
+            roots,
+            projects: [selected],
+            selected,
+            selectionReason: "config.activeProject",
+          };
+        } catch {
+          // no project
+        }
+      }
+    }
     return {
       config,
       roots,
@@ -554,6 +621,44 @@ async function resolveProjectSelection(workspaceRoot, configPath, options = {}) 
   });
 
   const best = scored[0];
+  if (hint && best.score > 0) {
+    return {
+      config,
+      roots,
+      projects: scored,
+      selected: best,
+      selectionReason: "hint",
+    };
+  }
+
+  if (config.activeProject) {
+    const activePath = path.resolve(config.activeProject);
+    const activeMatch = scored.find((project) => path.resolve(project.projectPath) === activePath);
+    if (activeMatch) {
+      return {
+        config,
+        roots,
+        projects: scored,
+        selected: activeMatch,
+        selectionReason: "config.activeProject",
+      };
+    }
+    if (await exists(activePath)) {
+      try {
+        const selected = await projectFromPath(activePath, 1000);
+        return {
+          config,
+          roots,
+          projects: [selected, ...scored],
+          selected,
+          selectionReason: "config.activeProject",
+        };
+      } catch {
+        // Fall through to best discovered project.
+      }
+    }
+  }
+
   if (hint && best.score === 0) {
     return {
       config,

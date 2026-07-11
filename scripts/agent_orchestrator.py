@@ -679,7 +679,20 @@ def build_suggested_tool_calls(
         return calls
 
     if not project_context.get("ok"):
-        return list(project_context.get("suggestedToolCalls") or [{"tool": "unreal_set_active_project", "args": {}}])
+        blocking_calls = list(
+            project_context.get("suggestedToolCalls") or [{"tool": "unreal_set_active_project", "args": {}}]
+        )
+        if task_kind not in {"inspect_only", "cpp_analysis"}:
+            return blocking_calls
+        # Source-first tasks still expose the recovery chain when no active project is set.
+        lower = text.lower()
+        browse_path = "project://Source"
+        search_term = "Cinematic" if "시네마틱" in lower or "cinematic" in lower else text
+        calls = list(blocking_calls)
+        calls.append({"tool": "search_files", "args": {"query": search_term, "path": browse_path}})
+        calls.append({"tool": "read_file", "args": {"path": "<from search_files matches>"}})
+        calls.append({"tool": "unreal_rag_search", "args": {"query": text, "mode": "review", "hybrid": False, "top_k": 4}})
+        return calls
 
     from asset_hint_resolver import resolve_asset_folder_hint
     from code_hint_resolver import looks_like_cpp_domain_request, resolve_code_domain_hint

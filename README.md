@@ -64,6 +64,15 @@ These are internal UE 5.8 RAG/MCP/UBT workflow measurements, not public standard
 
 > **BYOI** = Bring Your Own Index. This repo ships **tooling only**: not Epic source, not a pre-built `rag.sqlite`.
 
+### OSS clone vs Portable ZIP
+
+| Distribution | Index | Install |
+|--------------|-------|---------|
+| **GitHub clone (this repo)** | You build `rag.sqlite` locally (`rag.ps1 build`) | [`installer/INSTALL-SAFE-MODE.bat`](installer/INSTALL-SAFE-MODE.bat) |
+| **Portable ZIP** | May include a pre-built index (see [`installer/README-PORTABLE.md`](installer/README-PORTABLE.md)) | `INSTALL.bat` inside the ZIP |
+
+See [`docs/VERSIONING.md`](docs/VERSIONING.md) for product vs component version numbers.
+
 ## Quick Install
 
 ```powershell

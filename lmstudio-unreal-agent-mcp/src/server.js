@@ -68,7 +68,6 @@ const {
   stageBundle,
   commitBundle,
   rollbackBundle,
-  capturePreHashes
 } = require("./edit-bundle");
 const {
   validateWriteTarget,
@@ -97,6 +96,9 @@ const {
   writeDisciplineOptions,
   writeTextArtifact
 } = require("./context-ux.js");
+const { callableAgentToolNames, toolNotCallablePayload } = require("./tool-exposure");
+const { atomicWriteText, atomicWriteJson } = require("./atomic-io");
+const { sha256Text, sha256File, createExclusive, replaceWithCAS, sha256Buffer } = require("./safe-write");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -259,7 +261,10 @@ function text(content) {
 }
 
 function fail(message, options = {}) {
-  const result = text(JSON.stringify(errorPayload(message, options), null, 2));
+  const payload = errorPayload(message, options);
+  if (options.errorCode) payload.errorCode = options.errorCode;
+  if (options.retryable !== undefined) payload.retryable = options.retryable;
+  const result = text(JSON.stringify(payload, null, 2));
   result.isError = true;
   return result;
 }
@@ -275,9 +280,14 @@ async function agentNotify(message, level = "info") {
   }
 }
 
-function enforceTaskAuth(args) {
+function enforceTaskAuth(args, options = {}) {
   if (!CONTROL_PLANE_TOOLS) {
     return null;
+  }
+  const requireSession = Boolean(options.requireSession);
+  const taskSessionId = String(args?.taskSessionId || args?.task_session_id || "").trim();
+  if (requireSession && !taskSessionId) {
+    return fail("taskSessionId is required for control-plane write tools.", { errorCode: "TASK_SESSION_REQUIRED" });
   }
   const auth = validateMutationAuth(WORKSPACE_ROOT, args || {});
   if (!auth.ok && !auth.skipped) {
@@ -396,6 +406,10 @@ async function resolveReadToolPath(p) {
 async function resolveWriteToolPath(p) {
   const resolution = await resolveReadToolPath(p);
   if (resolution.resolvedRootType !== "active_project") {
+    const rel = path.relative(WORKSPACE_ROOT, resolution.absolutePath).replace(/\\/g, "/");
+    if (!rel.startsWith(".agent/")) {
+      throw new Error(`write blocked outside active project and .agent/: ${p}`);
+    }
     return resolution;
   }
   const rel = String(resolution.projectRelativePath || "").replace(/\\/g, "/");
@@ -450,17 +464,8 @@ function validationFailed(validation) {
 }
 
 function filterAgentTools(tools) {
-  let filtered = tools;
-  if (!CONTROL_PLANE_TOOLS) {
-    filtered = filtered.filter((tool) => !STABLE_HIDDEN_AGENT_TOOL_NAMES.has(tool.name));
-  }
-  if (MCP_EXTENDED_TOOLS) {
-    return filtered;
-  }
-  if (MCP_ESSENTIAL_TOOLS) {
-    return filtered.filter((tool) => ESSENTIAL_AGENT_TOOL_NAMES.has(tool.name));
-  }
-  return filtered.filter((tool) => !EXTENDED_AGENT_TOOL_NAMES.has(tool.name));
+  const allowed = callableAgentToolNames(tools.map((tool) => tool.name));
+  return tools.filter((tool) => allowed.has(tool.name));
 }
 
 function truncateOutput(s, maxBytes = MAX_OUTPUT_BYTES) {
@@ -482,6 +487,7 @@ function isTextLikely(buffer) {
 function allowedCommandBase(commandLine) {
   const trimmed = String(commandLine || "").trim();
   if (!trimmed) return false;
+  if (/[&|<>]/.test(trimmed)) return false;
 
   const lower = trimmed.toLowerCase();
 
@@ -522,27 +528,102 @@ function allowedCommandBase(commandLine) {
   return allowPatterns.some((re) => re.test(trimmed));
 }
 
+function parseAllowedCommand(commandLine) {
+  const trimmed = String(commandLine || "").trim();
+  if (!allowedCommandBase(trimmed)) return null;
+  if (process.platform === "win32" && /^(dir|type|where|findstr)(\s|$)/i.test(trimmed)) {
+    return { file: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", trimmed], shell: false };
+  }
+  const parts = trimmed.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+  if (!parts.length) return null;
+  const file = parts[0].replace(/^"|"$/g, "");
+  const args = parts.slice(1).map((part) => part.replace(/^"|"$/g, ""));
+  return { file, args, shell: false };
+}
+
 function execCommand(commandLine, cwd = WORKSPACE_ROOT, timeoutMs = COMMAND_TIMEOUT_MS) {
+  const parsed = parseAllowedCommand(commandLine);
+  if (!parsed) {
+    return Promise.resolve({
+      ok: false,
+      exitCode: 1,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      error: `command not allowlisted or blocked: ${commandLine}`,
+      timedOut: false,
+      processTreeKilled: false,
+      fullLogPath: null,
+    });
+  }
+
   return new Promise((resolve) => {
-    cp.exec(
-      commandLine,
-      {
-        cwd,
-        windowsHide: true,
-        timeout: timeoutMs,
-        maxBuffer: MAX_OUTPUT_BYTES * 4
-      },
-      (error, stdout, stderr) => {
-        resolve({
-          ok: !error,
-          exitCode: error && typeof error.code === "number" ? error.code : 0,
-          signal: error && error.signal ? error.signal : null,
-          stdout: truncateOutput(stdout || ""),
-          stderr: truncateOutput(stderr || ""),
-          error: error ? String(error.message || error) : ""
-        });
+    const logPath = path.join(os.tmpdir(), `unreal-agent-cmd-${process.pid}-${Date.now()}.log`);
+    let logStream;
+    try {
+      logStream = fs.createWriteStream(logPath, { flags: "a" });
+    } catch {
+      logStream = null;
+    }
+
+    const child = cp.spawn(parsed.file, parsed.args, {
+      cwd,
+      shell: parsed.shell === true,
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let killIssued = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killIssued = true;
+      if (process.platform === "win32" && child.pid) {
+        cp.exec(`taskkill /PID ${child.pid} /T /F`, { windowsHide: true }, () => {});
+      } else {
+        child.kill("SIGKILL");
       }
-    );
+    }, timeoutMs);
+    child.stdout?.on("data", (chunk) => {
+      const textChunk = String(chunk || "");
+      stdout += textChunk;
+      logStream?.write(textChunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const textChunk = String(chunk || "");
+      stderr += textChunk;
+      logStream?.write(textChunk);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      logStream?.end();
+      resolve({
+        ok: !timedOut && code === 0,
+        exitCode: typeof code === "number" ? code : 1,
+        signal: signal || null,
+        stdout: truncateOutput(stdout || ""),
+        stderr: truncateOutput(stderr || ""),
+        error: timedOut ? `Process timed out after ${timeoutMs}ms` : "",
+        timedOut,
+        processTreeKilled: timedOut ? killIssued : null,
+        fullLogPath: logStream ? logPath : null,
+      });
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      logStream?.end();
+      resolve({
+        ok: false,
+        exitCode: 1,
+        signal: null,
+        stdout: truncateOutput(stdout || ""),
+        stderr: truncateOutput(stderr || ""),
+        error: String(error.message || error),
+        timedOut: false,
+        processTreeKilled: false,
+        fullLogPath: logStream ? logPath : null,
+      });
+    });
   });
 }
 
@@ -558,13 +639,14 @@ function fileStatSignature(stat) {
   return `${stat.size}:${stat.mtimeMs}`;
 }
 
-function rememberReadEvidence(target, stat, resolution, lineRange = null) {
+function rememberReadEvidence(target, stat, resolution, lineRange = null, contentHash = null) {
   const key = path.resolve(target);
   const existing = readEvidence.get(key);
   const ranges = new Set(existing && existing.signature === fileStatSignature(stat) ? existing.lineRanges || [] : []);
   if (lineRange) ranges.add(lineRange);
   readEvidence.set(key, {
     signature: fileStatSignature(stat),
+    contentHash: contentHash || (existing && existing.signature === fileStatSignature(stat) ? existing.contentHash : null),
     path: pathMetadata(resolution),
     lineRanges: Array.from(ranges),
     readAt: Date.now()
@@ -573,7 +655,7 @@ function rememberReadEvidence(target, stat, resolution, lineRange = null) {
 
 function hasFreshReadEvidence(target, stat) {
   const entry = readEvidence.get(path.resolve(target));
-  return Boolean(entry && entry.signature === fileStatSignature(stat));
+  return Boolean(entry && entry.signature === fileStatSignature(stat) && entry.contentHash);
 }
 
 function sourceEvidenceSummary(activeProject) {
@@ -686,9 +768,7 @@ async function writeBootstrapCache(patch) {
   await fsp.mkdir(path.dirname(cachePath), { recursive: true });
   const existing = await readBootstrapCache();
   const next = mergeBootstrapCache(existing, patch);
-  const tmpPath = `${cachePath}.tmp`;
-  await fsp.writeFile(tmpPath, JSON.stringify(next, null, 2), "utf8");
-  await fsp.rename(tmpPath, cachePath);
+  atomicWriteJson(cachePath, next);
   invalidateWorkspaceInfoCache();
   return next;
 }
@@ -1082,6 +1162,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     const name = request.params.name;
     const args = request.params.arguments || {};
+    const allowed = callableAgentToolNames(allAgentTools().map((tool) => tool.name));
+    if (!allowed.has(name)) {
+      const blocked = toolNotCallablePayload(name);
+      return fail(blocked.error, {
+        errorCode: blocked.errorCode,
+        retryable: blocked.retryable,
+        userMessage: blocked.userMessage,
+        agentInstruction: blocked.agentInstruction,
+      });
+    }
 
     if (name === "get_workspace_info") {
       return text(JSON.stringify(await buildWorkspaceInfo(), null, 2));
@@ -1110,9 +1200,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       } else {
         projectContext = {
           ok: false,
-          error: "activeProject is not set. Call set_active_project first.",
+          error: "activeProject is not set.",
           browseAvailable: false,
-          suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+          requiredNextTool: { server: "unreal-rag", name: "unreal_set_active_project" },
+          suggestedToolCalls: [{ tool: "unreal_set_active_project", args: {} }]
         };
       }
       return text(JSON.stringify({
@@ -1372,7 +1463,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           out += ` Use read_file_range for partial reads.]`;
       }
       }
-      rememberReadEvidence(target, s, resolution, `1-${Math.max(1, out.split("\n").length)}`);
+      rememberReadEvidence(
+        target,
+        s,
+        resolution,
+        `1-${Math.max(1, out.split("\n").length)}`,
+        s.size <= MAX_READ_BYTES ? sha256Buffer(await fsp.readFile(target)) : null
+      );
       const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`;
       return text(metadataHeader + out);
     }
@@ -1408,7 +1505,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const lines = content.split(/\r?\n/);
       const slice = lines.slice(startLine - 1, endLine);
       const numbered = slice.map((line, idx) => `${startLine + idx}|${line}`).join("\n");
-      rememberReadEvidence(target, s, resolution, `${startLine}-${Math.min(endLine, lines.length)}`);
+      rememberReadEvidence(
+        target,
+        s,
+        resolution,
+        `${startLine}-${Math.min(endLine, lines.length)}`,
+        sha256Text(content)
+      );
       return text(
         `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`
       );
@@ -1466,7 +1569,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const startLine = Math.max(1, lineAt(match.index) - context);
       const endLine = Math.min(lines.length, lineAt(braceEnd) + context);
       const numbered = lines.slice(startLine - 1, endLine).map((line, idx) => `${startLine + idx}|${line}`).join("\n");
-      rememberReadEvidence(target, stat, resolution, `${startLine}-${endLine}`);
+      rememberReadEvidence(
+        target,
+        stat,
+        resolution,
+        `${startLine}-${endLine}`,
+        sha256Text(content)
+      );
       return text(`File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`);
     }
 
@@ -1510,16 +1619,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (repeat.duplicate) {
           return fail(duplicateMutationMessage("write_file", rel, repeat));
         }
-        const targetExists = await exists(target);
-        const priorContent = targetExists ? await fsp.readFile(target, "utf8") : null;
         const contentToWrite = String(args.content || "");
+        const targetExists = await exists(target);
+        const priorContent = targetExists && ALLOW_EXISTING_SOURCE_WRITE
+          ? await fsp.readFile(target, "utf8")
+          : null;
         try {
           if (ALLOW_EXISTING_SOURCE_WRITE) {
-            await fsp.writeFile(target, contentToWrite, "utf8");
+            atomicWriteText(target, contentToWrite);
           } else {
-            // Exclusive create: atomically fail if the file already exists (guards the
-            // TOCTOU window between the existence check above and this write).
-            await fsp.writeFile(target, contentToWrite, { encoding: "utf8", flag: "wx" });
+            await createExclusive(target, contentToWrite);
           }
         } catch (err) {
           if (err && err.code === "EEXIST") {
@@ -1545,7 +1654,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             if (priorContent === null) {
               await fsp.unlink(target);
             } else {
-              await fsp.writeFile(target, priorContent, "utf8");
+              atomicWriteText(target, priorContent);
             }
             invalidateFileCache(target);
             return validationToolResult(
@@ -1678,12 +1787,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Apply replacement on normalized content, then restore original line endings if needed
         const priorContent = content;
-        const replacement = newText.replace(/\r\n/g, "\n");
-        const updatedNorm = expectedOccurrences === 1
-          ? contentNorm.replace(oldTextNorm, replacement)
-          : contentNorm.split(oldTextNorm).join(replacement);
-        const updated = hasCRLF ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
-        await fsp.writeFile(target, updated, "utf8");
+        const evidenceEntry = readEvidence.get(path.resolve(target));
+        const casResult = await replaceWithCAS({
+          targetPath: target,
+          priorContent: content,
+          oldText,
+          newText,
+          expectedOccurrences,
+          readHash: evidenceEntry?.contentHash || null,
+        });
+        if (!casResult.ok) {
+          return fail(casResult.error || "replace_in_file blocked by read-hash CAS.", {
+            errorCode: casResult.errorCode || "READ_HASH_CAS_MISMATCH",
+            nextSteps: ["Re-read the file, then retry replace_in_file with exact oldText."],
+          });
+        }
+        const updated = casResult.updated;
         invalidateFileCache(target);
         const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
         const rel = path.relative(WORKSPACE_ROOT, target);
@@ -1693,7 +1812,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           let current = null;
           try { current = await fsp.readFile(target, "utf8"); } catch { current = null; }
           if (shouldRollback(current, updated)) {
-            await fsp.writeFile(target, priorContent, "utf8");
+            atomicWriteText(target, priorContent);
             invalidateFileCache(target);
             return validationToolResult(
               `PATCH ROLLED BACK — ${rel} failed static validation.`,
@@ -1810,8 +1929,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "apply_edit_bundle") {
+      if (!CONTROL_PLANE_TOOLS) {
+        return fail("apply_edit_bundle blocked in stable install.", { errorCode: "TOOL_NOT_CALLABLE" });
+      }
       if (!ALLOW_WRITE) return fail("apply_edit_bundle blocked. Set ALLOW_WRITE=1 to enable.");
-      const authFail = enforceTaskAuth(args);
+      const authFail = enforceTaskAuth(args, { requireSession: true });
       if (authFail) return authFail;
       await agentNotify("Applying edit bundle…");
       const bundle = {
@@ -1821,38 +1943,53 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!bundle.files.length && !bundle.patches.length) {
         return fail("apply_edit_bundle requires at least one file or patch entry.");
       }
-      const writeResolution = await resolveWriteToolPath((bundle.files[0] || bundle.patches[0] || {}).path || ".");
-      const projectRoot = path.dirname(path.resolve(getActiveProject(CONFIG_PATH) || writeResolution.absolutePath));
-      const staged = await stageBundle(projectRoot, bundle);
+      const activeProject = getActiveProject(CONFIG_PATH);
+      if (!activeProject) {
+        return fail("apply_edit_bundle requires an active project.", {
+          suggestedToolCalls: [{ tool: "unreal_set_active_project", args: {} }],
+        });
+      }
+      const projectRoot = path.dirname(path.resolve(activeProject));
+
+      async function resolveBundlePath(relPath) {
+        try {
+          const resolution = await resolveWriteToolPath(relPath);
+          return { ok: true, absolutePath: resolution.absolutePath };
+        } catch (error) {
+          return { ok: false, error: String(error.message || error) };
+        }
+      }
+
+      const staged = await stageBundle(projectRoot, bundle, resolveBundlePath);
       try {
-        const written = await commitBundle(projectRoot, bundle);
+        const written = await commitBundle(projectRoot, bundle, staged.preHashes, resolveBundlePath);
         const validationResults = [];
         for (const absPath of written) {
           validationResults.push(await validateAfterWrite(absPath, () => getActiveProject(CONFIG_PATH)));
         }
         const failed = validationResults.find((item) => validationFailed(item));
         if (failed) {
-          await rollbackBundle(projectRoot, staged.staged);
+          await rollbackBundle(projectRoot, staged.staged, staged.preHashes);
           return validationToolResult("BUNDLE ROLLED BACK — static validation failed.", failed, {
             ok: false,
             operation: "apply_edit_bundle",
             rolledBack: true,
             isError: true,
-            preChangeHashes: capturePreHashes(projectRoot, staged.relPaths),
+            preChangeHashes: staged.preHashes,
             nextSteps: ["Fix blocking findings and resubmit the bundle."]
           });
         }
         return validationToolResult(`OK — applied ${written.length} file(s) from bundle.`, validationResults[0] || null, {
           operation: "apply_edit_bundle",
           writtenCount: written.length,
-          preChangeHashes: capturePreHashes(projectRoot, staged.relPaths),
+          preChangeHashes: staged.preHashes,
           nextSteps: ["Run build_unreal_project after C++ edits."],
           phase: "editing",
           userMessage: `Applied ${written.length} file(s) from bundle`,
           cancellable: false
         });
       } catch (error) {
-        await rollbackBundle(projectRoot, staged.staged);
+        await rollbackBundle(projectRoot, staged.staged, staged.preHashes);
         await agentNotify(`apply_edit_bundle failed: ${error.message || error}`, "error");
         return fail(`apply_edit_bundle failed: ${error.message || error}`, { rolledBack: true });
       }
@@ -1924,6 +2061,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const results = [];
       let filesSeen = 0;
+      let filesSkippedBySize = 0;
 
       async function walk(p) {
         if (results.length >= maxResults || filesSeen >= SEARCH_MAX_FILES) return;
@@ -1945,7 +2083,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!st.isFile()) return;
         filesSeen++;
 
-        if (st.size > MAX_READ_BYTES) return;
+        if (st.size > MAX_READ_BYTES) {
+          filesSkippedBySize++;
+          return;
+        }
         const buf = await fsp.readFile(p);
         if (!isTextLikely(buf)) return;
 
@@ -1966,7 +2107,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       await walk(base);
-      return text(JSON.stringify({ path: pathMetadata(resolution), results, filesSeen }, null, 2));
+      return text(JSON.stringify({
+        path: pathMetadata(resolution),
+        results,
+        filesSeen,
+        filesSkippedBySize,
+        searchComplete: filesSeen < SEARCH_MAX_FILES,
+      }, null, 2));
     }
 
     if (name === "run_command") {
@@ -1991,14 +2138,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const planResult = await resolveBuildPlan(WORKSPACE_ROOT, CONFIG_PATH, args);
       if (!planResult.ok || !planResult.build) {
-        return text(JSON.stringify({
-          summary: `BUILD PLAN FAILED — ${planResult.error || "Could not resolve Unreal build plan."}`,
-          ok: false,
-          error: planResult.error || "Could not resolve Unreal build plan.",
-          selectionReason: planResult.selectionReason,
-          suggestions: planResult.suggestions || null,
-          searchRoots: planResult.roots || []
-        }, null, 2));
+        return fail(planResult.error || "Could not resolve Unreal build plan.", {
+          errorCode: "BUILD_PLAN_RESOLUTION_FAILED",
+          retryable: false,
+          userMessage: "Build plan could not be resolved for the active project.",
+          agentInstruction: "Call unreal_set_active_project on unreal-rag, confirm the .uproject path, then retry build_unreal_project.",
+          requiredNextTool: { server: "unreal-rag", name: "unreal_set_active_project" },
+          nextSteps: [
+            "Call unreal_set_active_project on unreal-rag with a valid .uproject path.",
+            "Confirm build target and configuration, then retry build_unreal_project.",
+          ],
+        });
       }
 
       const build = planResult.build;
@@ -2078,9 +2228,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return text(JSON.stringify(payload, null, 2));
     }
 
-    return fail(`unknown tool: ${name}`);
+    return fail(`unknown tool: ${name}`, { errorCode: "UNKNOWN_TOOL" });
   } catch (err) {
-    return fail(err && err.stack ? err.stack : String(err));
+    const message = err && err.message ? String(err.message) : String(err);
+    console.error(err && err.stack ? err.stack : err);
+    return fail(message, {
+      errorCode: "INTERNAL_ERROR",
+      retryable: false,
+      userMessage: message.split(/\r?\n/, 1)[0]
+    });
   }
 });
 

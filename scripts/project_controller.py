@@ -39,20 +39,33 @@ def switch_active_project(
 
     if clear:
         config["activeProject"] = None
-        save_shared_config(config)
+        try:
+            save_shared_config(config)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "switchResult": "failed",
+                "error": f"Failed to save shared config: {exc}",
+                "activeProject": previous or None,
+            }
+
         invalidate_payload: dict[str, Any] | None = None
+        cache_refresh_required = False
         try:
             from project_switch_invalidate import on_project_switch_invalidate
 
             invalidate_payload = on_project_switch_invalidate(previous or None, None, workspace=workspace)
         except Exception as exc:
             invalidate_payload = {"ok": False, "error": str(exc)}
+            cache_refresh_required = True
+
         return {
             "ok": True,
             "switchResult": "cleared",
             "activeProject": None,
             "message": "Active project cleared.",
             "cacheInvalidation": invalidate_payload,
+            "cacheRefreshRequired": cache_refresh_required,
             "readiness": {"ready": False, "reason": "no_active_project"},
         }
 
@@ -88,22 +101,14 @@ def switch_active_project(
         }
 
     invalidate_payload: dict[str, Any] | None = None
+    cache_refresh_required = False
     try:
         from project_switch_invalidate import on_project_switch_invalidate
 
         invalidate_payload = on_project_switch_invalidate(previous or None, resolved, workspace=workspace)
     except Exception as exc:
-        config["activeProject"] = previous or None
-        try:
-            save_shared_config(config)
-        except Exception:
-            pass
-        return {
-            "ok": False,
-            "switchResult": "failed",
-            "error": f"Cache invalidation failed; rolled back active project: {exc}",
-            "activeProject": previous or None,
-        }
+        invalidate_payload = {"ok": False, "error": str(exc)}
+        cache_refresh_required = True
 
     prepare_payload: dict[str, Any] | None = None
     if prepare or force_prepare:
@@ -119,13 +124,14 @@ def switch_active_project(
         except Exception as exc:
             prepare_payload = {"ok": False, "error": str(exc)}
 
-    switch_result = "switched" if readiness.get("ready") else "switched_degraded"
+    switch_result = "switched" if readiness.get("ready") and not cache_refresh_required else "switched_degraded"
     return {
         "ok": True,
         "switchResult": switch_result,
         "activeProject": str(resolved),
         "message": f"Active project set to {resolved.name}",
         "cacheInvalidation": invalidate_payload,
+        "cacheRefreshRequired": cache_refresh_required,
         "readiness": readiness,
         "autoSetup": prepare_payload,
         "prepareRequested": prepare or force_prepare,
