@@ -3,12 +3,39 @@
 
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 from typing import Any
 
 from project_context import clear_project_context_cache
 from project_identity import project_identity, resolve_uproject
 from symbol_cache import invalidate_project_caches
+
+
+def cache_generation_path(workspace: Path) -> Path:
+    return workspace / "data" / "project_cache_generation.json"
+
+
+def read_cache_generation(workspace: Path) -> int:
+    path = cache_generation_path(workspace)
+    if not path.is_file():
+        return 0
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return int(payload.get("generation") or 0)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return 0
+
+
+def write_cache_generation(workspace: Path) -> int:
+    path = cache_generation_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    generation = max(read_cache_generation(workspace) + 1, int(time.time() * 1000))
+    temp = path.with_suffix(".json.tmp")
+    temp.write_text(json.dumps({"generation": generation}, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.replace(path)
+    return generation
 
 
 def clear_wrapper_snapshot_cache() -> None:
@@ -72,5 +99,6 @@ def on_project_switch_invalidate(
         "previousProject": prev_identity,
         "newProject": new_identity,
         "cleared": cleared,
+        "cacheGeneration": write_cache_generation(workspace) if workspace is not None else None,
         "note": "Global RAG index chunks are not deleted; run unreal_rag_refresh or sync-active-project to reindex.",
     }

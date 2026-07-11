@@ -28,13 +28,32 @@ def test_compact_job_status_shape() -> None:
         "jobId": "abc",
         "status": "running",
         "revision": 3,
-        "progress": [{"message": "step"}],
+        "progressSequence": 2,
+        "progress": [{"seq": 1, "message": "step"}, {"seq": 2, "message": "step2"}],
         "currentAttempt": "attempt_1",
     }
     compact = compact_job_status(job)
     assert compact["userMessage"]
     assert compact["cancellable"] is True
     assert compact["hasNewOutput"] is True
+    assert compact["stateRevision"] == 3
+    assert compact["progressSequence"] == 2
+
+
+def test_progress_delta_uses_sequence_cursor() -> None:
+    job = {
+        "jobId": "abc",
+        "status": "running",
+        "revision": 5,
+        "progressSequence": 3,
+        "progress": [
+            {"seq": 1, "message": "a"},
+            {"seq": 2, "message": "b"},
+            {"seq": 3, "message": "c"},
+        ],
+    }
+    delta = compact_job_status(job, since_progress_sequence=1)["progressDelta"]
+    assert [entry["message"] for entry in delta] == ["b", "c"]
 
 
 def test_stale_revision_reject(tmp_path: Path) -> None:

@@ -63,6 +63,12 @@ def _active_job(workspace: Path, state: dict[str, Any]) -> dict[str, Any] | None
     return compact_job_status(job)
 
 
+def _public_state(state: dict[str, Any]) -> dict[str, Any]:
+    public = dict(state)
+    public.pop("authToken", None)
+    return public
+
+
 def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
     job = _active_job(workspace, state)
     ux = task_phase_from_state(state, job)
@@ -71,7 +77,7 @@ def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
         "taskSessionId": state.get("taskSessionId"),
         "status": state.get("status"),
         **ux,
-        "state": state,
+        "state": _public_state(state),
         "job": job,
     }
 

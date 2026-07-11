@@ -143,6 +143,20 @@ Check "Cline MCP settings" {
             throw "unresolved placeholders in $p — re-run Install-ClineUnrealMcp.ps1"
         }
         $cfg = $raw | ConvertFrom-Json
+        foreach ($name in @("unreal-rag", "unreal-agent")) {
+            $entry = $cfg.mcpServers.$name
+            if (-not $entry) { continue }
+            $cmd = [string]$entry.command
+            if (-not (Test-Path -LiteralPath $cmd)) {
+                throw "$name command missing: $cmd"
+            }
+            foreach ($arg in @($entry.args)) {
+                $argText = [string]$arg
+                if ($argText -match '\.(py|js)$' -and -not (Test-Path -LiteralPath $argText)) {
+                    throw "$name arg target missing: $argText"
+                }
+            }
+        }
         if ($cfg.mcpServers."unreal-rag" -and $cfg.mcpServers."unreal-agent") {
             $found = $true
             break

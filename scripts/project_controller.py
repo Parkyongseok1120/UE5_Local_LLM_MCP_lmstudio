@@ -5,11 +5,25 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 from workspace_paths import find_workspace_root, load_shared_config, save_shared_config
+
+
+def _validate_uproject(project_path: str) -> tuple[Path | None, str | None]:
+    resolved = Path(project_path).resolve()
+    if not resolved.is_file():
+        return None, f"projectPath not found: {resolved}"
+    if resolved.suffix.lower() != ".uproject":
+        return None, "projectPath must be an existing .uproject file."
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, f"Invalid .uproject JSON: {exc}"
+    if not isinstance(payload, dict):
+        return None, "Invalid .uproject: root must be a JSON object."
+    return resolved, None
 
 
 def switch_active_project(
@@ -35,6 +49,7 @@ def switch_active_project(
             invalidate_payload = {"ok": False, "error": str(exc)}
         return {
             "ok": True,
+            "switchResult": "cleared",
             "activeProject": None,
             "message": "Active project cleared.",
             "cacheInvalidation": invalidate_payload,
@@ -42,22 +57,11 @@ def switch_active_project(
         }
 
     if not project_path:
-        return {"ok": False, "error": "Provide projectPath or clear=true."}
+        return {"ok": False, "switchResult": "failed", "error": "Provide projectPath or clear=true."}
 
-    resolved = Path(project_path).resolve()
-    if not resolved.is_file() or resolved.suffix.lower() != ".uproject":
-        return {"ok": False, "error": "projectPath must be an existing .uproject file."}
-
-    config["activeProject"] = str(resolved)
-    save_shared_config(config)
-
-    invalidate_payload: dict[str, Any] | None = None
-    try:
-        from project_switch_invalidate import on_project_switch_invalidate
-
-        invalidate_payload = on_project_switch_invalidate(previous or None, resolved, workspace=workspace)
-    except Exception as exc:
-        invalidate_payload = {"ok": False, "error": str(exc)}
+    resolved, error = _validate_uproject(project_path)
+    if error or resolved is None:
+        return {"ok": False, "switchResult": "failed", "error": error}
 
     readiness: dict[str, Any]
     try:
@@ -65,7 +69,41 @@ def switch_active_project(
 
         readiness = active_project_check_status(resolved, workspace)
     except Exception as exc:
-        readiness = {"ready": False, "error": str(exc)}
+        return {
+            "ok": False,
+            "switchResult": "failed",
+            "error": f"Project validation failed: {exc}",
+            "activeProject": previous or None,
+        }
+
+    config["activeProject"] = str(resolved)
+    try:
+        save_shared_config(config)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "switchResult": "failed",
+            "error": f"Failed to save shared config: {exc}",
+            "activeProject": previous or None,
+        }
+
+    invalidate_payload: dict[str, Any] | None = None
+    try:
+        from project_switch_invalidate import on_project_switch_invalidate
+
+        invalidate_payload = on_project_switch_invalidate(previous or None, resolved, workspace=workspace)
+    except Exception as exc:
+        config["activeProject"] = previous or None
+        try:
+            save_shared_config(config)
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "switchResult": "failed",
+            "error": f"Cache invalidation failed; rolled back active project: {exc}",
+            "activeProject": previous or None,
+        }
 
     prepare_payload: dict[str, Any] | None = None
     if prepare or force_prepare:
@@ -81,8 +119,10 @@ def switch_active_project(
         except Exception as exc:
             prepare_payload = {"ok": False, "error": str(exc)}
 
+    switch_result = "switched" if readiness.get("ready") else "switched_degraded"
     return {
         "ok": True,
+        "switchResult": switch_result,
         "activeProject": str(resolved),
         "message": f"Active project set to {resolved.name}",
         "cacheInvalidation": invalidate_payload,

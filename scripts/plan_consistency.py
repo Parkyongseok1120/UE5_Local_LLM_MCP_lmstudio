@@ -27,13 +27,18 @@ RAG_ESSENTIAL_TOOLS = frozenset(
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
         "unreal_diagram_validate",
+        "unreal_project_status",
+    }
+)
+
+RAG_STABLE_HIDDEN_TOOLS = frozenset(
+    {
         "unreal_task_start",
         "unreal_task_status",
         "unreal_task_cancel",
         "unreal_task_resume",
         "unreal_task_approve",
         "unreal_project_prepare",
-        "unreal_project_status",
         "unreal_job_log_read",
         "unreal_architecture_decision_status",
         "unreal_architecture_decision_approve",
@@ -68,10 +73,16 @@ def essential_tools_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def control_plane_tools_enabled() -> bool:
+    value = os.environ.get("ALLOW_CONTROL_PLANE_TOOLS", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def exposed_rag_tools() -> frozenset[str]:
-    if essential_tools_enabled():
-        return RAG_ESSENTIAL_TOOLS
-    return RAG_ESSENTIAL_TOOLS | RAG_EXTENDED_ONLY
+    base = RAG_ESSENTIAL_TOOLS if essential_tools_enabled() else RAG_ESSENTIAL_TOOLS | RAG_EXTENDED_ONLY
+    if control_plane_tools_enabled():
+        return base | RAG_STABLE_HIDDEN_TOOLS
+    return base
 
 
 def apply_ambiguity_write_policy(

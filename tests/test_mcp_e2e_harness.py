@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -35,16 +36,17 @@ def test_continuation_token_single_use() -> None:
     assert consume_continuation_token(token, key) is False
 
 
-def test_mcp_tools_list_includes_task_tools() -> None:
-    from unreal_rag_mcp import McpServer
+def test_mcp_tools_list_matches_stable_manifest(monkeypatch, tmp_path) -> None:
+    import importlib.util
 
-    index = ROOT / "data" / "unreal58" / "rag.sqlite"
-    server = McpServer(index)
-    names = [tool["name"] for tool in server.all_tool_definitions()]
-    for tool in (
-        "unreal_task_start",
-        "unreal_task_status",
-        "unreal_project_status",
-        "unreal_job_log_read",
-    ):
-        assert tool in names
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.delenv("ALLOW_CONTROL_PLANE_TOOLS", raising=False)
+    spec = importlib.util.spec_from_file_location("unreal_rag_mcp", ROOT / "scripts" / "unreal_rag_mcp.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    server = module.McpServer(tmp_path / "missing.sqlite")
+    names = {tool["name"] for tool in server.all_tool_definitions()}
+    manifest = json.loads((ROOT / "config" / "stable_tool_manifest.json").read_text(encoding="utf-8-sig"))
+    assert names == set(manifest["ragEssential"])
+    assert "unreal_task_start" not in names

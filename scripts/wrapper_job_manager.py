@@ -122,8 +122,10 @@ def transition_job_status(job: dict[str, Any], next_status: str) -> bool:
 
 
 def append_progress(job: dict[str, Any], message: str, level: str = "info") -> None:
+    seq = int(job.get("progressSequence") or 0) + 1
+    job["progressSequence"] = seq
     job.setdefault("progress", []).append(
-        {"at": _utc_now(), "level": level, "message": message}
+        {"seq": seq, "at": _utc_now(), "level": level, "message": message}
     )
     job["updatedAt"] = _utc_now()
 
@@ -168,17 +170,21 @@ def _sync_from_run_metadata(job: dict[str, Any]) -> None:
         job["currentAttempt"] = attempts[-1]["name"]
 
 
-def compact_job_status(job: dict[str, Any], *, since_revision: int = 0) -> dict[str, Any]:
+def compact_job_status(job: dict[str, Any], *, since_progress_sequence: int = 0) -> dict[str, Any]:
     from task_phase import job_phase_from_status
 
     progress = list(job.get("progress") or [])
-    delta = progress[since_revision:] if since_revision else progress[-5:]
+    if since_progress_sequence:
+        delta = [entry for entry in progress if int(entry.get("seq") or 0) > since_progress_sequence]
+    else:
+        delta = progress[-5:]
     base = {
         "jobId": job.get("jobId"),
         "status": job.get("status"),
         "phase": job.get("currentAttempt") or job.get("status"),
         "attempt": job.get("currentAttempt"),
-        "revision": int(job.get("revision") or 0),
+        "stateRevision": int(job.get("revision") or 0),
+        "progressSequence": int(job.get("progressSequence") or 0),
         "progressDelta": delta,
         "hasNewOutput": bool(delta),
         "returncode": job.get("returncode"),
@@ -409,14 +415,25 @@ def start_job(
     return compact_job_status(read_job(workspace, job_id) or job)
 
 
-def job_status(workspace: Path, job_id: str, *, compact: bool = True, since_revision: int = 0) -> dict[str, Any]:
+def job_status(
+    workspace: Path,
+    job_id: str,
+    *,
+    compact: bool = True,
+    since_progress_sequence: int = 0,
+    since_revision: int | None = None,
+) -> dict[str, Any]:
+    if since_revision is not None and since_progress_sequence == 0:
+        since_progress_sequence = since_revision
     job = read_job(workspace, job_id)
     if not job:
         return {"ok": False, "error": f"Unknown job: {job_id}"}
     _sync_from_run_metadata(job)
-    job["updatedAt"] = _utc_now()
-    write_job(workspace, job)
-    payload = compact_job_status(job, since_revision=since_revision) if compact else job
+    payload = (
+        compact_job_status(job, since_progress_sequence=since_progress_sequence)
+        if compact
+        else job
+    )
     return {"ok": True, "job": payload}
 
 

@@ -23,26 +23,7 @@ RAG_ESSENTIAL = {
     "unreal_rag_capabilities",
     "unreal_code_sketch_claim_validate",
     "unreal_diagram_validate",
-    "unreal_task_start",
-    "unreal_task_status",
-    "unreal_task_cancel",
-    "unreal_task_resume",
-    "unreal_task_approve",
-    "unreal_project_prepare",
     "unreal_project_status",
-    "unreal_job_log_read",
-    "unreal_architecture_decision_status",
-    "unreal_architecture_decision_approve",
-    "unreal_architecture_decision_revoke",
-}
-
-RAG_EXTENDED_ONLY = {
-    "unreal_rag_refresh",
-    "unreal_start_rag_refresh",
-    "unreal_rag_refresh_status",
-    "unreal_start_compile_loop",
-    "unreal_compile_loop_status",
-    "unreal_cancel_compile_loop",
 }
 
 AGENT_ESSENTIAL = {
@@ -55,6 +36,7 @@ AGENT_ESSENTIAL = {
     "replace_in_file",
     "write_file",
     "search_files",
+    "static_validate_project",
     "build_unreal_project",
     "read_unreal_logs",
     "write_session_handoff",
@@ -88,6 +70,30 @@ def test_essential_tools_enabled_filters_rag_tools(monkeypatch, tmp_path):
     assert names == set(mod.ESSENTIAL_TOOL_NAMES)
     assert names == RAG_ESSENTIAL
     assert "unreal_rag_refresh" not in names
+
+
+RAG_EXTENDED_ONLY = {
+    "unreal_rag_refresh",
+    "unreal_start_rag_refresh",
+    "unreal_rag_refresh_status",
+    "unreal_start_compile_loop",
+    "unreal_compile_loop_status",
+    "unreal_cancel_compile_loop",
+}
+
+
+def test_hidden_control_plane_tools_require_flag(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.delenv("ALLOW_CONTROL_PLANE_TOOLS", raising=False)
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    names = {tool["name"] for tool in server.all_tool_definitions()}
+    assert "unreal_task_start" not in names
+    monkeypatch.setenv("ALLOW_CONTROL_PLANE_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    names = {tool["name"] for tool in server.all_tool_definitions()}
+    assert "unreal_task_start" in names
 
 
 def test_extended_tools_enabled_exposes_refresh_and_compile_loop(monkeypatch, tmp_path):

@@ -246,7 +246,9 @@ function Sync-InstallMachinePaths {
         [string]$DocumentsRoot = "",
         [string]$SharedConfigPath = "",
         [string]$EpicGamesRoot = "",
-        [string]$PreferredEngineVersion = ""
+        [string]$PreferredEngineVersion = "",
+        [switch]$SyncCline,
+        [switch]$EnableAgentMode
     )
 
     $engine = Resolve-EngineSelection -EpicGamesRoot $EpicGamesRoot -PreferredVersion $PreferredEngineVersion
@@ -274,16 +276,22 @@ function Sync-InstallMachinePaths {
     }
 
     $clinePaths = Get-ClineMcpSettingsPaths
-    $writeVsCode = Test-Path -LiteralPath $clinePaths.VsCode
-    $writeCli = Test-Path -LiteralPath $clinePaths.Cli
-    $cline = Sync-ClineMcpSettings `
-        -RagRoot $RagRoot `
-        -AgentRoot $AgentRoot `
-        -DocumentsRoot $DocumentsRoot `
-        -SharedConfigPath $SharedConfigPath `
-        -PortableRoot (Split-Path -Parent $RagRoot) `
-        -WriteVsCode:$writeVsCode `
-        -WriteCli:$writeCli
+    $writeVsCode = $false
+    $writeCli = $false
+    $cline = $null
+    if ($SyncCline) {
+        $writeVsCode = Test-Path -LiteralPath $clinePaths.VsCode
+        $writeCli = Test-Path -LiteralPath $clinePaths.Cli
+        $cline = Sync-ClineMcpSettings `
+            -RagRoot $RagRoot `
+            -AgentRoot $AgentRoot `
+            -DocumentsRoot $DocumentsRoot `
+            -SharedConfigPath $SharedConfigPath `
+            -PortableRoot (Split-Path -Parent $RagRoot) `
+            -EnableAgentMode:$EnableAgentMode `
+            -WriteVsCode:$writeVsCode `
+            -WriteCli:$writeCli
+    }
 
     return [ordered]@{
         EngineRoot  = $engine.Root
@@ -341,6 +349,15 @@ function Build-ClineMcpConfig {
     $allowBuild = if ($EnableAgentMode) { "1" } else { "0" }
     $validateOnWrite = if ($EnableAgentMode) { "1" } else { "0" }
 
+    $workspaceRoot = $DocumentsRoot
+    if ($SharedConfigPath -and (Test-Path -LiteralPath $SharedConfigPath)) {
+        $shared = Read-JsonObject $SharedConfigPath
+        $activeProject = [string]$shared.activeProject
+        if ($activeProject -and (Test-Path -LiteralPath $activeProject)) {
+            $workspaceRoot = Split-Path -Parent $activeProject
+        }
+    }
+
     return [ordered]@{
         mcpServers = [ordered]@{
             "unreal-rag" = [ordered]@{
@@ -361,7 +378,7 @@ function Build-ClineMcpConfig {
                 args    = @($agentServer)
                 timeout = 720000
                 env     = [ordered]@{
-                    WORKSPACE_ROOT              = $DocumentsRoot
+                    WORKSPACE_ROOT              = $workspaceRoot
                     AGENT_MCP_CONFIG            = $AgentConfigPath
                     SHARED_UNREAL_CONFIG        = $SharedConfigPath
                     UNREAL58_ROOT               = $RagRoot
@@ -381,6 +398,90 @@ function Build-ClineMcpConfig {
     }
 }
 
+function Merge-ClineMcpSettings {
+    param(
+        $Existing,
+        $Desired
+    )
+
+    if ($null -eq $Existing) {
+        return $Desired
+    }
+
+    $merged = [ordered]@{}
+    foreach ($property in $Existing.PSObject.Properties) {
+        if ($property.Name -ne "mcpServers") {
+            $merged[$property.Name] = $property.Value
+        }
+    }
+
+    $servers = [ordered]@{}
+    if ($Existing.mcpServers) {
+        foreach ($property in $Existing.mcpServers.PSObject.Properties) {
+            if ($property.Name -notin @("unreal-rag", "unreal-agent")) {
+                $servers[$property.Name] = $property.Value
+            }
+        }
+    }
+    foreach ($name in @("unreal-rag", "unreal-agent")) {
+        if ($Desired.mcpServers.$name) {
+            $servers[$name] = $Desired.mcpServers.$name
+        }
+    }
+    $merged["mcpServers"] = $servers
+    return $merged
+}
+
+function Write-JsonUtf8Atomic {
+    param(
+        [string]$Path,
+        $Object,
+        [switch]$WhatIf
+    )
+
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    $json = $Object | ConvertTo-Json -Depth 40
+    if ($WhatIf) {
+        return [ordered]@{
+            Path    = $Path
+            Changed = $true
+            Preview = $json
+        }
+    }
+
+    $backupPath = $null
+    if (Test-Path -LiteralPath $Path) {
+        $backupPath = "$Path.bak-$(Get-Date -Format yyyyMMddHHmmss)"
+        Copy-Item -LiteralPath $Path -Destination $backupPath -Force
+    }
+
+    $tempPath = "$Path.tmp"
+    try {
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($tempPath, $json + [Environment]::NewLine, $utf8)
+        $null = Get-Content -LiteralPath $tempPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Move-Item -LiteralPath $tempPath -Destination $Path -Force
+    }
+    catch {
+        if (Test-Path -LiteralPath $tempPath) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
+        if ($backupPath -and (Test-Path -LiteralPath $backupPath)) {
+            Copy-Item -LiteralPath $backupPath -Destination $Path -Force
+        }
+        throw
+    }
+
+    return [ordered]@{
+        Path       = $Path
+        BackupPath = $backupPath
+        Changed    = $true
+    }
+}
+
 function Sync-ClineMcpSettings {
     param(
         [string]$RagRoot,
@@ -392,7 +493,8 @@ function Sync-ClineMcpSettings {
         [string]$PortableRoot = "",
         [switch]$EnableAgentMode,
         [switch]$WriteVsCode,
-        [switch]$WriteCli
+        [switch]$WriteCli,
+        [switch]$WhatIf
     )
 
     if (-not $DocumentsRoot) {
@@ -407,9 +509,14 @@ function Sync-ClineMcpSettings {
     $agentConfigPath = Join-Path $AgentRoot "config\agent-mcp.json"
 
     if (-not $PythonExe) {
-        $bundled = Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
-        if (Test-Path $bundled) { $PythonExe = $bundled }
-        else {
+        foreach ($path in @(
+                (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+                (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
+                (Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe")
+            )) {
+            if (Test-Path $path) { $PythonExe = $path; break }
+        }
+        if (-not $PythonExe) {
             $cmd = Get-Command python -ErrorAction SilentlyContinue
             if ($cmd -and $cmd.Source -notlike "*\WindowsApps\*") { $PythonExe = $cmd.Source }
         }
@@ -419,7 +526,7 @@ function Sync-ClineMcpSettings {
         if ($cmd) { $NodeExe = $cmd.Source }
     }
 
-    $config = Build-ClineMcpConfig `
+    $desired = Build-ClineMcpConfig `
         -RagRoot $RagRoot `
         -AgentRoot $AgentRoot `
         -DocumentsRoot $DocumentsRoot `
@@ -431,22 +538,27 @@ function Sync-ClineMcpSettings {
         -EnableAgentMode:$EnableAgentMode
 
     $paths = Get-ClineMcpSettingsPaths
-    $vscodePath = $null
-    $cliPath = $null
+    $writes = @()
+    if ($WriteVsCode) { $writes += $paths.VsCode }
+    if ($WriteCli) { $writes += $paths.Cli }
 
-    if ($WriteVsCode) {
-        $vscodePath = $paths.VsCode
-        Write-JsonUtf8NoBom $vscodePath $config
-    }
-    if ($WriteCli) {
-        $cliPath = $paths.Cli
-        Write-JsonUtf8NoBom $cliPath $config
+    $results = @()
+    foreach ($targetPath in $writes) {
+        $existing = Read-JsonObject $targetPath
+        $merged = Merge-ClineMcpSettings -Existing $existing -Desired $desired
+        $changedKeys = @("unreal-rag", "unreal-agent")
+        if ($WhatIf) {
+            Write-Host "[WhatIf] Would update $targetPath (keys: $($changedKeys -join ', '))" -ForegroundColor Cyan
+        }
+        $results += Write-JsonUtf8Atomic -Path $targetPath -Object $merged -WhatIf:$WhatIf
     }
 
     return [ordered]@{
-        VsCodePath = $vscodePath
-        CliPath    = $cliPath
-        Config     = $config
+        VsCodePath = if ($WriteVsCode) { $paths.VsCode } else { $null }
+        CliPath    = if ($WriteCli) { $paths.Cli } else { $null }
+        Config     = $desired
+        Writes     = $results
+        WhatIf     = [bool]$WhatIf
     }
 }
 

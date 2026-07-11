@@ -148,7 +148,7 @@ def test_build_response_marks_up_to_date_as_built_stale() -> None:
 def test_build_response_normal_success_is_built_proof_level() -> None:
     payload = run_node(
         "ux.buildResponsePayload({"
-        "result:{ok:true,exitCode:0,stdout:'run 12 action(s)\\nBUILD SUCCEEDED',stderr:'',error:''},"
+        "result:{ok:true,exitCode:0,stdout:'run 12 action(s)\\n[1/12] Compile Foo.cpp\\nBUILD SUCCEEDED',stderr:'',error:''},"
         "build:{target:'GameEditor',platform:'Win64',configuration:'Development'},"
         "planResult:{selectionReason:'active'},projectPath:'C:/Game/Game.uproject',"
         "command:'Build.bat',logPath:'.agent/logs/latest-build.log',verbose:false})"
@@ -161,7 +161,7 @@ def test_build_response_normal_success_is_built_proof_level() -> None:
 def test_build_response_up_to_date_with_actions_is_built() -> None:
     payload = run_node(
         "ux.buildResponsePayload({"
-        "result:{ok:true,exitCode:0,stdout:'Target is up to date\\n------ Building 1 action(s) ------',stderr:'',error:''},"
+        "result:{ok:true,exitCode:0,stdout:'Target is up to date\\n------ Building 1 action(s) ------\\n[1/1] Compile Foo.cpp',stderr:'',error:''},"
         "build:{target:'GameEditor',platform:'Win64',configuration:'Development'},"
         "planResult:{selectionReason:'active'},projectPath:'C:/Game/Game.uproject',"
         "command:'Build.bat',logPath:'.agent/logs/latest-build.log',verbose:false})"

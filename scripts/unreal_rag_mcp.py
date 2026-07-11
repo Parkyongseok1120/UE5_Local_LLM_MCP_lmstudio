@@ -341,13 +341,18 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
         "unreal_diagram_validate",
+        "unreal_project_status",
+    }
+)
+
+STABLE_HIDDEN_TOOL_NAMES = frozenset(
+    {
         "unreal_task_start",
         "unreal_task_status",
         "unreal_task_cancel",
         "unreal_task_resume",
         "unreal_task_approve",
         "unreal_project_prepare",
-        "unreal_project_status",
         "unreal_job_log_read",
         "unreal_architecture_decision_status",
         "unreal_architecture_decision_approve",
@@ -388,6 +393,11 @@ def extended_tools_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def control_plane_tools_enabled() -> bool:
+    value = os.environ.get("ALLOW_CONTROL_PLANE_TOOLS", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def load_project_architecture(workspace: Path, index_dir: Path) -> dict[str, Any]:
     pab_path = index_dir / "project_architecture.json"
     if pab_path.exists():
@@ -413,6 +423,24 @@ class McpServer:
         self.workspace = Path(__file__).resolve().parent.parent
         self._progress_handlers: list[Callable[[str, str], None]] = []
         self._connection_session_id = uuid.uuid4().hex[:12]
+        from project_switch_invalidate import read_cache_generation
+
+        self._cache_generation = read_cache_generation(self.workspace)
+
+    def _maybe_refresh_project_caches(self) -> None:
+        from project_switch_invalidate import on_project_switch_invalidate, read_cache_generation
+
+        current = read_cache_generation(self.workspace)
+        if current == self._cache_generation:
+            return
+        self._cache_generation = current
+        try:
+            from workspace_paths import resolve_active_project_path
+
+            active = resolve_active_project_path()
+            on_project_switch_invalidate(None, active, workspace=self.workspace)
+        except Exception:
+            pass
 
     def run(self) -> None:
         for line in sys.stdin:
@@ -510,10 +538,15 @@ class McpServer:
 
     def all_tool_definitions(self) -> list[dict[str, Any]]:
         tools = self._all_tool_definitions_unfiltered()
+        if not control_plane_tools_enabled():
+            tools = [tool for tool in tools if tool["name"] not in STABLE_HIDDEN_TOOL_NAMES]
         if extended_tools_enabled():
             return tools
         if essential_tools_enabled():
-            return [tool for tool in tools if tool["name"] in ESSENTIAL_TOOL_NAMES]
+            allowed = ESSENTIAL_TOOL_NAMES
+            if control_plane_tools_enabled():
+                allowed = ESSENTIAL_TOOL_NAMES | STABLE_HIDDEN_TOOL_NAMES
+            return [tool for tool in tools if tool["name"] in allowed]
         return [tool for tool in tools if tool["name"] not in EXTENDED_TOOL_NAMES]
 
     def _all_tool_definitions_unfiltered(self) -> list[dict[str, Any]]:
@@ -1554,6 +1587,7 @@ class McpServer:
         )
 
     def handle_tool_call(self, message_id: Any, params: dict[str, Any]) -> None:
+        self._maybe_refresh_project_caches()
         name = params.get("name")
         arguments = params.get("arguments") or {}
 
@@ -2264,7 +2298,13 @@ class McpServer:
             self.workspace,
             job_id,
             compact=arguments.get("verbose") is not True,
-            since_revision=int(arguments.get("sinceRevision") or arguments.get("since_revision") or 0),
+            since_progress_sequence=int(
+                arguments.get("sinceProgressSequence")
+                or arguments.get("since_progress_sequence")
+                or arguments.get("sinceRevision")
+                or arguments.get("since_revision")
+                or 0
+            ),
         )
         self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 

@@ -1,48 +1,33 @@
-# Unreal Agent Rules (Cline + Rider)
+# Unreal Agent Rules (Cline + Rider) — stable install
 
-Primary IDE: **JetBrains Rider** (Unreal C++, UBT, debug).  
-AI agent: **Cline** with MCP `unreal-rag` + `unreal-agent`.
+Primary IDE: **JetBrains Rider**. AI agent: **Cline** with MCP `unreal-rag` + `unreal-agent` (Essential tools only).
 
 ## Tool roles
 
-- `unreal-rag` — search, symbols, health, compile loop, `unreal_agent_session`
-- `unreal-agent` — read/write files, `build_unreal_project`, `read_unreal_logs`
+- `unreal-rag` — search, symbols, health, `unreal_agent_session`, project switch via `unreal_set_active_project`
+- `unreal-agent` — read/write files, `static_validate_project`, `build_unreal_project`, `read_unreal_logs`
 - Do not invent Unreal APIs. No evidence → say verification is required.
 
 ## Session bootstrap
 
 1. `unreal_get_active_project` or agent `get_active_project`
-2. Set project if needed: `set_active_project` / `unreal_set_active_project`
-3. `unreal_rag_health` once per session
+2. Set project via RAG `unreal_set_active_project` (canonical path)
+3. `unreal_rag_health` and `unreal_project_status` once per session
 
 ## Implementation loop
 
-1. Search — `unreal_rag_search` (`hybrid=false` default) or `unreal_agent_session`
-2. Read — `read_file` on target `.h` / `.cpp` / `Build.cs`
-3. Patch — minimal diff; `VALIDATE_ON_WRITE` blocks bad includes (`Game/Framework/` → `GameFramework/`)
-4. Build — Rider UBT **or** agent `build_unreal_project` after every edit
-5. Fix — compile log → RAG `compile_fix` / `module_fix` / `reflection_fix`
-6. Runtime — `read_unreal_logs` → RAG `runtime_debug`
+1. Search — `unreal_rag_search` or `unreal_agent_session`
+2. Read — `read_file` / `read_file_range`
+3. Patch — `replace_in_file` with `expectedOccurrences=1`
+4. Validate — `static_validate_project` when validate-on-write timed out
+5. Build — Rider UBT preferred; agent `build_unreal_project` when agent mode enabled
+6. Fix — compile log → RAG `compile_fix` / `module_fix` / `reflection_fix`
 
-## Rider-specific
+## Safety
 
-- Prefer Rider **Build** / **Rebuild** for day-to-day compile; use agent UBT when Cline automates patches.
-- Discover targets from `.uproject`, `*.Target.cs`, Rider run configuration, or README.
-- Open the same repo root in Rider and in the editor where Cline runs.
-
-## Accuracy gates
-
-- `*.generated.h` last in reflected headers
-- No reflected types in namespaces
-- `CreateDefaultSubobject` only in constructors
-- RPC `_Implementation` in `.cpp`
-- Build.cs matches includes
-
-## Refactor stages
-
-- R0 plan only (`refactor_plan_validate`, `refactor_impact_scan`)
-- R1–R3 max 3 files/turn; R4 max 5
-- Prototype: one component/subsystem, max 3 files
+- Single-file edits only (`apply_edit_bundle` disabled in stable installs)
+- Never retry the same `unreal_rag_search` when `repeatDetected=true`
+- Prefer Rider Build over `run_command`
 
 ## Finish criteria
 

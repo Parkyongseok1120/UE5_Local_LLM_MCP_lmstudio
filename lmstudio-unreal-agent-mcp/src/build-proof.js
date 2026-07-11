@@ -20,24 +20,34 @@ function maxActionTotal(pattern, text) {
   return total;
 }
 
+function countMatches(pattern, text) {
+  return [...text.matchAll(new RegExp(pattern, "gi"))].length;
+}
+
 function parseBuildProof(ok, output, { logPath = "" } = {}) {
   const text = String(output || "");
+  const compileLineCount = countMatches(COMPILE_ACTION_PATTERN, text);
+  const linkLineCount = countMatches(LINK_ACTION_PATTERN, text);
   const compileActionCount = maxActionTotal(COMPILE_ACTION_PATTERN, text);
   const linkActionCount = maxActionTotal(LINK_ACTION_PATTERN, text);
   const runActionsMatch = text.match(RUN_ACTIONS_PATTERN);
   const buildingActionsMatch = text.match(BUILDING_ACTIONS_PATTERN);
-  const summaryActionCount = Math.max(
+  const declaredTotalActions = Math.max(
     runActionsMatch ? Number(runActionsMatch[1] || 0) : 0,
     buildingActionsMatch ? Number(buildingActionsMatch[1] || 0) : 0,
+    compileActionCount,
+    linkActionCount,
   );
-  const actionCount = Math.max(compileActionCount + linkActionCount, summaryActionCount);
+  const highestObservedActionIndex = Math.max(compileActionCount, linkActionCount);
+  const hasCompileOrLinkEvidence = compileLineCount > 0 || linkLineCount > 0;
+  const executorSetupSeen = EXECUTOR_SETUP_PATTERNS.some((pattern) => pattern.test(text));
+  const executorOnly = executorSetupSeen && !hasCompileOrLinkEvidence;
   const targetUpToDate = Boolean(ok && UP_TO_DATE_PATTERN.test(text));
-  const executorOnly = EXECUTOR_SETUP_PATTERNS.some((pattern) => pattern.test(text));
 
   let proofLevel;
   if (!ok) {
     proofLevel = "Failed";
-  } else if (actionCount > 0 && !executorOnly) {
+  } else if (hasCompileOrLinkEvidence) {
     proofLevel = "Built";
   } else if (targetUpToDate) {
     proofLevel = "BuiltStale";
@@ -48,9 +58,14 @@ function parseBuildProof(ok, output, { logPath = "" } = {}) {
   return {
     ok: Boolean(ok),
     targetUpToDate,
-    actionCount,
+    actionCount: highestObservedActionIndex,
+    compileLineCount,
+    linkLineCount,
+    declaredTotalActions,
+    highestObservedActionIndex,
     compileActionCount,
     linkActionCount,
+    executorOnly,
     proofLevel,
     logPath,
   };

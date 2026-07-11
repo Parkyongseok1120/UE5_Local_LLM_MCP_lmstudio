@@ -28,12 +28,11 @@ def test_essential_tools_subset_of_inventory() -> None:
     assert essential.issubset(set(RAG_ESSENTIAL_TOOLS))
 
 
-def test_python_exposure_inventory_has_task_tools() -> None:
+def test_python_exposure_inventory_includes_hidden_tools() -> None:
     inventory = exposure_inventory()
     names = set(inventory.get("ragMcpTools") or [])
     for tool in (
         "unreal_task_start",
-        "unreal_task_status",
         "unreal_project_status",
         "unreal_job_log_read",
     ):
@@ -60,3 +59,8 @@ def test_node_build_proof_unit() -> None:
         shell=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_manifest_matches_node_essential_tools() -> None:
+    manifest = json.loads((ROOT / "config" / "stable_tool_manifest.json").read_text(encoding="utf-8-sig"))
+    assert _node_essential_tools() == set(manifest["agentEssential"])

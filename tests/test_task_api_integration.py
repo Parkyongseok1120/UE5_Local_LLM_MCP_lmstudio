@@ -59,3 +59,6 @@ def test_task_state_persisted(tmp_path: Path) -> None:
     assert state_path.is_file()
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["authToken"]
+    status = task_status(tmp_path, task_id)
+    assert "authToken" not in status
+    assert "authToken" not in status.get("state", {})

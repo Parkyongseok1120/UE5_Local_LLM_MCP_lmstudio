@@ -17,11 +17,33 @@ from plan_slice_state import (  # noqa: E402
 )
 
 
+def test_executor_setup_with_compile_yields_built() -> None:
+    output = (
+        "Executing up to 16 processes, one per physical core\n"
+        "Building 4 actions with 4 processes\n"
+        "[1/4] Compile Demo.cpp"
+    )
+    proof = parse_build_proof(True, output)
+    assert proof["proofLevel"] == "Built"
+    assert proof["compileLineCount"] == 1
+    assert proof["executorOnly"] is False
+
+
 def test_executor_setup_lines_do_not_yield_built() -> None:
     output = "Executing up to 16 processes, one per physical core\nBuilding 4 actions with 4 processes"
     proof = parse_build_proof(True, output)
     assert proof["proofLevel"] != "Built"
     assert proof["proofLevel"] == "BuiltUnverified"
+    assert proof["executorOnly"] is True
+
+
+def test_large_action_denominator_does_not_inflate_compile_count() -> None:
+    output = "[1/100] Compile Demo.cpp"
+    proof = parse_build_proof(True, output)
+    assert proof["compileLineCount"] == 1
+    assert proof["declaredTotalActions"] == 100
+    assert proof["actionCount"] == 100
+    assert proof["proofLevel"] == "Built"
 
 
 def test_zero_actions_yields_built_stale() -> None:

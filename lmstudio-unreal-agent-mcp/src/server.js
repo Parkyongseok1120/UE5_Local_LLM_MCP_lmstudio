@@ -169,10 +169,10 @@ const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
   "replace_in_file",
   "write_file",
   "search_files",
+  "static_validate_project",
   "build_unreal_project",
   "read_unreal_logs",
-  "write_session_handoff",
-  "record_bootstrap_step"
+  "write_session_handoff"
 ]);
 const EXTENDED_AGENT_TOOL_NAMES = new Set([
   "set_active_project",
@@ -184,8 +184,14 @@ const EXTENDED_AGENT_TOOL_NAMES = new Set([
   "refactor_plan_validate",
   "propose_file_deletions",
   "delete_file",
-  "static_validate_project"
+  "record_bootstrap_step"
 ]);
+const STABLE_HIDDEN_AGENT_TOOL_NAMES = new Set([
+  "apply_edit_bundle"
+]);
+const CONTROL_PLANE_TOOLS = ["1", "true", "yes", "on"].includes(
+  String(process.env.ALLOW_CONTROL_PLANE_TOOLS || "").trim().toLowerCase()
+);
 const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
 const fileCache = new Map();
 const readEvidence = new Map();
@@ -253,7 +259,9 @@ function text(content) {
 }
 
 function fail(message, options = {}) {
-  return text(JSON.stringify(errorPayload(message, options), null, 2));
+  const result = text(JSON.stringify(errorPayload(message, options), null, 2));
+  result.isError = true;
+  return result;
 }
 
 async function agentNotify(message, level = "info") {
@@ -268,6 +276,9 @@ async function agentNotify(message, level = "info") {
 }
 
 function enforceTaskAuth(args) {
+  if (!CONTROL_PLANE_TOOLS) {
+    return null;
+  }
   const auth = validateMutationAuth(WORKSPACE_ROOT, args || {});
   if (!auth.ok && !auth.skipped) {
     return fail(auth.error || "Task authorization failed.", { taskSessionId: auth.taskSessionId });
@@ -439,13 +450,17 @@ function validationFailed(validation) {
 }
 
 function filterAgentTools(tools) {
+  let filtered = tools;
+  if (!CONTROL_PLANE_TOOLS) {
+    filtered = filtered.filter((tool) => !STABLE_HIDDEN_AGENT_TOOL_NAMES.has(tool.name));
+  }
   if (MCP_EXTENDED_TOOLS) {
-    return tools;
+    return filtered;
   }
   if (MCP_ESSENTIAL_TOOLS) {
-    return tools.filter((tool) => ESSENTIAL_AGENT_TOOL_NAMES.has(tool.name));
+    return filtered.filter((tool) => ESSENTIAL_AGENT_TOOL_NAMES.has(tool.name));
   }
-  return tools.filter((tool) => !EXTENDED_AGENT_TOOL_NAMES.has(tool.name));
+  return filtered.filter((tool) => !EXTENDED_AGENT_TOOL_NAMES.has(tool.name));
 }
 
 function truncateOutput(s, maxBytes = MAX_OUTPUT_BYTES) {

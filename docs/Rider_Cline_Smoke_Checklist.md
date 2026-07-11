@@ -1,6 +1,6 @@
-# Rider + Cline Smoke Checklist
+# Rider + Cline Smoke Checklist (stable install)
 
-Use this after `installer\Install-ClineUnrealMcp.ps1 -All` (or `Install-UnrealMcp.ps1 -InstallCline`).
+Use after `installer\Install-ClineUnrealMcp.ps1 -All` (or `Install-UnrealMcp.ps1 -InstallCline`).
 
 ## Prerequisites
 
@@ -16,42 +16,38 @@ Use this after `installer\Install-ClineUnrealMcp.ps1 -All` (or `Install-UnrealMc
 python scripts\rag_doctor.py
 ```
 
-- [ ] `unreal-rag` and `unreal-agent` appear in Cline MCP settings with **no** `{REPO_ROOT}` / `{PYTHON_EXE}` placeholders
+- [ ] `unreal-rag` and `unreal-agent` in Cline MCP settings with **no** `{REPO_ROOT}` / `{PYTHON_EXE}` placeholders
+- [ ] Existing non-Unreal MCP servers preserved after Cline reinstall
 - [ ] `.clinerules` present in RAG repo root
 
 ## MCP health
 
-In Cline chat:
-
 1. [ ] `unreal_rag_health` — index exists, chunk count > 0
 2. [ ] `unreal_get_active_project` — returns your `.uproject` or clear message
-3. [ ] `unreal_project_status` — `ready` or clear `syncReason`
+3. [ ] `unreal_set_active_project` — set project via RAG MCP (canonical path)
+4. [ ] `unreal_project_status` — `ready` or clear `syncReason`
 
-## Read / validate
+## Read / validate / edit
 
-4. [ ] Agent MCP `read_file` on a known `Source/*.cpp` path
-5. [ ] Agent MCP `static_validate_project` — returns pass or actionable errors
-
-## Task lifecycle
-
-6. [ ] `unreal_task_start` with a short request — returns `phase=planning`, `taskSessionId`, `authToken`
-7. [ ] `unreal_task_status` — same task shows `userMessage` and `cancellable=true`
-8. [ ] `unreal_task_cancel` — status becomes `cancelled`; if a background job was started, it stops
+5. [ ] Agent MCP `read_file` on a known `Source/*.cpp` path
+6. [ ] Agent MCP `replace_in_file` with `expectedOccurrences=1` on a trivial comment
+7. [ ] Agent MCP `static_validate_project` — pass or actionable errors (Essential tool)
 
 ## Build (Rider preferred)
 
-9. [ ] Build from **Rider** (Build → Build Project) after a trivial comment edit
-10. [ ] Optional: Agent MCP `build_unreal_project` when `ALLOW_UNREAL_BUILD=1` — shows progress notification and `phase` in JSON
+8. [ ] Build from **Rider** (Build → Build Project) after the trivial edit
+9. [ ] Optional: Agent MCP `build_unreal_project` when `ALLOW_UNREAL_BUILD=1`
 
-## Project switch
+## Validation dirty recovery
 
-11. [ ] `unreal_set_active_project` with `prepare=true` — returns `readiness` / `cacheInvalidation`
-12. [ ] Agent MCP `set_active_project` — same project, no stale RAG after switch
+10. [ ] If write validation times out, `static_validate_project` clears dirty gate and build proceeds
 
 ## Pass criteria
 
-All checked items succeed without manual JSON editing. If Cline shows unresolved paths, re-run:
+All checked items succeed without manual JSON editing. If Cline shows unresolved paths:
 
 ```powershell
 .\installer\Install-ClineUnrealMcp.ps1 -All [-EnableAgentMode]
 ```
+
+Re-run with `-WhatIf` first to preview MCP server key changes.

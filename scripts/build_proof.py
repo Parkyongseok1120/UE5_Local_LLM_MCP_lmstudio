@@ -35,21 +35,27 @@ def parse_build_proof(
     log_path: str = "",
 ) -> dict[str, Any]:
     text = str(output or "")
+    compile_line_count = len(COMPILE_ACTION_PATTERN.findall(text))
+    link_line_count = len(LINK_ACTION_PATTERN.findall(text))
     compile_action_count = _max_action_total(COMPILE_ACTION_PATTERN, text)
     link_action_count = _max_action_total(LINK_ACTION_PATTERN, text)
     run_match = RUN_ACTIONS_PATTERN.search(text)
     building_match = BUILDING_ACTIONS_PATTERN.search(text)
-    summary_action_count = max(
+    declared_total_actions = max(
         int(run_match.group(1)) if run_match else 0,
         int(building_match.group(1)) if building_match else 0,
+        compile_action_count,
+        link_action_count,
     )
-    action_count = max(compile_action_count + link_action_count, summary_action_count)
+    highest_observed_action_index = max(compile_action_count, link_action_count)
+    has_compile_or_link_evidence = compile_line_count > 0 or link_line_count > 0
+    executor_setup_seen = any(re.search(pattern, text, re.IGNORECASE) for pattern in EXECUTOR_SETUP_PATTERNS)
+    executor_only = executor_setup_seen and not has_compile_or_link_evidence
     target_up_to_date = bool(ok and UP_TO_DATE_PATTERN.search(text))
-    executor_only = any(re.search(pattern, text, re.IGNORECASE) for pattern in EXECUTOR_SETUP_PATTERNS)
 
     if not ok:
         proof_level = "Failed"
-    elif action_count > 0 and not executor_only:
+    elif has_compile_or_link_evidence:
         proof_level = "Built"
     elif target_up_to_date:
         proof_level = "BuiltStale"
@@ -59,9 +65,14 @@ def parse_build_proof(
     return {
         "ok": bool(ok),
         "targetUpToDate": target_up_to_date,
-        "actionCount": action_count,
+        "actionCount": highest_observed_action_index,
+        "compileLineCount": compile_line_count,
+        "linkLineCount": link_line_count,
+        "declaredTotalActions": declared_total_actions,
+        "highestObservedActionIndex": highest_observed_action_index,
         "compileActionCount": compile_action_count,
         "linkActionCount": link_action_count,
+        "executorOnly": executor_only,
         "proofLevel": proof_level,
         "logPath": log_path,
     }

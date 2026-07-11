@@ -58,6 +58,19 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
     status = str(state.get("status") or "unknown")
     active_job_id = str(state.get("activeJobId") or "").strip() or None
 
+    if status in {"cancelled", "failed", "completed", "awaiting_approval"}:
+        mapping = STATUS_TO_PHASE.get(status)
+        if mapping:
+            phase, msg, msg_ko, cancellable, resume = mapping
+            return phase_payload(
+                phase=phase,
+                user_message=msg,
+                user_message_ko=msg_ko,
+                cancellable=cancellable,
+                resume_action=resume,
+                active_job_id=active_job_id,
+            )
+
     if job and str(job.get("status") or "") in {"created", "starting", "queued", "running"}:
         job_status = str(job.get("status") or "running")
         phase, msg, msg_ko = JOB_STATUS_TO_PHASE.get(job_status, ("building", "Working", "작업 진행 중"))

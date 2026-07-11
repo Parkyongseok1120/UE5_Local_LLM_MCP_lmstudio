@@ -5,7 +5,8 @@ param(
     [switch]$VsCode,
     [switch]$Cli,
     [switch]$All,
-    [switch]$EnableAgentMode
+    [switch]$EnableAgentMode,
+    [switch]$WhatIf
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,8 +19,6 @@ if (-not $VsCode -and -not $Cli) {
 . (Join-Path $PSScriptRoot "Install-PathHelpers.ps1")
 
 function Find-PythonExe {
-    $bundled = Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
-    if (Test-Path $bundled) { return $bundled }
     foreach ($path in @(
             (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
             (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
@@ -47,12 +46,34 @@ function Find-NodeExe {
     throw "Node.js 20+ not found."
 }
 
+function Assert-PythonVersion([string]$PythonExe) {
+    $ver = & $PythonExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Cannot run Python at: $PythonExe" }
+    $parts = $ver.Trim().Split(".")
+    $major = [int]$parts[0]; $minor = [int]$parts[1]
+    if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 10)) {
+        throw "Python 3.10+ required (found $ver)."
+    }
+    Write-Host "Python version: $ver OK"
+}
+
+function Assert-NodeVersion([string]$NodeExe) {
+    $ver = & $NodeExe --version 2>&1 | Out-String
+    if ($ver -match "v(\d+)\.") {
+        $major = [int]$Matches[1]
+        if ($major -lt 20) { throw "Node.js 20+ required, found: $($ver.Trim())" }
+    }
+    Write-Host "Node version: $($ver.Trim()) OK"
+}
+
 $layout = Resolve-StackLayout $PortableRoot
 $ragRoot = $layout.RagRoot
 $agentRoot = $layout.AgentRoot
 $root = $layout.Root
 $python = Find-PythonExe
 $node = Find-NodeExe
+Assert-PythonVersion $python
+Assert-NodeVersion $node
 $lmHome = if ($LmStudioHome) { (Resolve-Path $LmStudioHome).Path } else { Join-Path $HOME ".lmstudio" }
 $docsRoot = if ($DocumentsRoot) { $DocumentsRoot } else { Join-Path $HOME "Documents" }
 $sharedConfigPath = Join-Path $lmHome "config\unreal-workspace.json"
@@ -72,16 +93,22 @@ $result = Sync-ClineMcpSettings `
     -PortableRoot $root `
     -EnableAgentMode:$EnableAgentMode `
     -WriteVsCode:($All -or $VsCode) `
-    -WriteCli:($All -or $Cli)
+    -WriteCli:($All -or $Cli) `
+    -WhatIf:$WhatIf
 
-foreach ($path in @($result.VsCodePath, $result.CliPath)) {
-    if ($path) {
-        Write-Host "Updated: $path" -ForegroundColor Green
+if (-not $WhatIf) {
+    foreach ($path in @($result.VsCodePath, $result.CliPath)) {
+        if ($path) {
+            Write-Host "Updated: $path" -ForegroundColor Green
+        }
     }
 }
 
 Write-Host ""
 Write-Host "=== Cline MCP install complete ==="
+if ($WhatIf) {
+    Write-Host "WhatIf mode — no files were written." -ForegroundColor Cyan
+}
 Write-Host "Restart Cline and confirm unreal-rag + unreal-agent appear in MCP Servers."
 if (-not $EnableAgentMode) {
     Write-Host "Safe mode (read-only agent). Re-run with -EnableAgentMode for writes/builds." -ForegroundColor Cyan
