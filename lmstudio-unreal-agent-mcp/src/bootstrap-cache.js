@@ -35,7 +35,7 @@ function mergeBootstrapCache(existing, patch) {
   const workspaceChanged = Boolean(
     patch.workspaceHash && existing?.workspaceHash && patch.workspaceHash !== existing.workspaceHash
   );
-  const ageMs = existing ? Date.now() - Number(existing.cachedAt || 0) : Number.POSITIVE_INFINITY;
+  const ageMs = existing?.cachedAt ? Date.now() - Number(existing.cachedAt) : 0;
   const ttlMs = Number(existing?.ttlSec || 3600) * 1000;
   const expired = Boolean(existing && BOOTSTRAP_CACHE_TTL_MS > 0 && ageMs > ttlMs);
   const reset = projectChanged || workspaceChanged || expired || patch.forceRefresh === true;

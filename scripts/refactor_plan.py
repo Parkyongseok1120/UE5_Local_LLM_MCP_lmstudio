@@ -55,7 +55,6 @@ MEDIUM_MARKERS = (
 LARGE_MARKERS = (
     "architecture",
     "module boundary",
-    "plugin",
     "blueprint",
     "asset rename",
     "dataasset",
@@ -384,18 +383,32 @@ def extract_refactor_symbols(text: str) -> list[str]:
 
 
 def _source_candidates(root: Path) -> list[Path]:
-    skip = {"Binaries", "Intermediate", "Saved", "DerivedDataCache", ".git"}
+    try:
+        from plugin_project_context import iter_scan_root_files, resolve_scan_roots
+
+        scan_roots = resolve_scan_roots(root)
+        paths: list[Path] = []
+        skip = {"Binaries", "Intermediate", "Saved", "DerivedDataCache", ".git", "ThirdParty"}
+        for scan_root in scan_roots:
+            if not scan_root.is_dir():
+                continue
+            for path in iter_scan_root_files(scan_root, skip_dirs=skip):
+                paths.append(path)
+        return sorted(set(paths))
+    except Exception:
+        pass
+
+    skip = {"Binaries", "Intermediate", "Saved", "DerivedDataCache", ".git", "ThirdParty"}
     suffixes = {".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"}
+    scan_roots = [root / "Source"] if (root / "Source").is_dir() else []
     paths: list[Path] = []
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in skip for part in path.parts):
-            continue
-        if path.suffix.lower() not in suffixes and not path.name.endswith(".Build.cs"):
-            continue
-        paths.append(path)
-    return paths
+    for scan_root in scan_roots:
+        for path in scan_root.rglob("*"):
+            if not path.is_file() or any(part in skip for part in path.parts):
+                continue
+            if path.suffix.lower() in suffixes or path.name.endswith(".Build.cs"):
+                paths.append(path)
+    return sorted(set(paths))
 
 
 def scan_symbol_impact(project_root: str, symbol: str, *, max_files: int = 40) -> dict[str, Any]:
@@ -407,31 +420,8 @@ def scan_symbol_impact(project_root: str, symbol: str, *, max_files: int = 40) -
     if len(query) < 2:
         return {"ok": False, "error": "symbol must be at least 2 characters", "matches": []}
 
-    # Try clangd references on first matching file when compile_commands exists.
-    try:
-        from clangd_helper import find_compile_commands, find_references
-
-        cc = find_compile_commands(root)
-        if cc:
-            for path in root.rglob("*.h"):
-                if any(p in path.parts for p in ("Intermediate", "Binaries", "Saved")):
-                    continue
-                text = path.read_text(encoding="utf-8", errors="ignore")
-                if query not in text:
-                    continue
-                rel = str(path.relative_to(root))
-                line = next((i + 1 for i, ln in enumerate(text.splitlines()) if query in ln), 1)
-                refs = find_references(root, rel, line)
-                if refs.get("ok") and refs.get("references"):
-                    return {
-                        "ok": True,
-                        "symbol": query,
-                        "method": "clangd_references",
-                        "matches": [{"path": str(root), "referenceCount": len(refs["references"])}],
-                    }
-    except Exception:
-        pass
-
+    # The masked-text scan remains the canonical schema. Clangd may be used by a
+    # higher-level caller, but must not return a reduced payload without roles/risks.
     matches: list[dict[str, Any]] = []
     role_counts: dict[str, int] = {}
     risk_counts: dict[str, int] = {}

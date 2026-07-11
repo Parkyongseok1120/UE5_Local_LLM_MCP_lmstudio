@@ -52,10 +52,14 @@ class IncludeResolution:
 
 def _module_name_from_path(path: Path, project_root: Path) -> str:
     try:
-        rel = path.relative_to(project_root / "Source")
-        return rel.parts[0] if rel.parts else ""
+        parts = path.resolve().relative_to(project_root.resolve()).parts
     except ValueError:
         return ""
+    if len(parts) >= 2 and parts[0].lower() == "source":
+        return parts[1]
+    if len(parts) >= 4 and parts[0].lower() == "plugins" and parts[2].lower() == "source":
+        return parts[3]
+    return ""
 
 
 def project_relative_include(declaring_file: Path, project_root: Path) -> str:

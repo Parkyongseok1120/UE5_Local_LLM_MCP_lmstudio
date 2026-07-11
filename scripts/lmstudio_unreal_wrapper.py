@@ -1396,10 +1396,8 @@ def build_static_autofix_steps(mode: str) -> list[AutofixStep]:
 
 
 def edit_limits_for_mode(base_limits: dict[str, Any], mode: str) -> dict[str, Any]:
-    limits = dict(base_limits or {})
-    if str(mode or "") == "multifile_refactor":
-        limits["maxFilesPerEdit"] = max(int(limits.get("maxFilesPerEdit") or 2), 4)
-    return limits
+    # Model profiles are the authority. Multifile work advances through 2-file slices.
+    return dict(base_limits or {})
 
 
 def only_build_cs_changed(before: dict[str, str], after: dict[str, str]) -> bool:
@@ -3627,6 +3625,7 @@ def run(args: argparse.Namespace) -> int:
                     load_slice_state,
                     mark_slice_complete,
                     next_slice_prompt,
+                    proof_level_from_build_output,
                     save_slice_state,
                 )
 
@@ -3639,6 +3638,7 @@ def run(args: argparse.Namespace) -> int:
                     project_root=project_root,
                     written_paths=last_written,
                     plan_slices=agent_plan.plan_slices,
+                    proof_level=proof_level_from_build_output(last_build.ok, last_build.output),
                 )
                 save_slice_state(slice_path, slice_state)
                 if int(slice_state.get("activeSliceIndex") or 0) < len(agent_plan.plan_slices):

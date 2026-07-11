@@ -13,6 +13,7 @@ from typing import Any, Literal
 TaskKind = Literal[
     "answer_only",
     "inspect_only",
+    "cpp_analysis",
     "code_sketch",
     "edit",
     "compile_fix",
@@ -91,6 +92,17 @@ CPP_REVIEW_TOOL_POLICY = tool_sequence_for_task(PROJECT_SOURCE_ANALYSIS_POLICY_K
     "answer_with_evidence",
 ]
 API_MARKERS = ("what is", "how does", "api", "lookup", "documentation", "explain")
+CPP_ANALYSIS_MARKERS = (
+    "cpp", "c++", ".h", ".cpp", "source", "class", "function", "component", "subsystem",
+    "current project", "existing system", "project code",
+    "\uD604\uC7AC \uD504\uB85C\uC81D\uD2B8", "\uD604\uC7AC \uC2DC\uC2A4\uD15C", "\uD504\uB85C\uC81D\uD2B8 \uCF54\uB4DC",
+    "\uC18C\uC2A4 \uCF54\uB4DC", "\uD074\uB798\uC2A4", "\uD568\uC218",
+)
+PROJECT_SPECIFIC_MARKERS = (
+    "current", "existing", "this code", "project",
+    "\uD604\uC7AC", "\uAE30\uC874", "\uC774 \uCF54\uB4DC", "\uD504\uB85C\uC81D\uD2B8",
+    "fix this", "improve this", "\uACE0\uCE58", "\uAC1C\uC120", "\uB9AC\uD329\uD130\uB9C1",
+)
 
 
 @dataclass
@@ -127,9 +139,11 @@ class AgentPlan:
     symbol_graph_hints: list[dict[str, Any]] = field(default_factory=list)
     refactor_manager: dict[str, Any] = field(default_factory=dict)
     domain_kind: str = "generic"
+    domain_profile: dict[str, Any] = field(default_factory=dict)
     plan_slices: list[dict[str, Any]] = field(default_factory=list)
     fix_evidence: dict[str, Any] = field(default_factory=dict)
     ambiguity_gate: dict[str, Any] = field(default_factory=dict)
+    source_evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -147,12 +161,16 @@ class AgentPlan:
             "notes": self.notes,
             "domainKind": self.domain_kind,
         }
+        if self.domain_profile:
+            payload["domainProfile"] = self.domain_profile
         if self.plan_slices:
             payload["planSlices"] = self.plan_slices
         if self.fix_evidence:
             payload["fixEvidence"] = self.fix_evidence
         if self.ambiguity_gate:
             payload["ambiguityGate"] = self.ambiguity_gate
+        if self.source_evidence:
+            payload["sourceEvidence"] = self.source_evidence
         if self.error_route:
             payload["errorRoute"] = self.error_route
         if self.module_hints:
@@ -177,6 +195,10 @@ def _is_runtime_symptom_analysis(text: str) -> bool:
     return any(m in text for m in runtime_symptom) and any(m in text for m in RUNTIME_MARKERS)
 
 
+def _is_project_specific(text: str) -> bool:
+    return any(marker in text for marker in PROJECT_SPECIFIC_MARKERS)
+
+
 def classify_task(request: str, mode: str = "auto") -> TaskKind:
     text = f"{mode} {request}".lower()
     if mode in {"refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4"}:
@@ -187,6 +209,8 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "inspect_only"
     if mode == "runtime_debug":
         return "runtime_debug"
+    if mode in {"cpp_analysis", "code_analysis"}:
+        return "cpp_analysis"
     if mode in {"review", "planning"}:
         return "inspect_only"
     if mode == "code_sketch":
@@ -203,6 +227,12 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "runtime_debug"
     if any(m in text for m in ASSET_ANALYSIS_MARKERS) and not _has_write_intent(text):
         return "inspect_only"
+    if (
+        any(m in text for m in (*REVIEW_MARKERS, *ANALYSIS_MARKERS))
+        and any(m in text for m in CPP_ANALYSIS_MARKERS)
+        and not _has_write_intent(text)
+    ):
+        return "cpp_analysis"
     if any(m in text for m in REVIEW_MARKERS):
         return "inspect_only"
     if any(m in text for m in ANALYSIS_MARKERS) and not _has_write_intent(text):
@@ -217,7 +247,7 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
 
 
 def choose_edit_strategy(task_kind: TaskKind, request: str, *, file_count_hint: int = 0) -> EditStrategy:
-    if task_kind in {"answer_only", "inspect_only", "code_sketch"}:
+    if task_kind in {"answer_only", "inspect_only", "cpp_analysis", "code_sketch"}:
         return "no_edit"
     if task_kind == "compile_fix":
         return "exact_patch"
@@ -226,7 +256,7 @@ def choose_edit_strategy(task_kind: TaskKind, request: str, *, file_count_hint: 
     if file_count_hint == 0 and "new file" in request.lower():
         return "new_file"
     if file_count_hint == 1:
-        return "full_rewrite_small"
+        return "exact_patch"
     return "exact_patch"
 
 
@@ -251,6 +281,12 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.writes_allowed = False
         plan.confidence = 0.6
         plan.files_to_read.append("Source/**/*.h")
+    elif task_kind == "cpp_analysis":
+        plan.rag_modes = ["review", "planning"]
+        plan.gates = ["direct_source_evidence", "unreal_review_claim_validate"]
+        plan.files_to_read.extend(["project://Source/**/*.h", "project://Source/**/*.cpp"])
+        plan.writes_allowed = False
+        plan.confidence = 0.7
     elif task_kind == "inspect_only":
         if mode in ASSET_METADATA_MODES:
             plan.rag_modes = [mode, "review"]
@@ -502,6 +538,13 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
             "Keep proof level at Proposed; do not claim it compiles or runs. Do not "
             "write files.",
         ]
+    if task_kind == "cpp_analysis":
+        return common + [
+            "Read current project .h/.cpp files before diagnosis; RAG is background/API evidence only.",
+            "Record project-relative files and line ranges in sourceEvidence.filesRead.",
+            "If direct source reads fail or filesRead is empty, stop without code or project claims.",
+            "Read header, cpp, and relevant callsites for cross-file lifecycle/API claims.",
+        ]
     if task_kind == "inspect_only":
         asset_steps = [
             "Call unreal_editor_metadata_status before material/blueprint wire claims.",
@@ -548,15 +591,18 @@ def build_stop_conditions(task_kind: TaskKind) -> list[str]:
             "what log/header/export would confirm it; do not guess an API name.",
             "Do not write files or claim the sketch compiles or runs.",
         ]
-    if task_kind in {"answer_only", "inspect_only", "runtime_debug"}:
+    if task_kind in {"answer_only", "inspect_only", "cpp_analysis", "runtime_debug"}:
         return [
             "Stop after evidence-backed answer or findings.",
             "If target Source files were already read, answer from direct file evidence; label stale RAG as background-only.",
             "Do not repeat unreal_rag_search while only saying refresh is needed.",
             "If evidence is missing, report the exact missing file/log/index instead of guessing.",
+            "For cpp_analysis, zero direct source reads is a hard stop; never substitute RAG snippets.",
         ]
     return [
-        "Stop when build_unreal_project succeeds.",
+        "Stop only when build_unreal_project returns proofLevel=Built for the current changed-file set.",
+        "BuiltStale and BuiltUnverified do not complete a compile-oriented plan slice.",
+        "Runtime-oriented work remains runtimePending until PIE/runtime evidence is recorded.",
         "If build fails, report the first actionable error line and retry with compile_fix RAG.",
         "If required file or activeProject is missing, stop and report the blocker.",
     ]
@@ -658,11 +704,11 @@ def build_suggested_tool_calls(
             )
         return calls
 
-    if task_kind == "inspect_only" and (
+    if task_kind in {"inspect_only", "cpp_analysis"} and (
         any(marker in lower for marker in REVIEW_MARKERS)
         or any(marker in lower for marker in ANALYSIS_MARKERS)
     ):
-        browse_path = str(project_context.get("sourceBrowsePath") or "Source")
+        browse_path = "project://Source"
         search_term = "Cinematic" if "시네마틱" in lower or "cinematic" in lower else text
         calls = [{"tool": "unreal_get_active_project", "args": {}}]
         calls.append({"tool": "search_files", "args": {"query": search_term, "path": browse_path}})
@@ -713,10 +759,12 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         strategy = "no_edit"
     if task_kind == "code_sketch":
         tool_policy_key = "code_sketch"
-    elif task_kind == "inspect_only":
+    elif task_kind in {"inspect_only", "cpp_analysis"}:
         from code_hint_resolver import looks_like_cpp_domain_request
 
-        if mode in ASSET_METADATA_MODES:
+        if task_kind == "cpp_analysis":
+            tool_policy_key = PROJECT_SOURCE_ANALYSIS_POLICY_KEY
+        elif mode in ASSET_METADATA_MODES:
             tool_policy_key = "asset_metadata_inspect"
         elif looks_like_cpp_domain_request(request) or any(m in request.lower() for m in ANALYSIS_MARKERS):
             tool_policy_key = PROJECT_SOURCE_ANALYSIS_POLICY_KEY
@@ -733,10 +781,10 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     tool_policy = tool_sequence_for_task(tool_policy_key) or tool_sequence_for_task(task_kind)
     if task_kind == "inspect_only" and mode in ASSET_METADATA_MODES:
         tool_policy = list(ASSET_METADATA_TOOL_POLICY)
-    elif task_kind == "inspect_only":
+    elif task_kind in {"inspect_only", "cpp_analysis"}:
         from code_hint_resolver import looks_like_cpp_domain_request
 
-        if looks_like_cpp_domain_request(request) or any(m in request.lower() for m in ANALYSIS_MARKERS):
+        if task_kind == "cpp_analysis" or looks_like_cpp_domain_request(request) or any(m in request.lower() for m in ANALYSIS_MARKERS):
             tool_policy = list(CPP_REVIEW_TOOL_POLICY)
     notes: list[str] = []
     module_hints = build_module_hints(request, project_context) if task_kind == "compile_fix" else []
@@ -744,11 +792,13 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     refactor_manager: dict[str, Any] = {}
     if task_kind == "refactor":
         try:
-            from refactor_plan import build_refactor_manager_plan
+            from refactor_plan import build_refactor_manager_plan, extract_refactor_symbols
 
+            refactor_symbols = list(dict.fromkeys([*evidence.symbols_to_scan, *extract_refactor_symbols(request)]))
             refactor_manager = build_refactor_manager_plan(
                 request,
-                symbols=evidence.symbols_to_scan,
+                project_root=str(project_context.get("projectDir") or "") or None,
+                symbols=refactor_symbols,
                 max_files=40,
             )
             refactor_scope = refactor_manager["scope"]
@@ -798,7 +848,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
 
     from domain_planner import (
         architecture_ambiguity_gate,
-        build_domain_slices,
+        build_domain_slice_dag,
         build_fix_evidence,
         build_domain_profile,
         detect_domain_kind,
@@ -807,7 +857,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
 
     domain_kind = detect_domain_kind(request, resolved_mode if resolved_mode != "auto" else mode)
     domain_profile = build_domain_profile(request, resolved_mode if resolved_mode != "auto" else mode)
-    plan_slices = [slice_.to_dict() for slice_ in build_domain_slices(domain_kind, request)]
+    plan_slices = [slice_.to_dict() for slice_ in build_domain_slice_dag(domain_profile, request)]
     fix_evidence = build_fix_evidence(
         request,
         error_route,
@@ -880,6 +930,20 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     if refactor_embedded and essential_tools_enabled():
         notes.append("Refactor manager results are embedded in refactorManager; do not call hidden refactor tools.")
 
+    source_required = task_kind in {"cpp_analysis", "refactor"} or (
+        task_kind in {"edit", "code_sketch"} and _is_project_specific(request.lower())
+    )
+    source_evidence = {
+        "required": source_required,
+        "sourceReadSucceeded": False,
+        "filesRead": [],
+        "claimPolicy": "fail_closed" if source_required else "generic_example_allowed",
+        "onMissing": (
+            "Stop without project diagnosis or code. Report the failed path, reason, and next read tool call."
+            if source_required else "Do not label generic examples as project-specific."
+        ),
+    }
+
     write_gate = build_write_gate(
         task_kind,
         evidence,
@@ -906,9 +970,11 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         symbol_graph_hints=symbol_graph_hints,
         refactor_manager=refactor_manager,
         domain_kind=domain_kind,
+        domain_profile=domain_profile.to_dict(),
         plan_slices=plan_slices,
         fix_evidence=fix_evidence,
         ambiguity_gate=ambiguity_gate,
+        source_evidence=source_evidence,
     )
     consistency_issues = validate_plan_consistency(plan)
     if consistency_issues:
@@ -996,7 +1062,7 @@ def verify_edit_allowed(plan: AgentPlan, *, files_count: int, patches_count: int
     issues: list[str] = []
     if plan.edit_strategy == "no_edit" and (files_count or patches_count):
         issues.append("Plan forbids edits but bundle contains file changes.")
-    if plan.task_kind in {"inspect_only", "code_sketch", "runtime_debug"} and (files_count or patches_count):
+    if plan.task_kind in {"inspect_only", "cpp_analysis", "code_sketch", "runtime_debug"} and (files_count or patches_count):
         issues.append(f"{plan.task_kind} task must not write files.")
     if not plan.write_gate.get("writesAllowed", plan.evidence.writes_allowed) and (files_count or patches_count):
         issues.append("Write gate forbids edits for this task.")

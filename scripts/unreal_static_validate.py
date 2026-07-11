@@ -59,7 +59,14 @@ def resolve_scan_roots(root: Path) -> list[Path]:
             plugin_source = root / "Plugins" / plugin / "Source"
             if plugin_source.is_dir():
                 roots.append(plugin_source)
-    return roots or [root]
+    if roots:
+        return roots
+    try:
+        from plugin_project_context import fallback_scan_roots
+
+        return fallback_scan_roots(root)
+    except Exception:
+        return []
 
 
 @dataclass
@@ -88,10 +95,18 @@ def should_ignore_project_path(path: Path) -> bool:
 
 def iter_source_files(root: Path, *, scan_roots: list[Path] | None = None) -> list[Path]:
     suffixes = {".h", ".hpp", ".cpp", ".c", ".cc", ".cs"}
-    files: list[Path] = []
+    try:
+        from plugin_project_context import iter_scan_root_files
+    except Exception:
+        iter_scan_root_files = None  # type: ignore[assignment]
+
     roots = scan_roots if scan_roots is not None else resolve_scan_roots(root)
+    files: list[Path] = []
     for scan_root in roots:
         if not scan_root.is_dir():
+            continue
+        if iter_scan_root_files is not None:
+            files.extend(iter_scan_root_files(scan_root, skip_dirs=IGNORED_PROJECT_DIRS))
             continue
         for path in scan_root.rglob("*"):
             if not path.is_file() or path.suffix.lower() not in suffixes:
@@ -148,29 +163,27 @@ def resolve_write_scope_paths(root: Path, write_target: str) -> list[Path]:
 
 def _source_module_root(path: Path, project_root: Path) -> Path | None:
     try:
-        rel = path.resolve().relative_to(project_root.resolve())
+        parts = path.resolve().relative_to(project_root.resolve()).parts
     except ValueError:
         return None
-    parts = rel.parts
-    if len(parts) < 2 or parts[0].lower() != "source":
-        return None
-    return (project_root / "Source" / parts[1]).resolve()
+    if len(parts) >= 2 and parts[0].lower() == "source":
+        return (project_root / parts[0] / parts[1]).resolve()
+    if len(parts) >= 4 and parts[0].lower() == "plugins" and parts[2].lower() == "source":
+        return (project_root / parts[0] / parts[1] / parts[2] / parts[3]).resolve()
+    return None
 
 
 def module_relative_key(path: Path, project_root: Path) -> str | None:
+    module_root = _source_module_root(path, project_root)
+    if module_root is None:
+        return None
     try:
-        rel = path.resolve().relative_to(project_root.resolve())
+        tail = list(path.resolve().relative_to(module_root).parts)
     except ValueError:
         return None
-    parts = rel.parts
-    if len(parts) < 3 or parts[0].lower() != "source":
-        return None
-    tail = list(parts[2:])
-    if tail and tail[0].lower() in {"public", "private"}:
+    if tail and tail[0].lower() in {"public", "private", "classes"}:
         tail = tail[1:]
-    if not tail:
-        return None
-    return "/".join(tail).replace("\\", "/")
+    return "/".join(tail).replace("\\", "/") if tail else None
 
 
 def _find_module_paired_files(
@@ -3011,6 +3024,7 @@ def _run_per_file_validators(
     skip_include_path_checks: bool,
     write_mode: bool = False,
     include_owner_map: dict[str, list[str]] | None = None,
+    domain_context: object | None = None,
 ) -> None:
     if path.name.endswith(".uplugin"):
         try:
@@ -3044,11 +3058,11 @@ def _run_per_file_validators(
                 validate_subsystem_lifecycle,
             )
 
-            findings.extend(validate_component_preflight(path, text, root))
-            findings.extend(validate_subsystem_lifecycle(path, text, root))
-            findings.extend(validate_replication_contract(path, text, root))
-            findings.extend(validate_gas_footprint(path, text, root))
-            findings.extend(validate_animation_notify_lifecycle(path, text, root))
+            findings.extend(validate_component_preflight(path, text, root, domain_context))
+            findings.extend(validate_subsystem_lifecycle(path, text, root, domain_context))
+            findings.extend(validate_replication_contract(path, text, root, domain_context))
+            findings.extend(validate_gas_footprint(path, text, root, domain_context))
+            findings.extend(validate_animation_notify_lifecycle(path, text, root, domain_context))
         except Exception:
             pass
     if path.suffix.lower() in {".h", ".hpp"}:
@@ -3115,6 +3129,9 @@ def validate_unreal_readiness(
     if scope_paths is not None:
         scope = sorted({path.resolve() for path in scope_paths if path.is_file()})
         texts = _read_scope_texts(scope)
+        from domain_validation_context import DomainValidationContext
+
+        domain_context = DomainValidationContext.from_project(root, paths=scope, texts=texts)
         headers = class_headers_from_paths(scope, texts)
         header_paths: dict[str, Path] = {}
         for path in scope:
@@ -3148,6 +3165,7 @@ def validate_unreal_readiness(
                 skip_include_path_checks=skip_include_path_checks,
                 write_mode=True,
                 include_owner_map=include_owner_map,
+                domain_context=domain_context,
             )
         findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
         if cpp_scope:
@@ -3178,8 +3196,12 @@ def validate_unreal_readiness(
     bases = class_bases(root)
     delegate_arity_map = build_delegate_arity_map(root)
     all_source_text = []
-    for path in iter_source_files(root):
-        text = read_text(path)
+    all_paths = iter_source_files(root)
+    from domain_validation_context import DomainValidationContext
+
+    domain_context = DomainValidationContext.from_project(root, paths=all_paths)
+    for path in all_paths:
+        text = domain_context.text_for(path)
         all_source_text.append(text)
         _run_per_file_validators(
             findings,
@@ -3192,6 +3214,7 @@ def validate_unreal_readiness(
             include_index=include_index,
             build_text_value=build_text_value,
             skip_include_path_checks=skip_include_path_checks,
+            domain_context=domain_context,
         )
     findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
     findings.extend(validate_include_owner_modules(root, build_text_value, include_owner_map))

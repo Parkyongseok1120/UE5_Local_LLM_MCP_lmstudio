@@ -32,6 +32,10 @@ class PlanSlice:
     files: list[str] = field(default_factory=list)
     postconditions: list[str] = field(default_factory=list)
     required_includes: list[str] = field(default_factory=list)
+    depends_on: list[str] = field(default_factory=list)
+    domain: str = "generic"
+    slice_kind: str = "compile"
+    required_validators: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -58,7 +62,7 @@ def _text_lower(text: str) -> str:
 DOMAIN_SIGNALS: dict[DomainKind, tuple[str, ...]] = {
     "component": ("component", "createdefaultsubobject", "uactorcomponent", "컴포넌트"),
     "subsystem": ("subsystem", "ugameinstancesubsystem", "uworldsubsystem", "서브시스템"),
-    "replication": ("replication", "onrep", "rpc", "doreplicated", "복제"),
+    "replication": ("replication", "replicate", "replicated", "networked", "onrep", "rpc", "doreplicated", "복제"),
     "gas": ("gameplay ability", "gas", "abilitysystem", "gameplayeffect", "attribute set"),
     "animation": ("animinstance", "animnotify", "notifystate", "animation blueprint", "애니"),
     "architecture": ("architecture", "ownership", "lifetime", "authority", "아키텍처"),
@@ -69,42 +73,73 @@ DOMAIN_SIGNALS: dict[DomainKind, tuple[str, ...]] = {
 class DomainProfile:
     primary: DomainKind
     scores: dict[str, float]
+    secondary_domains: list[DomainKind] = field(default_factory=list)
+    confidence: float = 0.0
     mixed: bool = False
     architecture_required: bool = False
+    network_sensitive: bool = False
+    asset_metadata_required: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "primary": self.primary,
+            "primaryDomain": self.primary,
+            "secondaryDomains": list(self.secondary_domains),
             "scores": self.scores,
+            "confidence": self.confidence,
             "mixed": self.mixed,
             "architectureRequired": self.architecture_required,
+            "networkSensitive": self.network_sensitive,
+            "assetMetadataRequired": self.asset_metadata_required,
         }
+
+
+def _marker_present(text: str, marker: str) -> bool:
+    if marker.isascii() and re.fullmatch(r"[a-z0-9_ ]+", marker):
+        return bool(re.search(rf"(?<![A-Za-z0-9_]){re.escape(marker)}(?![A-Za-z0-9_])", text))
+    return marker in text
 
 
 def build_domain_profile(request: str, mode: str = "auto") -> DomainProfile:
     text = _text_lower(f"{mode} {request}")
     scores: dict[str, float] = {"generic": 0.1}
     for kind, markers in DOMAIN_SIGNALS.items():
-        hits = sum(1 for marker in markers if marker in text)
+        hits = sum(1 for marker in markers if _marker_present(text, marker))
         if hits:
             scores[kind] = min(0.35 + hits * 0.2, 1.0)
-    if mode in {"prototype_component"}:
+    if mode == "prototype_component":
         scores["component"] = max(scores.get("component", 0), 0.9)
-    if mode in {"prototype_subsystem"}:
+    if mode == "prototype_subsystem":
         scores["subsystem"] = max(scores.get("subsystem", 0), 0.9)
 
-    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    primary = ranked[0][0] if ranked else "generic"
-    if primary == "generic" and len(ranked) > 1 and ranked[1][1] >= 0.45:
-        primary = ranked[1][0]  # type: ignore[assignment]
-    top = [score for _, score in ranked[:2]]
-    mixed = len(top) == 2 and top[0] >= 0.45 and top[1] >= 0.45 and abs(top[0] - top[1]) < 0.15
-    architecture_required = mixed or scores.get("architecture", 0) >= 0.45 or primary == "architecture"
+    ranked = [(kind, score) for kind, score in sorted(scores.items(), key=lambda item: item[1], reverse=True) if kind != "generic"]
+    primary: DomainKind = ranked[0][0] if ranked else "generic"  # type: ignore[assignment]
+    secondary = [kind for kind, score in ranked[1:] if score >= 0.45]
+    top_score = ranked[0][1] if ranked else scores["generic"]
+    second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+    mixed = bool(secondary) and top_score >= 0.45 and second_score >= 0.45
+    subsystem_ambiguous = primary == "subsystem" and select_subsystem_lifetime(request)["requestedLifetime"] == "unknown"
+    architecture_required = (
+        mixed
+        or subsystem_ambiguous
+        or scores.get("architecture", 0) >= 0.45
+        or primary == "architecture"
+    )
+    network_sensitive = scores.get("replication", 0) >= 0.45 or (
+        scores.get("gas", 0) >= 0.45 and any(token in text for token in ("server", "client", "multiplayer", "network"))
+    )
+    asset_metadata_required = scores.get("animation", 0) >= 0.45 and any(
+        token in text for token in ("blueprint", "asset", "montage", "\uC790\uC0B0")
+    )
     return DomainProfile(
-        primary=primary,  # type: ignore[arg-type]
+        primary=primary,
         scores=scores,
+        secondary_domains=secondary,  # type: ignore[arg-type]
+        confidence=round(top_score, 2),
         mixed=mixed,
         architecture_required=architecture_required,
+        network_sensitive=network_sensitive,
+        asset_metadata_required=asset_metadata_required,
     )
 
 
@@ -114,7 +149,7 @@ def detect_domain_kind(request: str, mode: str = "auto") -> DomainKind:
 
 def select_subsystem_lifetime(request: str) -> dict[str, Any]:
     text = _text_lower(request)
-    requested = "world"
+    requested = "unknown"
     if any(m in text for m in ("gameinstance", "game instance", "session", "게임 인스턴스")):
         requested = "game_instance"
     elif any(m in text for m in ("localplayer", "local player")):
@@ -146,8 +181,17 @@ def select_subsystem_lifetime(request: str) -> dict[str, Any]:
             "reason": "Process-wide services should use UEngineSubsystem.",
         },
     }
-    payload = dict(mapping.get(requested, mapping["world"]))
+    if requested == "unknown":
+        return {
+            "requestedLifetime": "unknown",
+            "recommendedBase": None,
+            "rejectedBases": [],
+            "reason": "Subsystem lifetime is ambiguous; choose ownership before code generation.",
+            "requiresClarification": True,
+        }
+    payload = dict(mapping[requested])
     payload["requestedLifetime"] = requested
+    payload["requiresClarification"] = False
     return payload
 
 
@@ -174,6 +218,17 @@ def build_domain_slices(domain_kind: DomainKind, request: str) -> list[PlanSlice
     if domain_kind == "subsystem":
         lifetime = select_subsystem_lifetime(request)
         base = lifetime["recommendedBase"]
+        if not base:
+            return [
+                PlanSlice(
+                    slice_id="subsystem_lifetime_decision",
+                    title="Choose subsystem lifetime and ownership",
+                    files=[],
+                    postconditions=["lifetime selected", "network scope selected"],
+                    domain="subsystem",
+                    slice_kind="architecture",
+                )
+            ]
         symbol = _first_symbol(request) or "UExampleSubsystem"
         module_hint = symbol[1:] if symbol.startswith("U") else "ExampleSubsystem"
         return [
@@ -196,7 +251,7 @@ def build_domain_slices(domain_kind: DomainKind, request: str) -> list[PlanSlice
         return [
             PlanSlice(slice_id="rep_contract", title="Declare replicated properties", files=["<actor>.h"], postconditions=["UPROPERTY(Replicated) present"]),
             PlanSlice(slice_id="rep_onrep", title="Add OnRep handlers", files=["<actor>.h", "<actor>.cpp"], postconditions=["GetLifetimeReplicatedProps updated"]),
-            PlanSlice(slice_id="rep_rpc", title="Add Server/Client RPC stubs", files=["<actor>.h", "<actor>.cpp"], postconditions=["authority checks in _Implementation"]),
+            PlanSlice(slice_id="rep_rpc", title="Add Server/Client RPC stubs", files=["<actor>.h", "<actor>.cpp"], postconditions=["RPC declaration and _Implementation signatures align"]),
             PlanSlice(slice_id="rep_validation", title="Validate replication setup", files=["<actor>.cpp"], postconditions=["bReplicates true on actor"]),
         ]
     if domain_kind == "gas":
@@ -220,6 +275,42 @@ def build_domain_slices(domain_kind: DomainKind, request: str) -> list[PlanSlice
             ),
         ]
     return []
+
+
+def build_domain_slice_dag(profile: DomainProfile, request: str) -> list[PlanSlice]:
+    """Merge primary/secondary domain slices behind one ownership decision."""
+    domains: list[DomainKind] = [profile.primary, *profile.secondary_domains]
+    slices: list[PlanSlice] = []
+    if profile.architecture_required and profile.primary != "architecture":
+        slices.append(
+            PlanSlice(
+                slice_id="ownership_decision",
+                title="Resolve ownership, lifetime, authority, and asset boundaries",
+                files=[],
+                postconditions=["ownership documented", "lifetime documented", "authority documented"],
+                domain="architecture",
+                slice_kind="architecture",
+            )
+        )
+    seen: set[str] = {item.slice_id for item in slices}
+    previous = "ownership_decision" if slices else ""
+    for domain in domains:
+        if domain in {"generic", "architecture"}:
+            continue
+        for item in build_domain_slices(domain, request):
+            if item.slice_id in seen:
+                continue
+            item.domain = domain
+            if previous and not item.depends_on:
+                item.depends_on = [previous]
+            if not item.required_validators and item.slice_kind == "compile":
+                item.required_validators = ["domain_static_validate", "ubt_build"]
+            slices.append(item)
+            seen.add(item.slice_id)
+            previous = item.slice_id
+    if profile.primary == "architecture" and not slices:
+        return build_domain_slices("architecture", request)
+    return slices
 
 
 def build_fix_evidence(
@@ -318,6 +409,8 @@ def architecture_ambiguity_gate(request: str) -> dict[str, Any]:
         score += 0.1
     if any(m in text for m in ("subsystem", "replication", "gas", "game instance", "world subsystem")):
         score += 0.05
+    if "subsystem" in text and select_subsystem_lifetime(request)["requestedLifetime"] == "unknown":
+        score = max(score, 0.75)
     score = min(score, 1.0)
 
     if score >= 0.85:

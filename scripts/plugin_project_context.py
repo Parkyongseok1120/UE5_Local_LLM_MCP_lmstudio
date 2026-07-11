@@ -6,7 +6,101 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
+
+SOURCE_FILE_SUFFIXES = {".h", ".hpp", ".hh", ".cpp", ".c", ".cc", ".cxx", ".cs"}
+FLAT_FIXTURE_SKIP_DIRS = {
+    ".git",
+    ".vs",
+    "Binaries",
+    "Intermediate",
+    "Saved",
+    "DerivedDataCache",
+    "ThirdParty",
+    "node_modules",
+    "tests",
+    "scripts",
+    "data",
+    "docs",
+    "Reports",
+    "lmstudio-unreal-agent-mcp",
+}
+
+
+def is_source_like_file(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    return suffix in SOURCE_FILE_SUFFIXES or path.name.endswith(".Build.cs")
+
+
+def flat_fixture_has_direct_sources(root: Path) -> bool:
+    """True for holdout-style trees without Source/Plugins layout."""
+    if not root.is_dir():
+        return False
+    if (root / "Source").is_dir() or (root / "Plugins").is_dir():
+        return False
+    for path in root.iterdir():
+        if is_source_like_file(path):
+            return True
+        if path.is_dir() and path.name not in FLAT_FIXTURE_SKIP_DIRS:
+            for sub in path.iterdir():
+                if is_source_like_file(sub):
+                    return True
+    return False
+
+
+def fallback_scan_roots(project_root: Path | str) -> list[Path]:
+    """Never return an ambiguous repo root for deep recursive scans."""
+    root = Path(project_root)
+    source = root / "Source"
+    if source.is_dir():
+        return [source]
+    if flat_fixture_has_direct_sources(root):
+        return [root]
+    return []
+
+
+def uses_deep_scan(scan_root: Path) -> bool:
+    """Deep rglob only for standard Unreal Source/Plugins module trees."""
+    parts = [part.lower() for part in scan_root.parts]
+    if scan_root.name == "Source":
+        return True
+    if scan_root.parent.name == "Source":
+        return True
+    if "plugins" in parts and "source" in parts:
+        return True
+    if scan_root.name.lower() in {"public", "private", "classes"} and "source" in parts:
+        return True
+    return False
+
+
+def iter_scan_root_files(
+    scan_root: Path,
+    *,
+    skip_dirs: Iterable[str] | None = None,
+) -> list[Path]:
+    """Iterate source files under a scan root without scanning whole workspaces."""
+    skip = set(skip_dirs or FLAT_FIXTURE_SKIP_DIRS)
+    files: list[Path] = []
+    if not scan_root.is_dir():
+        return files
+    if uses_deep_scan(scan_root):
+        for path in scan_root.rglob("*"):
+            if not path.is_file() or not is_source_like_file(path):
+                continue
+            if any(part in skip for part in path.parts):
+                continue
+            files.append(path)
+        return files
+    for path in scan_root.iterdir():
+        if path.is_file() and is_source_like_file(path):
+            files.append(path)
+            continue
+        if path.is_dir() and path.name not in skip:
+            for sub in path.iterdir():
+                if sub.is_file() and is_source_like_file(sub):
+                    files.append(sub)
+    return files
+
 
 
 @dataclass
@@ -178,32 +272,60 @@ def build_plugin_project_context(project_root: Path | str) -> PluginProjectConte
                         enabled=True,
                     )
                 )
+        for plugin_dir in sorted(plugins_root.iterdir()):
+            if not plugin_dir.is_dir() or list(plugin_dir.glob("*.uplugin")):
+                continue
+            source_dir = plugin_dir / "Source"
+            for module_name, module_path in _discover_module_dirs(source_dir):
+                rel = str(module_path.relative_to(root)).replace("\\", "/")
+                if any(module.source_dir == rel for module in ctx.modules):
+                    continue
+                ctx.modules.append(
+                    ModuleDescriptor(
+                        name=module_name,
+                        root=rel,
+                        source_dir=rel,
+                        module_type="Runtime",
+                        plugin_name=plugin_dir.name,
+                        installed=False,
+                        enabled=True,
+                    )
+                )
 
     return ctx
 
 
 def resolve_scan_roots(project_root: Path | str, *, include_vendor: bool = False) -> list[Path]:
     ctx = build_plugin_project_context(project_root)
-    return ctx.scan_roots(include_vendor=include_vendor)
+    roots = ctx.scan_roots(include_vendor=include_vendor)
+    if roots:
+        return roots
+    return fallback_scan_roots(project_root)
 
 
 def paired_header_for_cpp(cpp_path: Path, project_root: Path | str) -> Path | None:
-    """Return the paired Public/Private header for a plugin/game module cpp file."""
-    root = Path(project_root)
-    try:
-        rel = cpp_path.relative_to(root)
-    except ValueError:
-        return None
-    parts = rel.parts
-    if len(parts) < 4 or parts[0] not in {"Source", "Plugins"}:
-        return None
-    stem = cpp_path.stem
-    private_dir = cpp_path.parent
-    if private_dir.name.lower() != "private":
-        return None
-    public_dir = private_dir.parent / "Public"
-    candidate = public_dir / f"{stem}.h"
-    return candidate if candidate.is_file() else None
+    """Return a module-relative Public header for nested game/plugin Private cpp paths."""
+    root = Path(project_root).resolve()
+    cpp = cpp_path.resolve()
+    ctx = build_plugin_project_context(root)
+    for module in ctx.modules:
+        module_root = (root / module.source_dir).resolve()
+        try:
+            rel = cpp.relative_to(module_root)
+        except ValueError:
+            continue
+        parts = list(rel.parts)
+        if not parts or parts[0].lower() != "private":
+            continue
+        parts[0] = "Public"
+        parts[-1] = f"{cpp.stem}.h"
+        candidate = module_root.joinpath(*parts)
+        if candidate.is_file():
+            return candidate
+        public_root = module_root / "Public"
+        matches = sorted(public_root.rglob(f"{cpp.stem}.h")) if public_root.is_dir() else []
+        return matches[0] if len(matches) == 1 else None
+    return None
 
 
 def validate_uplugin_descriptor(path: Path) -> list[dict[str, Any]]:

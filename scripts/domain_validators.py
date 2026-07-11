@@ -1,183 +1,294 @@
 #!/usr/bin/env python
-"""Domain-specific static validators for component/subsystem/replication/GAS/animation."""
+"""Evidence-backed domain validators for Unreal component/subsystem/network/GAS/animation code."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from cpp_parse_utils import extract_macro_blocks, mask_comments_and_strings
 from unreal_static_validate import Finding, line_number
 
+if TYPE_CHECKING:
+    from domain_validation_context import DomainValidationContext
 
-def validate_component_preflight(path: Path, text: str, root: Path) -> list[Finding]:
-    findings: list[Finding] = []
-    rel = str(path.relative_to(root))
-    if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
-        return findings
+CPP_SUFFIXES = {".cpp", ".c", ".cc"}
+HEADER_SUFFIXES = {".h", ".hpp"}
+SUBSYSTEM_BASES = {
+    "UGameInstanceSubsystem",
+    "UWorldSubsystem",
+    "UEngineSubsystem",
+    "ULocalPlayerSubsystem",
+}
 
-    if path.suffix.lower() in {".cpp", ".c", ".cc"}:
-        for match in re.finditer(r"\bCreateDefaultSubobject\s*<", text):
-            before = text[: match.start()]
-            if "::" not in before.splitlines()[-1]:
-                findings.append(
-                    Finding(
-                        "warning",
-                        rel,
-                        line_number(text, match.start()),
-                        "COMPONENT_CREATE_DEFAULT_SUBOBJECT_WRONG_LOCATION",
-                        "CreateDefaultSubobject should be called from the owner class constructor, not a free function.",
-                    )
-                )
-                break
 
-    if path.suffix.lower() in {".h", ".hpp"} and "CreateDefaultSubobject" in text:
-        findings.append(
-            Finding(
-                "warning",
-                rel,
-                1,
-                "COMPONENT_CREATE_DEFAULT_SUBOBJECT_WRONG_LOCATION",
-                "CreateDefaultSubobject belongs in the owner .cpp constructor, not the header.",
-            )
-        )
+def _rel(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root)).replace("\\", "/")
+    except ValueError:
+        return str(path).replace("\\", "/")
 
-    member_pattern = re.compile(
-        r"CreateDefaultSubobject\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>",
+
+def _matching_brace(text: str, open_index: int) -> int:
+    depth = 0
+    for index in range(open_index, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _cpp_function_blocks(text: str) -> list[tuple[str, str, int, int, str]]:
+    masked = mask_comments_and_strings(text)
+    pattern = re.compile(
+        r"(?m)^[ \t]*(?:[A-Za-z_][\w:<>,~*& \t]*?[ \t]+)?"
+        r"(?P<class>[A-Za-z_]\w*)::(?P<func>~?[A-Za-z_]\w*)\s*"
+        r"\([^;{}]*\)[^{;]*\{"
     )
-    for match in member_pattern.finditer(text):
-        symbol = match.group(1)
-        if not re.search(rf"\bTObjectPtr\s*<\s*{re.escape(symbol)}\s*>|\b{re.escape(symbol)}\s*\*", text):
+    blocks: list[tuple[str, str, int, int, str]] = []
+    for match in pattern.finditer(masked):
+        open_index = masked.find("{", match.start(), match.end())
+        close_index = _matching_brace(masked, open_index)
+        if close_index >= 0:
+            blocks.append(
+                (
+                    match.group("class"),
+                    match.group("func"),
+                    match.start(),
+                    close_index + 1,
+                    text[open_index + 1 : close_index],
+                )
+            )
+    return blocks
+
+
+def _block_for_offset(
+    blocks: list[tuple[str, str, int, int, str]], offset: int
+) -> tuple[str, str, int, int, str] | None:
+    return next((block for block in blocks if block[2] <= offset < block[3]), None)
+
+
+def _class_context_text(
+    text: str,
+    context: DomainValidationContext | None,
+    class_name: str,
+) -> str:
+    if context and class_name:
+        combined = context.class_text(class_name)
+        if combined:
+            return combined
+    return text
+
+
+def validate_component_preflight(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in CPP_SUFFIXES:
+        return findings
+    rel = _rel(path, root)
+    masked = mask_comments_and_strings(text)
+    blocks = _cpp_function_blocks(text)
+    call_re = re.compile(r"\bCreateDefaultSubobject\s*<\s*(?P<type>[A-Za-z_]\w*)\s*>")
+    assignment_re = re.compile(
+        r"(?P<member>[A-Za-z_]\w*)\s*=\s*(?:[A-Za-z_]\w*\s*\.\s*)?"
+        r"CreateDefaultSubobject\s*<\s*(?P<type>[A-Za-z_]\w*)\s*>",
+        re.DOTALL,
+    )
+    for match in call_re.finditer(masked):
+        block = _block_for_offset(blocks, match.start())
+        if block is None or block[1] != block[0]:
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, match.start()),
+                    "COMPONENT_CREATE_DEFAULT_SUBOBJECT_WRONG_LOCATION",
+                    "CreateDefaultSubobject must run in the owner class constructor.",
+                )
+            )
+
+    for match in assignment_re.finditer(masked):
+        block = _block_for_offset(blocks, match.start())
+        if block is None:
+            continue
+        owner = block[0]
+        member = match.group("member")
+        component_type = match.group("type")
+        owner_text = _class_context_text(text, context, owner)
+        declaration = re.compile(
+            rf"(?:TObjectPtr\s*<\s*{re.escape(component_type)}\s*>|"
+            rf"{re.escape(component_type)}\s*\*)\s*{re.escape(member)}\b"
+        )
+        if context and context.header_for_class(owner) and not declaration.search(mask_comments_and_strings(owner_text)):
             findings.append(
                 Finding(
                     "warning",
                     rel,
                     line_number(text, match.start()),
                     "COMPONENT_MEMBER_DECLARATION_MISSING",
-                    f"Register {symbol} with a matching UPROPERTY member declaration in the owner header.",
+                    f"{owner} constructs {member}; declare a matching {component_type} member in its header.",
                 )
             )
-            break
     return findings
 
 
-def validate_subsystem_lifecycle(path: Path, text: str, root: Path) -> list[Finding]:
+def validate_subsystem_lifecycle(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
     findings: list[Finding] = []
-    rel = str(path.relative_to(root))
-    if path.suffix.lower() not in {".cpp", ".c", ".cc", ".h", ".hpp"}:
+    if path.suffix.lower() not in CPP_SUFFIXES:
         return findings
-    if "Subsystem" not in path.name and "Subsystem" not in text:
-        return findings
-
-    if re.search(r"\b(?:UGameInstanceSubsystem|UWorldSubsystem|UEngineSubsystem|ULocalPlayerSubsystem)\b", text):
-        if "CreateDefaultSubobject" in text:
+    rel = _rel(path, root)
+    for class_name, func_name, start, _, body in _cpp_function_blocks(text):
+        base = context.class_bases.get(class_name, "") if context else ""
+        class_text = _class_context_text(text, context, class_name)
+        is_subsystem = base in SUBSYSTEM_BASES or any(token in class_text for token in SUBSYSTEM_BASES)
+        if not is_subsystem:
+            continue
+        masked_body = mask_comments_and_strings(body)
+        if "CreateDefaultSubobject" in masked_body:
             findings.append(
                 Finding(
                     "error",
                     rel,
-                    line_number(text, text.index("CreateDefaultSubobject")),
+                    line_number(text, start),
                     "SUBSYSTEM_CREATE_DEFAULT_SUBOBJECT_FORBIDDEN",
-                    "Subsystems must not call CreateDefaultSubobject; use Initialize/Deinitialize instead.",
+                    "Subsystems must not create default subobjects; initialize owned state in Initialize().",
                 )
             )
-        if path.suffix.lower() in {".cpp", ".c", ".cc"} and re.search(r"\bGetWorld\s*\(", text):
-            ctor_match = re.search(r"::[A-Za-z0-9_]+\s*\([^)]*\)\s*\{", text)
-            if ctor_match and text.find("GetWorld", ctor_match.start(), ctor_match.end() + 200) >= 0:
+        if func_name == class_name and re.search(r"\bGetWorld\s*\(", masked_body):
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, start),
+                    "SUBSYSTEM_GETWORLD_IN_CTOR",
+                    "Avoid GetWorld() in subsystem constructors; defer world access to Initialize().",
+                )
+            )
+    return findings
+
+
+def _replicated_using_targets(text: str) -> list[tuple[int, str]]:
+    targets: list[tuple[int, str]] = []
+    for start, _, block in extract_macro_blocks(text, "UPROPERTY"):
+        match = re.search(r"\bReplicatedUsing\s*=\s*([A-Za-z_]\w*)", block)
+        if match:
+            targets.append((start, match.group(1)))
+    return targets
+
+
+def validate_replication_contract(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
+    """Validate exact OnRep contracts; Server RPCs do not need redundant HasAuthority checks."""
+    if path.suffix.lower() not in HEADER_SUFFIXES:
+        return []
+    rel = _rel(path, root)
+    findings: list[Finding] = []
+    masked = mask_comments_and_strings(text)
+    class_match = re.search(r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_]\w*)[^;{]*\{", masked)
+    owner = class_match.group(1) if class_match else ""
+    combined = _class_context_text(text, context, owner)
+    combined_masked = mask_comments_and_strings(combined)
+    for offset, handler in _replicated_using_targets(text):
+        declaration = re.search(rf"\bvoid\s+{re.escape(handler)}\s*\(", combined_masked)
+        definition = re.search(rf"\b[A-Za-z_]\w*::{re.escape(handler)}\s*\(", combined_masked)
+        if not declaration and not definition:
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, offset),
+                    "REPLICATION_ONREP_HANDLER_MISSING",
+                    f"ReplicatedUsing names {handler}, but no matching declaration or definition was found.",
+                )
+            )
+    return findings
+
+
+def validate_gas_footprint(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in CPP_SUFFIXES:
+        return findings
+    rel = _rel(path, root)
+    for class_name, _, start, _, body in _cpp_function_blocks(text):
+        masked_body = mask_comments_and_strings(body)
+        init = masked_body.find("InitAbilityActorInfo")
+        grant = masked_body.find("GiveAbility")
+        if init >= 0 and grant >= 0 and grant < init:
+            findings.append(
+                Finding(
+                    "warning",
+                    rel,
+                    line_number(text, start),
+                    "GAS_ABILITY_BEFORE_ASC_INIT",
+                    f"{class_name} grants an ability before InitAbilityActorInfo in the same function.",
+                )
+            )
+
+    masked = mask_comments_and_strings(text)
+    owner_match = re.search(r"\b([A-Za-z_]\w*)::GetLifetimeReplicatedProps\s*\(", masked)
+    if owner_match and context:
+        owner_text = context.class_text(owner_match.group(1))
+        if "UAttributeSet" in owner_text and "Replicated" not in owner_text:
+            findings.append(
+                Finding(
+                    "info",
+                    rel,
+                    line_number(text, owner_match.start()),
+                    "GAS_ATTRIBUTE_REPLICATION_WITHOUT_REPLICATED_FIELDS",
+                    "AttributeSet overrides lifetime replication but no replicated attribute field was found.",
+                )
+            )
+    return findings
+
+
+def validate_animation_notify_lifecycle(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
+    """Do not hard-code notify callback names; engine/version and inheritance decide valid overrides."""
+    if path.suffix.lower() not in CPP_SUFFIXES or context is None:
+        return []
+    rel = _rel(path, root)
+    findings: list[Finding] = []
+    for class_name, func_name, start, _, _ in _cpp_function_blocks(text):
+        class_text = context.class_text(class_name)
+        if "AnimNotify" not in class_text:
+            continue
+        header = context.header_for_class(class_name)
+        header_text = context.text_for(header)
+        if func_name in {"Notify", "Received_Notify", "NotifyBegin", "NotifyTick", "NotifyEnd"}:
+            if header and not re.search(rf"\b{re.escape(func_name)}\s*\(", mask_comments_and_strings(header_text)):
                 findings.append(
                     Finding(
                         "warning",
                         rel,
-                        line_number(text, ctor_match.start()),
-                        "SUBSYSTEM_GETWORLD_IN_CTOR",
-                        "Avoid GetWorld() in subsystem constructors; defer to Initialize().",
+                        line_number(text, start),
+                        "ANIMATION_CALLBACK_DECLARATION_MISSING",
+                        f"{class_name}::{func_name} is defined without a matching header declaration.",
                     )
                 )
-    return findings
-
-
-def validate_replication_contract(path: Path, text: str, root: Path) -> list[Finding]:
-    findings: list[Finding] = []
-    rel = str(path.relative_to(root))
-    if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
-        return findings
-
-    if re.search(r"\b(?:Server|Client|NetMulticast)\s*,\s*(?:Reliable|Unreliable)\b", text):
-        if "_Implementation" in text and "check(Role" not in text and "HasAuthority" not in text:
-            findings.append(
-                Finding(
-                    "warning",
-                    rel,
-                    line_number(text, text.index("_Implementation")),
-                    "REPLICATION_RPC_AUTHORITY_CHECK_MISSING",
-                    "RPC _Implementation should validate authority/role before mutating replicated state.",
-                )
-            )
-
-    if "UPROPERTY" in text and "ReplicatedUsing" in text:
-        prop = re.search(r"UPROPERTY[^;\n]*ReplicatedUsing\s*=\s*([A-Za-z0-9_]+)", text)
-        onrep = re.search(r"\bvoid\s+OnRep_[A-Za-z0-9_]+\s*\(", text)
-        if prop and not onrep:
-            findings.append(
-                Finding(
-                    "warning",
-                    rel,
-                    line_number(text, prop.start()),
-                    "REPLICATION_ONREP_HANDLER_MISSING",
-                    "ReplicatedUsing property should have a matching OnRep handler.",
-                )
-            )
-    return findings
-
-
-def validate_gas_footprint(path: Path, text: str, root: Path) -> list[Finding]:
-    findings: list[Finding] = []
-    rel = str(path.relative_to(root))
-    if "AbilitySystemComponent" in text and "GiveAbility" in text and "InitAbilityActorInfo" not in text:
-        findings.append(
-            Finding(
-                "warning",
-                rel,
-                line_number(text, text.index("GiveAbility")),
-                "GAS_ABILITY_BEFORE_ASC_INIT",
-                "Grant abilities only after InitAbilityActorInfo on the AbilitySystemComponent.",
-            )
-        )
-    if "UAttributeSet" in text and "GetLifetimeReplicatedProps" not in text and path.suffix.lower() in {".cpp", ".cc"}:
-        findings.append(
-            Finding(
-                "warning",
-                rel,
-                1,
-                "GAS_ATTRIBUTE_REPLICATION_MISSING",
-                "Replicated attribute sets should override GetLifetimeReplicatedProps.",
-            )
-        )
-    return findings
-
-
-def validate_animation_notify_lifecycle(path: Path, text: str, root: Path) -> list[Finding]:
-    findings: list[Finding] = []
-    rel = str(path.relative_to(root))
-    if "AnimNotify" not in text and "AnimNotifyState" not in text:
-        return findings
-    if "AnimNotifyState" in text:
-        if "NotifyBegin" not in text or "NotifyEnd" not in text:
-            findings.append(
-                Finding(
-                    "warning",
-                    rel,
-                    1,
-                    "ANIM_NOTIFYSTATE_LIFECYCLE_INCOMPLETE",
-                    "AnimNotifyState should implement NotifyBegin and NotifyEnd.",
-                )
-            )
-    elif "Received_Notify" not in text:
-        findings.append(
-            Finding(
-                "warning",
-                rel,
-                1,
-                "ANIM_NOTIFY_RECEIVED_MISSING",
-                "AnimNotify should override Received_Notify.",
-            )
-        )
     return findings

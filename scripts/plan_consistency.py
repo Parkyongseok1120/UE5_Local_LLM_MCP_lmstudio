@@ -149,7 +149,7 @@ def validate_plan_consistency(plan: Any) -> list[str]:
         issues.append("editStrategy=no_edit but writeGate.writesAllowed=true")
     if evidence_writes and not writes_allowed and edit_strategy != "no_edit":
         issues.append("evidence.writesAllowed=true but writeGate.writesAllowed=false without no_edit")
-    if task_kind in {"inspect_only", "answer_only", "code_sketch", "runtime_debug"} and writes_allowed:
+    if task_kind in {"inspect_only", "cpp_analysis", "answer_only", "code_sketch", "runtime_debug"} and writes_allowed:
         issues.append(f"taskKind={task_kind} must not allow writes")
     if ambiguity_gate.get("recommendedAction") == "ask_user_once" and writes_allowed:
         issues.append("ask_user_once must block writes")

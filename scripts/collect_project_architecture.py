@@ -107,17 +107,16 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
     gameplay_tags: list[dict[str, Any]] = []
     input_bindings: list[dict[str, Any]] = []
 
-    from plugin_project_context import build_plugin_project_context
+    from plugin_project_context import build_plugin_project_context, iter_scan_root_files, resolve_scan_roots
 
     plugin_ctx = build_plugin_project_context(project_root)
-    scan_roots = plugin_ctx.scan_roots()
+    scan_roots = resolve_scan_roots(project_root)
     source_files: list[Path] = []
     for scan_root in scan_roots:
         if not scan_root.is_dir():
             continue
-        for path in sorted(scan_root.rglob("*")):
-            if path.is_file() and not should_skip(path):
-                source_files.append(path)
+        source_files.extend(iter_scan_root_files(scan_root, skip_dirs=SKIP_DIRS))
+    source_files = sorted(set(source_files))
 
     if not source_files:
         return {

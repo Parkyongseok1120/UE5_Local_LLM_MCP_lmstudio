@@ -361,16 +361,9 @@ def pending_surfaces_after_partial(blockers: list[str]) -> set[str]:
 
 
 def scope_blocker_allows_partial_apply(mode: str, blockers: list[str], *, attempt: int = 1) -> bool:
-    if str(mode or "") != "multifile_refactor":
-        return False
-    if attempt <= 1:
-        return False
-    joined = "\n".join(blockers).lower()
-    return (
-        "multifile fix incomplete" in joined
-        or "header changed without matching .cpp" in joined
-        or "header declaration changed without matching .cpp" in joined
-    )
+    # First attempt is transactional. A bounded second attempt may apply the
+    # follow-up surface retained by the wrapper's pending-surface state machine.
+    return mode == "multifile_refactor" and attempt >= 2 and bool(pending_surfaces_after_partial(blockers))
 
 
 def route_forbidden_action_blockers(

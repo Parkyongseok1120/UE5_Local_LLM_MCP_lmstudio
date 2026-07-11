@@ -7,7 +7,7 @@
  * Safe-ish local tools for using a local LLM as a coding agent.
  *
  * Security model:
- * - File access is restricted to WORKSPACE_ROOT.
+ * - Reads are restricted to WORKSPACE_ROOT and the selected active project.
  * - Writes are disabled unless ALLOW_WRITE=1.
  * - Command execution is disabled unless ALLOW_COMMANDS=1.
  * - Commands are allowlisted.
@@ -49,6 +49,12 @@ const {
   scanSymbolImpact,
   validateRefactorPlan
 } = require("./refactor-tools.js");
+const {
+  resolveReadPath,
+  assertReadChildContained,
+  displayPath,
+  pathMetadata
+} = require("./read-path-resolver.js");
 const {
   validateAfterWrite,
   runStaticValidation,
@@ -150,6 +156,7 @@ const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
   "list_directory",
   "read_file",
   "read_file_range",
+  "read_symbol",
   "replace_in_file",
   "write_file",
   "search_files",
@@ -172,6 +179,7 @@ const EXTENDED_AGENT_TOOL_NAMES = new Set([
 ]);
 const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
 const fileCache = new Map();
+const readEvidence = new Map();
 let workspaceInfoCache = null;
 
 const SERVER_VERSION = (() => {
@@ -338,6 +346,28 @@ async function buildDeletionProposal(rawFiles, completedEditsSummary, activeProj
   };
 }
 
+async function resolveReadToolPath(p) {
+  return resolveReadPath(p, {
+    workspaceRoot: WORKSPACE_ROOT,
+    activeProject: getActiveProject(CONFIG_PATH)
+  });
+}
+
+async function resolveWriteToolPath(p) {
+  const resolution = await resolveReadToolPath(p);
+  if (resolution.resolvedRootType !== "active_project") {
+    return resolution;
+  }
+  const rel = String(resolution.projectRelativePath || "").replace(/\\/g, "/");
+  const allowed = rel.startsWith("Source/")
+    || rel.startsWith("Config/")
+    || /^Plugins\/[^/]+\/(?:Source\/|[^/]+\.uplugin$)/i.test(rel);
+  if (!allowed) {
+    throw new Error(`project write blocked outside Source/Config/Plugins source: ${p}`);
+  }
+  return resolution;
+}
+
 function normalizeRelPath(p) {
   if (!p || typeof p !== "string") {
     throw new Error("path must be a non-empty string");
@@ -484,6 +514,43 @@ function fileStatSignature(stat) {
   return `${stat.size}:${stat.mtimeMs}`;
 }
 
+function rememberReadEvidence(target, stat, resolution, lineRange = null) {
+  const key = path.resolve(target);
+  const existing = readEvidence.get(key);
+  const ranges = new Set(existing && existing.signature === fileStatSignature(stat) ? existing.lineRanges || [] : []);
+  if (lineRange) ranges.add(lineRange);
+  readEvidence.set(key, {
+    signature: fileStatSignature(stat),
+    path: pathMetadata(resolution),
+    lineRanges: Array.from(ranges),
+    readAt: Date.now()
+  });
+}
+
+function hasFreshReadEvidence(target, stat) {
+  const entry = readEvidence.get(path.resolve(target));
+  return Boolean(entry && entry.signature === fileStatSignature(stat));
+}
+
+function sourceEvidenceSummary(activeProject) {
+  const projectDir = activeProject ? path.dirname(path.resolve(activeProject)) : null;
+  const filesRead = [];
+  for (const [absolutePath, entry] of readEvidence.entries()) {
+    if (!projectDir || !absolutePath.toLowerCase().startsWith(projectDir.toLowerCase() + path.sep)) continue;
+    if (![".h", ".hpp", ".cpp", ".c", ".cc", ".cs"].includes(path.extname(absolutePath).toLowerCase())) continue;
+    filesRead.push({
+      path: entry.path.projectRelativePath,
+      lineRanges: entry.lineRanges,
+      readAt: entry.readAt
+    });
+  }
+  return {
+    sourceReadSucceeded: filesRead.length > 0,
+    filesRead,
+    directSourceRequired: true
+  };
+}
+
 function rememberCachedFile(target, stat, buffer) {
   if (FILE_CACHE_MAX_ENTRIES <= 0 || FILE_CACHE_MAX_BYTES <= 0 || buffer.length > FILE_CACHE_MAX_BYTES) {
     return;
@@ -543,7 +610,9 @@ async function readCachedTextFile(target, stat) {
 }
 
 function invalidateFileCache(target) {
-  fileCache.delete(path.resolve(target));
+  const key = path.resolve(target);
+  fileCache.delete(key);
+  readEvidence.delete(key);
 }
 
 function invalidateWorkspaceInfoCache() {
@@ -616,6 +685,7 @@ async function buildWorkspaceInfo() {
     serverVersion: SERVER_VERSION,
     activeProject,
     projectContext,
+    sourceEvidence: sourceEvidenceSummary(activeProject),
     allowWrite: ALLOW_WRITE,
     allowCommands: ALLOW_COMMANDS,
     allowUnrealBuild: ALLOW_UNREAL_BUILD,
@@ -784,7 +854,7 @@ function allAgentTools() {
       },
       {
         name: "list_directory",
-        description: "List files/directories under WORKSPACE_ROOT. When activeProject is set, prefer projectContext.sourceBrowsePath from get_active_project instead of broad root browsing.",
+        description: "List workspace:// or project:// directories. Source/, Plugins/, Config/, and Content/ resolve against activeProject even when it is outside WORKSPACE_ROOT.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace, e.g. '.', 'Source'." },
           maxEntries: { type: "number", description: "Max entries to show. Default 200." }
@@ -792,7 +862,7 @@ function allAgentTools() {
       },
       {
         name: "read_file",
-        description: "Read a UTF-8 text file inside WORKSPACE_ROOT. Required before any write to that file. Use detailLevel compact/medium/large/full (default compact ~16 KiB) or maxBytes override.",
+        description: "Read a UTF-8 file under workspace:// or project://. Active-project source may be outside WORKSPACE_ROOT. Required before writes; large source should use read_file_range.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           maxBytes: { type: "number", description: "Optional max bytes. Capped by detailLevel tier." },
@@ -805,7 +875,7 @@ function allAgentTools() {
       },
       {
         name: "read_file_range",
-        description: "Read a line range from a UTF-8 text file inside WORKSPACE_ROOT. Prefer this over read_file for large sources. Line span capped by detailLevel.",
+        description: "Read a line range under workspace:// or project://. Prefer this over read_file for large project sources. Line span is capped by detailLevel.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           startLine: { type: "number", description: "1-based start line (inclusive)." },
@@ -816,6 +886,15 @@ function allAgentTools() {
             description: "Max lines per request: compact 150, medium 400, large 1200, full 2000."
           }
         }, ["path", "startLine", "endLine"])
+      },
+      {
+        name: "read_symbol",
+        description: "Read one C++ function body and record it as direct source evidence. Prefer this for function-level analysis.",
+        inputSchema: makeJsonSchema({
+          path: { type: "string", description: "Source file containing the function." },
+          symbol: { type: "string", description: "Function or qualified function, e.g. UFoo::Tick or Tick." },
+          contextLines: { type: "number", description: "Extra lines around the function. Default 3, max 30." }
+        }, ["path", "symbol"])
       },
       {
         name: "write_file",
@@ -878,7 +957,7 @@ function allAgentTools() {
       },
       {
         name: "search_files",
-        description: "Search text files by regex or plain text under WORKSPACE_ROOT. Scope path to the active project whenever possible; do not search repo infrastructure to explain Unreal build failures.",
+        description: "Search text under workspace:// or project://. For current Unreal code, scope to project://Source or project://Plugins and use direct source evidence.",
         inputSchema: makeJsonSchema({
           query: { type: "string", description: "Regex or plain text to search." },
           path: { type: "string", description: "Relative directory/file to search. Default '.'." },
@@ -957,7 +1036,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
         };
       }
-      return text(JSON.stringify({ activeProject, details, projectContext }, null, 2));
+      return text(JSON.stringify({
+        activeProject,
+        details,
+        projectContext,
+        sourceEvidence: sourceEvidenceSummary(activeProject)
+      }, null, 2));
     }
 
     if (name === "set_active_project") {
@@ -1033,17 +1117,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "list_directory") {
-      const target = normalizeRelPath(args.path || ".");
+      const resolution = await resolveReadToolPath(args.path || ".");
+      const target = resolution.absolutePath;
       const maxEntries = Math.max(1, Math.min(Number(args.maxEntries || 200), 1000));
       const s = await statSafe(target);
-      if (!s) return fail(`not found: ${args.path}`);
-      if (!s.isDirectory()) return fail(`not a directory: ${args.path}`);
+      if (!s) return fail(`not found: ${args.path}`, { path: pathMetadata(resolution) });
+      if (!s.isDirectory()) return fail(`not a directory: ${args.path}`, { path: pathMetadata(resolution) });
 
       const entries = await fsp.readdir(target, { withFileTypes: true });
       const rows = [];
       for (const e of entries.slice(0, maxEntries)) {
-        const p = path.join(target, e.name);
-        const st = await statSafe(p);
+        const child = path.join(target, e.name);
+        await assertReadChildContained(child, resolution);
+        const st = await statSafe(child);
         rows.push({
           name: e.name,
           type: e.isDirectory() ? "dir" : e.isFile() ? "file" : "other",
@@ -1051,7 +1137,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           modified: st ? st.mtime.toISOString() : null
         });
       }
-      return text(JSON.stringify(rows, null, 2));
+      return text(JSON.stringify({ path: pathMetadata(resolution), entries: rows }, null, 2));
     }
 
     if (name === "read_unreal_logs") {
@@ -1167,18 +1253,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "read_file") {
-      const target = normalizeRelPath(args.path);
+      const resolution = await resolveReadToolPath(args.path);
+      const target = resolution.absolutePath;
       const s = await statSafe(target);
       if (!s) {
         return fail(`not found: ${args.path}`, {
           nextSteps: ["Search for the basename inside the active project before guessing a new path."],
           suggestedToolCalls: [{
             tool: "search_files",
-            args: { query: path.basename(String(args.path || "")), path: "." }
+            args: { query: path.basename(String(args.path || "")), path: resolution.resolvedRootType === "active_project" ? "project://Source" : "workspace://" }
           }]
         });
       }
-      if (!s.isFile()) return fail(`not a file: ${args.path}`);
+      if (!s.isFile()) return fail(`not a file: ${args.path}`, {
+        path: pathMetadata(resolution),
+        suggestedToolCalls: [{ tool: "list_directory", args: { path: displayPath(resolution) } }]
+      });
 
       const detail = resolveCodeDetail(args.detailLevel);
       const tierCap = CODE_DETAIL_READ_BYTES[detail];
@@ -1203,11 +1293,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           out += ` Use read_file_range for partial reads.]`;
       }
       }
-      return text(out);
+      rememberReadEvidence(target, s, resolution, `1-${Math.max(1, out.split("\n").length)}`);
+      const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`;
+      return text(metadataHeader + out);
     }
 
     if (name === "read_file_range") {
-      const target = normalizeRelPath(args.path);
+      const resolution = await resolveReadToolPath(args.path);
+      const target = resolution.absolutePath;
       const s = await statSafe(target);
       if (!s) return fail(`not found: ${args.path}`);
       if (!s.isFile()) return fail(`not a file: ${args.path}`);
@@ -1236,15 +1329,72 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const lines = content.split(/\r?\n/);
       const slice = lines.slice(startLine - 1, endLine);
       const numbered = slice.map((line, idx) => `${startLine + idx}|${line}`).join("\n");
-      const rel = path.relative(WORKSPACE_ROOT, target);
+      rememberReadEvidence(target, s, resolution, `${startLine}-${Math.min(endLine, lines.length)}`);
       return text(
-        `File: ${rel}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`
+        `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`
       );
+    }
+
+    if (name === "read_symbol") {
+      const resolution = await resolveReadToolPath(args.path);
+      const target = resolution.absolutePath;
+      const stat = await statSafe(target);
+      if (!stat || !stat.isFile()) return fail(`not found or not a file: ${args.path}`);
+      let content;
+      try { content = await readCachedTextFile(target, stat); }
+      catch (err) {
+        if (err && err.code === "BINARY_FILE") return fail(`file appears binary: ${args.path}`);
+        throw err;
+      }
+      const symbol = String(args.symbol || "").trim();
+      const parts = symbol.split("::");
+      const leaf = parts[parts.length - 1];
+      if (!leaf || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(leaf)) return fail("invalid C++ symbol");
+      const escapedParts = parts.map((part) => escapeRegExp(part));
+      const pattern = new RegExp(`\\b${escapedParts.join("\\s*::\\s*")}\\s*\\(`, "m");
+      const fallback = new RegExp(`\\b${escapeRegExp(leaf)}\\s*\\(`, "m");
+      const match = pattern.exec(content) || fallback.exec(content);
+      if (!match) return fail(`symbol not found: ${symbol}`, {
+        suggestedToolCalls: [{ tool: "search_files", args: { query: leaf, path: "project://Source" } }]
+      });
+      const braceStart = content.indexOf("{", match.index + match[0].length);
+      const semicolon = content.indexOf(";", match.index + match[0].length);
+      if (braceStart < 0 || (semicolon >= 0 && semicolon < braceStart)) {
+        return fail(`symbol body not found: ${symbol}`, {
+          nextSteps: ["Search for the qualified definition in .cpp files."]
+        });
+      }
+      let depth = 0;
+      let braceEnd = -1;
+      let quote = "";
+      let escaped = false;
+      for (let i = braceStart; i < content.length; i += 1) {
+        const ch = content[i];
+        if (quote) {
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === quote) quote = "";
+          continue;
+        }
+        if (ch === "\"" || ch === "'") { quote = ch; continue; }
+        if (ch === "{") depth += 1;
+        else if (ch === "}" && --depth === 0) { braceEnd = i; break; }
+      }
+      if (braceEnd < 0) return fail(`unbalanced symbol body: ${symbol}`);
+      const lines = content.split(/\r?\n/);
+      const lineAt = (offset) => content.slice(0, offset).split(/\r?\n/).length;
+      const context = Math.max(0, Math.min(30, Number(args.contextLines ?? 3)));
+      const startLine = Math.max(1, lineAt(match.index) - context);
+      const endLine = Math.min(lines.length, lineAt(braceEnd) + context);
+      const numbered = lines.slice(startLine - 1, endLine).map((line, idx) => `${startLine + idx}|${line}`).join("\n");
+      rememberReadEvidence(target, stat, resolution, `${startLine}-${endLine}`);
+      return text(`File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`);
     }
 
     if (name === "write_file") {
       if (!ALLOW_WRITE) return fail("write_file blocked. Set ALLOW_WRITE=1 to enable.");
-      const target = normalizeRelPath(args.path);
+      const writeResolution = await resolveWriteToolPath(args.path);
+      const target = writeResolution.absolutePath;
       const parent = path.dirname(target);
       const activeProject = getActiveProject(CONFIG_PATH);
       const guard = await validateWriteTarget({
@@ -1366,7 +1516,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "replace_in_file") {
       if (!ALLOW_WRITE) return fail("replace_in_file blocked. Set ALLOW_WRITE=1 to enable.");
-      const target = normalizeRelPath(args.path);
+      const writeResolution = await resolveWriteToolPath(args.path);
+      const target = writeResolution.absolutePath;
       const s = await statSafe(target);
       if (!s || !s.isFile()) {
         return fail(`not found or not file: ${args.path}. replace_in_file only edits existing files; to create a brand-new file, use write_file.`, {
@@ -1375,6 +1526,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             tool: "search_files",
             args: { query: path.basename(String(args.path || "")), path: "." }
           }]
+        });
+      }
+      if (PATCH_ONLY_EXISTING_EXTENSIONS.has(path.extname(target).toLowerCase()) && !hasFreshReadEvidence(target, s)) {
+        return fail("replace_in_file blocked: direct read evidence for the current file version is required.", {
+          sourceEvidence: sourceEvidenceSummary(getActiveProject(CONFIG_PATH)),
+          suggestedToolCalls: [{ tool: "read_file_range", args: { path: displayPath(writeResolution), startLine: 1, endLine: 200 } }]
         });
       }
       const oldText = String(args.oldText ?? "");
@@ -1593,7 +1750,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "search_files") {
-      const base = normalizeRelPath(args.path || ".");
+      const resolution = await resolveReadToolPath(args.path || ".");
+      const base = resolution.absolutePath;
       const maxResults = Math.max(1, Math.min(Number(args.maxResults || 100), 1000));
       const useRegex = !!args.regex;
       const query = String(args.query || "");
@@ -1613,6 +1771,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       async function walk(p) {
         if (results.length >= maxResults || filesSeen >= SEARCH_MAX_FILES) return;
+        await assertReadChildContained(p, resolution);
         const st = await statSafe(p);
         if (!st) return;
 
@@ -1641,7 +1800,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const hit = useRegex ? matcher.test(line) : line.toLowerCase().includes(query.toLowerCase());
           if (hit) {
             results.push({
-              file: path.relative(WORKSPACE_ROOT, p),
+              file: `${displayPath(resolution).replace(/\/$/, "")}/${path.relative(base, p).replace(/\\/g, "/")}`,
               line: i + 1,
               text: line.slice(0, 500)
             });
@@ -1651,7 +1810,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       await walk(base);
-      return text(JSON.stringify({ results, filesSeen }, null, 2));
+      return text(JSON.stringify({ path: pathMetadata(resolution), results, filesSeen }, null, 2));
     }
 
     if (name === "run_command") {

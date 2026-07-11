@@ -39,6 +39,7 @@ AGENT_ESSENTIAL = {
     "list_directory",
     "read_file",
     "read_file_range",
+    "read_symbol",
     "replace_in_file",
     "write_file",
     "search_files",

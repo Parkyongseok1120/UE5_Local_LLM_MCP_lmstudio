@@ -10,6 +10,9 @@ sys.path.insert(0, str(SCRIPTS))
 
 from plugin_project_context import (  # noqa: E402
     build_plugin_project_context,
+    fallback_scan_roots,
+    iter_scan_root_files,
+    FLAT_FIXTURE_SKIP_DIRS,
     validate_uplugin_descriptor,
 )
 from plan_slice_state import mark_slice_complete, init_slice_state  # noqa: E402
@@ -98,3 +101,45 @@ def test_query_history_index_reset(tmp_path: Path):
     record_query_delivery(fp, detail_level="compact", match_count=1, index_path=index_path)
     dropped = reset_query_history_for_index(index_path)
     assert dropped == 1
+
+
+def test_orphan_plugin_source_tree_is_scanned(tmp_path: Path) -> None:
+    plugin_dir = tmp_path / "Plugins" / "HoldoutPlugin" / "Source" / "HoldoutPlugin" / "Public"
+    plugin_dir.mkdir(parents=True)
+    header = plugin_dir / "HoldoutPluginComponent.h"
+    header.write_text("#pragma once\nclass UHoldoutPluginComponent {};\n", encoding="utf-8")
+
+    ctx = build_plugin_project_context(tmp_path)
+    roots = ctx.scan_roots()
+    assert any("Plugins" in str(path) for path in roots)
+    files: list[Path] = []
+    for scan_root in roots:
+        files.extend(iter_scan_root_files(scan_root, skip_dirs=FLAT_FIXTURE_SKIP_DIRS))
+    assert any(path.name == "HoldoutPluginComponent.h" for path in files)
+
+
+def test_fallback_scan_roots_avoids_repo_wide_scan(tmp_path: Path):
+    repo_like = tmp_path / "repo"
+    repo_like.mkdir()
+    (repo_like / "README.md").write_text("docs", encoding="utf-8")
+    nested = repo_like / "tests" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "Example.cpp").write_text("void X(){}", encoding="utf-8")
+
+    assert fallback_scan_roots(repo_like) == []
+    assert iter_scan_root_files(repo_like) == []
+
+
+def test_flat_fixture_root_scan_is_shallow(tmp_path: Path):
+    fixture = tmp_path / "flat_case"
+    fixture.mkdir()
+    (fixture / "Holdout.cpp").write_text("void Holdout(){}", encoding="utf-8")
+    deep = fixture / "nested" / "deep"
+    deep.mkdir(parents=True)
+    (deep / "Hidden.cpp").write_text("void Hidden(){}", encoding="utf-8")
+
+    roots = fallback_scan_roots(fixture)
+    assert roots == [fixture]
+    files = iter_scan_root_files(fixture)
+    assert any(path.name == "Holdout.cpp" for path in files)
+    assert not any(path.name == "Hidden.cpp" for path in files)

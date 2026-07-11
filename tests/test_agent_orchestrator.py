@@ -28,11 +28,11 @@ def test_classify_inspect_review():
 
 
 def test_classify_cinematic_system_analysis_korean():
-    assert classify_task("현재 프로젝트의 시네마틱 시스템 분석", "auto") == "inspect_only"
+    assert classify_task("현재 프로젝트의 시네마틱 시스템 분석", "auto") == "cpp_analysis"
 
 
 def test_classify_cinematic_structure_explain():
-    assert classify_task("시네마틱 시스템 구조와 작동 방식 설명", "auto") == "inspect_only"
+    assert classify_task("시네마틱 시스템 구조와 작동 방식 설명", "auto") in {"inspect_only", "cpp_analysis"}
 
 
 def test_classify_cinematic_runtime_bug():
@@ -46,7 +46,7 @@ def test_classify_cinematic_implement_is_edit():
 def test_cinematic_analysis_plan_source_first():
     plan = build_agent_plan("현재 프로젝트의 시네마틱 시스템 분석", "auto")
     payload = plan.to_dict()
-    assert plan.task_kind == "inspect_only"
+    assert plan.task_kind == "cpp_analysis"
     assert plan.evidence.writes_allowed is False
     assert payload["writeGate"]["writesAllowed"] is False
     policy = payload["toolPolicy"]

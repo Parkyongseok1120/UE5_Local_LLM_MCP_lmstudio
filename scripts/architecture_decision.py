@@ -18,6 +18,10 @@ class ArchitectureDecision:
     ownership: str = ""
     lifetime: str = ""
     authority: str = ""
+    project_path: str = ""
+    scope_hash: str = ""
+    affected_file_hash: str = ""
+    plan_revision: str = ""
     approved: bool = False
     notes: list[str] = field(default_factory=list)
 
@@ -47,11 +51,18 @@ def build_architecture_decision(
     ownership: str = "",
     lifetime: str = "",
     authority: str = "",
+    project_path: str = "",
+    scope_hash: str = "",
+    affected_file_hash: str = "",
+    plan_revision: str = "",
 ) -> ArchitectureDecision:
     questions = list(ambiguity_gate.get("clarificationQuestions") or [])
     fp = question_fingerprint(questions)
     risk = compute_architecture_risk(ambiguity_gate)
-    decision_id = hashlib.sha256(f"{fp}:{risk}:{ownership}:{lifetime}".encode()).hexdigest()[:20]
+    decision_material = ":".join(
+        (fp, str(risk), ownership, lifetime, authority, project_path, scope_hash, affected_file_hash, plan_revision)
+    )
+    decision_id = hashlib.sha256(decision_material.encode()).hexdigest()[:20]
     return ArchitectureDecision(
         decision_id=decision_id,
         question_fingerprint=fp,
@@ -59,6 +70,10 @@ def build_architecture_decision(
         ownership=ownership,
         lifetime=lifetime,
         authority=authority,
+        project_path=project_path,
+        scope_hash=scope_hash,
+        affected_file_hash=affected_file_hash,
+        plan_revision=plan_revision,
         approved=False,
     )
 
@@ -81,4 +96,17 @@ def persist_approval(path: Path, decision: ArchitectureDecision) -> None:
     decisions[decision.decision_id] = payload
     store["decisions"] = decisions
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
+
+
+def approval_is_valid(path: Path, decision: ArchitectureDecision) -> bool:
+    stored = (load_approval_store(path).get("decisions") or {}).get(decision.decision_id)
+    if not isinstance(stored, dict) or stored.get("approved") is not True:
+        return False
+    expected = decision.to_dict()
+    for key in ("project_path", "scope_hash", "affected_file_hash", "plan_revision", "authority"):
+        if str(stored.get(key) or "") != str(expected.get(key) or ""):
+            return False
+    return True

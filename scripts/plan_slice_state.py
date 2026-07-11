@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -97,24 +98,40 @@ def mark_slice_complete(
     project_root: Path,
     written_paths: list[Path | str],
     plan_slices: list[dict[str, Any]],
-    proof_level: str = "BuiltVerified",
+    proof_level: str = "",
+    required_evidence_satisfied: bool = False,
+    runtime_verified: bool = False,
 ) -> dict[str, Any]:
     idx = int(state.get("activeSliceIndex") or 0)
     slices = list(state.get("slices") or [])
     if idx >= len(slices):
         return state
-    if not written_paths:
+    plan = plan_slices[idx] if idx < len(plan_slices) else {}
+    slice_kind = str(plan.get("slice_kind") or plan.get("sliceKind") or "compile")
+    if slice_kind in {"analysis", "architecture"}:
+        if not required_evidence_satisfied:
+            slices[idx]["status"] = "failed"
+            state["lastError"] = "slice completion rejected: required evidence not satisfied"
+            state["slices"] = slices
+            return state
+    elif slice_kind == "runtime":
+        if not runtime_verified or proof_level not in {"PIEVerified", "RuntimeVerified"}:
+            slices[idx]["status"] = "built" if proof_level == "Built" else "failed"
+            state["lastError"] = "slice completion rejected: runtime evidence required"
+            state["slices"] = slices
+            return state
+    elif proof_level != "Built":
+        slices[idx]["status"] = "static_validated" if proof_level in {"BuiltStale", "BuiltUnverified"} else "failed"
+        state["lastError"] = f"slice completion rejected: proof_level={proof_level or 'missing'}"
+        state["slices"] = slices
+        return state
+
+    if slice_kind not in {"analysis", "architecture"} and not written_paths:
         slices[idx]["status"] = "failed"
         state["lastError"] = "slice completion rejected: empty written_paths"
         state["slices"] = slices
         return state
-    if proof_level in {"BuiltStale", "BuiltUnverified"}:
-        slices[idx]["status"] = "failed"
-        state["lastError"] = f"slice completion rejected: proof_level={proof_level}"
-        state["slices"] = slices
-        return state
 
-    plan = plan_slices[idx] if idx < len(plan_slices) else {}
     hashes: dict[str, str] = {}
     for raw in written_paths:
         path = Path(raw)
@@ -127,7 +144,7 @@ def mark_slice_complete(
             except ValueError:
                 rel = str(path).replace("\\", "/")
             hashes[rel] = _file_hash(path)
-    if not hashes:
+    if not hashes and slice_kind not in {"analysis", "architecture"}:
         slices[idx]["status"] = "failed"
         state["lastError"] = "slice completion rejected: no file hashes captured"
         state["slices"] = slices
@@ -155,6 +172,25 @@ def mark_slice_complete(
             )
             state["slices"] = slices
     return state
+
+
+def proof_level_from_build_output(ok: bool, output: str) -> str:
+    if not ok:
+        return "Failed"
+    text = str(output or "")
+    action_patterns = (
+        r"Executing up to \d+ processes, one per physical core",
+        r"Building \d+ action(?:s)? with \d+ process(?:es)?",
+        r"\[(\d+)/(\d+)\] Compile",
+    )
+    if re.search(action_patterns[0], text, re.IGNORECASE) or re.search(action_patterns[1], text, re.IGNORECASE):
+        return "Built"
+    action_matches = list(re.finditer(action_patterns[2], text, re.IGNORECASE))
+    if action_matches and any(int(match.group(2)) > 0 for match in action_matches):
+        return "Built"
+    if re.search(r"Target is up to date|0 action(?:s)?", text, re.IGNORECASE):
+        return "BuiltStale"
+    return "BuiltUnverified"
 
 
 def next_slice_prompt(state: dict[str, Any], plan_slices: list[dict[str, Any]]) -> str:
