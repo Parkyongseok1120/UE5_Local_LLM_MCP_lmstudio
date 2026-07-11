@@ -1,0 +1,12 @@
+{
+  "description": "Animation domain eval cases.",
+  "defaults": { "mode": "compile_fix" },
+  "cases": [
+    {
+      "id": "animation_notify_state",
+      "request": "Add AnimNotifyState for attack window begin/end",
+      "expectedDomainKind": "animation",
+      "minPlanSlices": 2
+    }
+  ]
+}

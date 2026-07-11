@@ -149,6 +149,85 @@ def project_index_needs_sync(project: Path, index_dir: Path) -> tuple[bool, str]
     return False, "up_to_date"
 
 
+def project_index_sync_capabilities(project: Path, index_dir: Path) -> dict[str, Any]:
+    """Detailed sync flags for RAG search staleness UX (capability-split, not binary)."""
+    project_name = project.stem
+    project_root = project.parent.resolve()
+    sqlite_path = index_dir / "rag.sqlite"
+
+    index_usable = sqlite_path.is_file()
+    try:
+        index_usable = index_usable and sqlite_path.stat().st_size > 0
+    except OSError:
+        index_usable = False
+
+    profiles = index_dir / "raw_project_profiles.jsonl"
+    architecture = index_dir / "raw_project_architecture.jsonl"
+    symbols_path = index_dir / "raw_project_symbols.jsonl"
+
+    has_profile = bool(_project_rows(_load_jsonl_rows(profiles), project_name, project_root))
+    has_architecture = bool(_project_rows(_load_jsonl_rows(architecture), project_name, project_root))
+    has_symbols = bool(_project_rows(_load_jsonl_rows(symbols_path), project_name))
+
+    source_newer_than_symbols = False
+    source_root = project_root / "Source"
+    if source_root.is_dir() and symbols_path.is_file():
+        newest_source = _newest_mtime(source_root, ("*.cpp", "*.h", "*.hpp", "*.cs"))
+        if newest_source is not None:
+            try:
+                symbols_mtime = symbols_path.stat().st_mtime
+            except OSError:
+                symbols_mtime = None
+            if symbols_mtime is not None and newest_source > symbols_mtime:
+                source_newer_than_symbols = True
+
+    editor_needed, editor_reason = _project_editor_metadata_needs_sync(project, index_dir, project_name)
+    manifest_path = index_dir / "build_manifest.json"
+    manifest_stale_flag, manifest_reason = manifest_stale(index_dir, manifest_path, sqlite_path)
+
+    sync_needed, primary_reason = project_index_needs_sync(project, index_dir)
+
+    project_source_fresh = not source_newer_than_symbols and has_profile
+    project_symbols_fresh = has_symbols and not source_newer_than_symbols
+    architecture_fresh = has_architecture
+    editor_metadata_fresh = not editor_needed
+
+    blocking_reasons = {
+        "index-missing",
+        "index-unreadable",
+        "index-empty",
+    }
+    is_blocking = not index_usable or any(r in primary_reason for r in blocking_reasons)
+
+    if is_blocking:
+        severity = "blocking"
+        analysis_can_proceed = False
+    elif sync_needed:
+        severity = "advisory"
+        analysis_can_proceed = True
+    else:
+        severity = "none"
+        analysis_can_proceed = True
+
+    return {
+        "stale": bool(sync_needed),
+        "reason": primary_reason,
+        "indexUsable": index_usable,
+        "projectSourceFresh": project_source_fresh,
+        "projectSymbolsFresh": project_symbols_fresh,
+        "architectureFresh": architecture_fresh,
+        "editorMetadataFresh": editor_metadata_fresh,
+        "manifestFresh": not manifest_stale_flag,
+        "stalenessSeverity": severity,
+        "analysisCanProceed": analysis_can_proceed,
+        "directSourcePreferred": source_newer_than_symbols or not project_symbols_fresh,
+        "refreshRecommended": bool(sync_needed) and not is_blocking,
+        "refreshRequired": is_blocking,
+        "editorMetadataReason": editor_reason if editor_needed else None,
+        "manifestReason": manifest_reason if manifest_stale_flag else None,
+    }
+
+
 def active_project_check_status(project: Path, workspace: Path | None = None, index_dir: Path | None = None) -> dict[str, Any]:
     workspace = workspace or find_workspace_root()
     index_dir = index_dir or resolve_index_dir()

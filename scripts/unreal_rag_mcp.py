@@ -485,7 +485,10 @@ class McpServer:
                 "title": "Search Unreal RAG",
                 "description": (
                     "Hybrid FTS + symbol retrieval over the local Unreal RAG index. "
-                    "Use before answering Unreal C++, Lyra, module, project, shader, material, or Blueprint questions."
+                    "Use before answering Unreal C++, Lyra, module, project, shader, material, or Blueprint questions. "
+                    "If indexStaleness.stale=true but analysisCanProceed=true, do not repeat the same query — "
+                    "use search_files/read_file on project Source/ or answer from returned matches. "
+                    "repeatDetected=true means full context was suppressed; do not call again with the same args."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -1768,27 +1771,97 @@ class McpServer:
             self.tool_result(message_id, f"RAG index does not exist: {self.index}", is_error=True)
             return
 
-        rows, context, resolved_scope, detail = self.run_search(query, top_k, arguments, use_hybrid)
         from index_staleness import project_source_stale_status
-        from token_budget import code_detail_limits, next_code_detail
+        from read_query_history import check_repeat_query, query_fingerprint, record_query_delivery
+        from token_budget import code_detail_limits, next_code_detail, resolve_code_detail
 
+        detail = resolve_code_detail(str(arguments.get("detailLevel") or "compact"))
+        mode = str(arguments.get("mode") or "auto")
+        scope = str(arguments.get("scope") or "auto")
+        config = load_shared_config()
+        active_project = str(config.get("activeProject") or "")
+
+        fingerprint = query_fingerprint(
+            tool="unreal_rag_search",
+            active_project=active_project,
+            query=query,
+            mode=mode,
+            scope=scope,
+            detail_level=detail,
+            top_k=top_k,
+            hybrid=use_hybrid,
+            index_path=self.index,
+        )
+        repeat = check_repeat_query(fingerprint)
+        if repeat.get("repeatDetected"):
+            short = (
+                f"{repeat.get('message')}\n"
+                f"requiredNextAction: {repeat.get('requiredNextAction')}"
+            )
+            self.tool_result(
+                message_id,
+                short,
+                structured={
+                    "ok": True,
+                    "repeatDetected": True,
+                    "doNotRetry": True,
+                    "fullContextSuppressed": True,
+                    "message": repeat.get("message"),
+                    "requiredNextAction": repeat.get("requiredNextAction"),
+                },
+                char_limit=1200,
+            )
+            return
+
+        rows, context, resolved_scope, detail = self.run_search(query, top_k, arguments, use_hybrid)
         char_limit = int(code_detail_limits(detail)["max_tool_chars"])
         truncated = "assembly budget truncated" in context
         next_detail = next_code_detail(detail) if truncated else None
-        stale_status = project_source_stale_status()
-        structured = {
+        stale_status = project_source_stale_status(search_mode=mode)
+
+        structured: dict[str, Any] = {
             "matches": rows,
             "hybrid": use_hybrid,
             "scope": resolved_scope,
             "detailLevel": detail,
             "nextDetailLevel": next_detail,
             "indexStaleness": stale_status,
+            "analysisCanProceed": stale_status.get("analysisCanProceed", True),
+            "directSourcePreferred": stale_status.get("directSourcePreferred", False),
+            "doNotRepeatSearch": False,
         }
-        if stale_status.get("stale"):
-            structured["nextSteps"] = [
-                "unreal_rag_refresh",
-                str(stale_status.get("recommendedCommand") or ".\\rag.ps1 sync-active-project"),
-            ]
+
+        if stale_status.get("stale") or stale_status.get("refreshRecommended"):
+            refresh_available = extended_tools_enabled()
+            if refresh_available:
+                structured["refreshAvailable"] = True
+                structured["recommendedTool"] = "unreal_start_rag_refresh"
+            else:
+                structured["refreshAvailable"] = False
+                structured["recommendedTool"] = None
+
+            severity = stale_status.get("stalenessSeverity") or "advisory"
+            if severity in {"advisory", "claim_blocking", "none"}:
+                structured["requiredNextAction"] = "read_project_source_or_answer"
+                structured["doNotRepeatSearch"] = True
+                structured["nextSteps"] = [
+                    "Answer from returned matches or use search_files/read_file on project Source/.",
+                ]
+                if stale_status.get("recommendedCommand"):
+                    structured["nextSteps"].append(str(stale_status["recommendedCommand"]))
+                if refresh_available and stale_status.get("refreshRecommended"):
+                    structured["nextSteps"].append(
+                        "Optional once: unreal_start_rag_refresh (background; not required for C++ structure analysis)."
+                    )
+            elif severity == "blocking":
+                structured["requiredNextAction"] = "report_refresh_command"
+                structured["nextSteps"] = [
+                    str(stale_status.get("recommendedCommand") or ".\\rag.ps1 build"),
+                ]
+                if refresh_available:
+                    structured["nextSteps"].insert(0, "unreal_start_rag_refresh")
+
+        record_query_delivery(fingerprint, detail_level=detail, match_count=len(rows))
         self.tool_result(
             message_id,
             context,

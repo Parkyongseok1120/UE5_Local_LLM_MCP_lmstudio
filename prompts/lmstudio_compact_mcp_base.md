@@ -76,6 +76,11 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 - If lookup returns `graphSampled=true` and `nextDetailLevel`, escalate with that detail **once** — do not loop lookup↔rag_search.
 - If `stopRetryingLookup=true` (empty graph or max detail), answer from the last lookup — do not repeat.
 - If `unreal_rag_search` errors, report it and continue from the last lookup; do not alternate tools in a loop.
+- **Successful search + stale index:** `indexStaleness.stale=true` does **not** invalidate returned matches. If `analysisCanProceed=true`, do **not** repeat the same RAG query.
+- For current-project **source/system analysis**, `search_files` / `read_file` on `Source/` is **newer and preferred** over stale indexed chunks.
+- Call a refresh tool **at most once**, only when available (Extended tools) and required for the claim. In Essential mode, report `recommendedCommand` once; do **not** repeat RAG search.
+- If `repeatDetected=true` or `doNotRepeatSearch=true`, answer from existing evidence or direct file reads.
+- If enough target files were already read, answer from those files and label RAG evidence as stale/background-only.
 
 ## C++ / source detail tiers
 

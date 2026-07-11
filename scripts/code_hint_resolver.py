@@ -172,6 +172,7 @@ def resolve_code_domain_hint(
                     },
                 }
             )
+    suggested.append({"tool": "read_file", "args": {"path": "<from search_files matches>"}})
     suggested.append(
         {
             "tool": "unreal_rag_search",

@@ -145,6 +145,7 @@ EXPANSION_CASES_24: list[dict[str, Any]] = [
         "expectedFilesToRead": ["component constructor cpp", "header forward declarations"],
         "expectedPatchTargets": ["matching cpp/header"],
         "forbiddenPatchTargets": ["Build.cs-first fix without module evidence"],
+        "expectedErrorSubkind": "COMPONENT_REGISTRATION_MISSING_INCLUDE",
         "notes": "Add the concrete component include at the use site rather than changing module dependencies.",
     },
     {

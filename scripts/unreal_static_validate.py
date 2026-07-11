@@ -888,6 +888,65 @@ def validate_required_includes(path: Path, text: str, root: Path) -> list[Findin
     return findings
 
 
+def validate_component_registration_includes(path: Path, text: str, root: Path) -> list[Finding]:
+    """Error-level missing include for CreateDefaultSubobject/NewObject complete types."""
+    from include_resolver import format_include_feedback, infer_usage_kind, resolve_project_symbol_include
+
+    findings: list[Finding] = []
+    rel = str(path.relative_to(root))
+    if path.suffix.lower() not in {".cpp", ".c", ".cc", ".h", ".hpp"}:
+        return findings
+
+    patterns = (
+        re.compile(r"CreateDefaultSubobject\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>"),
+        re.compile(r"NewObject\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>"),
+    )
+    seen: set[tuple[str, str]] = set()
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            symbol = match.group(1)
+            if not symbol.startswith("U"):
+                continue
+            include_key = (symbol, rel)
+            if include_key in seen:
+                continue
+            seen.add(include_key)
+            usage = infer_usage_kind(text, symbol, match.start())
+            resolution = resolve_project_symbol_include(root, symbol, path, usage)
+            if not resolution:
+                fallback = CPP_SYMBOL_INCLUDES.get(symbol)
+                if fallback and not has_include(text, fallback):
+                    findings.append(
+                        Finding(
+                            "error",
+                            rel,
+                            line_number(text, match.start()),
+                            "COMPONENT_REGISTRATION_INCLUDE_MISSING",
+                            (
+                                f"Missing include for component {symbol}.\n"
+                                f'Add: #include "{fallback}"\n'
+                                f"To: {rel}\n"
+                                "Do not modify Build.cs for engine component includes."
+                            ),
+                        )
+                    )
+                continue
+            if has_include(text, resolution.preferred_include):
+                continue
+            if f'"{symbol}.h"' in text:
+                continue
+            findings.append(
+                Finding(
+                    "error",
+                    rel,
+                    line_number(text, match.start()),
+                    "COMPONENT_REGISTRATION_INCLUDE_MISSING",
+                    format_include_feedback(resolution),
+                )
+            )
+    return findings
+
+
 def validate_unreal_lifecycle_overrides(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
     rel = str(path.relative_to(root))
@@ -2965,6 +3024,23 @@ def _run_per_file_validators(
         findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
         findings.extend(validate_blueprintpure_missing_const(path, text, root))
         findings.extend(validate_required_includes(path, text, root))
+        findings.extend(validate_component_registration_includes(path, text, root))
+        try:
+            from domain_validators import (
+                validate_animation_notify_lifecycle,
+                validate_component_preflight,
+                validate_gas_footprint,
+                validate_replication_contract,
+                validate_subsystem_lifecycle,
+            )
+
+            findings.extend(validate_component_preflight(path, text, root))
+            findings.extend(validate_subsystem_lifecycle(path, text, root))
+            findings.extend(validate_replication_contract(path, text, root))
+            findings.extend(validate_gas_footprint(path, text, root))
+            findings.extend(validate_animation_notify_lifecycle(path, text, root))
+        except Exception:
+            pass
     if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
         findings.extend(validate_editor_only_runtime_includes(path, text, root))
         findings.extend(validate_enhanced_input(path, text, root, build_text_value))
@@ -2982,6 +3058,7 @@ def _run_per_file_validators(
             )
     if path.suffix.lower() in {".cpp", ".c", ".cc"}:
         findings.extend(validate_required_includes(path, text, root))
+        findings.extend(validate_component_registration_includes(path, text, root))
         findings.extend(validate_constructor_lifecycle_usage(path, text, root))
         findings.extend(validate_newobject_outer(path, text, root))
         findings.extend(validate_component_timer_manager(path, text, root, bases))

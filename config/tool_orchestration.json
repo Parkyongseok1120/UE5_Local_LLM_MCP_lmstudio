@@ -18,6 +18,17 @@
       ],
       "writesAllowed": false
     },
+    "project_source_analysis": {
+      "sequence": [
+        "unreal_get_active_project",
+        "search_files",
+        "read_file",
+        "unreal_rag_search",
+        "unreal_review_claim_validate",
+        "answer_with_evidence"
+      ],
+      "writesAllowed": false
+    },
     "project_review": {
       "sequence": [
         "unreal_get_active_project",

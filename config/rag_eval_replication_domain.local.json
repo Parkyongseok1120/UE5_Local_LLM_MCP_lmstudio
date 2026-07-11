@@ -1,0 +1,12 @@
+{
+  "description": "Replication domain eval cases.",
+  "defaults": { "mode": "compile_fix" },
+  "cases": [
+    {
+      "id": "replication_four_slice_contract",
+      "request": "Add replicated health with OnRep and Server RPC",
+      "expectedDomainKind": "replication",
+      "minPlanSlices": 4
+    }
+  ]
+}

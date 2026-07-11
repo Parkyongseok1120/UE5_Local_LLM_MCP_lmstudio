@@ -94,6 +94,16 @@ SUBKIND_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ),
     ("RAW_UOBJECT_MEMBER_WITHOUT_UPROPERTY", "reflection_fix", re.compile(r"UPROPERTY.*UObject|raw pointer.*UObject", re.I)),
     ("CONSTRUCTOR_LIFECYCLE_MISUSE", "compile_fix", re.compile(r"constructor.*CreateDefaultSubobject|FObjectInitializer", re.I)),
+    (
+        "COMPONENT_REGISTRATION_MISSING_INCLUDE",
+        "compile_fix",
+        re.compile(
+            r"C2027.*undefined type.*creating a default subobject|"
+            r"undefined type.*CreateDefaultSubobject|"
+            r"incomplete type.*CreateDefaultSubobject",
+            re.I,
+        ),
+    ),
     ("SEQUENCER_BINDING_CONFUSION", "runtime_debug", re.compile(r"sequencer|level\s*sequence|movie\s*scene|binding.*(actor|component)|FMovieScene", re.I)),
     ("TICK_ORDER_SUSPECT", "runtime_debug", re.compile(r"tick\s*order|PrimaryActorTick|TG_|ETickingGroup|before.*tick|after.*tick", re.I)),
     ("API_VERSION_MISMATCH", "compile_fix", re.compile(r"API_VERSION|deprecated.*UE_|engine\s*version|WITH_ENGINE|UNREAL_ENGINE", re.I)),
@@ -316,6 +326,20 @@ def route_error_action(message: str, error_code: str = "") -> dict[str, Any]:
             forbidden=["adding UnrealEd to runtime module as default fix"],
             notes=["Prefer moving editor-only code behind editor modules or guards."],
         )
+
+    if subkind == "COMPONENT_REGISTRATION_MISSING_INCLUDE":
+        return set_route(
+            broad_mode="compile_fix",
+            reads=["referencing cpp", "declaring component header"],
+            rag=["compile_fix"],
+            targets=["referencing cpp or header at use site"],
+            forbidden=["Build.cs edit when same module", "create new component file", "broad actor rewrite"],
+            notes=["Add the exact project-relative include for the complete component type at the use site."],
+            soft=[
+                "Add the declaring header include at the CreateDefaultSubobject/NewObject use site.",
+                "Do not edit Build.cs when owner and consumer modules match.",
+            ],
+        ) | {"routePriorityApplied": "component_registration_include_before_build_cs"}
 
     if subkind == "SEQUENCER_BINDING_CONFUSION":
         return set_route(

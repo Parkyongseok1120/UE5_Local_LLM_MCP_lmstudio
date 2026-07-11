@@ -67,6 +67,38 @@ def _validation_error_key(rejection_kind: str, error_subkind: str = "") -> str:
     return "|".join(["validation", str(rejection_kind or ""), str(error_subkind or "")])
 
 
+def component_include_fingerprint(
+    *,
+    symbol: str = "",
+    patch_target: str = "",
+    required_include: str = "",
+) -> str:
+    return "|".join(
+        [
+            "component_include",
+            str(symbol or ""),
+            str(patch_target or "").replace("\\", "/"),
+            str(required_include or ""),
+        ]
+    )
+
+
+def count_consecutive_include_fingerprint_rejections(
+    attempts: list[dict[str, Any]],
+    fingerprint: str,
+) -> int:
+    if not attempts or not fingerprint:
+        return 0
+    count = 0
+    for record in reversed(attempts):
+        if record.get("includeFingerprint") != fingerprint:
+            if record.get("validationRejectionKind") or record.get("errorCode") == "VALIDATION_REJECTED":
+                break
+            continue
+        count += 1
+    return count
+
+
 def count_consecutive_validation_rejections(attempts: list[dict[str, Any]], rejection_kind: str) -> int:
     if not attempts or not rejection_kind:
         return 0
@@ -111,6 +143,35 @@ def make_validation_rejection_record(
     return record
 
 
+def make_include_missing_rejection_record(
+    *,
+    attempt: int,
+    feedback: str,
+    symbol: str,
+    patch_target: str,
+    required_include: str,
+    changed_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    fingerprint = component_include_fingerprint(
+        symbol=symbol,
+        patch_target=patch_target,
+        required_include=required_include,
+    )
+    record = make_validation_rejection_record(
+        attempt=attempt,
+        rejection_kind="component_include_missing",
+        feedback=feedback,
+        error_subkind="COMPONENT_REGISTRATION_MISSING_INCLUDE",
+        changed_paths=changed_paths or [],
+        notes=[fingerprint],
+    )
+    record["includeFingerprint"] = fingerprint
+    record["requiredInclude"] = required_include
+    record["patchTarget"] = patch_target
+    record["symbol"] = symbol
+    return record
+
+
 def recommend_retry_action(
     previous: dict[str, Any] | None,
     current: dict[str, Any],
@@ -124,13 +185,29 @@ def recommend_retry_action(
     if attempts:
         repeat_count = count_consecutive_same_errors(list(attempts) + [current])
         validation_repeat = count_consecutive_validation_rejections(list(attempts), str(rejection_kind or ""))
+        include_fingerprint = str(current.get("includeFingerprint") or "")
+        include_repeat = (
+            count_consecutive_include_fingerprint_rejections(list(attempts), include_fingerprint)
+            if include_fingerprint
+            else 0
+        )
     else:
         repeat_count = 2 if repeated else 1
         validation_repeat = 0
+        include_repeat = 0
     if current.get("passed"):
         action = "stop_success"
         reason = "build passed"
         escalation_level = 0
+    elif str(rejection_kind or "") == "component_include_missing" or include_repeat >= 1:
+        action = "inject_include_template" if include_repeat >= 1 else "continue_first_error_loop"
+        reason = (
+            "Same missing component include fingerprint repeated; inject resolver include template "
+            "instead of asking for the same wrong patch."
+            if include_repeat >= 1
+            else "Missing component include at complete-type use site."
+        )
+        escalation_level = 2 if include_repeat >= 1 else 1
     elif str(rejection_kind or "") == "multifile_incomplete":
         action = "require_multifile_surfaces"
         reason = "multifile patch did not cover all required declaration/definition/callsite surfaces"
@@ -239,6 +316,14 @@ def _prompt_hints(action: str, blocked_paths: list[str] | None = None) -> list[s
     hints: list[str] = []
     if action == "force_new_evidence":
         hints.extend(["Do not resubmit the same patch.", "Read current file state before editing."])
+    elif action == "inject_include_template":
+        hints.extend(
+            [
+                "Add the exact project-relative #include shown in fixEvidence or validation feedback.",
+                "Patch only the referencing cpp/header at the CreateDefaultSubobject/NewObject use site.",
+                "Do not edit Build.cs when owner and consumer modules match.",
+            ]
+        )
     elif action == "escalate_routing":
         hints.extend(["Classify the first actionable error again.", "Read owner Build.cs or symbol graph before patching."])
     elif action == "escalate_evidence":

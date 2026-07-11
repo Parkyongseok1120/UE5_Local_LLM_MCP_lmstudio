@@ -67,6 +67,12 @@ SUBKIND_POLICY: dict[str, SubkindPolicy] = {
         autofix_names=("blueprint_native_event_impl",),
         retry_hint_codes=("CPP_DEFINITION_MISSING",),
     ),
+    "COMPONENT_REGISTRATION_MISSING_INCLUDE": SubkindPolicy(
+        broad_mode="compile_fix",
+        eval_tier="single_file_compile_fix",
+        autofix_names=("component_include",),
+        retry_hint_codes=("COMPONENT_REGISTRATION_INCLUDE_MISSING",),
+    ),
     "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE": SubkindPolicy(
         broad_mode="editor_runtime_fix",
         eval_tier="editor_runtime_boundary",

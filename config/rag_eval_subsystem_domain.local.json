@@ -1,0 +1,20 @@
+{
+  "description": "Subsystem domain eval cases.",
+  "defaults": {
+    "mode": "prototype_subsystem",
+    "maxAttempts": 5
+  },
+  "cases": [
+    {
+      "id": "subsystem_missing_include",
+      "fixtureId": "local_game_instance_subsystem_missing_include",
+      "expectedErrorSubkind": "C1083_MISSING_INCLUDE"
+    },
+    {
+      "id": "subsystem_lifetime_world",
+      "request": "Add per-level inventory cache subsystem",
+      "expectedLifetime": "world",
+      "expectedBase": "UWorldSubsystem"
+    }
+  ]
+}

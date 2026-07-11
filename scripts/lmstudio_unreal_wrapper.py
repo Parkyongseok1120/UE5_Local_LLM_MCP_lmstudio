@@ -1385,7 +1385,7 @@ def build_static_autofix_steps(mode: str) -> list[AutofixStep]:
             AutofixStep(
                 "component_include",
                 apply_component_include_autofix,
-                {"MISSING_CONCRETE_COMPONENT_INCLUDE"},
+                {"COMPONENT_REGISTRATION_INCLUDE_MISSING", "MISSING_CONCRETE_COMPONENT_INCLUDE"},
             ),
             AutofixStep(
                 "include_path",
@@ -3623,6 +3623,30 @@ def run(args: argparse.Namespace) -> int:
             )
             write_file(run_dir / "final_answer.md", summary)
             print(summary)
+            if agent_plan is not None and agent_plan.plan_slices:
+                from plan_slice_state import (
+                    init_slice_state,
+                    load_slice_state,
+                    mark_slice_complete,
+                    next_slice_prompt,
+                    save_slice_state,
+                )
+
+                slice_path = run_dir / "plan_slice_state.json"
+                slice_state = load_slice_state(slice_path)
+                if not slice_state.get("slices"):
+                    slice_state = init_slice_state(agent_plan.plan_slices)
+                slice_state = mark_slice_complete(
+                    slice_state,
+                    project_root=project_root,
+                    written_paths=last_written,
+                    plan_slices=agent_plan.plan_slices,
+                )
+                save_slice_state(slice_path, slice_state)
+                if int(slice_state.get("activeSliceIndex") or 0) < len(agent_plan.plan_slices):
+                    previous_feedback = next_slice_prompt(slice_state, agent_plan.plan_slices)
+                    write_file(run_dir / "next_slice_prompt.txt", previous_feedback + "\n")
+                    continue
             return 0
 
         build_records = parse_build_feedback(last_build.log_path, project_root, last_build.output)

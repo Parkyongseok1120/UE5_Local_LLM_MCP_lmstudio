@@ -47,3 +47,23 @@ For unseen real-project validation:
 ```
 
 Use a filled copy of `config\real_project_eval_template.json`, not the template itself, for real reporting.
+
+## 9B compact acceptance floor
+
+Documented in [Roadmap_9B_Domain_Expansion.md](Roadmap_9B_Domain_Expansion.md). Minimum bar after domain-expansion work:
+
+```text
+Pass@K >= 36/36
+Pass@1 >= 35/36  (target 36/36 after component include fix)
+wrong-file = 0, Build.cs FP = 0, no-op = 0
+write validation p95 <= 2s
+```
+
+Focused gate before/after major 9B changes:
+
+| Gate | Command |
+|------|---------|
+| Fast | `python scripts/run_9b_regression_gate.py` |
+| Component x5 live | `python scripts/eval_pass_at_k.py --live --require-live --case-ids local_component_registration_missing_include` (repeat manually or via artifact dir) |
+| Full 36 live | `python scripts/eval_pass_at_k.py --live --require-live --config config/rag_eval_real_project_holdout_cases.local.json` |
+| KPI report | `python scripts/report_eval_kpi.py --kpi data/baseline/live_holdout/20260711-090534-qwen35-9b/kpi.json` |

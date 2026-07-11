@@ -33,6 +33,7 @@ Artifacts:
 | Live 36-case KPI | `data/baseline/live_holdout/20260711-090534-qwen35-9b/kpi.json` |
 | Per-case wrapper runs | `data/baseline/live_holdout/20260711-090534-qwen35-9b/<case-id>/wrapper_run/` |
 | Eval log | `data/baseline/live_holdout/20260711-090534-qwen35-9b/eval.log` |
+| Domain expansion roadmap | [Roadmap_9B_Domain_Expansion.md](Roadmap_9B_Domain_Expansion.md) |
 
 ---
 

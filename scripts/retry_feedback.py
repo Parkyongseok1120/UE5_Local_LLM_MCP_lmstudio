@@ -44,6 +44,11 @@ POSSIBLE_MISSING_MODULE_HINT = (
     "Static validation suspects a missing Build.cs module dependency.\n"
     "Inspect *.Build.cs and add the module to PublicDependencyModuleNames when public headers need it."
 )
+COMPONENT_REGISTRATION_INCLUDE_HINT = (
+    "Static validation reports a missing project component include at a complete-type use site.\n"
+    "Add the exact project-relative #include to the referencing file shown in the finding.\n"
+    "Do not edit Build.cs when the symbol owner module matches the consumer module."
+)
 
 
 def static_validation_retry_feedback(
@@ -81,6 +86,11 @@ def static_validation_retry_feedback(
         return GENERATED_H_RETRY_HINT
     if "POSSIBLE_MISSING_MODULE" in codes:
         return POSSIBLE_MISSING_MODULE_HINT
+    for finding in findings or []:
+        if finding.code == "COMPONENT_REGISTRATION_INCLUDE_MISSING":
+            return finding.message
+    if route.get("errorSubkind") == "COMPONENT_REGISTRATION_MISSING_INCLUDE":
+        return COMPONENT_REGISTRATION_INCLUDE_HINT
     if "CPP_DEFINITION_MISSING" in codes and route.get("errorSubkind") != "C1083_MISSING_INCLUDE":
         return LNK_MISSING_DEFINITION_RETRY_HINT
     if route.get("errorSubkind") == "DELEGATE_BROADCAST_SIGNATURE_MISMATCH":

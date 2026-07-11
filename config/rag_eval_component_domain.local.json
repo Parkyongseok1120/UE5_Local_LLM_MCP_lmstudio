@@ -1,0 +1,23 @@
+{
+  "description": "Component domain eval cases (bootstrap fixtures + routing checks).",
+  "defaults": {
+    "mode": "prototype_component",
+    "maxAttempts": 5
+  },
+  "cases": [
+    {
+      "id": "component_registration_missing_include",
+      "fixtureId": "local_component_registration_missing_include",
+      "expectedErrorSubkind": "COMPONENT_REGISTRATION_MISSING_INCLUDE",
+      "expectedPassAt1": true
+    },
+    {
+      "id": "component_scaffold_routing",
+      "request": "Implement UHealthComponent with CreateDefaultSubobject registration on owner",
+      "checks": {
+        "domainKind": "component",
+        "minPlanSlices": 2
+      }
+    }
+  ]
+}

@@ -27,6 +27,35 @@ def test_classify_inspect_review():
     assert classify_task("Review project architecture inventory", "review") == "inspect_only"
 
 
+def test_classify_cinematic_system_analysis_korean():
+    assert classify_task("현재 프로젝트의 시네마틱 시스템 분석", "auto") == "inspect_only"
+
+
+def test_classify_cinematic_structure_explain():
+    assert classify_task("시네마틱 시스템 구조와 작동 방식 설명", "auto") == "inspect_only"
+
+
+def test_classify_cinematic_runtime_bug():
+    assert classify_task("시네마틱 종료 후 위치가 되돌아가는 버그 분석", "auto") == "runtime_debug"
+
+
+def test_classify_cinematic_implement_is_edit():
+    assert classify_task("시네마틱 시스템에 Stop 기능 구현", "auto") == "edit"
+
+
+def test_cinematic_analysis_plan_source_first():
+    plan = build_agent_plan("현재 프로젝트의 시네마틱 시스템 분석", "auto")
+    payload = plan.to_dict()
+    assert plan.task_kind == "inspect_only"
+    assert plan.evidence.writes_allowed is False
+    assert payload["writeGate"]["writesAllowed"] is False
+    policy = payload["toolPolicy"]
+    assert policy.index("search_files") < policy.index("unreal_rag_search")
+    tools = [c["tool"] for c in payload["suggestedToolCalls"]]
+    assert "search_files" in tools
+    assert "read_file" in tools or any("read_file" in str(c) for c in payload["suggestedToolCalls"])
+
+
 def test_refactor_r0_no_edit():
     plan = build_agent_plan("Discover impact for UMySubsystem refactor R0", "refactor_r0")
     payload = plan.to_dict()

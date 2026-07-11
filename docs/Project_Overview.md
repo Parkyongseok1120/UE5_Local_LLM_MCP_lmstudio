@@ -12,7 +12,7 @@ v1.2.5 is the final planned minor release in the 1.2 line. Future 1.2.x updates,
 
 Latest measured results:
 
-See also: [Live Validation Results — 2026-07-11](Live_Validation_Results_20260711.md) (Project_MJS scoped smoke + post-stabilization 36-case live run).
+See also: [Live Validation Results — 2026-07-11](Live_Validation_Results_20260711.md) (Project_MJS scoped smoke + post-stabilization 36-case live run). [9B Domain Expansion Roadmap](Roadmap_9B_Domain_Expansion.md).
 
 | Run | Artifact | Wall-clock time | Pass@K | Pass@1 | Notes |
 |---|---|---:|---:|---:|---|

@@ -1,0 +1,12 @@
+{
+  "description": "GAS domain eval cases.",
+  "defaults": { "mode": "compile_fix" },
+  "cases": [
+    {
+      "id": "gas_staged_bootstrap",
+      "request": "Bootstrap AbilitySystemComponent and grant one gameplay ability",
+      "expectedDomainKind": "gas",
+      "minPlanSlices": 2
+    }
+  ]
+}

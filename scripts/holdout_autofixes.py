@@ -10,6 +10,7 @@ from unreal_static_validate import (
     Finding,
     build_cs_text,
     declared_build_modules,
+    has_include,
     iter_source_files,
     public_build_modules,
     read_text,
@@ -151,7 +152,45 @@ def apply_build_module_autofix(root: Path, findings: list[Finding]) -> list[Path
 
 
 def apply_component_include_autofix(root: Path, findings: list[Finding]) -> list[Path]:
+    from include_resolver import infer_usage_kind, resolve_project_symbol_include
+
     written: list[Path] = []
+    targeted = [f for f in findings if f.code == "COMPONENT_REGISTRATION_INCLUDE_MISSING"]
+    if targeted:
+        for finding in targeted:
+            path = (root / finding.path).resolve()
+            if not path.is_file():
+                continue
+            text = read_text(path)
+            updated = text
+            for pattern in (
+                re.compile(r"CreateDefaultSubobject\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>"),
+                re.compile(r"NewObject\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>"),
+            ):
+                for match in pattern.finditer(text):
+                    symbol = match.group(1)
+                    usage = infer_usage_kind(text, symbol, match.start())
+                    resolution = resolve_project_symbol_include(root, symbol, path, usage)
+                    include_path = resolution.preferred_include if resolution else ""
+                    if not include_path:
+                        include_path = {
+                            "UBoxComponent": "Components/BoxComponent.h",
+                            "USphereComponent": "Components/SphereComponent.h",
+                        }.get(symbol, "")
+                    if not include_path or has_include(text, include_path):
+                        continue
+                    lines = updated.splitlines()
+                    insert_at = 0
+                    for index, line in enumerate(lines):
+                        if line.strip().startswith("#include "):
+                            insert_at = index + 1
+                    lines.insert(insert_at, f'#include "{include_path}"')
+                    updated = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+            if updated != text:
+                write_file(path, updated)
+                written.append(path)
+        return written
+
     component_map = {
         "UBoxComponent": "Components/BoxComponent.h",
         "USphereComponent": "Components/SphereComponent.h",
