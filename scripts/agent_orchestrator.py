@@ -32,7 +32,20 @@ COMPILE_MARKERS = (
     "c1083", "lnk2019", "uht", "generated.h", "build.cs", "compile error",
     "undefined", "unresolved", "missing module", "signature mismatch",
     "cpp_function_signature_mismatch", "declaration", "definition",
-    "빌드 오류", "빌드오류", "컴파일 오류", "컴파일오류", "에러", "오류",
+    "빌드 오류", "빌드오류", "컴파일 오류", "컴파일오류",
+)
+COMPILE_CONTEXT_MARKERS = (
+    "compile", "build", "link", "uht", "c1083", "lnk2019", "generated.h", "build.cs",
+    "빌드", "컴파일", "undefined", "unresolved",
+)
+BROAD_ERROR_MARKERS = ("에러", "오류")
+READ_ONLY_OVERRIDE_MARKERS = (
+    "수정하지 말", "분석만", "설명만", "계획만",
+    "don't edit", "do not edit", "read only", "no edits", "analysis only",
+)
+CREATE_TARGET_MARKERS = (
+    ".h", ".cpp", ".cs", "class ", "component", "subsystem", "actor",
+    "클래스", "컴포넌트", "서브시스템", "액터", "파일",
 )
 REFACTOR_MARKERS = ("refactor", "r0", "r1", "r2", "r3", "r4", "move class", "extract")
 RUNTIME_MARKERS = (
@@ -56,7 +69,7 @@ ANALYSIS_MARKERS = (
 )
 WRITE_INTENT_MARKERS = (
     "implement", "fix", "patch", "create", "add ", "write ", "generate ",
-    "구현", "수정", "고쳐", "추가", "생성", "만들",
+    "구현", "수정", "고쳐", "추가", "생성", "만들", "패치",
 )
 ASSET_ANALYSIS_MARKERS = (
     "shader", "usf", "ush", "hlsl", "material", "material node",
@@ -195,7 +208,21 @@ class AgentPlan:
 
 
 def _has_write_intent(text: str) -> bool:
-    return any(m in text for m in WRITE_INTENT_MARKERS)
+    if any(m in text for m in READ_ONLY_OVERRIDE_MARKERS):
+        return False
+    if not any(m in text for m in WRITE_INTENT_MARKERS):
+        return False
+    if any(m in text for m in ("생성", "만들")):
+        return any(m in text for m in CREATE_TARGET_MARKERS)
+    return True
+
+
+def _is_compile_fix_request(text: str) -> bool:
+    if any(m in text for m in COMPILE_MARKERS):
+        return True
+    if any(m in text for m in BROAD_ERROR_MARKERS):
+        return any(m in text for m in COMPILE_CONTEXT_MARKERS)
+    return False
 
 
 def _is_runtime_symptom_analysis(text: str) -> bool:
@@ -229,7 +256,9 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "code_sketch"
     if mode == "api_lookup":
         return "answer_only"
-    if any(m in text for m in COMPILE_MARKERS):
+    if any(m in text for m in READ_ONLY_OVERRIDE_MARKERS):
+        return "inspect_only"
+    if _is_compile_fix_request(text):
         return "compile_fix"
     if any(m in text for m in SKETCH_MARKERS):
         return "code_sketch"

@@ -28,6 +28,16 @@ RAG_EXTENDED_PROFILE_TOOLS = frozenset(
         "unreal_node_plan_validate",
         "unreal_render_report",
         "unreal_rag_rebuild_status",
+        "clangd_document_symbols",
+        "clangd_find_references",
+        "clangd_goto_definition",
+        "unreal_generate_compile_loop",
+        "unreal_genre_scope_validate",
+        "unreal_open_project_picker",
+        "unreal_project_architecture",
+        "unreal_project_graph_query",
+        "unreal_review_claim_validate",
+        "unreal_runtime_config_check",
     }
 )
 
@@ -78,12 +88,10 @@ def callable_rag_tool_names(all_registered: Iterable[str]) -> frozenset[str]:
         visible -= hidden
     if extended_tools_enabled():
         return frozenset(visible)
-    if essential_tools_enabled():
-        allowed = set(essential)
-        if control_plane_tools_enabled():
-            allowed |= hidden
-        return frozenset(name for name in visible if name in allowed)
-    return frozenset(name for name in visible if name not in RAG_EXTENDED_PROFILE_TOOLS)
+    allowed = set(essential)
+    if control_plane_tools_enabled():
+        allowed |= hidden
+    return frozenset(name for name in visible if name in allowed)
 
 
 AGENT_EXTENDED_PROFILE_TOOLS = frozenset(
@@ -111,12 +119,10 @@ def callable_agent_tool_names(all_registered: Iterable[str]) -> frozenset[str]:
         visible -= hidden
     if extended_tools_enabled():
         return frozenset(visible)
-    if essential_tools_enabled():
-        allowed = set(essential)
-        if control_plane_tools_enabled():
-            allowed |= hidden
-        return frozenset(name for name in visible if name in allowed)
-    return frozenset(name for name in visible if name not in AGENT_EXTENDED_PROFILE_TOOLS)
+    allowed = set(essential)
+    if control_plane_tools_enabled():
+        allowed |= hidden
+    return frozenset(name for name in visible if name in allowed)
 
 
 def tool_not_callable_payload(tool_name: str) -> dict:

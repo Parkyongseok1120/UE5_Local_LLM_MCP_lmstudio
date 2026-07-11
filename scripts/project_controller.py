@@ -58,6 +58,8 @@ def switch_active_project(
         except Exception as exc:
             invalidate_payload = {"ok": False, "error": str(exc)}
             cache_refresh_required = True
+        if invalidate_payload and not invalidate_payload.get("ok", True):
+            cache_refresh_required = True
 
         return {
             "ok": True,
@@ -108,6 +110,8 @@ def switch_active_project(
         invalidate_payload = on_project_switch_invalidate(previous or None, resolved, workspace=workspace)
     except Exception as exc:
         invalidate_payload = {"ok": False, "error": str(exc)}
+        cache_refresh_required = True
+    if invalidate_payload and not invalidate_payload.get("ok", True):
         cache_refresh_required = True
 
     prepare_payload: dict[str, Any] | None = None

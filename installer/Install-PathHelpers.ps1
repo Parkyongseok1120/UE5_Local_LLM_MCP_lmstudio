@@ -183,9 +183,9 @@ function Assert-SafePackagePath {
     }
 
     if (-not $ForceUnsafePath) {
-        $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
+        $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
         if (-not $resolved.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Package path must be under `$env:TEMP ($tempRoot) or pass -ForceUnsafePath. Got: $resolved"
+            throw "Package path must be under `$env:TEMP ($($tempRoot.TrimEnd('\')) or pass -ForceUnsafePath. Got: $resolved"
         }
     }
 
@@ -214,7 +214,8 @@ function Get-PortablePackageRobocopyExcludes {
             ".git", ".agent", "node_modules", "wrapper_runs", "local_holdout_fixtures",
             "text_snapshot", "editor_export_jobs", "LyraStarterGame", "StackOBot",
             "AdvancedPuzzleConstructor", ".pytest_cache", ".pytest_tmp", ".venv",
-            "DerivedDataCache", "Intermediate", "Saved", "Binaries"
+            "DerivedDataCache", "Intermediate", "Saved", "Binaries",
+            "lmstudio-unreal-agent-mcp", "mcp-tools"
         )
         ExcludeFiles = @("*.bak*", "PORTABLE_ROOT.txt", "raw_source.jsonl", "chunks.jsonl", "rag.staging.sqlite")
     }
@@ -578,7 +579,7 @@ function Write-JsonUtf8Atomic {
         Copy-Item -LiteralPath $Path -Destination $backupPath -Force
     }
 
-    $tempPath = "$Path.tmp"
+    $tempPath = "$Path.$PID.$([guid]::NewGuid().ToString('N')).tmp"
     try {
         $utf8 = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::WriteAllText($tempPath, $json, $utf8)
@@ -611,11 +612,13 @@ function Write-McpConfigBatch {
     $completed = [System.Collections.Generic.List[object]]::new()
     try {
         foreach ($entry in $Entries) {
+            $existedBefore = Test-Path -LiteralPath $entry.Path
             $result = Write-JsonUtf8Atomic -Path $entry.Path -Object $entry.Object
             $completed.Add([ordered]@{
-                Path       = $entry.Path
-                BackupPath = $result.BackupPath
-                Changed    = $result.Changed
+                Path           = $entry.Path
+                BackupPath     = $result.BackupPath
+                Changed        = $result.Changed
+                ExistedBefore  = $existedBefore
             })
         }
     }
@@ -624,6 +627,9 @@ function Write-McpConfigBatch {
             $item = $completed[$i]
             if ($item.BackupPath -and (Test-Path -LiteralPath $item.BackupPath)) {
                 Copy-Item -LiteralPath $item.BackupPath -Destination $item.Path -Force
+            }
+            elseif (-not $item.ExistedBefore -and (Test-Path -LiteralPath $item.Path)) {
+                Remove-Item -LiteralPath $item.Path -Force -ErrorAction SilentlyContinue
             }
         }
         throw

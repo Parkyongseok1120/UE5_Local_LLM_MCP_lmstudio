@@ -46,16 +46,13 @@ function callableAgentToolNames(allRegistered) {
   if (envFlag("MCP_EXTENDED_TOOLS")) {
     return visible;
   }
-  if (envFlag("MCP_ESSENTIAL_TOOLS")) {
-    const allowed = new Set(essential);
-    if (envFlag("ALLOW_CONTROL_PLANE_TOOLS")) {
-      for (const name of hidden) {
-        allowed.add(name);
-      }
+  const allowed = new Set(essential);
+  if (envFlag("ALLOW_CONTROL_PLANE_TOOLS")) {
+    for (const name of hidden) {
+      allowed.add(name);
     }
-    return new Set([...visible].filter((name) => allowed.has(name)));
   }
-  return new Set([...visible].filter((name) => !AGENT_EXTENDED_PROFILE_TOOLS.has(name)));
+  return new Set([...visible].filter((name) => allowed.has(name)));
 }
 
 function toolNotCallablePayload(toolName) {

@@ -54,16 +54,37 @@ function atomicWriteText(targetPath, content, encoding = "utf8") {
   fs.renameSync(tempPath, resolved);
 }
 
-function atomicWriteTextExclusive(targetPath, content, encoding = "utf8") {
+function atomicCreateText(targetPath, content, encoding = "utf8") {
   const resolved = path.resolve(String(targetPath));
   fs.mkdirSync(path.dirname(resolved), { recursive: true });
-  const fd = fs.openSync(resolved, "wx");
+  if (fs.existsSync(resolved)) {
+    const err = new Error(`EEXIST: file already exists: ${resolved}`);
+    err.code = "EEXIST";
+    throw err;
+  }
+  const tempPath = uniqueTempPath(resolved);
+  const fd = fs.openSync(tempPath, "w");
   try {
     fs.writeFileSync(fd, content, encoding);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
+  try {
+    fs.renameSync(tempPath, resolved);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // ignore
+    }
+    throw err;
+  }
+}
+
+/** @deprecated Use atomicCreateText for new files. */
+function atomicWriteTextExclusive(targetPath, content, encoding = "utf8") {
+  return atomicCreateText(targetPath, content, encoding);
 }
 
 function atomicWriteJson(targetPath, value) {
@@ -72,6 +93,7 @@ function atomicWriteJson(targetPath, value) {
 
 module.exports = {
   atomicWriteText,
+  atomicCreateText,
   atomicWriteTextExclusive,
   atomicWriteJson,
   uniqueTempPath,

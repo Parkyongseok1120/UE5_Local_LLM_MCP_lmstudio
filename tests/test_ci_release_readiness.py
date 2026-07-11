@@ -26,7 +26,8 @@ def test_github_workflows_keep_windows_safe_commands() -> None:
 
     assert "python -m pip install -r requirements-dev.txt" in ci
     assert "python -m pip install ruff" in ci
-    assert "npm.cmd install --no-fund --no-audit" in ci
+    assert "npm.cmd ci --no-fund --no-audit" in ci
+    assert "Node syntax check (all src JS)" in ci
     assert "W503" not in ci
     assert "timeout-minutes: 10" in eval_regression
     assert "python -m pip install -r requirements-dev.txt" in eval_regression

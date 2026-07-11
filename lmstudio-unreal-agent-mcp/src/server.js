@@ -65,8 +65,7 @@ const {
 const { requireCleanOrFail } = require("./validation-dirty");
 const { validateMutationAuth } = require("./task-auth");
 const {
-  stageBundle,
-  commitBundle,
+  applyBundleTransaction,
   rollbackBundle,
 } = require("./edit-bundle");
 const {
@@ -1960,39 +1959,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
 
-      const staged = await stageBundle(projectRoot, bundle, resolveBundlePath);
-      try {
-        const written = await commitBundle(projectRoot, bundle, staged.preHashes, resolveBundlePath);
-        const validationResults = [];
-        for (const absPath of written) {
-          validationResults.push(await validateAfterWrite(absPath, () => getActiveProject(CONFIG_PATH)));
-        }
-        const failed = validationResults.find((item) => validationFailed(item));
-        if (failed) {
-          await rollbackBundle(projectRoot, staged.staged, staged.preHashes);
-          return validationToolResult("BUNDLE ROLLED BACK — static validation failed.", failed, {
-            ok: false,
-            operation: "apply_edit_bundle",
-            rolledBack: true,
-            isError: true,
-            preChangeHashes: staged.preHashes,
-            nextSteps: ["Fix blocking findings and resubmit the bundle."]
-          });
-        }
-        return validationToolResult(`OK — applied ${written.length} file(s) from bundle.`, validationResults[0] || null, {
-          operation: "apply_edit_bundle",
-          writtenCount: written.length,
-          preChangeHashes: staged.preHashes,
-          nextSteps: ["Run build_unreal_project after C++ edits."],
-          phase: "editing",
-          userMessage: `Applied ${written.length} file(s) from bundle`,
-          cancellable: false
+      const tx = await applyBundleTransaction(bundle, resolveBundlePath);
+      if (!tx.ok) {
+        await agentNotify(`apply_edit_bundle failed: ${tx.error}`, "error");
+        return fail(`apply_edit_bundle failed: ${tx.error}`, {
+          rolledBack: tx.rollback?.rolledBack ?? false,
+          rollbackIncomplete: tx.rollback?.rollbackIncomplete ?? true,
+          unrestoredPaths: tx.rollback?.unrestoredPaths || [],
+          preChangeHashes: tx.preChangeHashes,
         });
-      } catch (error) {
-        await rollbackBundle(projectRoot, staged.staged, staged.preHashes);
-        await agentNotify(`apply_edit_bundle failed: ${error.message || error}`, "error");
-        return fail(`apply_edit_bundle failed: ${error.message || error}`, { rolledBack: true });
       }
+
+      const validationResults = [];
+      for (const absPath of tx.writtenAbs) {
+        validationResults.push(await validateAfterWrite(absPath, () => getActiveProject(CONFIG_PATH)));
+      }
+      const failed = validationResults.find((item) => validationFailed(item));
+      if (failed) {
+        const rollback = await rollbackBundle(tx.staged.staged, tx.staged.absByRel, tx.postWriteHashes);
+        return validationToolResult("BUNDLE ROLLED BACK — static validation failed.", failed, {
+          ok: false,
+          operation: "apply_edit_bundle",
+          rolledBack: rollback.rolledBack,
+          rollbackIncomplete: rollback.rollbackIncomplete,
+          unrestoredPaths: rollback.unrestoredPaths,
+          isError: true,
+          preChangeHashes: tx.preChangeHashes,
+          nextSteps: ["Fix blocking findings and resubmit the bundle."],
+        });
+      }
+      return validationToolResult(`OK — applied ${tx.writtenAbs.length} file(s) from bundle.`, validationResults[0] || null, {
+        operation: "apply_edit_bundle",
+        writtenCount: tx.writtenAbs.length,
+        preChangeHashes: tx.preChangeHashes,
+        nextSteps: ["Run build_unreal_project after C++ edits."],
+        phase: "editing",
+        userMessage: `Applied ${tx.writtenAbs.length} file(s) from bundle`,
+        cancellable: false,
+      });
     }
 
     if (name === "static_validate_project") {
@@ -2112,7 +2116,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         results,
         filesSeen,
         filesSkippedBySize,
-        searchComplete: filesSeen < SEARCH_MAX_FILES,
+        searchComplete: filesSeen < SEARCH_MAX_FILES && filesSkippedBySize === 0,
+        incompleteReasons: filesSkippedBySize > 0 ? ["large_files_skipped"] : [],
       }, null, 2));
     }
 

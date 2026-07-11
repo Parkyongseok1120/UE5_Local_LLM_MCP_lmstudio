@@ -92,6 +92,23 @@ Check "unreal_rag_mcp.py compile" {
     finally { Pop-Location }
 }
 Check "agent server.js" { if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) { throw "missing" } }
+Check "agent src JS syntax" {
+    $jsFiles = Get-ChildItem -Path (Join-Path $agentRoot "src") -Filter *.js -Recurse
+    if ($jsFiles.Count -eq 0) { throw "no JS files under agent src" }
+    foreach ($file in $jsFiles) {
+        $out = & node --check $file.FullName 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "syntax error in $($file.Name): $out" }
+    }
+}
+Check "agent MCP startup smoke" {
+    $env:MCP_ESSENTIAL_TOOLS = "1"
+    $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify","version":"1.0"}}}'
+    $list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+    $input = "$init`n$list`n"
+    $stdout = ($input | & node (Join-Path $agentRoot "src\server.js") 2>$null | Out-String)
+    if ($stdout -notmatch '"tools"') { throw "tools/list did not return tools array" }
+    if ($stdout -notmatch 'read_file') { throw "essential tool read_file missing from tools/list" }
+}
 Check "agent write-locks.js" { if (-not (Test-Path (Join-Path $agentRoot "src\write-locks.js"))) { throw "missing write-locks.js (single-flight write guard)" } }
 Check "agent mutation-history.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-history.js"))) { throw "missing mutation-history.js (duplicate-call loop breaker)" } }
 Check "python version" {

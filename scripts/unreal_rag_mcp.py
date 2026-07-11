@@ -428,14 +428,14 @@ class McpServer:
         self._cache_generation = read_cache_generation(self.workspace)
         self._cache_refresh_required = False
         self._cache_partial_clear: list[str] = []
+        self._applied_cache_generation = self._cache_generation
 
     def _maybe_refresh_project_caches(self) -> None:
         from project_switch_invalidate import clear_local_project_caches, read_cache_generation
 
         current = read_cache_generation(self.workspace)
-        if current == self._cache_generation:
+        if current == self._applied_cache_generation and not self._cache_refresh_required:
             return
-        self._cache_refresh_required = False
         self._cache_partial_clear = []
         try:
             from workspace_paths import resolve_active_project_path
@@ -445,20 +445,26 @@ class McpServer:
             if not result.get("ok"):
                 self._cache_refresh_required = True
                 self._cache_partial_clear = list(result.get("partialClear") or [])
+                return
+            self._cache_refresh_required = False
+            self._applied_cache_generation = current
+            self._cache_generation = current
         except Exception:
             self._cache_refresh_required = True
-        self._cache_generation = current
 
     def run(self) -> None:
         for line in sys.stdin:
             line = line.strip()
             if not line:
                 continue
+            message: dict[str, Any] | None = None
             try:
                 message = json.loads(line)
                 self.handle_message(message)
             except Exception as exc:
                 self.log(f"error: {exc}")
+                if isinstance(message, dict) and message.get("id") is not None:
+                    self.error(message["id"], -32603, str(exc))
 
     def log(self, message: str) -> None:
         write_utf8_line(sys.stderr, message)
@@ -1598,7 +1604,13 @@ class McpServer:
 
             invalidation = payload.get("cacheInvalidation") or {}
             generation = invalidation.get("cacheGeneration")
-            self._cache_generation = int(generation) if generation is not None else read_cache_generation(self.workspace)
+            observed = int(generation) if generation is not None else read_cache_generation(self.workspace)
+            self._cache_generation = observed
+            if payload.get("cacheRefreshRequired"):
+                self._cache_refresh_required = True
+            else:
+                self._applied_cache_generation = observed
+                self._cache_refresh_required = False
 
         self.tool_result(
             message_id,

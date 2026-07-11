@@ -93,14 +93,17 @@ jobs:
           node-version: "20"
 
       - name: npm install (lmstudio-unreal-agent-mcp)
-        run: npm.cmd install --no-fund --no-audit
+        run: npm.cmd ci --no-fund --no-audit
         working-directory: lmstudio-unreal-agent-mcp
+        continue-on-error: false
 
-      - name: Node syntax check (server + context-ux)
+      - name: Node syntax check (all src JS)
         run: |
-          node --check src/server.js
-          node --check src/context-ux.js
-          node --check src/build-proof.js
+          Get-ChildItem -Path src -Filter *.js -Recurse | ForEach-Object {
+            Write-Host "Checking $($_.FullName)"
+            node --check $_.FullName
+          }
+        shell: pwsh
         working-directory: lmstudio-unreal-agent-mcp
 
       - name: npm test

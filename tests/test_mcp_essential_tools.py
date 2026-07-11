@@ -52,13 +52,14 @@ def _load_rag_mcp_module():
     return module
 
 
-def test_essential_tools_disabled_exposes_many_tools(monkeypatch, tmp_path):
+def test_default_profile_is_fail_closed(monkeypatch, tmp_path):
     monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
+    monkeypatch.delenv("MCP_EXTENDED_TOOLS", raising=False)
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")
     names = {tool["name"] for tool in server.all_tool_definitions()}
-    assert "clangd_goto_definition" in names
-    assert len(names) > len(RAG_ESSENTIAL)
+    assert names == RAG_ESSENTIAL
+    assert "clangd_goto_definition" not in names
 
 
 def test_essential_tools_enabled_filters_rag_tools(monkeypatch, tmp_path):

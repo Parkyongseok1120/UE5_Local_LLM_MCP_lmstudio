@@ -91,15 +91,22 @@ def write_job(workspace: Path, job: dict[str, Any], *, expected_revision: int | 
     job_id = str(job["jobId"])
     lock = _job_lock(job_id)
     with lock:
+        current = read_job(workspace, job_id)
         if expected_revision is not None:
-            current = read_job(workspace, job_id)
             if not current:
                 return False
             if int(current.get("revision") or 0) != expected_revision:
                 return False
-        job["revision"] = int(job.get("revision") or 0) + 1 if expected_revision is not None else int(job.get("revision") or 0) + 1
-        if expected_revision is None and "revision" not in job:
-            job["revision"] = 1
+            merged = {**current, **job}
+            merged["revision"] = int(current.get("revision") or 0) + 1
+            job = merged
+        elif current:
+            merged = {**current, **job}
+            merged["revision"] = int(current.get("revision") or 0) + 1
+            job = merged
+        else:
+            job = dict(job)
+            job["revision"] = max(1, int(job.get("revision") or 0) or 1)
         path = job_path(workspace, job_id)
         temp = path.with_suffix(".json.tmp")
         temp.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -115,8 +122,14 @@ def save_job(workspace: Path, job: dict[str, Any]) -> bool:
     if current is None:
         return write_job(workspace, job)
     expected = int(current.get("revision") or 0)
-    payload = dict(job)
-    return write_job(workspace, payload, expected_revision=expected)
+    if write_job(workspace, job, expected_revision=expected):
+        return True
+    fresh = read_job(workspace, job_id)
+    if not fresh:
+        return False
+    retry_expected = int(fresh.get("revision") or 0)
+    merged = {**fresh, **job}
+    return write_job(workspace, merged, expected_revision=retry_expected)
 
 
 def transition_job_status(job: dict[str, Any], next_status: str) -> bool:
@@ -272,8 +285,14 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     append_progress(job, "Job cancelled by request.")
     if orphan_suspected:
         job["orphanProcessSuspected"] = True
-    save_job(workspace, job)
-    return {"ok": True, "job": compact_job_status(job), "processTreeKilled": not orphan_suspected}
+    if not save_job(workspace, job):
+        return {"ok": False, "error": "Failed to persist cancelled job state", "jobId": job_id}
+    return {
+        "ok": True,
+        "job": compact_job_status(job),
+        "processTreeKilled": not orphan_suspected,
+        "orphanProcessSuspected": orphan_suspected,
+    }
 
 
 def build_wrapper_command(workspace: Path, run_dir: Path, arguments: dict[str, Any]) -> list[str]:
@@ -443,8 +462,6 @@ def job_status(
     since_progress_sequence: int = 0,
     since_revision: int | None = None,
 ) -> dict[str, Any]:
-    if since_revision is not None and since_progress_sequence == 0:
-        since_progress_sequence = since_revision
     job = read_job(workspace, job_id)
     if not job:
         return {"ok": False, "error": f"Unknown job: {job_id}"}
@@ -454,6 +471,8 @@ def job_status(
         if compact
         else job
     )
+    if since_revision is not None:
+        payload["revisionChanged"] = int(job.get("revision") or 0) > since_revision
     return {"ok": True, "job": payload}
 
 

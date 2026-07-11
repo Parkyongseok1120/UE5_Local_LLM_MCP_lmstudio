@@ -4,7 +4,7 @@ const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
 const crypto = require("crypto");
-const { atomicWriteText, atomicWriteTextExclusive } = require("./atomic-io");
+const { atomicWriteText, atomicCreateText } = require("./atomic-io");
 
 function sha256Buffer(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
@@ -64,13 +64,27 @@ async function replaceWithCAS({
   readHash,
   normalizeLineEndings = true,
 }) {
-  const raw = Buffer.isBuffer(priorContent)
-    ? priorContent
-    : Buffer.from(String(priorContent ?? ""), "utf8");
-  const preHash = sha256Buffer(raw);
-  const cas = verifyReadHash(preHash, readHash, targetPath);
-  if (!cas.ok) {
-    return cas;
+  const resolved = path.resolve(String(targetPath));
+  let raw;
+  if (await fileExists(resolved)) {
+    raw = await fsp.readFile(resolved);
+    const diskHash = sha256Buffer(raw);
+    if (readHash) {
+      const diskCas = verifyReadHash(diskHash, readHash, resolved);
+      if (!diskCas.ok) {
+        return diskCas;
+      }
+    }
+  } else {
+    raw = Buffer.isBuffer(priorContent)
+      ? priorContent
+      : Buffer.from(String(priorContent ?? ""), "utf8");
+    if (readHash) {
+      const cas = verifyReadHash(sha256Buffer(raw), readHash, resolved);
+      if (!cas.ok) {
+        return cas;
+      }
+    }
   }
 
   const hasCRLF = raw.includes(Buffer.from("\r\n"));
@@ -94,12 +108,12 @@ async function replaceWithCAS({
     : contentNorm.split(oldTextNorm).join(replacement);
   const updated = hasCRLF && normalizeLineEndings ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
 
-  atomicWriteText(targetPath, updated);
-  return { ok: true, updated, occurrences, priorContent: content, preHash };
+  atomicWriteText(resolved, updated);
+  return { ok: true, updated, occurrences, priorContent: content, preHash: sha256Buffer(raw) };
 }
 
 async function createExclusive(targetPath, content) {
-  atomicWriteTextExclusive(targetPath, String(content ?? ""));
+  atomicCreateText(targetPath, String(content ?? ""));
   return { ok: true };
 }
 

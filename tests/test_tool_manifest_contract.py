@@ -47,6 +47,59 @@ def test_agent_essential_in_server_js() -> None:
         assert "STABLE_HIDDEN_AGENT_TOOL_NAMES" in server_js
 
 
+def test_all_registered_rag_tools_covered_by_manifest(monkeypatch, tmp_path) -> None:
+    import importlib.util
+    import sys
+
+    monkeypatch.setenv("MCP_EXTENDED_TOOLS", "1")
+    monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
+    spec = importlib.util.spec_from_file_location("unreal_rag_mcp", ROOT / "scripts" / "unreal_rag_mcp.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(ROOT / "scripts"))
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    server = module.McpServer(tmp_path / "missing.sqlite")
+    registered = {tool["name"] for tool in server._all_tool_definitions_unfiltered()}
+    manifest = load_stable_manifest()
+    from plan_consistency import RAG_EXTENDED_ONLY
+    from tool_exposure import RAG_EXTENDED_PROFILE_TOOLS
+
+    covered = (
+        set(manifest["ragEssential"])
+        | set(manifest["ragHiddenUntilControlPlane"])
+        | set(RAG_EXTENDED_PROFILE_TOOLS)
+        | set(RAG_EXTENDED_ONLY)
+    )
+    missing = registered - covered
+    assert not missing, f"Registered RAG tools missing from manifest coverage: {sorted(missing)}"
+
+
+def test_all_registered_agent_tools_covered_by_manifest() -> None:
+    import re
+
+    manifest = load_stable_manifest()
+    server_js = (ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js").read_text(encoding="utf-8")
+    registered = set(re.findall(r'name:\s*"([a-z_]+)",\s*\n\s*description:', server_js))
+    covered = (
+        set(manifest["agentEssential"])
+        | set(manifest["agentHiddenUntilControlPlane"])
+        | {
+            "set_active_project",
+            "detect_unreal_project",
+            "list_unreal_projects",
+            "open_active_project_picker",
+            "run_command",
+            "refactor_impact_scan",
+            "refactor_plan_validate",
+            "propose_file_deletions",
+            "delete_file",
+            "record_bootstrap_step",
+        }
+    )
+    missing = registered - covered
+    assert not missing, f"Registered agent tools missing from manifest coverage: {sorted(missing)}"
+
+
 def test_docs_reference_only_manifest_tools() -> None:
     manifest = load_stable_manifest()
     allowed = set(manifest["docReferencedTools"])

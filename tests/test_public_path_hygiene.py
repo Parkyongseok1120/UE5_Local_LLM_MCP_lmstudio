@@ -38,6 +38,8 @@ def _text_files():
         for path in base.rglob("*"):
             if not path.is_file() or path in SKIP_FILES or path in seen:
                 continue
+            if "release_evidence" in path.parts:
+                continue
             if path.suffix.lower() in TEXT_SUFFIXES:
                 seen.add(path)
                 yield path
