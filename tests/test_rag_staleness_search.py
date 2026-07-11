@@ -14,9 +14,11 @@ sys.path.insert(0, str(SCRIPTS))
 from index_staleness import invalidate_stale_cache, project_source_stale_status  # noqa: E402
 from read_query_history import (  # noqa: E402
     check_repeat_query,
+    delivery_variant_key,
     query_fingerprint,
     record_query_delivery,
     reset_query_history,
+    semantic_query_key,
 )
 from unreal_rag_mcp import essential_tools_enabled, extended_tools_enabled  # noqa: E402
 
@@ -42,6 +44,71 @@ def test_repeat_query_suppresses_second_call(tmp_path: Path) -> None:
     assert repeat["repeatDetected"] is True
     assert repeat["doNotRetry"] is True
     assert repeat["fullContextSuppressed"] is True
+
+
+def test_semantic_key_blocks_top_k_variant_repeat(tmp_path: Path) -> None:
+    reset_query_history()
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"z" * 64)
+    semantic = semantic_query_key(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="replication setup",
+        mode="review",
+        scope="auto",
+        index_path=index,
+    )
+    fp4 = delivery_variant_key(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="replication setup",
+        mode="review",
+        scope="auto",
+        detail_level="compact",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+    )
+    fp8 = delivery_variant_key(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="replication setup",
+        mode="review",
+        scope="auto",
+        detail_level="compact",
+        top_k=8,
+        hybrid=False,
+        index_path=index,
+    )
+    assert fp4 != fp8
+    record_query_delivery(fp4, detail_level="compact", match_count=2, semantic_key=semantic)
+    repeat = check_repeat_query(fp8, semantic_key=semantic)
+    assert repeat["repeatDetected"] is True
+
+
+def test_detail_escalation_blocked_after_two_steps(tmp_path: Path) -> None:
+    reset_query_history()
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"w")
+    fp = query_fingerprint(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="gas ability",
+        mode="review",
+        scope="auto",
+        detail_level="compact",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+    )
+    record_query_delivery(fp, detail_level="compact", match_count=1)
+    blocked = check_repeat_query(
+        fp,
+        allow_detail_escalation=True,
+        previous_detail="compact",
+        current_detail="large",
+    )
+    assert blocked["repeatDetected"] is True
 
 
 def test_detail_escalation_allowed_after_first_delivery(tmp_path: Path) -> None:

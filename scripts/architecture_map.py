@@ -621,6 +621,32 @@ def write_outputs(arch: dict[str, Any], out: Path, markdown: Path | None = None)
         print(f"Wrote {markdown}")
 
 
+def semantic_graph_v1(arch: dict[str, Any]) -> dict[str, Any]:
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    for row in arch.get("types") or []:
+        nodes.append(
+            {
+                "id": f"{row.get('module','')}::{row.get('name','')}",
+                "kind": str(row.get("category") or "Class"),
+                "evidenceFiles": [row.get("header") or ""],
+                "confidence": "inferred",
+                "status": "confirmed" if row.get("header") else "unknown",
+            }
+        )
+        base = row.get("base")
+        if base:
+            edges.append(
+                {
+                    "from": f"{row.get('module','')}::{row.get('name','')}",
+                    "to": str(base),
+                    "kind": "INHERITS",
+                    "confidence": "inferred",
+                }
+            )
+    return {"version": 1, "nodes": nodes, "edges": edges}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a compact Unreal architecture map.")
     parser.add_argument("--project", default="", help="Project .uproject or project root. Falls back to activeProject.")

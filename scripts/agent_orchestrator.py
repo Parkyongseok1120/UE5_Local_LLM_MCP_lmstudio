@@ -141,9 +141,13 @@ class AgentPlan:
     domain_kind: str = "generic"
     domain_profile: dict[str, Any] = field(default_factory=dict)
     plan_slices: list[dict[str, Any]] = field(default_factory=list)
+    informational_plan_slices: list[dict[str, Any]] = field(default_factory=list)
+    executable_plan_slices: list[dict[str, Any]] = field(default_factory=list)
     fix_evidence: dict[str, Any] = field(default_factory=dict)
     ambiguity_gate: dict[str, Any] = field(default_factory=dict)
     source_evidence: dict[str, Any] = field(default_factory=dict)
+    tool_discovery_candidates: list[dict[str, Any]] = field(default_factory=list)
+    plan_graph_delta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -163,6 +167,10 @@ class AgentPlan:
         }
         if self.domain_profile:
             payload["domainProfile"] = self.domain_profile
+        if self.informational_plan_slices:
+            payload["informationalPlanSlices"] = self.informational_plan_slices
+        if self.executable_plan_slices:
+            payload["executablePlanSlices"] = self.executable_plan_slices
         if self.plan_slices:
             payload["planSlices"] = self.plan_slices
         if self.fix_evidence:
@@ -179,6 +187,10 @@ class AgentPlan:
             payload["symbolGraphHints"] = self.symbol_graph_hints
         if self.refactor_manager:
             payload["refactorManager"] = self.refactor_manager
+        if self.tool_discovery_candidates:
+            payload["toolDiscoveryCandidates"] = self.tool_discovery_candidates
+        if self.plan_graph_delta:
+            payload["planGraphDelta"] = self.plan_graph_delta
         return payload
 
 
@@ -514,6 +526,12 @@ def build_write_gate(
             gate["writesAllowed"] = False
         if gate_extras.get("requiresUserClarification"):
             gate["writesAllowed"] = False
+        if gate_extras.get("architectureApprovalValid") is False:
+            gate["writesAllowed"] = False
+            gate["requiresHumanApproval"] = True
+    gate["allowSmallRefactor"] = bool(policy.get("allowSmallRefactor"))
+    gate["smallRefactorMaxFiles"] = int(policy.get("smallRefactorMaxFiles") or 0)
+    gate["mediumRefactorPlanOnly"] = bool(policy.get("mediumRefactorPlanOnly"))
     return gate
 
 
@@ -852,12 +870,21 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         build_fix_evidence,
         build_domain_profile,
         detect_domain_kind,
+        partition_plan_slices,
         select_subsystem_lifetime,
     )
 
     domain_kind = detect_domain_kind(request, resolved_mode if resolved_mode != "auto" else mode)
     domain_profile = build_domain_profile(request, resolved_mode if resolved_mode != "auto" else mode)
-    plan_slices = [slice_.to_dict() for slice_ in build_domain_slice_dag(domain_profile, request)]
+    dag_slices = build_domain_slice_dag(domain_profile, request)
+    informational_slices, executable_slices = partition_plan_slices(
+        dag_slices,
+        task_kind=task_kind,
+        mode=resolved_mode if resolved_mode != "auto" else mode,
+    )
+    informational_plan_slices = [slice_.to_dict() for slice_ in informational_slices]
+    executable_plan_slices = [slice_.to_dict() for slice_ in executable_slices]
+    plan_slices = executable_plan_slices
     fix_evidence = build_fix_evidence(
         request,
         error_route,
@@ -891,6 +918,22 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
             evidence_writes_allowed=evidence.writes_allowed,
         )
         evidence.writes_allowed = evidence_writes
+        if float(ambiguity_gate.get("ambiguityScore") or 0) >= 0.6:
+            from architecture_decision import approval_is_valid, build_architecture_decision
+
+            decision = build_architecture_decision(
+                ambiguity_gate=ambiguity_gate,
+                project_path=str(project_context.get("uprojectPath") or ""),
+                plan_revision="1",
+            )
+            store_path = Path(__file__).resolve().parent.parent / "data" / "architecture_approvals.json"
+            if not approval_is_valid(store_path, decision):
+                gate_extras.setdefault("requiresHumanApproval", True)
+                gate_extras["architectureApprovalValid"] = False
+                gate_extras["architectureDecisionId"] = decision.decision_id
+            else:
+                gate_extras["architectureApprovalValid"] = True
+                gate_extras["architectureDecisionId"] = decision.decision_id
 
     if domain_kind == "subsystem" and plan_slices:
         lifetime = select_subsystem_lifetime(request)
@@ -900,8 +943,10 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         )
     if fix_evidence:
         notes.append("fixEvidence populated from error route/resolver.")
+    if informational_plan_slices:
+        notes.append(f"Informational plan slices: {len(informational_plan_slices)} (not executable).")
     if plan_slices:
-        notes.append(f"Domain plan slices ({domain_kind}): {len(plan_slices)} slice(s), max 2 files per slice.")
+        notes.append(f"Executable plan slices ({domain_kind}): {len(plan_slices)} slice(s), max 2 files per slice.")
 
     suggested = build_suggested_tool_calls(request, task_kind, mode, project_context)
     checkpoints = build_checkpoints(task_kind, evidence, mode)
@@ -952,6 +997,20 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         gate_extras=gate_extras,
     )
 
+    from tool_discovery import discover_tool_candidates
+
+    discovery_family = "architecture" if domain_kind in {"subsystem", "component", "replication"} else "source_search"
+    tool_discovery_candidates = discover_tool_candidates(family=discovery_family)
+    plan_graph_delta: dict[str, Any] = {}
+    if informational_plan_slices and not executable_plan_slices and task_kind == "compile_fix":
+        plan_graph_delta = {
+            "reason": "compile_fix informational-only plan",
+            "invalidate": [
+                str(item.get("slice_id") or item.get("sliceId") or "")
+                for item in informational_plan_slices
+            ],
+        }
+
     plan = AgentPlan(
         request=request,
         task_kind=task_kind,
@@ -972,9 +1031,13 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         domain_kind=domain_kind,
         domain_profile=domain_profile.to_dict(),
         plan_slices=plan_slices,
+        informational_plan_slices=informational_plan_slices,
+        executable_plan_slices=executable_plan_slices,
         fix_evidence=fix_evidence,
         ambiguity_gate=ambiguity_gate,
         source_evidence=source_evidence,
+        tool_discovery_candidates=tool_discovery_candidates,
+        plan_graph_delta=plan_graph_delta,
     )
     consistency_issues = validate_plan_consistency(plan)
     if consistency_issues:
@@ -1047,6 +1110,20 @@ def format_plan_for_prompt(plan: AgentPlan) -> str:
         + (
             "Plan slices: " + json.dumps(plan.plan_slices, ensure_ascii=False) + "\n"
             if plan.plan_slices
+            else ""
+        )
+        + (
+            "Informational plan slices: "
+            + json.dumps(plan.informational_plan_slices, ensure_ascii=False)
+            + "\n"
+            if plan.informational_plan_slices
+            else ""
+        )
+        + (
+            "Tool discovery candidates: "
+            + json.dumps(plan.tool_discovery_candidates, ensure_ascii=False)
+            + "\n"
+            if plan.tool_discovery_candidates
             else ""
         )
         + (

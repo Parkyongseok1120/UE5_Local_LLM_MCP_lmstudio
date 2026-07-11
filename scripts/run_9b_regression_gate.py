@@ -37,18 +37,33 @@ def main() -> int:
         "tests/test_domain_planner.py",
         "tests/test_include_resolver.py",
         "tests/test_rag_staleness_search.py",
+        "tests/test_domain_validators_crossfile.py",
+        "tests/test_domain_refactor_source_hardening.py",
+        "tests/test_compile_fix_plan_separation.py",
+        "tests/test_plan_slice_terminal_state.py",
+        "tests/test_wrapper_slice_progression.py",
+        "tests/test_architecture_evidence_node_execution.py",
     ]
     core_tests = [
         "tests/test_agent_orchestrator.py",
         "tests/test_unreal_static_validate.py",
         "tests/test_code_sketch_claim_validate.py",
     ]
+    node_checks = [
+        "lmstudio-unreal-agent-mcp/src/server.js",
+        "lmstudio-unreal-agent-mcp/src/read-path-resolver.js",
+        "lmstudio-unreal-agent-mcp/src/refactor-tools.js",
+        "lmstudio-unreal-agent-mcp/src/bootstrap-cache.js",
+        "lmstudio-unreal-agent-mcp/src/context-ux.js",
+        "lmstudio-unreal-agent-mcp/src/validate-write.js",
+        "lmstudio-unreal-agent-mcp/src/write-guards.js",
+    ]
 
     steps: list[tuple[str, list[str]]] = [
         ("architecture_safety_pytest", [py, "-m", "pytest", *architecture_tests, "-q"]),
         ("domain_contract_pytest", [py, "-m", "pytest", *domain_tests, "-q"]),
         ("core_compile_pytest", [py, "-m", "pytest", *core_tests, "-q"]),
-        ("domain_contract_runner", [py, str(SCRIPTS / "eval_domain_contract.py"), "--pytest-only"]),
+        ("domain_contract_runner", [py, str(SCRIPTS / "eval_domain_contract.py")]),
         ("cinematic_smoke", [py, str(SCRIPTS / "smoke_cinematic_analysis.py")]),
         (
             "component_autofix",
@@ -62,8 +77,14 @@ def main() -> int:
                 "local_component_registration_missing_include",
             ],
         ),
-        ("node_check", ["node", "--check", str(ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js")]),
     ]
+    for rel in node_checks:
+        steps.append((f"node_check_{Path(rel).stem}", ["node", "--check", str(ROOT / rel)]))
+    resolver_test = ROOT / "tests" / "test_active_project_read_resolver.py"
+    if shutil_which("node"):
+        steps.append(("active_project_read_resolver", [py, "-m", "pytest", str(resolver_test), "-q"]))
+    else:
+        steps.append(("active_project_read_resolver", [py, "-c", "import sys; sys.exit(0)"]))
     if args.live:
         for repeat_idx in range(max(1, int(args.component_repeat))):
             steps.append(
@@ -119,6 +140,12 @@ def main() -> int:
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["ok"] else 1
+
+
+def shutil_which(name: str) -> str | None:
+    import shutil
+
+    return shutil.which(name)
 
 
 if __name__ == "__main__":

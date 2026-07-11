@@ -172,6 +172,17 @@ def apply_component_include_autofix(root: Path, findings: list[Finding]) -> list
                     usage = infer_usage_kind(text, symbol, match.start())
                     resolution = resolve_project_symbol_include(root, symbol, path, usage)
                     include_path = resolution.preferred_include if resolution else ""
+                    if resolution:
+                        from include_resolver import classify_include_visibility
+
+                        visibility = classify_include_visibility(
+                            owner_module=resolution.owner_module,
+                            consumer_module=resolution.consumer_module,
+                            include_path=resolution.preferred_include,
+                            is_private_header="/Private/" in resolution.declaring_file.replace("\\", "/"),
+                        )
+                        if visibility == "private_cross_module_forbidden":
+                            continue
                     if not include_path:
                         include_path = {
                             "UBoxComponent": "Components/BoxComponent.h",

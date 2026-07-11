@@ -292,3 +292,116 @@ def validate_animation_notify_lifecycle(
                     )
                 )
     return findings
+
+
+def validate_replication_ownership_conservative(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
+    if path.suffix.lower() not in HEADER_SUFFIXES:
+        return []
+    rel = _rel(path, root)
+    masked = mask_comments_and_strings(text)
+    if re.search(r"\bUFUNCTION\s*\(\s*Server\b", masked) and "GetOwner()" not in masked:
+        return [
+            Finding(
+                "info",
+                rel,
+                1,
+                "REPLICATION_OWNERSHIP_UNKNOWN",
+                "Server RPC declared without visible owning-connection evidence; treat as plan-only.",
+            )
+        ]
+    return []
+
+
+def validate_rpc_caller_ownership_conservative(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
+    if path.suffix.lower() not in CPP_SUFFIXES:
+        return []
+    rel = _rel(path, root)
+    findings: list[Finding] = []
+    for _, func_name, start, _, body in _cpp_function_blocks(text):
+        if re.search(r"->Server\w+\s*\(", body) and "GetLocalRole()" not in body:
+            findings.append(
+                Finding(
+                    "info",
+                    rel,
+                    line_number(text, start),
+                    "REPLICATION_RPC_CALLER_UNKNOWN",
+                    "RPC callsite lacks caller-side ownership evidence; plan-only until verified.",
+                )
+            )
+    return findings
+
+
+def validate_gas_asc_lifecycle_conservative(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
+    if "AbilitySystemComponent" not in text or path.suffix.lower() not in CPP_SUFFIXES:
+        return []
+    rel = _rel(path, root)
+    if "InitAbilityActorInfo" in text and "OnRep_PlayerState" not in text:
+        return [
+            Finding(
+                "info",
+                rel,
+                1,
+                "GAS_ASC_LIFECYCLE_INCOMPLETE",
+                "InitAbilityActorInfo present without client OnRep_PlayerState path evidence.",
+            )
+        ]
+    return []
+
+
+def validate_animinstance_thread_conservative(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
+    if "AnimInstance" not in text or path.suffix.lower() not in CPP_SUFFIXES:
+        return []
+    rel = _rel(path, root)
+    if re.search(r"\bGetWorld\s*\(", text) and "ThreadSafe" in text:
+        return [
+            Finding(
+                "warning",
+                rel,
+                1,
+                "ANIMATION_THREAD_CONTEXT_RISK",
+                "Potential world mutation/read from worker-thread AnimInstance path.",
+            )
+        ]
+    return []
+
+
+def validate_animnotify_mutable_state_conservative(
+    path: Path,
+    text: str,
+    root: Path,
+    context: DomainValidationContext | None = None,
+) -> list[Finding]:
+    if "AnimNotify" not in text or path.suffix.lower() not in HEADER_SUFFIXES:
+        return []
+    rel = _rel(path, root)
+    if re.search(r"\b(bool|float|int32|TArray|TMap|TObjectPtr)\s+\w+\s*;", text):
+        return [
+            Finding(
+                "info",
+                rel,
+                1,
+                "ANIMATION_NOTIFY_MUTABLE_STATE",
+                "AnimNotify declares mutable state; prefer owner-owned runtime storage.",
+            )
+        ]
+    return []

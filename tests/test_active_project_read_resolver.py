@@ -1,11 +1,15 @@
 ﻿from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
-NODE = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"
+NODE = shutil.which("node")
+pytestmark = pytest.mark.skipif(not NODE, reason="node executable not available")
 RESOLVER = ROOT / "lmstudio-unreal-agent-mcp/src/read-path-resolver.js"
 
 
@@ -30,7 +34,7 @@ const r=require({json.dumps(str(RESOLVER))});
  console.log(JSON.stringify({{project:r.pathMetadata(project),corrected:r.pathMetadata(corrected),workspace:r.pathMetadata(workspacePath),escaped}}));
 }})();
 """
-    proc = subprocess.run([str(NODE), "-e", script], text=True, capture_output=True, check=True)
+    proc = subprocess.run([NODE, "-e", script], text=True, capture_output=True, check=True)
     payload = json.loads(proc.stdout)
     assert payload["project"]["resolvedRootType"] == "active_project"
     assert payload["project"]["projectRelativePath"].endswith("Demo.cpp")
@@ -55,7 +59,7 @@ const fs=require('fs'); const path=require('path'); const r=require({json.dumps(
  console.log(JSON.stringify({{supported,blocked}}));
 }})();
 """
-    proc = subprocess.run([str(NODE), "-e", script], text=True, capture_output=True, check=True)
+    proc = subprocess.run([NODE, "-e", script], text=True, capture_output=True, check=True)
     payload = json.loads(proc.stdout)
     if payload["supported"]:
         assert payload["blocked"] is True

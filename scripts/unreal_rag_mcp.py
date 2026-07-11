@@ -164,14 +164,29 @@ def _handle_unreal_node_plan_validate(server: McpServer, message_id: Any, argume
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
 
+def _handle_unreal_diagram_validate(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    from mermaid_validate import validate_mermaid_block
+
+    source = str(arguments.get("diagram") or arguments.get("mermaid") or "").strip()
+    result = validate_mermaid_block(source)
+    server.tool_result(message_id, json.dumps(result, ensure_ascii=False, indent=2), structured=result)
+
+
 def _handle_unreal_render_report(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    from mermaid_validate import sanitize_report_markdown
+
     text = str(arguments.get("text") or "")
     if not text.strip():
         server.tool_result(message_id, "Missing required argument: text", is_error=True)
         return
     fmt = str(arguments.get("format") or "md").strip().lower()
     output_path = str(arguments.get("outputPath") or "").strip() or None
-    payload = render_report(text, format=fmt, output_path=output_path)  # type: ignore[arg-type]
+    sanitized = sanitize_report_markdown(text, mode=str(arguments.get("diagramMode") or "sanitize"))
+    if not sanitized.get("ok"):
+        server.tool_result(message_id, sanitized.get("text") or "Invalid diagram content", is_error=True)
+        return
+    payload = render_report(sanitized.get("text") or text, format=fmt, output_path=output_path)  # type: ignore[arg-type]
+    payload["degraded"] = sanitized.get("degraded", False)
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
 
@@ -282,6 +297,15 @@ def build_mcp_tool_registry() -> McpToolRegistry:
         )
     )
     registry.register(
+        ToolSpec(
+            name="unreal_diagram_validate",
+            schema_dict={
+                "diagram": {"type": "string", "description": "Mermaid diagram source (without fences)."},
+            },
+            handler=_handle_unreal_diagram_validate,
+        )
+    )
+    registry.register(
         ToolSpec(name="unreal_rag_search", schema_dict={}, handler=_handle_unreal_rag_search)
     )
     registry.register(
@@ -315,6 +339,7 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
+        "unreal_diagram_validate",
     }
 )
 
@@ -1050,6 +1075,23 @@ class McpServer:
                 ),
             },
             {
+                "name": "unreal_diagram_validate",
+                "title": "Validate Mermaid Diagram",
+                "description": (
+                    "Validate Mermaid diagram syntax before embedding in reports or architecture docs. "
+                    "Evidence only: never writes files or builds."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "diagram": {
+                            "type": "string",
+                            "description": "Mermaid diagram source (without fences).",
+                        },
+                    },
+                    ["diagram"],
+                ),
+            },
+            {
                 "name": "unreal_node_plan_validate",
                 "title": "Validate Blueprint/Material Node Plan",
                 "description": (
@@ -1735,6 +1777,9 @@ class McpServer:
                 "architecture": arch,
                 "refreshed": True,
             }
+            from architecture_map import semantic_graph_v1
+
+            payload["semanticGraphV1"] = semantic_graph_v1(arch)
         else:
             raw = load_project_architecture(self.workspace, index_dir)
             if "error" in raw:
@@ -1754,6 +1799,9 @@ class McpServer:
                 "architecture": arch,
                 "activeProject": load_shared_config().get("activeProject"),
             }
+            from architecture_map import semantic_graph_v1
+
+            payload["semanticGraphV1"] = semantic_graph_v1(arch)
         self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
     def handle_search(self, message_id: Any, arguments: dict[str, Any]) -> None:
@@ -1772,7 +1820,7 @@ class McpServer:
             return
 
         from index_staleness import project_source_stale_status
-        from read_query_history import check_repeat_query, query_fingerprint, record_query_delivery
+        from rag_delivery import deliver_rag_result
         from token_budget import code_detail_limits, next_code_detail, resolve_code_detail
 
         detail = resolve_code_detail(str(arguments.get("detailLevel") or "compact"))
@@ -1780,8 +1828,9 @@ class McpServer:
         scope = str(arguments.get("scope") or "auto")
         config = load_shared_config()
         active_project = str(config.get("activeProject") or "")
+        session_id = str(arguments.get("sessionId") or arguments.get("session_id") or "")
 
-        fingerprint = query_fingerprint(
+        pre_delivery = deliver_rag_result(
             tool="unreal_rag_search",
             active_project=active_project,
             query=query,
@@ -1791,9 +1840,11 @@ class McpServer:
             top_k=top_k,
             hybrid=use_hybrid,
             index_path=self.index,
+            session_id=session_id,
+            rows=None,
         )
-        repeat = check_repeat_query(fingerprint)
-        if repeat.get("repeatDetected"):
+        if pre_delivery.get("suppressed"):
+            repeat = pre_delivery.get("repeat") or {}
             short = (
                 f"{repeat.get('message')}\n"
                 f"requiredNextAction: {repeat.get('requiredNextAction')}"
@@ -1806,6 +1857,8 @@ class McpServer:
                     "repeatDetected": True,
                     "doNotRetry": True,
                     "fullContextSuppressed": True,
+                    "semanticQueryKey": pre_delivery.get("semanticQueryKey"),
+                    "deliveryVariantKey": pre_delivery.get("deliveryVariantKey"),
                     "message": repeat.get("message"),
                     "requiredNextAction": repeat.get("requiredNextAction"),
                 },
@@ -1861,7 +1914,21 @@ class McpServer:
                 if refresh_available:
                     structured["nextSteps"].insert(0, "unreal_start_rag_refresh")
 
-        record_query_delivery(fingerprint, detail_level=detail, match_count=len(rows))
+        delivery = deliver_rag_result(
+            tool="unreal_rag_search",
+            active_project=active_project,
+            query=query,
+            mode=mode,
+            scope=scope,
+            detail_level=detail,
+            top_k=top_k,
+            hybrid=use_hybrid,
+            index_path=self.index,
+            session_id=session_id,
+            rows=rows,
+        )
+        structured["semanticQueryKey"] = delivery.get("semanticQueryKey")
+        structured["deliveryVariantKey"] = delivery.get("deliveryVariantKey")
         self.tool_result(
             message_id,
             context,

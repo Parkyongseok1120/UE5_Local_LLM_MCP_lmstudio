@@ -272,9 +272,47 @@ def build_domain_slices(domain_kind: DomainKind, request: str) -> list[PlanSlice
                 title="Ownership and lifetime checklist",
                 files=[],
                 postconditions=["ownership documented", "authority boundary documented", "no writes until approved"],
+                slice_kind="architecture",
             ),
         ]
     return []
+
+
+FIX_ONLY_MODES = frozenset({"compile_fix", "module_fix", "reflection_fix"})
+INFORMATIONAL_SLICE_KINDS = frozenset({"architecture", "analysis", "investigation"})
+EXECUTABLE_TASK_KINDS = frozenset({"edit", "codegen", "refactor", "compile_fix"})
+
+
+def allows_executable_slices(task_kind: str, mode: str = "auto") -> bool:
+    """Return True when domain scaffolding slices may execute as edits."""
+    normalized_mode = (mode or "auto").strip().lower()
+    if task_kind == "compile_fix" or normalized_mode in FIX_ONLY_MODES:
+        return False
+    if normalized_mode in {"prototype_component", "prototype_subsystem"}:
+        return True
+    if task_kind in {"edit", "codegen", "refactor"}:
+        return True
+    return False
+
+
+def partition_plan_slices(
+    dag_slices: list[PlanSlice],
+    *,
+    task_kind: str,
+    mode: str = "auto",
+) -> tuple[list[PlanSlice], list[PlanSlice]]:
+    """Split informational guidance from explicitly authorized executable steps."""
+    informational: list[PlanSlice] = []
+    executable: list[PlanSlice] = []
+    can_execute = allows_executable_slices(task_kind, mode)
+    for item in dag_slices:
+        if item.slice_kind in INFORMATIONAL_SLICE_KINDS:
+            informational.append(item)
+        elif not can_execute:
+            informational.append(item)
+        else:
+            executable.append(item)
+    return informational, executable
 
 
 def build_domain_slice_dag(profile: DomainProfile, request: str) -> list[PlanSlice]:
@@ -299,6 +337,8 @@ def build_domain_slice_dag(profile: DomainProfile, request: str) -> list[PlanSli
             continue
         for item in build_domain_slices(domain, request):
             if item.slice_id in seen:
+                continue
+            if item.slice_id == "subsystem_lifetime_decision" and "ownership_decision" in seen:
                 continue
             item.domain = domain
             if previous and not item.depends_on:
@@ -349,18 +389,30 @@ def build_fix_evidence(
         if project_root and project_root.is_dir():
             try:
                 from include_resolver import resolve_project_symbol_include
+                from plugin_project_context import iter_scan_root_files, resolve_scan_roots
 
-                for cpp in (project_root / "Source").rglob("*.cpp"):
-                    text = cpp.read_text(encoding="utf-8-sig", errors="replace")
-                    if f"CreateDefaultSubobject<{symbol}" in text or f"NewObject<{symbol}" in text:
-                        resolution = resolve_project_symbol_include(project_root, symbol, cpp, "create_default_subobject")
-                        if resolution:
-                            include_path = resolution.preferred_include
-                            patch_target = resolution.target_file
-                            evidence.reason = resolution.reason
-                            break
-            except Exception:
-                pass
+                scan_roots = resolve_scan_roots(project_root)
+                for scan_root in scan_roots:
+                    for cpp in iter_scan_root_files(
+                        scan_root,
+                        skip_dirs={"Intermediate", "Binaries", "Saved", "ThirdParty"},
+                    ):
+                        if cpp.suffix.lower() != ".cpp":
+                            continue
+                        text = cpp.read_text(encoding="utf-8-sig", errors="replace")
+                        if f"CreateDefaultSubobject<{symbol}" in text or f"NewObject<{symbol}" in text:
+                            resolution = resolve_project_symbol_include(
+                                project_root, symbol, cpp, "create_default_subobject"
+                            )
+                            if resolution:
+                                include_path = resolution.preferred_include
+                                patch_target = resolution.target_file
+                                evidence.reason = resolution.reason
+                                break
+                    if evidence.reason:
+                        break
+            except Exception as exc:
+                evidence.reason = f"include resolver degraded: {exc}"
         evidence.required_includes = [include_path]
         evidence.patch_template = (
             f'Missing include for project component {symbol}.\n'
@@ -390,11 +442,11 @@ def build_fix_evidence(
     payload["patchTemplate"] = payload.pop("patch_template", "")
     serialized = json.dumps(payload, ensure_ascii=False)
     if len(serialized) > FIX_EVIDENCE_MAX_CHARS:
-        payload["patch_template"] = payload.get("patch_template", "")[:800]
+        payload["patchTemplate"] = payload.get("patchTemplate", "")[:800]
         payload["reason"] = payload.get("reason", "")[:400]
         serialized = json.dumps(payload, ensure_ascii=False)
         if len(serialized) > FIX_EVIDENCE_MAX_CHARS:
-            payload["patch_template"] = payload.get("patch_template", "")[:400]
+            payload["patchTemplate"] = payload.get("patchTemplate", "")[:400]
     return payload
 
 

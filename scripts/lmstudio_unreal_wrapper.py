@@ -2749,6 +2749,91 @@ def run(args: argparse.Namespace) -> int:
         write_file(attempt_dir / "validation_feedback.txt", merged_feedback)
         previous_feedback = merged_feedback
 
+    executable_slices: list[dict[str, Any]] = []
+    slice_path: Path | None = None
+    plan_slice_fingerprint = ""
+    task_kind = ""
+    fix_only = original_mode in {"compile_fix", "module_fix", "reflection_fix"}
+    if agent_plan is not None:
+        task_kind = str(getattr(agent_plan, "task_kind", "") or "")
+        fix_only = fix_only or task_kind == "compile_fix"
+        executable_slices = list(getattr(agent_plan, "executable_plan_slices", None) or [])
+        if not executable_slices and not fix_only:
+            executable_slices = list(agent_plan.plan_slices or [])
+
+    if agent_plan is not None and executable_slices:
+        from plan_slice_state import (
+            capture_pre_change_hashes,
+            init_slice_state,
+            load_slice_state,
+            plan_fingerprint,
+            save_slice_state,
+            validate_loaded_state,
+        )
+
+        slice_path = run_dir / "plan_slice_state.json"
+        plan_slice_fingerprint = plan_fingerprint(executable_slices)
+        boot_slice_state = load_slice_state(slice_path)
+        if boot_slice_state.get("corrupt"):
+            summary = final_summary(
+                status="FAILED",
+                run_dir=run_dir,
+                project_file=project_file,
+                source_project_file=prepared.source_project_file,
+                direct_project_write=prepared.direct_project_write,
+                target=target,
+                answer=boot_slice_state.get("lastError") or "plan slice state corrupt",
+                written=[],
+                build_result=None,
+                findings=last_findings,
+                final_diff_path=final_diff_path,
+            )
+            write_file(run_dir / "final_answer.md", summary)
+            print(summary)
+            return 1
+        if not boot_slice_state.get("slices"):
+            boot_slice_state = init_slice_state(executable_slices)
+        plan_delta = getattr(agent_plan, "plan_graph_delta", None) or {}
+        if plan_delta:
+            from plan_graph import apply_plan_delta
+
+            boot_slice_state = apply_plan_delta(boot_slice_state, plan_delta)
+        boot_slice_state = validate_loaded_state(
+            boot_slice_state,
+            executable_slices,
+            expected_fingerprint=plan_slice_fingerprint,
+        )
+        boot_slice_state = capture_pre_change_hashes(
+            boot_slice_state,
+            project_root=project_root,
+            plan_slices=executable_slices,
+        )
+        save_slice_state(slice_path, boot_slice_state)
+
+    def informational_evidence_satisfied(active_kind: str) -> bool:
+        if active_kind not in {"architecture", "analysis", "investigation"}:
+            return False
+        if agent_plan is None:
+            return False
+        write_gate = getattr(agent_plan, "write_gate", {}) or {}
+        if write_gate.get("architectureApprovalValid") is True:
+            return True
+        if write_gate.get("architectureApprovalValid") is False:
+            return False
+        decision_id = str(write_gate.get("architectureDecisionId") or "").strip()
+        if decision_id:
+            from architecture_decision import approval_is_valid, build_architecture_decision
+
+            store_path = Path(__file__).resolve().parent.parent / "data" / "architecture_approvals.json"
+            ambiguity_gate = getattr(agent_plan, "ambiguity_gate", {}) or {}
+            decision = build_architecture_decision(
+                ambiguity_gate=ambiguity_gate,
+                project_path=str(project_file),
+                plan_revision="1",
+            )
+            return approval_is_valid(store_path, decision)
+        return False
+
     initial_prompt = agent_plan_block + user_prompt(
         request=request,
         rag_context=rag_context,
@@ -2920,6 +3005,21 @@ def run(args: argparse.Namespace) -> int:
         before_apply = None
         after_apply = None
         clear_refactor_surface_cache()
+        if slice_path is not None:
+            from plan_slice_state import increment_model_call, load_slice_state, retry_or_total_cap_exceeded, save_slice_state
+
+            attempt_slice_state = load_slice_state(slice_path)
+            if attempt_slice_state.get("corrupt"):
+                break
+            attempt_slice_state = increment_model_call(attempt_slice_state)
+            save_slice_state(slice_path, attempt_slice_state)
+            if retry_or_total_cap_exceeded(attempt_slice_state):
+                previous_feedback = (
+                    "Slice retry or total model-call budget exceeded. "
+                    f"retryWithinSlice={attempt_slice_state.get('retryWithinSlice')} "
+                    f"totalModelCalls={attempt_slice_state.get('totalModelCalls')}"
+                )
+                break
         if last_recommendation.get("action") == "stop_diagnosis_report":
             previous_feedback = (
                 "Retry escalation stopped the compile loop after repeated identical errors. "
@@ -3344,6 +3444,12 @@ def run(args: argparse.Namespace) -> int:
             after_apply = snapshot_project_files(project_root)
             applied_paths = changed_paths_between(before_apply, after_apply)
             invalidate_project_snapshot_cache(project_root, relative_paths=applied_paths)
+            try:
+                from domain_validation_context import invalidate_domain_validation_cache_for_paths
+
+                invalidate_domain_validation_cache_for_paths(project_root, applied_paths)
+            except Exception:
+                pass
             attempt_diff = diff_snapshots(before_apply, after_apply)
             write_file(attempt_dir / "diff.patch", attempt_diff + "\n")
             if attempt_diff == "No file changes detected.":
@@ -3503,6 +3609,15 @@ def run(args: argparse.Namespace) -> int:
             lightweight=lightweight_static,
             skip_include_path_checks=build_cs_only,
         )
+        try:
+            from domain_validation_context import invalidate_domain_validation_cache_for_paths
+
+            invalidate_domain_validation_cache_for_paths(
+                project_root,
+                changed_paths_between(before_apply, after_apply),
+            )
+        except Exception:
+            pass
         static_report = format_findings(last_findings)
         write_file(attempt_dir / "static_validation.txt", static_report + "\n")
         if should_block_llm_apply_static_gate(last_findings, mode=original_mode) and not args.skip_static_gate:
@@ -3604,6 +3719,166 @@ def run(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
             write_file(final_diff_path, diff_snapshots(baseline_snapshot, snapshot_project_files(project_root)) + "\n")
+
+            if fix_only and not executable_slices:
+                summary = final_summary(
+                    status="COMPILE_FIX_COMPLETE",
+                    run_dir=run_dir,
+                    project_file=project_file,
+                    source_project_file=prepared.source_project_file,
+                    direct_project_write=prepared.direct_project_write,
+                    target=target,
+                    answer=last_answer,
+                    written=last_written,
+                    build_result=last_build,
+                    findings=last_findings,
+                    final_diff_path=final_diff_path,
+                )
+                write_file(run_dir / "final_answer.md", summary)
+                print(summary)
+                return 0
+
+            slice_state: dict[str, Any] | None = None
+            if agent_plan is not None and executable_slices and slice_path is not None:
+                from plan_slice_state import (
+                    capture_pre_change_hashes,
+                    increment_retry_within_slice,
+                    load_slice_state,
+                    mark_slice_complete,
+                    next_slice_prompt,
+                    proof_level_from_build_output,
+                    retry_or_total_cap_exceeded,
+                    save_slice_state,
+                    slice_completion_accepted,
+                    terminal_status_for_plan,
+                    validate_loaded_state,
+                )
+
+                slice_state = load_slice_state(slice_path)
+                if slice_state.get("corrupt"):
+                    summary = final_summary(
+                        status="FAILED",
+                        run_dir=run_dir,
+                        project_file=project_file,
+                        source_project_file=prepared.source_project_file,
+                        direct_project_write=prepared.direct_project_write,
+                        target=target,
+                        answer=slice_state.get("lastError") or "plan slice state corrupt",
+                        written=last_written,
+                        build_result=last_build,
+                        findings=last_findings,
+                        final_diff_path=final_diff_path,
+                    )
+                    write_file(run_dir / "final_answer.md", summary)
+                    print(summary)
+                    return 1
+                slice_state = validate_loaded_state(
+                    slice_state,
+                    executable_slices,
+                    expected_fingerprint=plan_slice_fingerprint,
+                )
+                idx_before = int(slice_state.get("activeSliceIndex") or 0)
+                if idx_before >= len(executable_slices):
+                    summary = final_summary(
+                        status="FAILED",
+                        run_dir=run_dir,
+                        project_file=project_file,
+                        source_project_file=prepared.source_project_file,
+                        direct_project_write=prepared.direct_project_write,
+                        target=target,
+                        answer="plan slice index out of range",
+                        written=last_written,
+                        build_result=last_build,
+                        findings=last_findings,
+                        final_diff_path=final_diff_path,
+                    )
+                    write_file(run_dir / "final_answer.md", summary)
+                    print(summary)
+                    return 1
+                active_plan = executable_slices[idx_before]
+                active_kind = str(
+                    active_plan.get("slice_kind") or active_plan.get("sliceKind") or "compile"
+                )
+                slice_state = capture_pre_change_hashes(
+                    slice_state,
+                    project_root=project_root,
+                    plan_slices=executable_slices,
+                )
+                slice_state = mark_slice_complete(
+                    slice_state,
+                    project_root=project_root,
+                    written_paths=last_written,
+                    plan_slices=executable_slices,
+                    proof_level=proof_level_from_build_output(last_build.ok, last_build.output),
+                    required_evidence_satisfied=informational_evidence_satisfied(active_kind),
+                )
+                save_slice_state(slice_path, slice_state)
+                if not slice_completion_accepted(slice_state, idx_before):
+                    slice_state = increment_retry_within_slice(slice_state)
+                    save_slice_state(slice_path, slice_state)
+                    reject_reason = str(slice_state.get("lastError") or "slice completion rejected")
+                    previous_feedback = reject_reason + "\n\n" + next_slice_prompt(slice_state, executable_slices)
+                    write_file(run_dir / "validation_feedback.txt", previous_feedback)
+                    if retry_or_total_cap_exceeded(slice_state):
+                        summary = final_summary(
+                            status="FAILED",
+                            run_dir=run_dir,
+                            project_file=project_file,
+                            source_project_file=prepared.source_project_file,
+                            direct_project_write=prepared.direct_project_write,
+                            target=target,
+                            answer=previous_feedback,
+                            written=last_written,
+                            build_result=last_build,
+                            findings=last_findings,
+                            final_diff_path=final_diff_path,
+                        )
+                        write_file(run_dir / "final_answer.md", summary)
+                        print(summary)
+                        return 1
+                    continue
+                terminal_status = terminal_status_for_plan(
+                    task_kind=task_kind,
+                    mode=original_mode,
+                    executable_slice_count=len(executable_slices),
+                    slice_state=slice_state,
+                )
+                if slice_state.get("completed"):
+                    summary = final_summary(
+                        status=terminal_status,
+                        run_dir=run_dir,
+                        project_file=project_file,
+                        source_project_file=prepared.source_project_file,
+                        direct_project_write=prepared.direct_project_write,
+                        target=target,
+                        answer=last_answer,
+                        written=last_written,
+                        build_result=last_build,
+                        findings=last_findings,
+                        final_diff_path=final_diff_path,
+                    )
+                    write_file(run_dir / "final_answer.md", summary)
+                    print(summary)
+                    return 0
+                checkpoint = final_summary(
+                    status="SLICE_BUILD_OK",
+                    run_dir=run_dir,
+                    project_file=project_file,
+                    source_project_file=prepared.source_project_file,
+                    direct_project_write=prepared.direct_project_write,
+                    target=target,
+                    answer=last_answer,
+                    written=last_written,
+                    build_result=last_build,
+                    findings=last_findings,
+                    final_diff_path=final_diff_path,
+                )
+                idx = int(slice_state.get("activeSliceIndex") or 0)
+                write_file(run_dir / f"slice_checkpoint_{idx}.md", checkpoint)
+                previous_feedback = next_slice_prompt(slice_state, executable_slices)
+                write_file(run_dir / "next_slice_prompt.txt", previous_feedback + "\n")
+                continue
+
             summary = final_summary(
                 status="BUILD_OK",
                 run_dir=run_dir,
@@ -3619,32 +3894,6 @@ def run(args: argparse.Namespace) -> int:
             )
             write_file(run_dir / "final_answer.md", summary)
             print(summary)
-            if agent_plan is not None and agent_plan.plan_slices:
-                from plan_slice_state import (
-                    init_slice_state,
-                    load_slice_state,
-                    mark_slice_complete,
-                    next_slice_prompt,
-                    proof_level_from_build_output,
-                    save_slice_state,
-                )
-
-                slice_path = run_dir / "plan_slice_state.json"
-                slice_state = load_slice_state(slice_path)
-                if not slice_state.get("slices"):
-                    slice_state = init_slice_state(agent_plan.plan_slices)
-                slice_state = mark_slice_complete(
-                    slice_state,
-                    project_root=project_root,
-                    written_paths=last_written,
-                    plan_slices=agent_plan.plan_slices,
-                    proof_level=proof_level_from_build_output(last_build.ok, last_build.output),
-                )
-                save_slice_state(slice_path, slice_state)
-                if int(slice_state.get("activeSliceIndex") or 0) < len(agent_plan.plan_slices):
-                    previous_feedback = next_slice_prompt(slice_state, agent_plan.plan_slices)
-                    write_file(run_dir / "next_slice_prompt.txt", previous_feedback + "\n")
-                    continue
             return 0
 
         build_records = parse_build_feedback(last_build.log_path, project_root, last_build.output)

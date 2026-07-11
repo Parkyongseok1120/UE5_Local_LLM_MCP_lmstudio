@@ -39,16 +39,56 @@ def main() -> int:
     config = load_shared_config()
     genres = resolve_genre_adapters(args.request, args.genres or None)
     options = SearchOptions(mode=args.mode, genres=genres, candidate_limit=max(40, args.top_k * 10))
+    from rag_delivery import deliver_rag_result
+
+    active_project = str(config.get("activeProject") or "")
+    pre_delivery = deliver_rag_result(
+        tool="unreal_agent_session",
+        active_project=active_project,
+        query=args.request,
+        mode=args.mode,
+        scope="project_preferred",
+        detail_level="compact",
+        top_k=args.top_k,
+        hybrid=args.hybrid,
+        index_path=index,
+        session_id=args.session_id,
+        rows=None,
+    )
+    if pre_delivery.get("suppressed"):
+        repeat = pre_delivery.get("repeat") or {}
+        payload = {
+            "ok": True,
+            "phase": "plan",
+            "repeatDetected": True,
+            "doNotRetry": True,
+            "fullContextSuppressed": True,
+            "semanticQueryKey": pre_delivery.get("semanticQueryKey"),
+            "deliveryVariantKey": pre_delivery.get("deliveryVariantKey"),
+            "message": repeat.get("message"),
+            "requiredNextAction": repeat.get("requiredNextAction"),
+            "activeProject": config.get("activeProject"),
+            "resolvedGenres": genres,
+            "mode": args.mode,
+            "matchCount": 0,
+            "contextPreview": "",
+            "ragDelivery": {
+                "fingerprint": pre_delivery.get("fingerprint"),
+                "repeat": repeat,
+                "suppressed": True,
+            },
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
     rows = (
         search_hybrid(index, args.request, args.top_k, options)
         if args.hybrid
         else __import__("rag_search").search(index, args.request, args.top_k, options)
     )
-    from rag_delivery import deliver_rag_result
-
     delivery = deliver_rag_result(
         tool="unreal_agent_session",
-        active_project=str(config.get("activeProject") or ""),
+        active_project=active_project,
         query=args.request,
         mode=args.mode,
         scope="project_preferred",

@@ -12,6 +12,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+from domain_eval_normalize import evaluate_domain_case, normalize_eval_case  # noqa: E402
 
 
 def run_pytest(test_paths: list[str]) -> dict[str, Any]:
@@ -27,8 +30,29 @@ def run_pytest(test_paths: list[str]) -> dict[str, Any]:
 
 
 def load_domain_configs() -> list[Path]:
-    configs = sorted((ROOT / "config").glob("rag_eval_*_domain.local.json"))
-    return configs
+    return sorted((ROOT / "config").glob("rag_eval_*_domain.local.json"))
+
+
+def evaluate_config(config: Path) -> dict[str, Any]:
+    data = json.loads(config.read_text(encoding="utf-8-sig"))
+    defaults = dict(data.get("defaults") or {})
+    cases = list(data.get("cases") or [])
+    results: list[dict[str, Any]] = []
+    ok = True
+    for raw_case in cases:
+        if not isinstance(raw_case, dict):
+            ok = False
+            results.append({"ok": False, "error": "case must be object"})
+            continue
+        case = normalize_eval_case(defaults, raw_case)
+        if case.get("request"):
+            outcome = evaluate_domain_case(case)
+            outcome["caseId"] = raw_case.get("id") or raw_case.get("fixtureId") or ""
+            results.append(outcome)
+            ok = ok and bool(outcome.get("ok"))
+        else:
+            results.append({"ok": True, "caseId": raw_case.get("id"), "skipped": "fixture-only case"})
+    return {"ok": ok, "caseCount": len(cases), "results": results}
 
 
 def main() -> int:
@@ -50,6 +74,10 @@ def main() -> int:
         "tests/test_plugin_project_context.py",
         "tests/test_small_refactor_policy.py",
         "tests/test_refactor_impact_scan.py",
+        "tests/test_compile_fix_plan_separation.py",
+        "tests/test_plan_slice_terminal_state.py",
+        "tests/test_wrapper_slice_progression.py",
+        "tests/test_architecture_evidence_node_execution.py",
     ]
     pytest_result = run_pytest(domain_tests)
     report["steps"]["domain_pytest"] = pytest_result
@@ -57,15 +85,21 @@ def main() -> int:
         report["ok"] = False
 
     if not args.pytest_only:
-        for config in load_domain_configs():
-            step_name = f"config_smoke_{config.stem}"
+        configs = load_domain_configs()
+        if not configs:
+            report["environmentBlocked"] = True
+            report["environmentBlockedReason"] = (
+                "no rag_eval_*_domain.local.json holdout configs present"
+            )
+            report["steps"]["structural_eval"] = {"ok": True, "skipped": True}
+        for config in configs:
+            step_name = f"config_eval_{config.stem}"
             try:
-                data = json.loads(config.read_text(encoding="utf-8-sig"))
-                case_count = len(data.get("cases") or [])
-                report["steps"][step_name] = {"ok": case_count > 0, "caseCount": case_count}
-                if case_count <= 0:
+                outcome = evaluate_config(config)
+                report["steps"][step_name] = outcome
+                if not outcome.get("ok"):
                     report["ok"] = False
-            except (OSError, json.JSONDecodeError) as exc:
+            except (OSError, json.JSONDecodeError, TypeError) as exc:
                 report["steps"][step_name] = {"ok": False, "error": str(exc)}
                 report["ok"] = False
 

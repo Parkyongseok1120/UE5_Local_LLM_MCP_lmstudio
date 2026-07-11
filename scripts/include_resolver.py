@@ -20,6 +20,16 @@ UsageKind = Literal[
     "unknown",
 ]
 
+IncludeVisibility = Literal[
+    "same_module_public",
+    "same_module_private",
+    "public_cross_module",
+    "private_cross_module_forbidden",
+    "plugin_public_cross_module",
+    "engine_header",
+    "unresolved",
+]
+
 COMPLETE_TYPE_USAGES = frozenset(
     {
         "create_default_subobject",
@@ -230,3 +240,24 @@ def format_include_feedback(resolution: IncludeResolution) -> str:
         )
     lines.append(resolution.reason)
     return "\n".join(lines)
+
+
+def classify_include_visibility(
+    *,
+    owner_module: str,
+    consumer_module: str,
+    include_path: str,
+    is_private_header: bool = False,
+) -> IncludeVisibility:
+    include_lower = include_path.replace("\\", "/").lower()
+    if include_lower.startswith("engine/") or "/engine/" in include_lower:
+        return "engine_header"
+    if not owner_module or not consumer_module:
+        return "unresolved"
+    if owner_module == consumer_module:
+        return "same_module_private" if is_private_header else "same_module_public"
+    if is_private_header or "/private/" in include_lower:
+        return "private_cross_module_forbidden"
+    if include_lower.startswith("plugins/"):
+        return "plugin_public_cross_module"
+    return "public_cross_module"

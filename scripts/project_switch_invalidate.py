@@ -42,10 +42,19 @@ def on_project_switch_invalidate(
     cleared.append("wrapper_refactor_surface_cache")
 
     try:
+        from domain_validation_context import clear_domain_validation_cache
         from index_staleness import invalidate_stale_cache
+        from read_query_history import reset_query_history_for_index
 
+        clear_domain_validation_cache()
+        cleared.append("domain_validation_context")
         invalidate_stale_cache()
         cleared.append("index_staleness_cache")
+        if new:
+            from workspace_paths import resolve_index_dir
+
+            reset_query_history_for_index(resolve_index_dir() / "rag.sqlite")
+            cleared.append("rag_query_history_for_index")
     except Exception:
         pass
 

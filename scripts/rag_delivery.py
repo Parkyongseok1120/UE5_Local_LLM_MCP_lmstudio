@@ -8,8 +8,9 @@ from typing import Any
 
 from read_query_history import (
     check_repeat_query,
-    query_fingerprint,
+    delivery_variant_key,
     record_query_delivery,
+    semantic_query_key,
 )
 
 
@@ -30,7 +31,16 @@ def deliver_rag_result(
     previous_detail: str | None = None,
 ) -> dict[str, Any]:
     """Apply repeat-query guard and record successful full-context delivery."""
-    fingerprint = query_fingerprint(
+    semantic_key = semantic_query_key(
+        tool=tool,
+        active_project=active_project,
+        query=query,
+        mode=mode,
+        scope=scope,
+        index_path=index_path,
+        session_id=session_id,
+    )
+    delivery_key = delivery_variant_key(
         tool=tool,
         active_project=active_project,
         query=query,
@@ -43,15 +53,18 @@ def deliver_rag_result(
         session_id=session_id,
     )
     repeat = check_repeat_query(
-        fingerprint,
+        delivery_key,
         allow_detail_escalation=allow_detail_escalation,
         previous_detail=previous_detail,
         current_detail=detail_level,
+        semantic_key=semantic_key,
     )
     if repeat.get("repeatDetected"):
         return {
             "ok": True,
-            "fingerprint": fingerprint,
+            "semanticQueryKey": semantic_key,
+            "deliveryVariantKey": delivery_key,
+            "fingerprint": delivery_key,
             "repeat": repeat,
             "rows": [],
             "suppressed": True,
@@ -59,19 +72,22 @@ def deliver_rag_result(
 
     payload = {
         "ok": True,
-        "fingerprint": fingerprint,
+        "semanticQueryKey": semantic_key,
+        "deliveryVariantKey": delivery_key,
+        "fingerprint": delivery_key,
         "repeat": repeat,
         "rows": list(rows or []),
         "suppressed": False,
     }
     if rows is not None:
         record_query_delivery(
-            fingerprint,
+            delivery_key,
             detail_level=detail_level,
             match_count=len(rows),
             active_project=active_project,
             mode=mode,
             index_path=index_path,
             session_id=session_id,
+            semantic_key=semantic_key,
         )
     return payload

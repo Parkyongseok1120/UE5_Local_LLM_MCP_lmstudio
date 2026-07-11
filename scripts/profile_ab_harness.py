@@ -23,7 +23,25 @@ def run_eval(config: Path, profile_env: dict[str, str]) -> dict:
         "--dry-run",
     ]
     proc = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True)
-    return {"exitCode": proc.returncode, "stdout": proc.stdout[-4000:], "stderr": proc.stderr[-2000:]}
+    observed = {}
+    try:
+        from load_sampling_preset import load_sampling_preset, resolve_profile_name
+
+        preset = load_sampling_preset(profile_env.get("UNREAL_RAG_MODEL_PROFILE"))
+        observed = {
+            "selectedProfile": resolve_profile_name(),
+            "contextLengthRequested": preset.get("contextLength"),
+            "promptContract": preset.get("promptContract"),
+        }
+    except Exception as exc:
+        observed = {"error": str(exc)}
+    return {
+        "exitCode": proc.returncode,
+        "stdout": proc.stdout[-4000:],
+        "stderr": proc.stderr[-2000:],
+        "observed": observed,
+        "envOverrides": profile_env,
+    }
 
 
 def main() -> int:
@@ -43,7 +61,7 @@ def main() -> int:
         },
     }
     results = {name: run_eval(config, env) for name, env in profiles.items()}
-    payload = {"config": str(config), "profiles": profiles, "results": results}
+    payload = {"config": str(config), "profiles": profiles, "results": results, "liveValidated": False}
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

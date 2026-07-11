@@ -40,12 +40,16 @@ IGNORED_PROJECT_DIRS = {
 
 
 def resolve_scan_roots(root: Path) -> list[Path]:
+    last_error = ""
     try:
         from plugin_project_context import resolve_scan_roots as plugin_scan_roots
 
-        return plugin_scan_roots(root)
-    except Exception:
-        pass
+        roots = plugin_scan_roots(root)
+        if roots:
+            return roots
+        last_error = "plugin resolver returned empty roots"
+    except Exception as exc:
+        last_error = str(exc)
     roots: list[Path] = []
     source = root / "Source"
     if source.is_dir():
@@ -64,9 +68,20 @@ def resolve_scan_roots(root: Path) -> list[Path]:
     try:
         from plugin_project_context import fallback_scan_roots
 
-        return fallback_scan_roots(root)
-    except Exception:
-        return []
+        fallback = fallback_scan_roots(root)
+        if fallback:
+            return fallback
+        last_error = last_error or "fallback_scan_roots returned empty"
+    except Exception as exc:
+        last_error = last_error or str(exc)
+    resolve_scan_roots.last_diagnostic = {
+        "code": "PLUGIN_SCAN_DEGRADED",
+        "message": last_error or "no scan roots resolved",
+    }
+    return []
+
+
+resolve_scan_roots.last_diagnostic: dict[str, str] | None = None
 
 
 @dataclass
@@ -3010,6 +3025,66 @@ def validate_blueprintpure_missing_const(path: Path, text: str, root: Path) -> l
     return findings
 
 
+def _append_validator_internal_error(
+    findings: list[Finding],
+    path: Path,
+    root: Path,
+    validator_name: str,
+    exc: Exception,
+) -> None:
+    rel = str(path.relative_to(root)).replace("\\", "/") if path.is_file() else str(path)
+    findings.append(
+        Finding(
+            "error",
+            rel,
+            1,
+            "DOMAIN_VALIDATOR_INTERNAL_ERROR",
+            f"{validator_name} failed: {exc}",
+        )
+    )
+
+
+def _run_domain_validators(
+    findings: list[Finding],
+    path: Path,
+    text: str,
+    root: Path,
+    domain_context: object | None,
+) -> None:
+    from domain_validators import (
+        validate_animation_notify_lifecycle,
+        validate_animinstance_thread_conservative,
+        validate_animnotify_mutable_state_conservative,
+        validate_component_preflight,
+        validate_gas_asc_lifecycle_conservative,
+        validate_gas_footprint,
+        validate_replication_contract,
+        validate_replication_ownership_conservative,
+        validate_rpc_caller_ownership_conservative,
+        validate_subsystem_lifecycle,
+    )
+
+    validators = (
+        ("validate_component_preflight", validate_component_preflight),
+        ("validate_subsystem_lifecycle", validate_subsystem_lifecycle),
+        ("validate_replication_contract", validate_replication_contract),
+        ("validate_gas_footprint", validate_gas_footprint),
+        ("validate_animation_notify_lifecycle", validate_animation_notify_lifecycle),
+        ("validate_replication_ownership_conservative", validate_replication_ownership_conservative),
+        ("validate_rpc_caller_ownership_conservative", validate_rpc_caller_ownership_conservative),
+        ("validate_gas_asc_lifecycle_conservative", validate_gas_asc_lifecycle_conservative),
+        ("validate_animinstance_thread_conservative", validate_animinstance_thread_conservative),
+        ("validate_animnotify_mutable_state_conservative", validate_animnotify_mutable_state_conservative),
+    )
+    for name, func in validators:
+        try:
+            findings.extend(func(path, text, root, domain_context))
+        except (SyntaxError, UnicodeDecodeError) as exc:
+            _append_validator_internal_error(findings, path, root, name, exc)
+        except Exception as exc:
+            _append_validator_internal_error(findings, path, root, name, exc)
+
+
 def _run_per_file_validators(
     findings: list[Finding],
     path: Path,
@@ -3041,30 +3116,15 @@ def _run_per_file_validators(
                         str(item.get("message") or "Invalid .uplugin descriptor."),
                     )
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            _append_validator_internal_error(findings, path, root, "validate_uplugin_descriptor", exc)
         return
     if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
         findings.extend(validate_typo_includes(path, text, root))
         findings.extend(validate_component_subsystem_patterns(path, text, root))
         findings.extend(validate_gengine_world_context(path, text, root))
         findings.extend(validate_known_bad_api_patterns(path, text, root))
-        try:
-            from domain_validators import (
-                validate_animation_notify_lifecycle,
-                validate_component_preflight,
-                validate_gas_footprint,
-                validate_replication_contract,
-                validate_subsystem_lifecycle,
-            )
-
-            findings.extend(validate_component_preflight(path, text, root, domain_context))
-            findings.extend(validate_subsystem_lifecycle(path, text, root, domain_context))
-            findings.extend(validate_replication_contract(path, text, root, domain_context))
-            findings.extend(validate_gas_footprint(path, text, root, domain_context))
-            findings.extend(validate_animation_notify_lifecycle(path, text, root, domain_context))
-        except Exception:
-            pass
+        _run_domain_validators(findings, path, text, root, domain_context)
     if path.suffix.lower() in {".h", ".hpp"}:
         findings.extend(validate_generated_h(path, text, root))
         findings.extend(validate_reflected_namespace(path, text, root))
@@ -3127,23 +3187,53 @@ def validate_unreal_readiness(
     findings: list[Finding] = []
     build_text_value = build_cs_text(root)
     if scope_paths is not None:
-        scope = sorted({path.resolve() for path in scope_paths if path.is_file()})
-        texts = _read_scope_texts(scope)
-        from domain_validation_context import DomainValidationContext
+        from domain_validation_context import (
+            DomainValidationContext,
+            expand_domain_validation_scope,
+            get_cached_domain_context,
+        )
 
-        domain_context = DomainValidationContext.from_project(root, paths=scope, texts=texts)
+        expansion = expand_domain_validation_scope(root, scope_paths)
+        scope = list(expansion.get("paths") or [])
+        texts = _read_scope_texts(scope)
+        domain_context = get_cached_domain_context(root, paths=scope, texts=texts, validation_mode="scoped")
         headers = class_headers_from_paths(scope, texts)
-        header_paths: dict[str, Path] = {}
+        header_paths: dict[str, Path] = dict(domain_context.headers_by_class)
         for path in scope:
             if path.suffix.lower() not in {".h", ".hpp"}:
                 continue
+            module = domain_context.module_for_path(path)
             header_text = texts.get(path, "")
             for match in re.finditer(
                 r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b",
                 header_text,
             ):
                 if _is_class_definition(header_text, match.start()):
-                    header_paths.setdefault(match.group(1), path)
+                    class_name = match.group(1)
+                    from domain_validation_context import qualified_class_key
+
+                    header_paths.setdefault(qualified_class_key(module, class_name), path)
+                    header_paths.setdefault(class_name, path)
+        if expansion.get("reasons"):
+            import json as _json
+
+            findings.append(
+                Finding(
+                    severity="info",
+                    path=str(scope_paths[0]) if scope_paths else "",
+                    line=0,
+                    code="DOMAIN_VALIDATION_SCOPE_EXPANSION",
+                    message=_json.dumps(
+                        {
+                            "requestedScope": expansion.get("requestedScope"),
+                            "expandedScope": expansion.get("expandedScope"),
+                            "reasons": expansion.get("reasons"),
+                            "unresolved": expansion.get("unresolved"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            )
         bases = class_bases_from_paths(scope, texts)
         delegate_arity_map = build_delegate_arity_map_from_texts(scope, texts)
         include_index = build_source_include_index(root)

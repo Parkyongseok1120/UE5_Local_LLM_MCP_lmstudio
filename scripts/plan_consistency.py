@@ -26,6 +26,7 @@ RAG_ESSENTIAL_TOOLS = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
+        "unreal_diagram_validate",
     }
 )
 
@@ -171,15 +172,29 @@ def validate_plan_consistency(plan: Any) -> list[str]:
 
     if essential_tools_enabled():
         allowed = exposed_rag_tools()
+        from tool_policy import TERMINAL_ACTIONS, normalize_tool_entry
+
         for tool in tool_policy:
+            entry = normalize_tool_entry(tool)
+            if entry["kind"] == "terminal_action":
+                issues.append(f"terminal action {entry['name']} must not appear in toolPolicy")
+            if entry["name"] in TERMINAL_ACTIONS:
+                issues.append(f"terminal action {entry['name']} represented as toolPolicy entry")
             if tool in RAG_EXTENDED_ONLY:
                 issues.append(f"hidden tool {tool} in toolPolicy under Essential mode")
         for call in suggested:
-            if str(call.get("tool") or "") in RAG_EXTENDED_ONLY:
-                issues.append(f"hidden tool {call.get('tool')} in suggestedToolCalls under Essential mode")
+            call_tool = str(call.get("tool") or "")
+            if call_tool in TERMINAL_ACTIONS:
+                issues.append(f"terminal action {call_tool} in suggestedToolCalls")
+            if call_tool in RAG_EXTENDED_ONLY:
+                issues.append(f"hidden tool {call_tool} in suggestedToolCalls under Essential mode")
 
     if write_gate.get("requiresHumanApproval") and writes_allowed:
         issues.append("requiresHumanApproval=true but writesAllowed=true")
+
+    executable_slices = list(getattr(plan, "executable_plan_slices", None) or [])
+    if task_kind == "compile_fix" and executable_slices:
+        issues.append("taskKind=compile_fix must not have executablePlanSlices")
 
     return issues
 

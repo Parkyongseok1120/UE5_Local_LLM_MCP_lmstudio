@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,11 @@ CLASS_RE = re.compile(
     r"(?:\s*:\s*(?:public|protected|private)\s+(?P<base>[A-Za-z_]\w*))?[^;{]*\{"
 )
 CPP_OWNER_RE = re.compile(r"\b(?P<class>[A-Za-z_]\w*)::(?P<func>~?[A-Za-z_]\w*)\s*\(")
+
+
+def qualified_class_key(module: str, class_name: str) -> str:
+    module = (module or "").strip()
+    return f"{module}::{class_name}" if module else class_name
 
 
 def _read_text(path: Path) -> str:
@@ -93,12 +100,18 @@ class DomainValidationContext:
                 context.headers_by_module.setdefault(module_name, []).append(rel)
                 for match in CLASS_RE.finditer(masked):
                     name = match.group("name")
-                    context.headers_by_class.setdefault(name, path)
+                    qkey = qualified_class_key(module_name, name)
+                    context.headers_by_class[qkey] = path
                     if match.group("base"):
-                        context.class_bases.setdefault(name, match.group("base"))
+                        context.class_bases[qkey] = match.group("base")
             elif path.suffix.lower() in CPP_SUFFIXES:
+                module_name = context.module_for_path(path)
                 for match in CPP_OWNER_RE.finditer(masked):
                     owner = match.group("class")
+                    qkey = qualified_class_key(module_name, owner)
+                    context.cpp_paths_by_class.setdefault(qkey, [])
+                    if path not in context.cpp_paths_by_class[qkey]:
+                        context.cpp_paths_by_class[qkey].append(path)
                     context.cpp_paths_by_class.setdefault(owner, [])
                     if path not in context.cpp_paths_by_class[owner]:
                         context.cpp_paths_by_class[owner].append(path)
@@ -127,12 +140,24 @@ class DomainValidationContext:
             self.texts[resolved] = _read_text(resolved)
         return self.texts.get(resolved, "")
 
-    def header_for_class(self, class_name: str) -> Path | None:
-        return self.headers_by_class.get(class_name)
+    def header_for_class(self, class_name: str, module: str = "") -> Path | None:
+        if module:
+            hit = self.headers_by_class.get(qualified_class_key(module, class_name))
+            if hit:
+                return hit
+        direct = self.headers_by_class.get(class_name)
+        if direct:
+            return direct
+        suffix = f"::{class_name}"
+        matches = [path for key, path in self.headers_by_class.items() if key.endswith(suffix)]
+        return matches[0] if len(matches) == 1 else None
 
     def paired_header(self, cpp_path: Path, class_name: str = "") -> Path | None:
-        if class_name and class_name in self.headers_by_class:
-            return self.headers_by_class[class_name]
+        module = self.module_for_path(cpp_path)
+        if class_name:
+            header = self.header_for_class(class_name, module)
+            if header:
+                return header
         module = next(
             (item for item in self.plugin_context.modules if item.name == self.module_for_path(cpp_path)),
             None,
@@ -155,13 +180,18 @@ class DomainValidationContext:
         matches = sorted(public_root.rglob(f"{cpp_path.stem}.h")) if public_root.is_dir() else []
         return matches[0].resolve() if len(matches) == 1 else None
 
-    def class_text(self, class_name: str) -> str:
+    def class_text(self, class_name: str, module: str = "") -> str:
         parts: list[str] = []
-        header = self.header_for_class(class_name)
+        header = self.header_for_class(class_name, module)
         if header:
             parts.append(self.text_for(header))
-        for cpp in self.cpp_paths_by_class.get(class_name, []):
-            parts.append(self.text_for(cpp))
+        qkey = qualified_class_key(module, class_name) if module else class_name
+        seen: set[Path] = set()
+        for key in (qkey, class_name):
+            for cpp in self.cpp_paths_by_class.get(key, []):
+                if cpp not in seen:
+                    seen.add(cpp)
+                    parts.append(self.text_for(cpp))
         return "\n".join(parts)
 
     def to_dict(self) -> dict[str, Any]:
@@ -190,3 +220,144 @@ def validate_cross_file_subsystem_cleanup(
     if setup and "Deinitialize" in header_text and not teardown:
         issues.append("Subsystem Deinitialize should clear timers/delegates registered by this class.")
     return issues
+
+
+_CONTEXT_CACHE: dict[str, tuple[float, DomainValidationContext]] = {}
+_CONTEXT_METRICS: dict[str, Any] = {"hits": 0, "misses": 0, "buildMs": []}
+
+
+def _path_fingerprint(paths: list[Path]) -> str:
+    parts: list[str] = []
+    for path in sorted(paths):
+        try:
+            stat = path.stat()
+            parts.append(f"{path}:{stat.st_mtime_ns}:{stat.st_size}")
+        except OSError:
+            parts.append(f"{path}:missing")
+    raw = "|".join(parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _plugin_descriptor_fingerprint(project_root: Path) -> str:
+    try:
+        ctx = build_plugin_project_context(project_root)
+        payload = sorted(f"{p.name}:{m.name}:{m.enabled}" for p in ctx.plugins for m in p.modules)
+        return hashlib.sha256("|".join(payload).encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return "unknown"
+
+
+def clear_domain_validation_cache(project_root: Path | str | None = None) -> None:
+    global _CONTEXT_CACHE
+    if project_root is None:
+        _CONTEXT_CACHE.clear()
+        return
+    root = str(Path(project_root).resolve())
+    _CONTEXT_CACHE = {key: value for key, value in _CONTEXT_CACHE.items() if not key.startswith(root + "|")}
+
+
+def invalidate_domain_validation_cache_for_paths(
+    project_root: Path | str,
+    changed_paths: list[Path | str] | None = None,
+) -> None:
+    """Drop cached validation contexts after writes; project-wide when paths unknown."""
+    clear_domain_validation_cache(project_root)
+    if changed_paths:
+        _CONTEXT_METRICS["invalidations"] = int(_CONTEXT_METRICS.get("invalidations") or 0) + len(changed_paths)
+
+
+def get_context_cache_metrics() -> dict[str, Any]:
+    return dict(_CONTEXT_METRICS)
+
+
+def get_cached_domain_context(
+    project_root: Path | str,
+    *,
+    paths: list[Path] | None = None,
+    texts: dict[Path, str] | None = None,
+    validation_mode: str = "full",
+) -> DomainValidationContext:
+    root = Path(project_root).resolve()
+    selected = sorted({Path(path).resolve() for path in (paths or []) if Path(path).is_file()})
+    cache_key = "|".join(
+        [
+            str(root),
+            _plugin_descriptor_fingerprint(root),
+            validation_mode,
+            _path_fingerprint(selected),
+        ]
+    )
+    now = time.time()
+    cached = _CONTEXT_CACHE.get(cache_key)
+    if cached and now - cached[0] < 300:
+        _CONTEXT_METRICS["hits"] = int(_CONTEXT_METRICS.get("hits") or 0) + 1
+        return cached[1]
+    started = time.perf_counter()
+    context = DomainValidationContext.from_project(root, paths=paths, texts=texts)
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    _CONTEXT_METRICS["misses"] = int(_CONTEXT_METRICS.get("misses") or 0) + 1
+    builds = list(_CONTEXT_METRICS.get("buildMs") or [])
+    builds.append(elapsed_ms)
+    _CONTEXT_METRICS["buildMs"] = builds[-32:]
+    _CONTEXT_CACHE[cache_key] = (now, context)
+    return context
+
+
+def expand_domain_validation_scope(
+    project_root: Path | str,
+    requested_paths: list[Path | str],
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    requested = sorted({Path(item).resolve() for item in requested_paths if Path(item).is_file()})
+    expanded: set[Path] = set(requested)
+    reasons: dict[str, str] = {}
+    unresolved: list[str] = []
+    ctx = DomainValidationContext.from_project(root)
+
+    for path in requested:
+        rel = ctx.rel_path(path)
+        suffix = path.suffix.lower()
+        if suffix in CPP_SUFFIXES:
+            module = ctx.module_for_path(path)
+            for match in CPP_OWNER_RE.finditer(mask_comments_and_strings(ctx.text_for(path))):
+                class_name = match.group("class")
+                header = ctx.paired_header(path, class_name)
+                if header and header not in expanded:
+                    expanded.add(header)
+                    reasons[ctx.rel_path(header)] = f"paired header for {module}::{class_name}"
+            if header := ctx.paired_header(path):
+                if header not in expanded:
+                    expanded.add(header)
+                    reasons[ctx.rel_path(header)] = f"paired header for {rel}"
+        elif suffix in HEADER_SUFFIXES:
+            module = ctx.module_for_path(path)
+            header_text = ctx.text_for(path)
+            masked = mask_comments_and_strings(header_text)
+            class_names = [match.group("name") for match in CLASS_RE.finditer(masked)]
+            if not class_names:
+                class_names = [path.stem]
+            for class_name in class_names:
+                qkey = qualified_class_key(module, class_name)
+                cpp_hits = ctx.cpp_paths_by_class.get(qkey, [])
+                if not cpp_hits:
+                    cpp_hits = ctx.cpp_paths_by_class.get(class_name, [])
+                if not cpp_hits:
+                    unresolved.append(qkey)
+                for cpp in cpp_hits:
+                    if cpp not in expanded:
+                        expanded.add(cpp)
+                        reasons[ctx.rel_path(cpp)] = f"implementation for {qkey}"
+            build_cs = list(root.rglob("*.Build.cs"))
+            for build_path in build_cs:
+                if module and module.lower() in build_path.name.lower():
+                    if build_path not in expanded:
+                        expanded.add(build_path.resolve())
+                        reasons[ctx.rel_path(build_path)] = "module Build.cs for visibility"
+
+    return {
+        "requestedScope": [ctx.rel_path(path) for path in requested],
+        "expandedScope": [ctx.rel_path(path) for path in sorted(expanded)],
+        "reasons": reasons,
+        "unresolved": unresolved,
+        "paths": sorted(expanded),
+    }
