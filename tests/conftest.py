@@ -12,6 +12,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+AGENT_MCP_ROOT = ROOT / "lmstudio-unreal-agent-mcp"
+AGENT_MCP_SDK = AGENT_MCP_ROOT / "node_modules" / "@modelcontextprotocol" / "sdk"
+
+
+def require_agent_mcp_deps() -> None:
+    if not AGENT_MCP_SDK.is_dir():
+        pytest.skip("agent MCP npm deps missing; run: cd lmstudio-unreal-agent-mcp && npm ci")
+
 
 def _write_uproject(path: Path, modules: list[str]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)

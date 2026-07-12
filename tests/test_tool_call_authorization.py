@@ -13,6 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 RAG_SCRIPT = ROOT / "scripts" / "unreal_rag_mcp.py"
 AGENT_SERVER = ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js"
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
+
+from conftest import require_agent_mcp_deps  # noqa: E402
+from mcp_stdio_client import format_subprocess_response_failure  # noqa: E402
 
 
 def _python_exe() -> str:
@@ -41,16 +45,27 @@ class _StdioClient:
         )
         assert self.proc.stdin and self.proc.stdout
 
-    def request(self, method: str, params: dict | None = None, req_id: int = 1) -> dict:
+    def request(self, method: str, params: dict | None = None, req_id: int = 1, *, timeout_sec: float = 30.0) -> dict:
+        import time
+
         self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params or {}}) + "\n")
         self.proc.stdin.flush()
-        while True:
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
             line = self.proc.stdout.readline()
-            if not line.strip():
+            if not line:
+                if self.proc.poll() is not None:
+                    break
+                continue
+            line = line.strip()
+            if not line:
                 continue
             message = json.loads(line)
             if message.get("id") == req_id:
                 return message
+        if self.proc.poll() is None:
+            self.proc.terminate()
+        raise format_subprocess_response_failure(self.proc, req_id)
 
     def call_tool(self, name: str, arguments: dict | None = None, req_id: int = 10) -> dict:
         return self.request("tools/call", {"name": name, "arguments": arguments or {}}, req_id)
@@ -93,6 +108,7 @@ def test_rag_rejects_extended_refresh_in_essential_mode(tmp_path: Path) -> None:
 
 
 def test_agent_rejects_apply_edit_bundle_when_control_plane_off(tmp_path: Path) -> None:
+    require_agent_mcp_deps()
     env = os.environ.copy()
     env.update(
         {

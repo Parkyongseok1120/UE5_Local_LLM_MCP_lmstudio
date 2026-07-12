@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from conftest import require_agent_mcp_deps  # noqa: E402
 from mcp_stdio_client import StdioJsonRpc  # noqa: E402
 
 RAG_SCRIPT = ROOT / "scripts" / "unreal_rag_mcp.py"
@@ -93,6 +94,7 @@ def rag_env(tmp_path: Path) -> dict[str, str]:
 
 
 def test_agent_repeated_read_file_calls(agent_env: dict[str, str], tmp_path: Path) -> None:
+    require_agent_mcp_deps()
     if not AGENT_SERVER.is_file():
         pytest.skip("agent server missing")
     sample = tmp_path / "note.txt"
@@ -131,6 +133,7 @@ def test_rag_repeated_health_calls(rag_env: dict[str, str], tmp_path: Path) -> N
 
 
 def test_agent_malformed_then_valid_call(agent_env: dict[str, str], tmp_path: Path) -> None:
+    require_agent_mcp_deps()
     if not AGENT_SERVER.is_file():
         pytest.skip("agent server missing")
     sample = tmp_path / "note.txt"
@@ -147,6 +150,7 @@ def test_agent_malformed_then_valid_call(agent_env: dict[str, str], tmp_path: Pa
 
 
 def test_agent_unknown_tool_then_valid_call(agent_env: dict[str, str], tmp_path: Path) -> None:
+    require_agent_mcp_deps()
     if not AGENT_SERVER.is_file():
         pytest.skip("agent server missing")
     sample = tmp_path / "note.txt"
@@ -163,6 +167,7 @@ def test_agent_unknown_tool_then_valid_call(agent_env: dict[str, str], tmp_path:
 
 
 def test_agent_restart_after_disconnect(agent_env: dict[str, str], tmp_path: Path) -> None:
+    require_agent_mcp_deps()
     if not AGENT_SERVER.is_file():
         pytest.skip("agent server missing")
     sample = tmp_path / "note.txt"
@@ -180,6 +185,7 @@ def test_agent_restart_after_disconnect(agent_env: dict[str, str], tmp_path: Pat
 
 
 def test_dual_server_concurrent_tools_call(agent_env: dict[str, str], rag_env: dict[str, str], tmp_path: Path) -> None:
+    require_agent_mcp_deps()
     if not AGENT_SERVER.is_file() or not RAG_SCRIPT.is_file():
         pytest.skip("servers missing")
     sample = tmp_path / "note.txt"
