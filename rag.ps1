@@ -196,7 +196,11 @@ $dataDir = $ragPaths.DataDir
 $indexPath = $ragPaths.IndexPath
 $moduleGraphPath = if ($ModuleGraph) { $ModuleGraph } else { $ragPaths.ModuleGraphPath }
 
-if (-not $SourceRoot) {
+$commandsNeedingSourceRoot = @("collect-source", "collect-symbols", "update-engine")
+$commandsNeedingUbtPath = @("ubt-feedback", "wrapper", "bench-mcp")
+$engineRoot = $null
+
+if (($Command -in $commandsNeedingSourceRoot) -and (-not $SourceRoot)) {
     $engineRoot = Get-WorkspaceEngineRoot -Fallback ""
     if (-not $engineRoot) {
         throw "Unreal Engine root not found. Set UNREAL_ENGINE_ROOT or config/workspace.json defaultEngineRoot."
@@ -204,8 +208,10 @@ if (-not $SourceRoot) {
     $SourceRoot = Join-Path $engineRoot "Engine\Source"
 }
 
-if (-not $UbtPath) {
-    $engineRoot = Get-WorkspaceEngineRoot -Fallback ""
+if (($Command -in $commandsNeedingUbtPath) -and (-not $UbtPath)) {
+    if (-not $engineRoot) {
+        $engineRoot = Get-WorkspaceEngineRoot -Fallback ""
+    }
     if (-not $engineRoot) {
         throw "Unreal Engine root not found. Set UNREAL_ENGINE_ROOT or config/workspace.json defaultEngineRoot."
     }

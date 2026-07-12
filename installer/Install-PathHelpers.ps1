@@ -29,7 +29,7 @@ function Get-EpicGamesRoot {
 function Get-DetectedUnrealEngineInstalls {
     param([string]$EpicGamesRoot = "")
     $root = Get-EpicGamesRoot -Override $EpicGamesRoot
-    if (-not (Test-Path -LiteralPath $root)) {
+    if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) {
         return @()
     }
     Get-ChildItem -LiteralPath $root -Directory -Filter "UE_5.*" -ErrorAction SilentlyContinue |
