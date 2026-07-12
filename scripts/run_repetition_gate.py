@@ -22,6 +22,7 @@ SUITES = [
     "tests/test_rag_staleness_search.py",
     "tests/test_compile_fix_plan_separation.py",
     "tests/test_job_cancel_deterministic.py",
+    "tests/test_mcp_soak_matrix.py",
 ]
 
 

@@ -53,8 +53,89 @@ def test_job_store_revision_conflict(isolated_state: Path) -> None:
     assert int(current["revision"]) == 2
 
 
+def test_cancel_blocks_stale_running_merge(isolated_state: Path) -> None:
+    job_id = uuid.uuid4().hex[:12]
+    write_job_record(
+        {
+            "jobId": job_id,
+            "status": "cancel_requested",
+            "revision": 2,
+            "progressSequence": 1,
+            "progress": [],
+        },
+        workspace=isolated_state,
+    )
+    stale_running = {
+        "jobId": job_id,
+        "status": "running",
+        "revision": 1,
+        "pid": 1234,
+        "progressSequence": 0,
+    }
+    from wrapper_job_manager import save_job  # noqa: E402
+
+    assert save_job(isolated_state, stale_running) is False
+    persisted = read_job_record(job_id, workspace=isolated_state)
+    assert persisted is not None
+    assert persisted["status"] == "cancel_requested"
+
+
+def test_cancel_job_skips_kill_when_pid_identity_mismatch(monkeypatch, isolated_state: Path) -> None:
+    job_id = uuid.uuid4().hex[:12]
+    command = [sys.executable, "rag_refresh.py"]
+    from process_identity import command_fingerprint  # noqa: E402
+
+    job = {
+        "jobId": job_id,
+        "status": "running",
+        "revision": 1,
+        "progressSequence": 0,
+        "pid": 4242,
+        "command": command,
+        "commandFingerprint": command_fingerprint(command),
+        "pidStartedAt": "2026-01-01T00:00:00+00:00",
+        "progress": [],
+    }
+    write_job_record(job, workspace=isolated_state)
+    monkeypatch.setattr("wrapper_job_manager._pid_matches_job", lambda _job: False)
+    monkeypatch.setattr("wrapper_job_manager._process_alive", lambda _pid: True)
+    result = cancel_job(isolated_state, job_id)
+    assert result["ok"] is True
+    assert result["orphanProcessSuspected"] is True
+    assert result["cancellationState"] == "cancellation_uncertain"
+    persisted = read_job(isolated_state, job_id)
+    assert persisted is not None
+    assert persisted["status"] == "cancellation_uncertain"
+    assert persisted.get("orphanProcessSuspected") is True
+
+
+def test_cancel_job_cancelled_when_pid_dead_and_identity_mismatch(monkeypatch, isolated_state: Path) -> None:
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "jobId": job_id,
+        "status": "running",
+        "revision": 1,
+        "progressSequence": 0,
+        "pid": 4242,
+        "progress": [],
+    }
+    write_job_record(job, workspace=isolated_state)
+    monkeypatch.setattr("wrapper_job_manager._pid_matches_job", lambda _job: False)
+    monkeypatch.setattr("wrapper_job_manager._process_alive", lambda _pid: False)
+    result = cancel_job(isolated_state, job_id)
+    assert result["ok"] is True
+    assert result["orphanProcessSuspected"] is False
+    persisted = read_job(isolated_state, job_id)
+    assert persisted is not None
+    assert persisted["status"] == "cancelled"
+
+
 def test_cancel_job_persists_cancel_requested(monkeypatch, isolated_state: Path) -> None:
-    monkeypatch.setattr("wrapper_job_manager.subprocess.run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    def _fake_run(*args, **kwargs):
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("wrapper_job_manager.subprocess.run", _fake_run)
+    monkeypatch.setattr("process_identity.subprocess.run", _fake_run)
     job_id = uuid.uuid4().hex[:12]
     job = {
         "jobId": job_id,

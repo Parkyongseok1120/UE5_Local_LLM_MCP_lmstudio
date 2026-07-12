@@ -166,6 +166,7 @@ else {
     Join-Path $HOME ".lmstudio"
 }
 $docsRoot = if ($DocumentsRoot) { $DocumentsRoot } else { Join-Path $HOME "Documents" }
+$agentStateRoot = Join-Path $lmHome "state\unreal-agent"
 
 Write-Host "Portable root : $root"
 Write-Host "Python        : $python"
@@ -256,6 +257,7 @@ foreach ($mcpPath in $mcpPaths) {
         timeout = 420000
         env     = [ordered]@{
             SHARED_UNREAL_CONFIG = $sharedConfigPath
+            AGENT_STATE_ROOT     = $agentStateRoot
             UNREAL58_ROOT        = $ragRoot
             UNREAL58_PORTABLE_ROOT = $root
             PYTHONUTF8           = "1"
@@ -275,6 +277,7 @@ foreach ($mcpPath in $mcpPaths) {
             WORKSPACE_ROOT       = $docsRoot
             AGENT_MCP_CONFIG     = $agentConfigPath
             SHARED_UNREAL_CONFIG = $sharedConfigPath
+            AGENT_STATE_ROOT     = $agentStateRoot
             UNREAL58_ROOT        = $ragRoot
             ALLOW_WRITE          = $allowWrite
             ALLOW_COMMANDS       = $allowCommands

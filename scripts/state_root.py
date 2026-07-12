@@ -17,11 +17,10 @@ def resolve_shared_config_path() -> Path:
 
 
 def resolve_agent_state_root(workspace: Path | None = None) -> Path:
+    del workspace  # workspace does not affect control-plane state root
     override = os.environ.get("AGENT_STATE_ROOT", "").strip()
     if override:
         return Path(override).expanduser().resolve()
-    if workspace is not None:
-        return (Path(workspace).resolve() / ".agent" / "state" / "unreal-agent").resolve()
     config_path = resolve_shared_config_path()
     return (config_path.parent.parent / "state" / "unreal-agent").resolve()
 

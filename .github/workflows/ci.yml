@@ -123,6 +123,36 @@ jobs:
           $ErrorActionPreference = 'Stop'
           powershell -NoProfile -ExecutionPolicy Bypass -File installer\Verify-Oss-Ready.ps1
 
+  powershell-syntax:
+    name: PowerShell syntax gate
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse all PowerShell scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failures = @()
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors -and $errors.Count -gt 0) {
+              $failures += "$($_.FullName): $($errors[0].Message)"
+            }
+          }
+          if ($failures.Count -gt 0) {
+            Write-Error ("PowerShell parse failures:`n" + ($failures -join "`n"))
+          }
+
+      - name: rag.ps1 doctor dispatch smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File rag.ps1 doctor
+
   installer-gates:
     name: Installer verify and WhatIf
     runs-on: windows-latest

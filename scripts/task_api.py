@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from task_phase import task_phase_from_state
+
+TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled", "failed", "cancellation_uncertain"})
+APPROVABLE_TASK_STATUSES = frozenset({"pending_approval", "awaiting_approval"})
 
 
 def _utc_now() -> str:
@@ -56,9 +61,39 @@ def _read_state(workspace: Path, task_session_id: str) -> dict[str, Any] | None:
 def _write_state(workspace: Path, task_session_id: str, state: dict[str, Any]) -> None:
     root = task_root(workspace, task_session_id)
     root.mkdir(parents=True, exist_ok=True)
-    temp = root / "state.json.tmp"
+    temp = root / f"state.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     temp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(_state_path(workspace, task_session_id))
+
+
+@contextmanager
+def _task_lock(workspace: Path, task_session_id: str) -> Iterator[None]:
+    from write_locks import release_cross_process_lock, try_acquire_cross_process_lock
+
+    state_path = _state_path(workspace, task_session_id)
+    acquired = try_acquire_cross_process_lock(state_path, label="task_state")
+    if not acquired.get("ok"):
+        raise RuntimeError(acquired.get("error") or f"task lock busy: {acquired.get('holder')}")
+    try:
+        yield
+    finally:
+        release_cross_process_lock(state_path)
+
+
+def _mutate_task_state(
+    workspace: Path,
+    task_session_id: str,
+    mutator: Callable[[dict[str, Any]], dict[str, Any] | None],
+) -> dict[str, Any]:
+    with _task_lock(workspace, task_session_id):
+        state = _read_state(workspace, task_session_id)
+        if not state:
+            return {"ok": False, "error": f"Unknown task: {task_session_id}"}
+        updated = mutator(state)
+        if updated is None:
+            return {"ok": False, "error": "Task mutation rejected", "taskSessionId": task_session_id}
+        _write_state(workspace, task_session_id, updated)
+        return _task_response(workspace, updated)
 
 
 def _append_log(workspace: Path, task_session_id: str, message: str, level: str = "info") -> None:
@@ -195,21 +230,30 @@ def task_status(workspace: Path, task_session_id: str) -> dict[str, Any]:
 
 
 def task_approve(workspace: Path, task_session_id: str, *, note: str = "") -> dict[str, Any]:
-    state = _read_state(workspace, task_session_id)
-    if not state:
-        return {"ok": False, "error": f"Unknown task: {task_session_id}"}
-    state["status"] = "running"
-    state["approvalNote"] = note
-    state["updatedAt"] = _utc_now()
-    _write_state(workspace, task_session_id, state)
-    _append_log(workspace, task_session_id, f"Approved: {note[:200]}")
-    return _task_response(workspace, state)
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        status = str(state.get("status") or "")
+        if status in TERMINAL_TASK_STATUSES:
+            return None
+        if status not in APPROVABLE_TASK_STATUSES and status != "running":
+            return None
+        state["status"] = "running"
+        state["approvalNote"] = note
+        state["updatedAt"] = _utc_now()
+        _append_log(workspace, task_session_id, f"Approved: {note[:200]}")
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if result.get("ok") is False and "Unknown task" not in str(result.get("error") or ""):
+        result["error"] = "Approve rejected: task is not awaiting approval or is already terminal."
+    return result
 
 
 def task_cancel(workspace: Path, task_session_id: str) -> dict[str, Any]:
     state = _read_state(workspace, task_session_id)
     if not state:
         return {"ok": False, "error": f"Unknown task: {task_session_id}"}
+    if str(state.get("status") or "") in TERMINAL_TASK_STATUSES:
+        return {"ok": False, "error": "Cancel rejected: task is already terminal.", "taskSessionId": task_session_id}
 
     job_id = str(state.get("activeJobId") or "").strip()
     if job_id:
@@ -231,22 +275,22 @@ def task_cancel(workspace: Path, task_session_id: str) -> dict[str, Any]:
 
     state["status"] = "cancelled"
     state["updatedAt"] = _utc_now()
-    _write_state(workspace, task_session_id, state)
+    with _task_lock(workspace, task_session_id):
+        _write_state(workspace, task_session_id, state)
     _append_log(workspace, task_session_id, "Task cancelled")
     return _task_response(workspace, state)
 
 
 def task_resume(workspace: Path, task_session_id: str) -> dict[str, Any]:
-    state = _read_state(workspace, task_session_id)
-    if not state:
-        return {"ok": False, "error": f"Unknown task: {task_session_id}"}
-    if state.get("status") in {"cancelled", "failed", "cancellation_uncertain"}:
-        return {
-            "ok": False,
-            "error": "Resume rejected: start a new task instead of resuming a terminal session.",
-            "taskSessionId": task_session_id,
-        }
-    state["updatedAt"] = _utc_now()
-    _write_state(workspace, task_session_id, state)
-    _append_log(workspace, task_session_id, "Task resumed")
-    return _task_response(workspace, state)
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        if str(state.get("status") or "") in TERMINAL_TASK_STATUSES:
+            return None
+        state["updatedAt"] = _utc_now()
+        _append_log(workspace, task_session_id, "Task resumed")
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if result.get("ok") is False and "Unknown task" not in str(result.get("error") or ""):
+        result["error"] = "Resume rejected: start a new task instead of resuming a terminal session."
+        result["taskSessionId"] = task_session_id
+    return result

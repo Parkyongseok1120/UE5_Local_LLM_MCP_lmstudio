@@ -125,7 +125,7 @@ def _handle_unreal_rag_refresh_status(server: McpServer, message_id: Any, argume
         server.tool_result(message_id, "Provide job_id or set list_recent=true.", is_error=True)
         return
     payload = job_status(server.workspace, job_id)
-    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+    _emit_structured_result(server, message_id, payload)
 
 
 def _handle_unreal_cancel_compile_loop(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
@@ -134,7 +134,7 @@ def _handle_unreal_cancel_compile_loop(server: McpServer, message_id: Any, argum
         server.tool_result(message_id, "Missing required argument: job_id", is_error=True)
         return
     payload = cancel_job(server.workspace, job_id)
-    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+    _emit_structured_result(server, message_id, payload)
 
 
 def _handle_unreal_code_sketch_claim_validate(
@@ -186,7 +186,17 @@ def _handle_unreal_render_report(server: McpServer, message_id: Any, arguments: 
     if not sanitized.get("ok"):
         server.tool_result(message_id, sanitized.get("text") or "Invalid diagram content", is_error=True)
         return
-    payload = render_report(sanitized.get("text") or text, format=fmt, output_path=output_path)  # type: ignore[arg-type]
+    try:
+        payload = render_report(
+            sanitized.get("text") or text,
+            format=fmt,  # type: ignore[arg-type]
+            output_path=output_path,
+            workspace=server.workspace,
+            allow_overwrite=arguments.get("allowOverwrite") is True,
+        )
+    except (ValueError, FileExistsError) as exc:
+        server.tool_result(message_id, str(exc), is_error=True)
+        return
     payload["degraded"] = sanitized.get("degraded", False)
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
@@ -233,6 +243,16 @@ def _handle_unreal_rag_capabilities(server: McpServer, message_id: Any, argument
         "indexHealthy": status.get("chunkCount", 0) > 0 and not status.get("needsRebuild", True),
     }
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _emit_structured_result(server: McpServer, message_id: Any, payload: dict[str, Any]) -> None:
+    server.structured_tool_result(message_id, payload)
+
+
+def structured_payload_is_error(payload: dict[str, Any]) -> bool:
+    if "isError" in payload:
+        return bool(payload.get("isError"))
+    return payload.get("ok") is False
 
 
 def build_mcp_tool_registry() -> McpToolRegistry:
@@ -504,19 +524,35 @@ class McpServer:
             "isError": is_error,
         }
         if structured is not None:
-            from mcp_tool_compact import compact_json_text
-
             cap = max(8_000, min(limit // 2, 32_000))
             try:
+                from mcp_tool_compact import compact_structured_payload
+
                 serialized = json.dumps(structured, ensure_ascii=False)
                 if len(serialized) > cap:
-                    payload["structuredContent"] = json.loads(compact_json_text(structured, limit=cap))
+                    payload["structuredContent"] = compact_structured_payload(structured, max_bytes=cap)
                     payload["structuredContentTruncated"] = True
                 else:
                     payload["structuredContent"] = structured
-            except (TypeError, ValueError, json.JSONDecodeError):
+            except (TypeError, ValueError):
                 payload["structuredContent"] = {"error": "structuredContent could not be serialized"}
         self.result(message_id, payload)
+
+    def structured_tool_result(
+        self,
+        message_id: Any,
+        payload: dict[str, Any],
+        *,
+        char_limit: int | None = None,
+    ) -> None:
+        is_error = payload.get("isError") if "isError" in payload else (payload.get("ok") is False)
+        self.tool_result(
+            message_id,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            structured=payload,
+            is_error=bool(is_error),
+            char_limit=char_limit,
+        )
 
     def handle_message(self, message: dict[str, Any]) -> None:
         method = message.get("method")
@@ -1665,19 +1701,20 @@ class McpServer:
                     self.tool_result(message_id, "No active project.", is_error=True)
                     return
                 payload = ensure_active_project_ready(project, force=arguments.get("force") is True)
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                self.structured_tool_result(message_id, payload)
             elif name == "unreal_project_status":
-                import os
-
+                from agent_capabilities import resolve_agent_write_enabled
                 from mcp_tool_compact import envelope_fields
                 from project_controller import active_project_readiness
                 from workspace_paths import resolve_index_path
 
                 payload = active_project_readiness(self.workspace)
+                agent_write_enabled = resolve_agent_write_enabled()
+                payload["agentWriteEnabled"] = agent_write_enabled
                 blocking: list[str] = []
                 if not payload.get("ready"):
                     blocking.append(str(payload.get("reason") or "project_not_ready"))
-                if os.environ.get("ALLOW_WRITE", "").strip().lower() not in {"1", "true", "yes", "on"}:
+                if not agent_write_enabled:
                     blocking.append("agent_write_mode_disabled")
                 index_path = resolve_index_path(self.workspace)
                 if not index_path.is_file():
@@ -1706,27 +1743,27 @@ class McpServer:
                     start_background_job=arguments.get("startBackgroundJob") is True,
                     on_progress=lambda job, msg: self.notify(f"[task {job.get('jobId')}] {msg}"),
                 )
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_status":
                 from task_api import task_status
 
                 payload = task_status(self.workspace, str(arguments.get("taskSessionId") or ""))
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_approve":
                 from task_api import task_approve
 
                 payload = task_approve(self.workspace, str(arguments.get("taskSessionId") or ""), note=str(arguments.get("note") or ""))
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_cancel":
                 from task_api import task_cancel
 
                 payload = task_cancel(self.workspace, str(arguments.get("taskSessionId") or ""))
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_resume":
                 from task_api import task_resume
 
                 payload = task_resume(self.workspace, str(arguments.get("taskSessionId") or ""))
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                self.structured_tool_result(message_id, payload)
             elif name == "unreal_architecture_decision_status":
                 from architecture_decision import approval_is_valid, build_architecture_decision
 
@@ -1739,8 +1776,16 @@ class McpServer:
                 payload = {"ok": True, "valid": approval_is_valid(store, decision), "decision": decision.to_dict()}
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_architecture_decision_approve":
-                from architecture_decision import build_architecture_decision, persist_approval
+                from architecture_decision import approval_token_valid, build_architecture_decision, persist_approval
 
+                token = str(arguments.get("approvalToken") or arguments.get("approval_token") or "")
+                if not approval_token_valid(token):
+                    self.tool_result(
+                        message_id,
+                        "Architecture approval token required.",
+                        is_error=True,
+                    )
+                    return
                 store = self.workspace / "data" / "architecture_approvals.json"
                 decision = build_architecture_decision(
                     ambiguity_gate=arguments.get("ambiguityGate") or {},

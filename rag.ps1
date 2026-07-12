@@ -214,7 +214,7 @@ if (-not $UbtPath) {
 
 switch ($Command) {
     "collect-docs" {
-        & $py scripts\collect_unreal_docs.py --seeds config\unreal_58_seed_urls.txt --out "$dataDir\raw_docs.jsonl --max-pages $MaxPages --delay 0.5
+        & $py scripts\collect_unreal_docs.py --seeds config\unreal_58_seed_urls.txt --out "$dataDir\raw_docs.jsonl" --max-pages $MaxPages --delay 0.5
     }
     "collect-source" {
         $sourceArgs = @("scripts\collect_unreal_source.py", "--root", $SourceRoot, "--out", "$dataDir\raw_source.jsonl")
@@ -256,10 +256,10 @@ switch ($Command) {
         & $py @projectArgs
     }
     "collect-guidelines" {
-        & $py scripts\collect_project_guidelines.py --root $GuidelinesRoot --out "$dataDir\raw_guidelines.jsonl
+        & $py scripts\collect_project_guidelines.py --root $GuidelinesRoot --out "$dataDir\raw_guidelines.jsonl"
     }
     "collect-game-design" {
-        & $py scripts\collect_game_design_docs.py --root $GameDesignRoot --out "$dataDir\raw_game_design.jsonl
+        & $py scripts\collect_game_design_docs.py --root $GameDesignRoot --out "$dataDir\raw_game_design.jsonl"
     }
     "collect-symbols" {
         $symbolsOut = Join-Path $dataDir "raw_symbols.jsonl"
@@ -321,7 +321,7 @@ switch ($Command) {
     }
     "collect-project-profile" {
         $profileRoot = if ($ProjectFile) { $ProjectFile } else { $ProjectsRoot }
-        & $py scripts\collect_unreal_project_profile.py --root $profileRoot --out "$dataDir\raw_project_profiles.jsonl
+        & $py scripts\collect_unreal_project_profile.py --root $profileRoot --out "$dataDir\raw_project_profiles.jsonl"
     }
     "collect-project-architecture" {
         $archArgs = @("scripts\collect_project_architecture.py", "--out-dir", $dataDir, "--jsonl", "$dataDir\raw_project_architecture.jsonl")
@@ -388,14 +388,14 @@ switch ($Command) {
         & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir $dataDir --export "${Question}:sequencer"
     }
     "collect-failure-memory" {
-        & $py scripts\collect_failure_memory.py --out "$dataDir\raw_failure_memory.jsonl
+        & $py scripts\collect_failure_memory.py --out "$dataDir\raw_failure_memory.jsonl"
     }
     "build" {
         if (Test-Path $GuidelinesRoot) {
-            & $py scripts\collect_project_guidelines.py --root $GuidelinesRoot --out "$dataDir\raw_guidelines.jsonl
+            & $py scripts\collect_project_guidelines.py --root $GuidelinesRoot --out "$dataDir\raw_guidelines.jsonl"
         }
         if (Test-Path $GameDesignRoot) {
-            & $py scripts\collect_game_design_docs.py --root $GameDesignRoot --out "$dataDir\raw_game_design.jsonl
+            & $py scripts\collect_game_design_docs.py --root $GameDesignRoot --out "$dataDir\raw_game_design.jsonl"
         }
         $inputs = @()
         if (Test-Path "$dataDir\raw_guidelines.jsonl") {

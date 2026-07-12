@@ -10,7 +10,7 @@ const STALE_TEMP_AGE_MS = 60_000;
 
 function uniqueTempPath(resolved) {
   tempCounter += 1;
-  return `${resolved}.${process.pid}.${crypto.randomUUID()}.${tempCounter}.tmp`;
+  return `${resolved}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.${tempCounter}.tmp`;
 }
 
 function cleanupStaleTempFiles(resolved) {
@@ -23,17 +23,26 @@ function cleanupStaleTempFiles(resolved) {
       if (!entry.startsWith(`${base}.`) || !entry.endsWith(".tmp")) {
         continue;
       }
+      const tempPath = path.join(dir, entry);
       const middle = entry.slice(base.length + 1, -4);
       const parts = middle.split(".");
       const ownerPid = parts[0];
-      const createdAt = Number(parts[1] || 0);
+      let stale = false;
+      try {
+        const ageMs = now - fs.statSync(tempPath).mtimeMs;
+        stale = ageMs > STALE_TEMP_AGE_MS;
+      } catch {
+        stale = true;
+      }
       const ownedByProcess = ownerPid === myPid;
-      const stale = createdAt > 0 && now - createdAt > STALE_TEMP_AGE_MS;
+      if (ownedByProcess && !stale) {
+        continue;
+      }
       if (!ownedByProcess && !stale) {
         continue;
       }
       try {
-        fs.unlinkSync(path.join(dir, entry));
+        fs.unlinkSync(tempPath);
       } catch {
         // Best-effort cleanup.
       }
@@ -61,11 +70,6 @@ function atomicWriteText(targetPath, content, encoding = "utf8") {
 function atomicCreateText(targetPath, content, encoding = "utf8") {
   const resolved = path.resolve(String(targetPath));
   fs.mkdirSync(path.dirname(resolved), { recursive: true });
-  if (fs.existsSync(resolved)) {
-    const err = new Error(`EEXIST: file already exists: ${resolved}`);
-    err.code = "EEXIST";
-    throw err;
-  }
   const tempPath = uniqueTempPath(resolved);
   const fd = fs.openSync(tempPath, "w");
   try {
@@ -75,12 +79,18 @@ function atomicCreateText(targetPath, content, encoding = "utf8") {
     fs.closeSync(fd);
   }
   try {
-    fs.renameSync(tempPath, resolved);
+    fs.copyFileSync(tempPath, resolved, fs.constants.COPYFILE_EXCL);
+    fs.unlinkSync(tempPath);
   } catch (err) {
     try {
       fs.unlinkSync(tempPath);
     } catch {
       // ignore
+    }
+    if (err && (err.code === "EEXIST" || err.code === "EPERM")) {
+      const existsErr = new Error(`EEXIST: file already exists: ${resolved}`);
+      existsErr.code = "EEXIST";
+      throw existsErr;
     }
     throw err;
   }

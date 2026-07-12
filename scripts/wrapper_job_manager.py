@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -135,18 +136,39 @@ def save_job(workspace: Path, job: dict[str, Any]) -> bool:
     job_id = str(job.get("jobId") or "")
     if not job_id:
         return False
+    patch = dict(job)
+
+    def mutator(draft: dict[str, Any]) -> None:
+        from job_store import _merge_payload
+
+        merged = _merge_payload(draft, patch)
+        if merged is None:
+            raise ValueError("job merge rejected")
+        draft.clear()
+        draft.update(merged)
+
+    try:
+        from job_store import mutate_job_record
+
+        return mutate_job_record(job_id, mutator, workspace=workspace)
+    except ValueError:
+        return False
+    except Exception:
+        pass
     current = read_job(workspace, job_id)
     if current is None:
         return write_job(workspace, job)
-    expected = int(current.get("revision") or 0)
-    if write_job(workspace, job, expected_revision=expected):
-        return True
-    fresh = read_job(workspace, job_id)
-    if not fresh:
+    from job_store import _merge_payload
+
+    safe = _merge_payload(current, patch)
+    if safe is None:
         return False
-    retry_expected = int(fresh.get("revision") or 0)
-    merged = {**fresh, **job}
-    return write_job(workspace, merged, expected_revision=retry_expected)
+    expected = int(current.get("revision") or 0)
+    return write_job(workspace, safe, expected_revision=expected)
+
+
+def command_fingerprint(command: list[str]) -> str:
+    return hashlib.sha256("\0".join(str(part) for part in command).encode("utf-8")).hexdigest()
 
 
 def transition_job_status(job: dict[str, Any], next_status: str) -> bool:
@@ -238,49 +260,29 @@ def compact_job_status(job: dict[str, Any], *, since_progress_sequence: int = 0)
 
 
 def list_jobs(workspace: Path, limit: int = 20) -> list[dict[str, Any]]:
-    root = jobs_root(workspace)
-    _prune_stale_jobs(workspace)
-    files = sorted(root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    jobs: list[dict[str, Any]] = []
-    for path in files[:limit]:
-        try:
-            job = json.loads(path.read_text(encoding="utf-8"))
-            jobs.append(compact_job_status(job))
-        except Exception:
-            continue
-    return jobs
+    from job_store import list_job_records, prune_terminal_jobs
+
+    prune_terminal_jobs(workspace)
+    jobs = list_job_records(workspace, limit=limit)
+    return [compact_job_status(job) for job in jobs]
 
 
 def _prune_stale_jobs(workspace: Path, ttl_hours: int = 24) -> None:
-    root = jobs_root(workspace)
-    cutoff = time.time() - (ttl_hours * 3600)
-    for path in root.glob("*.json"):
-        try:
-            job = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        status = str(job.get("status") or "")
-        updated = path.stat().st_mtime
-        if status in TERMINAL_STATUSES and updated < cutoff:
-            try:
-                path.unlink(missing_ok=True)
-            except Exception:
-                continue
+    from job_store import prune_terminal_jobs
+
+    prune_terminal_jobs(workspace, ttl_hours=ttl_hours)
 
 
 def _process_alive(pid: int) -> bool:
+    from process_probe import ProbeTimeout, run_probe
+
     if pid <= 0:
         return False
     if sys.platform == "win32":
-        result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-        stdout = getattr(result, "stdout", None) or ""
-        return str(pid) in stdout
+        result = run_probe(["tasklist", "/FI", f"PID eq {pid}"])
+        if isinstance(result, ProbeTimeout):
+            return False
+        return str(pid) in (result.stdout or "")
     try:
         os.kill(pid, 0)
         return True
@@ -288,14 +290,19 @@ def _process_alive(pid: int) -> bool:
         return False
 
 
+def _pid_matches_job(job: dict[str, Any]) -> bool:
+    from process_identity import verify_job_process
+
+    return verify_job_process(job)
+
+
 def _kill_process_tree(pid: int) -> bool:
+    from process_probe import ProbeTimeout, run_probe
+
     if sys.platform == "win32":
-        result = subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+        result = run_probe(["taskkill", "/PID", str(pid), "/T", "/F"])
+        if isinstance(result, ProbeTimeout):
+            return False
         return result.returncode == 0
     try:
         os.kill(pid, 15)
@@ -334,11 +341,17 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     orphan_suspected = False
     process_tree_killed = False
     next_status = "cancelled"
-    if pid and _process_alive(int(pid)):
-        process_tree_killed = _kill_process_tree(int(pid))
-        orphan_suspected = not process_tree_killed
-        if not process_tree_killed:
-            next_status = "cancellation_uncertain"
+    if pid:
+        pid_int = int(pid)
+        if _process_alive(pid_int):
+            if _pid_matches_job(fresh):
+                process_tree_killed = _kill_process_tree(pid_int)
+                orphan_suspected = not process_tree_killed
+                if not process_tree_killed:
+                    next_status = "cancellation_uncertain"
+            else:
+                orphan_suspected = True
+                next_status = "cancellation_uncertain"
     if not transition_job_status(fresh, next_status):
         fresh["status"] = next_status
     append_progress(fresh, "Job cancelled by request.")
@@ -426,6 +439,7 @@ def start_job(
     write_job(workspace, job)
 
     command = build_wrapper_command(workspace, run_dir, arguments)
+    cmd_fp = command_fingerprint(command)
 
     def worker() -> None:
         current = read_job(workspace, job_id) or job
@@ -437,14 +451,10 @@ def start_job(
                 message="Job cancelled before wrapper subprocess start.",
             )
             return
-        transition_job_status(current, "running")
-        append_progress(current, "Wrapper subprocess started.")
-        save_job(workspace, current)
-        if on_progress:
-            on_progress(current, "Wrapper subprocess started.")
 
         timeout_sec = max(0, int(arguments.get("timeoutSec") or 0))
         timed_out = False
+        process: subprocess.Popen[str] | None = None
 
         with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
             "w", encoding="utf-8"
@@ -456,8 +466,32 @@ def start_job(
                 stderr=stderr_file,
                 text=True,
             )
-            current["pid"] = process.pid
-            save_job(workspace, current)
+
+            def mark_running(draft: dict[str, Any]) -> None:
+                append_progress(draft, "Wrapper subprocess started.")
+                draft["pid"] = process.pid
+                draft["pidStartedAt"] = _utc_now()
+                draft["commandFingerprint"] = cmd_fp
+                draft["command"] = command
+
+            try:
+                from job_store import transition_job_record
+
+                if not transition_job_record(job_id, "running", mark_running, workspace=workspace):
+                    process.kill()
+                    return
+            except Exception:
+                current = read_job(workspace, job_id) or job
+                if _is_cancelled(workspace, job_id):
+                    process.kill()
+                    return
+                transition_job_status(current, "running")
+                mark_running(current)
+                save_job(workspace, current)
+
+            current = read_job(workspace, job_id) or job
+            if on_progress:
+                on_progress(current, "Wrapper subprocess started.")
 
             stop_polling = threading.Event()
 
@@ -467,6 +501,9 @@ def start_job(
                         return
                     polled = read_job(workspace, job_id)
                     if not polled:
+                        return
+                    status = str(polled.get("status") or "")
+                    if status in {"cancel_requested", "cancelled", "cancellation_uncertain"}:
                         return
                     before = polled.get("currentAttempt")
                     _sync_from_run_metadata(polled)
@@ -580,6 +617,17 @@ def start_rag_refresh_job(
     write_job(workspace, job)
 
     script = workspace / "scripts" / "rag_refresh.py"
+    command = [
+        sys.executable,
+        str(script),
+        "--scope",
+        scope,
+        "--workspace",
+        str(workspace.resolve()),
+    ]
+    if force:
+        command.append("--force")
+    cmd_fp = command_fingerprint(command)
 
     def worker() -> None:
         current = read_job(workspace, job_id) or job
@@ -591,18 +639,7 @@ def start_rag_refresh_job(
                 message="Job cancelled before RAG refresh subprocess start.",
             )
             return
-        transition_job_status(current, "running")
-        save_job(workspace, current)
-        command = [
-            sys.executable,
-            str(script),
-            "--scope",
-            scope,
-            "--workspace",
-            str(workspace.resolve()),
-        ]
-        if force:
-            command.append("--force")
+
         process = subprocess.Popen(
             command,
             cwd=str(workspace),
@@ -610,8 +647,29 @@ def start_rag_refresh_job(
             stderr=subprocess.PIPE,
             text=True,
         )
-        current["pid"] = process.pid
-        save_job(workspace, current)
+
+        def mark_running(draft: dict[str, Any]) -> None:
+            append_progress(draft, "RAG refresh subprocess started.")
+            draft["pid"] = process.pid
+            draft["pidStartedAt"] = _utc_now()
+            draft["commandFingerprint"] = cmd_fp
+            draft["command"] = command
+
+        try:
+            from job_store import transition_job_record
+
+            if not transition_job_record(job_id, "running", mark_running, workspace=workspace):
+                process.kill()
+                return
+        except Exception:
+            current = read_job(workspace, job_id) or job
+            if _is_cancelled(workspace, job_id):
+                process.kill()
+                return
+            transition_job_status(current, "running")
+            mark_running(current)
+            save_job(workspace, current)
+
         try:
             stdout, stderr = process.communicate(timeout=timeout_sec if timeout_sec > 0 else None)
         except subprocess.TimeoutExpired:

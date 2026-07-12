@@ -75,10 +75,21 @@ def test_no_versioned_unreal_install_path_defaults_in_code_or_config():
     assert not violations, "Hardcoded Unreal install paths found:\n" + "\n".join(sorted(violations))
 
 
-def test_tracked_workspace_config_is_sanitized():
-    path = ROOT / "config" / "workspace.json"
-    if not path.is_file():
-        path = ROOT / "config" / "workspace.example.json"
+def test_tracked_workspace_config_is_sanitized() -> None:
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "config/workspace.example.json", "config/workspace.json.template"],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        check=False,
+    )
+    candidates = [ROOT / line.strip() for line in tracked.stdout.splitlines() if line.strip()]
+    if not candidates:
+        candidates = [ROOT / "config" / "workspace.example.json", ROOT / "config" / "workspace.json.template"]
+    path = next((candidate for candidate in candidates if candidate.is_file()), None)
+    assert path is not None, "No tracked workspace config template found"
     data = json.loads(path.read_text(encoding="utf-8-sig"))
 
     assert not data.get("rootPath")

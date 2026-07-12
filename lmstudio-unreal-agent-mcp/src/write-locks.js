@@ -32,7 +32,24 @@ function readLockOwner(lockPath) {
   }
 }
 
+const STALE_LOCK_AGE_MS = 300_000;
+
+function isProcessAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isStaleLock(lockPath) {
+  if (!fs.existsSync(lockPath)) {
+    return true;
+  }
   const owner = readLockOwner(lockPath);
   if (!owner) {
     return true;
@@ -42,9 +59,12 @@ function isStaleLock(lockPath) {
   if (!Number.isFinite(pid) || pid <= 0) {
     return true;
   }
+  if (!isProcessAlive(pid)) {
+    return true;
+  }
   try {
-    process.kill(pid, 0);
-    return false;
+    const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+    return ageMs > STALE_LOCK_AGE_MS;
   } catch {
     return true;
   }

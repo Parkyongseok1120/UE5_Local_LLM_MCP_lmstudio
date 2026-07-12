@@ -166,6 +166,18 @@ Check "mcp.json unreal-rag entry" {
     $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $cfg.mcpServers."unreal-rag") { throw "unreal-rag not in mcp.json" }
 }
+Check "mcp.json AGENT_STATE_ROOT parity" {
+    $mcp = Join-Path $HOME ".lmstudio\mcp.json"
+    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run INSTALL-SAFE-MODE.bat" }
+    $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
+    $ragRoot = [string]$cfg.mcpServers."unreal-rag".env.AGENT_STATE_ROOT
+    $agentRoot = [string]$cfg.mcpServers."unreal-agent".env.AGENT_STATE_ROOT
+    if (-not $ragRoot) { throw "unreal-rag missing AGENT_STATE_ROOT" }
+    if (-not $agentRoot) { throw "unreal-agent missing AGENT_STATE_ROOT" }
+    if ($ragRoot -ne $agentRoot) {
+        throw "AGENT_STATE_ROOT mismatch: rag=$ragRoot agent=$agentRoot"
+    }
+}
 Check "shared workspace config" {
     $p = Join-Path $HOME ".lmstudio\config\unreal-workspace.json"
     if (-not (Test-Path $p)) { throw "missing" }

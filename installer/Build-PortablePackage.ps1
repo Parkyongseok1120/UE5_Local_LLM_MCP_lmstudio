@@ -2,7 +2,8 @@ param(
     [string]$OutputDir = "",
     [string]$ZipPath = "",
     [string]$SourceRoot = "",
-    [switch]$ForceUnsafePath
+    [switch]$ForceUnsafePath,
+    [switch]$IncludeIndex
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,10 @@ $ragRoot = $layout.RagRoot
 $agentRoot = $layout.AgentRoot
 $mcpToolsRoot = $layout.McpToolsRoot
 $packExcludes = Get-PortablePackageRobocopyExcludes
+if ($IncludeIndex) {
+    $packExcludes.ExcludeFiles = @($packExcludes.ExcludeFiles | Where-Object { $_ -ne "rag.sqlite" -and $_ -ne "*.sqlite" })
+    Write-Host "WARNING: Including RAG index files may produce a multi-GB portable package." -ForegroundColor Yellow
+}
 
 if (-not $OutputDir) {
     $OutputDir = Join-Path $env:TEMP "Unreal58-RAG-Portable"

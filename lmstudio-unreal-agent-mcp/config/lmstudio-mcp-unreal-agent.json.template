@@ -8,6 +8,8 @@
       "env": {
         "WORKSPACE_ROOT": "%USERPROFILE%\\Documents",
         "AGENT_MCP_CONFIG": "%USERPROFILE%\\.lmstudio\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-unreal-agent-mcp\\config\\agent-mcp.json",
+        "SHARED_UNREAL_CONFIG": "%USERPROFILE%\\.lmstudio\\config\\unreal-workspace.json",
+        "AGENT_STATE_ROOT": "%USERPROFILE%\\.lmstudio\\state\\unreal-agent",
         "ALLOW_WRITE": "0",
         "ALLOW_COMMANDS": "0",
         "ALLOW_UNREAL_BUILD": "0",

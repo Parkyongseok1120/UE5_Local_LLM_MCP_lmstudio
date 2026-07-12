@@ -16,7 +16,7 @@ description: GPT-style Unreal agent loop with shared activeProject, RAG evidence
 ## Session bootstrap
 
 1. Call `unreal_get_active_project` (RAG) or `get_active_project` (agent).
-2. If the user names a game/project, call `set_active_project` with `.uproject` path or hint.
+2. If the user names a game/project, call `unreal_set_active_project` on **unreal-rag** with `.uproject` path or hint. Use agent `set_active_project` only when extended tools are exposed.
 3. Call `unreal_rag_health` once per session to confirm the index is loaded.
 
 ## Standard implementation loop
@@ -33,8 +33,7 @@ description: GPT-style Unreal agent loop with shared activeProject, RAG evidence
 
 ## Background compile loop
 
-- For large generated changes, use `unreal_start_compile_loop` (not the deprecated alias).
-- Poll `unreal_compile_loop_status` until `completed`, `failed`, or `cancelled`.
+- Use `unreal_start_compile_loop` and poll `unreal_compile_loop_status` **only when** control-plane/extended tools are exposed (`ALLOW_CONTROL_PLANE_TOOLS=1` or `MCP_EXTENDED_TOOLS=1`). In Essential Tools mode these calls return `TOOL_NOT_CALLABLE`.
 - Do not claim success from the initial jobId alone.
 
 ## Unreal accuracy gates

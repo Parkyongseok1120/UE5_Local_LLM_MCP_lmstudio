@@ -5,9 +5,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+from write_locks import release_cross_process_lock, try_acquire_cross_process_lock
 
 
 @dataclass
@@ -88,17 +93,33 @@ def load_approval_store(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {"decisions": {}}
 
 
-def persist_approval(path: Path, decision: ArchitectureDecision) -> None:
-    store = load_approval_store(path)
-    decisions = dict(store.get("decisions") or {})
-    payload = decision.to_dict()
-    payload["approved"] = True
-    decisions[decision.decision_id] = payload
-    store["decisions"] = decisions
+@contextmanager
+def _approval_store_lock(path: Path) -> Iterator[None]:
+    acquired = try_acquire_cross_process_lock(path, label="architecture_approval")
+    if not acquired.get("ok"):
+        raise RuntimeError(acquired.get("error") or f"approval store lock busy: {acquired.get('holder')}")
+    try:
+        yield
+    finally:
+        release_cross_process_lock(path)
+
+
+def _atomic_write_store(path: Path, store: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
     temp_path.replace(path)
+
+
+def persist_approval(path: Path, decision: ArchitectureDecision) -> None:
+    with _approval_store_lock(path):
+        store = load_approval_store(path)
+        decisions = dict(store.get("decisions") or {})
+        payload = decision.to_dict()
+        payload["approved"] = True
+        decisions[decision.decision_id] = payload
+        store["decisions"] = decisions
+        _atomic_write_store(path, store)
 
 
 def approval_is_valid(path: Path, decision: ArchitectureDecision) -> bool:
@@ -113,14 +134,23 @@ def approval_is_valid(path: Path, decision: ArchitectureDecision) -> bool:
 
 
 def revoke_approval(path: Path, decision_id: str) -> bool:
-    store = load_approval_store(path)
-    decisions = dict(store.get("decisions") or {})
-    if decision_id not in decisions:
-        return False
-    decisions.pop(decision_id, None)
-    store["decisions"] = decisions
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp_path.replace(path)
-    return True
+    with _approval_store_lock(path):
+        store = load_approval_store(path)
+        decisions = dict(store.get("decisions") or {})
+        if decision_id not in decisions:
+            return False
+        decisions.pop(decision_id, None)
+        store["decisions"] = decisions
+        _atomic_write_store(path, store)
+        return True
+
+
+def approval_token_required() -> str:
+    return os.environ.get("CONTROL_PLANE_APPROVAL_TOKEN", "").strip()
+
+
+def approval_token_valid(provided: str) -> bool:
+    expected = approval_token_required()
+    if not expected:
+        return True
+    return str(provided or "").strip() == expected

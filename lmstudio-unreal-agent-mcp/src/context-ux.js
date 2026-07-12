@@ -157,6 +157,7 @@ function errorPayload(message, options = {}) {
   const reserved = new Set([
     "userMessage", "nextSteps", "suggestedToolCalls", "writeToolPolicy",
     "requiredNextTool", "errorCode", "retryable", "doNotRetry", "agentInstruction",
+    "writeApplied", "bookkeepingFailed", "mutationGenerationNotRecorded", "operation", "path",
   ]);
   for (const [key, value] of Object.entries(options)) {
     if (reserved.has(key) || value === undefined) continue;
@@ -167,6 +168,13 @@ function errorPayload(message, options = {}) {
   if (options.errorCode) payload.errorCode = options.errorCode;
   if (options.retryable !== undefined) payload.retryable = options.retryable;
   if (options.doNotRetry) payload.doNotRetry = options.doNotRetry;
+  if (options.writeApplied !== undefined) payload.writeApplied = options.writeApplied;
+  if (options.bookkeepingFailed !== undefined) payload.bookkeepingFailed = options.bookkeepingFailed;
+  if (options.mutationGenerationNotRecorded !== undefined) {
+    payload.mutationGenerationNotRecorded = options.mutationGenerationNotRecorded;
+  }
+  if (options.operation) payload.operation = options.operation;
+  if (options.path) payload.path = options.path;
   if (options.agentInstruction) payload.agentInstruction = options.agentInstruction;
   else if (Array.isArray(options.nextSteps) && options.nextSteps.length) {
     payload.agentInstruction = options.nextSteps.join(" ");

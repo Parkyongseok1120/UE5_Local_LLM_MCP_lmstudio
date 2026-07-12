@@ -9,6 +9,14 @@ const { sha256Text } = require("./safe-write");
 const { ensureStateRootLayout, resolveAgentStateRoot } = require("./state-root");
 
 const MAX_ARCHIVED = 50;
+const TERMINAL_JOURNAL_STATUSES = new Set([
+  "completed",
+  "archived",
+  "recovered",
+  "rolled_back",
+  "aborted",
+  "recovery_required",
+]);
 
 function journalDir(stateRoot = resolveAgentStateRoot()) {
   return path.join(ensureStateRootLayout(stateRoot), "transactions");
@@ -85,16 +93,30 @@ async function archiveJournal(transactionId, stateRoot = resolveAgentStateRoot()
 
 async function recoverIncompleteJournals(stateRoot = resolveAgentStateRoot()) {
   const dir = journalDir(stateRoot);
-  const recovery = { recovered: [], recoveryRequired: [], scanned: 0 };
+  const recovery = {
+    recovered: [],
+    recoveryRequired: [],
+    skippedCorrupt: [],
+    skippedTerminal: [],
+    scanned: 0,
+  };
   for (const name of fs.readdirSync(dir)) {
     if (!name.endsWith(".json")) {
       continue;
     }
     recovery.scanned += 1;
-    const journal = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
-    if (journal.status === "completed" || journal.status === "archived") {
+    let journal;
+    try {
+      journal = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
+    } catch {
+      recovery.skippedCorrupt.push(name);
       continue;
     }
+    if (TERMINAL_JOURNAL_STATUSES.has(journal.status)) {
+      recovery.skippedTerminal.push(journal.transactionId || name);
+      continue;
+    }
+    const localRequired = [];
     for (const entry of completedEntries(journal)) {
       const abs = entry.canonicalAbsolutePath;
       let currentHash = "";
@@ -114,14 +136,22 @@ async function recoverIncompleteJournals(stateRoot = resolveAgentStateRoot()) {
           }
           recovery.recovered.push(entry.relativePath);
         } catch (err) {
-          recovery.recoveryRequired.push({ path: entry.relativePath, error: String(err.message || err) });
+          const item = { path: entry.relativePath, error: String(err.message || err) };
+          localRequired.push(item);
+          recovery.recoveryRequired.push(item);
         }
       } else {
-        recovery.recoveryRequired.push({ path: entry.relativePath, reason: "external_change_detected" });
+        const item = { path: entry.relativePath, reason: "external_change_detected" };
+        localRequired.push(item);
+        recovery.recoveryRequired.push(item);
       }
     }
-    journal.status = recovery.recoveryRequired.length ? "recovery_required" : "recovered";
+    journal.status = localRequired.length ? "recovery_required" : "recovered";
+    journal.updatedAt = new Date().toISOString();
     saveJournal(journal);
+    if (!localRequired.length) {
+      await archiveJournal(journal.transactionId, stateRoot);
+    }
   }
   return recovery;
 }
@@ -135,4 +165,5 @@ module.exports = {
   completedEntries,
   archiveJournal,
   recoverIncompleteJournals,
+  TERMINAL_JOURNAL_STATUSES,
 };

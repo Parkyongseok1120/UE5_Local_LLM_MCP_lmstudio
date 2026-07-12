@@ -29,10 +29,44 @@ JOB_ID_RE = __import__("re").compile(r"^[A-Fa-f0-9]{12,32}$")
 TERMINAL_STATUSES = frozenset({
     "completed", "failed", "timed_out", "cancelled", "cancellation_uncertain",
 })
+VALID_TRANSITIONS: dict[str, frozenset[str]] = {
+    "created": frozenset({"queued", "cancelled", "cancel_requested"}),
+    "starting": frozenset({"queued", "running", "cancelled", "cancel_requested"}),
+    "queued": frozenset({"starting", "running", "cancelled", "cancel_requested"}),
+    "running": frozenset({"completed", "failed", "timed_out", "cancelled", "cancel_requested", "cancellation_uncertain"}),
+    "cancel_requested": frozenset({"cancelled", "cancellation_uncertain"}),
+}
+NON_REGRESSIVE_FROM = frozenset({"cancel_requested", "cancelled", "cancellation_uncertain"})
+BLOCKED_AFTER_CANCEL = frozenset({"running", "completed", "failed", "queued", "starting", "created"})
 
 
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def status_transition_allowed(current: str, next_status: str) -> bool:
+    current = str(current or "created")
+    next_status = str(next_status or "")
+    if current == next_status:
+        return True
+    if current in TERMINAL_STATUSES:
+        return False
+    allowed = VALID_TRANSITIONS.get(current, frozenset())
+    if next_status in allowed:
+        return True
+    return current == "starting" and next_status == "running"
+
+
+def _merge_payload(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any] | None:
+    merged = {**current, **patch}
+    current_status = str(current.get("status") or "created")
+    next_status = str(merged.get("status") or current_status)
+    if next_status != current_status and not status_transition_allowed(current_status, next_status):
+        return None
+    if current_status in NON_REGRESSIVE_FROM and next_status in BLOCKED_AFTER_CANCEL:
+        if next_status != current_status:
+            return None
+    return merged
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -54,9 +88,10 @@ def validate_job_id(job_id: str) -> str:
 
 
 def _db_path(workspace: Path | None = None) -> Path:
+    del workspace
     from state_root import resolve_agent_state_root
 
-    root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+    root = ensure_state_root_layout(resolve_agent_state_root())
     return jobs_sqlite_path(root)
 
 
@@ -101,10 +136,16 @@ def write_job_record(
                 if current_revision != expected_revision:
                     conn.execute("ROLLBACK")
                     return False
-                merged = {**json.loads(row["payload_json"]), **payload}
+                merged = _merge_payload(json.loads(row["payload_json"]), payload)
+                if merged is None:
+                    conn.execute("ROLLBACK")
+                    return False
                 merged["revision"] = current_revision + 1
             elif row:
-                merged = {**json.loads(row["payload_json"]), **payload}
+                merged = _merge_payload(json.loads(row["payload_json"]), payload)
+                if merged is None:
+                    conn.execute("ROLLBACK")
+                    return False
                 merged["revision"] = int(row["revision"]) + 1
             else:
                 merged = dict(payload)
@@ -164,3 +205,85 @@ def mutate_job_record(
     draft = dict(fresh)
     mutator(draft)
     return write_job_record(draft, expected_revision=retry_expected, workspace=workspace)
+
+
+def transition_job_record(
+    job_id: str,
+    next_status: str,
+    mutator: Callable[[dict[str, Any]], None] | None = None,
+    *,
+    workspace: Path | None = None,
+) -> bool:
+    job_id = validate_job_id(job_id)
+
+    def apply(draft: dict[str, Any]) -> None:
+        current_status = str(draft.get("status") or "created")
+        if not status_transition_allowed(current_status, next_status):
+            raise ValueError(f"invalid transition {current_status} -> {next_status}")
+        draft["status"] = next_status
+        if mutator:
+            mutator(draft)
+
+    current = read_job_record(job_id, workspace=workspace)
+    if not current:
+        return False
+    expected = int(current.get("revision") or 0)
+    draft = dict(current)
+    try:
+        apply(draft)
+    except ValueError:
+        return False
+    if write_job_record(draft, expected_revision=expected, workspace=workspace):
+        return True
+    fresh = read_job_record(job_id, workspace=workspace)
+    if not fresh:
+        return False
+    draft = dict(fresh)
+    try:
+        apply(draft)
+    except ValueError:
+        return False
+    return write_job_record(draft, expected_revision=int(fresh.get("revision") or 0), workspace=workspace)
+
+
+def list_job_records(workspace: Path | None = None, *, limit: int = 20) -> list[dict[str, Any]]:
+    db_path = _db_path(workspace)
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            _ensure_schema(conn)
+            rows = conn.execute(
+                "SELECT payload_json FROM jobs ORDER BY updated_at DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+            jobs: list[dict[str, Any]] = []
+            for row in rows:
+                try:
+                    jobs.append(json.loads(row["payload_json"]))
+                except (TypeError, json.JSONDecodeError):
+                    continue
+            return jobs
+        finally:
+            conn.close()
+
+
+def prune_terminal_jobs(workspace: Path | None = None, *, ttl_hours: int = 24) -> int:
+    cutoff = datetime.now(tz=timezone.utc).timestamp() - (max(1, int(ttl_hours)) * 3600)
+    cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+    db_path = _db_path(workspace)
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            _ensure_schema(conn)
+            cur = conn.execute(
+                """
+                DELETE FROM jobs
+                WHERE status IN (?, ?, ?, ?, ?)
+                  AND updated_at < ?
+                """,
+                (*TERMINAL_STATUSES, cutoff_iso),
+            )
+            conn.commit()
+            return int(cur.rowcount or 0)
+        finally:
+            conn.close()

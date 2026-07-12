@@ -68,8 +68,26 @@ function toolNotCallablePayload(toolName) {
   };
 }
 
+function projectSwitchGuidance(allRegisteredToolNames) {
+  const allowed = callableAgentToolNames(allRegisteredToolNames);
+  if (allowed.has("set_active_project")) {
+    return {
+      suggestedToolCalls: [{ tool: "set_active_project", args: {} }],
+      agentInstruction: "Call set_active_project with a valid .uproject path."
+    };
+  }
+  const manifest = loadStableManifest();
+  const canonical = manifest.projectSwitchCanonical || "unreal_set_active_project";
+  return {
+    requiredNextTool: { server: "unreal-rag", name: canonical },
+    suggestedToolCalls: [{ tool: canonical, args: {} }],
+    agentInstruction: `Call ${canonical} on unreal-rag with a valid .uproject path.`
+  };
+}
+
 module.exports = {
   callableAgentToolNames,
   toolNotCallablePayload,
   loadStableManifest,
+  projectSwitchGuidance,
 };

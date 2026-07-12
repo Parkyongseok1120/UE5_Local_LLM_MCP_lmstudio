@@ -99,7 +99,7 @@ const {
   writeDisciplineOptions,
   writeTextArtifact
 } = require("./context-ux.js");
-const { callableAgentToolNames, toolNotCallablePayload } = require("./tool-exposure");
+const { callableAgentToolNames, toolNotCallablePayload, projectSwitchGuidance } = require("./tool-exposure");
 const { atomicWriteText, atomicWriteJson } = require("./atomic-io");
 const { sha256Buffer } = require("./safe-write");
 const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
@@ -272,15 +272,35 @@ function fail(message, options = {}) {
   return result;
 }
 
+function agentRegisteredToolNames() {
+  return allAgentTools().map((tool) => tool.name);
+}
+
+function mutationBookkeepingFailure(message, operation, relPath) {
+  const doNotRetry = operation === "create" ? ["write_file"] : ["replace_in_file"];
+  return fail(String(message || "Mutation bookkeeping failed after write."), {
+    errorCode: "MUTATION_LOCK_BUSY",
+    path: relPath,
+    operation,
+    writeApplied: true,
+    bookkeepingFailed: true,
+    mutationGenerationNotRecorded: true,
+    retryable: false,
+    doNotRetry,
+    nextSteps: [
+      `Do NOT retry ${doNotRetry.join(" or ")} — the file change is already on disk.`,
+      "Call read_file on the same path to confirm current content.",
+      "Call static_validate_project (or build_unreal_project when appropriate) to recover validation state.",
+    ],
+    agentInstruction: "Bookkeeping failed after a successful write; verify disk state before any further edits.",
+  });
+}
+
 async function bumpProjectMutationGeneration(relPath, content) {
-  try {
-    const uproject = getActiveProject(CONFIG_PATH);
-    if (!uproject) return null;
-    const projectDir = path.dirname(path.resolve(uproject));
-    return await recordMutation(projectDir, relPath, content);
-  } catch {
-    return null;
-  }
+  const uproject = getActiveProject(CONFIG_PATH);
+  if (!uproject) return null;
+  const projectDir = path.dirname(path.resolve(uproject));
+  return await recordMutation(projectDir, relPath, content);
 }
 
 async function agentNotify(message, level = "info") {
@@ -663,7 +683,8 @@ function makeJsonSchema(properties, required = []) {
   return {
     type: "object",
     properties,
-    required
+    required,
+    additionalProperties: false
   };
 }
 
@@ -827,11 +848,14 @@ async function buildWorkspaceInfo() {
       ...buildProjectBrowsePaths(activeProject, WORKSPACE_ROOT)
     };
   } else {
+    const switchGuidance = projectSwitchGuidance(agentRegisteredToolNames());
     projectContext = {
       ok: false,
-      error: "activeProject is not set. Call set_active_project first.",
+      error: switchGuidance.requiredNextTool
+        ? "activeProject is not set. Call unreal_set_active_project on unreal-rag first."
+        : "activeProject is not set. Call set_active_project first.",
       browseAvailable: false,
-      suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+      ...switchGuidance
     };
   }
   const payload = {
@@ -1178,7 +1202,8 @@ function allAgentTools() {
           timeoutMs: { type: "number", description: "Build timeout in ms. Default COMMAND_TIMEOUT_MS." },
           verboseOutput: { type: "boolean", description: "Include truncated stdout/stderr inline. Default false; prefer fullLogPath." },
           validationOverride: { type: "boolean", description: "Allow build despite validation-dirty state (audit trail only)." },
-          validationOverrideNote: { type: "string", description: "Reason recorded when validationOverride=true." }
+          validationOverrideNote: { type: "string", description: "Reason recorded when validationOverride=true." },
+          allowEngineFallback: { type: "boolean", description: "When true, allow build with a non-default engine install if UE 5.8 is missing. Record audit note in agent chat." }
         })
       }
   ];
@@ -1346,10 +1371,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "read_unreal_logs") {
       const activeProject = getActiveProject(CONFIG_PATH);
       if (!activeProject) {
-        return fail("activeProject is not set. Use set_active_project first.", {
-          nextSteps: ["Select the target .uproject, then read logs again."],
-          suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
-        });
+        const switchGuidance = projectSwitchGuidance(agentRegisteredToolNames());
+        return fail(
+          switchGuidance.requiredNextTool
+            ? "activeProject is not set. Use unreal_set_active_project on unreal-rag first."
+            : "activeProject is not set. Use set_active_project first.",
+          {
+            nextSteps: ["Select the target .uproject, then read logs again."],
+            ...switchGuidance
+          }
+        );
       }
       const projectDir = path.dirname(path.resolve(activeProject));
       const logsDir = path.join(projectDir, "Saved", "Logs");
@@ -1726,7 +1757,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           summary += " Static validation exceeded its time budget.";
           nextSteps.unshift("Run static_validate_project before build.");
         }
-        const mutation = await bumpProjectMutationGeneration(rel, contentToWrite);
+        let mutation;
+        try {
+          mutation = await bumpProjectMutationGeneration(rel, contentToWrite);
+        } catch (err) {
+          return mutationBookkeepingFailure(err.message || err, "create", rel);
+        }
         return validationToolResult(summary, validation, {
           path: rel,
           operation: "create",
@@ -1887,7 +1923,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           summary += " Static validation exceeded its time budget.";
           nextSteps.unshift("Run static_validate_project before build.");
         }
-        const mutation = await bumpProjectMutationGeneration(rel, newText);
+        let mutation;
+        try {
+          mutation = await bumpProjectMutationGeneration(rel, newText);
+        } catch (err) {
+          return mutationBookkeepingFailure(err.message || err, "replace", rel);
+        }
         return validationToolResult(summary, validation, {
           path: rel,
           operation: "replace",
@@ -2048,9 +2089,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectRoot = path.dirname(path.resolve(activeProject));
       }
       if (!projectRoot) {
+        const switchGuidance = projectSwitchGuidance(agentRegisteredToolNames());
         return fail("No active project and no projectRoot provided.", {
           nextSteps: ["Select an active .uproject, then run static validation again."],
-          suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+          ...switchGuidance
         });
       }
       const resolved = path.resolve(projectRoot);
@@ -2263,10 +2305,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       const endGen = await finishBuild(path.dirname(projectPath), buildGen.buildStartGeneration);
       const result = {
+        ok: Boolean(execResult.commandSucceeded),
         exitCode: execResult.exitCode ?? 1,
         stdout: execResult.stdout || "",
         stderr: execResult.stderr || "",
         error: execResult.error || "",
+        timedOut: Boolean(execResult.timedOut),
+        errorCode: execResult.errorCode || "",
       };
       const command = `${execResult.executable} ${(execResult.args || []).join(" ")}`;
       const logPath = execResult.fullLogPath || logAbs;
@@ -2283,6 +2328,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       payload.resolvedEngineVersion = execResult.resolvedEngineVersion;
       payload.resolvedUbtPath = execResult.resolvedUbtPath;
       payload.commandSucceeded = execResult.commandSucceeded;
+      payload.timedOut = Boolean(execResult.timedOut);
       payload.mutationGeneration = endGen.mutationGeneration;
       payload.buildStartGeneration = buildGen.buildStartGeneration;
       payload.buildEndGeneration = endGen.buildEndGeneration;
@@ -2291,8 +2337,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         payload.phase = "stale";
         payload.ok = false;
       }
+      if (execResult.errorCode === "BUILD_TIMEOUT") {
+        payload.errorCode = "BUILD_TIMEOUT";
+        payload.ok = false;
+      }
       await agentNotify(payload.userMessage || payload.summary, payload.ok ? "info" : "error");
-      return text(JSON.stringify(payload, null, 2));
+      const response = text(JSON.stringify(payload, null, 2));
+      if (!payload.ok || payload.timedOut || payload.errorCode === "BUILD_TIMEOUT") {
+        response.isError = true;
+      }
+      return response;
     }
 
     return fail(`unknown tool: ${name}`, { errorCode: "UNKNOWN_TOOL" });
@@ -2312,6 +2366,9 @@ async function main() {
     const recovery = await recoverIncompleteJournals(resolveAgentStateRoot());
     if (recovery.recoveryRequired?.length) {
       console.error(`[unreal-agent] transaction recovery required: ${JSON.stringify(recovery.recoveryRequired)}`);
+    }
+    if (recovery.skippedCorrupt?.length) {
+      console.error(`[unreal-agent] skipped corrupt journals: ${recovery.skippedCorrupt.length}`);
     }
   } catch (err) {
     console.error(`[unreal-agent] transaction recovery scan failed: ${err.message || err}`);

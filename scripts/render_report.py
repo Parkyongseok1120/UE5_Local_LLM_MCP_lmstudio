@@ -269,11 +269,36 @@ def validate_mermaid_diagrams(text: str) -> dict[str, Any]:
     }
 
 
+def resolve_report_output_path(
+    workspace: Path,
+    output_path: str | Path | None,
+    *,
+    format: str,
+    allow_overwrite: bool = False,
+) -> Path:
+    reports_root = (workspace / "data" / "reports").resolve()
+    reports_root.mkdir(parents=True, exist_ok=True)
+    suffix = {"md": ".md", "pptx": ".pptx", "docx": ".docx", "pdf": ".pdf"}.get(str(format or "md"), ".md")
+    if output_path is None:
+        candidate = reports_root / f"report{suffix}"
+    else:
+        raw = Path(str(output_path))
+        candidate = (reports_root / raw.name).resolve() if not raw.is_absolute() else raw.resolve()
+        if reports_root not in candidate.parents and candidate != reports_root:
+            raise ValueError(f"outputPath must stay under {reports_root}")
+    if candidate.exists() and not allow_overwrite:
+        raise FileExistsError(f"report already exists: {candidate}")
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    return candidate
+
+
 def render_report(
     text: str,
     *,
     format: ReportFormat = "md",
     output_path: str | Path | None = None,
+    workspace: Path | None = None,
+    allow_overwrite: bool = False,
 ) -> dict[str, Any]:
     """Render report text. Markdown always succeeds; other formats degrade if deps missing."""
     fmt = str(format or "md").strip().lower()
@@ -292,10 +317,19 @@ def render_report(
     if mermaid_validation["blockCount"] > 0:
         result["mermaidValidation"] = mermaid_validation
 
-    if output_path is None:
+    if output_path is None and workspace is None:
         suffix = {"md": ".md", "pptx": ".pptx", "docx": ".docx", "pdf": ".pdf"}[fmt]
-        output_path = Path("report") / f"report{suffix}"
-    out = Path(output_path)
+        out = Path("report") / f"report{suffix}"
+    elif workspace is not None:
+        out = resolve_report_output_path(
+            workspace,
+            output_path,
+            format=fmt,
+            allow_overwrite=allow_overwrite,
+        )
+    else:
+        out = Path(output_path)  # type: ignore[arg-type]
+    out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if fmt == "md":

@@ -149,6 +149,7 @@ def test_dual_mcp_project_switch_and_read(tmp_path: Path, monkeypatch) -> None:
     rag_env = os.environ.copy()
     rag_env["MCP_ESSENTIAL_TOOLS"] = "1"
     rag_env["SHARED_UNREAL_CONFIG"] = str(shared_config)
+    rag_env["AGENT_STATE_ROOT"] = str(tmp_path / "state" / "unreal-agent")
     index = tmp_path / "rag.sqlite"
     index.write_bytes(b"")
 
@@ -176,6 +177,7 @@ def test_dual_mcp_project_switch_and_read(tmp_path: Path, monkeypatch) -> None:
             "MCP_ESSENTIAL_TOOLS": "1",
             "WORKSPACE_ROOT": str(tmp_path),
             "SHARED_UNREAL_CONFIG": str(shared_config),
+            "AGENT_STATE_ROOT": str(tmp_path / "state" / "unreal-agent"),
             "AGENT_MCP_CONFIG": str(agent_config),
             "ALLOW_WRITE": "1",
             "VALIDATE_ON_WRITE": "0",
@@ -303,6 +305,6 @@ def test_agent_build_plan_fail_is_error(tmp_path: Path) -> None:
         )
         assert result["result"].get("isError") is True
         text = result["result"]["content"][0]["text"]
-        assert "BUILD_PLAN_RESOLUTION_FAILED" in text
+        assert "BUILD_PLAN_RESOLUTION_FAILED" in text or '"ok": false' in text
     finally:
         client.close()

@@ -8,6 +8,12 @@ const { atomicWriteText } = require("./atomic-io");
 const { sha256Text } = require("./safe-write");
 const { tryAcquirePathLock, releasePathLock } = require("./write-locks");
 
+const LOCK_ATTEMPTS = 40;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function mutationStatePath(projectRoot) {
   return path.join(path.resolve(projectRoot), ".agent", "state", "mutation.json");
 }
@@ -35,21 +41,30 @@ async function writeMutationState(projectRoot, state) {
   atomicWriteText(file, JSON.stringify(state, null, 2));
 }
 
-async function recordMutation(projectRoot, relPath, content) {
-  const abs = path.isAbsolute(relPath) ? relPath : path.join(projectRoot, relPath);
-  const lock = tryAcquirePathLock(abs, "mutation_generation");
-  if (!lock.ok) {
-    throw new Error("mutation generation lock busy");
+async function withMutationLock(projectRoot, fn) {
+  const stateFile = mutationStatePath(projectRoot);
+  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+    const lock = tryAcquirePathLock(stateFile, "mutation_generation");
+    if (lock.ok) {
+      try {
+        return await fn();
+      } finally {
+        releasePathLock(stateFile);
+      }
+    }
+    await sleep(Math.min(50 * (attempt + 1), 500));
   }
-  try {
+  throw new Error("mutation generation lock busy");
+}
+
+async function recordMutation(projectRoot, relPath, content) {
+  return withMutationLock(projectRoot, async () => {
     const state = await readMutationState(projectRoot);
     state.mutationGeneration = int(state.mutationGeneration) + 1;
     state.paths[String(relPath).replace(/\\/g, "/")] = sha256Text(String(content ?? ""));
     await writeMutationState(projectRoot, state);
     return { mutationGeneration: state.mutationGeneration };
-  } finally {
-    releasePathLock(abs);
-  }
+  });
 }
 
 function int(value) {
@@ -95,6 +110,7 @@ module.exports = {
   mutationStatePath,
   readMutationState,
   recordMutation,
+  withMutationLock,
   beginValidation,
   finishValidation,
   beginBuild,

@@ -33,19 +33,46 @@ def write_state(project_root: Path, state: dict) -> None:
     atomic_write_text(path, json.dumps(state, ensure_ascii=False, indent=2))
 
 
+def _state_path(project_root: Path) -> Path:
+    return (project_root / ".agent" / "state" / "mutation.json").resolve()
+
+
+def _with_mutation_lock(project_root: Path, fn):
+    from time import sleep
+
+    from write_locks import release_cross_process_lock, try_acquire_cross_process_lock
+
+    state_path = _state_path(project_root)
+    for attempt in range(40):
+        acquired = try_acquire_cross_process_lock(state_path, "mutation_generation")
+        if acquired.get("ok"):
+            try:
+                return fn()
+            finally:
+                release_cross_process_lock(state_path)
+        sleep(min(0.05 * (attempt + 1), 0.5))
+    raise RuntimeError("mutation generation lock busy")
+
+
 def record_mutation(project_root: Path, rel_path: str, content_hash: str) -> int:
-    state = read_state(project_root)
-    state["mutationGeneration"] = int(state.get("mutationGeneration") or 0) + 1
-    state.setdefault("paths", {})[rel_path.replace("\\", "/")] = content_hash
-    write_state(project_root, state)
-    return int(state["mutationGeneration"])
+    def action() -> int:
+        state = read_state(project_root)
+        state["mutationGeneration"] = int(state.get("mutationGeneration") or 0) + 1
+        state.setdefault("paths", {})[rel_path.replace("\\", "/")] = content_hash
+        write_state(project_root, state)
+        return int(state["mutationGeneration"])
+
+    return _with_mutation_lock(project_root, action)
 
 
 def finish_validation(project_root: Path, start_generation: int) -> dict:
-    state = read_state(project_root)
-    current = int(state.get("mutationGeneration") or 0)
-    if current != int(start_generation):
-        return {"validationStale": True, "validatedGeneration": None, "mutationGeneration": current}
-    state["validatedGeneration"] = current
-    write_state(project_root, state)
-    return {"validationStale": False, "validatedGeneration": current, "mutationGeneration": current}
+    def action() -> dict:
+        state = read_state(project_root)
+        current = int(state.get("mutationGeneration") or 0)
+        if current != int(start_generation):
+            return {"validationStale": True, "validatedGeneration": None, "mutationGeneration": current}
+        state["validatedGeneration"] = current
+        write_state(project_root, state)
+        return {"validationStale": False, "validatedGeneration": current, "mutationGeneration": current}
+
+    return _with_mutation_lock(project_root, action)

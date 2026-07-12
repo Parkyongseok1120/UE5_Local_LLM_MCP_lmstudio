@@ -217,7 +217,7 @@ function Get-PortablePackageRobocopyExcludes {
             "DerivedDataCache", "Intermediate", "Saved", "Binaries",
             "lmstudio-unreal-agent-mcp", "mcp-tools"
         )
-        ExcludeFiles = @("*.bak*", "PORTABLE_ROOT.txt", "raw_source.jsonl", "chunks.jsonl", "rag.staging.sqlite")
+        ExcludeFiles = @("*.bak*", "PORTABLE_ROOT.txt", "raw_source.jsonl", "chunks.jsonl", "rag.staging.sqlite", "rag.sqlite", "*.sqlite")
     }
 }
 
@@ -441,6 +441,7 @@ function Build-ClineMcpConfig {
         [string]$PythonExe,
         [string]$NodeExe,
         [string]$PortableRoot,
+        [string]$AgentStateRoot,
         [switch]$EnableAgentMode
     )
 
@@ -469,6 +470,7 @@ function Build-ClineMcpConfig {
                 timeout = 420000
                 env     = [ordered]@{
                     SHARED_UNREAL_CONFIG   = $SharedConfigPath
+                    AGENT_STATE_ROOT       = $AgentStateRoot
                     UNREAL58_ROOT          = $RagRoot
                     UNREAL58_PORTABLE_ROOT = $PortableRoot
                     PYTHONUTF8             = "1"
@@ -484,6 +486,7 @@ function Build-ClineMcpConfig {
                     WORKSPACE_ROOT              = $workspaceRoot
                     AGENT_MCP_CONFIG            = $AgentConfigPath
                     SHARED_UNREAL_CONFIG        = $SharedConfigPath
+                    AGENT_STATE_ROOT            = $AgentStateRoot
                     UNREAL58_ROOT               = $RagRoot
                     UNREAL58_PORTABLE_ROOT      = $PortableRoot
                     ALLOW_WRITE                 = $allowWrite
@@ -662,6 +665,7 @@ function Sync-ClineMcpSettings {
         $PortableRoot = Split-Path -Parent $RagRoot
     }
     $agentConfigPath = Join-Path $AgentRoot "config\agent-mcp.json"
+    $agentStateRoot = Join-Path (Split-Path (Split-Path $SharedConfigPath -Parent) -Parent) "state\unreal-agent"
 
     if (-not $PythonExe) {
         foreach ($path in @(
@@ -690,6 +694,7 @@ function Sync-ClineMcpSettings {
         -PythonExe $PythonExe `
         -NodeExe $NodeExe `
         -PortableRoot $PortableRoot `
+        -AgentStateRoot $agentStateRoot `
         -EnableAgentMode:$EnableAgentMode
 
     $paths = Get-ClineMcpSettingsPaths

@@ -12,14 +12,10 @@ function resolveSharedConfigPath() {
   return path.join(os.homedir(), ".lmstudio", "config", "unreal-workspace.json");
 }
 
-function resolveAgentStateRoot(workspaceRoot = "") {
+function resolveAgentStateRoot(_workspaceRoot = "") {
   const override = String(process.env.AGENT_STATE_ROOT || "").trim();
   if (override) {
     return path.resolve(override);
-  }
-  const ws = String(workspaceRoot || process.env.WORKSPACE_ROOT || "").trim();
-  if (ws) {
-    return path.join(path.resolve(ws), ".agent", "state", "unreal-agent");
   }
   const configPath = resolveSharedConfigPath();
   const configDir = path.dirname(configPath);
