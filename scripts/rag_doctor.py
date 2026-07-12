@@ -140,12 +140,25 @@ def warn(label: str, detail: str = "") -> dict:
     return entry
 
 
+def engine_install_ready(engine_root: Path, ubt: Path, source: Path) -> bool:
+    root_text = str(engine_root)
+    if not root_text or root_text == ".":
+        return False
+    return engine_root.is_dir() and ubt.is_file() and source.is_dir()
+
+
 def main() -> int:
     configure_stdio_utf8()
 
     parser = argparse.ArgumentParser(description="Unreal58-RAG doctor")
     parser.add_argument("--rag-root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--repo-only",
+        action="store_true",
+        help="OSS/CI mode: require toolchain only; warn on missing UE, index, and LM Studio config.",
+    )
     args = parser.parse_args()
+    repo_only = bool(args.repo_only)
 
     rag_root = args.rag_root.resolve()
     if (rag_root / "config" / "workspace.json").exists():
@@ -182,23 +195,54 @@ def main() -> int:
     else:
         checks.append(check("node", False, "not found"))
 
-    checks.append(
-        check("configured_engine_root", configured_engine_root.is_dir(), str(configured_engine_root))
+    engine_ready = engine_install_ready(
+        configured_engine_root, configured_ubt, configured_source
     )
-    checks.append(check("configured_ubt", configured_ubt.is_file(), str(configured_ubt)))
-    checks.append(
-        check("configured_source", configured_source.is_dir(), str(configured_source))
-    )
+    engine_detail = str(configured_engine_root)
+    if repo_only:
+        if engine_ready:
+            checks.append(check("configured_engine_root", True, engine_detail))
+            checks.append(check("configured_ubt", True, str(configured_ubt)))
+            checks.append(check("configured_source", True, str(configured_source)))
+        else:
+            checks.append(
+                warn(
+                    "configured_engine_root",
+                    "UE not installed — expected for OSS clone until installer configures paths",
+                )
+            )
+            checks.append(
+                warn(
+                    "configured_ubt",
+                    "UnrealBuildTool not found — run installer after installing Epic Launcher",
+                )
+            )
+            checks.append(
+                warn(
+                    "configured_source",
+                    "Engine\\Source not found — run installer after installing Epic Launcher",
+                )
+            )
+    else:
+        checks.append(check("configured_engine_root", engine_ready, engine_detail))
+        checks.append(check("configured_ubt", configured_ubt.is_file(), str(configured_ubt)))
+        checks.append(
+            check("configured_source", configured_source.is_dir(), str(configured_source))
+        )
 
     health = index_health(index_path)
     chunk_count = int(health.get("chunkCount") or 0)
-    checks.append(
-        check(
-            "rag_index",
-            index_path.is_file() and chunk_count > 0,
-            f"{index_path} ({chunk_count} chunks, namespace={index_namespace})",
+    index_ok = index_path.is_file() and chunk_count > 0
+    index_detail = f"{index_path} ({chunk_count} chunks, namespace={index_namespace})"
+    if repo_only and not index_ok:
+        checks.append(
+            warn(
+                "rag_index",
+                f"{index_detail} — BYOI index missing until collect/build pipeline runs",
+            )
         )
-    )
+    else:
+        checks.append(check("rag_index", index_ok, index_detail))
 
     include_owner_count = 0
     if index_path.is_file():
@@ -274,13 +318,11 @@ def main() -> int:
         except (OSError, json.JSONDecodeError) as exc:
             checks.append(check("index_engine_version", False, str(exc)))
     else:
-        checks.append(
-            check(
-                "index_engine_version",
-                False,
-                f"build_manifest.json missing under {index_path.parent}",
-            )
-        )
+        manifest_detail = f"build_manifest.json missing under {index_path.parent}"
+        if repo_only:
+            checks.append(warn("index_engine_version", manifest_detail))
+        else:
+            checks.append(check("index_engine_version", False, manifest_detail))
 
     shared = load_shared_config()
     active_project = str(shared.get("activeProject") or "").strip()
@@ -323,14 +365,27 @@ def main() -> int:
         checks.append(check("active_project_engine_mismatch", True, "no activeProject configured"))
 
     shared_error = str(shared.get("_configError") or "")
-    checks.append(
-        check(
-            "shared_config",
-            shared_config.is_file() and not shared_error,
-            shared_error or str(shared_config),
+    shared_ok = shared_config.is_file() and not shared_error
+    shared_detail = shared_error or str(shared_config)
+    if repo_only and not shared_ok:
+        checks.append(
+            warn(
+                "shared_config",
+                f"{shared_detail} — run installer to create LM Studio shared config",
+            )
         )
-    )
-    checks.append(check("mcp_json", mcp_config.is_file(), str(mcp_config)))
+    else:
+        checks.append(check("shared_config", shared_ok, shared_detail))
+
+    if repo_only and not mcp_config.is_file():
+        checks.append(
+            warn(
+                "mcp_json",
+                f"{mcp_config} — run INSTALL-SAFE-MODE.bat after cloning",
+            )
+        )
+    else:
+        checks.append(check("mcp_json", mcp_config.is_file(), str(mcp_config)))
 
     mcp_python_ok = False
     mcp_python_detail = "mcp.json missing"
@@ -349,7 +404,10 @@ def main() -> int:
                 mcp_python_detail = f"invalid command: {cmd or '(empty)'}"
         except (OSError, json.JSONDecodeError) as exc:
             mcp_python_detail = str(exc)
-    checks.append(check("mcp_unreal_rag_python", mcp_python_ok, mcp_python_detail))
+    if repo_only and not mcp_python_ok:
+        checks.append(warn("mcp_unreal_rag_python", mcp_python_detail))
+    else:
+        checks.append(check("mcp_unreal_rag_python", mcp_python_ok, mcp_python_detail))
 
     agent_ok = False
     agent_detail = "mcp.json missing"
@@ -364,7 +422,10 @@ def main() -> int:
             agent_detail = f"command={cmd}, server={server_js}"
         except (OSError, json.JSONDecodeError) as exc:
             agent_detail = str(exc)
-    checks.append(check("mcp_unreal_agent", agent_ok, agent_detail))
+    if repo_only and not agent_ok:
+        checks.append(warn("mcp_unreal_agent", agent_detail))
+    else:
+        checks.append(check("mcp_unreal_agent", agent_ok, agent_detail))
 
     cline_ok = False
     cline_detail = "not configured"
@@ -451,7 +512,10 @@ def main() -> int:
     if fail_count:
         print(f"{fail_count} check(s) failed.")
         return 1
-    print("All doctor checks passed.")
+    if repo_only:
+        print("Repo-only doctor checks passed (machine-specific items may be WARN).")
+    else:
+        print("All doctor checks passed.")
     return 0
 
 

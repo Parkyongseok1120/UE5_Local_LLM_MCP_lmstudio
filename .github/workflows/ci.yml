@@ -151,7 +151,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          powershell -NoProfile -ExecutionPolicy Bypass -File rag.ps1 doctor
+          powershell -NoProfile -ExecutionPolicy Bypass -File rag.ps1 doctor -RepoOnly
 
   installer-gates:
     name: Installer verify and WhatIf
@@ -169,6 +169,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: npm install (lmstudio-unreal-agent-mcp)
+        run: npm.cmd ci --no-fund --no-audit
+        working-directory: lmstudio-unreal-agent-mcp
 
       - name: Repo layout verify
         shell: pwsh

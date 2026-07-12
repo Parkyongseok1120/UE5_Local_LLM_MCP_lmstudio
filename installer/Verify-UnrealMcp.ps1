@@ -101,6 +101,11 @@ Check "agent src JS syntax" {
     }
 }
 Check "agent MCP startup smoke" {
+    $nodeModules = Join-Path $agentRoot "node_modules\@modelcontextprotocol\sdk"
+    if ($RepoOnly -and -not (Test-Path -LiteralPath $nodeModules)) {
+        Warn "agent node_modules missing — skipped startup smoke (run npm ci in lmstudio-unreal-agent-mcp)"
+        return
+    }
     $env:MCP_ESSENTIAL_TOOLS = "1"
     $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify","version":"1.0"}}}'
     $list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
@@ -125,6 +130,10 @@ Check "python version" {
     }
 }
 Check "Unreal Engine install" {
+    if ([string]::IsNullOrWhiteSpace([string]$engineRoot)) {
+        Warn "Engine root not configured. Install UE or rerun Sync-InstallMachinePaths.ps1 after installing Epic Launcher."
+        return
+    }
     if (-not (Test-Path -LiteralPath $engineRoot)) {
         Warn "Engine root not found: $engineRoot. Install UE or rerun Sync-InstallMachinePaths.ps1 after installing Epic Launcher."
         return

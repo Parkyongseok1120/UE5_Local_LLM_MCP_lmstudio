@@ -59,7 +59,8 @@ param(
     [switch]$Explorer,
     [switch]$ClearActiveProject,
     [switch]$RunUbt,
-    [switch]$RequireLive
+    [switch]$RequireLive,
+    [switch]$RepoOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -893,7 +894,11 @@ switch ($Command) {
         }
     }
     "doctor" {
-        & $py scripts\rag_doctor.py --rag-root (Get-Location).Path
+        $doctorArgs = @("scripts\rag_doctor.py", "--rag-root", (Get-Location).Path)
+        if ($RepoOnly) {
+            $doctorArgs += "--repo-only"
+        }
+        & $py @doctorArgs
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }

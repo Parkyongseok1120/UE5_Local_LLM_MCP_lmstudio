@@ -16,6 +16,7 @@ def test_rag_ps1_doctor_parses_and_runs() -> None:
             "-File",
             str(ROOT / "rag.ps1"),
             "doctor",
+            "-RepoOnly",
         ],
         capture_output=True,
         text=True,
