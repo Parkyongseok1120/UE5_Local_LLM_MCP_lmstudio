@@ -103,7 +103,7 @@ Check "agent src JS syntax" {
 Check "agent MCP startup smoke" {
     $nodeModules = Join-Path $agentRoot "node_modules\@modelcontextprotocol\sdk"
     if ($RepoOnly -and -not (Test-Path -LiteralPath $nodeModules)) {
-        Warn "agent node_modules missing — skipped startup smoke (run npm ci in lmstudio-unreal-agent-mcp)"
+        Warn "agent node_modules missing - skipped startup smoke (run npm ci in lmstudio-unreal-agent-mcp)"
         return
     }
     $env:MCP_ESSENTIAL_TOOLS = "1"
