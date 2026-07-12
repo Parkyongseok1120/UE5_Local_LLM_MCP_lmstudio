@@ -572,7 +572,7 @@ function Write-JsonUtf8Atomic {
             }
         }
         catch {
-            # Existing file unreadable — proceed with replace.
+            # Existing file unreadable - proceed with replace.
         }
     }
 

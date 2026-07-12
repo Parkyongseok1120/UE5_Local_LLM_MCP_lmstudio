@@ -204,7 +204,7 @@ if (-not $SkipPythonDeps -and -not $WhatIf) {
     Write-Host "Installing fastembed (optional hybrid search)..."
     cmd /c "`"$python`" -m pip install fastembed --quiet 2>&1"
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "fastembed install failed (optional — hybrid search will be unavailable). Run: pip install fastembed"
+        Write-Warning "fastembed install failed (optional - hybrid search will be unavailable). Run: pip install fastembed"
     } else {
         Write-Host "fastembed installed OK."
     }
@@ -227,7 +227,7 @@ if (-not (Test-Path $sharedConfigPath)) {
     }
 }
 
-# agent config — rewritten on every install from detected local paths
+# agent config - rewritten on every install from detected local paths
 $agentConfigPath = Join-Path $agentRoot "config\agent-mcp.json"
 
 $ragServer = Join-Path $ragRoot "scripts\unreal_rag_mcp.py"
@@ -305,7 +305,7 @@ foreach ($mcpPath in $mcpPaths) {
     }
 
     if (Test-Path $mcpRemoteProxy) {
-        # preserve existing tavily entry only if not already set — optional remote search
+        # preserve existing tavily entry only if not already set - optional remote search
         if (-not $config.mcpServers."tavily-remote") {
             Write-Host "Note: tavily-remote not configured (needs API key in mcp.json)."
         }
@@ -341,7 +341,7 @@ if (-not $WhatIf -and $mcpWriteEntries.Count -gt 0) {
 }
 
 if ($WhatIf) {
-    Write-Host "WhatIf mode — no files were written." -ForegroundColor Cyan
+    Write-Host "WhatIf mode - no files were written." -ForegroundColor Cyan
     exit 0
 }
 

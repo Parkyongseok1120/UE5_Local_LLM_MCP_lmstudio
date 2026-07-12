@@ -69,7 +69,7 @@ $py = Find-Python
 $configPath = Join-Path $ragRoot "config\workspace.json"
 $templatePath = Join-Path $ragRoot "config\workspace.json.template"
 
-Write-Host "Configure Knowledge — UE5 Local LLM MCP"
+Write-Host "Configure Knowledge - UE5 Local LLM MCP"
 Write-Host "Workspace: $ragRoot"
 Write-Host ""
 
@@ -96,7 +96,7 @@ if ($engines.Count -eq 0) {
 else {
     Write-Host "Detected engine installs:"
     for ($i = 0; $i -lt $engines.Count; $i++) {
-        Write-Host ("  [{0}] {1} — {2}" -f ($i + 1), $engines[$i].Version, $engines[$i].Root)
+        Write-Host ("  [{0}] {1} - {2}" -f ($i + 1), $engines[$i].Version, $engines[$i].Root)
     }
     if ($NonInteractive) {
         $pick = $engines[0]
@@ -117,7 +117,7 @@ $namespace = Index-NamespaceFromVersion $selectedVersion
 $indexRel = "data\$namespace\rag.sqlite"
 
 if ($selectedVersion -eq "5.4") {
-    Write-Warning "UE 5.4 selected: best-effort only — eval sets are verified for 5.8, not 5.4."
+    Write-Warning "UE 5.4 selected: best-effort only - eval sets are verified for 5.8, not 5.4."
     if (-not $NonInteractive) {
         $confirm = Read-Host "Continue with 5.4 namespace '$namespace'? [y/N]"
         if ($confirm -notmatch '^[Yy]') {

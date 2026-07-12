@@ -1,4 +1,4 @@
-# Disable agent mode — safe read-only profile
+# Disable agent mode - safe read-only profile
 param(
     [string]$LmStudioHome = ""
 )
@@ -15,7 +15,7 @@ if (-not (Test-Path $mcpPath)) {
 
 $config = Get-Content $mcpPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $config.mcpServers."unreal-agent") {
-    Write-Host "unreal-agent not configured — nothing to do."
+    Write-Host "unreal-agent not configured - nothing to do."
     exit 0
 }
 

@@ -57,14 +57,14 @@ Robo-CopyFiltered `
     $packExcludes.ExcludeDirs `
     $packExcludes.ExcludeFiles
 
-# Agent MCP (no node_modules — npm install on target)
+# Agent MCP (no node_modules - npm install on target)
 Robo-CopyFiltered `
     $agentRoot `
     (Join-Path $staging "lmstudio-unreal-agent-mcp") `
     @("node_modules") `
     @()
 
-# mcp-tools (optional — current-datetime MCP)
+# mcp-tools (optional - current-datetime MCP)
 $mcpToolsDest = Join-Path $staging "mcp-tools"
 New-Item -ItemType Directory -Force -Path $mcpToolsDest | Out-Null
 $mcpPkg = Join-Path $mcpToolsRoot "package.json"

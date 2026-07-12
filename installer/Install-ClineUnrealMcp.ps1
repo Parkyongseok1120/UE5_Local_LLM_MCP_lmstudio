@@ -99,10 +99,10 @@ $agentConfigPath = Join-Path $agentRoot "config\agent-mcp.json"
 
 if (-not (Test-Path $sharedConfigPath)) {
     if ($WhatIf) {
-        Write-Host "[WhatIf] Shared config missing at $sharedConfigPath — preview only." -ForegroundColor Cyan
+        Write-Host "[WhatIf] Shared config missing at $sharedConfigPath - preview only." -ForegroundColor Cyan
     }
     else {
-        throw "Shared config missing: $sharedConfigPath — run Install-UnrealMcp.ps1 first."
+        throw "Shared config missing: $sharedConfigPath - run Install-UnrealMcp.ps1 first."
     }
 }
 
@@ -130,7 +130,7 @@ if (-not $WhatIf) {
 Write-Host ""
 Write-Host "=== Cline MCP install complete ==="
 if ($WhatIf) {
-    Write-Host "WhatIf mode — no files were written." -ForegroundColor Cyan
+    Write-Host "WhatIf mode - no files were written." -ForegroundColor Cyan
 }
 Write-Host "Restart Cline and confirm unreal-rag + unreal-agent appear in MCP Servers."
 if (-not $EnableAgentMode) {
