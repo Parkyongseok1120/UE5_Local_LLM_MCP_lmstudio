@@ -40,6 +40,15 @@ jobs:
       - name: Verify UTF-8 encoding (scripts/tests/docs)
         run: python scripts/verify_encoding.py
 
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: npm install (lmstudio-unreal-agent-mcp)
+        run: npm.cmd ci --no-fund --no-audit
+        working-directory: lmstudio-unreal-agent-mcp
+
       - name: Run tests
         run: pytest --tb=short -q
         working-directory: ${{ github.workspace }}

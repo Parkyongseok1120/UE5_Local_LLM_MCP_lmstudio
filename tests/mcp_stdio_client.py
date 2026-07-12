@@ -14,6 +14,23 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def format_subprocess_response_failure(proc: subprocess.Popen[str], req_id: int) -> Exception:
+    exit_code = proc.poll()
+    stderr_text = ""
+    if proc.stderr is not None:
+        try:
+            stderr_text = proc.stderr.read() or ""
+        except OSError:
+            stderr_text = ""
+    stderr_snippet = stderr_text.strip()[:2000]
+    if exit_code is not None:
+        detail = f"exit={exit_code}"
+        if stderr_snippet:
+            detail += f"; stderr={stderr_snippet}"
+        return RuntimeError(f"MCP subprocess exited before response id={req_id}: {detail}")
+    return TimeoutError(f"Timed out waiting for response id={req_id}")
+
+
 class StdioJsonRpc:
     def __init__(self, cmd: list[str], *, env: dict[str, str] | None = None, cwd: Path | None = None) -> None:
         self.proc = subprocess.Popen(
@@ -57,7 +74,7 @@ class StdioJsonRpc:
                 return message
         if self.proc.poll() is None:
             self.proc.terminate()
-        raise TimeoutError(f"Timed out waiting for response id={req_id}")
+        raise format_subprocess_response_failure(self.proc, req_id)
 
     def close(self) -> None:
         if self.proc.poll() is None:

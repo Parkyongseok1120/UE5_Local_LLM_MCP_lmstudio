@@ -10,6 +10,11 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
+
+from conftest import require_agent_mcp_deps  # noqa: E402
+from mcp_stdio_client import format_subprocess_response_failure  # noqa: E402
+
 MANIFEST = json.loads((ROOT / "config" / "stable_tool_manifest.json").read_text(encoding="utf-8-sig"))
 RAG_SCRIPT = ROOT / "scripts" / "unreal_rag_mcp.py"
 AGENT_SERVER = ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js"
@@ -61,7 +66,9 @@ class _StdioJsonRpc:
             message = json.loads(line)
             if message.get("id") == req_id:
                 return message
-        raise TimeoutError(f"Timed out waiting for response id={req_id}")
+        if self.proc.poll() is None:
+            self.proc.terminate()
+        raise format_subprocess_response_failure(self.proc, req_id)
 
     def request(self, method: str, params: dict | None = None, req_id: int = 1) -> dict:
         self.send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params or {}})
@@ -102,6 +109,7 @@ def test_rag_mcp_subprocess_tools_list_stable_essential(tmp_path: Path, monkeypa
 
 
 def test_agent_mcp_subprocess_tools_list_stable_essential(tmp_path: Path) -> None:
+    require_agent_mcp_deps()
     if not AGENT_SERVER.is_file():
         pytest.skip("agent server missing")
     env = os.environ.copy()
@@ -133,6 +141,7 @@ def test_agent_mcp_subprocess_tools_list_stable_essential(tmp_path: Path) -> Non
 
 
 def test_dual_mcp_project_switch_and_read(tmp_path: Path, monkeypatch) -> None:
+    require_agent_mcp_deps()
     project_dir = tmp_path / "DemoGame"
     source_dir = project_dir / "Source" / "DemoGame"
     source_dir.mkdir(parents=True)
@@ -237,6 +246,7 @@ def test_rag_subprocess_rejects_hidden_tool_call(tmp_path: Path) -> None:
 
 
 def test_agent_subprocess_rejects_apply_edit_bundle(tmp_path: Path) -> None:
+    require_agent_mcp_deps()
     env = os.environ.copy()
     env.update(
         {
@@ -270,6 +280,7 @@ def test_agent_subprocess_rejects_apply_edit_bundle(tmp_path: Path) -> None:
 
 
 def test_agent_build_plan_fail_is_error(tmp_path: Path) -> None:
+    require_agent_mcp_deps()
     if not AGENT_SERVER.is_file():
         pytest.skip("agent server missing")
     shared = tmp_path / "shared.json"
