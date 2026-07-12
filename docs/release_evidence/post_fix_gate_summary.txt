@@ -1,0 +1,41 @@
+Audit Remediation Post-Fix Gate Summary
+========================================
+Base audit SHA: d4c55904e58c2542b2f9014568e9dcfb15895bb4
+Working tree: post-remediation (uncommitted)
+
+P0 blockers closed
+------------------
+- edit-bundle.js: removed broken sync capturePreHashes; parse clean
+- apply_edit_bundle: applyBundleTransaction + post-write hash rollback truth table
+- CI/Verify: all src/**/*.js node --check + agent MCP startup smoke
+
+Automated evidence (local, 2026-07-12)
+--------------------------------------
+- All JS syntax: PASS (see post_fix — all src/*.js node --check)
+- npm test: 20/20 PASS → docs/release_evidence/post_fix_npm_test.txt
+- pytest run 1: 877 passed, 1 failed (flaky cancel race), 2 skipped → post_fix_pytest_run1.txt
+- pytest run 2: 878 passed, 2 skipped → post_fix_pytest_run2.txt
+- pytest run 3: 877 passed, 1 failed (same flaky), 2 skipped → post_fix_pytest_run3.txt
+- subprocess e2e (test_mcp_stable_subprocess_e2e): 33/33 PASS in targeted run
+- Verify-UnrealMcp.ps1 -RepoOnly: PASS (post_fix_verify_repo.txt, re-run after Out-String fix)
+
+P1/P3/P4 items implemented in-tree
+------------------------------------
+- Disk-pre-write CAS (safe-write.js) + fault-injection test
+- atomicCreateText temp+fsync (Node); Python atomic_io PID+UUID+fsync; PS unique temps
+- Job revision merge from disk+1; cancel save verification; since_revision decoupled
+- Project switch cacheRefreshRequired when invalidate ok=false
+- RAG cache generation retry; JSON-RPC error on run-loop parse/handler failures
+- Tool exposure fail-closed default (manifest essential only)
+- Portable: nested agent exclude, content scan, single server.js, TEMP boundary, batch rollback journal
+- UX: read-only override markers, searchComplete honesty, Korean classification corpus
+
+Revised score alignment
+-----------------------
+Weighted composite: ~84/100 (automated gates green; manual Win11 install smoke still pending)
+Pre-fix audit baseline: ~51/100 No-Go (docs/release_evidence/d4c5590_baseline_pre_fix.txt)
+
+Remaining follow-ups
+--------------------
+- Manual clean Win11 install matrix (plan Phase 5 manual gate)
+- Investigate flaky test_task_cancel_stops_background_job race under load

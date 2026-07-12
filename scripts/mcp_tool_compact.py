@@ -33,6 +33,54 @@ def compact_json_text(payload: dict[str, Any], *, limit: int | None = None) -> s
     return truncate_text(json.dumps(payload, ensure_ascii=False, indent=2), limit)
 
 
+def _shrink_value(value: Any, *, max_str: int, max_list: int) -> Any:
+    if isinstance(value, str):
+        if len(value) <= max_str:
+            return value
+        omitted = len(value) - max_str
+        return value[:max_str] + f"... [truncated {omitted} chars]"
+    if isinstance(value, list):
+        items = [_shrink_value(item, max_str=max_str, max_list=max_list) for item in value[:max_list]]
+        if len(value) > max_list:
+            items.append({"truncatedCount": len(value) - max_list})
+        return items
+    if isinstance(value, dict):
+        return {str(key): _shrink_value(item, max_str=max_str, max_list=max_list) for key, item in value.items()}
+    return value
+
+
+def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> dict[str, Any]:
+    """Return a valid dict that fits within max_bytes without string-slicing JSON."""
+    if not isinstance(payload, dict):
+        return {"value": payload}
+
+    specialized = payload
+    if "exportDir" in payload or "needsEditorExport" in payload:
+        specialized = compact_metadata_status_payload(payload)
+    elif "rebuild" in payload or "chunkCount" in payload:
+        specialized = compact_sync_metadata_payload(payload)
+    elif payload.get("primary") is not None or payload.get("matchCount") is not None:
+        specialized = compact_asset_graph_payload(payload)
+
+    serialized = json.dumps(specialized, ensure_ascii=False)
+    if len(serialized) <= max_bytes:
+        return specialized
+
+    for max_str, max_list in ((2000, 50), (1000, 30), (500, 20), (200, 10), (80, 5)):
+        candidate = _shrink_value(specialized, max_str=max_str, max_list=max_list)
+        if isinstance(candidate, dict):
+            candidate = dict(candidate)
+            candidate["_structuredTruncated"] = True
+        if len(json.dumps(candidate, ensure_ascii=False)) <= max_bytes:
+            return candidate if isinstance(candidate, dict) else {"value": candidate, "_structuredTruncated": True}
+
+    return {
+        "ok": payload.get("ok"),
+        "_structuredTruncated": True,
+        "summaryKeys": list(payload.keys())[:20],
+    }
+
+
 def _short_status(status: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(status, dict):
         return None
@@ -160,3 +208,26 @@ def compact_asset_graph_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if primary.get("nextDetailLevel"):
         compact["nextDetailLevel"] = primary.get("nextDetailLevel")
     return compact
+
+
+def envelope_fields(
+    *,
+    phase: str | None = None,
+    user_message: str | None = None,
+    agent_instruction: str | None = None,
+    error_code: str | None = None,
+    retryable: bool | None = None,
+) -> dict[str, Any]:
+    """Shared response envelope fields for stable MCP tool payloads."""
+    payload: dict[str, Any] = {}
+    if phase:
+        payload["phase"] = phase
+    if user_message:
+        payload["userMessage"] = user_message
+    if agent_instruction:
+        payload["agentInstruction"] = agent_instruction
+    if error_code:
+        payload["errorCode"] = error_code
+    if retryable is not None:
+        payload["retryable"] = retryable
+    return payload

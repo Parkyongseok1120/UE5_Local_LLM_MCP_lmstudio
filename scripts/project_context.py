@@ -179,6 +179,8 @@ def resolve_active_project_context(start: Path | None = None) -> dict[str, Any]:
     content_root = project_dir / "Content"
     export_dir = default_editor_export_dir(start)
     browse_available = _project_under_workspace(project_dir, workspace_root)
+    workspace_relative_browse = browse_available
+    active_project_browse = True
 
     ctx: dict[str, Any] = {
         "ok": True,
@@ -193,17 +195,21 @@ def resolve_active_project_context(start: Path | None = None) -> dict[str, Any]:
         "exportDir": str(export_dir),
         "workspaceRoot": str(workspace_root),
         "browseAvailable": browse_available,
+        "workspaceRelativeBrowseAvailable": workspace_relative_browse,
+        "activeProjectBrowseAvailable": active_project_browse,
     }
 
-    if browse_available:
+    if workspace_relative_browse:
         ctx["sourceBrowsePath"] = _relative_browse_path(workspace_root, Path(ctx["sourceRoot"]))
         ctx["contentBrowsePath"] = _relative_browse_path(workspace_root, content_root)
     else:
         ctx["sourceBrowsePath"] = ""
-        ctx["contentBrowsePath"] = ""
+        ctx["contentBrowsePath"] = "project://Content"
+        ctx["pluginsBrowsePath"] = "project://Plugins"
+        ctx["configBrowsePath"] = "project://Config"
         ctx["browseNote"] = (
-            "Project is outside WORKSPACE_ROOT; search_files/list_directory may be unavailable. "
-            "Use RAG, metadata lookup, or absolute Python reads."
+            "Project is outside WORKSPACE_ROOT; use project://Source, project://Plugins, "
+            "project://Config, project://Content via Node read tools."
         )
 
     _store_project_context(cache_key, ctx)

@@ -1,0 +1,20 @@
+SHA: e6396af44cf676858afba58574b857a1521955c2
+Date: 2026-07-12
+Node: v24.17.0 (C:\Program Files\nodejs\node.exe)
+Python: 3.12.13 (codex bundled — create .venv with 3.11 for release gate)
+Forbidden interpreter: UE bundled Python (not used)
+
+Environment snapshot:
+- MCP_ESSENTIAL_TOOLS: (runtime default fail-closed)
+- AGENT_STATE_ROOT: ~/.lmstudio/state/unreal-agent (default)
+- WORKSPACE_ROOT: repo root at test time
+
+Gate runs (implementation pass):
+- All src JS node --check: PASS
+- npm test: 23/23 PASS
+- pytest focused P0 suites: PASS (job cancel store, mutation generation)
+- Full pytest x3 / 100x cancel / manual Win11 / holdout: NOT RUN in this pass
+
+Artifacts:
+- docs/release_evidence/e6396af_audit_matrix.md (576 scoped files)
+- docs/release_evidence/e6396af_final_gate_summary.txt

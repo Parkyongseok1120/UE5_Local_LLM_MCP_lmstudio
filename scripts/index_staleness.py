@@ -11,8 +11,31 @@ from on_active_project_changed import project_index_sync_capabilities
 from workspace_paths import resolve_active_project_path, resolve_index_dir
 
 
-_STALE_CACHE: dict[str, Any] = {"checkedAt": 0.0, "payload": {}}
+_STALE_CACHE: dict[str, dict[str, Any]] = {}
 _STALE_TTL_SECONDS = 60.0
+
+
+def _staleness_cache_key(active: Path, index_dir: Path, search_mode: str) -> str:
+    from read_query_history import index_fingerprint
+
+    return "|".join(
+        [
+            str(active.resolve()),
+            str(index_dir.resolve()),
+            index_fingerprint(index_dir / "rag.sqlite"),
+            (search_mode or "auto").strip().lower(),
+        ]
+    )
+
+
+def invalidate_stale_cache(project: Path | str | None = None) -> None:
+    if project is None:
+        _STALE_CACHE.clear()
+        return
+    prefix = str(Path(project).resolve()) + "|"
+    for key in list(_STALE_CACHE):
+        if key.startswith(prefix):
+            _STALE_CACHE.pop(key, None)
 
 
 def _index_mtime_fingerprint(index_dir: Path) -> str:
@@ -33,12 +56,19 @@ def project_source_stale_status(
 ) -> dict[str, Any]:
     """Return capability-split staleness for active project vs RAG index."""
     now = time.time()
-    if not force and now - float(_STALE_CACHE.get("checkedAt") or 0.0) < _STALE_TTL_SECONDS:
-        cached = _STALE_CACHE.get("payload")
-        if isinstance(cached, dict):
-            return cached
-
     active = resolve_active_project_path()
+    index_dir = resolve_index_dir()
+    cache_key = _staleness_cache_key(active or Path("_none_"), index_dir, search_mode)
+    cached_entry = _STALE_CACHE.get(cache_key)
+    if not force and cached_entry:
+        manifest_fp = _index_mtime_fingerprint(index_dir)
+        age = now - float(cached_entry.get("checkedAt") or 0.0)
+        payload = cached_entry.get("payload")
+        if isinstance(payload, dict) and cached_entry.get("manifestFp") == manifest_fp and age < _STALE_TTL_SECONDS:
+            return payload
+        if isinstance(payload, dict) and cached_entry.get("manifestFp") == manifest_fp and age < 300.0:
+            return payload
+
     if not active:
         payload = {
             "ok": True,
@@ -54,12 +84,11 @@ def project_source_stale_status(
             "recommendedCommand": None,
             "indexFingerprint": None,
         }
-        _STALE_CACHE["checkedAt"] = now
-        _STALE_CACHE["payload"] = payload
+        _STALE_CACHE[cache_key] = {"checkedAt": now, "payload": payload}
         return payload
 
-    index_dir = resolve_index_dir()
     caps = project_index_sync_capabilities(active, index_dir)
+    manifest_fp = _index_mtime_fingerprint(index_dir)
     mode = (search_mode or "auto").strip().lower()
 
     # Blueprint/asset graph claims need fresh editor metadata; C++ review does not.
@@ -82,11 +111,9 @@ def project_source_stale_status(
         "recommendedCommand": ".\\rag.ps1 sync-active-project" if caps.get("refreshRecommended") else None,
         **caps,
     }
-    _STALE_CACHE["checkedAt"] = now
-    _STALE_CACHE["payload"] = payload
+    _STALE_CACHE[cache_key] = {"checkedAt": now, "payload": payload, "manifestFp": manifest_fp}
     return payload
 
 
-def invalidate_stale_cache() -> None:
-    _STALE_CACHE["checkedAt"] = 0.0
-    _STALE_CACHE["payload"] = {}
+def invalidate_stale_cache_legacy() -> None:
+    invalidate_stale_cache(None)

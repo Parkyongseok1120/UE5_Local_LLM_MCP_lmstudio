@@ -1,9 +1,22 @@
 param(
     [string]$OutputDir = "",
-    [string]$ZipPath = ""
+    [string]$ZipPath = "",
+    [string]$SourceRoot = "",
+    [switch]$ForceUnsafePath
 )
 
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot "Resolve-StackLayout.ps1")
+. (Join-Path $PSScriptRoot "Install-PathHelpers.ps1")
+
+$layout = Resolve-StackLayout $SourceRoot
+$ragRoot = $layout.RagRoot
+$agentRoot = $layout.AgentRoot
+$mcpToolsRoot = $layout.McpToolsRoot
+$installerRoot = Join-Path $ragRoot "installer"
+$readmeSource = Join-Path $installerRoot "README-FULL.md"
+$packExcludes = Get-PortablePackageRobocopyExcludes
 
 if (-not $OutputDir) {
     $OutputDir = Join-Path $env:TEMP "Unreal58-RAG-Portable-Full"
@@ -12,10 +25,12 @@ if (-not $ZipPath) {
     $ZipPath = Join-Path $env:TEMP "Unreal58-RAG-Portable-Full.zip"
 }
 
-function Copy-FullTree {
+function Copy-FullTreeFiltered {
     param(
         [Parameter(Mandatory = $true)][string]$Source,
-        [Parameter(Mandatory = $true)][string]$Dest
+        [Parameter(Mandatory = $true)][string]$Dest,
+        [string[]]$ExtraExcludeDirs = @(),
+        [string[]]$ExtraExcludeFiles = @()
     )
 
     if (-not (Test-Path -LiteralPath $Source)) {
@@ -23,21 +38,22 @@ function Copy-FullTree {
     }
 
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-    & robocopy $Source $Dest /E /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+    $excludeDirs = @($packExcludes.ExcludeDirs + $ExtraExcludeDirs)
+    $excludeFiles = @($packExcludes.ExcludeFiles + $ExtraExcludeFiles)
+    $args = @($Source, $Dest, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS", "/NP")
+    foreach ($d in $excludeDirs) { $args += "/XD"; $args += $d }
+    foreach ($f in $excludeFiles) { $args += "/XF"; $args += $f }
+    & robocopy @args | Out-Null
     if ($LASTEXITCODE -ge 8) {
         throw "robocopy failed for $Source"
     }
 }
 
-$workspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$lmstudioRoot = (Resolve-Path (Join-Path $workspaceRoot "..")).Path
-$installerRoot = Join-Path $workspaceRoot "installer"
-$workspaceSource = $workspaceRoot
-$agentSource = Join-Path $lmstudioRoot "lmstudio-unreal-agent-mcp"
-$mcpToolsSource = Join-Path $lmstudioRoot "mcp-tools"
-$readmeSource = Join-Path $installerRoot "README-FULL.md"
+$sourceRoots = @($ragRoot, $agentRoot, $mcpToolsRoot) | Where-Object { $_ }
+$OutputDir = Assert-SafePackagePath -Path $OutputDir -SourceRoots $sourceRoots -ForceUnsafePath:$ForceUnsafePath
+$ZipPath = Assert-SafePackagePath -Path $ZipPath -SourceRoots $sourceRoots -ForceUnsafePath:$ForceUnsafePath
 
-foreach ($path in @($workspaceSource, $agentSource, $mcpToolsSource, $readmeSource)) {
+foreach ($path in @($ragRoot, $agentRoot, $readmeSource)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required path not found: $path"
     }
@@ -49,18 +65,24 @@ if (Test-Path -LiteralPath $OutputDir) {
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 Write-Host "Staging full portable package at $OutputDir"
+Write-Host "Source RAG root : $ragRoot"
+Write-Host "Source agent    : $agentRoot"
 
-# Copy the full workspace and bundled MCP folders.
-Write-Host "Copying full Unreal58-RAG workspace..."
-Copy-FullTree -Source $workspaceSource -Dest (Join-Path $OutputDir "Unreal58-RAG")
+Write-Host "Copying full RAG workspace..."
+Copy-FullTreeFiltered -Source $ragRoot -Dest (Join-Path $OutputDir "Unreal58-RAG") `
+    -ExtraExcludeFiles @("config\unreal-workspace.json", "config\cline-workspace.json")
 
 Write-Host "Copying full lmstudio-unreal-agent-mcp folder..."
-Copy-FullTree -Source $agentSource -Dest (Join-Path $OutputDir "lmstudio-unreal-agent-mcp")
+Copy-FullTreeFiltered -Source $agentRoot -Dest (Join-Path $OutputDir "lmstudio-unreal-agent-mcp")
 
-Write-Host "Copying full mcp-tools folder..."
-Copy-FullTree -Source $mcpToolsSource -Dest (Join-Path $OutputDir "mcp-tools")
+if (Test-Path -LiteralPath $mcpToolsRoot) {
+    Write-Host "Copying mcp-tools folder..."
+    Copy-FullTreeFiltered -Source $mcpToolsRoot -Dest (Join-Path $OutputDir "mcp-tools")
+}
+else {
+    Write-Host "Skipping mcp-tools (not present at $mcpToolsRoot)."
+}
 
-# Write the root launcher and README copy.
 @'
 @echo off
 setlocal
@@ -74,19 +96,16 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo.
-echo Done. Restart LM Studio and connect MCP servers.
+echo Install OK. Restart LM Studio.
 pause
 '@ | Set-Content -LiteralPath (Join-Path $OutputDir "INSTALL.bat") -Encoding ASCII
 
 Copy-Item -LiteralPath $readmeSource -Destination (Join-Path $OutputDir "README.txt") -Force
 
-# Zip the staging directory.
 if (Test-Path -LiteralPath $ZipPath) {
     Remove-Item -LiteralPath $ZipPath -Force
 }
-
-Write-Host "Creating archive $ZipPath (may take several minutes)..."
+Write-Host "Creating archive $ZipPath ..."
 $tar = Get-Command tar -ErrorAction SilentlyContinue
 if ($tar) {
     Push-Location (Split-Path $OutputDir -Parent)

@@ -23,7 +23,7 @@ param(
     [string]$UbtPlatform = "Win64",
     [string]$UbtConfiguration = "Development",
     [string]$UbtPath = "",
-    [string]$ModuleGraph = "data\unreal58\raw_module_graph.jsonl",
+    [string]$ModuleGraph = "",
     [string]$ProjectName = "ScratchPrototype",
     [string]$ScratchRoot = "data\wrapper_runs",
     [int]$MaxAttempts = 4,
@@ -59,7 +59,8 @@ param(
     [switch]$Explorer,
     [switch]$ClearActiveProject,
     [switch]$RunUbt,
-    [switch]$RequireLive
+    [switch]$RequireLive,
+    [switch]$RepoOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -188,12 +189,19 @@ function Get-SharedActiveProjectInfo {
     }
 }
 
-$resolvedNamespace = Get-WorkspaceIndexNamespace -Override $IndexNamespace
-$dataDir = Join-Path $PSScriptRoot ("data\" + $resolvedNamespace)
-$indexPath = Join-Path $dataDir "rag.sqlite"
-$moduleGraphPath = Join-Path $dataDir "raw_module_graph.jsonl"
+. (Join-Path $PSScriptRoot "installer\Install-PathHelpers.ps1")
+$namespaceOverride = if ($IndexNamespace) { $IndexNamespace } else { "" }
+$ragPaths = Get-RagDataPaths -RagRoot $PSScriptRoot -NamespaceOverride $namespaceOverride
+$resolvedNamespace = $ragPaths.Namespace
+$dataDir = $ragPaths.DataDir
+$indexPath = $ragPaths.IndexPath
+$moduleGraphPath = if ($ModuleGraph) { $ModuleGraph } else { $ragPaths.ModuleGraphPath }
 
-if (-not $SourceRoot) {
+$commandsNeedingSourceRoot = @("collect-source", "collect-symbols", "update-engine")
+$commandsNeedingUbtPath = @("ubt-feedback", "wrapper", "bench-mcp")
+$engineRoot = $null
+
+if (($Command -in $commandsNeedingSourceRoot) -and (-not $SourceRoot)) {
     $engineRoot = Get-WorkspaceEngineRoot -Fallback ""
     if (-not $engineRoot) {
         throw "Unreal Engine root not found. Set UNREAL_ENGINE_ROOT or config/workspace.json defaultEngineRoot."
@@ -201,8 +209,10 @@ if (-not $SourceRoot) {
     $SourceRoot = Join-Path $engineRoot "Engine\Source"
 }
 
-if (-not $UbtPath) {
-    $engineRoot = Get-WorkspaceEngineRoot -Fallback ""
+if (($Command -in $commandsNeedingUbtPath) -and (-not $UbtPath)) {
+    if (-not $engineRoot) {
+        $engineRoot = Get-WorkspaceEngineRoot -Fallback ""
+    }
     if (-not $engineRoot) {
         throw "Unreal Engine root not found. Set UNREAL_ENGINE_ROOT or config/workspace.json defaultEngineRoot."
     }
@@ -211,10 +221,10 @@ if (-not $UbtPath) {
 
 switch ($Command) {
     "collect-docs" {
-        & $py scripts\collect_unreal_docs.py --seeds config\unreal_58_seed_urls.txt --out data\unreal58\raw_docs.jsonl --max-pages $MaxPages --delay 0.5
+        & $py scripts\collect_unreal_docs.py --seeds config\unreal_58_seed_urls.txt --out "$dataDir\raw_docs.jsonl" --max-pages $MaxPages --delay 0.5
     }
     "collect-source" {
-        $sourceArgs = @("scripts\collect_unreal_source.py", "--root", $SourceRoot, "--out", "data\unreal58\raw_source.jsonl")
+        $sourceArgs = @("scripts\collect_unreal_source.py", "--root", $SourceRoot, "--out", "$dataDir\raw_source.jsonl")
         if ($IncludeThirdParty) {
             $sourceArgs += "--include-third-party"
         }
@@ -240,7 +250,7 @@ switch ($Command) {
         if ($ProjectsRoot -and $ProjectsRoot -ne "data") {
             $searchRoots = @($ProjectsRoot)
         }
-        $projectArgs = @("scripts\collect_unreal_projects.py", "--out", "data\unreal58\raw_projects.jsonl")
+        $projectArgs = @("scripts\collect_unreal_projects.py", "--out", "$dataDir\raw_projects.jsonl")
         foreach ($root in $searchRoots) {
             $projectArgs += @("--root", $root)
         }
@@ -253,10 +263,10 @@ switch ($Command) {
         & $py @projectArgs
     }
     "collect-guidelines" {
-        & $py scripts\collect_project_guidelines.py --root $GuidelinesRoot --out data\unreal58\raw_guidelines.jsonl
+        & $py scripts\collect_project_guidelines.py --root $GuidelinesRoot --out "$dataDir\raw_guidelines.jsonl"
     }
     "collect-game-design" {
-        & $py scripts\collect_game_design_docs.py --root $GameDesignRoot --out data\unreal58\raw_game_design.jsonl
+        & $py scripts\collect_game_design_docs.py --root $GameDesignRoot --out "$dataDir\raw_game_design.jsonl"
     }
     "collect-symbols" {
         $symbolsOut = Join-Path $dataDir "raw_symbols.jsonl"
@@ -318,17 +328,17 @@ switch ($Command) {
     }
     "collect-project-profile" {
         $profileRoot = if ($ProjectFile) { $ProjectFile } else { $ProjectsRoot }
-        & $py scripts\collect_unreal_project_profile.py --root $profileRoot --out data\unreal58\raw_project_profiles.jsonl
+        & $py scripts\collect_unreal_project_profile.py --root $profileRoot --out "$dataDir\raw_project_profiles.jsonl"
     }
     "collect-project-architecture" {
-        $archArgs = @("scripts\collect_project_architecture.py", "--out-dir", "data\unreal58", "--jsonl", "data\unreal58\raw_project_architecture.jsonl")
+        $archArgs = @("scripts\collect_project_architecture.py", "--out-dir", $dataDir, "--jsonl", "$dataDir\raw_project_architecture.jsonl")
         if ($ProjectFile) {
             $archArgs += @("--project", $ProjectFile)
         }
         & $py @archArgs
     }
     "collect-build-logs" {
-        $logArgs = @("scripts\collect_build_logs.py", "--out", "data\unreal58\raw_build_logs.jsonl")
+        $logArgs = @("scripts\collect_build_logs.py", "--out", "$dataDir\raw_build_logs.jsonl")
         foreach ($value in $BuildLogRoot) { $logArgs += @("--root", $value) }
         if ($LogsOnly) {
             $logArgs += "--logs-only"
@@ -340,138 +350,138 @@ switch ($Command) {
             throw "collect-blueprint-metadata requires -Question pointing to Editor-export JSONL"
         }
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
-        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:blueprint"
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir $dataDir --export "${Question}:blueprint"
     }
     "collect-material-metadata" {
         if (-not $Question) {
             throw "collect-material-metadata requires -Question pointing to Editor-export JSONL"
         }
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
-        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:material"
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir $dataDir --export "${Question}:material"
     }
     "collect-animation-metadata" {
         if (-not $Question) {
             throw "collect-animation-metadata requires -Question pointing to Editor-export JSONL"
         }
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
-        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:animation"
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir $dataDir --export "${Question}:animation"
     }
     "collect-skeletal-mesh-metadata" {
         if (-not $Question) {
             throw "collect-skeletal-mesh-metadata requires -Question pointing to Editor-export JSONL"
         }
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
-        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:skeletal_mesh"
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir $dataDir --export "${Question}:skeletal_mesh"
     }
     "collect-anim-blueprint-metadata" {
         if (-not $Question) {
             throw "collect-anim-blueprint-metadata requires -Question pointing to Editor-export JSONL"
         }
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
-        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:anim_blueprint"
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir $dataDir --export "${Question}:anim_blueprint"
     }
     "collect-anim-montage-metadata" {
         if (-not $Question) {
             throw "collect-anim-montage-metadata requires -Question pointing to Editor-export JSONL"
         }
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
-        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:anim_montage"
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir $dataDir --export "${Question}:anim_montage"
     }
     "collect-sequencer-metadata" {
         if (-not $Question) {
             throw "collect-sequencer-metadata requires -Question pointing to Editor-export JSONL"
         }
         $proj = if ($ProjectName) { $ProjectName } else { "UnknownProject" }
-        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir data\unreal58 --export "${Question}:sequencer"
+        & $py scripts\collect_editor_metadata.py --project-name $proj --out-dir $dataDir --export "${Question}:sequencer"
     }
     "collect-failure-memory" {
-        & $py scripts\collect_failure_memory.py --out data\unreal58\raw_failure_memory.jsonl
+        & $py scripts\collect_failure_memory.py --out "$dataDir\raw_failure_memory.jsonl"
     }
     "build" {
         if (Test-Path $GuidelinesRoot) {
-            & $py scripts\collect_project_guidelines.py --root $GuidelinesRoot --out data\unreal58\raw_guidelines.jsonl
+            & $py scripts\collect_project_guidelines.py --root $GuidelinesRoot --out "$dataDir\raw_guidelines.jsonl"
         }
         if (Test-Path $GameDesignRoot) {
-            & $py scripts\collect_game_design_docs.py --root $GameDesignRoot --out data\unreal58\raw_game_design.jsonl
+            & $py scripts\collect_game_design_docs.py --root $GameDesignRoot --out "$dataDir\raw_game_design.jsonl"
         }
         $inputs = @()
-        if (Test-Path "data\unreal58\raw_guidelines.jsonl") {
-            $inputs += "data\unreal58\raw_guidelines.jsonl"
+        if (Test-Path "$dataDir\raw_guidelines.jsonl") {
+            $inputs += "$dataDir\raw_guidelines.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_game_design.jsonl") {
-            $inputs += "data\unreal58\raw_game_design.jsonl"
+        if (Test-Path "$dataDir\raw_game_design.jsonl") {
+            $inputs += "$dataDir\raw_game_design.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_symbols.jsonl") {
-            $inputs += "data\unreal58\raw_symbols.jsonl"
+        if (Test-Path "$dataDir\raw_symbols.jsonl") {
+            $inputs += "$dataDir\raw_symbols.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_module_graph.jsonl") {
-            $inputs += "data\unreal58\raw_module_graph.jsonl"
+        if (Test-Path "$dataDir\raw_module_graph.jsonl") {
+            $inputs += "$dataDir\raw_module_graph.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_project_profiles.jsonl") {
-            $inputs += "data\unreal58\raw_project_profiles.jsonl"
+        if (Test-Path "$dataDir\raw_project_profiles.jsonl") {
+            $inputs += "$dataDir\raw_project_profiles.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_build_logs.jsonl") {
-            $inputs += "data\unreal58\raw_build_logs.jsonl"
+        if (Test-Path "$dataDir\raw_build_logs.jsonl") {
+            $inputs += "$dataDir\raw_build_logs.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_docs.jsonl") {
-            $inputs += "data\unreal58\raw_docs.jsonl"
+        if (Test-Path "$dataDir\raw_docs.jsonl") {
+            $inputs += "$dataDir\raw_docs.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_source.jsonl") {
-            $inputs += "data\unreal58\raw_source.jsonl"
+        if (Test-Path "$dataDir\raw_source.jsonl") {
+            $inputs += "$dataDir\raw_source.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_projects.jsonl") {
-            $inputs += "data\unreal58\raw_projects.jsonl"
+        if (Test-Path "$dataDir\raw_projects.jsonl") {
+            $inputs += "$dataDir\raw_projects.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_project_architecture.jsonl") {
-            $inputs += "data\unreal58\raw_project_architecture.jsonl"
+        if (Test-Path "$dataDir\raw_project_architecture.jsonl") {
+            $inputs += "$dataDir\raw_project_architecture.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_blueprint_metadata.jsonl") {
-            $inputs += "data\unreal58\raw_blueprint_metadata.jsonl"
+        if (Test-Path "$dataDir\raw_blueprint_metadata.jsonl") {
+            $inputs += "$dataDir\raw_blueprint_metadata.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_material_metadata.jsonl") {
-            $inputs += "data\unreal58\raw_material_metadata.jsonl"
+        if (Test-Path "$dataDir\raw_material_metadata.jsonl") {
+            $inputs += "$dataDir\raw_material_metadata.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_animation_metadata.jsonl") {
-            $inputs += "data\unreal58\raw_animation_metadata.jsonl"
+        if (Test-Path "$dataDir\raw_animation_metadata.jsonl") {
+            $inputs += "$dataDir\raw_animation_metadata.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_skeletal_mesh_metadata.jsonl") {
-            $inputs += "data\unreal58\raw_skeletal_mesh_metadata.jsonl"
+        if (Test-Path "$dataDir\raw_skeletal_mesh_metadata.jsonl") {
+            $inputs += "$dataDir\raw_skeletal_mesh_metadata.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_anim_blueprint_metadata.jsonl") {
-            $inputs += "data\unreal58\raw_anim_blueprint_metadata.jsonl"
+        if (Test-Path "$dataDir\raw_anim_blueprint_metadata.jsonl") {
+            $inputs += "$dataDir\raw_anim_blueprint_metadata.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_anim_montage_metadata.jsonl") {
-            $inputs += "data\unreal58\raw_anim_montage_metadata.jsonl"
+        if (Test-Path "$dataDir\raw_anim_montage_metadata.jsonl") {
+            $inputs += "$dataDir\raw_anim_montage_metadata.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_sequencer_metadata.jsonl") {
-            $inputs += "data\unreal58\raw_sequencer_metadata.jsonl"
+        if (Test-Path "$dataDir\raw_sequencer_metadata.jsonl") {
+            $inputs += "$dataDir\raw_sequencer_metadata.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_asset_registry.jsonl") {
-            $inputs += "data\unreal58\raw_asset_registry.jsonl"
+        if (Test-Path "$dataDir\raw_asset_registry.jsonl") {
+            $inputs += "$dataDir\raw_asset_registry.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_project_settings.jsonl") {
-            $inputs += "data\unreal58\raw_project_settings.jsonl"
+        if (Test-Path "$dataDir\raw_project_settings.jsonl") {
+            $inputs += "$dataDir\raw_project_settings.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_level_metadata.jsonl") {
-            $inputs += "data\unreal58\raw_level_metadata.jsonl"
+        if (Test-Path "$dataDir\raw_level_metadata.jsonl") {
+            $inputs += "$dataDir\raw_level_metadata.jsonl"
         }
-        if (Test-Path "data\unreal58\raw_failure_memory.jsonl") {
-            $inputs += "data\unreal58\raw_failure_memory.jsonl"
+        if (Test-Path "$dataDir\raw_failure_memory.jsonl") {
+            $inputs += "$dataDir\raw_failure_memory.jsonl"
         }
         if ($inputs.Count -eq 0) {
             throw "Run collect-source, collect-projects, or collect-docs first."
         }
         $workspaceRoot = (Resolve-Path $PSScriptRoot).Path
-        & $py scripts\build_rag_index.py --input @inputs --out-dir data\unreal58 --workspace-root $workspaceRoot
+        & $py scripts\build_rag_index.py --input @inputs --out-dir $dataDir --workspace-root $workspaceRoot
     }
     "build-incremental" {
-        & $py scripts\incremental_build.py --out-dir data\unreal58
+        & $py scripts\incremental_build.py --out-dir $dataDir
     }
     "build-embeddings" {
-        & $py scripts\rag_embeddings.py --index data\unreal58\rag.sqlite --priority-only
+        & $py scripts\rag_embeddings.py --index $indexPath --priority-only
     }
     "build-embeddings-full" {
-        & $py scripts\rag_embeddings.py --index data\unreal58\rag.sqlite
+        & $py scripts\rag_embeddings.py --index $indexPath
     }
     "sync-active-project" {
         powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "scripts\sync_active_project.ps1")
@@ -582,7 +592,7 @@ switch ($Command) {
         if (-not $Question) {
             throw "Pass a value with -Question."
         }
-        $queryArgs = @("scripts\query_rag.py", "--index", "data\unreal58\rag.sqlite", "--mode", $Mode)
+        $queryArgs = @("scripts\query_rag.py", "--index", "$dataDir\rag.sqlite", "--mode", $Mode)
         if ($PSBoundParameters.ContainsKey("TopK")) {
             $queryArgs += @("--top-k", $TopK)
         }
@@ -603,7 +613,7 @@ switch ($Command) {
         if (-not $Question) {
             throw "Pass a value with -Question."
         }
-        $askArgs = @("scripts\query_rag.py", "--index", "data\unreal58\rag.sqlite", "--ask-lmstudio", "--mode", $Mode)
+        $askArgs = @("scripts\query_rag.py", "--index", "$dataDir\rag.sqlite", "--ask-lmstudio", "--mode", $Mode)
         if ($PSBoundParameters.ContainsKey("TopK")) {
             $askArgs += @("--top-k", $TopK)
         }
@@ -759,7 +769,7 @@ switch ($Command) {
     "collect-editor-metadata" {
         if (-not $ProjectName) { throw "collect-editor-metadata requires -ProjectName" }
         if (-not $Question) { throw "collect-editor-metadata requires -Question as export spec path:type" }
-        & $py scripts\collect_editor_metadata.py --project-name $ProjectName --out-dir data\unreal58 --export $Question
+        & $py scripts\collect_editor_metadata.py --project-name $ProjectName --out-dir $dataDir --export $Question
     }
     "sonnet-tier-gate" {
         $gateArgs = @("-File", (Join-Path $PSScriptRoot "scripts\run_sonnet_tier_gate.ps1"))
@@ -820,7 +830,7 @@ switch ($Command) {
         $wrapperArgs = @(
             "scripts\lmstudio_unreal_wrapper.py",
             "--index",
-            "data\unreal58\rag.sqlite",
+            "$dataDir\rag.sqlite",
             "--module-graph",
             $ModuleGraph,
             "--mode",
@@ -884,7 +894,11 @@ switch ($Command) {
         }
     }
     "doctor" {
-        & $py scripts\rag_doctor.py --rag-root (Get-Location).Path
+        $doctorArgs = @("scripts\rag_doctor.py", "--rag-root", (Get-Location).Path)
+        if ($RepoOnly) {
+            $doctorArgs += "--repo-only"
+        }
+        & $py @doctorArgs
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }

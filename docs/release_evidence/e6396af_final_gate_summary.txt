@@ -1,0 +1,40 @@
+e6396af Final Stabilization — Subsystem Scores (post-regression fix pass)
+================================================================================
+
+Scorecard NOT updated — gates 10–12 (live UE 5.8), 17 (9B eval artifact), 19–21 still require local/manual runs.
+
+| Subsystem | Score | Status |
+|-----------|------:|--------|
+| Multi-file transaction safety | 78 | Journal + cross-process locks + maxFilesPerEdit=2; journal unit tests added |
+| Background job/cancel | 82 | SQLite store + cancel_requested→cancelled; 100/100 repetition gate PASS |
+| Unreal build execution | 72 | Dedicated executor + UE 5.8 fail-closed; fake tests PASS; live 5.8 pending |
+| Validation/build generation | 70 | mutationGeneration on write/build; race tests PASS |
+| Runtime Tool-Call reliability | 68 | Reader-thread client + basic soak + tool_contract.json |
+| Code-sketch reliability | 62 | Korean routing markers expanded; corpus/9B eval pending |
+| Installer/upgrade | 65 | Verify checks state_root + tool_contract; full install journal pending |
+| UX truthfulness | 74 | context-ux errorPayload passthrough + server fail() unified |
+
+Automated gates (this pass):
+- Gate 1–3: npm 26/26 PASS; pytest 883 passed ×3 (Python 3.12.13; plan prefers 3.11 venv)
+- Gate 4: cancel suite 100/100 via run_repetition_gate.py --suite tests/test_job_cancel_deterministic.py --repeat 100 — PASS
+- Gates 5–8: edit-bundle transaction + job store deterministic tests PASS
+- Gate 9: cancel integration test PASS (no false cancelled when process already exited)
+- Gates 10–12: build-executor fake tests PASS; live UE 5.8 NOT RUN
+- Gate 13: test_mutation_generation_race PASS
+- Gates 14–16: test_mcp_runtime_soak PASS; full 100-call soak matrix partial
+- Gate 17: Korean corpus holdout eval NOT RUN
+- Gate 18: fault tests leave no stray journals in temp roots (unit scoped)
+- Gates 19–21: Project_MJS smoke, holdout, manual Win11 NOT RUN
+
+Key fixes this session:
+- Workspace-scoped AGENT_STATE_ROOT (Python + Node) restores task_api integration tests
+- cancel_job finalizes cancelled when PID already exited; worker finalizes cancel_requested
+- sha256Buffer import restored in server.js read_file
+- Orchestrator tests delenv MCP_ESSENTIAL_TOOLS where full tool exposure required
+- context-ux errorPayload spreads rollback/cancel/generation fields
+
+Remaining before scorecard update:
+- Python 3.11 .venv + pytest ×3 on 3.11
+- Live UE 5.8 integration smoke
+- Holdout non-regression (36/36 Pass@K)
+- Manual clean Win11 install

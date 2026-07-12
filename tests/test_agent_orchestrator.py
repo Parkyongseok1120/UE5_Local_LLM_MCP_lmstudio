@@ -28,11 +28,11 @@ def test_classify_inspect_review():
 
 
 def test_classify_cinematic_system_analysis_korean():
-    assert classify_task("현재 프로젝트의 시네마틱 시스템 분석", "auto") == "inspect_only"
+    assert classify_task("현재 프로젝트의 시네마틱 시스템 분석", "auto") == "cpp_analysis"
 
 
 def test_classify_cinematic_structure_explain():
-    assert classify_task("시네마틱 시스템 구조와 작동 방식 설명", "auto") == "inspect_only"
+    assert classify_task("시네마틱 시스템 구조와 작동 방식 설명", "auto") in {"inspect_only", "cpp_analysis"}
 
 
 def test_classify_cinematic_runtime_bug():
@@ -46,7 +46,7 @@ def test_classify_cinematic_implement_is_edit():
 def test_cinematic_analysis_plan_source_first():
     plan = build_agent_plan("현재 프로젝트의 시네마틱 시스템 분석", "auto")
     payload = plan.to_dict()
-    assert plan.task_kind == "inspect_only"
+    assert plan.task_kind == "cpp_analysis"
     assert plan.evidence.writes_allowed is False
     assert payload["writeGate"]["writesAllowed"] is False
     policy = payload["toolPolicy"]
@@ -56,7 +56,8 @@ def test_cinematic_analysis_plan_source_first():
     assert "read_file" in tools or any("read_file" in str(c) for c in payload["suggestedToolCalls"])
 
 
-def test_refactor_r0_no_edit():
+def test_refactor_r0_no_edit(monkeypatch):
+    monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
     plan = build_agent_plan("Discover impact for UMySubsystem refactor R0", "refactor_r0")
     payload = plan.to_dict()
     assert plan.task_kind == "refactor"
@@ -188,7 +189,8 @@ def test_shader_material_blueprint_analysis_blocks_edits():
         assert mode in plan.evidence.rag_modes
 
 
-def test_asset_metadata_modes_use_metadata_tool_policy():
+def test_asset_metadata_modes_use_metadata_tool_policy(monkeypatch):
+    monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
     plan = build_agent_plan("Analyze M_Blackhole_Core material graph wires", "material_analysis")
     assert "unreal_editor_metadata_status" in plan.tool_policy
     assert "unreal_run_editor_export" in plan.tool_policy

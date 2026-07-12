@@ -1,0 +1,20 @@
+﻿SHA: d4c55904e58c2542b2f9014568e9dcfb15895bb4
+Date: 2026-07-12T03:41:11.4220436+09:00
+Node: v24.17.0
+atomic-io.js: exit=0 
+bootstrap-cache.js: exit=0 
+build-proof.js: exit=0 
+context-ux.js: exit=0 
+edit-bundle.js: exit=1 lmstudio-unreal-agent-mcp/src/edit-bundle.js:29       const st = await fsp.stat(abs);                  ^^^^^ SyntaxError: await is only valid in async functions and the top level bodies of modules
+mutation-history.js: exit=0 
+read-path-resolver.js: exit=0 
+refactor-tools.js: exit=0 
+safe-write.js: exit=0 
+server.js: exit=0 
+task-auth.js: exit=0 
+tool-exposure.js: exit=0 
+unreal-detect.js: exit=0 
+validate-write.js: exit=0 
+validation-dirty.js: exit=0 
+write-guards.js: exit=0 
+write-locks.js: exit=0 

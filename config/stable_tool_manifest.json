@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "description": "Default stable install tool exposure (MCP_ESSENTIAL_TOOLS=1). Hidden tools remain in code but require ALLOW_CONTROL_PLANE_TOOLS=1.",
+  "ragEssential": [
+    "unreal_get_active_project",
+    "unreal_set_active_project",
+    "unreal_rag_health",
+    "unreal_agent_plan",
+    "unreal_rag_search",
+    "unreal_symbol_lookup",
+    "unreal_agent_session",
+    "unreal_rag_capabilities",
+    "unreal_code_sketch_claim_validate",
+    "unreal_diagram_validate",
+    "unreal_project_status"
+  ],
+  "ragHiddenUntilControlPlane": [
+    "unreal_task_start",
+    "unreal_task_status",
+    "unreal_task_cancel",
+    "unreal_task_resume",
+    "unreal_task_approve",
+    "unreal_project_prepare",
+    "unreal_job_log_read",
+    "unreal_architecture_decision_status",
+    "unreal_architecture_decision_approve",
+    "unreal_architecture_decision_revoke"
+  ],
+  "agentEssential": [
+    "get_workspace_info",
+    "get_active_project",
+    "list_directory",
+    "read_file",
+    "read_file_range",
+    "read_symbol",
+    "search_files",
+    "write_file",
+    "replace_in_file",
+    "static_validate_project",
+    "build_unreal_project",
+    "read_unreal_logs",
+    "write_session_handoff"
+  ],
+  "agentHiddenUntilControlPlane": [
+    "apply_edit_bundle"
+  ],
+  "projectSwitchCanonical": "unreal_set_active_project",
+  "docReferencedTools": [
+    "unreal_rag_health",
+    "unreal_get_active_project",
+    "unreal_set_active_project",
+    "unreal_project_status",
+    "unreal_agent_plan",
+    "unreal_rag_search",
+    "get_active_project",
+    "read_file",
+    "read_file_range",
+    "search_files",
+    "replace_in_file",
+    "write_file",
+    "static_validate_project",
+    "build_unreal_project",
+    "write_session_handoff"
+  ]
+}

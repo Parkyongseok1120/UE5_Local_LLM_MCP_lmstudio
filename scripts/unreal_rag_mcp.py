@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -124,7 +125,7 @@ def _handle_unreal_rag_refresh_status(server: McpServer, message_id: Any, argume
         server.tool_result(message_id, "Provide job_id or set list_recent=true.", is_error=True)
         return
     payload = job_status(server.workspace, job_id)
-    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+    _emit_structured_result(server, message_id, payload)
 
 
 def _handle_unreal_cancel_compile_loop(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
@@ -133,7 +134,7 @@ def _handle_unreal_cancel_compile_loop(server: McpServer, message_id: Any, argum
         server.tool_result(message_id, "Missing required argument: job_id", is_error=True)
         return
     payload = cancel_job(server.workspace, job_id)
-    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+    _emit_structured_result(server, message_id, payload)
 
 
 def _handle_unreal_code_sketch_claim_validate(
@@ -164,14 +165,39 @@ def _handle_unreal_node_plan_validate(server: McpServer, message_id: Any, argume
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
 
+def _handle_unreal_diagram_validate(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    from mermaid_validate import validate_mermaid_block
+
+    source = str(arguments.get("diagram") or arguments.get("mermaid") or "").strip()
+    result = validate_mermaid_block(source)
+    server.tool_result(message_id, json.dumps(result, ensure_ascii=False, indent=2), structured=result)
+
+
 def _handle_unreal_render_report(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
+    from mermaid_validate import sanitize_report_markdown
+
     text = str(arguments.get("text") or "")
     if not text.strip():
         server.tool_result(message_id, "Missing required argument: text", is_error=True)
         return
     fmt = str(arguments.get("format") or "md").strip().lower()
     output_path = str(arguments.get("outputPath") or "").strip() or None
-    payload = render_report(text, format=fmt, output_path=output_path)  # type: ignore[arg-type]
+    sanitized = sanitize_report_markdown(text, mode=str(arguments.get("diagramMode") or "sanitize"))
+    if not sanitized.get("ok"):
+        server.tool_result(message_id, sanitized.get("text") or "Invalid diagram content", is_error=True)
+        return
+    try:
+        payload = render_report(
+            sanitized.get("text") or text,
+            format=fmt,  # type: ignore[arg-type]
+            output_path=output_path,
+            workspace=server.workspace,
+            allow_overwrite=arguments.get("allowOverwrite") is True,
+        )
+    except (ValueError, FileExistsError) as exc:
+        server.tool_result(message_id, str(exc), is_error=True)
+        return
+    payload["degraded"] = sanitized.get("degraded", False)
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
 
@@ -217,6 +243,16 @@ def _handle_unreal_rag_capabilities(server: McpServer, message_id: Any, argument
         "indexHealthy": status.get("chunkCount", 0) > 0 and not status.get("needsRebuild", True),
     }
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _emit_structured_result(server: McpServer, message_id: Any, payload: dict[str, Any]) -> None:
+    server.structured_tool_result(message_id, payload)
+
+
+def structured_payload_is_error(payload: dict[str, Any]) -> bool:
+    if "isError" in payload:
+        return bool(payload.get("isError"))
+    return payload.get("ok") is False
 
 
 def build_mcp_tool_registry() -> McpToolRegistry:
@@ -282,6 +318,15 @@ def build_mcp_tool_registry() -> McpToolRegistry:
         )
     )
     registry.register(
+        ToolSpec(
+            name="unreal_diagram_validate",
+            schema_dict={
+                "diagram": {"type": "string", "description": "Mermaid diagram source (without fences)."},
+            },
+            handler=_handle_unreal_diagram_validate,
+        )
+    )
+    registry.register(
         ToolSpec(name="unreal_rag_search", schema_dict={}, handler=_handle_unreal_rag_search)
     )
     registry.register(
@@ -315,6 +360,23 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
+        "unreal_diagram_validate",
+        "unreal_project_status",
+    }
+)
+
+STABLE_HIDDEN_TOOL_NAMES = frozenset(
+    {
+        "unreal_task_start",
+        "unreal_task_status",
+        "unreal_task_cancel",
+        "unreal_task_resume",
+        "unreal_task_approve",
+        "unreal_project_prepare",
+        "unreal_job_log_read",
+        "unreal_architecture_decision_status",
+        "unreal_architecture_decision_approve",
+        "unreal_architecture_decision_revoke",
     }
 )
 
@@ -351,6 +413,11 @@ def extended_tools_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def control_plane_tools_enabled() -> bool:
+    value = os.environ.get("ALLOW_CONTROL_PLANE_TOOLS", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def load_project_architecture(workspace: Path, index_dir: Path) -> dict[str, Any]:
     pab_path = index_dir / "project_architecture.json"
     if pab_path.exists():
@@ -375,17 +442,55 @@ class McpServer:
         self.index = index.resolve()
         self.workspace = Path(__file__).resolve().parent.parent
         self._progress_handlers: list[Callable[[str, str], None]] = []
+        self._connection_session_id = uuid.uuid4().hex[:12]
+        from project_switch_invalidate import read_cache_generation
+
+        self._cache_generation = read_cache_generation(self.workspace)
+        self._cache_refresh_required = False
+        self._cache_partial_clear: list[str] = []
+        self._applied_cache_generation = self._cache_generation
+        try:
+            from reconcile_jobs import reconcile_stale_jobs
+
+            reconcile_stale_jobs(self.workspace)
+        except Exception:
+            pass
+
+    def _maybe_refresh_project_caches(self) -> None:
+        from project_switch_invalidate import clear_local_project_caches, read_cache_generation
+
+        current = read_cache_generation(self.workspace)
+        if current == self._applied_cache_generation and not self._cache_refresh_required:
+            return
+        self._cache_partial_clear = []
+        try:
+            from workspace_paths import resolve_active_project_path
+
+            active = resolve_active_project_path()
+            result = clear_local_project_caches(self.workspace, previous_project=None, new_project=active)
+            if not result.get("ok"):
+                self._cache_refresh_required = True
+                self._cache_partial_clear = list(result.get("partialClear") or [])
+                return
+            self._cache_refresh_required = False
+            self._applied_cache_generation = current
+            self._cache_generation = current
+        except Exception:
+            self._cache_refresh_required = True
 
     def run(self) -> None:
         for line in sys.stdin:
             line = line.strip()
             if not line:
                 continue
+            message: dict[str, Any] | None = None
             try:
                 message = json.loads(line)
                 self.handle_message(message)
             except Exception as exc:
                 self.log(f"error: {exc}")
+                if isinstance(message, dict) and message.get("id") is not None:
+                    self.error(message["id"], -32603, str(exc))
 
     def log(self, message: str) -> None:
         write_utf8_line(sys.stderr, message)
@@ -425,8 +530,35 @@ class McpServer:
             "isError": is_error,
         }
         if structured is not None:
-            payload["structuredContent"] = structured
+            cap = max(8_000, min(limit // 2, 32_000))
+            try:
+                from mcp_tool_compact import compact_structured_payload
+
+                serialized = json.dumps(structured, ensure_ascii=False)
+                if len(serialized) > cap:
+                    payload["structuredContent"] = compact_structured_payload(structured, max_bytes=cap)
+                    payload["structuredContentTruncated"] = True
+                else:
+                    payload["structuredContent"] = structured
+            except (TypeError, ValueError):
+                payload["structuredContent"] = {"error": "structuredContent could not be serialized"}
         self.result(message_id, payload)
+
+    def structured_tool_result(
+        self,
+        message_id: Any,
+        payload: dict[str, Any],
+        *,
+        char_limit: int | None = None,
+    ) -> None:
+        is_error = payload.get("isError") if "isError" in payload else (payload.get("ok") is False)
+        self.tool_result(
+            message_id,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            structured=payload,
+            is_error=bool(is_error),
+            char_limit=char_limit,
+        )
 
     def handle_message(self, message: dict[str, Any]) -> None:
         method = message.get("method")
@@ -471,12 +603,12 @@ class McpServer:
         }
 
     def all_tool_definitions(self) -> list[dict[str, Any]]:
+        from tool_exposure import callable_rag_tool_names
+
         tools = self._all_tool_definitions_unfiltered()
-        if extended_tools_enabled():
-            return tools
-        if essential_tools_enabled():
-            return [tool for tool in tools if tool["name"] in ESSENTIAL_TOOL_NAMES]
-        return [tool for tool in tools if tool["name"] not in EXTENDED_TOOL_NAMES]
+        all_names = [tool["name"] for tool in tools]
+        allowed = callable_rag_tool_names(all_names)
+        return [tool for tool in tools if tool["name"] in allowed]
 
     def _all_tool_definitions_unfiltered(self) -> list[dict[str, Any]]:
         return [
@@ -1050,6 +1182,23 @@ class McpServer:
                 ),
             },
             {
+                "name": "unreal_diagram_validate",
+                "title": "Validate Mermaid Diagram",
+                "description": (
+                    "Validate Mermaid diagram syntax before embedding in reports or architecture docs. "
+                    "Evidence only: never writes files or builds."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "diagram": {
+                            "type": "string",
+                            "description": "Mermaid diagram source (without fences).",
+                        },
+                    },
+                    ["diagram"],
+                ),
+            },
+            {
                 "name": "unreal_node_plan_validate",
                 "title": "Validate Blueprint/Material Node Plan",
                 "description": (
@@ -1173,6 +1322,140 @@ class McpServer:
                         "nameContains": {"type": "string"},
                         "projectName": {"type": "string"},
                     },
+                ),
+            },
+            {
+                "name": "unreal_task_start",
+                "title": "Start scoped agent task",
+                "description": (
+                    "Create a task session with auth token for write/build gating. "
+                    "Call first for multi-step edit workflows; poll unreal_task_status for phase updates."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "request": {"type": "string", "description": "User goal in plain language."},
+                        "mode": {
+                            "type": "string",
+                            "enum": ["agent_edit", "read_only", "plan_only"],
+                            "default": "agent_edit",
+                        },
+                        "projectFile": {"type": "string", "description": "Optional .uproject path override."},
+                        "planId": {"type": "string"},
+                    },
+                    ["request"],
+                ),
+            },
+            {
+                "name": "unreal_task_status",
+                "title": "Task session status",
+                "description": "Poll task phase, active job, and cancellable flag for a task started with unreal_task_start.",
+                "inputSchema": self._schema(
+                    {
+                        "taskSessionId": {"type": "string"},
+                    },
+                    ["taskSessionId"],
+                ),
+            },
+            {
+                "name": "unreal_task_approve",
+                "title": "Approve gated task",
+                "description": "Resume a task waiting on architecture or user approval (awaiting_approval).",
+                "inputSchema": self._schema(
+                    {
+                        "taskSessionId": {"type": "string"},
+                        "note": {"type": "string"},
+                    },
+                    ["taskSessionId"],
+                ),
+            },
+            {
+                "name": "unreal_task_cancel",
+                "title": "Cancel task and active jobs",
+                "description": "Cancel the task session and any linked background compile/RAG jobs.",
+                "inputSchema": self._schema(
+                    {
+                        "taskSessionId": {"type": "string"},
+                    },
+                    ["taskSessionId"],
+                ),
+            },
+            {
+                "name": "unreal_task_resume",
+                "title": "Resume cancelled task",
+                "description": "Resume a previously cancelled task session.",
+                "inputSchema": self._schema(
+                    {
+                        "taskSessionId": {"type": "string"},
+                    },
+                    ["taskSessionId"],
+                ),
+            },
+            {
+                "name": "unreal_project_prepare",
+                "title": "Prepare active project for agent work",
+                "description": (
+                    "Invalidate caches and optionally sync RAG inputs for the active project. "
+                    "Call after unreal_set_active_project before heavy edits."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "force": {"type": "boolean", "default": False},
+                    },
+                ),
+            },
+            {
+                "name": "unreal_project_status",
+                "title": "Active project readiness",
+                "description": "Report RAG/index readiness and last prepare status for the active project.",
+                "inputSchema": self._schema({}),
+            },
+            {
+                "name": "unreal_job_log_read",
+                "title": "Read background job log",
+                "description": "Paged read of stdout/stderr for compile loop or RAG refresh jobs.",
+                "inputSchema": self._schema(
+                    {
+                        "job_id": {"type": "string"},
+                        "stream": {"type": "string", "enum": ["stdout", "stderr", "progress"], "default": "stdout"},
+                        "offset": {"type": "integer", "minimum": 0, "default": 0},
+                        "limit": {"type": "integer", "minimum": 100, "maximum": 32000, "default": 8000},
+                    },
+                    ["job_id"],
+                ),
+            },
+            {
+                "name": "unreal_architecture_decision_status",
+                "title": "Architecture decision approval status",
+                "description": "Check whether an architecture decision gate is approved for the given plan revision.",
+                "inputSchema": self._schema(
+                    {
+                        "projectPath": {"type": "string"},
+                        "planRevision": {"type": "string", "default": "1"},
+                        "ambiguityGate": {"type": "object"},
+                    },
+                ),
+            },
+            {
+                "name": "unreal_architecture_decision_approve",
+                "title": "Approve architecture decision",
+                "description": "Persist approval for an architecture decision gate before writes proceed.",
+                "inputSchema": self._schema(
+                    {
+                        "projectPath": {"type": "string"},
+                        "planRevision": {"type": "string", "default": "1"},
+                        "ambiguityGate": {"type": "object"},
+                    },
+                ),
+            },
+            {
+                "name": "unreal_architecture_decision_revoke",
+                "title": "Revoke architecture decision",
+                "description": "Revoke a previously approved architecture decision by decisionId.",
+                "inputSchema": self._schema(
+                    {
+                        "decisionId": {"type": "string"},
+                    },
+                    ["decisionId"],
                 ),
             },
         ]
@@ -1331,83 +1614,69 @@ class McpServer:
         }
 
     def handle_set_active_project(self, message_id: Any, arguments: dict[str, Any]) -> None:
+        from project_controller import switch_active_project
+
         if arguments.get("clear") is True:
-            config = load_shared_config()
-            config["activeProject"] = None
-            save_shared_config(config)
-            self.tool_result(
-                message_id,
-                json.dumps(
-                    {
-                        "ok": True,
-                        "activeProject": None,
-                        "message": "Active project cleared.",
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
+            payload = switch_active_project(self.workspace, clear=True)
+        else:
+            project_path = str(arguments.get("projectPath") or "").strip()
+            if not project_path:
+                self.tool_result(
+                    message_id,
+                    "Provide projectPath (.uproject) or clear=true. Hint-based selection: use unreal-agent set_active_project.",
+                    is_error=True,
+                )
+                return
+            payload = switch_active_project(
+                self.workspace,
+                project_path=project_path,
+                prepare=arguments.get("prepare") is True,
+                force_prepare=arguments.get("force") is True,
             )
+            if payload.get("ok"):
+                payload["activeProjectNames"] = active_project_names()
+                payload["fastPath"] = arguments.get("prepare") is not True
+
+        if not payload.get("ok"):
+            self.tool_result(message_id, payload.get("error") or "Project switch failed.", is_error=True)
             return
 
-        project_path = str(arguments.get("projectPath") or "").strip()
-        if not project_path:
-            self.tool_result(
-                message_id,
-                "Provide projectPath (.uproject) or clear=true. Hint-based selection: use unreal-agent set_active_project.",
-                is_error=True,
-            )
-            return
+        if payload.get("ok"):
+            from project_switch_invalidate import read_cache_generation
 
-        resolved = Path(project_path).resolve()
-        if not resolved.exists():
-            self.tool_result(message_id, f"Project not found: {resolved}", is_error=True)
-            return
-        if resolved.suffix.lower() != ".uproject":
-            self.tool_result(message_id, "projectPath must be a .uproject file path.", is_error=True)
-            return
-
-        config = load_shared_config()
-        previous = str(config.get("activeProject") or "").strip()
-        config["activeProject"] = str(resolved)
-        save_shared_config(config)
-
-        setup_payload: dict[str, Any] | None = None
-        invalidate_payload: dict[str, Any] | None = None
-        try:
-            from project_switch_invalidate import on_project_switch_invalidate
-
-            invalidate_payload = on_project_switch_invalidate(previous or None, resolved, workspace=self.workspace)
-        except Exception as exc:
-            invalidate_payload = {"ok": False, "error": str(exc)}
-        try:
-            from on_active_project_changed import ensure_active_project_ready
-
-            setup_payload = ensure_active_project_ready(
-                resolved,
-                previous_project=previous or None,
-            )
-        except Exception as exc:
-            setup_payload = {"ok": False, "error": str(exc)}
+            invalidation = payload.get("cacheInvalidation") or {}
+            generation = invalidation.get("cacheGeneration")
+            observed = int(generation) if generation is not None else read_cache_generation(self.workspace)
+            self._cache_generation = observed
+            if payload.get("cacheRefreshRequired"):
+                self._cache_refresh_required = True
+            else:
+                self._applied_cache_generation = observed
+                self._cache_refresh_required = False
 
         self.tool_result(
             message_id,
-            json.dumps(
-                {
-                    "ok": True,
-                    "activeProject": str(resolved),
-                    "activeProjectNames": active_project_names(),
-                    "message": f"Active project set to {resolved.name}",
-                    "cacheInvalidation": invalidate_payload,
-                    "autoSetup": setup_payload,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            structured=payload,
         )
 
     def handle_tool_call(self, message_id: Any, params: dict[str, Any]) -> None:
+        self._maybe_refresh_project_caches()
         name = params.get("name")
         arguments = params.get("arguments") or {}
+
+        from tool_exposure import callable_rag_tool_names, tool_not_callable_payload
+
+        all_names = [tool["name"] for tool in self._all_tool_definitions_unfiltered()]
+        if name not in callable_rag_tool_names(all_names):
+            payload = tool_not_callable_payload(str(name or ""))
+            self.tool_result(
+                message_id,
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                structured=payload,
+                is_error=True,
+            )
+            return
 
         try:
             if _MCP_TOOL_REGISTRY.dispatch(self, message_id, name, arguments):
@@ -1427,6 +1696,118 @@ class McpServer:
                 self.handle_compile_loop_status(message_id, arguments)
             elif name == "unreal_cancel_compile_loop":
                 _handle_unreal_cancel_compile_loop(self, message_id, arguments)
+            elif name == "unreal_job_log_read":
+                self.handle_unreal_job_log_read(message_id, arguments)
+            elif name == "unreal_project_prepare":
+                from on_active_project_changed import ensure_active_project_ready
+                from workspace_paths import resolve_active_project_path
+
+                project = resolve_active_project_path()
+                if not project:
+                    self.tool_result(message_id, "No active project.", is_error=True)
+                    return
+                payload = ensure_active_project_ready(project, force=arguments.get("force") is True)
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_project_status":
+                from agent_capabilities import resolve_agent_write_enabled
+                from mcp_tool_compact import envelope_fields
+                from project_controller import active_project_readiness
+                from workspace_paths import resolve_index_path
+
+                payload = active_project_readiness(self.workspace)
+                agent_write_enabled = resolve_agent_write_enabled()
+                payload["agentWriteEnabled"] = agent_write_enabled
+                blocking: list[str] = []
+                if not payload.get("ready"):
+                    blocking.append(str(payload.get("reason") or "project_not_ready"))
+                if not agent_write_enabled:
+                    blocking.append("agent_write_mode_disabled")
+                index_path = resolve_index_path(self.workspace)
+                if not index_path.is_file():
+                    blocking.append("rag_index_missing")
+                else:
+                    payload["ragIndexPath"] = str(index_path)
+                    payload["ragIndexExists"] = True
+                    payload["ragIndexMtime"] = index_path.stat().st_mtime
+                payload.update(
+                    envelope_fields(
+                        phase="status",
+                        user_message="Project status snapshot for the active workspace.",
+                    )
+                )
+                if blocking:
+                    payload["blockingReasons"] = blocking
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_task_start":
+                from task_api import task_start
+
+                payload = task_start(
+                    self.workspace,
+                    request=str(arguments.get("request") or ""),
+                    mode=str(arguments.get("mode") or "agent_edit"),
+                    project_file=str(arguments.get("projectFile") or arguments.get("project_file") or ""),
+                    start_background_job=arguments.get("startBackgroundJob") is True,
+                    on_progress=lambda job, msg: self.notify(f"[task {job.get('jobId')}] {msg}"),
+                )
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_status":
+                from task_api import task_status
+
+                payload = task_status(self.workspace, str(arguments.get("taskSessionId") or ""))
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_approve":
+                from task_api import task_approve
+
+                payload = task_approve(self.workspace, str(arguments.get("taskSessionId") or ""), note=str(arguments.get("note") or ""))
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_cancel":
+                from task_api import task_cancel
+
+                payload = task_cancel(self.workspace, str(arguments.get("taskSessionId") or ""))
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_resume":
+                from task_api import task_resume
+
+                payload = task_resume(self.workspace, str(arguments.get("taskSessionId") or ""))
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_architecture_decision_status":
+                from architecture_decision import approval_is_valid, build_architecture_decision
+
+                store = self.workspace / "data" / "architecture_approvals.json"
+                decision = build_architecture_decision(
+                    ambiguity_gate=arguments.get("ambiguityGate") or {},
+                    project_path=str(arguments.get("projectPath") or ""),
+                    plan_revision=str(arguments.get("planRevision") or "1"),
+                )
+                payload = {"ok": True, "valid": approval_is_valid(store, decision), "decision": decision.to_dict()}
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_architecture_decision_approve":
+                from architecture_decision import approval_token_valid, build_architecture_decision, persist_approval
+
+                token = str(arguments.get("approvalToken") or arguments.get("approval_token") or "")
+                if not approval_token_valid(token):
+                    self.tool_result(
+                        message_id,
+                        "Architecture approval token required.",
+                        is_error=True,
+                    )
+                    return
+                store = self.workspace / "data" / "architecture_approvals.json"
+                decision = build_architecture_decision(
+                    ambiguity_gate=arguments.get("ambiguityGate") or {},
+                    project_path=str(arguments.get("projectPath") or ""),
+                    plan_revision=str(arguments.get("planRevision") or "1"),
+                )
+                persist_approval(store, decision)
+                payload = {"ok": True, "approved": True, "decision": decision.to_dict()}
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+            elif name == "unreal_architecture_decision_revoke":
+                from architecture_decision import revoke_approval
+
+                store = self.workspace / "data" / "architecture_approvals.json"
+                decision_id = str(arguments.get("decisionId") or "")
+                payload = {"ok": True, "revoked": revoke_approval(store, decision_id)}
+                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_generate_compile_loop":
                 self.handle_legacy_compile_loop(message_id, arguments)
             elif name == "unreal_refactor_plan_validate":
@@ -1683,20 +2064,86 @@ class McpServer:
         arguments["mode"] = mode
         arguments["genre"] = genres
 
+        config = load_shared_config()
+        active_project = str(config.get("activeProject") or "")
+        from agent_session_core import compact_evidence_refs, maybe_auto_handoff, resolve_session_id
+        from rag_delivery import deliver_rag_result
+
+        session_id = resolve_session_id(
+            str(arguments.get("sessionId") or arguments.get("session_id") or ""),
+            connection_id=self._connection_session_id,
+        )
+        continuation_token = str(arguments.get("continuationToken") or arguments.get("continuation_token") or "")
+
+        precheck = deliver_rag_result(
+            tool="unreal_agent_session",
+            active_project=active_project,
+            query=request,
+            mode=mode,
+            scope=str(arguments.get("scope") or "auto"),
+            detail_level=str(arguments.get("detailLevel") or "compact"),
+            top_k=top_k,
+            hybrid=use_hybrid,
+            index_path=self.index,
+            session_id=session_id,
+            rows=None,
+            continuation_token=continuation_token,
+        )
+        if precheck.get("suppressed"):
+            repeat = precheck.get("repeat") or {}
+            handoff = maybe_auto_handoff(repeat_detected=True)
+            short = (
+                f"{repeat.get('message')}\n"
+                f"requiredNextAction: {repeat.get('requiredNextAction')}"
+            )
+            structured = {
+                "ok": True,
+                "repeatDetected": True,
+                "doNotRetry": True,
+                "fullContextSuppressed": True,
+                "sessionId": session_id,
+                "semanticQueryKey": precheck.get("semanticQueryKey"),
+                "deliveryVariantKey": precheck.get("deliveryVariantKey"),
+                "message": repeat.get("message"),
+                "requiredNextAction": repeat.get("requiredNextAction"),
+            }
+            if handoff:
+                structured["autoHandoff"] = handoff
+            self.tool_result(message_id, short, structured=structured, char_limit=1200)
+            return
+
         rows, context, resolved_scope, detail = self.run_search(request, top_k, arguments, use_hybrid)
         from token_budget import code_detail_limits
 
         char_limit = int(code_detail_limits(detail)["max_tool_chars"])
-        config = load_shared_config()
+        delivery = deliver_rag_result(
+            tool="unreal_agent_session",
+            active_project=active_project,
+            query=request,
+            mode=mode,
+            scope=resolved_scope,
+            detail_level=detail,
+            top_k=top_k,
+            hybrid=use_hybrid,
+            index_path=self.index,
+            session_id=session_id,
+            rows=rows,
+            continuation_token=continuation_token,
+        )
         payload = {
             "ok": True,
             "activeProject": config.get("activeProject"),
+            "sessionId": session_id,
             "resolvedGenres": genres,
             "mode": mode,
             "scope": resolved_scope,
             "hybrid": use_hybrid,
             "detailLevel": detail,
             "matchCount": len(rows),
+            "semanticQueryKey": delivery.get("semanticQueryKey"),
+            "deliveryVariantKey": delivery.get("deliveryVariantKey"),
+            "continuationToken": delivery.get("continuationToken"),
+            "deliveredFullContext": delivery.get("deliveredFullContext", bool(rows)),
             "nextSteps": [
                 "unreal_get_active_project",
                 "unreal_agent_plan (follow writeGate/checkpoints)",
@@ -1706,7 +2153,8 @@ class McpServer:
                 "build_unreal_project (unreal-agent)",
             ],
             "context": context,
-            "matches": rows,
+            "evidenceRefs": compact_evidence_refs(rows),
+            "matches": rows if arguments.get("includeRawMatches") is True else [],
         }
         self.tool_result(
             message_id,
@@ -1735,6 +2183,9 @@ class McpServer:
                 "architecture": arch,
                 "refreshed": True,
             }
+            from architecture_map import semantic_graph_v1
+
+            payload["semanticGraphV1"] = semantic_graph_v1(arch)
         else:
             raw = load_project_architecture(self.workspace, index_dir)
             if "error" in raw:
@@ -1754,6 +2205,9 @@ class McpServer:
                 "architecture": arch,
                 "activeProject": load_shared_config().get("activeProject"),
             }
+            from architecture_map import semantic_graph_v1
+
+            payload["semanticGraphV1"] = semantic_graph_v1(arch)
         self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
     def handle_search(self, message_id: Any, arguments: dict[str, Any]) -> None:
@@ -1772,7 +2226,7 @@ class McpServer:
             return
 
         from index_staleness import project_source_stale_status
-        from read_query_history import check_repeat_query, query_fingerprint, record_query_delivery
+        from rag_delivery import deliver_rag_result
         from token_budget import code_detail_limits, next_code_detail, resolve_code_detail
 
         detail = resolve_code_detail(str(arguments.get("detailLevel") or "compact"))
@@ -1780,8 +2234,15 @@ class McpServer:
         scope = str(arguments.get("scope") or "auto")
         config = load_shared_config()
         active_project = str(config.get("activeProject") or "")
+        from agent_session_core import resolve_session_id
 
-        fingerprint = query_fingerprint(
+        session_id = resolve_session_id(
+            str(arguments.get("sessionId") or arguments.get("session_id") or ""),
+            connection_id=self._connection_session_id,
+        )
+        continuation_token = str(arguments.get("continuationToken") or arguments.get("continuation_token") or "")
+
+        pre_delivery = deliver_rag_result(
             tool="unreal_rag_search",
             active_project=active_project,
             query=query,
@@ -1791,9 +2252,12 @@ class McpServer:
             top_k=top_k,
             hybrid=use_hybrid,
             index_path=self.index,
+            session_id=session_id,
+            rows=None,
+            continuation_token=continuation_token,
         )
-        repeat = check_repeat_query(fingerprint)
-        if repeat.get("repeatDetected"):
+        if pre_delivery.get("suppressed"):
+            repeat = pre_delivery.get("repeat") or {}
             short = (
                 f"{repeat.get('message')}\n"
                 f"requiredNextAction: {repeat.get('requiredNextAction')}"
@@ -1806,6 +2270,8 @@ class McpServer:
                     "repeatDetected": True,
                     "doNotRetry": True,
                     "fullContextSuppressed": True,
+                    "semanticQueryKey": pre_delivery.get("semanticQueryKey"),
+                    "deliveryVariantKey": pre_delivery.get("deliveryVariantKey"),
                     "message": repeat.get("message"),
                     "requiredNextAction": repeat.get("requiredNextAction"),
                 },
@@ -1861,7 +2327,24 @@ class McpServer:
                 if refresh_available:
                     structured["nextSteps"].insert(0, "unreal_start_rag_refresh")
 
-        record_query_delivery(fingerprint, detail_level=detail, match_count=len(rows))
+        delivery = deliver_rag_result(
+            tool="unreal_rag_search",
+            active_project=active_project,
+            query=query,
+            mode=mode,
+            scope=resolved_scope,
+            detail_level=detail,
+            top_k=top_k,
+            hybrid=use_hybrid,
+            index_path=self.index,
+            session_id=session_id,
+            rows=rows,
+            continuation_token=continuation_token,
+        )
+        structured["sessionId"] = session_id
+        structured["semanticQueryKey"] = delivery.get("semanticQueryKey")
+        structured["deliveryVariantKey"] = delivery.get("deliveryVariantKey")
+        structured["continuationToken"] = delivery.get("continuationToken")
         self.tool_result(
             message_id,
             context,
@@ -1931,7 +2414,34 @@ class McpServer:
             self.tool_result(message_id, "Provide job_id or set list_recent=true.", is_error=True)
             return
 
-        payload = job_status(self.workspace, job_id)
+        payload = job_status(
+            self.workspace,
+            job_id,
+            compact=arguments.get("verbose") is not True,
+            since_progress_sequence=int(
+                arguments.get("sinceProgressSequence")
+                or arguments.get("since_progress_sequence")
+                or arguments.get("sinceRevision")
+                or arguments.get("since_revision")
+                or 0
+            ),
+        )
+        self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+
+    def handle_unreal_job_log_read(self, message_id: Any, arguments: dict[str, Any]) -> None:
+        from wrapper_job_manager import read_job_log_page
+
+        job_id = str(arguments.get("job_id") or "").strip()
+        if not job_id:
+            self.tool_result(message_id, "Provide job_id.", is_error=True)
+            return
+        payload = read_job_log_page(
+            self.workspace,
+            job_id,
+            stream=str(arguments.get("stream") or "stdout"),
+            offset=int(arguments.get("offset") or 0),
+            limit=int(arguments.get("limit") or 8000),
+        )
         self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
     def handle_legacy_compile_loop(self, message_id: Any, arguments: dict[str, Any]) -> None:

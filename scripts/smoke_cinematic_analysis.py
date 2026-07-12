@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Programmatic smoke for Phase 0.5 cinematic analysis routing (no LM Studio required)."""
+"""Programmatic smoke for cinematic C++ analysis routing (no LM Studio required)."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ PROMPT = "현재 프로젝트의 시네마틱 시스템 분석"
 
 def main() -> int:
     task = classify_task(PROMPT, "auto")
-    if task != "inspect_only":
-        print(json.dumps({"ok": False, "error": f"expected inspect_only, got {task}"}))
+    if task != "cpp_analysis":
+        print(json.dumps({"ok": False, "error": f"expected cpp_analysis, got {task}"}))
         return 1
 
     plan = build_agent_plan(PROMPT, "auto")
@@ -27,7 +27,8 @@ def main() -> int:
     tools = [c.get("tool") for c in payload.get("suggestedToolCalls") or []]
 
     checks = {
-        "taskKind": payload.get("taskKind") == "inspect_only",
+        "taskKind": payload.get("taskKind") == "cpp_analysis",
+        "sourceEvidenceRequired": payload.get("sourceEvidence", {}).get("required") is True,
         "writesAllowedFalse": payload.get("writeGate", {}).get("writesAllowed") is False,
         "searchBeforeRag": "search_files" in policy and "unreal_rag_search" in policy
         and policy.index("search_files") < policy.index("unreal_rag_search"),

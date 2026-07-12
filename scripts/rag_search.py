@@ -37,6 +37,15 @@ MODULE_QUERY_MARKERS = (
 )
 
 
+def close_index_connections() -> None:
+    for conn in list(_conn_cache.values()):
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+    _conn_cache.clear()
+
+
 def get_index_connection(index: Path) -> sqlite3.Connection:
     key = str(index.resolve())
     conn = _conn_cache.get(key)

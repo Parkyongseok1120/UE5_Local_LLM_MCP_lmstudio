@@ -41,6 +41,7 @@ def test_demo_game_combat_cpp_domain(demo_game_project, monkeypatch):
 
 
 def test_orchestrator_injects_project_context_and_suggested_calls(demo_game_project, monkeypatch):
+    monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
     monkeypatch.setenv("WORKSPACE_ROOT", str(demo_game_project["projectDir"].parent))
     plan = build_agent_plan("MF_Test folder material analysis", mode="material_analysis")
     graph_calls = [call for call in plan.suggested_tool_calls if call["tool"] == "unreal_asset_graph_lookup"]

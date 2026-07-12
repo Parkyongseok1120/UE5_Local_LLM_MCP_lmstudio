@@ -9,6 +9,7 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from include_resolver import (  # noqa: E402
+    classify_include_visibility,
     infer_usage_kind,
     project_relative_include,
     resolve_project_symbol_include,
@@ -56,3 +57,13 @@ def test_infer_usage_kind_create_default_subobject() -> None:
     text = "Root = CreateDefaultSubobject<UBoxComponent>(TEXT(\"Box\"));"
     kind = infer_usage_kind(text, "UBoxComponent", text.find("CreateDefaultSubobject"))
     assert kind == "create_default_subobject"
+
+
+def test_private_cross_module_include_forbidden() -> None:
+    visibility = classify_include_visibility(
+        owner_module="Other",
+        consumer_module="Demo",
+        include_path="Other/Private/Secret.h",
+        is_private_header=True,
+    )
+    assert visibility == "private_cross_module_forbidden"

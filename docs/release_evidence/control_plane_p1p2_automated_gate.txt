@@ -1,0 +1,30 @@
+Control-Plane P1/P2 automated verification
+Date: 2026-07-12
+MCP_SOAK_CALLS: 5 (repetition gate); 100 recommended before release claim
+
+Automated PASS
+- npm test: 38/38 (atomic create race, mutation bookkeeping, tool-exposure, build envelope, journal, etc.)
+- Python targeted: 20/20 (cancel truthfulness, agent capabilities, atomic_io, rag envelope, soak matrix)
+- repetition gate (10x): ok=true across all suites including test_mcp_soak_matrix.py and test_job_cancel_deterministic.py
+
+P1 fixes verified by tests
+1. cancel_job: alive PID + identity mismatch -> cancellation_uncertain + orphanProcessSuspected
+2. unreal_project_status: resolve_agent_write_enabled() reads unreal-agent mcp.json ALLOW_WRITE
+3. MUTATION_LOCK_BUSY: writeApplied/bookkeepingFailed/doNotRetry + read/validate nextSteps
+4. atomicCreateText/atomic_create_text: OS-level exclusive create (COPYFILE_EXCL / O_EXCL)
+5. RAG soak: unreal_rag_health + isError assertions + negative control for unreal_health
+
+P2 fixes verified by tests
+6. RAG structured_tool_result: ok:false -> isError:true (task/project/cancel handlers)
+7. makeJsonSchema additionalProperties:false + build_unreal_project.allowEngineFallback
+8. projectSwitchGuidance(): stable profile -> unreal_set_active_project on unreal-rag
+
+Manual gates still NOT RUN (require local UE 5.8 + LM Studio session)
+- docs/release_evidence/live_ue58_build_proof.md
+- docs/release_evidence/lmstudio_model_eval_gate.md (Qwen 3.5 9B / 3.6 27B 100-call)
+
+Commands to complete manual gates
+- Follow live_ue58_build_proof.md then save log to docs/release_evidence/live_ue58_build.log
+- MCP_SOAK_CALLS=100 python scripts/run_repetition_gate.py
+- python scripts/generate_lmstudio_eval_artifact.py --model qwen3.5-9b ...
+- python scripts/generate_lmstudio_eval_artifact.py --model qwen3.6-27b ...

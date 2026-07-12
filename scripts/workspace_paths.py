@@ -77,9 +77,10 @@ def load_shared_config() -> dict:
 
 
 def save_shared_config(config: dict) -> Path:
+    from atomic_io import atomic_write_text
+
     path = shared_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     return path
 
 

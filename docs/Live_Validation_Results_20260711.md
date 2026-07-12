@@ -43,7 +43,7 @@ Command pattern:
 
 ```powershell
 python scripts/validate_project_sources.py `
-  --project-root "C:\Users\sster\Documents\Git\Project_MJS" `
+  --project-root "<project-root>" `
   --write-target "<relative Source path>" `
   --json
 ```
@@ -67,7 +67,7 @@ Compared to pre-stabilization Project_MJS scoped writes (~349ms / ~318ms with bl
 | LM Studio model | `qwen3.5-9b-deepseek-v4-flash` |
 | Sampling profile | `qwen3_5_9b_deepseek_v4_flash` |
 | UE version | 5.8 |
-| UBT | `C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe` |
+| UBT | `<UE_5.8_ENGINE_ROOT>\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe` |
 | Config | `config/rag_eval_real_project_holdout_cases.local.json` (36 cases) |
 | Wall-clock | ~26m 34s |
 | Command | `python scripts/eval_pass_at_k.py --live --require-live --config ... --model qwen3.5-9b-deepseek-v4-flash --ubt-path ... --wrapper-timeout 1800 --artifact-dir data/baseline/live_holdout/20260711-090534-qwen35-9b` |

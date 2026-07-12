@@ -27,7 +27,7 @@ python scripts/patch_mcp_config.py
 
 Restart LM Studio after changes.
 
-### unreal-rag (9 tools)
+### unreal-rag (11 tools)
 
 - `unreal_get_active_project`
 - `unreal_set_active_project`
@@ -38,12 +38,14 @@ Restart LM Studio after changes.
 - `unreal_agent_session`
 - `unreal_rag_capabilities`
 - `unreal_code_sketch_claim_validate` - verify drafted APIs before showing code sketches
+- `unreal_diagram_validate`
+- `unreal_project_status`
 
-### unreal-agent (11 tools)
+### unreal-agent (13 tools)
 
 - `get_workspace_info`, `get_active_project`
-- `list_directory`, `read_file`, `read_file_range`
-- `replace_in_file`, `write_file`, `search_files`
+- `list_directory`, `read_file`, `read_file_range`, `read_symbol`, `search_files`
+- `replace_in_file`, `write_file`, `static_validate_project`
 - `build_unreal_project`, `read_unreal_logs`
 - `write_session_handoff` - save a compact resume note before a fresh chat; safe-mode allowed; overwrites only `.agent/handoff/latest.md`
 

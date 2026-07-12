@@ -7,7 +7,7 @@
  * Safe-ish local tools for using a local LLM as a coding agent.
  *
  * Security model:
- * - File access is restricted to WORKSPACE_ROOT.
+ * - Reads are restricted to WORKSPACE_ROOT and the selected active project.
  * - Writes are disabled unless ALLOW_WRITE=1.
  * - Command execution is disabled unless ALLOW_COMMANDS=1.
  * - Commands are allowlisted.
@@ -50,11 +50,28 @@ const {
   validateRefactorPlan
 } = require("./refactor-tools.js");
 const {
+  resolveReadPath,
+  assertReadChildContained,
+  displayPath,
+  pathMetadata
+} = require("./read-path-resolver.js");
+const {
   validateAfterWrite,
   runStaticValidation,
   resolveValidateOnWrite,
-  VALIDATE_ON_WRITE_TIMEOUT_MS
+  VALIDATE_ON_WRITE_TIMEOUT_MS,
+  clearValidated
 } = require("./validate-write.js");
+const { requireCleanOrFail, getDirtyState } = require("./validation-dirty");
+const { validateMutationAuth } = require("./task-auth");
+const {
+  applyBundleTransaction,
+  finalizeTransaction,
+  rollbackJournal,
+  DEFAULT_MAX_FILES_PER_EDIT,
+} = require("./edit-bundle");
+const { recoverIncompleteJournals } = require("./transaction-journal");
+const { resolveAgentStateRoot, ensureStateRootLayout } = require("./state-root");
 const {
   validateWriteTarget,
   shouldRollback,
@@ -82,6 +99,11 @@ const {
   writeDisciplineOptions,
   writeTextArtifact
 } = require("./context-ux.js");
+const { callableAgentToolNames, toolNotCallablePayload, projectSwitchGuidance } = require("./tool-exposure");
+const { atomicWriteText, atomicWriteJson } = require("./atomic-io");
+const { sha256Buffer } = require("./safe-write");
+const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
+const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -150,13 +172,14 @@ const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
   "list_directory",
   "read_file",
   "read_file_range",
+  "read_symbol",
   "replace_in_file",
   "write_file",
   "search_files",
+  "static_validate_project",
   "build_unreal_project",
   "read_unreal_logs",
-  "write_session_handoff",
-  "record_bootstrap_step"
+  "write_session_handoff"
 ]);
 const EXTENDED_AGENT_TOOL_NAMES = new Set([
   "set_active_project",
@@ -168,10 +191,17 @@ const EXTENDED_AGENT_TOOL_NAMES = new Set([
   "refactor_plan_validate",
   "propose_file_deletions",
   "delete_file",
-  "static_validate_project"
+  "record_bootstrap_step"
 ]);
+const STABLE_HIDDEN_AGENT_TOOL_NAMES = new Set([
+  "apply_edit_bundle"
+]);
+const CONTROL_PLANE_TOOLS = ["1", "true", "yes", "on"].includes(
+  String(process.env.ALLOW_CONTROL_PLANE_TOOLS || "").trim().toLowerCase()
+);
 const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
 const fileCache = new Map();
+const readEvidence = new Map();
 let workspaceInfoCache = null;
 
 const SERVER_VERSION = (() => {
@@ -189,7 +219,8 @@ const server = new Server(
   },
   {
     capabilities: {
-      tools: {}
+      tools: {},
+      logging: {}
     }
   }
 );
@@ -235,11 +266,78 @@ function text(content) {
 }
 
 function fail(message, options = {}) {
-  return text(JSON.stringify(errorPayload(message, options), null, 2));
+  const payload = errorPayload(message, options);
+  const result = text(JSON.stringify(payload, null, 2));
+  result.isError = true;
+  return result;
+}
+
+function agentRegisteredToolNames() {
+  return allAgentTools().map((tool) => tool.name);
+}
+
+function mutationBookkeepingFailure(message, operation, relPath) {
+  const doNotRetry = operation === "create" ? ["write_file"] : ["replace_in_file"];
+  return fail(String(message || "Mutation bookkeeping failed after write."), {
+    errorCode: "MUTATION_LOCK_BUSY",
+    path: relPath,
+    operation,
+    writeApplied: true,
+    bookkeepingFailed: true,
+    mutationGenerationNotRecorded: true,
+    retryable: false,
+    doNotRetry,
+    nextSteps: [
+      `Do NOT retry ${doNotRetry.join(" or ")} — the file change is already on disk.`,
+      "Call read_file on the same path to confirm current content.",
+      "Call static_validate_project (or build_unreal_project when appropriate) to recover validation state.",
+    ],
+    agentInstruction: "Bookkeeping failed after a successful write; verify disk state before any further edits.",
+  });
+}
+
+async function bumpProjectMutationGeneration(relPath, content) {
+  const uproject = getActiveProject(CONFIG_PATH);
+  if (!uproject) return null;
+  const projectDir = path.dirname(path.resolve(uproject));
+  return await recordMutation(projectDir, relPath, content);
+}
+
+async function agentNotify(message, level = "info") {
+  try {
+    await server.notification({
+      method: "notifications/message",
+      params: { level, logger: "unreal-agent", data: String(message) }
+    });
+  } catch {
+    // Client may not subscribe to logging notifications.
+  }
+}
+
+function enforceTaskAuth(args, options = {}) {
+  if (!CONTROL_PLANE_TOOLS) {
+    return null;
+  }
+  const requireSession = Boolean(options.requireSession);
+  const taskSessionId = String(args?.taskSessionId || args?.task_session_id || "").trim();
+  if (requireSession && !taskSessionId) {
+    return fail("taskSessionId is required for control-plane write tools.", { errorCode: "TASK_SESSION_REQUIRED" });
+  }
+  if (!taskSessionId) {
+    return null;
+  }
+  const auth = validateMutationAuth(WORKSPACE_ROOT, args || {}, { requireAll: true });
+  if (!auth.ok) {
+    return fail(auth.error || "Task authorization failed.", {
+      taskSessionId: auth.taskSessionId,
+      errorCode: auth.errorCode || "TASK_AUTH_FAILED",
+    });
+  }
+  return auth;
 }
 
 function validationToolResult(summary, validation, options = {}) {
-  const payload = options.ok === false
+  const base = options.ok === false
     ? {
       summary,
       ok: false,
@@ -247,13 +345,25 @@ function validationToolResult(summary, validation, options = {}) {
       operation: options.operation || null,
       replacements: options.replacements ?? null,
       rolledBack: options.rolledBack ?? null,
+      rollbackIncomplete: options.rollbackIncomplete ?? null,
+      restoredPaths: options.restoredPaths ?? null,
+      unrestoredPaths: options.unrestoredPaths ?? null,
+      externalChangeDetected: options.externalChangeDetected ?? null,
+      rollbackErrors: options.rollbackErrors ?? null,
       conflict: options.conflict ?? null,
       error: options.error || null,
       validation: compactValidationPayload(validation),
-      nextSteps: options.nextSteps || []
+      nextSteps: options.nextSteps || [],
     }
     : slimWriteSuccessPayload(summary, validation, options);
-  const result = text(JSON.stringify(payload, null, 2));
+  const passthrough = [
+    "mutationGeneration", "validatedGeneration", "validationStale", "proofLevel",
+    "commandSucceeded", "proofSatisfied", "recoveryRequired",
+  ];
+  for (const key of passthrough) {
+    if (options[key] !== undefined) base[key] = options[key];
+  }
+  const result = text(JSON.stringify(base, null, 2));
   if (options.isError) result.isError = true;
   return result;
 }
@@ -338,6 +448,32 @@ async function buildDeletionProposal(rawFiles, completedEditsSummary, activeProj
   };
 }
 
+async function resolveReadToolPath(p) {
+  return resolveReadPath(p, {
+    workspaceRoot: WORKSPACE_ROOT,
+    activeProject: getActiveProject(CONFIG_PATH)
+  });
+}
+
+async function resolveWriteToolPath(p) {
+  const resolution = await resolveReadToolPath(p);
+  if (resolution.resolvedRootType !== "active_project") {
+    const rel = path.relative(WORKSPACE_ROOT, resolution.absolutePath).replace(/\\/g, "/");
+    if (!rel.startsWith(".agent/")) {
+      throw new Error(`write blocked outside active project and .agent/: ${p}`);
+    }
+    return resolution;
+  }
+  const rel = String(resolution.projectRelativePath || "").replace(/\\/g, "/");
+  const allowed = rel.startsWith("Source/")
+    || rel.startsWith("Config/")
+    || /^Plugins\/[^/]+\/(?:Source\/|[^/]+\.uplugin$)/i.test(rel);
+  if (!allowed) {
+    throw new Error(`project write blocked outside Source/Config/Plugins source: ${p}`);
+  }
+  return resolution;
+}
+
 function normalizeRelPath(p) {
   if (!p || typeof p !== "string") {
     throw new Error("path must be a non-empty string");
@@ -380,13 +516,8 @@ function validationFailed(validation) {
 }
 
 function filterAgentTools(tools) {
-  if (MCP_EXTENDED_TOOLS) {
-    return tools;
-  }
-  if (MCP_ESSENTIAL_TOOLS) {
-    return tools.filter((tool) => ESSENTIAL_AGENT_TOOL_NAMES.has(tool.name));
-  }
-  return tools.filter((tool) => !EXTENDED_AGENT_TOOL_NAMES.has(tool.name));
+  const allowed = callableAgentToolNames(tools.map((tool) => tool.name));
+  return tools.filter((tool) => allowed.has(tool.name));
 }
 
 function truncateOutput(s, maxBytes = MAX_OUTPUT_BYTES) {
@@ -408,6 +539,7 @@ function isTextLikely(buffer) {
 function allowedCommandBase(commandLine) {
   const trimmed = String(commandLine || "").trim();
   if (!trimmed) return false;
+  if (/[&|<>]/.test(trimmed)) return false;
 
   const lower = trimmed.toLowerCase();
 
@@ -448,27 +580,102 @@ function allowedCommandBase(commandLine) {
   return allowPatterns.some((re) => re.test(trimmed));
 }
 
+function parseAllowedCommand(commandLine) {
+  const trimmed = String(commandLine || "").trim();
+  if (!allowedCommandBase(trimmed)) return null;
+  if (process.platform === "win32" && /^(dir|type|where|findstr)(\s|$)/i.test(trimmed)) {
+    return { file: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", trimmed], shell: false };
+  }
+  const parts = trimmed.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+  if (!parts.length) return null;
+  const file = parts[0].replace(/^"|"$/g, "");
+  const args = parts.slice(1).map((part) => part.replace(/^"|"$/g, ""));
+  return { file, args, shell: false };
+}
+
 function execCommand(commandLine, cwd = WORKSPACE_ROOT, timeoutMs = COMMAND_TIMEOUT_MS) {
+  const parsed = parseAllowedCommand(commandLine);
+  if (!parsed) {
+    return Promise.resolve({
+      ok: false,
+      exitCode: 1,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      error: `command not allowlisted or blocked: ${commandLine}`,
+      timedOut: false,
+      processTreeKilled: false,
+      fullLogPath: null,
+    });
+  }
+
   return new Promise((resolve) => {
-    cp.exec(
-      commandLine,
-      {
-        cwd,
-        windowsHide: true,
-        timeout: timeoutMs,
-        maxBuffer: MAX_OUTPUT_BYTES * 4
-      },
-      (error, stdout, stderr) => {
-        resolve({
-          ok: !error,
-          exitCode: error && typeof error.code === "number" ? error.code : 0,
-          signal: error && error.signal ? error.signal : null,
-          stdout: truncateOutput(stdout || ""),
-          stderr: truncateOutput(stderr || ""),
-          error: error ? String(error.message || error) : ""
-        });
+    const logPath = path.join(os.tmpdir(), `unreal-agent-cmd-${process.pid}-${Date.now()}.log`);
+    let logStream;
+    try {
+      logStream = fs.createWriteStream(logPath, { flags: "a" });
+    } catch {
+      logStream = null;
+    }
+
+    const child = cp.spawn(parsed.file, parsed.args, {
+      cwd,
+      shell: parsed.shell === true,
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let killIssued = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killIssued = true;
+      if (process.platform === "win32" && child.pid) {
+        cp.exec(`taskkill /PID ${child.pid} /T /F`, { windowsHide: true }, () => {});
+      } else {
+        child.kill("SIGKILL");
       }
-    );
+    }, timeoutMs);
+    child.stdout?.on("data", (chunk) => {
+      const textChunk = String(chunk || "");
+      stdout += textChunk;
+      logStream?.write(textChunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const textChunk = String(chunk || "");
+      stderr += textChunk;
+      logStream?.write(textChunk);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      logStream?.end();
+      resolve({
+        ok: !timedOut && code === 0,
+        exitCode: typeof code === "number" ? code : 1,
+        signal: signal || null,
+        stdout: truncateOutput(stdout || ""),
+        stderr: truncateOutput(stderr || ""),
+        error: timedOut ? `Process timed out after ${timeoutMs}ms` : "",
+        timedOut,
+        processTreeKilled: timedOut ? killIssued : null,
+        fullLogPath: logStream ? logPath : null,
+      });
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      logStream?.end();
+      resolve({
+        ok: false,
+        exitCode: 1,
+        signal: null,
+        stdout: truncateOutput(stdout || ""),
+        stderr: truncateOutput(stderr || ""),
+        error: String(error.message || error),
+        timedOut: false,
+        processTreeKilled: false,
+        fullLogPath: logStream ? logPath : null,
+      });
+    });
   });
 }
 
@@ -476,12 +683,51 @@ function makeJsonSchema(properties, required = []) {
   return {
     type: "object",
     properties,
-    required
+    required,
+    additionalProperties: false
   };
 }
 
 function fileStatSignature(stat) {
   return `${stat.size}:${stat.mtimeMs}`;
+}
+
+function rememberReadEvidence(target, stat, resolution, lineRange = null, contentHash = null) {
+  const key = path.resolve(target);
+  const existing = readEvidence.get(key);
+  const ranges = new Set(existing && existing.signature === fileStatSignature(stat) ? existing.lineRanges || [] : []);
+  if (lineRange) ranges.add(lineRange);
+  readEvidence.set(key, {
+    signature: fileStatSignature(stat),
+    contentHash: contentHash || (existing && existing.signature === fileStatSignature(stat) ? existing.contentHash : null),
+    path: pathMetadata(resolution),
+    lineRanges: Array.from(ranges),
+    readAt: Date.now()
+  });
+}
+
+function hasFreshReadEvidence(target, stat) {
+  const entry = readEvidence.get(path.resolve(target));
+  return Boolean(entry && entry.signature === fileStatSignature(stat) && entry.contentHash);
+}
+
+function sourceEvidenceSummary(activeProject) {
+  const projectDir = activeProject ? path.dirname(path.resolve(activeProject)) : null;
+  const filesRead = [];
+  for (const [absolutePath, entry] of readEvidence.entries()) {
+    if (!projectDir || !absolutePath.toLowerCase().startsWith(projectDir.toLowerCase() + path.sep)) continue;
+    if (![".h", ".hpp", ".cpp", ".c", ".cc", ".cs"].includes(path.extname(absolutePath).toLowerCase())) continue;
+    filesRead.push({
+      path: entry.path.projectRelativePath,
+      lineRanges: entry.lineRanges,
+      readAt: entry.readAt
+    });
+  }
+  return {
+    sourceReadSucceeded: filesRead.length > 0,
+    filesRead,
+    directSourceRequired: true
+  };
 }
 
 function rememberCachedFile(target, stat, buffer) {
@@ -543,7 +789,9 @@ async function readCachedTextFile(target, stat) {
 }
 
 function invalidateFileCache(target) {
-  fileCache.delete(path.resolve(target));
+  const key = path.resolve(target);
+  fileCache.delete(key);
+  readEvidence.delete(key);
 }
 
 function invalidateWorkspaceInfoCache() {
@@ -573,9 +821,7 @@ async function writeBootstrapCache(patch) {
   await fsp.mkdir(path.dirname(cachePath), { recursive: true });
   const existing = await readBootstrapCache();
   const next = mergeBootstrapCache(existing, patch);
-  const tmpPath = `${cachePath}.tmp`;
-  await fsp.writeFile(tmpPath, JSON.stringify(next, null, 2), "utf8");
-  await fsp.rename(tmpPath, cachePath);
+  atomicWriteJson(cachePath, next);
   invalidateWorkspaceInfoCache();
   return next;
 }
@@ -602,20 +848,25 @@ async function buildWorkspaceInfo() {
       ...buildProjectBrowsePaths(activeProject, WORKSPACE_ROOT)
     };
   } else {
+    const switchGuidance = projectSwitchGuidance(agentRegisteredToolNames());
     projectContext = {
       ok: false,
-      error: "activeProject is not set. Call set_active_project first.",
+      error: switchGuidance.requiredNextTool
+        ? "activeProject is not set. Call unreal_set_active_project on unreal-rag first."
+        : "activeProject is not set. Call set_active_project first.",
       browseAvailable: false,
-      suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+      ...switchGuidance
     };
   }
   const payload = {
     workspaceRoot: WORKSPACE_ROOT,
+    stateRoot: ensureStateRootLayout(resolveAgentStateRoot()),
     configPath: CONFIG_PATH,
     serverEntry: __filename,
     serverVersion: SERVER_VERSION,
     activeProject,
     projectContext,
+    sourceEvidence: sourceEvidenceSummary(activeProject),
     allowWrite: ALLOW_WRITE,
     allowCommands: ALLOW_COMMANDS,
     allowUnrealBuild: ALLOW_UNREAL_BUILD,
@@ -659,14 +910,6 @@ async function buildWorkspaceInfo() {
     })),
   };
   if (activeProject) {
-    const bootstrapCache = evaluateBootstrapCache(await readBootstrapCache(), activeProject);
-    if (!bootstrapCache.canSkipSteps || !bootstrapCache.valid) {
-      await writeBootstrapCache({
-        projectPath: activeProject,
-        stepsCompleted: ["get_workspace_info"],
-        workspaceHash: cacheKey,
-      });
-    }
     payload.bootstrapCache = evaluateBootstrapCache(await readBootstrapCache(), activeProject);
   } else {
     payload.bootstrapCache = evaluateBootstrapCache(await readBootstrapCache(), activeProject);
@@ -792,7 +1035,7 @@ function allAgentTools() {
       },
       {
         name: "list_directory",
-        description: "List files/directories under WORKSPACE_ROOT. When activeProject is set, prefer projectContext.sourceBrowsePath from get_active_project instead of broad root browsing.",
+        description: "List workspace:// or project:// directories. Source/, Plugins/, Config/, and Content/ resolve against activeProject even when it is outside WORKSPACE_ROOT.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace, e.g. '.', 'Source'." },
           maxEntries: { type: "number", description: "Max entries to show. Default 200." }
@@ -800,7 +1043,7 @@ function allAgentTools() {
       },
       {
         name: "read_file",
-        description: "Read a UTF-8 text file inside WORKSPACE_ROOT. Required before any write to that file. Use detailLevel compact/medium/large/full (default compact ~16 KiB) or maxBytes override.",
+        description: "Read a UTF-8 file under workspace:// or project://. Active-project source may be outside WORKSPACE_ROOT. Required before writes; large source should use read_file_range.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           maxBytes: { type: "number", description: "Optional max bytes. Capped by detailLevel tier." },
@@ -813,7 +1056,7 @@ function allAgentTools() {
       },
       {
         name: "read_file_range",
-        description: "Read a line range from a UTF-8 text file inside WORKSPACE_ROOT. Prefer this over read_file for large sources. Line span capped by detailLevel.",
+        description: "Read a line range under workspace:// or project://. Prefer this over read_file for large project sources. Line span is capped by detailLevel.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace." },
           startLine: { type: "number", description: "1-based start line (inclusive)." },
@@ -824,6 +1067,15 @@ function allAgentTools() {
             description: "Max lines per request: compact 150, medium 400, large 1200, full 2000."
           }
         }, ["path", "startLine", "endLine"])
+      },
+      {
+        name: "read_symbol",
+        description: "Read one C++ function body and record it as direct source evidence. Prefer this for function-level analysis.",
+        inputSchema: makeJsonSchema({
+          path: { type: "string", description: "Source file containing the function." },
+          symbol: { type: "string", description: "Function or qualified function, e.g. UFoo::Tick or Tick." },
+          contextLines: { type: "number", description: "Extra lines around the function. Default 3, max 30." }
+        }, ["path", "symbol"])
       },
       {
         name: "write_file",
@@ -878,6 +1130,39 @@ function allAgentTools() {
         }, ["path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"])
       },
       {
+        name: "apply_edit_bundle",
+        description: "Apply a multi-file edit bundle atomically with pre-hash capture, scoped validation, and rollback on failure. Requires ALLOW_WRITE=1.",
+        inputSchema: makeJsonSchema({
+          files: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                content: { type: "string" }
+              }
+            }
+          },
+          patches: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                oldText: { type: "string" },
+                newText: { type: "string" },
+                expectedOccurrences: { type: "number" }
+              }
+            }
+          },
+          taskSessionId: { type: "string" },
+          planId: { type: "string" },
+          planRevision: { type: "string" },
+          activeSliceId: { type: "string" },
+          authToken: { type: "string" }
+        })
+      },
+      {
         name: "static_validate_project",
         description: "Run static Unreal compile-readiness validation on the active project Source tree. Extended mode. Call before build_unreal_project when validation findings from writes need a full-project check.",
         inputSchema: makeJsonSchema({
@@ -886,7 +1171,7 @@ function allAgentTools() {
       },
       {
         name: "search_files",
-        description: "Search text files by regex or plain text under WORKSPACE_ROOT. Scope path to the active project whenever possible; do not search repo infrastructure to explain Unreal build failures.",
+        description: "Search text under workspace:// or project://. For current Unreal code, scope to project://Source or project://Plugins and use direct source evidence.",
         inputSchema: makeJsonSchema({
           query: { type: "string", description: "Regex or plain text to search." },
           path: { type: "string", description: "Relative directory/file to search. Default '.'." },
@@ -915,7 +1200,10 @@ function allAgentTools() {
           configuration: { type: "string", description: "Optional configuration. Default Development." },
           allowAbsoluteProject: { type: "boolean", description: "Allow absolute .uproject path outside workspace. Default false." },
           timeoutMs: { type: "number", description: "Build timeout in ms. Default COMMAND_TIMEOUT_MS." },
-          verboseOutput: { type: "boolean", description: "Include truncated stdout/stderr inline. Default false; prefer fullLogPath." }
+          verboseOutput: { type: "boolean", description: "Include truncated stdout/stderr inline. Default false; prefer fullLogPath." },
+          validationOverride: { type: "boolean", description: "Allow build despite validation-dirty state (audit trail only)." },
+          validationOverrideNote: { type: "string", description: "Reason recorded when validationOverride=true." },
+          allowEngineFallback: { type: "boolean", description: "When true, allow build with a non-default engine install if UE 5.8 is missing. Record audit note in agent chat." }
         })
       }
   ];
@@ -932,6 +1220,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     const name = request.params.name;
     const args = request.params.arguments || {};
+    const allowed = callableAgentToolNames(allAgentTools().map((tool) => tool.name));
+    if (!allowed.has(name)) {
+      const blocked = toolNotCallablePayload(name);
+      return fail(blocked.error, {
+        errorCode: blocked.errorCode,
+        retryable: blocked.retryable,
+        userMessage: blocked.userMessage,
+        agentInstruction: blocked.agentInstruction,
+      });
+    }
 
     if (name === "get_workspace_info") {
       return text(JSON.stringify(await buildWorkspaceInfo(), null, 2));
@@ -960,12 +1258,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       } else {
         projectContext = {
           ok: false,
-          error: "activeProject is not set. Call set_active_project first.",
+          error: "activeProject is not set.",
           browseAvailable: false,
-          suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+          requiredNextTool: { server: "unreal-rag", name: "unreal_set_active_project" },
+          suggestedToolCalls: [{ tool: "unreal_set_active_project", args: {} }]
         };
       }
-      return text(JSON.stringify({ activeProject, details, projectContext }, null, 2));
+      return text(JSON.stringify({
+        activeProject,
+        details,
+        projectContext,
+        sourceEvidence: sourceEvidenceSummary(activeProject)
+      }, null, 2));
     }
 
     if (name === "set_active_project") {
@@ -1041,17 +1345,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "list_directory") {
-      const target = normalizeRelPath(args.path || ".");
+      const resolution = await resolveReadToolPath(args.path || ".");
+      const target = resolution.absolutePath;
       const maxEntries = Math.max(1, Math.min(Number(args.maxEntries || 200), 1000));
       const s = await statSafe(target);
-      if (!s) return fail(`not found: ${args.path}`);
-      if (!s.isDirectory()) return fail(`not a directory: ${args.path}`);
+      if (!s) return fail(`not found: ${args.path}`, { path: pathMetadata(resolution) });
+      if (!s.isDirectory()) return fail(`not a directory: ${args.path}`, { path: pathMetadata(resolution) });
 
       const entries = await fsp.readdir(target, { withFileTypes: true });
       const rows = [];
       for (const e of entries.slice(0, maxEntries)) {
-        const p = path.join(target, e.name);
-        const st = await statSafe(p);
+        const child = path.join(target, e.name);
+        await assertReadChildContained(child, resolution);
+        const st = await statSafe(child);
         rows.push({
           name: e.name,
           type: e.isDirectory() ? "dir" : e.isFile() ? "file" : "other",
@@ -1059,16 +1365,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           modified: st ? st.mtime.toISOString() : null
         });
       }
-      return text(JSON.stringify(rows, null, 2));
+      return text(JSON.stringify({ path: pathMetadata(resolution), entries: rows }, null, 2));
     }
 
     if (name === "read_unreal_logs") {
       const activeProject = getActiveProject(CONFIG_PATH);
       if (!activeProject) {
-        return fail("activeProject is not set. Use set_active_project first.", {
-          nextSteps: ["Select the target .uproject, then read logs again."],
-          suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
-        });
+        const switchGuidance = projectSwitchGuidance(agentRegisteredToolNames());
+        return fail(
+          switchGuidance.requiredNextTool
+            ? "activeProject is not set. Use unreal_set_active_project on unreal-rag first."
+            : "activeProject is not set. Use set_active_project first.",
+          {
+            nextSteps: ["Select the target .uproject, then read logs again."],
+            ...switchGuidance
+          }
+        );
       }
       const projectDir = path.dirname(path.resolve(activeProject));
       const logsDir = path.join(projectDir, "Saved", "Logs");
@@ -1175,18 +1487,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "read_file") {
-      const target = normalizeRelPath(args.path);
+      const resolution = await resolveReadToolPath(args.path);
+      const target = resolution.absolutePath;
       const s = await statSafe(target);
       if (!s) {
         return fail(`not found: ${args.path}`, {
           nextSteps: ["Search for the basename inside the active project before guessing a new path."],
           suggestedToolCalls: [{
             tool: "search_files",
-            args: { query: path.basename(String(args.path || "")), path: "." }
+            args: { query: path.basename(String(args.path || "")), path: resolution.resolvedRootType === "active_project" ? "project://Source" : "workspace://" }
           }]
         });
       }
-      if (!s.isFile()) return fail(`not a file: ${args.path}`);
+      if (!s.isFile()) return fail(`not a file: ${args.path}`, {
+        path: pathMetadata(resolution),
+        suggestedToolCalls: [{ tool: "list_directory", args: { path: displayPath(resolution) } }]
+      });
 
       const detail = resolveCodeDetail(args.detailLevel);
       const tierCap = CODE_DETAIL_READ_BYTES[detail];
@@ -1211,11 +1527,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           out += ` Use read_file_range for partial reads.]`;
       }
       }
-      return text(out);
+      rememberReadEvidence(
+        target,
+        s,
+        resolution,
+        `1-${Math.max(1, out.split("\n").length)}`,
+        s.size <= MAX_READ_BYTES ? sha256Buffer(await fsp.readFile(target)) : null
+      );
+      const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`;
+      return text(metadataHeader + out);
     }
 
     if (name === "read_file_range") {
-      const target = normalizeRelPath(args.path);
+      const resolution = await resolveReadToolPath(args.path);
+      const target = resolution.absolutePath;
       const s = await statSafe(target);
       if (!s) return fail(`not found: ${args.path}`);
       if (!s.isFile()) return fail(`not a file: ${args.path}`);
@@ -1244,15 +1569,86 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const lines = content.split(/\r?\n/);
       const slice = lines.slice(startLine - 1, endLine);
       const numbered = slice.map((line, idx) => `${startLine + idx}|${line}`).join("\n");
-      const rel = path.relative(WORKSPACE_ROOT, target);
-      return text(
-        `File: ${rel}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`
+      rememberReadEvidence(
+        target,
+        s,
+        resolution,
+        `${startLine}-${Math.min(endLine, lines.length)}`,
+        sha256Text(content)
       );
+      return text(
+        `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`
+      );
+    }
+
+    if (name === "read_symbol") {
+      const resolution = await resolveReadToolPath(args.path);
+      const target = resolution.absolutePath;
+      const stat = await statSafe(target);
+      if (!stat || !stat.isFile()) return fail(`not found or not a file: ${args.path}`);
+      let content;
+      try { content = await readCachedTextFile(target, stat); }
+      catch (err) {
+        if (err && err.code === "BINARY_FILE") return fail(`file appears binary: ${args.path}`);
+        throw err;
+      }
+      const symbol = String(args.symbol || "").trim();
+      const parts = symbol.split("::");
+      const leaf = parts[parts.length - 1];
+      if (!leaf || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(leaf)) return fail("invalid C++ symbol");
+      const escapedParts = parts.map((part) => escapeRegExp(part));
+      const pattern = new RegExp(`\\b${escapedParts.join("\\s*::\\s*")}\\s*\\(`, "m");
+      const fallback = new RegExp(`\\b${escapeRegExp(leaf)}\\s*\\(`, "m");
+      const match = pattern.exec(content) || fallback.exec(content);
+      if (!match) return fail(`symbol not found: ${symbol}`, {
+        suggestedToolCalls: [{ tool: "search_files", args: { query: leaf, path: "project://Source" } }]
+      });
+      const braceStart = content.indexOf("{", match.index + match[0].length);
+      const semicolon = content.indexOf(";", match.index + match[0].length);
+      if (braceStart < 0 || (semicolon >= 0 && semicolon < braceStart)) {
+        return fail(`symbol body not found: ${symbol}`, {
+          nextSteps: ["Search for the qualified definition in .cpp files."]
+        });
+      }
+      let depth = 0;
+      let braceEnd = -1;
+      let quote = "";
+      let escaped = false;
+      for (let i = braceStart; i < content.length; i += 1) {
+        const ch = content[i];
+        if (quote) {
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === quote) quote = "";
+          continue;
+        }
+        if (ch === "\"" || ch === "'") { quote = ch; continue; }
+        if (ch === "{") depth += 1;
+        else if (ch === "}" && --depth === 0) { braceEnd = i; break; }
+      }
+      if (braceEnd < 0) return fail(`unbalanced symbol body: ${symbol}`);
+      const lines = content.split(/\r?\n/);
+      const lineAt = (offset) => content.slice(0, offset).split(/\r?\n/).length;
+      const context = Math.max(0, Math.min(30, Number(args.contextLines ?? 3)));
+      const startLine = Math.max(1, lineAt(match.index) - context);
+      const endLine = Math.min(lines.length, lineAt(braceEnd) + context);
+      const numbered = lines.slice(startLine - 1, endLine).map((line, idx) => `${startLine + idx}|${line}`).join("\n");
+      rememberReadEvidence(
+        target,
+        stat,
+        resolution,
+        `${startLine}-${endLine}`,
+        sha256Text(content)
+      );
+      return text(`File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`);
     }
 
     if (name === "write_file") {
       if (!ALLOW_WRITE) return fail("write_file blocked. Set ALLOW_WRITE=1 to enable.");
-      const target = normalizeRelPath(args.path);
+      const authFail = enforceTaskAuth(args);
+      if (authFail) return authFail;
+      const writeResolution = await resolveWriteToolPath(args.path);
+      const target = writeResolution.absolutePath;
       const parent = path.dirname(target);
       const activeProject = getActiveProject(CONFIG_PATH);
       const guard = await validateWriteTarget({
@@ -1287,16 +1683,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (repeat.duplicate) {
           return fail(duplicateMutationMessage("write_file", rel, repeat));
         }
-        const targetExists = await exists(target);
-        const priorContent = targetExists ? await fsp.readFile(target, "utf8") : null;
         const contentToWrite = String(args.content || "");
+        const targetExists = await exists(target);
+        const priorContent = targetExists && ALLOW_EXISTING_SOURCE_WRITE
+          ? await fsp.readFile(target, "utf8")
+          : null;
         try {
           if (ALLOW_EXISTING_SOURCE_WRITE) {
-            await fsp.writeFile(target, contentToWrite, "utf8");
+            atomicWriteText(target, contentToWrite);
           } else {
-            // Exclusive create: atomically fail if the file already exists (guards the
-            // TOCTOU window between the existence check above and this write).
-            await fsp.writeFile(target, contentToWrite, { encoding: "utf8", flag: "wx" });
+            await createExclusive(target, contentToWrite);
           }
         } catch (err) {
           if (err && err.code === "EEXIST") {
@@ -1322,7 +1718,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             if (priorContent === null) {
               await fsp.unlink(target);
             } else {
-              await fsp.writeFile(target, priorContent, "utf8");
+              atomicWriteText(target, priorContent);
             }
             invalidateFileCache(target);
             return validationToolResult(
@@ -1361,11 +1757,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           summary += " Static validation exceeded its time budget.";
           nextSteps.unshift("Run static_validate_project before build.");
         }
+        let mutation;
+        try {
+          mutation = await bumpProjectMutationGeneration(rel, contentToWrite);
+        } catch (err) {
+          return mutationBookkeepingFailure(err.message || err, "create", rel);
+        }
         return validationToolResult(summary, validation, {
           path: rel,
           operation: "create",
           bytesWritten: Buffer.byteLength(contentToWrite, "utf8"),
-          nextSteps
+          nextSteps,
+          ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
         });
       } finally {
         releasePathLock(target);
@@ -1374,7 +1777,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "replace_in_file") {
       if (!ALLOW_WRITE) return fail("replace_in_file blocked. Set ALLOW_WRITE=1 to enable.");
-      const target = normalizeRelPath(args.path);
+      const authFail = enforceTaskAuth(args);
+      if (authFail) return authFail;
+      const writeResolution = await resolveWriteToolPath(args.path);
+      const target = writeResolution.absolutePath;
       const s = await statSafe(target);
       if (!s || !s.isFile()) {
         return fail(`not found or not file: ${args.path}. replace_in_file only edits existing files; to create a brand-new file, use write_file.`, {
@@ -1383,6 +1789,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             tool: "search_files",
             args: { query: path.basename(String(args.path || "")), path: "." }
           }]
+        });
+      }
+      if (PATCH_ONLY_EXISTING_EXTENSIONS.has(path.extname(target).toLowerCase()) && !hasFreshReadEvidence(target, s)) {
+        return fail("replace_in_file blocked: direct read evidence for the current file version is required.", {
+          sourceEvidence: sourceEvidenceSummary(getActiveProject(CONFIG_PATH)),
+          suggestedToolCalls: [{ tool: "read_file_range", args: { path: displayPath(writeResolution), startLine: 1, endLine: 200 } }]
         });
       }
       const oldText = String(args.oldText ?? "");
@@ -1425,15 +1837,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
           return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`);
         }
-        if (args.expectedOccurrences !== undefined && occurrences !== Number(args.expectedOccurrences)) {
-          return fail(`occurrence mismatch: expected ${args.expectedOccurrences}, found ${occurrences}`);
+        const isSourcePath = [".h", ".hpp", ".cpp", ".c", ".cc", ".cs"].includes(path.extname(target).toLowerCase());
+        const expectedOccurrences = args.expectedOccurrences !== undefined
+          ? Number(args.expectedOccurrences)
+          : (isSourcePath ? 1 : undefined);
+        if (isSourcePath && args.expectedOccurrences === undefined && occurrences > 1) {
+          const snippets = contentNorm.split("\n")
+            .map((line, index) => ({ line, index }))
+            .filter(({ line }) => line.includes(oldTextNorm.split("\n")[0]))
+            .slice(0, 3)
+            .map(({ line, index }) => `L${index + 1}: ${line.slice(0, 120)}`)
+            .join("\n");
+          return fail(
+            `ambiguous replace in ${args.path}: found ${occurrences} matches; specify expectedOccurrences or narrow oldText.${snippets ? `\n\nMatches:\n${snippets}` : ""}`
+          );
+        }
+        if (expectedOccurrences !== undefined && occurrences !== expectedOccurrences) {
+          return fail(`occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`);
         }
 
         // Apply replacement on normalized content, then restore original line endings if needed
         const priorContent = content;
-        const updatedNorm = contentNorm.split(oldTextNorm).join(newText.replace(/\r\n/g, "\n"));
-        const updated = hasCRLF ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
-        await fsp.writeFile(target, updated, "utf8");
+        const evidenceEntry = readEvidence.get(path.resolve(target));
+        const casResult = await replaceWithCAS({
+          targetPath: target,
+          priorContent: content,
+          oldText,
+          newText,
+          expectedOccurrences,
+          readHash: evidenceEntry?.contentHash || null,
+        });
+        if (!casResult.ok) {
+          return fail(casResult.error || "replace_in_file blocked by read-hash CAS.", {
+            errorCode: casResult.errorCode || "READ_HASH_CAS_MISMATCH",
+            nextSteps: ["Re-read the file, then retry replace_in_file with exact oldText."],
+          });
+        }
+        const updated = casResult.updated;
         invalidateFileCache(target);
         const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
         const rel = path.relative(WORKSPACE_ROOT, target);
@@ -1443,7 +1883,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           let current = null;
           try { current = await fsp.readFile(target, "utf8"); } catch { current = null; }
           if (shouldRollback(current, updated)) {
-            await fsp.writeFile(target, priorContent, "utf8");
+            atomicWriteText(target, priorContent);
             invalidateFileCache(target);
             return validationToolResult(
               `PATCH ROLLED BACK — ${rel} failed static validation.`,
@@ -1483,11 +1923,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           summary += " Static validation exceeded its time budget.";
           nextSteps.unshift("Run static_validate_project before build.");
         }
+        let mutation;
+        try {
+          mutation = await bumpProjectMutationGeneration(rel, newText);
+        } catch (err) {
+          return mutationBookkeepingFailure(err.message || err, "replace", rel);
+        }
         return validationToolResult(summary, validation, {
           path: rel,
           operation: "replace",
           replacements: occurrences,
-          nextSteps
+          nextSteps,
+          ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
         });
       } finally {
         releasePathLock(target);
@@ -1545,6 +1992,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         await fsp.unlink(target);
         invalidateFileCache(target);
+        const activeProjectForMutation = getActiveProject(CONFIG_PATH);
+        let mutation = null;
+        if (activeProjectForMutation) {
+          const projectDir = path.dirname(path.resolve(activeProjectForMutation));
+          try {
+            mutation = await recordDeletion(projectDir, rel);
+          } catch (error) {
+            return fail(String(error.message || error), {
+              errorCode: "MUTATION_LOCK_BUSY",
+              deleted: rel,
+              writeApplied: true,
+              bookkeepingFailed: true,
+              mutationGenerationNotRecorded: true,
+              retryable: false,
+              nextSteps: [
+                "Do NOT retry delete_file — the file is already removed from disk.",
+                "Call static_validate_project before build_unreal_project.",
+              ],
+            });
+          }
+        }
         return text(JSON.stringify({
           ok: true,
           deleted: rel,
@@ -1553,22 +2021,111 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           reason,
           ifNotDeleted,
           ifDeleted,
+          ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
         }, null, 2));
       } finally {
         releasePathLock(target);
       }
     }
 
+    if (name === "apply_edit_bundle") {
+      if (!CONTROL_PLANE_TOOLS) {
+        return fail("apply_edit_bundle blocked in stable install.", { errorCode: "TOOL_NOT_CALLABLE" });
+      }
+      if (!ALLOW_WRITE) return fail("apply_edit_bundle blocked. Set ALLOW_WRITE=1 to enable.");
+      const authFail = enforceTaskAuth(args, { requireSession: true });
+      if (authFail && authFail.isError) return authFail;
+      const auth = authFail || validateMutationAuth(WORKSPACE_ROOT, args, { requireAll: true });
+      await agentNotify("Applying edit bundle…");
+      const bundle = {
+        files: Array.isArray(args.files) ? args.files : [],
+        patches: Array.isArray(args.patches) ? args.patches : []
+      };
+      if (!bundle.files.length && !bundle.patches.length) {
+        return fail("apply_edit_bundle requires at least one file or patch entry.");
+      }
+      const activeProject = getActiveProject(CONFIG_PATH);
+      if (!activeProject) {
+        return fail("apply_edit_bundle requires an active project.", {
+          suggestedToolCalls: [{ tool: "unreal_set_active_project", args: {} }],
+        });
+      }
+      const projectRoot = path.dirname(path.resolve(activeProject));
+
+      async function resolveBundlePath(relPath) {
+        try {
+          const resolution = await resolveWriteToolPath(relPath);
+          return { ok: true, absolutePath: resolution.absolutePath };
+        } catch (error) {
+          return { ok: false, error: String(error.message || error) };
+        }
+      }
+
+      const tx = await applyBundleTransaction(bundle, resolveBundlePath, {
+        maxFilesPerEdit: auth.maxFilesPerEdit || DEFAULT_MAX_FILES_PER_EDIT,
+        onCommitted: async (commit) => {
+          const validationResults = [];
+          for (const absPath of commit.writtenAbs) {
+            validationResults.push(await validateAfterWrite(absPath, () => getActiveProject(CONFIG_PATH)));
+          }
+          const failed = validationResults.find((item) => validationFailed(item));
+          if (failed) {
+            return { ok: false, error: "static validation failed", validation: failed, validationResults };
+          }
+          return { ok: true, validationResults };
+        },
+      });
+      if (!tx.ok) {
+        await agentNotify(`apply_edit_bundle failed: ${tx.error}`, "error");
+        return fail(`apply_edit_bundle failed: ${tx.error}`, {
+          rolledBack: tx.rollback?.rolledBack ?? tx.rolledBack ?? false,
+          rollbackIncomplete: tx.rollback?.rollbackIncomplete ?? tx.rollbackIncomplete ?? true,
+          restoredPaths: tx.rollback?.restoredPaths || tx.restoredPaths || [],
+          unrestoredPaths: tx.rollback?.unrestoredPaths || tx.unrestoredPaths || [],
+          externalChangeDetected: tx.rollback?.externalChangeDetected || tx.externalChangeDetected || [],
+          rollbackErrors: tx.rollback?.rollbackErrors || [],
+          recoveryRequired: Boolean(tx.lockFailure),
+        });
+      }
+
+      const primaryValidation = Array.isArray(tx.validation?.validationResults)
+        ? tx.validation.validationResults[0]
+        : null;
+      let lastMutation = null;
+      for (const absPath of tx.writtenAbs) {
+        const relPath = path.relative(WORKSPACE_ROOT, absPath).replace(/\\/g, "/");
+        const contentOrHash = (tx.postWriteHashes && tx.postWriteHashes[relPath]) || "";
+        try {
+          lastMutation = await recordMutation(projectRoot, relPath, contentOrHash);
+        } catch (error) {
+          return mutationBookkeepingFailure(error.message, "apply_edit_bundle", relPath);
+        }
+      }
+      return validationToolResult(`OK — applied ${tx.writtenAbs.length} file(s) from bundle.`, primaryValidation, {
+        operation: "apply_edit_bundle",
+        writtenCount: tx.writtenAbs.length,
+        preChangeHashes: tx.preChangeHashes,
+        transactionId: tx.transactionId,
+        ...(lastMutation ? { mutationGeneration: lastMutation.mutationGeneration } : {}),
+        nextSteps: ["Run build_unreal_project after C++ edits."],
+        phase: "editing",
+        userMessage: `Applied ${tx.writtenAbs.length} file(s) from bundle`,
+        cancellable: false,
+      });
+    }
+
     if (name === "static_validate_project") {
+      await agentNotify("Running static validation…");
       const activeProject = getActiveProject(CONFIG_PATH);
       let projectRoot = String(args.projectRoot || "").trim();
       if (!projectRoot && activeProject) {
         projectRoot = path.dirname(path.resolve(activeProject));
       }
       if (!projectRoot) {
+        const switchGuidance = projectSwitchGuidance(agentRegisteredToolNames());
         return fail("No active project and no projectRoot provided.", {
           nextSteps: ["Select an active .uproject, then run static validation again."],
-          suggestedToolCalls: [{ tool: "set_active_project", args: {} }]
+          ...switchGuidance
         });
       }
       const resolved = path.resolve(projectRoot);
@@ -1576,6 +2133,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectRoot = path.dirname(resolved);
       } else {
         projectRoot = resolved;
+      }
+      let validationStart;
+      try {
+        validationStart = await beginValidation(projectRoot);
+      } catch (err) {
+        if (err && err.errorCode === "MUTATION_STATE_CORRUPT") {
+          return fail("Static validation blocked: mutation state corrupt.", {
+            errorCode: "MUTATION_STATE_CORRUPT",
+            nextSteps: ["Repair .agent/state/mutation.json, then run static_validate_project."],
+          });
+        }
+        throw err;
       }
       const validation = await runStaticValidation(projectRoot);
       const severityCounts = (validation.findings || []).reduce((counts, finding) => {
@@ -1594,14 +2163,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Fix the first blocking error, then run static_validate_project again."]
         });
       }
+      const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration);
+      if (finish.validationStale) {
+        return fail("Validation stale: project mutated during validation.", {
+          validationStale: true,
+          mutationGeneration: finish.mutationGeneration,
+          nextSteps: ["Re-run static_validate_project after edits settle."],
+        });
+      }
+      await agentNotify(validationSummary);
       return validationToolResult(validationSummary, validation, {
         operation: "static_validate",
-        nextSteps: ["Run build_unreal_project if C++ or Build.cs changed."]
+        validatedGeneration: finish.validatedGeneration,
+        mutationGeneration: finish.mutationGeneration,
+        nextSteps: ["Run build_unreal_project if C++ or Build.cs changed."],
+        phase: "validating",
+        userMessage: validationSummary,
+        cancellable: false
       });
     }
 
     if (name === "search_files") {
-      const base = normalizeRelPath(args.path || ".");
+      const resolution = await resolveReadToolPath(args.path || ".");
+      const base = resolution.absolutePath;
       const maxResults = Math.max(1, Math.min(Number(args.maxResults || 100), 1000));
       const useRegex = !!args.regex;
       const query = String(args.query || "");
@@ -1618,9 +2202,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const results = [];
       let filesSeen = 0;
+      let filesSkippedBySize = 0;
 
       async function walk(p) {
         if (results.length >= maxResults || filesSeen >= SEARCH_MAX_FILES) return;
+        await assertReadChildContained(p, resolution);
         const st = await statSafe(p);
         if (!st) return;
 
@@ -1638,7 +2224,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!st.isFile()) return;
         filesSeen++;
 
-        if (st.size > MAX_READ_BYTES) return;
+        if (st.size > MAX_READ_BYTES) {
+          filesSkippedBySize++;
+          return;
+        }
         const buf = await fsp.readFile(p);
         if (!isTextLikely(buf)) return;
 
@@ -1649,7 +2238,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const hit = useRegex ? matcher.test(line) : line.toLowerCase().includes(query.toLowerCase());
           if (hit) {
             results.push({
-              file: path.relative(WORKSPACE_ROOT, p),
+              file: `${displayPath(resolution).replace(/\/$/, "")}/${path.relative(base, p).replace(/\\/g, "/")}`,
               line: i + 1,
               text: line.slice(0, 500)
             });
@@ -1659,7 +2248,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       await walk(base);
-      return text(JSON.stringify({ results, filesSeen }, null, 2));
+      return text(JSON.stringify({
+        path: pathMetadata(resolution),
+        results,
+        filesSeen,
+        filesSkippedBySize,
+        searchComplete: filesSeen < SEARCH_MAX_FILES && filesSkippedBySize === 0,
+        incompleteReasons: filesSkippedBySize > 0 ? ["large_files_skipped"] : [],
+      }, null, 2));
     }
 
     if (name === "run_command") {
@@ -1684,14 +2280,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const planResult = await resolveBuildPlan(WORKSPACE_ROOT, CONFIG_PATH, args);
       if (!planResult.ok || !planResult.build) {
-        return text(JSON.stringify({
-          summary: `BUILD PLAN FAILED — ${planResult.error || "Could not resolve Unreal build plan."}`,
-          ok: false,
-          error: planResult.error || "Could not resolve Unreal build plan.",
-          selectionReason: planResult.selectionReason,
-          suggestions: planResult.suggestions || null,
-          searchRoots: planResult.roots || []
-        }, null, 2));
+        return fail(planResult.error || "Could not resolve Unreal build plan.", {
+          errorCode: "BUILD_PLAN_RESOLUTION_FAILED",
+          retryable: false,
+          userMessage: "Build plan could not be resolved for the active project.",
+          agentInstruction: "Call unreal_set_active_project on unreal-rag, confirm the .uproject path, then retry build_unreal_project.",
+          requiredNextTool: { server: "unreal-rag", name: "unreal_set_active_project" },
+          nextSteps: [
+            "Call unreal_set_active_project on unreal-rag with a valid .uproject path.",
+            "Confirm build target and configuration, then retry build_unreal_project.",
+          ],
+        });
       }
 
       const build = planResult.build;
@@ -1714,6 +2313,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!(await exists(projectPath))) return fail(`uproject not found: ${projectPath}`);
       if (!projectPath.toLowerCase().endsWith(".uproject")) return fail("project must be a .uproject file");
 
+      const projectRoot = path.dirname(projectPath);
+      let mutation;
+      try {
+        mutation = await readMutationState(projectRoot);
+      } catch (err) {
+        if (err && err.errorCode === "MUTATION_STATE_CORRUPT") {
+          return fail("build blocked: mutation state corrupt.", {
+            errorCode: "MUTATION_STATE_CORRUPT",
+            nextSteps: ["Repair .agent/state/mutation.json, then run static_validate_project."],
+          });
+        }
+        throw err;
+      }
+      const dirtyState = getDirtyState(projectRoot);
+      if (dirtyState.corrupt) {
+        return fail("build blocked: validation state corrupt.", {
+          errorCode: "VALIDATION_STATE_CORRUPT",
+          nextSteps: ["Repair .agent/state/validation.json, then run static_validate_project."],
+        });
+      }
+      const dirtyGate = requireCleanOrFail(projectRoot, {
+        override: args.validationOverride === true,
+        auditNote: String(args.validationOverrideNote || "")
+      });
+      if (!dirtyGate.ok) {
+        return fail(dirtyGate.error, {
+          validationDirty: dirtyGate.state,
+          nextSteps: dirtyGate.nextSteps
+        });
+      }
+      const validatedGeneration = Number(mutation.validatedGeneration || 0);
+      const mutationGeneration = Number(mutation.mutationGeneration || 0);
+      if (validatedGeneration !== mutationGeneration) {
+        return fail("build blocked: validation proof stale.", {
+          validatedGeneration,
+          mutationGeneration,
+          nextSteps: [
+            "Run static_validate_project after the latest edits before building.",
+          ],
+        });
+      }
+
       const target = String(build.target || "").trim();
       if (!/^[A-Za-z0-9_]+$/.test(target)) return fail("target must be a simple target name, e.g. MyGameEditor");
 
@@ -1723,27 +2364,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!/^[A-Za-z0-9_]+$/.test(platform)) return fail("invalid platform");
       if (!/^[A-Za-z0-9_]+$/.test(configuration)) return fail("invalid configuration");
 
-      const command = `"${build.buildBat}" ${target} ${platform} ${configuration} -Project="${projectPath}" -WaitMutex -NoHotReloadFromIDE`;
       const buildTimeout = Number(args.timeoutMs || COMMAND_TIMEOUT_MS);
-      const result = await execCommand(command, path.dirname(projectPath), buildTimeout);
-      const fullLog = [
-        `Command: ${command}`,
-        `ExitCode: ${result.exitCode}`,
-        "",
-        "===== STDOUT =====",
-        result.stdout || "",
-        "",
-        "===== STDERR =====",
-        result.stderr || "",
-        "",
-        "===== EXEC ERROR =====",
-        result.error || ""
-      ].join("\n");
-      const logPath = await writeTextArtifact(
-        WORKSPACE_ROOT,
-        path.join(".agent", "logs", "latest-build.log"),
-        fullLog
-      );
+      const logRel = path.join(".agent", "logs", "latest-build.log");
+      const logAbs = path.join(WORKSPACE_ROOT, logRel);
+      const buildGen = await beginBuild(path.dirname(projectPath));
+      await agentNotify(`Building ${target} ${platform} ${configuration}…`);
+      const execResult = await runUnrealBuildFromPlan({
+        workspaceRoot: path.dirname(projectPath),
+        build: { ...build, target, platform, configuration, projectPath },
+        allowEngineFallback: args.allowEngineFallback === true,
+        expectedEngineVersion: DEFAULT_EXPECTED_ENGINE,
+        timeoutMs: buildTimeout,
+        logPath: logAbs,
+      });
+      if (execResult.errorCode === "ENGINE_VERSION_MISMATCH") {
+        return fail(execResult.error, {
+          errorCode: execResult.errorCode,
+          resolvedEngineVersion: execResult.resolvedEngineVersion,
+          resolvedUbtPath: execResult.resolvedUbtPath,
+          engineMismatch: true,
+          retryable: false,
+          nextSteps: ["Install UE 5.8 or pass allowEngineFallback=true with audit note."],
+        });
+      }
+      const endGen = await finishBuild(path.dirname(projectPath), buildGen.buildStartGeneration);
+      const result = {
+        ok: Boolean(execResult.commandSucceeded),
+        exitCode: execResult.exitCode ?? 1,
+        stdout: execResult.stdout || "",
+        stderr: execResult.stderr || "",
+        error: execResult.error || "",
+        timedOut: Boolean(execResult.timedOut),
+        errorCode: execResult.errorCode || "",
+      };
+      const command = `${execResult.executable} ${(execResult.args || []).join(" ")}`;
+      const logPath = execResult.fullLogPath || logAbs;
       const verbose = args.verboseOutput === true || BUILD_VERBOSE_OUTPUT;
       const payload = buildResponsePayload({
         result,
@@ -1752,18 +2407,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectPath,
         command,
         logPath,
-        verbose
+        verbose,
       });
-      return text(JSON.stringify(payload, null, 2));
+      payload.resolvedEngineVersion = execResult.resolvedEngineVersion;
+      payload.resolvedUbtPath = execResult.resolvedUbtPath;
+      payload.commandSucceeded = execResult.commandSucceeded;
+      payload.timedOut = Boolean(execResult.timedOut);
+      payload.mutationGeneration = endGen.mutationGeneration;
+      payload.buildStartGeneration = buildGen.buildStartGeneration;
+      payload.buildEndGeneration = endGen.buildEndGeneration;
+      if (endGen.buildStale) {
+        payload.proofLevel = "BuiltStale";
+        payload.phase = "stale";
+        payload.ok = false;
+      }
+      if (execResult.errorCode === "BUILD_TIMEOUT") {
+        payload.errorCode = "BUILD_TIMEOUT";
+        payload.ok = false;
+      }
+      await agentNotify(payload.userMessage || payload.summary, payload.ok ? "info" : "error");
+      const response = text(JSON.stringify(payload, null, 2));
+      if (!payload.ok || payload.timedOut || payload.errorCode === "BUILD_TIMEOUT") {
+        response.isError = true;
+      }
+      return response;
     }
 
-    return fail(`unknown tool: ${name}`);
+    return fail(`unknown tool: ${name}`, { errorCode: "UNKNOWN_TOOL" });
   } catch (err) {
-    return fail(err && err.stack ? err.stack : String(err));
+    const message = err && err.message ? String(err.message) : String(err);
+    console.error(err && err.stack ? err.stack : err);
+    return fail(message, {
+      errorCode: "INTERNAL_ERROR",
+      retryable: false,
+      userMessage: message.split(/\r?\n/, 1)[0]
+    });
   }
 });
 
 async function main() {
+  try {
+    const recovery = await recoverIncompleteJournals(resolveAgentStateRoot());
+    if (recovery.recoveryRequired?.length) {
+      console.error(`[unreal-agent] transaction recovery required: ${JSON.stringify(recovery.recoveryRequired)}`);
+    }
+    if (recovery.skippedCorrupt?.length) {
+      console.error(`[unreal-agent] skipped corrupt journals: ${recovery.skippedCorrupt.length}`);
+    }
+  } catch (err) {
+    console.error(`[unreal-agent] transaction recovery scan failed: ${err.message || err}`);
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

@@ -10,7 +10,7 @@ $layout = Resolve-StackLayout -PortableRoot $PortableRoot -LmStudioHome $LmStudi
 $mcpPath = Join-Path $layout.LmStudioHome "mcp.json"
 
 if (-not (Test-Path $mcpPath)) {
-    throw "mcp.json not found at $mcpPath — run Install-UnrealMcp.ps1 first."
+    throw "mcp.json not found at $mcpPath - run Install-UnrealMcp.ps1 first."
 }
 
 $config = Get-Content $mcpPath -Raw -Encoding UTF8 | ConvertFrom-Json

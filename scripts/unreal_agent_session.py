@@ -27,6 +27,7 @@ def main() -> int:
     parser.add_argument("--hybrid", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--include-matches", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--index", type=Path, default=Path("data/unreal58/rag.sqlite"))
+    parser.add_argument("--session-id", default="")
     args = parser.parse_args()
 
     rag_root = Path(__file__).resolve().parent.parent
@@ -38,12 +39,68 @@ def main() -> int:
     config = load_shared_config()
     genres = resolve_genre_adapters(args.request, args.genres or None)
     options = SearchOptions(mode=args.mode, genres=genres, candidate_limit=max(40, args.top_k * 10))
+    from rag_delivery import deliver_rag_result
+
+    active_project = str(config.get("activeProject") or "")
+    pre_delivery = deliver_rag_result(
+        tool="unreal_agent_session",
+        active_project=active_project,
+        query=args.request,
+        mode=args.mode,
+        scope="project_preferred",
+        detail_level="compact",
+        top_k=args.top_k,
+        hybrid=args.hybrid,
+        index_path=index,
+        session_id=args.session_id,
+        rows=None,
+    )
+    if pre_delivery.get("suppressed"):
+        repeat = pre_delivery.get("repeat") or {}
+        payload = {
+            "ok": True,
+            "phase": "plan",
+            "repeatDetected": True,
+            "doNotRetry": True,
+            "fullContextSuppressed": True,
+            "semanticQueryKey": pre_delivery.get("semanticQueryKey"),
+            "deliveryVariantKey": pre_delivery.get("deliveryVariantKey"),
+            "message": repeat.get("message"),
+            "requiredNextAction": repeat.get("requiredNextAction"),
+            "activeProject": config.get("activeProject"),
+            "resolvedGenres": genres,
+            "mode": args.mode,
+            "matchCount": 0,
+            "contextPreview": "",
+            "ragDelivery": {
+                "fingerprint": pre_delivery.get("fingerprint"),
+                "repeat": repeat,
+                "suppressed": True,
+            },
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
     rows = (
         search_hybrid(index, args.request, args.top_k, options)
         if args.hybrid
         else __import__("rag_search").search(index, args.request, args.top_k, options)
     )
-    context = assemble_context(rows, args.request, args.mode)
+    delivery = deliver_rag_result(
+        tool="unreal_agent_session",
+        active_project=active_project,
+        query=args.request,
+        mode=args.mode,
+        scope="project_preferred",
+        detail_level="compact",
+        top_k=args.top_k,
+        hybrid=args.hybrid,
+        index_path=index,
+        session_id=args.session_id,
+        rows=rows,
+    )
+    delivered_rows = list(delivery.get("rows") or [])
+    context = assemble_context(delivered_rows, args.request, args.mode) if not delivery.get("suppressed") else ""
     plan = build_agent_plan(args.request, args.mode)
 
     payload = {
@@ -54,8 +111,13 @@ def main() -> int:
         "activeProject": config.get("activeProject"),
         "resolvedGenres": genres,
         "mode": args.mode,
-        "matchCount": len(rows),
+        "matchCount": len(delivered_rows),
         "contextPreview": context[:4000],
+        "ragDelivery": {
+            "fingerprint": delivery.get("fingerprint"),
+            "repeat": delivery.get("repeat"),
+            "suppressed": delivery.get("suppressed", False),
+        },
         "taskPlan": plan.to_dict(),
         "toolPolicy": plan.tool_policy,
         "nextSteps": plan.tool_policy or [
@@ -68,7 +130,7 @@ def main() -> int:
         ],
     }
     if args.include_matches:
-        payload["matches"] = rows
+        payload["matches"] = delivered_rows
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 

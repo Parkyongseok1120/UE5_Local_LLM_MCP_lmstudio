@@ -5,12 +5,15 @@ param(
     [switch]$SkipNpm,
     [switch]$SkipPythonDeps,
     [switch]$EnableAgentMode,
-    [switch]$SkipProjectSetup
+    [switch]$SkipProjectSetup,
+    [switch]$InstallCline,
+    [switch]$WhatIf
 )
 
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Resolve-StackLayout.ps1")
+. (Join-Path $PSScriptRoot "Install-PathHelpers.ps1")
 
 function Find-PythonExe {
     $bundled = Join-Path $HOME ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
@@ -107,11 +110,11 @@ function Read-JsonObject([string]$Path) {
 }
 
 function Write-JsonUtf8([string]$Path, $Object) {
-    $dir = Split-Path -Parent $Path
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    $json = $Object | ConvertTo-Json -Depth 40
-    $utf8 = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $utf8)
+    if ($WhatIf) {
+        Write-Host "[WhatIf] Would write JSON: $Path" -ForegroundColor Cyan
+        return
+    }
+    Write-JsonUtf8Atomic -Path $Path -Object $Object | Out-Null
 }
 
 function Merge-McpServer($Servers, [string]$Name, $Entry) {
@@ -139,12 +142,31 @@ if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) {
     throw "lmstudio-unreal-agent-mcp not found under: $root"
 }
 
-$python = Find-PythonExe
-$node = Find-NodeExe
-Assert-PythonVersion $python
-Assert-NodeVersion $node
-$lmHome = if ($LmStudioHome) { (Resolve-Path $LmStudioHome).Path } else { Join-Path $HOME ".lmstudio" }
+if ($WhatIf) {
+    $python = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $python) { $python = "python.exe" }
+    $node = (Get-Command node -ErrorAction SilentlyContinue).Source
+    if (-not $node) { $node = "node.exe" }
+}
+else {
+    $python = Find-PythonExe
+    $node = Find-NodeExe
+    Assert-PythonVersion $python
+    Assert-NodeVersion $node
+}
+$lmHome = if ($LmStudioHome) {
+    if (Test-Path -LiteralPath $LmStudioHome) {
+        (Resolve-Path -LiteralPath $LmStudioHome).Path
+    }
+    else {
+        $LmStudioHome
+    }
+}
+else {
+    Join-Path $HOME ".lmstudio"
+}
 $docsRoot = if ($DocumentsRoot) { $DocumentsRoot } else { Join-Path $HOME "Documents" }
+$agentStateRoot = Join-Path $lmHome "state\unreal-agent"
 
 Write-Host "Portable root : $root"
 Write-Host "Python        : $python"
@@ -152,7 +174,7 @@ Write-Host "Node          : $node"
 Write-Host "LM Studio home: $lmHome"
 
 # npm dependencies
-if (-not $SkipNpm) {
+if (-not $SkipNpm -and -not $WhatIf) {
     foreach ($pair in @(
             @{ Dir = $agentRoot; Name = "unreal-agent" },
             @{ Dir = $mcpToolsRoot; Name = "mcp-tools" }
@@ -162,7 +184,11 @@ if (-not $SkipNpm) {
         Write-Host "npm install in $($pair.Name)..."
         Push-Location $pair.Dir
         try {
-            cmd /c "npm install --no-fund --no-audit 2>&1"
+            cmd /c "npm ci --no-fund --no-audit 2>&1"
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "npm ci failed; falling back to npm install..."
+                cmd /c "npm install --no-fund --no-audit 2>&1"
+            }
             if ($LASTEXITCODE -ne 0) {
                 throw "npm install failed in $($pair.Name) (exit $LASTEXITCODE)"
             }
@@ -174,11 +200,11 @@ if (-not $SkipNpm) {
 }
 
 # optional python deps for hybrid search
-if (-not $SkipPythonDeps) {
+if (-not $SkipPythonDeps -and -not $WhatIf) {
     Write-Host "Installing fastembed (optional hybrid search)..."
     cmd /c "`"$python`" -m pip install fastembed --quiet 2>&1"
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "fastembed install failed (optional — hybrid search will be unavailable). Run: pip install fastembed"
+        Write-Warning "fastembed install failed (optional - hybrid search will be unavailable). Run: pip install fastembed"
     } else {
         Write-Host "fastembed installed OK."
     }
@@ -187,20 +213,25 @@ if (-not $SkipPythonDeps) {
 # shared workspace config
 $sharedConfigPath = Join-Path $lmHome "config\unreal-workspace.json"
 if (-not (Test-Path $sharedConfigPath)) {
-    $templatePath = Join-Path $PSScriptRoot "templates\unreal-workspace.template.json"
-    $template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $sharedConfig = Expand-TemplateValue $template
-    $sharedDir = Split-Path -Parent $sharedConfigPath
-    New-Item -ItemType Directory -Force -Path $sharedDir | Out-Null
-    Write-JsonUtf8 $sharedConfigPath $sharedConfig
-    Write-Host "Created $sharedConfigPath"
+    if ($WhatIf) {
+        Write-Host "[WhatIf] Would create $sharedConfigPath" -ForegroundColor Cyan
+    }
+    else {
+        $templatePath = Join-Path $PSScriptRoot "templates\unreal-workspace.template.json"
+        $template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $sharedConfig = Expand-TemplateValue $template
+        $sharedDir = Split-Path -Parent $sharedConfigPath
+        New-Item -ItemType Directory -Force -Path $sharedDir | Out-Null
+        Write-JsonUtf8 $sharedConfigPath $sharedConfig
+        Write-Host "Created $sharedConfigPath"
+    }
 }
 
-# agent config — rewritten on every install from detected local paths
+# agent config - rewritten on every install from detected local paths
 $agentConfigPath = Join-Path $agentRoot "config\agent-mcp.json"
 
 $ragServer = Join-Path $ragRoot "scripts\unreal_rag_mcp.py"
-$ragIndex = Join-Path $ragRoot "data\unreal58\rag.sqlite"
+$ragIndex = Resolve-RagIndexPath -RagRoot $ragRoot
 $agentServer = Join-Path $agentRoot "src\server.js"
 $dateTimeJs = Join-Path $mcpToolsRoot "current-datetime.js"
 $mcpRemoteProxy = Join-Path $mcpToolsRoot "node_modules\mcp-remote\dist\proxy.js"
@@ -210,6 +241,7 @@ $mcpPaths = @(
     (Join-Path $lmHome ".internal\last-synced-mcp-state.json")
 )
 
+$mcpWriteEntries = [System.Collections.Generic.List[object]]::new()
 foreach ($mcpPath in $mcpPaths) {
     $config = Read-JsonObject $mcpPath
     if ($null -eq $config) {
@@ -225,6 +257,7 @@ foreach ($mcpPath in $mcpPaths) {
         timeout = 420000
         env     = [ordered]@{
             SHARED_UNREAL_CONFIG = $sharedConfigPath
+            AGENT_STATE_ROOT     = $agentStateRoot
             UNREAL58_ROOT        = $ragRoot
             UNREAL58_PORTABLE_ROOT = $root
             PYTHONUTF8           = "1"
@@ -244,6 +277,7 @@ foreach ($mcpPath in $mcpPaths) {
             WORKSPACE_ROOT       = $docsRoot
             AGENT_MCP_CONFIG     = $agentConfigPath
             SHARED_UNREAL_CONFIG = $sharedConfigPath
+            AGENT_STATE_ROOT     = $agentStateRoot
             UNREAL58_ROOT        = $ragRoot
             ALLOW_WRITE          = $allowWrite
             ALLOW_COMMANDS       = $allowCommands
@@ -271,17 +305,44 @@ foreach ($mcpPath in $mcpPaths) {
     }
 
     if (Test-Path $mcpRemoteProxy) {
-        # preserve existing tavily entry only if not already set — optional remote search
+        # preserve existing tavily entry only if not already set - optional remote search
         if (-not $config.mcpServers."tavily-remote") {
             Write-Host "Note: tavily-remote not configured (needs API key in mcp.json)."
         }
     }
 
-    if (Test-Path $mcpPath) {
-        Copy-Item -LiteralPath $mcpPath -Destination "$mcpPath.bak-portable-$(Get-Date -Format yyyyMMddHHmmss)" -Force
+    if ($WhatIf) {
+        Write-Host "[WhatIf] Would update $mcpPath" -ForegroundColor Cyan
+        continue
     }
-    Write-JsonUtf8 $mcpPath $config
-    Write-Host "Updated $mcpPath"
+
+    $mcpWriteEntries.Add([ordered]@{
+        Path   = $mcpPath
+        Object = $config
+    })
+}
+
+if (-not $WhatIf -and $mcpWriteEntries.Count -gt 0) {
+    try {
+        $batchResults = Write-McpConfigBatch -Entries @($mcpWriteEntries)
+        foreach ($result in $batchResults) {
+            if ($result.Changed) {
+                Write-Host "Updated $($result.Path)"
+            }
+            else {
+                Write-Host "Skipped unchanged $($result.Path)"
+            }
+        }
+    }
+    catch {
+        Write-Host "MCP config batch write failed; restored prior backups when available." -ForegroundColor Red
+        throw
+    }
+}
+
+if ($WhatIf) {
+    Write-Host "WhatIf mode - no files were written." -ForegroundColor Cyan
+    exit 0
 }
 
 # portable marker for user
@@ -306,15 +367,37 @@ $pathSync = Sync-InstallMachinePaths `
     -SharedConfigPath $sharedConfigPath
 Write-Host "Machine-local paths synced (engine: $($pathSync.EngineRoot))."
 
+if ($InstallCline) {
+    Write-Host ""
+    Write-Host "Installing Cline MCP settings..."
+    $clineArgs = @{
+        PortableRoot = $root
+        LmStudioHome = $lmHome
+        DocumentsRoot = $docsRoot
+    }
+    if ($EnableAgentMode) {
+        $clineArgs.EnableAgentMode = $true
+    }
+    & (Join-Path $PSScriptRoot "Install-ClineUnrealMcp.ps1") @clineArgs
+}
+
 Write-Host ""
-Write-Host "=== Install complete ==="
-Write-Host "1. Restart LM Studio"
-Write-Host "2. Enable MCP: unreal-rag, unreal-agent, current-datetime"
+Write-Host "=== Install complete ===" -ForegroundColor Green
+Write-Host "RAG index path : $ragIndex"
+Write-Host "Agent mode     : $(if ($EnableAgentMode) { 'ENABLED (write/build/commands)' } else { 'Safe (read-only agent)' })"
+Write-Host "Shared config  : $sharedConfigPath"
+Write-Host ""
+Write-Host "Next steps:"
+Write-Host "1. Restart LM Studio (required after MCP config changes)"
+Write-Host "2. Enable MCP servers: unreal-rag, unreal-agent"
+Write-Host "3. Workflow doc: docs/Project_Overview.md"
+if (-not (Test-Path -LiteralPath $ragIndex)) {
+    Write-Host "4. Build RAG index: cd `"$ragRoot`"; .\rag.ps1 build" -ForegroundColor Yellow
+}
 if ($SkipProjectSetup) {
-    Write-Host "3. cd `"$ragRoot`""
-    Write-Host "   .\rag.ps1 pick-project"
-    Write-Host "4. Optional verify: .\installer\Verify-UnrealMcp.ps1"
+    Write-Host "5. Pick project: cd `"$ragRoot`"; .\rag.ps1 pick-project"
+    Write-Host "6. Verify: .\installer\Verify-UnrealMcp.ps1 -PortableRoot `"$root`""
 }
 else {
-    Write-Host "3. Optional verify: .\installer\Verify-UnrealMcp.ps1"
+    Write-Host "4. Verify: .\installer\Verify-UnrealMcp.ps1 -PortableRoot `"$root`""
 }

@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -13,9 +15,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+TERMINAL_STATUSES = frozenset({"completed", "failed", "timed_out", "cancelled", "cancellation_uncertain"})
+VALID_TRANSITIONS: dict[str, frozenset[str]] = {
+    "created": frozenset({"queued", "cancelled", "cancel_requested"}),
+    "starting": frozenset({"queued", "running", "cancelled", "cancel_requested", "failed", "cancellation_uncertain"}),
+    "queued": frozenset({"starting", "running", "cancelled", "cancel_requested"}),
+    "running": frozenset({"completed", "failed", "timed_out", "cancelled", "cancel_requested", "cancellation_uncertain"}),
+    "cancel_requested": frozenset({"cancelled", "cancellation_uncertain"}),
+}
+
+_JOB_LOCKS: dict[str, threading.Lock] = {}
+_LOCK_GUARD = threading.Lock()
+
 
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _job_lock(job_id: str) -> threading.Lock:
+    with _LOCK_GUARD:
+        if job_id not in _JOB_LOCKS:
+            _JOB_LOCKS[job_id] = threading.Lock()
+        return _JOB_LOCKS[job_id]
 
 
 def jobs_root(workspace: Path) -> Path:
@@ -28,21 +49,164 @@ def job_path(workspace: Path, job_id: str) -> Path:
     return jobs_root(workspace) / f"{job_id}.json"
 
 
+def _read_json_with_retry(path: Path, *, attempts: int = 8, delay_sec: float = 0.05) -> dict[str, Any] | None:
+    last_error: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt + 1 >= attempts:
+                break
+            time.sleep(delay_sec)
+    if last_error:
+        raise last_error
+    return None
+
+
 def read_job(workspace: Path, job_id: str) -> dict[str, Any] | None:
+    from job_store import JobStoreError, read_job_record, validate_job_id
+
+    job_id = validate_job_id(job_id)
+    try:
+        record = read_job_record(job_id, workspace=workspace)
+        if record:
+            return record
+    except JobStoreError:
+        if not _legacy_json_enabled():
+            raise
+    if not _legacy_json_enabled():
+        return None
     path = job_path(workspace, job_id)
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return _read_json_with_retry(path)
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
-def write_job(workspace: Path, job: dict[str, Any]) -> None:
-    path = job_path(workspace, str(job["jobId"]))
-    path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+def _legacy_json_enabled() -> bool:
+    return os.environ.get("MCP_JOBS_LEGACY_JSON", "").strip() == "1"
+
+
+def _atomic_replace_with_retry(temp: Path, path: Path, *, attempts: int = 8, delay_sec: float = 0.05) -> None:
+    last_error: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            temp.replace(path)
+            return
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 >= attempts:
+                break
+            time.sleep(delay_sec)
+    if last_error:
+        raise last_error
+
+
+def write_job(workspace: Path, job: dict[str, Any], *, expected_revision: int | None = None) -> bool:
+    from job_store import JobStoreError, validate_job_id, write_job_record
+
+    job_id = validate_job_id(str(job["jobId"]))
+    try:
+        return write_job_record(job, expected_revision=expected_revision, workspace=workspace)
+    except JobStoreError:
+        if not _legacy_json_enabled():
+            raise
+    lock = _job_lock(job_id)
+    with lock:
+        current = _read_legacy_job(workspace, job_id)
+        if expected_revision is not None:
+            if not current:
+                return False
+            if int(current.get("revision") or 0) != expected_revision:
+                return False
+            merged = {**current, **job}
+            merged["revision"] = int(current.get("revision") or 0) + 1
+            job = merged
+        elif current:
+            merged = {**current, **job}
+            merged["revision"] = int(current.get("revision") or 0) + 1
+            job = merged
+        else:
+            job = dict(job)
+            job["revision"] = max(1, int(job.get("revision") or 0) or 1)
+        path = job_path(workspace, job_id)
+        temp = path.with_suffix(".json.tmp")
+        temp.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_replace_with_retry(temp, path)
+        return True
+
+
+def _read_legacy_job(workspace: Path, job_id: str) -> dict[str, Any] | None:
+    path = job_path(workspace, job_id)
+    if not path.exists():
+        return None
+    try:
+        return _read_json_with_retry(path)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def save_job(workspace: Path, job: dict[str, Any]) -> bool:
+    job_id = str(job.get("jobId") or "")
+    if not job_id:
+        return False
+    patch = dict(job)
+
+    def mutator(draft: dict[str, Any]) -> None:
+        from job_store import _merge_payload
+
+        merged = _merge_payload(draft, patch)
+        if merged is None:
+            raise ValueError("job merge rejected")
+        draft.clear()
+        draft.update(merged)
+
+    try:
+        from job_store import mutate_job_record
+
+        return mutate_job_record(job_id, mutator, workspace=workspace)
+    except ValueError:
+        return False
+    except Exception:
+        pass
+    current = read_job(workspace, job_id)
+    if current is None:
+        return write_job(workspace, job)
+    from job_store import _merge_payload
+
+    safe = _merge_payload(current, patch)
+    if safe is None:
+        return False
+    expected = int(current.get("revision") or 0)
+    return write_job(workspace, safe, expected_revision=expected)
+
+
+def command_fingerprint(command: list[str]) -> str:
+    return hashlib.sha256("\0".join(str(part) for part in command).encode("utf-8")).hexdigest()
+
+
+def transition_job_status(job: dict[str, Any], next_status: str) -> bool:
+    current = str(job.get("status") or "created")
+    if current in TERMINAL_STATUSES:
+        return False
+    allowed = VALID_TRANSITIONS.get(current, frozenset())
+    if next_status not in allowed and not (current == "starting" and next_status == "running"):
+        if current == "starting" and next_status == "queued":
+            job["status"] = next_status
+            return True
+        return False
+    job["status"] = next_status
+    return True
 
 
 def append_progress(job: dict[str, Any], message: str, level: str = "info") -> None:
+    seq = int(job.get("progressSequence") or 0) + 1
+    job["progressSequence"] = seq
     job.setdefault("progress", []).append(
-        {"at": _utc_now(), "level": level, "message": message}
+        {"seq": seq, "at": _utc_now(), "level": level, "message": message}
     )
     job["updatedAt"] = _utc_now()
 
@@ -87,70 +251,195 @@ def _sync_from_run_metadata(job: dict[str, Any]) -> None:
         job["currentAttempt"] = attempts[-1]["name"]
 
 
+def compact_job_status(job: dict[str, Any], *, since_progress_sequence: int = 0) -> dict[str, Any]:
+    from task_phase import job_phase_from_status
+
+    progress = list(job.get("progress") or [])
+    if since_progress_sequence:
+        delta = [entry for entry in progress if int(entry.get("seq") or 0) > since_progress_sequence]
+    else:
+        delta = progress[-5:]
+    base = {
+        "jobId": job.get("jobId"),
+        "status": job.get("status"),
+        "phase": job.get("currentAttempt") or job.get("status"),
+        "attempt": job.get("currentAttempt"),
+        "runDir": job.get("runDir"),
+        "stateRevision": int(job.get("revision") or 0),
+        "progressSequence": int(job.get("progressSequence") or 0),
+        "progressDelta": delta,
+        "hasNewOutput": bool(delta),
+        "returncode": job.get("returncode"),
+        "updatedAt": job.get("updatedAt"),
+    }
+    base.update(job_phase_from_status(job))
+    return base
+
+
 def list_jobs(workspace: Path, limit: int = 20) -> list[dict[str, Any]]:
-    root = jobs_root(workspace)
-    _prune_stale_jobs(workspace)
-    files = sorted(root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    jobs: list[dict[str, Any]] = []
-    for path in files[:limit]:
-        try:
-            job = json.loads(path.read_text(encoding="utf-8"))
-            jobs.append(
-                {
-                    "jobId": job.get("jobId"),
-                    "status": job.get("status"),
-                    "createdAt": job.get("createdAt"),
-                    "updatedAt": job.get("updatedAt"),
-                    "runDir": job.get("runDir"),
-                    "returncode": job.get("returncode"),
-                }
-            )
-        except Exception:
-            continue
-    return jobs
+    from job_store import list_job_records, prune_terminal_jobs
+
+    prune_terminal_jobs(workspace)
+    jobs = list_job_records(workspace, limit=limit)
+    return [compact_job_status(job) for job in jobs]
 
 
 def _prune_stale_jobs(workspace: Path, ttl_hours: int = 24) -> None:
-    root = jobs_root(workspace)
-    cutoff = time.time() - (ttl_hours * 3600)
-    for path in root.glob("*.json"):
-        try:
-            job = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        status = str(job.get("status") or "")
-        updated = path.stat().st_mtime
-        if status in {"failed", "timed_out", "cancelled", "completed"} and updated < cutoff:
-            try:
-                path.unlink(missing_ok=True)
-            except Exception:
-                continue
+    from job_store import prune_terminal_jobs
+
+    prune_terminal_jobs(workspace, ttl_hours=ttl_hours)
+
+
+def _process_alive(pid: int) -> str:
+    from process_probe import probe_process_alive
+
+    return probe_process_alive(pid)
+
+
+def _pid_matches_job(job: dict[str, Any]) -> bool:
+    from process_identity import verify_job_process
+
+    return verify_job_process(job)
+
+
+def _kill_process_tree(pid: int) -> bool:
+    from process_probe import ProbeTimeout, run_probe
+
+    if sys.platform == "win32":
+        result = run_probe(["taskkill", "/PID", str(pid), "/T", "/F"])
+        if isinstance(result, ProbeTimeout):
+            return False
+        return result.returncode == 0
+    try:
+        os.kill(pid, 15)
+        return True
+    except OSError:
+        return False
+
+
+def _confirm_process_dead(pid: int, *, retries: int = 5, delay_sec: float = 0.2) -> str:
+    from process_probe import ProcessAlive
+
+    if pid <= 0:
+        return "dead"
+    for attempt in range(max(1, retries)):
+        alive: ProcessAlive = _process_alive(pid)
+        if alive == "dead":
+            return "dead"
+        if alive == "unknown":
+            return "unknown"
+        if attempt + 1 < retries:
+            time.sleep(delay_sec)
+    return "unknown"
+
+
+def _mark_spawn_failure(
+    workspace: Path,
+    job_id: str,
+    current: dict[str, Any],
+    *,
+    pid: int | None,
+    message: str,
+) -> None:
+    if pid and pid > 0:
+        _kill_process_tree(pid)
+        death = _confirm_process_dead(pid)
+    else:
+        death = "dead"
+    latest = read_job(workspace, job_id) or current
+    if death == "dead":
+        transition_job_status(latest, "failed")
+        latest["spawnPersistFailed"] = True
+    else:
+        transition_job_status(latest, "cancellation_uncertain")
+        latest["orphanProcessSuspected"] = True
+    append_progress(latest, message, level="error")
+    save_job(workspace, latest)
+
+
+def _wait_process_after_kill(process: subprocess.Popen[str]) -> tuple[int | None, bool]:
+    """Return (returncode, orphan_suspected)."""
+    if process.poll() is not None:
+        return process.returncode, False
+    _kill_process_tree(process.pid)
+    try:
+        return process.wait(timeout=30), False
+    except subprocess.TimeoutExpired:
+        return None, True
+
+
+def _is_cancelled(workspace: Path, job_id: str) -> bool:
+    job = read_job(workspace, job_id)
+    return bool(job and str(job.get("status") or "") in {"cancelled", "cancel_requested"})
+
+
+def _finalize_cancelled_worker(workspace: Path, job_id: str, current: dict[str, Any], *, message: str) -> None:
+    latest = read_job(workspace, job_id) or current
+    if str(latest.get("status") or "") == "cancel_requested":
+        transition_job_status(latest, "cancelled")
+        append_progress(latest, message)
+        save_job(workspace, latest)
 
 
 def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     job = read_job(workspace, job_id)
     if not job:
         return {"ok": False, "error": f"Unknown job: {job_id}"}
-    pid = job.get("pid")
-    if pid and job.get("status") in {"starting", "running", "queued"}:
-        try:
-            import os
-            import signal
+    if str(job.get("status") or "") in TERMINAL_STATUSES:
+        terminal = str(job.get("status") or "")
+        return {
+            "ok": True,
+            "job": compact_job_status(job),
+            "processTreeKilled": False,
+            "cancellationState": terminal,
+            "orphanProcessSuspected": bool(job.get("orphanProcessSuspected")),
+        }
+    if not transition_job_status(job, "cancel_requested"):
+        job["status"] = "cancel_requested"
+    append_progress(job, "Cancel requested.")
+    if not save_job(workspace, job):
+        return {"ok": False, "error": "Failed to persist cancel_requested", "jobId": job_id}
 
-            os.kill(int(pid), signal.SIGTERM)
-        except Exception as exc:
-            append_progress(job, f"Cancel signal failed: {exc}", level="error")
-        job["status"] = "cancelled"
-        append_progress(job, "Job cancelled by request.")
-        write_job(workspace, job)
-        return {"ok": True, "job": job}
-    job["status"] = "cancelled"
-    append_progress(job, "Job marked cancelled.")
-    write_job(workspace, job)
-    return {"ok": True, "job": job}
+    fresh = read_job(workspace, job_id) or job
+    pid = fresh.get("pid")
+    orphan_suspected = False
+    process_tree_killed = False
+    next_status = "cancelled"
+    if pid:
+        pid_int = int(pid)
+        alive = _process_alive(pid_int)
+        if alive == "alive":
+            if _pid_matches_job(fresh):
+                process_tree_killed = _kill_process_tree(pid_int)
+                orphan_suspected = not process_tree_killed
+                if not process_tree_killed:
+                    next_status = "cancellation_uncertain"
+            else:
+                orphan_suspected = True
+                next_status = "cancellation_uncertain"
+        elif alive == "unknown":
+            orphan_suspected = True
+            next_status = "cancellation_uncertain"
+    if not transition_job_status(fresh, next_status):
+        fresh["status"] = next_status
+    append_progress(fresh, "Job cancelled by request.")
+    if orphan_suspected:
+        fresh["orphanProcessSuspected"] = True
+    if not save_job(workspace, fresh):
+        return {"ok": False, "error": "Failed to persist cancelled job state", "jobId": job_id}
+    return {
+        "ok": True,
+        "job": compact_job_status(read_job(workspace, job_id) or fresh),
+        "processTreeKilled": process_tree_killed,
+        "orphanProcessSuspected": orphan_suspected,
+        "cancellationState": str((read_job(workspace, job_id) or fresh).get("status") or ""),
+    }
 
 
 def build_wrapper_command(workspace: Path, run_dir: Path, arguments: dict[str, Any]) -> list[str]:
+    from workspace_paths import resolve_index_dir
+
+    index_dir = resolve_index_dir()
     script = workspace / "scripts" / "lmstudio_unreal_wrapper.py"
     command = [
         sys.executable,
@@ -158,15 +447,17 @@ def build_wrapper_command(workspace: Path, run_dir: Path, arguments: dict[str, A
         "--request",
         str(arguments.get("request") or ""),
         "--index",
-        str((workspace / "data" / "unreal58" / "rag.sqlite").resolve()),
+        str((index_dir / "rag.sqlite").resolve()),
         "--module-graph",
-        str((workspace / "data" / "unreal58" / "raw_module_graph.jsonl").resolve()),
+        str((index_dir / "raw_module_graph.jsonl").resolve()),
         "--project-name",
         str(arguments.get("project_name") or "ScratchPrototype"),
         "--mode",
         str(arguments.get("mode") or "agent_edit"),
         "--max-attempts",
         str(max(1, min(6, int(arguments.get("max_attempts") or 4)))),
+        "--max-total-model-calls",
+        str(max(1, int(arguments.get("max_total_model_calls") or 40))),
         "--run-dir",
         str(run_dir.resolve()),
     ]
@@ -183,11 +474,7 @@ def build_wrapper_command(workspace: Path, run_dir: Path, arguments: dict[str, A
     return command
 
 
-def start_job(
-    workspace: Path,
-    arguments: dict[str, Any],
-    on_progress: Callable[[dict[str, Any], str], None] | None = None,
-) -> dict[str, Any]:
+def create_job(workspace: Path, arguments: dict[str, Any]) -> dict[str, Any]:
     request_text = str(arguments.get("request") or "").strip()
     if not request_text:
         raise ValueError("Missing required argument: request")
@@ -200,7 +487,8 @@ def start_job(
 
     job: dict[str, Any] = {
         "jobId": job_id,
-        "status": "starting",
+        "status": "created",
+        "revision": 0,
         "createdAt": _utc_now(),
         "updatedAt": _utc_now(),
         "runDir": str(run_dir.resolve()),
@@ -211,100 +499,320 @@ def start_job(
         "stderrPath": str(stderr_path),
     }
     append_progress(job, "Job created.")
+    transition_job_status(job, "queued")
     write_job(workspace, job)
+    return read_job(workspace, job_id) or job
 
-    command = build_wrapper_command(workspace, run_dir, arguments)
 
-    def worker() -> None:
+def _run_wrapper_worker(
+    workspace: Path,
+    job_id: str,
+    job: dict[str, Any],
+    command: list[str],
+    cmd_fp: str,
+    arguments: dict[str, Any],
+    *,
+    stdout_path: Path,
+    stderr_path: Path,
+    on_progress: Callable[[dict[str, Any], str], None] | None = None,
+) -> None:
+    current = read_job(workspace, job_id) or job
+    if _is_cancelled(workspace, job_id):
+        _finalize_cancelled_worker(
+            workspace,
+            job_id,
+            current,
+            message="Job cancelled before wrapper subprocess start.",
+        )
+        return
+
+    def mark_starting(draft: dict[str, Any]) -> None:
+        append_progress(draft, "Preparing wrapper subprocess.")
+        draft["commandFingerprint"] = cmd_fp
+        draft["command"] = command
+
+    from job_store import transition_job_record
+
+    if not transition_job_record(job_id, "starting", mark_starting, workspace=workspace):
+        _mark_spawn_failure(
+            workspace,
+            job_id,
+            current,
+            pid=None,
+            message="Failed to transition job to starting before spawn.",
+        )
+        return
+
+    timeout_sec = max(0, int(arguments.get("timeoutSec") or 0))
+    timed_out = False
+    orphan_after_kill = False
+    returncode: int | None = 0
+    process: subprocess.Popen[str] | None = None
+
+    with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+        "w", encoding="utf-8"
+    ) as stderr_file:
+        process = subprocess.Popen(
+            command,
+            cwd=str(workspace),
+            stdout=stdout_file,
+            stderr=stderr_file,
+            text=True,
+        )
+
+        def mark_running(draft: dict[str, Any]) -> None:
+            append_progress(draft, "Wrapper subprocess started.")
+            draft["pid"] = process.pid
+            draft["pidStartedAt"] = _utc_now()
+            draft["commandFingerprint"] = cmd_fp
+            draft["command"] = command
+
+        if not transition_job_record(job_id, "running", mark_running, workspace=workspace):
+            _mark_spawn_failure(
+                workspace,
+                job_id,
+                current,
+                pid=process.pid,
+                message="Failed to persist running state after spawn.",
+            )
+            return
+
         current = read_job(workspace, job_id) or job
-        current["status"] = "running"
-        append_progress(current, "Wrapper subprocess started.")
-        write_job(workspace, current)
         if on_progress:
             on_progress(current, "Wrapper subprocess started.")
 
-        timeout_sec = max(0, int(arguments.get("timeoutSec") or 0))
-        timed_out = False
+        stop_polling = threading.Event()
 
-        with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
-            "w", encoding="utf-8"
-        ) as stderr_file:
-            process = subprocess.Popen(
-                command,
-                cwd=str(workspace),
-                stdout=stdout_file,
-                stderr=stderr_file,
-                text=True,
-            )
-            current["pid"] = process.pid
-            write_job(workspace, current)
+        def metadata_poller() -> None:
+            while not stop_polling.is_set():
+                if _is_cancelled(workspace, job_id):
+                    return
+                polled = read_job(workspace, job_id)
+                if not polled:
+                    return
+                status = str(polled.get("status") or "")
+                if status in {"cancel_requested", "cancelled", "cancellation_uncertain"}:
+                    return
+                before = polled.get("currentAttempt")
+                _sync_from_run_metadata(polled)
+                after = polled.get("currentAttempt")
+                if after and after != before:
+                    append_progress(polled, f"In progress: {after}")
+                    if on_progress:
+                        on_progress(polled, f"In progress: {after}")
+                polled["updatedAt"] = _utc_now()
+                if not save_job(workspace, polled):
+                    return
+                stop_polling.wait(5)
 
-            stop_polling = threading.Event()
-
-            def metadata_poller() -> None:
-                while not stop_polling.is_set():
-                    polled = read_job(workspace, job_id)
-                    if not polled:
-                        return
-                    before = polled.get("currentAttempt")
-                    _sync_from_run_metadata(polled)
-                    after = polled.get("currentAttempt")
-                    if after and after != before:
-                        append_progress(polled, f"In progress: {after}")
-                        if on_progress:
-                            on_progress(polled, f"In progress: {after}")
-                    polled["updatedAt"] = _utc_now()
-                    write_job(workspace, polled)
-                    stop_polling.wait(5)
-
-            poller = threading.Thread(target=metadata_poller, name=f"wrapper-poller-{job_id}", daemon=True)
-            poller.start()
-            if timeout_sec > 0:
-                try:
-                    returncode = process.wait(timeout=timeout_sec)
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    process.kill()
-                    returncode = process.wait(timeout=30)
-            else:
-                returncode = process.wait()
-            stop_polling.set()
-            poller.join(timeout=2)
-
-        current = read_job(workspace, job_id) or job
-        _sync_from_run_metadata(current)
-        current["returncode"] = returncode
-        if timed_out:
-            current["status"] = "timed_out"
-            append_progress(current, f"Wrapper timed out after {timeout_sec}s.", level="error")
+        poller = threading.Thread(target=metadata_poller, name=f"wrapper-poller-{job_id}", daemon=True)
+        poller.start()
+        if timeout_sec > 0:
+            try:
+                returncode = process.wait(timeout=timeout_sec)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                returncode, orphan_after_kill = _wait_process_after_kill(process)
         else:
-            current["status"] = "completed" if returncode == 0 else "failed"
-        current["stdoutTail"] = _tail_file(stdout_path)
-        current["stderrTail"] = _tail_file(stderr_path)
-        append_progress(
-            current,
-            f"Wrapper finished with exit code {returncode}.",
-            level="error" if returncode != 0 else "info",
-        )
-        write_job(workspace, current)
-        if on_progress:
-            on_progress(current, f"Wrapper finished with exit code {returncode}.")
+            returncode = process.wait()
+        stop_polling.set()
+        poller.join(timeout=2)
 
-    thread = threading.Thread(target=worker, name=f"wrapper-job-{job_id}", daemon=True)
+    if _is_cancelled(workspace, job_id):
+        return
+    current = read_job(workspace, job_id) or job
+    _sync_from_run_metadata(current)
+    current["returncode"] = returncode
+    if orphan_after_kill:
+        transition_job_status(current, "cancellation_uncertain")
+        current["orphanProcessSuspected"] = True
+        append_progress(current, "Wrapper kill timeout; process termination unconfirmed.", level="error")
+    elif timed_out:
+        transition_job_status(current, "timed_out")
+        append_progress(current, f"Wrapper timed out after {timeout_sec}s.", level="error")
+    else:
+        transition_job_status(current, "completed" if returncode == 0 else "failed")
+    current["stdoutTail"] = _tail_file(stdout_path)
+    current["stderrTail"] = _tail_file(stderr_path)
+    append_progress(
+        current,
+        f"Wrapper finished with exit code {returncode}.",
+        level="error" if returncode not in (0, None) else "info",
+    )
+    save_job(workspace, current)
+    if on_progress:
+        on_progress(current, f"Wrapper finished with exit code {returncode}.")
+
+
+def launch_job(
+    workspace: Path,
+    job_id: str,
+    on_progress: Callable[[dict[str, Any], str], None] | None = None,
+) -> dict[str, Any]:
+    job = read_job(workspace, job_id)
+    if not job:
+        raise ValueError(f"Unknown job: {job_id}")
+    arguments = dict(job.get("arguments") or {})
+    run_dir = Path(str(job.get("runDir") or jobs_root(workspace) / job_id))
+    stdout_path = Path(str(job.get("stdoutPath") or run_dir / "job.stdout.log"))
+    stderr_path = Path(str(job.get("stderrPath") or run_dir / "job.stderr.log"))
+    command = build_wrapper_command(workspace, run_dir, arguments)
+    cmd_fp = command_fingerprint(command)
+
+    thread = threading.Thread(
+        target=_run_wrapper_worker,
+        args=(workspace, job_id, job, command, cmd_fp, arguments),
+        kwargs={
+            "stdout_path": stdout_path,
+            "stderr_path": stderr_path,
+            "on_progress": on_progress,
+        },
+        name=f"wrapper-job-{job_id}",
+        daemon=True,
+    )
     thread.start()
-    job["status"] = "queued"
-    write_job(workspace, job)
-    return job
+    return compact_job_status(read_job(workspace, job_id) or job)
 
 
-def job_status(workspace: Path, job_id: str) -> dict[str, Any]:
+def start_job(
+    workspace: Path,
+    arguments: dict[str, Any],
+    on_progress: Callable[[dict[str, Any], str], None] | None = None,
+) -> dict[str, Any]:
+    job = create_job(workspace, arguments)
+    return launch_job(workspace, str(job["jobId"]), on_progress=on_progress)
+
+
+def job_status(
+    workspace: Path,
+    job_id: str,
+    *,
+    compact: bool = True,
+    since_progress_sequence: int = 0,
+    since_revision: int | None = None,
+) -> dict[str, Any]:
     job = read_job(workspace, job_id)
     if not job:
         return {"ok": False, "error": f"Unknown job: {job_id}"}
     _sync_from_run_metadata(job)
-    job["updatedAt"] = _utc_now()
-    write_job(workspace, job)
-    return {"ok": True, "job": job}
+    payload = (
+        compact_job_status(job, since_progress_sequence=since_progress_sequence)
+        if compact
+        else job
+    )
+    if since_revision is not None:
+        payload["revisionChanged"] = int(job.get("revision") or 0) > since_revision
+    return {"ok": True, "job": payload}
+
+
+def read_job_log_page(workspace: Path, job_id: str, *, stream: str = "stdout", offset: int = 0, limit: int = 8000) -> dict[str, Any]:
+    job = read_job(workspace, job_id)
+    if not job:
+        return {"ok": False, "error": f"Unknown job: {job_id}"}
+    path = Path(job.get("stdoutPath" if stream == "stdout" else "stderrPath") or "")
+    if not path.is_file():
+        return {"ok": True, "text": "", "offset": offset, "eof": True}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    page = text[offset : offset + limit]
+    return {"ok": True, "text": page, "offset": offset + len(page), "eof": offset + len(page) >= len(text)}
+
+
+def _run_rag_refresh_worker(
+    workspace: Path,
+    job_id: str,
+    job: dict[str, Any],
+    command: list[str],
+    cmd_fp: str,
+    timeout_sec: int,
+    on_progress: Callable[[dict[str, Any], str], None] | None = None,
+) -> None:
+    current = read_job(workspace, job_id) or job
+    if _is_cancelled(workspace, job_id):
+        _finalize_cancelled_worker(
+            workspace,
+            job_id,
+            current,
+            message="Job cancelled before RAG refresh subprocess start.",
+        )
+        return
+
+    def mark_starting(draft: dict[str, Any]) -> None:
+        append_progress(draft, "Preparing RAG refresh subprocess.")
+        draft["commandFingerprint"] = cmd_fp
+        draft["command"] = command
+
+    from job_store import transition_job_record
+
+    if not transition_job_record(job_id, "starting", mark_starting, workspace=workspace):
+        _mark_spawn_failure(
+            workspace,
+            job_id,
+            current,
+            pid=None,
+            message="Failed to transition RAG refresh job to starting before spawn.",
+        )
+        return
+
+    process = subprocess.Popen(
+        command,
+        cwd=str(workspace),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    def mark_running(draft: dict[str, Any]) -> None:
+        append_progress(draft, "RAG refresh subprocess started.")
+        draft["pid"] = process.pid
+        draft["pidStartedAt"] = _utc_now()
+        draft["commandFingerprint"] = cmd_fp
+        draft["command"] = command
+
+    if not transition_job_record(job_id, "running", mark_running, workspace=workspace):
+        _mark_spawn_failure(
+            workspace,
+            job_id,
+            current,
+            pid=process.pid,
+            message="Failed to persist running state after RAG refresh spawn.",
+        )
+        return
+
+    orphan_after_kill = False
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_sec if timeout_sec > 0 else None)
+    except subprocess.TimeoutExpired:
+        returncode, orphan_after_kill = _wait_process_after_kill(process)
+        stdout, stderr = "", ""
+        current = read_job(workspace, job_id) or job
+        if orphan_after_kill:
+            transition_job_status(current, "cancellation_uncertain")
+            current["orphanProcessSuspected"] = True
+            append_progress(current, f"RAG refresh kill timeout after {timeout_sec}s.", level="error")
+        elif not _is_cancelled(workspace, job_id):
+            transition_job_status(current, "timed_out")
+            append_progress(current, f"RAG refresh timed out after {timeout_sec}s.", level="error")
+        save_job(workspace, current)
+        return
+
+    if _is_cancelled(workspace, job_id):
+        return
+    current = read_job(workspace, job_id) or job
+    payload: dict[str, Any] | None = None
+    try:
+        payload = json.loads(stdout.strip() or "{}")
+    except json.JSONDecodeError:
+        payload = {"ok": process.returncode == 0, "stdout": stdout[-4000:], "stderr": stderr[-4000:]}
+    current["result"] = payload
+    if process.returncode == 0 and payload.get("ok", True):
+        transition_job_status(current, "completed")
+        append_progress(current, "RAG refresh finished.")
+    else:
+        transition_job_status(current, "failed")
+        append_progress(current, stderr or "RAG refresh failed.", level="error")
+    save_job(workspace, current)
+    if on_progress:
+        on_progress(current, f"RAG refresh job {current['status']}.")
 
 
 def start_rag_refresh_job(
@@ -320,7 +828,8 @@ def start_rag_refresh_job(
     job: dict[str, Any] = {
         "jobId": job_id,
         "jobType": "rag_refresh",
-        "status": "starting",
+        "status": "created",
+        "revision": 0,
         "createdAt": _utc_now(),
         "updatedAt": _utc_now(),
         "arguments": {"scope": scope, "force": force, "timeoutSec": timeout_sec},
@@ -328,57 +837,27 @@ def start_rag_refresh_job(
         "result": None,
     }
     append_progress(job, f"RAG refresh job created (scope={scope}).")
+    transition_job_status(job, "queued")
     write_job(workspace, job)
 
-    def worker() -> None:
-        from rag_refresh import refresh_active_project
+    script = workspace / "scripts" / "rag_refresh.py"
+    command = [
+        sys.executable,
+        str(script),
+        "--scope",
+        scope,
+        "--workspace",
+        str(workspace.resolve()),
+    ]
+    if force:
+        command.append("--force")
+    cmd_fp = command_fingerprint(command)
 
-        current = read_job(workspace, job_id) or job
-        current["status"] = "running"
-        write_job(workspace, current)
-
-        def progress(message: str) -> None:
-            polled = read_job(workspace, job_id) or current
-            append_progress(polled, message)
-            write_job(workspace, polled)
-            if on_progress:
-                on_progress(polled, message)
-
-        payload: dict[str, Any] | None = None
-        error: str | None = None
-
-        def run_refresh() -> None:
-            nonlocal payload, error
-            try:
-                payload = refresh_active_project(
-                    scope=scope,  # type: ignore[arg-type]
-                    workspace=workspace,
-                    force=force,
-                    progress=progress,
-                )
-            except Exception as exc:
-                error = str(exc)
-
-        thread = threading.Thread(target=run_refresh, name=f"rag-refresh-{job_id}", daemon=True)
-        thread.start()
-        thread.join(timeout=timeout_sec if timeout_sec > 0 else None)
-        current = read_job(workspace, job_id) or job
-        if thread.is_alive():
-            current["status"] = "timed_out"
-            append_progress(current, f"RAG refresh timed out after {timeout_sec}s.", level="error")
-        elif error:
-            current["status"] = "failed"
-            current["result"] = {"ok": False, "error": error}
-            append_progress(current, error, level="error")
-        else:
-            current["result"] = payload
-            current["status"] = "completed" if payload and payload.get("ok", True) else "failed"
-            append_progress(current, "RAG refresh finished.")
-        write_job(workspace, current)
-        if on_progress:
-            on_progress(current, f"RAG refresh job {current['status']}.")
-
-    threading.Thread(target=worker, name=f"rag-refresh-job-{job_id}", daemon=True).start()
-    job["status"] = "queued"
-    write_job(workspace, job)
-    return job
+    threading.Thread(
+        target=_run_rag_refresh_worker,
+        args=(workspace, job_id, job, command, cmd_fp, timeout_sec),
+        kwargs={"on_progress": on_progress},
+        name=f"rag-refresh-job-{job_id}",
+        daemon=True,
+    ).start()
+    return compact_job_status(read_job(workspace, job_id) or job)

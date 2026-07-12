@@ -9,6 +9,8 @@ const { promisify } = require("util");
 
 const execFile = promisify(cp.execFile);
 
+const { markUnvalidated, clearValidated } = require("./validation-dirty");
+
 const UNREAL58_ROOT = path.resolve(
   process.env.UNREAL58_ROOT || path.join(os.homedir(), ".lmstudio", "Unreal58-RAG")
 );
@@ -114,17 +116,75 @@ async function runRuntimeConfigCheck(projectRoot) {
 }
 
 async function resolveProjectRootForFile(absPath, getActiveProject) {
-  let dir = path.dirname(absPath);
-  for (let depth = 0; depth < 10; depth += 1) {
-    const base = path.basename(dir).toLowerCase();
-    if (base === "source") {
-      return path.dirname(dir);
+  const resolved = path.resolve(absPath);
+  const activeProject = getActiveProject();
+  if (activeProject) {
+    const activeRoot = path.dirname(path.resolve(activeProject));
+    const rel = path.relative(activeRoot, resolved);
+    if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      return activeRoot;
     }
+  }
+
+  let dir = path.dirname(resolved);
+  for (let depth = 0; depth < 20; depth += 1) {
     try {
       const entries = await fsp.readdir(dir);
       const uproject = entries.find((entry) => entry.toLowerCase().endsWith(".uproject"));
       if (uproject) {
         return dir;
+      }
+    } catch {
+      break;
+    }
+    const base = path.basename(dir).toLowerCase();
+    if (base === "source") {
+      let candidate = path.dirname(dir);
+      for (let up = 0; up < 15; up += 1) {
+        try {
+          const entries = await fsp.readdir(candidate);
+          if (entries.some((entry) => entry.toLowerCase().endsWith(".uproject"))) {
+            return candidate;
+          }
+        } catch {
+          break;
+        }
+        const parent = path.dirname(candidate);
+        if (parent === candidate) {
+          break;
+        }
+        candidate = parent;
+      }
+      return path.dirname(dir);
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+
+  dir = path.dirname(resolved);
+  for (let depth = 0; depth < 20; depth += 1) {
+    try {
+      const entries = await fsp.readdir(dir);
+      if (entries.some((entry) => entry.toLowerCase().endsWith(".uplugin"))) {
+        let candidate = path.dirname(dir);
+        for (let up = 0; up < 15; up += 1) {
+          try {
+            const pluginEntries = await fsp.readdir(candidate);
+            if (pluginEntries.some((entry) => entry.toLowerCase().endsWith(".uproject"))) {
+              return candidate;
+            }
+          } catch {
+            break;
+          }
+          const parent = path.dirname(candidate);
+          if (parent === candidate) {
+            break;
+          }
+          candidate = parent;
+        }
       }
     } catch {
       break;
@@ -136,7 +196,6 @@ async function resolveProjectRootForFile(absPath, getActiveProject) {
     dir = parent;
   }
 
-  const activeProject = getActiveProject();
   if (activeProject) {
     return path.dirname(path.resolve(activeProject));
   }
@@ -286,18 +345,29 @@ async function validateAfterWrite(absPath, getActiveProject) {
   if (isConfigLike(absPath)) {
     const runtime = await runRuntimeConfigCheck(projectRoot);
     if (!runtime.skipped && !runtime.ok) {
-      return {
-        ok: false,
-        skipped: false,
-        projectRoot,
-        findingCount: (runtime.payload?.issues || []).length,
-        findings: (runtime.payload?.issues || []).map((msg, index) => ({
+      const issues = runtime.payload?.issues || runtime.findings || [];
+      const findings = issues.length
+        ? issues.map((msg, index) => ({
           severity: "error",
           code: "RUNTIME_CONFIG",
           path: absPath,
           line: index + 1,
-          message: msg,
-        })),
+          message: typeof msg === "string" ? msg : String(msg.message || msg),
+        }))
+        : [{
+          severity: "error",
+          code: "RUNTIME_CONFIG",
+          path: absPath,
+          line: 0,
+          message: runtime.reason || "runtime config check failed",
+        }];
+      return {
+        ok: false,
+        skipped: false,
+        projectRoot,
+        reason: runtime.reason || "runtime config check failed",
+        findingCount: findings.length,
+        findings,
       };
     }
     return { ok: true, skipped: false, projectRoot, findingCount: 0, findings: [] };
@@ -314,6 +384,8 @@ async function validateAfterWrite(absPath, getActiveProject) {
   // validation was skipped so the model runs static_validate_project before building.
   // Real findings still fail CLOSED exactly as before.
   if (result && result.timedOut) {
+    const writeTarget = path.relative(projectRoot, absPath).split(path.sep).join("/");
+    markUnvalidated(projectRoot, writeTarget, result.note || "validation skipped (time budget)");
     return {
       ok: true,
       skipped: true,
@@ -323,6 +395,9 @@ async function validateAfterWrite(absPath, getActiveProject) {
       findings: [],
       note: "validation skipped (time budget); run static_validate_project before build",
     };
+  }
+  if (result && result.ok) {
+    // Scoped validation success does not clear global dirty state; full static_validate_project does.
   }
   return result;
 }
@@ -370,6 +445,30 @@ function formatValidationResult(result) {
   return lines.join("\n");
 }
 
+function countOccurrences(haystack, needle) {
+  if (!needle) {
+    return 0;
+  }
+  let count = 0;
+  let index = 0;
+  while ((index = haystack.indexOf(needle, index)) !== -1) {
+    count += 1;
+    index += needle.length || 1;
+  }
+  return count;
+}
+
+function validateReplaceOccurrences(content, oldText, _newText, options = {}) {
+  const expected = options.expectedOccurrences !== undefined
+    ? Number(options.expectedOccurrences)
+    : undefined;
+  const occurrences = countOccurrences(String(content || ""), String(oldText || ""));
+  if (expected !== undefined && occurrences !== expected) {
+    return `occurrence mismatch: expected ${expected}, found ${occurrences}`;
+  }
+  return null;
+}
+
 module.exports = {
   VALIDATE_ON_WRITE,
   VALIDATE_ON_WRITE_TIMEOUT_MS,
@@ -380,4 +479,8 @@ module.exports = {
   runStaticValidation,
   resolveProjectRootForFile,
   blockingErrorsOf,
+  clearValidated,
+  markUnvalidated,
+  countOccurrences,
+  validateReplaceOccurrences,
 };

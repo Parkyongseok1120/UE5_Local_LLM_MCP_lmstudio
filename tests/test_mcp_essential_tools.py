@@ -22,15 +22,8 @@ RAG_ESSENTIAL = {
     "unreal_agent_session",
     "unreal_rag_capabilities",
     "unreal_code_sketch_claim_validate",
-}
-
-RAG_EXTENDED_ONLY = {
-    "unreal_rag_refresh",
-    "unreal_start_rag_refresh",
-    "unreal_rag_refresh_status",
-    "unreal_start_compile_loop",
-    "unreal_compile_loop_status",
-    "unreal_cancel_compile_loop",
+    "unreal_diagram_validate",
+    "unreal_project_status",
 }
 
 AGENT_ESSENTIAL = {
@@ -39,9 +32,11 @@ AGENT_ESSENTIAL = {
     "list_directory",
     "read_file",
     "read_file_range",
+    "read_symbol",
     "replace_in_file",
     "write_file",
     "search_files",
+    "static_validate_project",
     "build_unreal_project",
     "read_unreal_logs",
     "write_session_handoff",
@@ -57,13 +52,14 @@ def _load_rag_mcp_module():
     return module
 
 
-def test_essential_tools_disabled_exposes_many_tools(monkeypatch, tmp_path):
+def test_default_profile_is_fail_closed(monkeypatch, tmp_path):
     monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
+    monkeypatch.delenv("MCP_EXTENDED_TOOLS", raising=False)
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")
     names = {tool["name"] for tool in server.all_tool_definitions()}
-    assert "clangd_goto_definition" in names
-    assert len(names) > len(RAG_ESSENTIAL)
+    assert names == RAG_ESSENTIAL
+    assert "clangd_goto_definition" not in names
 
 
 def test_essential_tools_enabled_filters_rag_tools(monkeypatch, tmp_path):
@@ -75,6 +71,30 @@ def test_essential_tools_enabled_filters_rag_tools(monkeypatch, tmp_path):
     assert names == set(mod.ESSENTIAL_TOOL_NAMES)
     assert names == RAG_ESSENTIAL
     assert "unreal_rag_refresh" not in names
+
+
+RAG_EXTENDED_ONLY = {
+    "unreal_rag_refresh",
+    "unreal_start_rag_refresh",
+    "unreal_rag_refresh_status",
+    "unreal_start_compile_loop",
+    "unreal_compile_loop_status",
+    "unreal_cancel_compile_loop",
+}
+
+
+def test_hidden_control_plane_tools_require_flag(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.delenv("ALLOW_CONTROL_PLANE_TOOLS", raising=False)
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    names = {tool["name"] for tool in server.all_tool_definitions()}
+    assert "unreal_task_start" not in names
+    monkeypatch.setenv("ALLOW_CONTROL_PLANE_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    names = {tool["name"] for tool in server.all_tool_definitions()}
+    assert "unreal_task_start" in names
 
 
 def test_extended_tools_enabled_exposes_refresh_and_compile_loop(monkeypatch, tmp_path):

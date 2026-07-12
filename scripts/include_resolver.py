@@ -20,6 +20,16 @@ UsageKind = Literal[
     "unknown",
 ]
 
+IncludeVisibility = Literal[
+    "same_module_public",
+    "same_module_private",
+    "public_cross_module",
+    "private_cross_module_forbidden",
+    "plugin_public_cross_module",
+    "engine_header",
+    "unresolved",
+]
+
 COMPLETE_TYPE_USAGES = frozenset(
     {
         "create_default_subobject",
@@ -52,10 +62,14 @@ class IncludeResolution:
 
 def _module_name_from_path(path: Path, project_root: Path) -> str:
     try:
-        rel = path.relative_to(project_root / "Source")
-        return rel.parts[0] if rel.parts else ""
+        parts = path.resolve().relative_to(project_root.resolve()).parts
     except ValueError:
         return ""
+    if len(parts) >= 2 and parts[0].lower() == "source":
+        return parts[1]
+    if len(parts) >= 4 and parts[0].lower() == "plugins" and parts[2].lower() == "source":
+        return parts[3]
+    return ""
 
 
 def project_relative_include(declaring_file: Path, project_root: Path) -> str:
@@ -79,23 +93,36 @@ def project_relative_include(declaring_file: Path, project_root: Path) -> str:
     return "/".join(parts).replace("\\", "/")
 
 
-def _scan_declaring_file(root: Path, symbol: str) -> Path | None:
+def _declaring_scan_roots(root: Path) -> list[Path]:
+    try:
+        from plugin_project_context import resolve_scan_roots
+
+        return resolve_scan_roots(root)
+    except Exception:
+        source = root / "Source"
+        return [source] if source.is_dir() else [root]
+
+
+def _scan_declaring_file(scan_roots: list[Path], symbol: str) -> Path | None:
     class_pattern = re.compile(
         rf"\bclass\s+(?:[A-Z0-9_]+_API\s+)?{re.escape(symbol)}\b[^;{{]*\{{",
         re.MULTILINE,
     )
     uclass_pattern = re.compile(r"\bUCLASS\b")
-    for path in root.rglob("*"):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+    for scan_root in scan_roots:
+        if not scan_root.is_dir():
             continue
-        if "Intermediate" in path.parts or "ThirdParty" in path.parts:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8-sig", errors="replace")
-        except OSError:
-            continue
-        if class_pattern.search(text) and uclass_pattern.search(text):
-            return path
+        for path in scan_root.rglob("*.h"):
+            if path.suffix.lower() not in {".h", ".hpp"}:
+                continue
+            if "Intermediate" in path.parts or "ThirdParty" in path.parts:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                continue
+            if class_pattern.search(text) and uclass_pattern.search(text):
+                return path
     return None
 
 
@@ -109,7 +136,7 @@ def _resolve_declaring_file(root: Path, symbol: str) -> tuple[Path | None, float
                 candidate = root / file_path
             if candidate.is_file():
                 return candidate.resolve(), 0.9
-    scanned = _scan_declaring_file(root / "Source", symbol)
+    scanned = _scan_declaring_file(_declaring_scan_roots(root), symbol)
     if scanned:
         return scanned.resolve(), 0.75
     return None, 0.0
@@ -213,3 +240,24 @@ def format_include_feedback(resolution: IncludeResolution) -> str:
         )
     lines.append(resolution.reason)
     return "\n".join(lines)
+
+
+def classify_include_visibility(
+    *,
+    owner_module: str,
+    consumer_module: str,
+    include_path: str,
+    is_private_header: bool = False,
+) -> IncludeVisibility:
+    include_lower = include_path.replace("\\", "/").lower()
+    if include_lower.startswith("engine/") or "/engine/" in include_lower:
+        return "engine_header"
+    if not owner_module or not consumer_module:
+        return "unresolved"
+    if owner_module == consumer_module:
+        return "same_module_private" if is_private_header else "same_module_public"
+    if is_private_header or "/private/" in include_lower:
+        return "private_cross_module_forbidden"
+    if include_lower.startswith("plugins/"):
+        return "plugin_public_cross_module"
+    return "public_cross_module"

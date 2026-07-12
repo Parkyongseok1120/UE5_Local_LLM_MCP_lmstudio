@@ -107,8 +107,18 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
     gameplay_tags: list[dict[str, Any]] = []
     input_bindings: list[dict[str, Any]] = []
 
-    source_root = project_root / "Source"
-    if not source_root.is_dir():
+    from plugin_project_context import build_plugin_project_context, iter_scan_root_files, resolve_scan_roots
+
+    plugin_ctx = build_plugin_project_context(project_root)
+    scan_roots = resolve_scan_roots(project_root)
+    source_files: list[Path] = []
+    for scan_root in scan_roots:
+        if not scan_root.is_dir():
+            continue
+        source_files.extend(iter_scan_root_files(scan_root, skip_dirs=SKIP_DIRS))
+    source_files = sorted(set(source_files))
+
+    if not source_files:
         return {
             "project": project_name,
             "projectRoot": str(project_root),
@@ -125,18 +135,17 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
             "delegates": delegates,
             "gameplayTags": gameplay_tags,
             "inputBindings": input_bindings,
+            "pluginContext": plugin_ctx.to_dict(),
         }
 
-    for path in sorted(source_root.rglob("*")):
-        if not path.is_file() or should_skip(path):
-            continue
-        if path.suffix.lower() not in SOURCE_EXTENSIONS:
+    for path in source_files:
+        if path.suffix.lower() not in SOURCE_EXTENSIONS and not path.name.endswith(".Build.cs"):
             continue
         text = read_text(path) or ""
         rel = rel_path(project_root, path)
         owner_class = ""
 
-        if path.suffix.lower() == ".Build.cs":
+        if path.name.endswith(".Build.cs"):
             module_name = path.name.removesuffix(".Build.cs")
             parsed = parse_build_cs_file(path)
             deps = parsed.get("dependencies") or {}
@@ -229,6 +238,7 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
         "delegates": delegates,
         "gameplayTags": gameplay_tags,
         "inputBindings": input_bindings,
+        "pluginContext": plugin_ctx.to_dict(),
         "summary": {
             "classCount": len(classes),
             "subsystemCount": len(subsystems),

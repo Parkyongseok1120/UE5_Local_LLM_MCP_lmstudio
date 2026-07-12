@@ -12,6 +12,14 @@
       "expectedPassAt1": true
     },
     {
+      "id": "compile_fix_no_executable_slices",
+      "request": "compile fix UBoxComponent missing include CreateDefaultSubobject component registration",
+      "mode": "compile_fix",
+      "checks": {
+        "maxExecutablePlanSlices": 0
+      }
+    },
+    {
       "id": "component_scaffold_routing",
       "request": "Implement UHealthComponent with CreateDefaultSubobject registration on owner",
       "checks": {

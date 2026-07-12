@@ -228,6 +228,17 @@ def project_index_sync_capabilities(project: Path, index_dir: Path) -> dict[str,
     }
 
 
+def project_prepare_status(workspace: Path | None = None) -> dict[str, Any]:
+    from workspace_paths import resolve_active_project_path
+
+    ws = workspace or find_workspace_root()
+    project = resolve_active_project_path()
+    if not project:
+        return {"ok": False, "error": "No active project."}
+    status = active_project_check_status(project, workspace=ws)
+    return {"ok": True, **status}
+
+
 def active_project_check_status(project: Path, workspace: Path | None = None, index_dir: Path | None = None) -> dict[str, Any]:
     workspace = workspace or find_workspace_root()
     index_dir = index_dir or resolve_index_dir()

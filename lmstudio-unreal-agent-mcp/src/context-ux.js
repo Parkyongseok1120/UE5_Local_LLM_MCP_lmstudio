@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { atomicWriteText } = require("./atomic-io");
 
 const DEFAULT_AGENT_RESULT_MAX_CHARS = 32_000;
 const DEFAULT_BUILD_ERROR_LINES = 20;
@@ -141,18 +142,43 @@ function compactMcpContent(content, maxChars = resolveAgentResultMaxChars()) {
 
 function errorPayload(message, options = {}) {
   const error = String(message || "Unknown error");
+  const firstLine = error.split(/\r?\n/, 1)[0];
   const payload = {
-    summary: `ERROR — ${error.split(/\r?\n/, 1)[0]}`,
+    summary: `ERROR — ${firstLine}`,
     ok: false,
     error,
+    phase: "failed",
+    userMessage: options.userMessage || firstLine,
     nextSteps: Array.isArray(options.nextSteps) ? options.nextSteps : [],
     suggestedToolCalls: Array.isArray(options.suggestedToolCalls)
       ? options.suggestedToolCalls
       : []
   };
+  const reserved = new Set([
+    "userMessage", "nextSteps", "suggestedToolCalls", "writeToolPolicy",
+    "requiredNextTool", "errorCode", "retryable", "doNotRetry", "agentInstruction",
+    "writeApplied", "bookkeepingFailed", "mutationGenerationNotRecorded", "operation", "path",
+  ]);
+  for (const [key, value] of Object.entries(options)) {
+    if (reserved.has(key) || value === undefined) continue;
+    payload[key] = value;
+  }
   if (options.writeToolPolicy) payload.writeToolPolicy = options.writeToolPolicy;
   if (options.requiredNextTool) payload.requiredNextTool = options.requiredNextTool;
+  if (options.errorCode) payload.errorCode = options.errorCode;
+  if (options.retryable !== undefined) payload.retryable = options.retryable;
   if (options.doNotRetry) payload.doNotRetry = options.doNotRetry;
+  if (options.writeApplied !== undefined) payload.writeApplied = options.writeApplied;
+  if (options.bookkeepingFailed !== undefined) payload.bookkeepingFailed = options.bookkeepingFailed;
+  if (options.mutationGenerationNotRecorded !== undefined) {
+    payload.mutationGenerationNotRecorded = options.mutationGenerationNotRecorded;
+  }
+  if (options.operation) payload.operation = options.operation;
+  if (options.path) payload.path = options.path;
+  if (options.agentInstruction) payload.agentInstruction = options.agentInstruction;
+  else if (Array.isArray(options.nextSteps) && options.nextSteps.length) {
+    payload.agentInstruction = options.nextSteps.join(" ");
+  }
   return payload;
 }
 
@@ -271,6 +297,8 @@ function slimWriteSuccessPayload(summary, validation, options = {}) {
   const payload = {
     summary,
     ok: true,
+    phase: "complete",
+    userMessage: summary,
     path: options.path || null,
     operation: options.operation || null,
     bytesWritten: options.bytesWritten ?? null,
@@ -309,6 +337,8 @@ function slimWriteSuccessPayload(summary, validation, options = {}) {
   return payload;
 }
 
+const { parseBuildProof } = require("./build-proof");
+
 function extractLikelyCompileErrors(stdout, stderr, maxLines = DEFAULT_BUILD_ERROR_LINES) {
   const combined = `${stdout || ""}\n${stderr || ""}`;
   const interesting = combined.split(/\r?\n/).filter((line) => (
@@ -330,25 +360,23 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
   const errorLines = extractLikelyCompileErrors(result.stdout, result.stderr);
   const firstError = firstUsefulLine(errorLines);
   const execSummary = parseBuildExecutionSummary(result.stdout, result.stderr);
-  const upToDate = Boolean(result.ok && execSummary.upToDate);
-  const actionsExecuted = execSummary.actionsExecuted;
-  const proofLevel = !result.ok
-    ? "Failed"
-    : (actionsExecuted != null && actionsExecuted > 0)
-      ? "Built"
-      : (actionsExecuted === 0 || upToDate)
-        ? "BuiltStale"
-        : "BuiltUnverified";
+  const proof = parseBuildProof(result.ok, `${result.stdout || ""}\n${result.stderr || ""}`, { logPath });
+  const upToDate = proof.targetUpToDate;
+  const actionsExecuted = proof.highestObservedActionIndex || proof.actionCount;
+  const proofLevel = proof.proofLevel;
+  const hasCompileEvidence = Number(proof.compileLineCount || 0) > 0 || Number(proof.linkLineCount || 0) > 0;
 
   let summary;
   if (!result.ok) {
     summary = `BUILD FAILED — ${errorLines.length} likely error line(s)${firstError ? `; first: ${firstError}` : ""}`;
   } else if (actionsExecuted != null && actionsExecuted > 0) {
     summary = `BUILD SUCCEEDED — ${actionsExecuted} action(s) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
-  } else if (upToDate || actionsExecuted === 0) {
+  } else if (upToDate && actionsExecuted === 0) {
     summary = `BUILD SUCCEEDED (up to date — 0 files recompiled) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
-  } else {
+  } else if (actionsExecuted === 0) {
     summary = `BUILD SUCCEEDED (compile proof unverified — action count not detected) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
+  } else {
+    summary = `BUILD SUCCEEDED — ${actionsExecuted} action(s) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
   }
 
   const payload = {
@@ -357,13 +385,29 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
     exitCode: result.exitCode,
     upToDate,
     actionsExecuted,
+    declaredTotalActions: proof.declaredTotalActions,
+    observedCompileLines: proof.compileLineCount,
+    observedLinkLines: proof.linkLineCount,
+    highestObservedActionIndex: proof.highestObservedActionIndex,
     proofLevel,
     responseMode: verbose ? "verbose" : "compact",
     likelyErrors: errorLines,
     fullLogPath: logPath,
     error: result.error || "",
     nextSteps: [],
-    suggestedToolCalls: []
+    suggestedToolCalls: [],
+    phase: result.ok ? "complete" : "failed",
+    userMessage: result.ok
+      ? (upToDate && actionsExecuted === 0
+        ? "Build finished (up to date — no files recompiled)"
+        : `Build succeeded (${actionsExecuted ?? "?"} action(s))`)
+      : `Build failed${firstError ? `: ${firstError}` : ""}`,
+    userMessageKo: result.ok
+      ? (upToDate && actionsExecuted === 0
+        ? "빌드 완료 (최신 상태 — 재컴파일 없음)"
+        : `빌드 성공 (${actionsExecuted ?? "?"} action(s))`)
+      : `빌드 실패${firstError ? `: ${firstError}` : ""}`,
+    cancellable: false
   };
 
   if (!result.ok) {
@@ -378,16 +422,22 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
         args: { query: firstError.slice(0, 800), mode: "compile_fix", hybrid: false, top_k: 4 }
       }];
     }
-  } else if (upToDate || actionsExecuted === 0) {
+  } else if (upToDate && actionsExecuted === 0) {
     payload.nextSteps = [
       "upToDate=true means UBT did not recompile any files — this is not proof your recent edit was built.",
       "If you just edited C++, confirm the file was saved, then rebuild and check fullLogPath for action count > 0.",
       `Report proofLevel=${proofLevel} with fullLogPath as evidence.`
     ];
+  } else if (hasCompileEvidence) {
+    payload.nextSteps = [
+      `Compile/link evidence detected (${proof.compileLineCount || 0} compile, ${proof.linkLineCount || 0} link lines).`,
+      "Inspect fullLogPath if runtime verification is still required.",
+      `Report proofLevel=${proofLevel} with fullLogPath as evidence.`
+    ];
   } else {
     payload.nextSteps = [
       "Compile action count was not detected in the build summary.",
-      "Inspect fullLogPath manually; if you find action count > 0, you may report proofLevel=Built.",
+      "Inspect fullLogPath manually; if you find compile/link lines, you may report proofLevel=Built.",
       "Otherwise stay at proofLevel=BuiltUnverified until compile proof is visible.",
       `Report proofLevel=${proofLevel} with fullLogPath as evidence.`
     ];
@@ -468,8 +518,7 @@ function compactLogPayload(payload, maxChars = DEFAULT_LOG_RESULT_MAX_CHARS) {
 
 async function writeTextArtifact(workspaceRoot, relativePath, text) {
   const target = path.join(workspaceRoot, relativePath);
-  await fs.promises.mkdir(path.dirname(target), { recursive: true });
-  await fs.promises.writeFile(target, String(text || ""), "utf8");
+  atomicWriteText(target, String(text || ""));
   return path.relative(workspaceRoot, target).replace(/\\/g, "/");
 }
 

@@ -22,6 +22,7 @@ function evaluateBootstrapCache(cache, activeProject) {
   return {
     valid: canSkipSteps,
     canSkipSteps,
+    skipBootstrapPrompt: canSkipSteps,
     missingSteps,
     projectPath: cache.projectPath || null,
     cachedAt: cache.cachedAt || null,
@@ -35,7 +36,10 @@ function mergeBootstrapCache(existing, patch) {
   const workspaceChanged = Boolean(
     patch.workspaceHash && existing?.workspaceHash && patch.workspaceHash !== existing.workspaceHash
   );
-  const reset = projectChanged || workspaceChanged;
+  const ageMs = existing?.cachedAt ? Date.now() - Number(existing.cachedAt) : 0;
+  const ttlMs = Number(existing?.ttlSec || 3600) * 1000;
+  const expired = Boolean(existing && BOOTSTRAP_CACHE_TTL_MS > 0 && ageMs > ttlMs);
+  const reset = projectChanged || workspaceChanged || expired || patch.forceRefresh === true;
   return {
     projectPath: patch.projectPath || existing?.projectPath || "",
     ragHealthOk: reset
@@ -45,8 +49,9 @@ function mergeBootstrapCache(existing, patch) {
     stepsCompleted: reset
       ? (patch.stepsCompleted || [])
       : Array.from(new Set([...(existing?.stepsCompleted || []), ...(patch.stepsCompleted || [])])),
-    cachedAt: Date.now(),
+    cachedAt: reset ? Date.now() : (existing?.cachedAt || Date.now()),
     ttlSec: patch.ttlSec || existing?.ttlSec || Math.floor(BOOTSTRAP_CACHE_TTL_MS / 1000) || 3600,
+    stale: expired && !reset,
   };
 }
 
