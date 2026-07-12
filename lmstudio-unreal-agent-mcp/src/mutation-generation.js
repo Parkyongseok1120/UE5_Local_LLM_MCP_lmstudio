@@ -44,7 +44,7 @@ async function writeMutationState(projectRoot, state) {
 async function withMutationLock(projectRoot, fn) {
   const stateFile = mutationStatePath(projectRoot);
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-    const lock = tryAcquirePathLock(stateFile, "mutation_generation");
+    const lock = tryAcquirePathLock(stateFile, "mutation_generation", { heartbeat: true });
     if (lock.ok) {
       try {
         return await fn();
@@ -78,12 +78,29 @@ async function beginValidation(projectRoot) {
 }
 
 async function finishValidation(projectRoot, startGeneration) {
-  const state = await readMutationState(projectRoot);
-  const current = int(state.mutationGeneration);
-  if (current !== int(startGeneration)) {
-    return { validationStale: true, validatedGeneration: null, mutationGeneration: current };
-  }
-  return { validationStale: false, validatedGeneration: current, mutationGeneration: current };
+  return withMutationLock(projectRoot, async () => {
+    const state = await readMutationState(projectRoot);
+    const current = int(state.mutationGeneration);
+    if (current !== int(startGeneration)) {
+      return { validationStale: true, validatedGeneration: null, mutationGeneration: current };
+    }
+    state.validatedGeneration = current;
+    await writeMutationState(projectRoot, state);
+    return { validationStale: false, validatedGeneration: current, mutationGeneration: current };
+  });
+}
+
+async function recordDeletion(projectRoot, relPath) {
+  return withMutationLock(projectRoot, async () => {
+    const state = await readMutationState(projectRoot);
+    state.mutationGeneration = int(state.mutationGeneration) + 1;
+    const normalized = String(relPath || "").replace(/\\/g, "/");
+    if (normalized && state.paths) {
+      delete state.paths[normalized];
+    }
+    await writeMutationState(projectRoot, state);
+    return { mutationGeneration: state.mutationGeneration };
+  });
 }
 
 async function beginBuild(projectRoot) {
@@ -110,6 +127,7 @@ module.exports = {
   mutationStatePath,
   readMutationState,
   recordMutation,
+  recordDeletion,
   withMutationLock,
   beginValidation,
   finishValidation,

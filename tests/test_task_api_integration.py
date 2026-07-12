@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import sys
 import time
+import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from task_api import task_cancel, task_root, task_start, task_status  # noqa: E402
-from wrapper_job_manager import job_path, read_job  # noqa: E402
+from wrapper_job_manager import job_path, read_job, write_job  # noqa: E402
 
 
 def _wait_for_job_file(workspace: Path, job_id: str, *, timeout_sec: float = 10.0) -> None:
@@ -38,15 +40,32 @@ def test_task_start_and_status_phase_fields(tmp_path: Path) -> None:
     assert (task_root(tmp_path, task_id) / "logs" / "task.log").is_file()
 
 
-def test_task_cancel_stops_background_job(tmp_path: Path) -> None:
-    started = task_start(
-        tmp_path,
-        request="Compile fix loop",
-        start_background_job=True,
-    )
+def test_task_cancel_stops_background_job(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    job_id = uuid.uuid4().hex[:12]
+
+    def fake_start_job(workspace, job_args, on_progress=None):
+        write_job(
+            workspace,
+            {
+                "jobId": job_id,
+                "status": "running",
+                "revision": 1,
+                "progress": [],
+                "pid": 999999,
+            },
+        )
+        return {"jobId": job_id, "status": "running"}
+
+    monkeypatch.setattr("wrapper_job_manager._process_alive", lambda _pid: "dead")
+    with patch("wrapper_job_manager.start_job", side_effect=fake_start_job):
+        started = task_start(
+            tmp_path,
+            request="Compile fix loop",
+            start_background_job=True,
+        )
     task_id = started["taskSessionId"]
-    job_id = started.get("activeJobId") or started.get("state", {}).get("activeJobId")
-    assert job_id
+    assert started.get("activeJobId") or started.get("state", {}).get("activeJobId")
     _wait_for_job_file(tmp_path, job_id)
     cancelled = task_cancel(tmp_path, task_id)
     assert cancelled["status"] == "cancelled"

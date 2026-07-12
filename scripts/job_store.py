@@ -12,6 +12,10 @@ from typing import Any, Callable
 
 from state_root import ensure_state_root_layout, jobs_sqlite_path
 
+
+class JobStoreError(RuntimeError):
+    """Raised when the SQLite job store is unavailable in fail-closed mode."""
+
 _DB_LOCK = threading.Lock()
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -98,16 +102,19 @@ def _db_path(workspace: Path | None = None) -> Path:
 def read_job_record(job_id: str, workspace: Path | None = None) -> dict[str, Any] | None:
     job_id = validate_job_id(job_id)
     db_path = _db_path(workspace)
-    with _DB_LOCK:
-        conn = _connect(db_path)
-        try:
-            _ensure_schema(conn)
-            row = conn.execute("SELECT payload_json FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
-            if not row:
-                return None
-            return json.loads(row["payload_json"])
-        finally:
-            conn.close()
+    try:
+        with _DB_LOCK:
+            conn = _connect(db_path)
+            try:
+                _ensure_schema(conn)
+                row = conn.execute("SELECT payload_json FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+                if not row:
+                    return None
+                return json.loads(row["payload_json"])
+            finally:
+                conn.close()
+    except (sqlite3.Error, OSError, json.JSONDecodeError) as exc:
+        raise JobStoreError(str(exc)) from exc
 
 
 def write_job_record(
@@ -119,68 +126,71 @@ def write_job_record(
     job_id = validate_job_id(str(job["jobId"]))
     db_path = _db_path(workspace)
     payload = dict(job)
-    with _DB_LOCK:
-        conn = _connect(db_path)
-        try:
-            _ensure_schema(conn)
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT revision, payload_json FROM jobs WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
-            if expected_revision is not None:
-                if not row:
-                    conn.execute("ROLLBACK")
-                    return False
-                current_revision = int(row["revision"])
-                if current_revision != expected_revision:
-                    conn.execute("ROLLBACK")
-                    return False
-                merged = _merge_payload(json.loads(row["payload_json"]), payload)
-                if merged is None:
-                    conn.execute("ROLLBACK")
-                    return False
-                merged["revision"] = current_revision + 1
-            elif row:
-                merged = _merge_payload(json.loads(row["payload_json"]), payload)
-                if merged is None:
-                    conn.execute("ROLLBACK")
-                    return False
-                merged["revision"] = int(row["revision"]) + 1
-            else:
-                merged = dict(payload)
-                merged["revision"] = max(1, int(merged.get("revision") or 0) or 1)
-            merged["updatedAt"] = _utc_now()
-            conn.execute(
-                """
-                INSERT INTO jobs(job_id, status, revision, progress_sequence, payload_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(job_id) DO UPDATE SET
-                  status = excluded.status,
-                  revision = excluded.revision,
-                  progress_sequence = excluded.progress_sequence,
-                  payload_json = excluded.payload_json,
-                  updated_at = excluded.updated_at
-                """,
-                (
-                    job_id,
-                    str(merged.get("status") or "created"),
-                    int(merged.get("revision") or 0),
-                    int(merged.get("progressSequence") or 0),
-                    json.dumps(merged, ensure_ascii=False),
-                    merged["updatedAt"],
-                ),
-            )
-            conn.execute("COMMIT")
-            return True
-        except Exception:
+    try:
+        with _DB_LOCK:
+            conn = _connect(db_path)
             try:
-                conn.execute("ROLLBACK")
+                _ensure_schema(conn)
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT revision, payload_json FROM jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if expected_revision is not None:
+                    if not row:
+                        conn.execute("ROLLBACK")
+                        return False
+                    current_revision = int(row["revision"])
+                    if current_revision != expected_revision:
+                        conn.execute("ROLLBACK")
+                        return False
+                    merged = _merge_payload(json.loads(row["payload_json"]), payload)
+                    if merged is None:
+                        conn.execute("ROLLBACK")
+                        return False
+                    merged["revision"] = current_revision + 1
+                elif row:
+                    merged = _merge_payload(json.loads(row["payload_json"]), payload)
+                    if merged is None:
+                        conn.execute("ROLLBACK")
+                        return False
+                    merged["revision"] = int(row["revision"]) + 1
+                else:
+                    merged = dict(payload)
+                    merged["revision"] = max(1, int(merged.get("revision") or 0) or 1)
+                merged["updatedAt"] = _utc_now()
+                conn.execute(
+                    """
+                    INSERT INTO jobs(job_id, status, revision, progress_sequence, payload_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id) DO UPDATE SET
+                      status = excluded.status,
+                      revision = excluded.revision,
+                      progress_sequence = excluded.progress_sequence,
+                      payload_json = excluded.payload_json,
+                      updated_at = excluded.updated_at
+                    """,
+                    (
+                        job_id,
+                        str(merged.get("status") or "created"),
+                        int(merged.get("revision") or 0),
+                        int(merged.get("progressSequence") or 0),
+                        json.dumps(merged, ensure_ascii=False),
+                        merged["updatedAt"],
+                    ),
+                )
+                conn.execute("COMMIT")
+                return True
             except Exception:
-                pass
-            raise
-        finally:
-            conn.close()
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+    except (sqlite3.Error, OSError, json.JSONDecodeError) as exc:
+        raise JobStoreError(str(exc)) from exc
 
 
 def mutate_job_record(

@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Literal, Sequence
+
+ProcessAlive = Literal["alive", "dead", "unknown"]
 
 DEFAULT_PROBE_TIMEOUT_SEC = 10.0
 
@@ -32,3 +34,22 @@ def run_probe(
         )
     except subprocess.TimeoutExpired:
         return ProbeTimeout(command=tuple(str(part) for part in command))
+
+
+def probe_process_alive(pid: int) -> ProcessAlive:
+    import os
+    import sys
+
+    if pid <= 0:
+        return "dead"
+    if sys.platform == "win32":
+        result = run_probe(["tasklist", "/FI", f"PID eq {pid}"])
+        if isinstance(result, ProbeTimeout):
+            return "unknown"
+        return "alive" if str(pid) in (result.stdout or "") else "dead"
+    try:
+        os.kill(pid, 0)
+        return "alive"
+    except OSError:
+        return "dead"
+

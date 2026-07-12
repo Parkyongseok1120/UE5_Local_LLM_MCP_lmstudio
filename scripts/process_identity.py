@@ -24,20 +24,9 @@ def _parse_iso(value: str) -> datetime | None:
 
 
 def _process_alive(pid: int) -> bool:
-    from process_probe import ProbeTimeout, run_probe
+    from process_probe import probe_process_alive
 
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        result = run_probe(["tasklist", "/FI", f"PID eq {pid}"])
-        if isinstance(result, ProbeTimeout):
-            return False
-        return str(pid) in (result.stdout or "")
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return probe_process_alive(pid) != "dead"
 
 
 def _probe_process(pid: int) -> tuple[str, datetime | None]:

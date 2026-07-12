@@ -65,15 +65,18 @@ def _read_json_with_retry(path: Path, *, attempts: int = 8, delay_sec: float = 0
 
 
 def read_job(workspace: Path, job_id: str) -> dict[str, Any] | None:
-    try:
-        from job_store import read_job_record, validate_job_id
+    from job_store import JobStoreError, read_job_record, validate_job_id
 
-        validate_job_id(job_id)
+    job_id = validate_job_id(job_id)
+    try:
         record = read_job_record(job_id, workspace=workspace)
         if record:
             return record
-    except Exception:
-        pass
+    except JobStoreError:
+        if not _legacy_json_enabled():
+            raise
+    if not _legacy_json_enabled():
+        return None
     path = job_path(workspace, job_id)
     if not path.exists():
         return None
@@ -81,6 +84,10 @@ def read_job(workspace: Path, job_id: str) -> dict[str, Any] | None:
         return _read_json_with_retry(path)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _legacy_json_enabled() -> bool:
+    return os.environ.get("MCP_JOBS_LEGACY_JSON", "").strip() == "1"
 
 
 def _atomic_replace_with_retry(temp: Path, path: Path, *, attempts: int = 8, delay_sec: float = 0.05) -> None:
@@ -99,17 +106,17 @@ def _atomic_replace_with_retry(temp: Path, path: Path, *, attempts: int = 8, del
 
 
 def write_job(workspace: Path, job: dict[str, Any], *, expected_revision: int | None = None) -> bool:
-    job_id = str(job["jobId"])
-    try:
-        from job_store import validate_job_id, write_job_record
+    from job_store import JobStoreError, validate_job_id, write_job_record
 
-        validate_job_id(job_id)
+    job_id = validate_job_id(str(job["jobId"]))
+    try:
         return write_job_record(job, expected_revision=expected_revision, workspace=workspace)
-    except Exception:
-        pass
+    except JobStoreError:
+        if not _legacy_json_enabled():
+            raise
     lock = _job_lock(job_id)
     with lock:
-        current = read_job(workspace, job_id)
+        current = _read_legacy_job(workspace, job_id)
         if expected_revision is not None:
             if not current:
                 return False
@@ -130,6 +137,16 @@ def write_job(workspace: Path, job: dict[str, Any], *, expected_revision: int | 
         temp.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
         _atomic_replace_with_retry(temp, path)
         return True
+
+
+def _read_legacy_job(workspace: Path, job_id: str) -> dict[str, Any] | None:
+    path = job_path(workspace, job_id)
+    if not path.exists():
+        return None
+    try:
+        return _read_json_with_retry(path)
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def save_job(workspace: Path, job: dict[str, Any]) -> bool:
@@ -273,21 +290,10 @@ def _prune_stale_jobs(workspace: Path, ttl_hours: int = 24) -> None:
     prune_terminal_jobs(workspace, ttl_hours=ttl_hours)
 
 
-def _process_alive(pid: int) -> bool:
-    from process_probe import ProbeTimeout, run_probe
+def _process_alive(pid: int) -> str:
+    from process_probe import probe_process_alive
 
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        result = run_probe(["tasklist", "/FI", f"PID eq {pid}"])
-        if isinstance(result, ProbeTimeout):
-            return False
-        return str(pid) in (result.stdout or "")
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return probe_process_alive(pid)
 
 
 def _pid_matches_job(job: dict[str, Any]) -> bool:
@@ -329,7 +335,14 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     if not job:
         return {"ok": False, "error": f"Unknown job: {job_id}"}
     if str(job.get("status") or "") in TERMINAL_STATUSES:
-        return {"ok": True, "job": compact_job_status(job), "processTreeKilled": False}
+        terminal = str(job.get("status") or "")
+        return {
+            "ok": True,
+            "job": compact_job_status(job),
+            "processTreeKilled": False,
+            "cancellationState": terminal,
+            "orphanProcessSuspected": bool(job.get("orphanProcessSuspected")),
+        }
     if not transition_job_status(job, "cancel_requested"):
         job["status"] = "cancel_requested"
     append_progress(job, "Cancel requested.")
@@ -343,7 +356,8 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     next_status = "cancelled"
     if pid:
         pid_int = int(pid)
-        if _process_alive(pid_int):
+        alive = _process_alive(pid_int)
+        if alive == "alive":
             if _pid_matches_job(fresh):
                 process_tree_killed = _kill_process_tree(pid_int)
                 orphan_suspected = not process_tree_killed
@@ -352,6 +366,9 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
             else:
                 orphan_suspected = True
                 next_status = "cancellation_uncertain"
+        elif alive == "unknown":
+            orphan_suspected = True
+            next_status = "cancellation_uncertain"
     if not transition_job_status(fresh, next_status):
         fresh["status"] = next_status
     append_progress(fresh, "Job cancelled by request.")

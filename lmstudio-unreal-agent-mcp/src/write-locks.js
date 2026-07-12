@@ -8,6 +8,7 @@ const { ensureStateRootLayout, resolveAgentStateRoot } = require("./state-root")
 
 const pendingPaths = new Map();
 const OWNER = `${process.pid}:${crypto.randomUUID()}`;
+const HEARTBEAT_INTERVAL_MS = 60_000;
 
 function canonicalLockKey(absPath) {
   try {
@@ -32,17 +33,15 @@ function readLockOwner(lockPath) {
   }
 }
 
-const STALE_LOCK_AGE_MS = 300_000;
-
 function isProcessAlive(pid) {
   if (!Number.isFinite(pid) || pid <= 0) {
-    return false;
+    return "dead";
   }
   try {
     process.kill(pid, 0);
-    return true;
+    return "alive";
   } catch {
-    return false;
+    return "dead";
   }
 }
 
@@ -59,14 +58,18 @@ function isStaleLock(lockPath) {
   if (!Number.isFinite(pid) || pid <= 0) {
     return true;
   }
-  if (!isProcessAlive(pid)) {
+  const alive = isProcessAlive(pid);
+  if (alive === "dead") {
     return true;
   }
-  try {
-    const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
-    return ageMs > STALE_LOCK_AGE_MS;
-  } catch {
-    return true;
+  return false;
+}
+
+function refreshLockHeartbeat(absPath, label = "write", stateRoot = resolveAgentStateRoot()) {
+  const lockPath = lockFilePath(absPath, stateRoot);
+  const owner = readLockOwner(lockPath);
+  if (owner.startsWith(OWNER)) {
+    fs.writeFileSync(lockPath, `${OWNER}\n${label}\n${new Date().toISOString()}\n`);
   }
 }
 
@@ -105,6 +108,9 @@ function releaseCrossProcessLock(absPath) {
     return;
   }
   pendingPaths.delete(key);
+  if (meta.heartbeatTimer) {
+    clearInterval(meta.heartbeatTimer);
+  }
   try {
     const owner = readLockOwner(meta.lockPath);
     if (owner.startsWith(OWNER)) {
@@ -115,8 +121,24 @@ function releaseCrossProcessLock(absPath) {
   }
 }
 
-function tryAcquirePathLock(absPath, label = "write") {
-  return tryAcquireCrossProcessLock(absPath, label);
+function tryAcquirePathLock(absPath, label = "write", options = {}) {
+  const acquired = tryAcquireCrossProcessLock(absPath, label, options.stateRoot);
+  if (!acquired.ok) {
+    return acquired;
+  }
+  if (options.heartbeat) {
+    const key = acquired.key;
+    const meta = pendingPaths.get(key);
+    if (meta) {
+      meta.heartbeatTimer = setInterval(() => {
+        refreshLockHeartbeat(absPath, label, options.stateRoot);
+      }, HEARTBEAT_INTERVAL_MS);
+      if (typeof meta.heartbeatTimer.unref === "function") {
+        meta.heartbeatTimer.unref();
+      }
+    }
+  }
+  return acquired;
 }
 
 function releasePathLock(absPath) {
@@ -132,8 +154,8 @@ function isPathLocked(absPath) {
   return fs.existsSync(lockPath) && !isStaleLock(lockPath);
 }
 
-async function withPathLock(absPath, label, fn) {
-  const acquired = tryAcquirePathLock(absPath, label);
+async function withPathLock(absPath, label, fn, options = {}) {
+  const acquired = tryAcquirePathLock(absPath, label, options);
   if (!acquired.ok) {
     return { locked: true, holder: acquired.holder };
   }
@@ -152,4 +174,6 @@ module.exports = {
   withPathLock,
   tryAcquireCrossProcessLock,
   releaseCrossProcessLock,
+  refreshLockHeartbeat,
+  isStaleLock,
 };

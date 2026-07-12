@@ -103,7 +103,7 @@ const { callableAgentToolNames, toolNotCallablePayload, projectSwitchGuidance } 
 const { atomicWriteText, atomicWriteJson } = require("./atomic-io");
 const { sha256Buffer } = require("./safe-write");
 const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
-const { beginBuild, finishBuild, beginValidation, finishValidation, recordMutation } = require("./mutation-generation");
+const { beginBuild, finishBuild, beginValidation, finishValidation, recordMutation, recordDeletion } = require("./mutation-generation");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -1992,6 +1992,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         await fsp.unlink(target);
         invalidateFileCache(target);
+        const activeProjectForMutation = getActiveProject(CONFIG_PATH);
+        let mutation = null;
+        if (activeProjectForMutation) {
+          const projectDir = path.dirname(path.resolve(activeProjectForMutation));
+          try {
+            mutation = await recordDeletion(projectDir, rel);
+          } catch (error) {
+            return fail(String(error.message || error), {
+              errorCode: "MUTATION_LOCK_BUSY",
+              deleted: rel,
+              writeApplied: true,
+              bookkeepingFailed: true,
+              mutationGenerationNotRecorded: true,
+              retryable: false,
+              nextSteps: [
+                "Do NOT retry delete_file — the file is already removed from disk.",
+                "Call static_validate_project before build_unreal_project.",
+              ],
+            });
+          }
+        }
         return text(JSON.stringify({
           ok: true,
           deleted: rel,
@@ -2000,6 +2021,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           reason,
           ifNotDeleted,
           ifDeleted,
+          ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
         }, null, 2));
       } finally {
         releasePathLock(target);
@@ -2069,11 +2091,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const primaryValidation = Array.isArray(tx.validation?.validationResults)
         ? tx.validation.validationResults[0]
         : null;
+      let lastMutation = null;
+      for (const absPath of tx.writtenAbs) {
+        const relPath = path.relative(WORKSPACE_ROOT, absPath).replace(/\\/g, "/");
+        const contentOrHash = (tx.postWriteHashes && tx.postWriteHashes[relPath]) || "";
+        try {
+          lastMutation = await recordMutation(projectRoot, relPath, contentOrHash);
+        } catch (error) {
+          return mutationBookkeepingFailure(error.message, "apply_edit_bundle", relPath);
+        }
+      }
       return validationToolResult(`OK — applied ${tx.writtenAbs.length} file(s) from bundle.`, primaryValidation, {
         operation: "apply_edit_bundle",
         writtenCount: tx.writtenAbs.length,
         preChangeHashes: tx.preChangeHashes,
         transactionId: tx.transactionId,
+        ...(lastMutation ? { mutationGeneration: lastMutation.mutationGeneration } : {}),
         nextSteps: ["Run build_unreal_project after C++ edits."],
         phase: "editing",
         userMessage: `Applied ${tx.writtenAbs.length} file(s) from bundle`,
@@ -2101,6 +2134,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       } else {
         projectRoot = resolved;
       }
+      const validationStart = await beginValidation(projectRoot);
       const validation = await runStaticValidation(projectRoot);
       const severityCounts = (validation.findings || []).reduce((counts, finding) => {
         const key = String(finding.severity || "unknown").toLowerCase();
@@ -2118,10 +2152,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Fix the first blocking error, then run static_validate_project again."]
         });
       }
+      const finish = await finishValidation(projectRoot, validationStart.startGeneration);
+      if (finish.validationStale) {
+        return fail("Validation stale: project mutated during validation.", {
+          validationStale: true,
+          mutationGeneration: finish.mutationGeneration,
+          nextSteps: ["Re-run static_validate_project after edits settle."],
+        });
+      }
       clearValidated(projectRoot);
       await agentNotify(validationSummary);
       return validationToolResult(validationSummary, validation, {
         operation: "static_validate",
+        validatedGeneration: finish.validatedGeneration,
+        mutationGeneration: finish.mutationGeneration,
         nextSteps: ["Run build_unreal_project if C++ or Build.cs changed."],
         phase: "validating",
         userMessage: validationSummary,

@@ -98,7 +98,7 @@ def test_cancel_job_skips_kill_when_pid_identity_mismatch(monkeypatch, isolated_
     }
     write_job_record(job, workspace=isolated_state)
     monkeypatch.setattr("wrapper_job_manager._pid_matches_job", lambda _job: False)
-    monkeypatch.setattr("wrapper_job_manager._process_alive", lambda _pid: True)
+    monkeypatch.setattr("wrapper_job_manager._process_alive", lambda _pid: "alive")
     result = cancel_job(isolated_state, job_id)
     assert result["ok"] is True
     assert result["orphanProcessSuspected"] is True
@@ -121,7 +121,7 @@ def test_cancel_job_cancelled_when_pid_dead_and_identity_mismatch(monkeypatch, i
     }
     write_job_record(job, workspace=isolated_state)
     monkeypatch.setattr("wrapper_job_manager._pid_matches_job", lambda _job: False)
-    monkeypatch.setattr("wrapper_job_manager._process_alive", lambda _pid: False)
+    monkeypatch.setattr("wrapper_job_manager._process_alive", lambda _pid: "dead")
     result = cancel_job(isolated_state, job_id)
     assert result["ok"] is True
     assert result["orphanProcessSuspected"] is False

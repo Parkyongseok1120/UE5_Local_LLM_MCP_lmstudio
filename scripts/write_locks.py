@@ -5,14 +5,18 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
+from process_probe import ProcessAlive, probe_process_alive
 from state_root import ensure_state_root_layout, resolve_agent_state_root
 
 _OWNER = f"{os.getpid()}:{uuid.uuid4().hex}"
-_STALE_LOCK_AGE_SEC = 300.0
+_HEARTBEAT_INTERVAL_SEC = 60.0
 
 
 def _canonical_lock_key(abs_path: Path) -> str:
@@ -35,21 +39,8 @@ def _read_lock_owner(lock_path: Path) -> str:
         return ""
 
 
-def _process_alive(pid: int) -> bool:
-    from process_probe import ProbeTimeout, run_probe
-
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        result = run_probe(["tasklist", "/FI", f"PID eq {pid}"])
-        if isinstance(result, ProbeTimeout):
-            return False
-        return str(pid) in (result.stdout or "")
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+def _process_alive(pid: int) -> ProcessAlive:
+    return probe_process_alive(pid)
 
 
 def _is_stale_lock(lock_path: Path) -> bool:
@@ -65,13 +56,24 @@ def _is_stale_lock(lock_path: Path) -> bool:
         return True
     if pid <= 0:
         return True
-    if not _process_alive(pid):
+    alive = _process_alive(pid)
+    if alive == "dead":
         return True
-    try:
-        age = datetime.now(tz=timezone.utc).timestamp() - lock_path.stat().st_mtime
-        return age > _STALE_LOCK_AGE_SEC
-    except OSError:
-        return True
+    if alive == "unknown":
+        return False
+    return False
+
+
+def _write_lock_payload(lock_path: Path, label: str) -> None:
+    payload = f"{_OWNER}\n{label}\n{datetime.now(tz=timezone.utc).isoformat()}\n"
+    lock_path.write_text(payload, encoding="utf-8")
+
+
+def refresh_lock_heartbeat(abs_path: Path, *, label: str = "write", state_root: Path | None = None) -> None:
+    lock_path = lock_file_path(abs_path, state_root)
+    owner = _read_lock_owner(lock_path)
+    if owner.startswith(_OWNER):
+        _write_lock_payload(lock_path, label)
 
 
 def try_acquire_cross_process_lock(abs_path: Path, label: str = "write", state_root: Path | None = None) -> dict:
@@ -105,3 +107,33 @@ def release_cross_process_lock(abs_path: Path, state_root: Path | None = None) -
             lock_path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+class cross_process_lock:
+    """Context manager with optional heartbeat for long-held locks."""
+
+    def __init__(self, abs_path: Path, *, label: str = "write", heartbeat: bool = False) -> None:
+        self.abs_path = abs_path
+        self.label = label
+        self.heartbeat = heartbeat
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> dict:
+        acquired = try_acquire_cross_process_lock(self.abs_path, self.label)
+        if not acquired.get("ok"):
+            raise RuntimeError(acquired.get("error") or f"lock busy: {acquired.get('holder')}")
+        if self.heartbeat:
+            self._thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+            self._thread.start()
+        return acquired
+
+    def _heartbeat_loop(self) -> None:
+        while not self._stop.wait(_HEARTBEAT_INTERVAL_SEC):
+            refresh_lock_heartbeat(self.abs_path, label=self.label)
+
+    def __exit__(self, *_args) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1.0)
+        release_cross_process_lock(self.abs_path)

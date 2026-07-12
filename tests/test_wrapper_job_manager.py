@@ -110,3 +110,41 @@ def test_list_jobs_reads_sqlite_records(tmp_path: Path, monkeypatch) -> None:
     )
     jobs = list_jobs(workspace, limit=5)
     assert any(item.get("jobId") == job_id for item in jobs)
+
+
+def test_write_job_fail_closed_without_legacy(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.delenv("MCP_JOBS_LEGACY_JSON", raising=False)
+    workspace = tmp_path
+    job_id = uuid.uuid4().hex[:12]
+
+    def boom(*_args, **_kwargs):
+        from job_store import JobStoreError
+
+        raise JobStoreError("sqlite unavailable")
+
+    monkeypatch.setattr("job_store.write_job_record", boom)
+    from job_store import JobStoreError
+
+    import pytest
+
+    with pytest.raises(JobStoreError):
+        write_job(workspace, {"jobId": job_id, "status": "running", "revision": 1, "progress": []})
+
+
+def test_write_job_legacy_fallback_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("MCP_JOBS_LEGACY_JSON", "1")
+    workspace = tmp_path
+    job_id = uuid.uuid4().hex[:12]
+
+    def boom(*_args, **_kwargs):
+        from job_store import JobStoreError
+
+        raise JobStoreError("sqlite unavailable")
+
+    monkeypatch.setattr("job_store.write_job_record", boom)
+    assert write_job(workspace, {"jobId": job_id, "status": "running", "revision": 1, "progress": []}) is True
+    legacy_path = jobs_root(workspace) / f"{job_id}.json"
+    assert legacy_path.is_file()
+

@@ -33,10 +33,6 @@ def write_state(project_root: Path, state: dict) -> None:
     atomic_write_text(path, json.dumps(state, ensure_ascii=False, indent=2))
 
 
-def _state_path(project_root: Path) -> Path:
-    return (project_root / ".agent" / "state" / "mutation.json").resolve()
-
-
 def _with_mutation_lock(project_root: Path, fn):
     from time import sleep
 
@@ -63,6 +59,11 @@ def record_mutation(project_root: Path, rel_path: str, content_hash: str) -> int
         return int(state["mutationGeneration"])
 
     return _with_mutation_lock(project_root, action)
+
+
+def begin_validation(project_root: Path) -> dict:
+    state = read_state(project_root)
+    return {"startGeneration": int(state.get("mutationGeneration") or 0)}
 
 
 def finish_validation(project_root: Path, start_generation: int) -> dict:

@@ -135,15 +135,46 @@ def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def bind_active_job(workspace: Path, task_session_id: str, job_id: str) -> dict[str, Any]:
-    state = _read_state(workspace, task_session_id)
-    if not state:
-        return {"ok": False, "error": f"Unknown task: {task_session_id}"}
-    state["activeJobId"] = job_id
+def _task_status_from_job_terminal(terminal: str) -> str:
+    if terminal == "completed":
+        return "completed"
+    if terminal == "cancelled":
+        return "cancelled"
+    if terminal == "cancellation_uncertain":
+        return "cancellation_uncertain"
+    return "failed"
+
+
+def _reflect_job_terminal_state(
+    workspace: Path,
+    task_session_id: str,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    job = _active_job(workspace, state)
+    if not job:
+        return state
+    terminal = str(job.get("status") or "")
+    if terminal not in {"completed", "failed", "timed_out", "cancelled", "cancellation_uncertain"}:
+        return state
+    if state.get("terminalLogged"):
+        return state
+    state["status"] = _task_status_from_job_terminal(terminal)
+    if terminal == "cancellation_uncertain" and job.get("orphanProcessSuspected"):
+        state["orphanProcessSuspected"] = True
     state["updatedAt"] = _utc_now()
-    _write_state(workspace, task_session_id, state)
-    _append_log(workspace, task_session_id, f"Bound active job {job_id}")
-    return _task_response(workspace, state)
+    _append_log(workspace, task_session_id, f"Job {job.get('jobId')} finished: {terminal}")
+    state["terminalLogged"] = True
+    return state
+
+
+def bind_active_job(workspace: Path, task_session_id: str, job_id: str) -> dict[str, Any]:
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        state["activeJobId"] = job_id
+        state["updatedAt"] = _utc_now()
+        _append_log(workspace, task_session_id, f"Bound active job {job_id}")
+        return state
+
+    return _mutate_task_state(workspace, task_session_id, mutate)
 
 
 def task_start(
@@ -178,8 +209,9 @@ def task_start(
             "build_unreal_project",
         ],
     }
-    _write_state(workspace, task_session_id, state)
     (task_root(workspace, task_session_id) / "logs").mkdir(parents=True, exist_ok=True)
+    with _task_lock(workspace, task_session_id):
+        _write_state(workspace, task_session_id, state)
     _append_log(workspace, task_session_id, f"Task started: {request[:200]}")
 
     if start_background_job and request.strip():
@@ -197,9 +229,15 @@ def task_start(
                 on_progress(job, message)
 
         job = start_job(workspace, job_args, on_progress=_progress)
-        state["activeJobId"] = job.get("jobId") or ""
-        state["updatedAt"] = _utc_now()
-        _write_state(workspace, task_session_id, state)
+
+        def bind_job(current: dict[str, Any]) -> dict[str, Any] | None:
+            current["activeJobId"] = job.get("jobId") or ""
+            current["updatedAt"] = _utc_now()
+            return current
+
+        bound = _mutate_task_state(workspace, task_session_id, bind_job)
+        if bound.get("ok"):
+            state = bound["state"]
 
     payload = _task_response(workspace, state)
     payload["authToken"] = auth_token
@@ -207,26 +245,18 @@ def task_start(
 
 
 def task_status(workspace: Path, task_session_id: str) -> dict[str, Any]:
-    state = _read_state(workspace, task_session_id)
-    if not state:
-        return {"ok": False, "error": f"Unknown task: {task_session_id}"}
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        return _reflect_job_terminal_state(workspace, task_session_id, state)
 
-    job = _active_job(workspace, state)
-    if job and str(job.get("status") or "") in {"completed", "failed", "timed_out", "cancelled", "cancellation_uncertain"}:
-        terminal = str(job.get("status") or "")
-        if not state.get("terminalLogged"):
-            if terminal == "completed":
-                state["status"] = "completed"
-            elif terminal == "cancelled":
-                state["status"] = "cancelled"
-            else:
-                state["status"] = "failed"
-            state["updatedAt"] = _utc_now()
-            _append_log(workspace, task_session_id, f"Job {job.get('jobId')} finished: {terminal}")
-            state["terminalLogged"] = True
-            _write_state(workspace, task_session_id, state)
-
-    return _task_response(workspace, state)
+    try:
+        return _mutate_task_state(workspace, task_session_id, mutate)
+    except RuntimeError as exc:
+        if "task lock busy" not in str(exc):
+            raise
+        state = _read_state(workspace, task_session_id)
+        if not state:
+            return {"ok": False, "error": f"Unknown task: {task_session_id}"}
+        return _task_response(workspace, state)
 
 
 def task_approve(workspace: Path, task_session_id: str, *, note: str = "") -> dict[str, Any]:
@@ -249,36 +279,71 @@ def task_approve(workspace: Path, task_session_id: str, *, note: str = "") -> di
 
 
 def task_cancel(workspace: Path, task_session_id: str) -> dict[str, Any]:
-    state = _read_state(workspace, task_session_id)
-    if not state:
-        return {"ok": False, "error": f"Unknown task: {task_session_id}"}
-    if str(state.get("status") or "") in TERMINAL_TASK_STATUSES:
-        return {"ok": False, "error": "Cancel rejected: task is already terminal.", "taskSessionId": task_session_id}
+    cancel_error: dict[str, Any] | None = None
+    cancel_meta: dict[str, Any] = {}
 
-    job_id = str(state.get("activeJobId") or "").strip()
-    if job_id:
-        from wrapper_job_manager import cancel_job
-
-        cancel_result = cancel_job(workspace, job_id)
-        _append_log(
-            workspace,
-            task_session_id,
-            f"Cancelled job {job_id}: {cancel_result.get('ok')}",
-        )
-        if not cancel_result.get("ok"):
-            return {
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal cancel_error, cancel_meta
+        if str(state.get("status") or "") in TERMINAL_TASK_STATUSES:
+            cancel_error = {
                 "ok": False,
-                "error": cancel_result.get("error") or "cancel_job failed",
+                "error": "Cancel rejected: task is already terminal.",
                 "taskSessionId": task_session_id,
-                "jobId": job_id,
             }
+            return None
+        job_id = str(state.get("activeJobId") or "").strip()
+        if job_id:
+            from wrapper_job_manager import cancel_job
 
-    state["status"] = "cancelled"
-    state["updatedAt"] = _utc_now()
-    with _task_lock(workspace, task_session_id):
-        _write_state(workspace, task_session_id, state)
-    _append_log(workspace, task_session_id, "Task cancelled")
-    return _task_response(workspace, state)
+            cancel_result = cancel_job(workspace, job_id)
+            _append_log(
+                workspace,
+                task_session_id,
+                f"Cancelled job {job_id}: {cancel_result.get('ok')}",
+            )
+            if not cancel_result.get("ok"):
+                cancel_error = {
+                    "ok": False,
+                    "error": cancel_result.get("error") or "cancel_job failed",
+                    "taskSessionId": task_session_id,
+                    "jobId": job_id,
+                }
+                return None
+            cancel_state = str(cancel_result.get("cancellationState") or "")
+            cancel_meta = {
+                "cancellationState": cancel_state,
+                "orphanProcessSuspected": bool(cancel_result.get("orphanProcessSuspected")),
+            }
+            if cancel_state == "cancellation_uncertain":
+                state["status"] = "cancellation_uncertain"
+                if cancel_meta["orphanProcessSuspected"]:
+                    state["orphanProcessSuspected"] = True
+            elif cancel_state in {"failed", "timed_out"}:
+                state["status"] = "failed"
+            elif cancel_state == "completed":
+                state["status"] = "completed"
+            else:
+                state["status"] = "cancelled"
+        else:
+            state["status"] = "cancelled"
+            cancel_meta = {"cancellationState": "cancelled", "orphanProcessSuspected": False}
+        state["updatedAt"] = _utc_now()
+        _append_log(workspace, task_session_id, f"Task {state['status']}")
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if cancel_error:
+        return cancel_error
+    if result.get("ok") is False:
+        if "Unknown task" in str(result.get("error") or ""):
+            return result
+        return {
+            "ok": False,
+            "error": "Cancel rejected: task is already terminal.",
+            "taskSessionId": task_session_id,
+        }
+    result.update(cancel_meta)
+    return result
 
 
 def task_resume(workspace: Path, task_session_id: str) -> dict[str, Any]:
