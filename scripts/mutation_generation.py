@@ -13,6 +13,10 @@ def _state_path(project_root: Path) -> Path:
     return (project_root / ".agent" / "state" / "mutation.json").resolve()
 
 
+class MutationStateCorruptError(RuntimeError):
+    """Raised when mutation.json is unreadable or corrupt."""
+
+
 def default_state() -> dict:
     return {"mutationGeneration": 0, "paths": {}, "validatedGeneration": 0}
 
@@ -23,8 +27,8 @@ def read_state(project_root: Path) -> dict:
         return default_state()
     try:
         return {**default_state(), **json.loads(path.read_text(encoding="utf-8"))}
-    except Exception:
-        return default_state()
+    except Exception as exc:
+        raise MutationStateCorruptError(f"mutation state corrupt: {path}") from exc
 
 
 def write_state(project_root: Path, state: dict) -> None:

@@ -18,8 +18,19 @@ function mutationStatePath(projectRoot) {
   return path.join(path.resolve(projectRoot), ".agent", "state", "mutation.json");
 }
 
+function validationStatePath(projectRoot) {
+  return path.join(path.resolve(projectRoot), ".agent", "state", "validation.json");
+}
+
 function defaultState() {
-  return { mutationGeneration: 0, paths: {}, updatedAt: new Date().toISOString() };
+  return { mutationGeneration: 0, paths: {}, validatedGeneration: 0, updatedAt: new Date().toISOString() };
+}
+
+function mutationStateCorruptError(cause) {
+  const err = new Error("MUTATION_STATE_CORRUPT");
+  err.errorCode = "MUTATION_STATE_CORRUPT";
+  err.cause = cause;
+  return err;
 }
 
 async function readMutationState(projectRoot) {
@@ -29,8 +40,8 @@ async function readMutationState(projectRoot) {
   }
   try {
     return { ...defaultState(), ...JSON.parse(await fsp.readFile(file, "utf8")) };
-  } catch {
-    return defaultState();
+  } catch (err) {
+    throw mutationStateCorruptError(err);
   }
 }
 
@@ -90,6 +101,27 @@ async function finishValidation(projectRoot, startGeneration) {
   });
 }
 
+async function finishValidationAndClear(projectRoot, startGeneration) {
+  return withMutationLock(projectRoot, async () => {
+    const state = await readMutationState(projectRoot);
+    const current = int(state.mutationGeneration);
+    if (current !== int(startGeneration)) {
+      return { validationStale: true, validatedGeneration: null, mutationGeneration: current };
+    }
+    state.validatedGeneration = current;
+    await writeMutationState(projectRoot, state);
+    const validationFile = validationStatePath(projectRoot);
+    try {
+      if (fs.existsSync(validationFile)) {
+        fs.unlinkSync(validationFile);
+      }
+    } catch {
+      // Best-effort cleanup under the same lock scope.
+    }
+    return { validationStale: false, validatedGeneration: current, mutationGeneration: current };
+  });
+}
+
 async function recordDeletion(projectRoot, relPath) {
   return withMutationLock(projectRoot, async () => {
     const state = await readMutationState(projectRoot);
@@ -131,6 +163,7 @@ module.exports = {
   withMutationLock,
   beginValidation,
   finishValidation,
+  finishValidationAndClear,
   beginBuild,
   finishBuild,
 };

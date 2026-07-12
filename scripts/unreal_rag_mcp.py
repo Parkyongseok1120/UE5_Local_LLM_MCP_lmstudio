@@ -449,6 +449,12 @@ class McpServer:
         self._cache_refresh_required = False
         self._cache_partial_clear: list[str] = []
         self._applied_cache_generation = self._cache_generation
+        try:
+            from reconcile_jobs import reconcile_stale_jobs
+
+            reconcile_stale_jobs(self.workspace)
+        except Exception:
+            pass
 
     def _maybe_refresh_project_caches(self) -> None:
         from project_switch_invalidate import clear_local_project_caches, read_cache_generation

@@ -235,25 +235,41 @@ async function rollbackJournal(journal) {
     const abs = entry.canonicalAbsolutePath;
     const rel = entry.relativePath;
     try {
+      const existsNow = fs.existsSync(abs);
       let currentHash = "";
-      if (fs.existsSync(abs)) {
+      if (existsNow) {
         currentHash = sha256Text(await fsp.readFile(abs, "utf8"));
       }
-      if (entry.postHash && currentHash && currentHash !== entry.postHash) {
-        externalChangeDetected.push(rel);
-        unrestored.push(rel);
-        upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
-        continue;
-      }
       if (entry.existedBefore) {
+        if (!existsNow) {
+          externalChangeDetected.push(rel);
+          unrestored.push(rel);
+          upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
+          continue;
+        }
+        if (entry.postHash && currentHash !== entry.postHash) {
+          externalChangeDetected.push(rel);
+          unrestored.push(rel);
+          upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
+          continue;
+        }
         const backup = entry.preContentBackupPath;
         if (backup && fs.existsSync(backup)) {
           atomicWriteText(abs, fs.readFileSync(backup, "utf8"));
         } else {
           throw new Error(`missing backup for ${rel}`);
         }
-      } else if (fs.existsSync(abs)) {
+      } else if (!existsNow) {
+        restored.push(rel);
+        upsertEntry(journal, { relativePath: rel, restored: true });
+        continue;
+      } else if (entry.postHash && currentHash === entry.postHash) {
         await fsp.unlink(abs);
+      } else {
+        externalChangeDetected.push(rel);
+        unrestored.push(rel);
+        upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
+        continue;
       }
       restored.push(rel);
       upsertEntry(journal, { relativePath: rel, restored: true });

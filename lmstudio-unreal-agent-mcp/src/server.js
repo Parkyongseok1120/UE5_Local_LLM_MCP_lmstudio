@@ -62,7 +62,7 @@ const {
   VALIDATE_ON_WRITE_TIMEOUT_MS,
   clearValidated
 } = require("./validate-write.js");
-const { requireCleanOrFail } = require("./validation-dirty");
+const { requireCleanOrFail, getDirtyState } = require("./validation-dirty");
 const { validateMutationAuth } = require("./task-auth");
 const {
   applyBundleTransaction,
@@ -103,7 +103,7 @@ const { callableAgentToolNames, toolNotCallablePayload, projectSwitchGuidance } 
 const { atomicWriteText, atomicWriteJson } = require("./atomic-io");
 const { sha256Buffer } = require("./safe-write");
 const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
-const { beginBuild, finishBuild, beginValidation, finishValidation, recordMutation, recordDeletion } = require("./mutation-generation");
+const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -2134,7 +2134,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       } else {
         projectRoot = resolved;
       }
-      const validationStart = await beginValidation(projectRoot);
+      let validationStart;
+      try {
+        validationStart = await beginValidation(projectRoot);
+      } catch (err) {
+        if (err && err.errorCode === "MUTATION_STATE_CORRUPT") {
+          return fail("Static validation blocked: mutation state corrupt.", {
+            errorCode: "MUTATION_STATE_CORRUPT",
+            nextSteps: ["Repair .agent/state/mutation.json, then run static_validate_project."],
+          });
+        }
+        throw err;
+      }
       const validation = await runStaticValidation(projectRoot);
       const severityCounts = (validation.findings || []).reduce((counts, finding) => {
         const key = String(finding.severity || "unknown").toLowerCase();
@@ -2152,7 +2163,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Fix the first blocking error, then run static_validate_project again."]
         });
       }
-      const finish = await finishValidation(projectRoot, validationStart.startGeneration);
+      const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration);
       if (finish.validationStale) {
         return fail("Validation stale: project mutated during validation.", {
           validationStale: true,
@@ -2160,7 +2171,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Re-run static_validate_project after edits settle."],
         });
       }
-      clearValidated(projectRoot);
       await agentNotify(validationSummary);
       return validationToolResult(validationSummary, validation, {
         operation: "static_validate",
@@ -2304,6 +2314,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!projectPath.toLowerCase().endsWith(".uproject")) return fail("project must be a .uproject file");
 
       const projectRoot = path.dirname(projectPath);
+      let mutation;
+      try {
+        mutation = await readMutationState(projectRoot);
+      } catch (err) {
+        if (err && err.errorCode === "MUTATION_STATE_CORRUPT") {
+          return fail("build blocked: mutation state corrupt.", {
+            errorCode: "MUTATION_STATE_CORRUPT",
+            nextSteps: ["Repair .agent/state/mutation.json, then run static_validate_project."],
+          });
+        }
+        throw err;
+      }
+      const dirtyState = getDirtyState(projectRoot);
+      if (dirtyState.corrupt) {
+        return fail("build blocked: validation state corrupt.", {
+          errorCode: "VALIDATION_STATE_CORRUPT",
+          nextSteps: ["Repair .agent/state/validation.json, then run static_validate_project."],
+        });
+      }
       const dirtyGate = requireCleanOrFail(projectRoot, {
         override: args.validationOverride === true,
         auditNote: String(args.validationOverrideNote || "")
@@ -2312,6 +2341,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return fail(dirtyGate.error, {
           validationDirty: dirtyGate.state,
           nextSteps: dirtyGate.nextSteps
+        });
+      }
+      const validatedGeneration = Number(mutation.validatedGeneration || 0);
+      const mutationGeneration = Number(mutation.mutationGeneration || 0);
+      if (validatedGeneration !== mutationGeneration) {
+        return fail("build blocked: validation proof stale.", {
+          validatedGeneration,
+          mutationGeneration,
+          nextSteps: [
+            "Run static_validate_project after the latest edits before building.",
+          ],
         });
       }
 

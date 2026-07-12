@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -13,7 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from job_store import read_job_record, validate_job_id, write_job_record  # noqa: E402
 from state_root import ensure_state_root_layout  # noqa: E402
-from wrapper_job_manager import cancel_job, read_job, start_job  # noqa: E402
+from wrapper_job_manager import cancel_job, create_job, launch_job, read_job, start_job  # noqa: E402
 
 
 class _FakePopen:
@@ -151,3 +152,55 @@ def test_cancel_job_persists_cancel_requested(monkeypatch, isolated_state: Path)
     persisted = read_job(isolated_state, job_id)
     assert persisted is not None
     assert persisted["status"] in {"cancelled", "cancellation_uncertain", "cancel_requested"}
+
+
+def test_spawn_persist_failure_kills_tree_and_marks_failed(monkeypatch, isolated_state: Path) -> None:
+    job = create_job(isolated_state, {"request": "spawn-fail-test"})
+    job_id = str(job["jobId"])
+    kill_calls: list[int] = []
+    monkeypatch.setattr("wrapper_job_manager._kill_process_tree", lambda pid: kill_calls.append(pid) or True)
+    monkeypatch.setattr("wrapper_job_manager._confirm_process_dead", lambda _pid: "dead")
+    monkeypatch.setattr("wrapper_job_manager.subprocess.Popen", _FakePopen)
+
+    original = __import__("job_store").transition_job_record
+
+    def fake_transition(job_id_arg, status, mutator, workspace=None):
+        if status == "running":
+            return False
+        return original(job_id_arg, status, mutator, workspace=workspace)
+
+    monkeypatch.setattr("job_store.transition_job_record", fake_transition)
+    launch_job(isolated_state, job_id)
+    deadline = time.time() + 5
+    persisted = read_job(isolated_state, job_id)
+    while time.time() < deadline:
+        persisted = read_job(isolated_state, job_id)
+        if persisted and persisted.get("status") in {"failed", "cancellation_uncertain"}:
+            break
+        time.sleep(0.05)
+    assert persisted is not None
+    assert persisted["status"] == "failed"
+    assert persisted.get("spawnPersistFailed") is True
+    assert kill_calls
+
+
+def test_reconcile_stale_starting_job_without_pid(isolated_state: Path) -> None:
+    from reconcile_jobs import reconcile_stale_jobs
+
+    job_id = uuid.uuid4().hex[:12]
+    write_job_record(
+        {
+            "jobId": job_id,
+            "status": "starting",
+            "revision": 1,
+            "progressSequence": 0,
+            "progress": [],
+        },
+        workspace=isolated_state,
+    )
+    summary = reconcile_stale_jobs(isolated_state)
+    assert summary["terminalized"] >= 1
+    persisted = read_job(isolated_state, job_id)
+    assert persisted is not None
+    assert persisted["status"] == "failed"
+    assert persisted.get("reconciledStaleStarting") is True

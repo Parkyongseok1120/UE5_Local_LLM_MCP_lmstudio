@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 AGENT = ROOT / "lmstudio-unreal-agent-mcp"
@@ -33,6 +35,18 @@ def test_validation_succeeds_when_generation_stable(tmp_path: Path) -> None:
     result = finish_validation(project, gen)
     assert result["validationStale"] is False
     assert result["validatedGeneration"] == gen
+
+
+def test_corrupt_mutation_state_raises(tmp_path: Path) -> None:
+    from mutation_generation import MutationStateCorruptError
+
+    project = tmp_path / "Game"
+    project.mkdir()
+    state_file = project / ".agent" / "state" / "mutation.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text("{bad json", encoding="utf-8")
+    with pytest.raises(MutationStateCorruptError):
+        read_state(project)
 
 
 def test_concurrent_python_mutations_preserve_paths(tmp_path: Path, monkeypatch) -> None:

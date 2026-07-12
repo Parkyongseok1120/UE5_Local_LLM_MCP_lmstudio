@@ -4,8 +4,6 @@ const fs = require("fs");
 const path = require("path");
 const { atomicWriteJson } = require("./atomic-io");
 
-const dirtyByProject = new Map();
-
 function projectKey(projectRoot) {
   return path.resolve(String(projectRoot || "")).toLowerCase();
 }
@@ -39,42 +37,46 @@ function savePersisted(projectRoot, entry) {
   atomicWriteJson(stateFilePath(projectRoot), entry);
 }
 
-function hydrateFromDisk(projectRoot) {
-  const key = projectKey(projectRoot);
-  if (dirtyByProject.has(key)) {
-    return;
-  }
+function getDirtyState(projectRoot) {
   const persisted = loadPersisted(projectRoot);
-  if (persisted && persisted.validationRequired) {
-    dirtyByProject.set(key, {
+  if (!persisted) {
+    return {
+      validationRequired: false,
+      unvalidatedPaths: [],
+      reason: null,
+      corrupt: false,
+    };
+  }
+  if (persisted.corrupt || persisted.reason === "state_corrupt") {
+    return {
       validationRequired: true,
       unvalidatedPaths: [...(persisted.unvalidatedPaths || [])],
-      fileHashes: { ...(persisted.fileHashes || {}) },
-      reason: persisted.reason || "validation skipped",
-      corrupt: Boolean(persisted.corrupt),
-    });
+      reason: persisted.reason || "state_corrupt",
+      corrupt: true,
+    };
   }
-}
-
-function getDirtyState(projectRoot) {
-  hydrateFromDisk(projectRoot);
-  const key = projectKey(projectRoot);
-  const entry = dirtyByProject.get(key) || { validationRequired: false, unvalidatedPaths: [] };
   return {
-    validationRequired: Boolean(entry.validationRequired),
-    unvalidatedPaths: [...(entry.unvalidatedPaths || [])],
-    reason: entry.reason || null,
+    validationRequired: Boolean(persisted.validationRequired),
+    unvalidatedPaths: [...(persisted.unvalidatedPaths || [])],
+    reason: persisted.reason || null,
+    corrupt: false,
   };
 }
 
 function markUnvalidated(projectRoot, relPath, reason = "validation skipped") {
-  hydrateFromDisk(projectRoot);
-  const key = projectKey(projectRoot);
-  const entry = dirtyByProject.get(key) || {
-    validationRequired: false,
-    unvalidatedPaths: [],
-    fileHashes: {},
-  };
+  const existing = loadPersisted(projectRoot);
+  const entry = existing && !existing.corrupt
+    ? {
+        validationRequired: Boolean(existing.validationRequired),
+        unvalidatedPaths: [...(existing.unvalidatedPaths || [])],
+        fileHashes: { ...(existing.fileHashes || {}) },
+        reason: existing.reason || reason,
+      }
+    : {
+        validationRequired: false,
+        unvalidatedPaths: [],
+        fileHashes: {},
+      };
   entry.validationRequired = true;
   const normalized = String(relPath || "").replace(/\\/g, "/");
   if (normalized && !entry.unvalidatedPaths.includes(normalized)) {
@@ -82,12 +84,10 @@ function markUnvalidated(projectRoot, relPath, reason = "validation skipped") {
     const absPath = path.join(path.resolve(projectRoot), normalized);
     const digest = hashFile(absPath);
     if (digest) {
-      entry.fileHashes = entry.fileHashes || {};
       entry.fileHashes[normalized] = digest;
     }
   }
   entry.reason = reason;
-  dirtyByProject.set(key, entry);
   savePersisted(projectRoot, {
     validationRequired: entry.validationRequired,
     unvalidatedPaths: entry.unvalidatedPaths,
@@ -99,8 +99,6 @@ function markUnvalidated(projectRoot, relPath, reason = "validation skipped") {
 }
 
 function clearValidated(projectRoot) {
-  const key = projectKey(projectRoot);
-  dirtyByProject.delete(key);
   const filePath = stateFilePath(projectRoot);
   try {
     if (fs.existsSync(filePath)) {
@@ -114,6 +112,16 @@ function clearValidated(projectRoot) {
 
 function requireCleanOrFail(projectRoot, { override = false, auditNote = "" } = {}) {
   const state = getDirtyState(projectRoot);
+  if (state.corrupt) {
+    return {
+      ok: false,
+      state,
+      error: "build blocked: validation state corrupt",
+      nextSteps: [
+        "Repair or delete .agent/state/validation.json, then run static_validate_project.",
+      ],
+    };
+  }
   if (!state.validationRequired || override) {
     return { ok: true, state, auditNote };
   }
@@ -133,4 +141,5 @@ module.exports = {
   markUnvalidated,
   clearValidated,
   requireCleanOrFail,
+  stateFilePath,
 };

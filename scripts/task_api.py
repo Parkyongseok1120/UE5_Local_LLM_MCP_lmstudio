@@ -215,7 +215,14 @@ def task_start(
     _append_log(workspace, task_session_id, f"Task started: {request[:200]}")
 
     if start_background_job and request.strip():
-        from wrapper_job_manager import start_job
+        from wrapper_job_manager import (
+            append_progress as job_append_progress,
+            create_job,
+            launch_job,
+            read_job,
+            save_job,
+            transition_job_status,
+        )
 
         job_args: dict[str, Any] = {
             "request": request,
@@ -228,16 +235,25 @@ def task_start(
             if on_progress:
                 on_progress(job, message)
 
-        job = start_job(workspace, job_args, on_progress=_progress)
+        job = create_job(workspace, job_args)
+        job_id = str(job.get("jobId") or "")
 
         def bind_job(current: dict[str, Any]) -> dict[str, Any] | None:
-            current["activeJobId"] = job.get("jobId") or ""
+            current["activeJobId"] = job_id
             current["updatedAt"] = _utc_now()
             return current
 
         bound = _mutate_task_state(workspace, task_session_id, bind_job)
-        if bound.get("ok"):
+        if not bound.get("ok"):
+            latest = read_job(workspace, job_id) or job
+            transition_job_status(latest, "cancelled")
+            latest["taskBindFailed"] = True
+            job_append_progress(latest, "Task bind failed before worker launch.")
+            save_job(workspace, latest)
+        else:
+            launch_job(workspace, job_id, on_progress=_progress)
             state = bound["state"]
+            state["activeJobId"] = job_id
 
     payload = _task_response(workspace, state)
     payload["authToken"] = auth_token
