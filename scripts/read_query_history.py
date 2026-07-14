@@ -164,7 +164,11 @@ def check_repeat_query(
     continuation_token: str = "",
 ) -> dict[str, Any]:
     _prune_expired()
-    if continuation_token and consume_continuation_token(continuation_token, fingerprint):
+    if continuation_token and consume_continuation_token(
+        continuation_token,
+        fingerprint,
+        semantic_key=semantic_key,
+    ):
         return {"repeatDetected": False, "doNotRetry": False, "fullContextSuppressed": False, "continuationConsumed": True}
     if allow_detail_escalation and previous_detail and current_detail:
         order = ("compact", "medium", "large", "full")
@@ -227,11 +231,34 @@ def issue_continuation_token(delivery_key: str) -> str:
     return token
 
 
-def consume_continuation_token(token: str, delivery_key: str) -> bool:
+def consume_continuation_token(token: str, delivery_key: str = "", *, semantic_key: str = "") -> bool:
     if not token:
         return False
     expected = _CONTINUATION_TOKENS.pop(str(token), "")
-    return bool(expected) and expected == delivery_key
+    if not expected:
+        return False
+    if delivery_key and expected == delivery_key:
+        return True
+    # Allow detail escalation: token from a prior delivery under the same semantic key.
+    if semantic_key:
+        entry = _HISTORY.get(expected)
+        if entry and str(entry.get("semanticQueryKey") or "") == semantic_key:
+            return True
+        if expected == semantic_key:
+            return True
+    return False
+
+
+def previous_detail_for_semantic(semantic_key: str) -> str | None:
+    if not semantic_key:
+        return None
+    for delivery_key in reversed(list(_SEMANTIC_INDEX.get(semantic_key) or [])):
+        entry = _HISTORY.get(delivery_key)
+        if entry and entry.get("deliveredFullContext"):
+            detail = str(entry.get("detailLevel") or "").strip().lower()
+            if detail:
+                return detail
+    return None
 
 
 def record_query_delivery(

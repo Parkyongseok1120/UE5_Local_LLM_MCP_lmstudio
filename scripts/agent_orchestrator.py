@@ -620,8 +620,10 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
         "Prefer replace_in_file with expectedOccurrences=1 for existing files.",
         "Use write_file only for brand-new files; never full-rewrite an existing .h/.cpp/.cs.",
         "If write/replace returns static validation findings, fix them before build_unreal_project.",
-        "If cleanup requires deleting files, finish edits first, call propose_file_deletions with count/path/fileName/reason/ifNotDeleted/ifDeleted, report the plan, and wait for explicit user approval before delete_file.",
-        "For more than 2 files, prefer unreal_start_compile_loop + unreal_compile_loop_status.",
+        "If cleanup requires deleting files, finish edits first; deletion tools are Extended-only "
+        "(propose_file_deletions / delete_file). In Essential mode report the duplicate path and stop for user approval.",
+        "For more than 2 files in Essential mode, patch sequentially and run build_unreal_project after each slice; "
+        "prefer unreal_start_compile_loop only when that tool appears in tools/list (Extended).",
         "Do not use run_javascript/js-code-sandbox/Deno file APIs for project file I/O; use unreal-agent file tools.",
     ]
     if "ubt_build" in evidence.gates or task_kind in {"edit", "compile_fix", "refactor"}:

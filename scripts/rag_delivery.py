@@ -9,6 +9,7 @@ from typing import Any
 from read_query_history import (
     check_repeat_query,
     delivery_variant_key,
+    previous_detail_for_semantic,
     record_query_delivery,
     semantic_query_key,
 )
@@ -27,7 +28,7 @@ def deliver_rag_result(
     index_path: Path,
     session_id: str = "",
     rows: list[Any] | None = None,
-    allow_detail_escalation: bool = False,
+    allow_detail_escalation: bool = True,
     previous_detail: str | None = None,
     continuation_token: str = "",
 ) -> dict[str, Any]:
@@ -53,17 +54,18 @@ def deliver_rag_result(
         index_path=index_path,
         session_id=session_id,
     )
+    prev_detail = previous_detail or previous_detail_for_semantic(semantic_key)
     repeat = check_repeat_query(
         delivery_key,
         allow_detail_escalation=allow_detail_escalation,
-        previous_detail=previous_detail,
+        previous_detail=prev_detail,
         current_detail=detail_level,
         semantic_key=semantic_key,
         continuation_token=continuation_token,
     )
     if repeat.get("repeatDetected"):
         return {
-            "ok": True,
+            "ok": False,
             "semanticQueryKey": semantic_key,
             "deliveryVariantKey": delivery_key,
             "fingerprint": delivery_key,

@@ -105,7 +105,6 @@ AGENT_EXTENDED_PROFILE_TOOLS = frozenset(
         "refactor_plan_validate",
         "propose_file_deletions",
         "delete_file",
-        "record_bootstrap_step",
     }
 )
 

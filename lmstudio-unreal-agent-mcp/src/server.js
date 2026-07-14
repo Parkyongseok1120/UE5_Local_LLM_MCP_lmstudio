@@ -83,8 +83,10 @@ const {
   releasePathLock
 } = require("./write-locks.js");
 const {
-  checkAndRecordMutation,
-  duplicateMutationMessage
+  checkMutationDuplicate,
+  recordMutation: recordMutationAttempt,
+  duplicateMutationMessage,
+  clearMutationHistory
 } = require("./mutation-history.js");
 const {
   buildResponsePayload,
@@ -201,6 +203,9 @@ function clearLoopHistoriesOnProjectChange(force = false) {
   if (force || changed) {
     clearReadSuccessHistory();
     clearToolFailureHistory();
+    clearMutationHistory();
+    readEvidence.clear();
+    fileCache.clear();
   }
   lastSeenActiveProjectKey = current;
   return force || changed;
@@ -339,7 +344,8 @@ function enforceTaskAuth(args, options = {}) {
       errorCode: auth.errorCode || "TASK_AUTH_FAILED",
     });
   }
-  return auth;
+  // Success must return null so write_file/replace_in_file proceed (not return the auth object).
+  return null;
 }
 
 function validationToolResult(summary, validation, options = {}) {
@@ -726,6 +732,7 @@ function cachedReadSuccess(content, options = {}) {
   const payload = {
     ok: true,
     cached: true,
+    evidenceStatus: "cached",
     repeatDetected: true,
     doNotRepeatRead: true,
     stopCurrentWorkflow: options.stopCurrentWorkflow !== false,
@@ -1716,14 +1723,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         s,
         resolution,
         `1-${truncated.endLine}`,
-        s.size <= MAX_READ_BYTES ? sha256Buffer(await fsp.readFile(target)) : null
+        // Always hash the full file so truncated reads still unlock replace_in_file.
+        sha256Buffer(await fsp.readFile(target))
       );
       const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`
         + (truncated.meta.truncated ? `[read-truncation: ${JSON.stringify(truncated.meta)}]\n` : "");
       const output = metadataHeader + out;
       recordReadSuccess("read_file", guard.normalizedArgs, {
         ...readContext,
-        evidenceHash: s.size <= MAX_READ_BYTES ? sha256Text(out) : null,
+        evidenceHash: sha256Text(out),
       }, output, { lineRange: { start: 1, end: truncated.endLine } });
       return text(output);
     }
@@ -1892,11 +1900,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.createDirs) await fsp.mkdir(parent, { recursive: true });
         if (!(await exists(parent))) return fail(`parent directory not found: ${path.relative(WORKSPACE_ROOT, parent)}`);
         const rel = path.relative(WORKSPACE_ROOT, target);
-        const repeat = checkAndRecordMutation("write_file", target, String(args.content || ""));
+        const mutationPayload = String(args.content || "");
+        const repeat = checkMutationDuplicate("write_file", target, mutationPayload);
         if (repeat.duplicate) {
-          return fail(duplicateMutationMessage("write_file", rel, repeat));
+          return fail(duplicateMutationMessage("write_file", rel, repeat), {
+            errorCode: "MUTATION_REPEAT_BLOCKED",
+            retryable: false,
+            doNotRetry: ["write_file"],
+            stopCurrentWorkflow: true,
+          });
         }
-        const contentToWrite = String(args.content || "");
+        const contentToWrite = mutationPayload;
         const targetExists = await exists(target);
         const priorContent = targetExists && ALLOW_EXISTING_SOURCE_WRITE
           ? await fsp.readFile(target, "utf8")
@@ -1920,6 +1934,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
           throw err;
         }
+        recordMutationAttempt("write_file", target, mutationPayload);
         invalidateFileCache(target);
         const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
         if (validationFailed(validation)) {
@@ -2019,13 +2034,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return fail("previous write still in progress on this path; verify file state with read_file before retrying.");
       }
       try {
-        const repeat = checkAndRecordMutation(
-          "replace_in_file",
-          target,
-          `${oldText}\u0000${newText}\u0000${args.expectedOccurrences ?? ""}`
-        );
+        const mutationPayload = `${oldText}\u0000${newText}\u0000${args.expectedOccurrences ?? ""}`;
+        const repeat = checkMutationDuplicate("replace_in_file", target, mutationPayload);
         if (repeat.duplicate) {
-          return fail(duplicateMutationMessage("replace_in_file", path.relative(WORKSPACE_ROOT, target), repeat));
+          return fail(duplicateMutationMessage("replace_in_file", path.relative(WORKSPACE_ROOT, target), repeat), {
+            errorCode: "MUTATION_REPEAT_BLOCKED",
+            retryable: false,
+            doNotRetry: ["replace_in_file"],
+            stopCurrentWorkflow: true,
+          });
         }
         const raw = await readCachedBufferFile(target, s);
         const hasCRLF = raw.includes(Buffer.from("\r\n"));
@@ -2048,7 +2065,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } else {
             hint = "\n\nHint: the first line of oldText was not found anywhere in the file. Use read_file or search_files to verify the exact content before retrying.";
           }
-          return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`);
+          return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`, {
+            errorCode: "OLD_TEXT_NOT_FOUND",
+            retryable: false,
+            doNotRetry: ["replace_in_file"],
+            nextSteps: ["Call read_file_range for the target lines, then retry replace_in_file with corrected oldText."],
+          });
         }
         const isSourcePath = [".h", ".hpp", ".cpp", ".c", ".cc", ".cs"].includes(path.extname(target).toLowerCase());
         const expectedOccurrences = args.expectedOccurrences !== undefined
@@ -2062,11 +2084,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             .map(({ line, index }) => `L${index + 1}: ${line.slice(0, 120)}`)
             .join("\n");
           return fail(
-            `ambiguous replace in ${args.path}: found ${occurrences} matches; specify expectedOccurrences or narrow oldText.${snippets ? `\n\nMatches:\n${snippets}` : ""}`
+            `ambiguous replace in ${args.path}: found ${occurrences} matches; specify expectedOccurrences or narrow oldText.${snippets ? `\n\nMatches:\n${snippets}` : ""}`,
+            {
+              errorCode: "AMBIGUOUS_REPLACE",
+              retryable: false,
+              doNotRetry: ["replace_in_file"],
+            }
           );
         }
         if (expectedOccurrences !== undefined && occurrences !== expectedOccurrences) {
-          return fail(`occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`);
+          return fail(`occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`, {
+            errorCode: "OCCURRENCE_MISMATCH",
+            retryable: false,
+            doNotRetry: ["replace_in_file"],
+          });
         }
 
         // Apply replacement on normalized content, then restore original line endings if needed
@@ -2083,9 +2114,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!casResult.ok) {
           return fail(casResult.error || "replace_in_file blocked by read-hash CAS.", {
             errorCode: casResult.errorCode || "READ_HASH_CAS_MISMATCH",
+            retryable: false,
+            doNotRetry: ["replace_in_file"],
             nextSteps: ["Re-read the file, then retry replace_in_file with exact oldText."],
           });
         }
+        recordMutationAttempt("replace_in_file", target, mutationPayload);
         const updated = casResult.updated;
         invalidateFileCache(target);
         const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
@@ -2155,9 +2189,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "propose_file_deletions") {
-      const activeProject = getActiveProject(CONFIG_PATH);
-      const plan = await buildDeletionProposal(args.files, args.completedEditsSummary, activeProject);
-      return text(JSON.stringify(plan, null, 2));
+      try {
+        const activeProject = getActiveProject(CONFIG_PATH);
+        const plan = await buildDeletionProposal(args.files, args.completedEditsSummary, activeProject);
+        return text(JSON.stringify(plan, null, 2));
+      } catch (err) {
+        const message = err && err.message ? String(err.message) : String(err);
+        return fail(message, {
+          errorCode: "VALIDATION_ERROR",
+          retryable: false,
+          userMessage: message,
+          agentInstruction: "Fix propose_file_deletions arguments (summary/reasons must be concrete sentences) and retry once.",
+        });
+      }
     }
 
     if (name === "delete_file") {
@@ -2405,10 +2449,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!query) return fail("query must not be empty");
 
       const baseStat = await statSafe(base);
+      if (!baseStat) {
+        return fail(`not found: ${args.path || "."}`, {
+          errorCode: "SEARCH_PATH_NOT_FOUND",
+          retryable: false,
+          doNotRetry: ["search_files"],
+          nextSteps: ["Call get_active_project / list_directory, then search under project://Source."],
+        });
+      }
+      if (!baseStat.isDirectory() && !baseStat.isFile()) {
+        return fail(`not a searchable path: ${args.path || "."}`, {
+          errorCode: "SEARCH_PATH_INVALID",
+          retryable: false,
+        });
+      }
       const mutationGeneration = await resolveMutationGenerationForRead(resolution, base);
       const readContext = buildReadEvidenceContext(base, baseStat, resolution, {
         mutationGeneration,
-        scopeSignature: baseStat ? fileStatSignature(baseStat) : String(base),
+        scopeSignature: fileStatSignature(baseStat),
       });
       const guard = prepareReadGuard("search_files", args, readContext);
       const blocked = applyReadGuard("search_files", guard, readContext);
@@ -2666,15 +2724,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   } catch (err) {
     const message = err && err.message ? String(err.message) : String(err);
     console.error(err && err.stack ? err.stack : err);
-    recordToolFailure(name, args, "INTERNAL_ERROR");
+    const validationLike = /must be a concrete|must contain at least|may contain at most|write blocked|path escapes|path must be|not found or not file|Duplicate deletion path/i.test(message);
+    if (!validationLike) {
+      recordToolFailure(name, args, "INTERNAL_ERROR");
+    }
     return fail(message, {
-      errorCode: "INTERNAL_ERROR",
+      errorCode: validationLike ? "VALIDATION_ERROR" : "INTERNAL_ERROR",
       retryable: false,
-      doNotRetry: [name],
+      doNotRetry: validationLike ? [] : [name],
       userMessage: message.split(/\r?\n/, 1)[0],
-      agentInstruction:
-        `Do not retry ${name} with the same arguments. `
-        + "Stop the current workflow and report the MCP internal error."
+      agentInstruction: validationLike
+        ? `Fix the invalid ${name} arguments and retry once with corrected input.`
+        : `Do not retry ${name} with the same arguments. Stop the current workflow and report the MCP internal error.`,
     });
   }
 });

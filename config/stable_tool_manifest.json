@@ -40,7 +40,8 @@
     "static_validate_project",
     "build_unreal_project",
     "read_unreal_logs",
-    "write_session_handoff"
+    "write_session_handoff",
+    "record_bootstrap_step"
   ],
   "agentHiddenUntilControlPlane": [
     "apply_edit_bundle"

@@ -126,6 +126,17 @@ def sanitize_tools_for_exposure(
     """Filter hidden tools in Essential mode; return notes and sanitized gates."""
     notes: list[str] = []
     gate_list = list(gates or [])
+    from tool_policy import TERMINAL_ACTIONS, normalize_tool_entry
+
+    # Terminal actions belong in stopConditions, not toolPolicy.
+    cleaned_policy: list[str] = []
+    for tool in tool_policy:
+        entry = normalize_tool_entry(tool)
+        if entry["kind"] == "terminal_action" or entry["name"] in TERMINAL_ACTIONS:
+            continue
+        cleaned_policy.append(tool)
+    tool_policy = cleaned_policy
+
     if not essential_tools_enabled():
         return tool_policy, suggested_calls, notes, gate_list
 
@@ -134,13 +145,15 @@ def sanitize_tools_for_exposure(
     hidden_policy = [tool for tool in tool_policy if tool.startswith("unreal_") and tool not in allowed]
     if hidden_policy:
         notes.append(
-            "Essential mode: refactor/refresh tools omitted from toolPolicy; "
-            "use embedded refactorManager in plan response."
+            "Essential mode: hidden unreal_* tools omitted from toolPolicy "
+            f"({', '.join(hidden_policy[:6])}{'…' if len(hidden_policy) > 6 else ''})."
         )
 
     filtered_calls: list[dict[str, Any]] = []
     for call in suggested_calls:
         tool = str(call.get("tool") or "")
+        if tool in TERMINAL_ACTIONS:
+            continue
         if tool in RAG_EXTENDED_ONLY:
             if refactor_manager_embedded and tool in {
                 "unreal_refactor_manager_plan",
@@ -150,6 +163,7 @@ def sanitize_tools_for_exposure(
             notes.append(f"Essential mode: suppressed suggested call to hidden tool {tool}.")
             continue
         if tool.startswith("unreal_") and tool not in allowed:
+            notes.append(f"Essential mode: suppressed suggested call to non-essential tool {tool}.")
             continue
         filtered_calls.append(call)
 

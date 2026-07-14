@@ -621,7 +621,9 @@ class McpServer:
                     "Use before answering Unreal C++, Lyra, module, project, shader, material, or Blueprint questions. "
                     "If indexStaleness.stale=true but analysisCanProceed=true, do not repeat the same query — "
                     "use search_files/read_file on project Source/ or answer from returned matches. "
-                    "repeatDetected=true means full context was suppressed; do not call again with the same args."
+                    "repeatDetected=true / ok=false means full context was suppressed; do not call again with the same args. "
+                    "To escalate detail once after truncation, pass continuationToken from the prior result "
+                    "together with detailLevel=nextDetailLevel (one step only)."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -661,9 +663,18 @@ class McpServer:
                             "default": "compact",
                             "description": (
                                 "Evidence size tier for C++ / doc chunks: compact (~10k assembly), "
-                                "medium (~18k), large (~40k), full (~80k). Escalate once if evidence is truncated."
+                                "medium (~18k), large (~40k), full (~80k). Escalate once with continuationToken "
+                                "if evidence is truncated."
                             ),
                         },
+                        "continuationToken": {
+                            "type": "string",
+                            "description": (
+                                "Token from a prior unreal_rag_search structured result. Required when "
+                                "escalating detailLevel via nextDetailLevel; one-shot use."
+                            ),
+                        },
+                        "sessionId": {"type": "string"},
                     },
                     ["query"],
                 ),
@@ -2269,7 +2280,7 @@ class McpServer:
                 message_id,
                 short,
                 structured={
-                    "ok": True,
+                    "ok": False,
                     "repeatDetected": True,
                     "doNotRetry": True,
                     "fullContextSuppressed": True,
@@ -2279,6 +2290,7 @@ class McpServer:
                     "requiredNextAction": repeat.get("requiredNextAction"),
                 },
                 char_limit=1200,
+                is_error=True,
             )
             return
 

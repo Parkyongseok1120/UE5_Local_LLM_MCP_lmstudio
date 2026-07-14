@@ -41,6 +41,7 @@ AGENT_ESSENTIAL = {
     "build_unreal_project",
     "read_unreal_logs",
     "write_session_handoff",
+    "record_bootstrap_step",
 }
 
 
