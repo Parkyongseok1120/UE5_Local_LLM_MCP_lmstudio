@@ -111,6 +111,7 @@ const {
 const {
   checkReadRepeat,
   recordReadSuccess,
+  recordReadStagnation,
   normalizeReadToolArgs,
   cachedReadInstruction
 } = require("./tool-read-history");
@@ -745,18 +746,122 @@ function cachedReadSuccess(content, options = {}) {
     phase: "evidence_cached",
     userMessage: options.userMessage || cachedReadInstruction(errorCode),
     agentInstruction: options.agentInstruction || cachedReadInstruction(errorCode),
-    content,
+    content: content == null ? "" : content,
     readAttempts: options.readAttempts || 2,
   };
   if (options.readCount != null) payload.readCount = options.readCount;
-  if (options.pingPong) payload.pingPong = true;
+  if (options.fullyCovered) payload.fullyCovered = true;
+  if (options.coveredBy) payload.coveredBy = options.coveredBy;
   return text(JSON.stringify(payload, null, 2));
+}
+
+function evidenceStagnationFail(tool, guard, options = {}) {
+  const errorCode = guard.reason || "EVIDENCE_STAGNATION";
+  recordReadStagnation(tool, guard.normalizedArgs, options.context || {});
+  return fail(
+    errorCode === "TOOL_REPEAT_BLOCKED"
+      ? `identical ${tool} evidence call blocked after stagnation.`
+      : "Evidence read stagnating — no new line coverage or soft budget exhausted.",
+    {
+      errorCode,
+      retryable: false,
+      doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
+      stopCurrentWorkflow: true,
+      agentInstruction: cachedReadInstruction(errorCode),
+      userMessage: cachedReadInstruction(errorCode),
+      nextSteps: [
+        "Do not call another evidence tool.",
+        "Produce the final analysis from evidence already in the conversation.",
+      ],
+      readAttempts: guard.attempts,
+      pingPong: Boolean(guard.pingPong),
+    }
+  );
 }
 
 function prepareReadGuard(tool, args, context) {
   const normalizedArgs = normalizeReadToolArgs(tool, args);
-  const repeat = checkReadRepeat(tool, normalizedArgs, context);
-  return { normalizedArgs, repeat };
+  const decision = checkReadRepeat(tool, normalizedArgs, context);
+  return { normalizedArgs, decision, ...decision };
+}
+
+function applyReadGuard(tool, guard, context) {
+  if (!guard || guard.action === "allow" || !guard.repeat) return null;
+  if (guard.action === "stagnation" || guard.reason === "EVIDENCE_STAGNATION" || guard.reason === "TOOL_REPEAT_BLOCKED") {
+    return evidenceStagnationFail(tool, guard, { context });
+  }
+  // Identical / fully-covered range: return cached success (no wrong-range body injection for uncovered misses).
+  if (guard.action === "cache" || guard.reason === "READ_REPEAT_DETECTED") {
+    if (guard.cachedContent == null && guard.fullyCovered) {
+      return fail("Requested line range is already covered by prior reads.", {
+        errorCode: "READ_REPEAT_DETECTED",
+        retryable: false,
+        doNotRetry: [tool],
+        fullyCovered: true,
+        coveredBy: guard.coveredBy || [],
+        agentInstruction:
+          "Those lines were already returned. Do not re-scan. Finish analysis or call read_symbol for a named function.",
+        nextSteps: [
+          "Use existing evidence, or call read_symbol with an exact C++ symbol name.",
+        ],
+      });
+    }
+    return cachedReadSuccess(guard.cachedContent, {
+      errorCode: "READ_REPEAT_DETECTED",
+      readAttempts: guard.attempts,
+      fullyCovered: guard.fullyCovered,
+      coveredBy: guard.coveredBy,
+    });
+  }
+  return null;
+}
+
+/**
+ * Truncate a UTF-8 text buffer on the last complete newline and describe line span.
+ */
+function truncateTextAtNewline(utf8Text, fileSize, bytesRead, detail) {
+  let body = String(utf8Text || "");
+  // Drop a trailing partial line when the raw byte read stopped mid-line.
+  if (fileSize > bytesRead && body.length && !body.endsWith("\n")) {
+    const lastNl = body.lastIndexOf("\n");
+    if (lastNl >= 0) body = body.slice(0, lastNl + 1);
+  }
+  const lines = body.length ? body.replace(/\n$/, "").split("\n") : [];
+  const startLine = 1;
+  const endLine = Math.max(1, lines.length);
+  const nextStartLine = endLine + 1;
+  const nextDetail = detail === "compact" ? "medium" : detail === "medium" ? "large" : null;
+
+  // Best-effort: last function-like signature that may be cut off.
+  let detectedPartialSymbol = null;
+  const sigRe = /\b((?:[A-Za-z_][\w:]*::)+[A-Za-z_]\w*)\s*\(/g;
+  let match;
+  while ((match = sigRe.exec(body)) !== null) {
+    detectedPartialSymbol = match[1];
+  }
+
+  const meta = {
+    truncated: fileSize > bytesRead,
+    returnedLines: { start: startLine, end: endLine },
+    nextStartLine,
+    preferredNextTool: "read_symbol",
+    detectedPartialSymbol,
+    fileSizeBytes: fileSize,
+    bytesRead,
+    detailLevel: detail,
+  };
+  let footer = "";
+  if (meta.truncated) {
+    footer = `\n\n[TRUNCATED: file size ${fileSize} bytes, read ${bytesRead} bytes at detailLevel=${detail}. `
+      + `Returned lines ${startLine}-${endLine}. Next unread line: ${nextStartLine}. `
+      + `Prefer read_symbol for a named function`
+      + (detectedPartialSymbol ? ` (partial symbol candidate: ${detectedPartialSymbol})` : "")
+      + `. `
+      + (nextDetail
+        ? `Escalate once with detailLevel=${nextDetail} or read_file_range from line ${nextStartLine}.]`
+        : `Use read_file_range from line ${nextStartLine} or read_symbol.]`);
+  }
+  return { body, footer, meta, endLine };
 }
 
 function rememberReadEvidence(target, stat, resolution, lineRange = null, contentHash = null) {
@@ -1591,15 +1696,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const mutationGeneration = await resolveMutationGenerationForRead(resolution, target);
       const readContext = buildReadEvidenceContext(target, s, resolution, { mutationGeneration });
-      const { normalizedArgs, repeat } = prepareReadGuard("read_file", args, readContext);
-      if (repeat.repeat) {
-        return cachedReadSuccess(repeat.cachedContent, {
-          errorCode: repeat.reason,
-          readAttempts: repeat.attempts,
-          readCount: repeat.readCount,
-          pingPong: repeat.pingPong,
-        });
-      }
+      const guard = prepareReadGuard("read_file", args, readContext);
+      const blocked = applyReadGuard("read_file", guard, readContext);
+      if (blocked) return blocked;
 
       const detail = resolveCodeDetail(args.detailLevel);
       const tierCap = CODE_DETAIL_READ_BYTES[detail];
@@ -1611,32 +1710,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!isTextLikely(buffer)) return fail(`file appears binary: ${args.path}`);
       const hasCRLF = buffer.includes(Buffer.from("\r\n"));
       // Normalize line endings so model's copy-paste into oldText matches replace_in_file
-      let out = buffer.toString("utf8").replace(/\r\n/g, "\n");
+      const rawOut = buffer.toString("utf8").replace(/\r\n/g, "\n");
+      const truncated = truncateTextAtNewline(rawOut, s.size, buffer.length, detail);
+      let out = truncated.body;
       if (hasCRLF) {
-          out = `[line-endings: CRLF — replace_in_file normalizes automatically]\n` + out;
-        }
-      if (s.size > buffer.length) {
-        const nextDetail = detail === "compact" ? "medium" : detail === "medium" ? "large" : null;
-        out += `\n\n[TRUNCATED: file size ${s.size} bytes, read ${buffer.length} bytes at detailLevel=${detail}.`;
-        if (nextDetail) {
-          out += ` Escalate once with detailLevel=${nextDetail} or use read_file_range.]`;
-        } else {
-          out += ` Use read_file_range for partial reads.]`;
+        out = `[line-endings: CRLF — replace_in_file normalizes automatically]\n` + out;
       }
-      }
+      out += truncated.footer;
       rememberReadEvidence(
         target,
         s,
         resolution,
-        `1-${Math.max(1, out.split("\n").length)}`,
+        `1-${truncated.endLine}`,
         s.size <= MAX_READ_BYTES ? sha256Buffer(await fsp.readFile(target)) : null
       );
-      const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`;
+      const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`
+        + (truncated.meta.truncated ? `[read-truncation: ${JSON.stringify(truncated.meta)}]\n` : "");
       const output = metadataHeader + out;
-      recordReadSuccess("read_file", normalizedArgs, {
+      recordReadSuccess("read_file", guard.normalizedArgs, {
         ...readContext,
         evidenceHash: s.size <= MAX_READ_BYTES ? sha256Text(out) : null,
-      }, output);
+      }, output, { lineRange: { start: 1, end: truncated.endLine } });
       return text(output);
     }
 
@@ -1649,15 +1743,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const mutationGeneration = await resolveMutationGenerationForRead(resolution, target);
       const readContext = buildReadEvidenceContext(target, s, resolution, { mutationGeneration });
-      const { normalizedArgs, repeat } = prepareReadGuard("read_file_range", args, readContext);
-      if (repeat.repeat) {
-        return cachedReadSuccess(repeat.cachedContent, {
-          errorCode: repeat.reason,
-          readAttempts: repeat.attempts,
-          readCount: repeat.readCount,
-          pingPong: repeat.pingPong,
-        });
-      }
+      const guard = prepareReadGuard("read_file_range", args, readContext);
+      const blocked = applyReadGuard("read_file_range", guard, readContext);
+      if (blocked) return blocked;
+      const normalizedArgs = guard.normalizedArgs;
 
       const detail = resolveCodeDetail(args.detailLevel);
       const lineCap = CODE_DETAIL_LINE_CAP[detail];
@@ -1706,15 +1795,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const mutationGeneration = await resolveMutationGenerationForRead(resolution, target);
       const readContext = buildReadEvidenceContext(target, stat, resolution, { mutationGeneration });
-      const { normalizedArgs, repeat } = prepareReadGuard("read_symbol", args, readContext);
-      if (repeat.repeat) {
-        return cachedReadSuccess(repeat.cachedContent, {
-          errorCode: repeat.reason,
-          readAttempts: repeat.attempts,
-          readCount: repeat.readCount,
-          pingPong: repeat.pingPong,
-        });
-      }
+      const guard = prepareReadGuard("read_symbol", args, readContext);
+      const blocked = applyReadGuard("read_symbol", guard, readContext);
+      if (blocked) return blocked;
+      const normalizedArgs = guard.normalizedArgs;
 
       let content;
       try { content = await readCachedTextFile(target, stat); }
@@ -2328,19 +2412,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const baseStat = await statSafe(base);
       const mutationGeneration = await resolveMutationGenerationForRead(resolution, base);
-      const readContext = buildReadEvidenceContext(null, baseStat, resolution, {
+      const readContext = buildReadEvidenceContext(base, baseStat, resolution, {
         mutationGeneration,
         scopeSignature: baseStat ? fileStatSignature(baseStat) : String(base),
       });
-      const { normalizedArgs, repeat } = prepareReadGuard("search_files", args, readContext);
-      if (repeat.repeat) {
-        return cachedReadSuccess(repeat.cachedContent, {
-          errorCode: repeat.reason,
-          readAttempts: repeat.attempts,
-          readCount: repeat.readCount,
-          pingPong: repeat.pingPong,
-        });
-      }
+      const guard = prepareReadGuard("search_files", args, readContext);
+      const blocked = applyReadGuard("search_files", guard, readContext);
+      if (blocked) return blocked;
+      const normalizedArgs = guard.normalizedArgs;
 
       const ignoreDirs = new Set([
         ".git", ".vs", ".idea", "Binaries", "DerivedDataCache", "Intermediate",

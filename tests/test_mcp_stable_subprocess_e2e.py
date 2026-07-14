@@ -390,6 +390,88 @@ def test_agent_successful_read_repeat_returns_cached(tmp_path: Path) -> None:
         client.close()
 
 
+def test_agent_novel_range_allowed_after_prior_reads(tmp_path: Path) -> None:
+    """Hotfix3: call-count budget must not hide unread lines behind prior ranges."""
+    source_dir = tmp_path / "Source" / "Demo"
+    source_dir.mkdir(parents=True)
+    lines = [f"// line {i}" for i in range(1, 601)]
+    sample = source_dir / "Demo.cpp"
+    sample.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    client = _start_agent_client(tmp_path)
+    try:
+        req_id = 2
+        for start, end in ((100, 200), (200, 300), (300, 400)):
+            result = client.request(
+                "tools/call",
+                {
+                    "name": "read_file_range",
+                    "arguments": {"path": str(sample), "startLine": start, "endLine": end},
+                },
+                req_id=req_id,
+            )
+            req_id += 1
+            assert result["result"].get("isError") is not True
+            text = result["result"]["content"][0]["text"]
+            assert f"{start}|// line {start}" in text
+
+        novel = client.request(
+            "tools/call",
+            {
+                "name": "read_file_range",
+                "arguments": {"path": str(sample), "startLine": 400, "endLine": 500},
+            },
+            req_id=req_id,
+        )
+        assert novel["result"].get("isError") is not True
+        novel_text = novel["result"]["content"][0]["text"]
+        assert "400|// line 400" in novel_text
+        assert "500|// line 500" in novel_text
+        # Must not be a cached prior 300-400 body.
+        assert "cached" not in novel_text.lower() or "READ_REPEAT" not in novel_text
+    finally:
+        client.close()
+
+
+def test_agent_evidence_stagnation_is_error_without_wrong_body(tmp_path: Path) -> None:
+    """Soft non-range budget exhaustion must fail closed, not return prior code as ok."""
+    source_dir = tmp_path / "Source" / "Demo"
+    source_dir.mkdir(parents=True)
+    sample = source_dir / "Demo.cpp"
+    sample.write_text("void UDemo::BeginPlay() {}\n", encoding="utf-8")
+
+    client = _start_agent_client(tmp_path)
+    try:
+        req_id = 2
+        for i in range(8):
+            result = client.request(
+                "tools/call",
+                {
+                    "name": "search_files",
+                    "arguments": {"query": f"unique_marker_{i}", "path": str(source_dir), "maxResults": 5},
+                },
+                req_id=req_id,
+            )
+            req_id += 1
+            assert result["result"].get("isError") is not True
+
+        blocked = client.request(
+            "tools/call",
+            {
+                "name": "search_files",
+                "arguments": {"query": "should_block_now", "path": str(source_dir), "maxResults": 5},
+            },
+            req_id=req_id,
+        )
+        assert blocked["result"].get("isError") is True
+        payload = json.loads(blocked["result"]["content"][0]["text"])
+        assert payload.get("errorCode") == "EVIDENCE_STAGNATION"
+        assert payload.get("ok") is False
+        assert "content" not in payload or not str(payload.get("content") or "").strip()
+    finally:
+        client.close()
+
+
 def test_rag_subprocess_rejects_hidden_tool_call(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["MCP_ESSENTIAL_TOOLS"] = "1"
