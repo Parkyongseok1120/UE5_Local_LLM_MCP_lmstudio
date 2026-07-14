@@ -47,13 +47,14 @@ When the user asks for logic / design / bug analysis of project C++ (not a compi
 1. **Plan trigger:** if the user asks for a plan / implementation plan (`계획`, `구현 계획`, `plan`, `implementation plan`), the next tool call **must** be `unreal_agent_plan` on **unreal-rag** before any other analysis tool or prose. Do not answer from memory.
 2. Otherwise follow the normal flow: `unreal_agent_plan` and follow `toolPolicy`, `writeGate` (advisory in chat — still honor it), `checkpoints`, and `stopConditions`
 3. If `writeGate.writesAllowed=false`, do not call write tools; answer or report findings only
-4. `unreal_rag_search` (`hybrid=false`, `top_k` 4-6, `detailLevel=compact`) before edits; if truncated, escalate **once** with `continuationToken` + `detailLevel=nextDetailLevel`.
-5. `read_file` / `read_file_range` on every target file before writing — default `detailLevel=compact`; escalate once for large `.cpp`/`.h` if truncated.
-6. `replace_in_file` preferred with `expectedOccurrences=1`; use `write_file` only for brand-new files. Before creating a new `.h`/`.cpp`, run `search_files` for basename collisions under `Source/`. If a replacement fails, re-read a narrower range and patch again; do not rewrite an existing `.h`/`.cpp` with `write_file`.
-7. If deletion cleanup is needed: Essential mode — report the duplicate path and stop for user approval (deletion tools are Extended-only). Extended mode (`tools/list` has `propose_file_deletions`) — finish edits first, call `propose_file_deletions`, wait for explicit approval, then `delete_file`.
-8. `build_unreal_project` after C++ / Build.cs changes
-9. On UBT failure: `unreal_rag_search` `mode=compile_fix` with only the current error context, then patch and rebuild
-10. For UHT/generated.h/include/module errors, read the failing file and the actual `*.Build.cs` before editing. Patch one root cause per build loop.
+4. **Inventory / review / gap analysis (what exists or is missing in the active project):** `search_files` → `read_file` / `read_file_range` on that project's Source **before** `unreal_rag_search`. RAG is background/API only. If RAG returns `scope=project_miss`, `projectMatchCount=0`, `doNotRepeatSearch=true`, or `ok=false`, stop RAG and finish from Source evidence (or conclude absence from zero Source hits). Guideline/engine hits are not project implementation evidence.
+5. **Edit / compile path:** `unreal_rag_search` (`hybrid=false`, `top_k` 4-6, `detailLevel=compact`) before edits; if truncated, escalate **once** with `continuationToken` + `detailLevel=nextDetailLevel`.
+6. `read_file` / `read_file_range` on every target file before writing — default `detailLevel=compact`; escalate once for large `.cpp`/`.h` if truncated.
+7. `replace_in_file` preferred with `expectedOccurrences=1`; use `write_file` only for brand-new files. Before creating a new `.h`/`.cpp`, run `search_files` for basename collisions under `Source/`. If a replacement fails, re-read a narrower range and patch again; do not rewrite an existing `.h`/`.cpp` with `write_file`.
+8. If deletion cleanup is needed: Essential mode — report the duplicate path and stop for user approval (deletion tools are Extended-only). Extended mode (`tools/list` has `propose_file_deletions`) — finish edits first, call `propose_file_deletions`, wait for explicit approval, then `delete_file`.
+9. `build_unreal_project` after C++ / Build.cs changes
+10. On UBT failure: `unreal_rag_search` `mode=compile_fix` with only the current error context, then patch and rebuild
+11. For UHT/generated.h/include/module errors, read the failing file and the actual `*.Build.cs` before editing. Patch one root cause per build loop.
 
 ## Write safety and flow
 

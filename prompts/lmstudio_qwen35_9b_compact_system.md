@@ -68,6 +68,12 @@ If `EVIDENCE_STAGNATION` / `EVIDENCE_STAGNATION_REPEAT` / `isError: true`, stop 
 - AuthoredWorld / ExplicitTransform / socket look-at fields that match comments are **ByDesign**, not missing logic.
 - Run `unreal_review_claim_validate` on "누락/missing logic" claims before the final answer.
 
+## Inventory / gap analysis (9B)
+
+- For "what's missing", inventory, or "what to add" on the **active project**: `search_files` → `read_file` first (not RAG-only).
+- If `unreal_rag_search` returns `scope=project_miss`, `projectMatchCount=0`, `doNotRepeatSearch`, or `ok=false`, stop RAG; use Source tools or conclude absence from zero Source hits.
+- Guideline/engine RAG is not proof the feature exists in the active project.
+
 ## Tool sequence
 
 Follow the **Standard sequence** in [`lmstudio_compact_mcp_base.md`](lmstudio_compact_mcp_base.md). The model-specific constraints above still apply.

@@ -77,7 +77,17 @@ def test_authored_world_missing_logic_claim_fails_by_design(tmp_path: Path) -> N
     assert any("by-design" in issue.lower() or "intentional" in issue.lower() for issue in result["issues"])
 
 
-def test_cpp_only_bug_claim_fails_header_unread(tmp_path: Path) -> None:
+def test_exists_claim_without_source_needs_source_read(tmp_path: Path) -> None:
+    project = tmp_path / "AlphaGame"
+    (project / "Source").mkdir(parents=True)
+    result = validate_claim(
+        "UStaminaComponent exists in the project and is already implemented",
+        project,
+        pab={},
+    )
+    assert result["ok"] is False
+    assert "needs_source_read" in result["reasons"]
+
     project = tmp_path / "DemoGame"
     project.mkdir()
     _write_authored_world_fixture(project)

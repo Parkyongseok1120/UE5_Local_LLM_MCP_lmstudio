@@ -494,17 +494,76 @@ def build_module_hints(request: str, project_context: dict[str, Any] | None = No
     return hints
 
 
+_FEATURE_STOPWORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "what",
+        "when",
+        "where",
+        "which",
+        "review",
+        "inventory",
+        "missing",
+        "system",
+        "project",
+        "source",
+        "component",
+        "components",
+        "add",
+        "need",
+        "needs",
+        "should",
+        "about",
+        "after",
+        "before",
+        "only",
+        "please",
+        "analyze",
+        "analysis",
+    }
+)
+
+
 def _symbol_candidates_from_text(text: str) -> list[str]:
     found: list[str] = []
     for pattern in (
         r"\b[AUFSI][A-Z][A-Za-z0-9_]{2,}\b",
         r"\b[A-Z][A-Za-z0-9_]+(?:Component|Subsystem|Character|Actor|GameMode|Widget)\b",
+        r"\b[A-Z][a-zA-Z]{2,}\b",
     ):
         for match in re.finditer(pattern, text or ""):
             symbol = match.group(0)
+            if symbol.lower() in _FEATURE_STOPWORDS:
+                continue
             if symbol not in found:
                 found.append(symbol)
     return found[:12]
+
+
+def _feature_search_tokens_from_text(text: str) -> list[str]:
+    """Prefer compact search_files queries over the full user sentence."""
+    tokens = _symbol_candidates_from_text(text)
+    if tokens:
+        return tokens[:3]
+    lowered = (text or "").strip()
+    if "시네마틱" in lowered or "cinematic" in lowered.lower():
+        return ["Cinematic"]
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", text or "")
+    picked: list[str] = []
+    for word in words:
+        if word.lower() in _FEATURE_STOPWORDS:
+            continue
+        if word not in picked:
+            picked.append(word)
+        if len(picked) >= 3:
+            break
+    return picked
 
 
 def build_symbol_graph_hints(request: str) -> list[dict[str, Any]]:
@@ -598,11 +657,20 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
     if task_kind == "cpp_analysis":
         return common + [
             "Read current project .h/.cpp files before diagnosis; RAG is background/API evidence only.",
+            "Claims about what exists or is missing in the active project require search_files/read_file on that project's Source.",
+            "Guideline/engine RAG hits are not project implementation evidence.",
+            "On project_miss / doNotRepeatSearch, stop RAG and use search_files then read_file (or conclude absence from zero Source hits).",
             "Record project-relative files and line ranges in sourceEvidence.filesRead.",
             "If direct source reads fail or filesRead is empty, stop without code or project claims.",
             "Read header, cpp, and relevant callsites for cross-file lifecycle/API claims.",
         ]
     if task_kind == "inspect_only":
+        inventory_steps = [
+            "Claims about what exists or is missing in the active project require search_files/read_file on that project's Source.",
+            "Guideline/engine RAG hits are not project implementation evidence.",
+            "On project_miss / doNotRepeatSearch, stop RAG and use search_files then read_file (or conclude absence from zero Source hits).",
+            "Read target files before findings; do not write files.",
+        ]
         asset_steps = [
             "Call unreal_editor_metadata_status before material/blueprint wire claims.",
             "If export dir has JSONL newer than index, call unreal_sync_editor_metadata.",
@@ -610,8 +678,8 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
             "Validate concrete claims with unreal_material_claim_validate or unreal_blueprint_claim_validate.",
         ]
         if mode in ASSET_METADATA_MODES:
-            return common + asset_steps + ["Read target files before findings; do not write files."]
-        return common + ["Read target files before findings; do not write files."]
+            return common + asset_steps + inventory_steps
+        return common + inventory_steps
     if task_kind == "runtime_debug":
         return common + ["Read logs/config before diagnosis; do not write files by default."]
     edit_steps = [
@@ -782,14 +850,15 @@ def build_suggested_tool_calls(
             )
         return calls
 
-    if task_kind in {"inspect_only", "cpp_analysis"} and (
-        any(marker in lower for marker in REVIEW_MARKERS)
-        or any(marker in lower for marker in ANALYSIS_MARKERS)
-    ):
+    if task_kind in {"inspect_only", "cpp_analysis"}:
         browse_path = "project://Source"
-        search_term = "Cinematic" if "시네마틱" in lower or "cinematic" in lower else text
+        search_tokens = _feature_search_tokens_from_text(text)
         calls = [{"tool": "unreal_get_active_project", "args": {}}]
-        calls.append({"tool": "search_files", "args": {"query": search_term, "path": browse_path}})
+        if search_tokens:
+            for token in search_tokens:
+                calls.append({"tool": "search_files", "args": {"query": token, "path": browse_path}})
+        else:
+            calls.append({"tool": "search_files", "args": {"query": text[:64], "path": browse_path}})
         calls.append({"tool": "read_file", "args": {"path": "<from search_files matches>"}})
         calls.append({"tool": "unreal_rag_search", "args": {"query": text, "mode": "review", "hybrid": False, "top_k": 4}})
         calls.append(

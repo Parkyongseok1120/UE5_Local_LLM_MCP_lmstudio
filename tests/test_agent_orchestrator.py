@@ -219,6 +219,64 @@ def test_edit_plan_suggests_search_files_before_write(monkeypatch):
     assert "search_files" in tools
 
 
+def test_inventory_plan_source_first():
+    plan = build_agent_plan("inventory what's missing Stamina system", "review")
+    payload = plan.to_dict()
+    assert plan.task_kind == "inspect_only"
+    policy = payload["toolPolicy"]
+    assert "search_files" in policy
+    assert policy.index("search_files") < policy.index("unreal_rag_search")
+    assert "direct_source_evidence" in payload["evidencePlan"]["gates"]
+    tools = [c["tool"] for c in payload["suggestedToolCalls"]]
+    assert tools.count("search_files") >= 1
+    search_queries = [c["args"].get("query") for c in payload["suggestedToolCalls"] if c["tool"] == "search_files"]
+    assert any(q and "Stamina" in str(q) for q in search_queries)
+    assert any("Guideline/engine RAG" in item for item in payload["checkpoints"])
+
+
+def test_korean_gap_inventory_source_first():
+    plan = build_agent_plan("HP Stemina 시스템에 추가해야할 것들이 있을텐데 뭐뭐 있니", "review")
+    payload = plan.to_dict()
+    assert plan.task_kind == "inspect_only"
+    policy = payload["toolPolicy"]
+    assert policy.index("search_files") < policy.index("unreal_rag_search")
+
+
+def test_inspect_policy_not_tied_to_fixed_project_name(monkeypatch):
+    for name, browse in (
+        ("AlphaGame", "AlphaGame/Source"),
+        ("BetaSample", "BetaSample/Source"),
+    ):
+        monkeypatch.setattr(
+            "project_context.resolve_active_project_context",
+            lambda name=name, browse=browse: {
+                "ok": True,
+                "projectName": name,
+                "sourceBrowsePath": browse,
+            },
+        )
+        plan = build_agent_plan(f"Review inventory for missing FooComponent in {name}", "review")
+        policy = plan.to_dict()["toolPolicy"]
+        assert policy.index("search_files") < policy.index("unreal_rag_search")
+        queries = [
+            c["args"].get("query")
+            for c in plan.suggested_tool_calls
+            if c["tool"] == "search_files"
+        ]
+        assert any("Foo" in str(q) for q in queries)
+
+
+def test_edit_codegen_refactor_policy_unchanged():
+    from tool_policy import gates_for_task, tool_sequence_for_task
+
+    seq = tool_sequence_for_task("edit")
+    assert seq[0] == "unreal_agent_session"
+    assert "search_files" not in seq
+    assert "direct_source_evidence" not in gates_for_task("edit")
+    assert "search_files" not in tool_sequence_for_task("codegen")
+    assert "search_files" not in tool_sequence_for_task("refactor")
+
+
 def test_verify_edit_limit_from_profile():
     plan = build_agent_plan("Implement dodge component", "agent_edit")
     max_files = int(plan.write_gate["maxFilesPerEdit"])

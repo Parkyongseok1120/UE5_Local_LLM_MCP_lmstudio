@@ -789,7 +789,11 @@ def assemble_context(
     if exclude_chunk_ids:
         rows = [row for row in rows if str(row.get("chunk_id") or "") not in exclude_chunk_ids]
     if not rows:
-        return "No matching Unreal RAG context was found. Ask for more exact class, file, module, log, or asset names."
+        return (
+            "No matching Unreal RAG context was found in the active project index (or engine-wide for this query). "
+            "Use search_files then read_file on the active project's Source/ before claiming a feature exists or is missing. "
+            "Do not invent project implementation from genre guidelines."
+        )
 
     resolved_mode = str(rows[0].get("resolved_mode") or mode or "auto")
     budget_mode = budget_mode_for(resolved_mode)

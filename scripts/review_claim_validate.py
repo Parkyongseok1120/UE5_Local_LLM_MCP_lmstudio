@@ -15,6 +15,10 @@ MISSING_CLAIM_RE = re.compile(
     r"(없음|없다|누락|미사용|missing|not\s+used|unused|does\s+not\s+exist|no\s+such)",
     re.IGNORECASE,
 )
+EXISTS_CLAIM_RE = re.compile(
+    r"(존재|있습니다|구현되어|이미\s*있|exists|is\s+implemented|already\s+(?:has|exists)|present\s+in\s+(?:the\s+)?project)",
+    re.IGNORECASE,
+)
 LOGIC_MISSING_CLAIM_RE = re.compile(
     r"("
     r"누락|로직\s*없음|처리되지\s*않|무시됨|빠져\s*있|"
@@ -279,6 +283,27 @@ def validate_claim(
                 evidence.extend(hits[:3])
                 ok = False
                 reasons.append("symbol_present")
+
+    if EXISTS_CLAIM_RE.search(claim_text) and not MISSING_CLAIM_RE.search(claim_text):
+        if not unique_symbols:
+            ok = False
+            issues.append(
+                "Existence claim has no project symbol; needs_source_read via search_files/read_file "
+                "(guideline/RAG alone is not project evidence)."
+            )
+            reasons.append("needs_source_read")
+        else:
+            for symbol in unique_symbols:
+                hits = grep_project(project_root, re.escape(symbol))
+                if not hits:
+                    ok = False
+                    issues.append(
+                        f"Claim says '{symbol}' exists but no Source hit; needs_source_read "
+                        "or mark the feature absent (do not cite guideline RAG as proof)."
+                    )
+                    reasons.append("needs_source_read")
+                else:
+                    evidence.extend(hits[:3])
 
     if SUBSYSTEM_SPLIT_RE.search(claim_text):
         for symbol in unique_symbols:

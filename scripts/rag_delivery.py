@@ -74,28 +74,30 @@ def deliver_rag_result(
             "suppressed": True,
         }
 
+    row_list = list(rows or [])
     payload = {
         "ok": True,
         "semanticQueryKey": semantic_key,
         "deliveryVariantKey": delivery_key,
         "fingerprint": delivery_key,
         "repeat": repeat,
-        "rows": list(rows or []),
+        "rows": row_list,
         "suppressed": False,
-        "deliveredFullContext": len(rows or []) > 0,
+        "deliveredFullContext": len(row_list) > 0,
+        "deliveredTerminalAbsence": len(row_list) == 0,
     }
     if rows is not None:
         record_query_delivery(
             delivery_key,
             detail_level=detail_level,
-            match_count=len(rows),
+            match_count=len(row_list),
             active_project=active_project,
             mode=mode,
             index_path=index_path,
             session_id=session_id,
             semantic_key=semantic_key,
         )
-        if rows:
+        if row_list:
             from read_query_history import issue_continuation_token
 
             payload["continuationToken"] = issue_continuation_token(delivery_key)
