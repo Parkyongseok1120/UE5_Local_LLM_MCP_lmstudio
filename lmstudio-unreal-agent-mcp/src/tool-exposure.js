@@ -15,7 +15,6 @@ const AGENT_EXTENDED_PROFILE_TOOLS = new Set([
   "refactor_plan_validate",
   "propose_file_deletions",
   "delete_file",
-  "record_bootstrap_step",
 ]);
 
 let manifestCache = null;

@@ -7,7 +7,7 @@ Guide for **LM Studio basic chat** with `unreal-rag` + `unreal-agent` MCP. This 
 | Path | Orchestrator | Enforcement |
 |------|--------------|-------------|
 | `lmstudio_unreal_wrapper.py` | Yes; injects plan JSON | JSON schema, edit limits, static validation, UBT loop |
-| LM Studio chat | Yes, if the model calls `unreal_agent_plan` | System prompt, Essential Tools, tool descriptions, returned `writeGate` |
+| LM Studio chat | Yes, if the model calls `unreal_agent_plan` | System prompt, Essential Tools, tool descriptions, **advisory** `writeGate` / gates, hard loop guards on the MCP servers |
 
 Weak local models fail when too many tools are exposed. Use **Essential Tools** mode for chat.
 
@@ -27,7 +27,18 @@ python scripts/patch_mcp_config.py
 
 Restart LM Studio after changes.
 
-### unreal-rag (11 tools)
+### Hotfix restart (read-loop / evidence guards)
+
+After pulling Hotfix 1–3 commits that change `lmstudio-unreal-agent-mcp` (`sha256Text` import, failure repeat block, coverage-based read guard), **fully restart the `unreal-agent` MCP server** in LM Studio (or restart LM Studio). An old Node process will keep the previous livelock behavior (returning prior ranges as `ok: true`).
+
+Confirm after restart:
+
+- Novel `read_file_range` windows are still served (not replaced by an older range body).
+- Identical re-reads return `READ_REPEAT_DETECTED` with `cached: true`.
+- Evidence stagnation returns `isError: true` / `EVIDENCE_STAGNATION` (repeat escalation: `EVIDENCE_STAGNATION_REPEAT`) with no substituted prior code body.
+- Cached covering ranges never cross files (file A body is never returned for file B).
+
+### unreal-rag (12 tools)
 
 - `unreal_get_active_project`
 - `unreal_set_active_project`
@@ -38,26 +49,41 @@ Restart LM Studio after changes.
 - `unreal_agent_session`
 - `unreal_rag_capabilities`
 - `unreal_code_sketch_claim_validate` - verify drafted APIs before showing code sketches
+- `unreal_review_claim_validate` - batch-validate review findings (including by-design / header-contract false positives)
 - `unreal_diagram_validate`
 - `unreal_project_status`
 
-### unreal-agent (13 tools)
+### unreal-agent (14 tools)
 
 - `get_workspace_info`, `get_active_project`
 - `list_directory`, `read_file`, `read_file_range`, `read_symbol`, `search_files`
 - `replace_in_file`, `write_file`, `static_validate_project`
 - `build_unreal_project`, `read_unreal_logs`
 - `write_session_handoff` - save a compact resume note before a fresh chat; safe-mode allowed; overwrites only `.agent/handoff/latest.md`
+- `record_bootstrap_step` - record bootstrap cache steps so later chats can skip healthy checks
 
 ### Extended tools (`MCP_EXTENDED_TOOLS=1`)
 
-Enable when you need refresh, compile loop jobs, claim validators, refactor helpers, or cleanup:
+Enable when you need refresh, compile loop jobs, extra claim validators, refactor helpers, or cleanup:
 
-**unreal-rag:** `unreal_rag_refresh`, `unreal_start_rag_refresh`, `unreal_rag_refresh_status`, compile-loop tools, editor metadata, asset graph, claim validators, refactor manager, render report.
+**unreal-rag:** `unreal_rag_refresh`, `unreal_start_rag_refresh`, `unreal_rag_refresh_status`, compile-loop tools, editor metadata, asset graph, material/blueprint validators, refactor manager, render report.
 
-**unreal-agent:** `propose_file_deletions`, `delete_file` (requires `ALLOW_SOURCE_DELETE=1` and a matching deletion plan token), `static_validate_project`, `set_active_project`, refactor scan/plan tools.
+**unreal-agent:** `propose_file_deletions`, `delete_file` (requires `ALLOW_SOURCE_DELETE=1` and a matching deletion plan token), `set_active_project`, refactor scan/plan tools.
 
 With `MCP_ESSENTIAL_TOOLS=1` alone, extended tools stay hidden to reduce model confusion.
+
+## Advisory contracts (chat path)
+
+In LM Studio chat, `writeGate` and plan `gates` are **advisory** (prompt/orchestrator text). The wrapper path can enforce harder. Still obey `writeGate.writesAllowed=false`. Server-side loop guards (`READ_REPEAT_*`, `EVIDENCE_STAGNATION*`, `TOOL_REPEAT_BLOCKED`, mutation duplicate) are hard.
+
+## Logic review (false-bug guard)
+
+When reviewing gameplay/cinematic logic (not compile errors):
+
+1. Read the sibling `.h` UENUM / field comments **before** calling `read_symbol` / concluding a bug from `.cpp` alone.
+2. Label every finding `Bug` | `ByDesign` | `Ambiguous` | `NeedsRuntimeProof`.
+3. Intentional early returns that match header contracts (e.g. AuthoredWorld = keep asset transform) are **ByDesign**, not "missing logic".
+4. Batch findings through `unreal_review_claim_validate` — it rejects false missing/unused claims **and** logic-missing claims that contradict by-design header text (`by_design_contract`, `header_contract_unread`).
 
 ## Validate-on-write
 
@@ -192,11 +218,18 @@ Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_
 | Writes on review/runtime tasks | Re-call `unreal_agent_plan`; obey `writeGate.writesAllowed=false` |
 | Model calls `run_javascript` / `js-code-sandbox` | Start a new chat with the bootstrap prompt, remove sandbox auto-approval, and hide/disable the sandbox plugin if available |
 | Hallucinated analysis | Force `read_file` before claims or edits |
-| Repeated no-op patch | Re-read file, patch only missing current text, set `expectedOccurrences=1` |
-| Tool not in list | Essential mode hides advanced tools; use wrapper/Cline for clangd/graph |
+| False logic bugs (early return = "missing") | Read sibling `.h` UENUM/field docs first; classify `ByDesign`/`Ambiguous`; run `unreal_review_claim_validate` |
+| `READ_REPEAT_DETECTED` / `evidenceStatus=cached` | Stop re-reading that path; use returned `content` and finish |
+| `EVIDENCE_STAGNATION` / `EVIDENCE_STAGNATION_REPEAT` | Stop evidence tools; finish from existing context. Restart `unreal-agent` if Hotfix 3+ is not loaded |
+| `TOOL_REPEAT_BLOCKED` | Identical call failed internally twice — do **not** retry same args; handoff / fresh chat. Distinct from evidence stagnation |
+| Repeated no-op patch / `MUTATION_REPEAT_BLOCKED` | Re-read file, patch only missing current text, set `expectedOccurrences=1` |
+| Tool not in list | Essential mode hides advanced tools; use Extended or wrapper/Cline for clangd/graph/deletion |
 | `unreal_rag_refresh` times out | Re-run `python scripts/patch_mcp_config.py` so `unreal-rag` has `"timeout": 420000` (7 minutes, ms) and `unreal-agent` has `"timeout": 720000` in `%USERPROFILE%\.lmstudio\mcp.json`, then restart LM Studio. Prefer `unreal_start_rag_refresh` + `unreal_rag_refresh_status` for long refresh. Use `scope=project_source` when Editor metadata is not needed. |
-| Write blocked for basename collision | Use `search_files` to find the existing file; patch with `replace_in_file` on that path. Extended mode: after duplicate cleanup, call `propose_file_deletions`, get approval, then `delete_file` with `ALLOW_SOURCE_DELETE=1`. |
+| Write blocked for basename collision | Use `search_files` to find the existing file; patch with `replace_in_file` on that path. Extended mode: after duplicate cleanup, call `propose_file_deletions`, get approval, then `delete_file` with `ALLOW_SOURCE_DELETE=1`. Essential: report path and stop. |
 | `identical ... call already attempted` | The model repeated a byte-identical edit (stuck loop). `read_file` the current content, change the patch, or checkpoint and summarize. If loops persist, start a fresh chat with the session bootstrap. |
+| RAG `repeatDetected` / `ok=false` after detail escalate | Pass `continuationToken` with `detailLevel=nextDetailLevel`, or answer from prior matches / `search_files` |
+| RAG `scope=project_miss` / `projectMatchCount=0` / `doNotRepeatSearch` | Active project filter returned no rows — **do not** treat guideline/engine text as project code. Call `search_files` → `read_file` on that project's Source (any active project). Restart `unreal-rag` after this fix if still seeing silent `engine_fallback`. |
+| Inventory / "what's missing" loops on RAG only | Follow `inspect_only` `toolPolicy`: `search_files` before `unreal_rag_search`. Re-call `unreal_agent_plan` if policy looks RAG-first. |
 | `UHT_MACRO_IN_CONDITIONAL_BLOCK` on write | Reflection macros (`UCLASS`/`UPROPERTY`/`UFUNCTION`/`GENERATED_BODY`) sit inside a preprocessor conditional UHT cannot parse (e.g. `#if !UE_BUILD_SHIPPING`). Declare them unconditionally in the header; guard only the `.cpp` implementation. `WITH_EDITOR` / `WITH_EDITORONLY_DATA` blocks are allowed. |
 | `GENGINE_WORLD_CONTEXT` on write | Code resolves worlds via `GEngine->GetWorld()` / `GEngine->GetGameInstance()`. Use the owning subsystem/actor `GetWorld()` or an explicit `UWorld*` parameter; get the game instance from `World->GetGameInstance()`. |
 

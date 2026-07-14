@@ -22,6 +22,7 @@ RAG_ESSENTIAL = {
     "unreal_agent_session",
     "unreal_rag_capabilities",
     "unreal_code_sketch_claim_validate",
+    "unreal_review_claim_validate",
     "unreal_diagram_validate",
     "unreal_project_status",
 }
@@ -40,6 +41,7 @@ AGENT_ESSENTIAL = {
     "build_unreal_project",
     "read_unreal_logs",
     "write_session_handoff",
+    "record_bootstrap_step",
 }
 
 

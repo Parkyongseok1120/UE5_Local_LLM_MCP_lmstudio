@@ -235,8 +235,9 @@ console.log(JSON.stringify({
     assert payload == {"match": True, "conflict": False, "nullCurrent": False}
 
 
-def test_write_locks_single_flight_per_path() -> None:
-    script = """
+def test_write_locks_single_flight_per_path(tmp_path: Path) -> None:
+    script = f"""
+process.env.AGENT_STATE_ROOT = {json.dumps(str(tmp_path / "state"))};
 const locks = require('./src/write-locks.js');
 const a1 = locks.tryAcquirePathLock('/tmp/one', 'write_file');
 const a2 = locks.tryAcquirePathLock('/tmp/one', 'replace_in_file');
@@ -244,13 +245,15 @@ const lockedDuring = locks.isPathLocked('/tmp/one');
 const other = locks.tryAcquirePathLock('/tmp/two', 'write_file');
 locks.releasePathLock('/tmp/one');
 const a3 = locks.tryAcquirePathLock('/tmp/one', 'write_file');
-console.log(JSON.stringify({
+locks.releasePathLock('/tmp/one');
+locks.releasePathLock('/tmp/two');
+console.log(JSON.stringify({{
   a1: a1.ok,
   a2: a2.ok,
   lockedDuring,
   other: other.ok,
   a3: a3.ok,
-}));
+}}));
 """
     payload = _run_node(script)
     assert payload == {
@@ -262,32 +265,53 @@ console.log(JSON.stringify({
     }
 
 
-def test_with_path_lock_reports_conflict_and_releases() -> None:
-    script = """
+def test_with_path_lock_reports_conflict_and_releases(tmp_path: Path) -> None:
+    script = f"""
+process.env.AGENT_STATE_ROOT = {json.dumps(str(tmp_path / "state"))};
 const locks = require('./src/write-locks.js');
-(async () => {
+(async () => {{
   let innerRan = false;
-  const outer = locks.withPathLock('/tmp/lockme', 'write_file', async () => {
-    const nested = await locks.withPathLock('/tmp/lockme', 'write_file', async () => {
+  const outer = locks.withPathLock('/tmp/lockme', 'write_file', async () => {{
+    const nested = await locks.withPathLock('/tmp/lockme', 'write_file', async () => {{
       innerRan = true;
       return 'inner';
-    });
+    }});
     return nested;
-  });
+  }});
   const outerResult = await outer;
   const afterRelease = locks.tryAcquirePathLock('/tmp/lockme', 'write_file');
   locks.releasePathLock('/tmp/lockme');
-  console.log(JSON.stringify({
+  console.log(JSON.stringify({{
     innerLocked: outerResult.result.locked,
     innerRan,
     afterRelease: afterRelease.ok,
-  }));
-})();
+  }}));
+}})();
 """
     payload = _run_node(script)
     assert payload["innerLocked"] is True
     assert payload["innerRan"] is False
     assert payload["afterRelease"] is True
+
+
+def test_write_lock_reclaims_expired_lock_with_reused_pid(tmp_path: Path) -> None:
+    script = f"""
+process.env.AGENT_STATE_ROOT = {json.dumps(str(tmp_path / "state"))};
+const fs = require('fs');
+const locks = require('./src/write-locks.js');
+const target = '/tmp/reused-pid';
+const first = locks.tryAcquirePathLock(target, 'write_file');
+const lockPath = first.lockPath;
+locks.releasePathLock(target);
+fs.writeFileSync(lockPath, `${{process.pid}}:reused-pid\nwrite_file\nold\n`);
+const old = new Date(Date.now() - 10 * 60 * 1000);
+fs.utimesSync(lockPath, old, old);
+const reclaimed = locks.tryAcquirePathLock(target, 'replace_in_file');
+locks.releasePathLock(target);
+console.log(JSON.stringify({{ first: first.ok, reclaimed: reclaimed.ok }}));
+"""
+    payload = _run_node(script)
+    assert payload == {"first": True, "reclaimed": True}
 
 
 def test_resolve_validate_on_write_timeout_ms_default_and_env() -> None:

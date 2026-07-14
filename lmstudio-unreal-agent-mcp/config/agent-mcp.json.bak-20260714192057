@@ -1,0 +1,18 @@
+{
+    "projectSearchRoots":  [
+                               "C:\\Users\\sster\\Documents\\Git",
+                               "C:\\Users\\sster\\Documents\\Unreal Projects",
+                               "C:\\Users\\sster\\Documents\\Git\\Project_MJS",
+                               "C:\\Users\\sster\\Documents\\Git\\JRPGMainGame",
+                               "C:\\Users\\sster\\Documents\\Git\\PoisonMainGame",
+                               "C:\\Users\\sster\\Documents\\Git\\TPSPrototype",
+                               "C:\\Users\\sster\\Documents\\Unreal Projects\\SoulslikePrototype",
+                               "C:\\Users\\sster\\Documents\\Git\\CiciToon_HayaKawa_KR",
+                               "C:\\Users\\sster\\Documents\\Git\\CiCiWuwa_YounuoRender",
+                               "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\data"
+                           ],
+    "defaultEngineRoot":  "C:\\Program Files\\Epic Games\\UE_5.8",
+    "defaultPlatform":  "Win64",
+    "defaultConfiguration":  "Development",
+    "activeProject":  null
+}

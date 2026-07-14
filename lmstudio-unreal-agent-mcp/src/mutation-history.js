@@ -15,6 +15,8 @@
 //   "write Foo.cpp -> validation fails on missing Foo.h -> write Foo.h ->
 //   retry identical Foo.cpp" is a valid flow) and rejected from the 3rd
 //   attempt within the TTL window.
+// - Prefer checkMutationDuplicate + recordMutation(after success) so failed
+//   oldText/occurrence mismatches do not poison the duplicate counter.
 
 const crypto = require("crypto");
 
@@ -54,10 +56,10 @@ function prune(now, maxEntries, ttlMs) {
 }
 
 /**
- * Check whether this mutation call is a pathological repeat, and record it.
- * Returns { duplicate, consecutive, attempts }.
+ * Peek whether this mutation would be treated as a pathological repeat.
+ * Does not mutate history.
  */
-function checkAndRecordMutation(tool, absPath, payload, options = {}) {
+function checkMutationDuplicate(tool, absPath, payload, options = {}) {
   const now = Number.isFinite(options.now) ? options.now : Date.now();
   const maxEntries = Number.isFinite(options.maxEntries) ? options.maxEntries : DEFAULT_MAX_ENTRIES;
   const ttlMs = Number.isFinite(options.ttlMs) ? options.ttlMs : DEFAULT_TTL_MS;
@@ -65,26 +67,56 @@ function checkAndRecordMutation(tool, absPath, payload, options = {}) {
 
   const key = mutationHash(tool, absPath, payload);
   const prior = entries.get(key);
-  const priorSeq = globalSeq;
-  globalSeq += 1;
+  if (!prior) {
+    return { duplicate: false, consecutive: false, attempts: 0, key };
+  }
+  const consecutive = prior.lastSeq === globalSeq;
+  const nextCount = prior.count + 1;
+  if (consecutive) {
+    return { duplicate: true, consecutive: true, attempts: nextCount, key };
+  }
+  if (nextCount >= 3) {
+    return { duplicate: true, consecutive: false, attempts: nextCount, key };
+  }
+  return { duplicate: false, consecutive: false, attempts: prior.count, key };
+}
 
+/**
+ * Record a successful mutation after the write landed.
+ */
+function recordMutation(tool, absPath, payload, options = {}) {
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const maxEntries = Number.isFinite(options.maxEntries) ? options.maxEntries : DEFAULT_MAX_ENTRIES;
+  const ttlMs = Number.isFinite(options.ttlMs) ? options.ttlMs : DEFAULT_TTL_MS;
+  prune(now, maxEntries, ttlMs);
+
+  const key = mutationHash(tool, absPath, payload);
+  const prior = entries.get(key);
+  globalSeq += 1;
   if (!prior) {
     entries.set(key, { count: 1, at: now, lastSeq: globalSeq, tool: String(tool || "") });
-    return { duplicate: false, consecutive: false, attempts: 1 };
+    return { recorded: true, attempts: 1 };
   }
-
-  const consecutive = prior.lastSeq === priorSeq;
   prior.count += 1;
   prior.at = now;
   prior.lastSeq = globalSeq;
+  return { recorded: true, attempts: prior.count };
+}
 
-  if (consecutive) {
-    return { duplicate: true, consecutive: true, attempts: prior.count };
+/**
+ * Check + record in one step (legacy). Prefer check then record-after-success.
+ */
+function checkAndRecordMutation(tool, absPath, payload, options = {}) {
+  const peek = checkMutationDuplicate(tool, absPath, payload, options);
+  if (peek.duplicate) {
+    return peek;
   }
-  if (prior.count >= 3) {
-    return { duplicate: true, consecutive: false, attempts: prior.count };
-  }
-  return { duplicate: false, consecutive: false, attempts: prior.count };
+  const recorded = recordMutation(tool, absPath, payload, options);
+  return {
+    duplicate: false,
+    consecutive: false,
+    attempts: recorded.attempts,
+  };
 }
 
 function duplicateMutationMessage(tool, relPath, status) {
@@ -108,6 +140,8 @@ function mutationHistorySize() {
 
 module.exports = {
   checkAndRecordMutation,
+  checkMutationDuplicate,
+  recordMutation,
   duplicateMutationMessage,
   clearMutationHistory,
   mutationHistorySize,

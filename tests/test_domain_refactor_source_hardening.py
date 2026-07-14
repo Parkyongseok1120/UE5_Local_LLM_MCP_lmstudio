@@ -27,7 +27,9 @@ def test_cpp_analysis_is_source_first_and_fail_closed() -> None:
     assert payload["sourceEvidence"]["sourceReadSucceeded"] is False
     assert payload["suggestedToolCalls"][1]["tool"] == "search_files"
     assert payload["suggestedToolCalls"][1]["args"]["path"] == "project://Source"
-    assert payload["suggestedToolCalls"][-1]["tool"] == "unreal_rag_search"
+    tools = [call["tool"] for call in payload["suggestedToolCalls"]]
+    assert tools.index("unreal_rag_search") < tools.index("unreal_review_claim_validate")
+    assert tools[-1] == "unreal_review_claim_validate"
 
 
 def test_generic_component_example_does_not_claim_project_evidence() -> None:

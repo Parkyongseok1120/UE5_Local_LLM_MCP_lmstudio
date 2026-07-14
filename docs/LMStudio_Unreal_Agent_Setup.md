@@ -44,11 +44,11 @@ Base rules: [`prompts/lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact
 |-------|---------------|
 | **Qwen 3.6 27B** (primary) | [`lmstudio_qwen36_27b_compact_system.md`](../prompts/lmstudio_qwen36_27b_compact_system.md) + base |
 | GPT OSS | [`lmstudio_gpt_oss_compact_system.md`](../prompts/lmstudio_gpt_oss_compact_system.md) |
-| Qwen 3.5 9B / 8B | [`lmstudio_qwen35_9b_compact_system.md`](../prompts/lmstudio_qwen35_9b_compact_system.md) |
+| Qwen 3.5 9B / 8B | [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_base.md) + [`lmstudio_qwen35_9b_compact_system.md`](../prompts/lmstudio_qwen35_9b_compact_system.md) |
 
-Paste the matching file into LM Studio **System Prompt**.
+Paste the base rules first and the matching model file immediately after them into LM Studio **System Prompt**. A Markdown link in a prompt does not load the linked file into LM Studio.
 
-**Qwen 3.6 / thinking models:** disable visible reasoning in LM Studio or use execute turns with thinking OFF. Visible chat must not include "thinking process" text — it breaks tool/JSON parsers.
+**Qwen / thinking models:** set thinking OFF for plan, critique, and execute turns. The repository's Qwen 3.5 Flash sampling profile also specifies `thinking: off`; visible reasoning can run before the required first tool call and break the plan/tool contract.
 
 ## 4. Session start (every chat)
 

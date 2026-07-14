@@ -21,18 +21,34 @@ RAG_MCP_TOOLS = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
+        "unreal_review_claim_validate",
+        "unreal_diagram_validate",
+        "unreal_project_status",
+        "unreal_project_architecture",
+        "unreal_project_graph_query",
         "unreal_rag_refresh",
         "unreal_start_rag_refresh",
         "unreal_rag_refresh_status",
+        "unreal_rag_rebuild_status",
         "unreal_start_compile_loop",
         "unreal_compile_loop_status",
         "unreal_cancel_compile_loop",
+        "unreal_generate_compile_loop",
         "unreal_refactor_manager_plan",
         "unreal_refactor_impact_scan",
         "unreal_refactor_plan_validate",
-        "unreal_diagram_validate",
         "unreal_render_report",
-        "unreal_project_status",
+        "unreal_editor_metadata_status",
+        "unreal_run_editor_export",
+        "unreal_sync_editor_metadata",
+        "unreal_asset_graph_lookup",
+        "unreal_blueprint_claim_validate",
+        "unreal_material_claim_validate",
+        "unreal_material_porting_plan_validate",
+        "unreal_node_plan_validate",
+        "unreal_genre_scope_validate",
+        "unreal_runtime_config_check",
+        "unreal_open_project_picker",
         "unreal_task_start",
         "unreal_task_status",
         "unreal_task_approve",
@@ -43,6 +59,9 @@ RAG_MCP_TOOLS = frozenset(
         "unreal_architecture_decision_status",
         "unreal_architecture_decision_approve",
         "unreal_architecture_decision_revoke",
+        "clangd_document_symbols",
+        "clangd_find_references",
+        "clangd_goto_definition",
     }
 )
 
@@ -89,6 +108,13 @@ def tool_sequence_for_task(task_kind: str) -> list[str]:
         for item in typed_sequence_for_task(task_kind)
         if item.get("name") and item.get("kind") not in {"terminal_action", "checkpoint"}
     ]
+
+
+def gates_for_task(task_kind: str) -> list[str]:
+    """Return orchestration gates for a task (may include semantic gate names)."""
+    cfg = load_tool_orchestration()
+    task = (cfg.get("tasks") or {}).get(task_kind) or {}
+    return [str(gate).strip() for gate in (task.get("gates") or []) if str(gate).strip()]
 
 
 def writes_allowed_for_task(task_kind: str) -> bool:

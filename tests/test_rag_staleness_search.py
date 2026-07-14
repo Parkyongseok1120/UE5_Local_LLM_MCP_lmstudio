@@ -15,11 +15,13 @@ from index_staleness import invalidate_stale_cache, project_source_stale_status 
 from read_query_history import (  # noqa: E402
     check_repeat_query,
     delivery_variant_key,
+    issue_continuation_token,
     query_fingerprint,
     record_query_delivery,
     reset_query_history,
     semantic_query_key,
 )
+from rag_delivery import deliver_rag_result  # noqa: E402
 from unreal_rag_mcp import essential_tools_enabled, extended_tools_enabled  # noqa: E402
 
 
@@ -134,6 +136,89 @@ def test_detail_escalation_allowed_after_first_delivery(tmp_path: Path) -> None:
         current_detail="medium",
     )
     assert allowed["repeatDetected"] is False
+
+
+def test_deliver_rag_auto_escalates_one_detail_step(tmp_path: Path) -> None:
+    reset_query_history()
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"z")
+    first = deliver_rag_result(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="cinematic system",
+        mode="review",
+        scope="auto",
+        detail_level="compact",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+        rows=[{"path": "A.cpp"}],
+    )
+    assert first["ok"] is True
+    assert first.get("continuationToken")
+    # One-step escalation without token (history remembers previous detail).
+    auto = deliver_rag_result(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="cinematic system",
+        mode="review",
+        scope="auto",
+        detail_level="medium",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+        rows=[{"path": "A.cpp"}],
+    )
+    assert auto["suppressed"] is False
+    assert auto["ok"] is True
+
+    # Same medium again should suppress.
+    blocked = deliver_rag_result(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="cinematic system",
+        mode="review",
+        scope="auto",
+        detail_level="medium",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+        rows=None,
+    )
+    assert blocked["suppressed"] is True
+    assert blocked["ok"] is False
+
+
+def test_deliver_rag_suppress_marks_ok_false(tmp_path: Path) -> None:
+    reset_query_history()
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"w")
+    deliver_rag_result(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="same query",
+        mode="review",
+        scope="auto",
+        detail_level="compact",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+        rows=[{"path": "A.cpp"}],
+    )
+    blocked = deliver_rag_result(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="same query",
+        mode="review",
+        scope="auto",
+        detail_level="compact",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+        rows=None,
+    )
+    assert blocked["suppressed"] is True
+    assert blocked["ok"] is False
 
 
 def test_project_sync_capabilities_advisory_when_source_newer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

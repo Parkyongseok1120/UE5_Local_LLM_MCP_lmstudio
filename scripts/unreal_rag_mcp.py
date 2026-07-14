@@ -360,6 +360,7 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
+        "unreal_review_claim_validate",
         "unreal_diagram_validate",
         "unreal_project_status",
     }
@@ -617,10 +618,15 @@ class McpServer:
                 "title": "Search Unreal RAG",
                 "description": (
                     "Hybrid FTS + symbol retrieval over the local Unreal RAG index. "
-                    "Use before answering Unreal C++, Lyra, module, project, shader, material, or Blueprint questions. "
+                    "For Unreal API/engine questions, search here first. "
+                    "For active-project inventory / what-exists-or-missing reviews, prefer search_files/read_file "
+                    "on that project's Source/; if this tool returns scope=project_miss or projectMatchCount=0, "
+                    "stop repeating RAG and use Source tools (or conclude absence from zero Source hits). "
                     "If indexStaleness.stale=true but analysisCanProceed=true, do not repeat the same query — "
                     "use search_files/read_file on project Source/ or answer from returned matches. "
-                    "repeatDetected=true means full context was suppressed; do not call again with the same args."
+                    "repeatDetected=true / ok=false means context was suppressed; do not call again with the same args. "
+                    "To escalate detail once after truncation, pass continuationToken from the prior result "
+                    "together with detailLevel=nextDetailLevel (one step only)."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -660,9 +666,18 @@ class McpServer:
                             "default": "compact",
                             "description": (
                                 "Evidence size tier for C++ / doc chunks: compact (~10k assembly), "
-                                "medium (~18k), large (~40k), full (~80k). Escalate once if evidence is truncated."
+                                "medium (~18k), large (~40k), full (~80k). Escalate once with continuationToken "
+                                "if evidence is truncated."
                             ),
                         },
+                        "continuationToken": {
+                            "type": "string",
+                            "description": (
+                                "Token from a prior unreal_rag_search structured result. Required when "
+                                "escalating detailLevel via nextDetailLevel; one-shot use."
+                            ),
+                        },
+                        "sessionId": {"type": "string"},
                     },
                     ["query"],
                 ),
@@ -1243,7 +1258,9 @@ class McpServer:
                 "title": "Validate Review Claims (grep + PAB)",
                 "description": (
                     "Batch validate review findings against project source and PAB. "
-                    "Flags false 'missing/unused' claims and duplicate Subsystem/DataAsset suggestions."
+                    "Flags false 'missing/unused' claims, duplicate Subsystem/DataAsset suggestions, "
+                    "and logic-missing claims that contradict by-design header contracts "
+                    "(reasons: by_design_contract, header_contract_unread)."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -1547,36 +1564,16 @@ class McpServer:
             self.index, query, top_k, options
         )
         if not rows and options.projects:
-            fallback_opts = SearchOptions(
-                mode=options.mode,
-                sources=options.sources,
-                projects=[],
-                layers=options.layers,
-                doc_types=options.doc_types,
-                genres=options.genres,
-                extensions=options.extensions,
-                required_terms=options.required_terms,
-                candidate_limit=options.candidate_limit,
+            # Do not substitute engine/guideline hits as project evidence.
+            active = active_project_names()
+            resolved_scope = "project_miss"
+            context = (
+                "No matching Unreal RAG context was found in the active project index. "
+                "Use search_files then read_file on that project's Source/ before claiming "
+                "a feature exists or is missing. Guideline/engine hits are not primary "
+                f"project evidence. activeProjects={active!r}."
             )
-            fallback_rows = search_hybrid(self.index, query, top_k, fallback_opts) if use_hybrid else search(
-                self.index, query, top_k, fallback_opts
-            )
-            if fallback_rows:
-                rows = fallback_rows
-                resolved_scope = "engine_fallback"
-                context = assemble_context(
-                    rows,
-                    query,
-                    mode,
-                    **assembly_kwargs,
-                )
-                context += (
-                    "\n[project scope fallback: active project filter returned 0 rows; "
-                    "showing engine-wide matches. Re-sync metadata for the active project.]\n"
-                )
-                rows = annotate_other_project_rows(rows, active_project_names())
-                context += other_project_context_warning(rows)
-                return rows, context, resolved_scope, detail
+            return [], context, resolved_scope, detail
         context = assemble_context(rows, query, mode, **assembly_kwargs)
         rows = annotate_other_project_rows(rows, active_project_names())
         context += other_project_context_warning(rows)
@@ -2097,7 +2094,7 @@ class McpServer:
                 f"requiredNextAction: {repeat.get('requiredNextAction')}"
             )
             structured = {
-                "ok": True,
+                "ok": False,
                 "repeatDetected": True,
                 "doNotRetry": True,
                 "fullContextSuppressed": True,
@@ -2109,7 +2106,7 @@ class McpServer:
             }
             if handoff:
                 structured["autoHandoff"] = handoff
-            self.tool_result(message_id, short, structured=structured, char_limit=1200)
+            self.tool_result(message_id, short, structured=structured, char_limit=1200, is_error=True)
             return
 
         rows, context, resolved_scope, detail = self.run_search(request, top_k, arguments, use_hybrid)
@@ -2266,7 +2263,7 @@ class McpServer:
                 message_id,
                 short,
                 structured={
-                    "ok": True,
+                    "ok": False,
                     "repeatDetected": True,
                     "doNotRetry": True,
                     "fullContextSuppressed": True,
@@ -2276,6 +2273,7 @@ class McpServer:
                     "requiredNextAction": repeat.get("requiredNextAction"),
                 },
                 char_limit=1200,
+                is_error=True,
             )
             return
 
@@ -2284,8 +2282,12 @@ class McpServer:
         truncated = "assembly budget truncated" in context
         next_detail = next_code_detail(detail) if truncated else None
         stale_status = project_source_stale_status(search_mode=mode)
+        match_count = len(rows)
+        project_miss = resolved_scope == "project_miss"
+        zero_result = match_count == 0
 
         structured: dict[str, Any] = {
+            "ok": not project_miss,
             "matches": rows,
             "hybrid": use_hybrid,
             "scope": resolved_scope,
@@ -2293,9 +2295,21 @@ class McpServer:
             "nextDetailLevel": next_detail,
             "indexStaleness": stale_status,
             "analysisCanProceed": stale_status.get("analysisCanProceed", True),
-            "directSourcePreferred": stale_status.get("directSourcePreferred", False),
-            "doNotRepeatSearch": False,
+            "directSourcePreferred": stale_status.get("directSourcePreferred", False) or project_miss or (
+                zero_result and bool(active_project)
+            ),
+            "doNotRepeatSearch": bool(project_miss or zero_result),
+            "matchCount": match_count,
+            "projectMatchCount": 0 if project_miss else match_count,
+            "activeProjects": active_project_names() if (project_miss or active_project) else [],
         }
+        if project_miss or (zero_result and bool(active_project)):
+            structured["requiredNextAction"] = "search_files_then_read_file"
+            structured["nextSteps"] = [
+                "Call search_files on the active project's Source/ for the feature or symbol tokens.",
+                "read_file / read_file_range matching paths before claiming presence or absence.",
+                "Do not treat genre/guideline RAG as project implementation evidence.",
+            ]
 
         if stale_status.get("stale") or stale_status.get("refreshRecommended"):
             refresh_available = extended_tools_enabled()
@@ -2308,15 +2322,16 @@ class McpServer:
 
             severity = stale_status.get("stalenessSeverity") or "advisory"
             if severity in {"advisory", "claim_blocking", "none"}:
-                structured["requiredNextAction"] = "read_project_source_or_answer"
-                structured["doNotRepeatSearch"] = True
-                structured["nextSteps"] = [
-                    "Answer from returned matches or use search_files/read_file on project Source/.",
-                ]
+                if not project_miss:
+                    structured["requiredNextAction"] = "read_project_source_or_answer"
+                    structured["doNotRepeatSearch"] = True
+                    structured["nextSteps"] = [
+                        "Answer from returned matches or use search_files/read_file on project Source/.",
+                    ]
                 if stale_status.get("recommendedCommand"):
-                    structured["nextSteps"].append(str(stale_status["recommendedCommand"]))
+                    structured.setdefault("nextSteps", []).append(str(stale_status["recommendedCommand"]))
                 if refresh_available and stale_status.get("refreshRecommended"):
-                    structured["nextSteps"].append(
+                    structured.setdefault("nextSteps", []).append(
                         "Optional once: unreal_start_rag_refresh (background; not required for C++ structure analysis)."
                     )
             elif severity == "blocking":
@@ -2350,6 +2365,7 @@ class McpServer:
             context,
             structured=structured,
             char_limit=char_limit,
+            is_error=bool(project_miss),
         )
 
     def handle_symbol_lookup(self, message_id: Any, arguments: dict[str, Any]) -> None:

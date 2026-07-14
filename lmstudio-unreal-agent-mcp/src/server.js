@@ -83,8 +83,10 @@ const {
   releasePathLock
 } = require("./write-locks.js");
 const {
-  checkAndRecordMutation,
-  duplicateMutationMessage
+  checkMutationDuplicate,
+  recordMutation: recordMutationAttempt,
+  duplicateMutationMessage,
+  clearMutationHistory
 } = require("./mutation-history.js");
 const {
   buildResponsePayload,
@@ -101,13 +103,38 @@ const {
 } = require("./context-ux.js");
 const { callableAgentToolNames, toolNotCallablePayload, projectSwitchGuidance } = require("./tool-exposure");
 const { atomicWriteText, atomicWriteJson } = require("./atomic-io");
-const { sha256Buffer } = require("./safe-write");
+const {
+  createExclusive,
+  replaceWithCAS,
+  sha256Buffer,
+  sha256Text,
+} = require("./safe-write");
+const {
+  beginToolCall,
+  checkToolRepeatBlocked,
+  recordToolFailure,
+  toolRepeatBlockedMessage,
+  clearToolFailureHistory
+} = require("./tool-failure-history");
+const {
+  checkReadRepeat,
+  recordReadSuccess,
+  recordReadStagnation,
+  normalizeReadToolArgs,
+  cachedReadInstruction,
+  clearReadSuccessHistory
+} = require("./tool-read-history");
 const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
 const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
+const { resolveProjectRootForFile } = require("./validate-write");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? Math.max(min, value) : fallback;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || process.cwd());
@@ -166,39 +193,28 @@ const MCP_ESSENTIAL_TOOLS = ["1", "true", "yes", "on"].includes(
 const MCP_EXTENDED_TOOLS = ["1", "true", "yes", "on"].includes(
   String(process.env.MCP_EXTENDED_TOOLS || "").trim().toLowerCase()
 );
-const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
-  "get_workspace_info",
-  "get_active_project",
-  "list_directory",
-  "read_file",
-  "read_file_range",
-  "read_symbol",
-  "replace_in_file",
-  "write_file",
-  "search_files",
-  "static_validate_project",
-  "build_unreal_project",
-  "read_unreal_logs",
-  "write_session_handoff"
-]);
-const EXTENDED_AGENT_TOOL_NAMES = new Set([
-  "set_active_project",
-  "detect_unreal_project",
-  "list_unreal_projects",
-  "open_active_project_picker",
-  "run_command",
-  "refactor_impact_scan",
-  "refactor_plan_validate",
-  "propose_file_deletions",
-  "delete_file",
-  "record_bootstrap_step"
-]);
-const STABLE_HIDDEN_AGENT_TOOL_NAMES = new Set([
-  "apply_edit_bundle"
-]);
 const CONTROL_PLANE_TOOLS = ["1", "true", "yes", "on"].includes(
   String(process.env.ALLOW_CONTROL_PLANE_TOOLS || "").trim().toLowerCase()
 );
+/** Tracks shared activeProject so history clears when rag or agent switches projects. */
+let lastSeenActiveProjectKey = null;
+
+function clearLoopHistoriesOnProjectChange(force = false) {
+  const current = String(getActiveProject(CONFIG_PATH) || "");
+  if (!force && lastSeenActiveProjectKey !== null && current === lastSeenActiveProjectKey) {
+    return false;
+  }
+  const changed = lastSeenActiveProjectKey !== null && current !== lastSeenActiveProjectKey;
+  if (force || changed) {
+    clearReadSuccessHistory();
+    clearToolFailureHistory();
+    clearMutationHistory();
+    readEvidence.clear();
+    fileCache.clear();
+  }
+  lastSeenActiveProjectKey = current;
+  return force || changed;
+}
 const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
 const fileCache = new Map();
 const readEvidence = new Map();
@@ -333,7 +349,8 @@ function enforceTaskAuth(args, options = {}) {
       errorCode: auth.errorCode || "TASK_AUTH_FAILED",
     });
   }
-  return auth;
+  // Success must return null so write_file/replace_in_file proceed (not return the auth object).
+  return null;
 }
 
 function validationToolResult(summary, validation, options = {}) {
@@ -690,6 +707,165 @@ function makeJsonSchema(properties, required = []) {
 
 function fileStatSignature(stat) {
   return `${stat.size}:${stat.mtimeMs}`;
+}
+
+async function resolveMutationGenerationForRead(resolution, targetPath) {
+  try {
+    const activeProject = resolution.activeProject || getActiveProject(CONFIG_PATH);
+    if (!activeProject) return 0;
+    const projectRoot = await resolveProjectRootForFile(targetPath, () => activeProject);
+    if (!projectRoot) return 0;
+    const state = await readMutationState(projectRoot);
+    return Number(state.mutationGeneration || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function buildReadEvidenceContext(target, stat, resolution, options = {}) {
+  return {
+    fileAbsPath: target ? path.resolve(target) : null,
+    fileSignature: stat ? fileStatSignature(stat) : null,
+    mutationGeneration: options.mutationGeneration ?? 0,
+    scopeSignature: options.scopeSignature || null,
+    evidenceHash: options.evidenceHash || null,
+  };
+}
+
+function cachedReadSuccess(content, options = {}) {
+  const errorCode = options.errorCode || "READ_REPEAT_DETECTED";
+  const payload = {
+    ok: true,
+    cached: true,
+    evidenceStatus: "cached",
+    repeatDetected: true,
+    doNotRepeatRead: true,
+    stopCurrentWorkflow: options.stopCurrentWorkflow !== false,
+    errorCode,
+    retryable: false,
+    phase: "evidence_cached",
+    userMessage: options.userMessage || cachedReadInstruction(errorCode),
+    agentInstruction: options.agentInstruction || cachedReadInstruction(errorCode),
+    content: content == null ? "" : content,
+    readAttempts: options.readAttempts || 2,
+  };
+  if (options.readCount != null) payload.readCount = options.readCount;
+  if (options.fullyCovered) payload.fullyCovered = true;
+  if (options.coveredBy) payload.coveredBy = options.coveredBy;
+  return text(JSON.stringify(payload, null, 2));
+}
+
+function evidenceStagnationFail(tool, guard, options = {}) {
+  const errorCode = guard.reason || "EVIDENCE_STAGNATION";
+  recordReadStagnation(tool, guard.normalizedArgs, options.context || {});
+  return fail(
+    errorCode === "EVIDENCE_STAGNATION_REPEAT"
+      ? `identical ${tool} evidence call blocked after stagnation.`
+      : "Evidence read stagnating — no new line coverage or soft budget exhausted.",
+    {
+      errorCode,
+      retryable: false,
+      doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
+      stopCurrentWorkflow: true,
+      agentInstruction: cachedReadInstruction(errorCode),
+      userMessage: cachedReadInstruction(errorCode),
+      nextSteps: [
+        "Do not call another evidence tool.",
+        "Produce the final analysis from evidence already in the conversation.",
+      ],
+      readAttempts: guard.attempts,
+      pingPong: Boolean(guard.pingPong),
+    }
+  );
+}
+
+function prepareReadGuard(tool, args, context) {
+  const normalizedArgs = normalizeReadToolArgs(tool, args);
+  const decision = checkReadRepeat(tool, normalizedArgs, context);
+  return { normalizedArgs, decision, ...decision };
+}
+
+function applyReadGuard(tool, guard, context) {
+  if (!guard || guard.action === "allow" || !guard.repeat) return null;
+  if (
+    guard.action === "stagnation"
+    || guard.reason === "EVIDENCE_STAGNATION"
+    || guard.reason === "EVIDENCE_STAGNATION_REPEAT"
+  ) {
+    return evidenceStagnationFail(tool, guard, { context });
+  }
+  // Identical / fully-covered range: return cached success (no wrong-range body injection for uncovered misses).
+  if (guard.action === "cache" || guard.reason === "READ_REPEAT_DETECTED") {
+    if (guard.cachedContent == null && guard.fullyCovered) {
+      return fail("Requested line range is already covered by prior reads.", {
+        errorCode: "READ_REPEAT_DETECTED",
+        retryable: false,
+        doNotRetry: [tool],
+        fullyCovered: true,
+        coveredBy: guard.coveredBy || [],
+        agentInstruction:
+          "Those lines were already returned. Do not re-scan. Finish analysis or call read_symbol for a named function.",
+        nextSteps: [
+          "Use existing evidence, or call read_symbol with an exact C++ symbol name.",
+        ],
+      });
+    }
+    return cachedReadSuccess(guard.cachedContent, {
+      errorCode: "READ_REPEAT_DETECTED",
+      readAttempts: guard.attempts,
+      fullyCovered: guard.fullyCovered,
+      coveredBy: guard.coveredBy,
+    });
+  }
+  return null;
+}
+
+/**
+ * Truncate a UTF-8 text buffer on the last complete newline and describe line span.
+ */
+function truncateTextAtNewline(utf8Text, fileSize, bytesRead, detail) {
+  let body = String(utf8Text || "");
+  // Drop a trailing partial line when the raw byte read stopped mid-line.
+  if (fileSize > bytesRead && body.length && !body.endsWith("\n")) {
+    const lastNl = body.lastIndexOf("\n");
+    if (lastNl >= 0) body = body.slice(0, lastNl + 1);
+  }
+  const lines = body.length ? body.replace(/\n$/, "").split("\n") : [];
+  const startLine = 1;
+  const endLine = Math.max(1, lines.length);
+  const nextStartLine = endLine + 1;
+  const nextDetail = detail === "compact" ? "medium" : detail === "medium" ? "large" : null;
+
+  // Best-effort: last function-like signature that may be cut off.
+  let detectedPartialSymbol = null;
+  const sigRe = /\b((?:[A-Za-z_][\w:]*::)+[A-Za-z_]\w*)\s*\(/g;
+  let match;
+  while ((match = sigRe.exec(body)) !== null) {
+    detectedPartialSymbol = match[1];
+  }
+
+  const meta = {
+    truncated: fileSize > bytesRead,
+    returnedLines: { start: startLine, end: endLine },
+    nextStartLine,
+    preferredNextTool: "read_symbol",
+    detectedPartialSymbol,
+    fileSizeBytes: fileSize,
+    bytesRead,
+    detailLevel: detail,
+  };
+  let footer = "";
+  if (meta.truncated) {
+    footer = `\n\n[TRUNCATED: file size ${fileSize} bytes, read ${bytesRead} bytes at detailLevel=${detail}. `
+      + `Returned lines ${startLine}-${endLine}. Next unread line: ${nextStartLine}. `
+      + `Prefer read_symbol for a named function`
+      + (detectedPartialSymbol ? ` (partial symbol candidate: ${detectedPartialSymbol})` : "")
+      + `. `
+      + (nextDetail
+        ? `Escalate once with detailLevel=${nextDetail} or read_file_range from line ${nextStartLine}.]`
+        : `Use read_file_range from line ${nextStartLine} or read_symbol.]`);
+  }
+  return { body, footer, meta, endLine };
 }
 
 function rememberReadEvidence(target, stat, resolution, lineRange = null, contentHash = null) {
@@ -1079,18 +1255,18 @@ function allAgentTools() {
       },
       {
         name: "write_file",
-        description: "Create a brand-new UTF-8 file inside WORKSPACE_ROOT. Requires ALLOW_WRITE=1. Create-only: any file that already exists is blocked (every extension, not just source). Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
+        description: "Create a brand-new UTF-8 file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1. Create-only: any file that already exists is blocked. Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
         inputSchema: makeJsonSchema({
-          path: { type: "string", description: "Relative path inside workspace." },
+          path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
           content: { type: "string", description: "Full file content to write." },
           createDirs: { type: "boolean", description: "Create parent directories if needed. Default false." }
         }, ["path", "content"])
       },
       {
         name: "replace_in_file",
-        description: "Safely replace exact text in a file. Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying. Byte-identical repeat calls are rejected as a loop guard.",
+        description: "Safely replace exact text in a file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying. Byte-identical repeat calls are rejected as a loop guard.",
         inputSchema: makeJsonSchema({
-          path: { type: "string", description: "Relative path inside workspace." },
+          path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
           oldText: { type: "string", description: "Exact text to replace." },
           newText: { type: "string", description: "Replacement text." },
           expectedOccurrences: { type: "number", description: "If set, replacement only proceeds when occurrence count matches." }
@@ -1164,7 +1340,7 @@ function allAgentTools() {
       },
       {
         name: "static_validate_project",
-        description: "Run static Unreal compile-readiness validation on the active project Source tree. Extended mode. Call before build_unreal_project when validation findings from writes need a full-project check.",
+        description: "Run static Unreal compile-readiness validation on the active project Source tree. Call before build_unreal_project when validation findings from writes need a full-project check.",
         inputSchema: makeJsonSchema({
           projectRoot: { type: "string", description: "Optional project root or .uproject path. Defaults to active project." }
         })
@@ -1217,9 +1393,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const name = request.params.name;
+  const args = request.params.arguments || {};
+  const priorSeq = beginToolCall();
   try {
-    const name = request.params.name;
-    const args = request.params.arguments || {};
+    clearLoopHistoriesOnProjectChange(false);
     const allowed = callableAgentToolNames(allAgentTools().map((tool) => tool.name));
     if (!allowed.has(name)) {
       const blocked = toolNotCallablePayload(name);
@@ -1229,6 +1407,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         userMessage: blocked.userMessage,
         agentInstruction: blocked.agentInstruction,
       });
+    }
+
+    const repeatBlock = checkToolRepeatBlocked(name, args, priorSeq);
+    if (repeatBlock.blocked) {
+      return fail(toolRepeatBlockedMessage(name, repeatBlock), {
+        errorCode: "TOOL_REPEAT_BLOCKED",
+        retryable: false,
+        stopCurrentWorkflow: true,
+        doNotRetry: [name],
+        agentInstruction:
+          `Do not retry ${name} with the same arguments. `
+          + "Stop the current workflow and report the MCP internal error.",
+      });
+    }
+
+    if (process.env.MCP_TEST_FORCE_TOOL_ERROR === name) {
+      throw new Error(`test-forced internal error for ${name}`);
     }
 
     if (name === "get_workspace_info") {
@@ -1282,6 +1477,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         clear: args.clear === true
       });
       invalidateWorkspaceInfoCache();
+      clearLoopHistoriesOnProjectChange(true);
       return text(JSON.stringify(result, null, 2));
     }
 
@@ -1504,6 +1700,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         suggestedToolCalls: [{ tool: "list_directory", args: { path: displayPath(resolution) } }]
       });
 
+      const mutationGeneration = await resolveMutationGenerationForRead(resolution, target);
+      const readContext = buildReadEvidenceContext(target, s, resolution, { mutationGeneration });
+      const guard = prepareReadGuard("read_file", args, readContext);
+      const blocked = applyReadGuard("read_file", guard, readContext);
+      if (blocked) return blocked;
+
       const detail = resolveCodeDetail(args.detailLevel);
       const tierCap = CODE_DETAIL_READ_BYTES[detail];
       const maxBytes = Math.max(
@@ -1514,28 +1716,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!isTextLikely(buffer)) return fail(`file appears binary: ${args.path}`);
       const hasCRLF = buffer.includes(Buffer.from("\r\n"));
       // Normalize line endings so model's copy-paste into oldText matches replace_in_file
-      let out = buffer.toString("utf8").replace(/\r\n/g, "\n");
+      const rawOut = buffer.toString("utf8").replace(/\r\n/g, "\n");
+      const truncated = truncateTextAtNewline(rawOut, s.size, buffer.length, detail);
+      let out = truncated.body;
       if (hasCRLF) {
-          out = `[line-endings: CRLF — replace_in_file normalizes automatically]\n` + out;
-        }
-      if (s.size > buffer.length) {
-        const nextDetail = detail === "compact" ? "medium" : detail === "medium" ? "large" : null;
-        out += `\n\n[TRUNCATED: file size ${s.size} bytes, read ${buffer.length} bytes at detailLevel=${detail}.`;
-        if (nextDetail) {
-          out += ` Escalate once with detailLevel=${nextDetail} or use read_file_range.]`;
-        } else {
-          out += ` Use read_file_range for partial reads.]`;
+        out = `[line-endings: CRLF — replace_in_file normalizes automatically]\n` + out;
       }
-      }
+      out += truncated.footer;
       rememberReadEvidence(
         target,
         s,
         resolution,
-        `1-${Math.max(1, out.split("\n").length)}`,
-        s.size <= MAX_READ_BYTES ? sha256Buffer(await fsp.readFile(target)) : null
+        `1-${truncated.endLine}`,
+        // Always hash the full file so truncated reads still unlock replace_in_file.
+        sha256Buffer(await fsp.readFile(target))
       );
-      const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`;
-      return text(metadataHeader + out);
+      const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`
+        + (truncated.meta.truncated ? `[read-truncation: ${JSON.stringify(truncated.meta)}]\n` : "");
+      const output = metadataHeader + out;
+      recordReadSuccess("read_file", guard.normalizedArgs, {
+        ...readContext,
+        evidenceHash: sha256Text(out),
+      }, output, { lineRange: { start: 1, end: truncated.endLine } });
+      return text(output);
     }
 
     if (name === "read_file_range") {
@@ -1544,6 +1747,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const s = await statSafe(target);
       if (!s) return fail(`not found: ${args.path}`);
       if (!s.isFile()) return fail(`not a file: ${args.path}`);
+
+      const mutationGeneration = await resolveMutationGenerationForRead(resolution, target);
+      const readContext = buildReadEvidenceContext(target, s, resolution, { mutationGeneration });
+      const guard = prepareReadGuard("read_file_range", args, readContext);
+      const blocked = applyReadGuard("read_file_range", guard, readContext);
+      if (blocked) return blocked;
+      const normalizedArgs = guard.normalizedArgs;
 
       const detail = resolveCodeDetail(args.detailLevel);
       const lineCap = CODE_DETAIL_LINE_CAP[detail];
@@ -1576,9 +1786,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `${startLine}-${Math.min(endLine, lines.length)}`,
         sha256Text(content)
       );
-      return text(
-        `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`
-      );
+      const output = `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`;
+      recordReadSuccess("read_file_range", normalizedArgs, {
+        ...readContext,
+        evidenceHash: sha256Text(content),
+      }, output);
+      return text(output);
     }
 
     if (name === "read_symbol") {
@@ -1586,6 +1799,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const target = resolution.absolutePath;
       const stat = await statSafe(target);
       if (!stat || !stat.isFile()) return fail(`not found or not a file: ${args.path}`);
+
+      const mutationGeneration = await resolveMutationGenerationForRead(resolution, target);
+      const readContext = buildReadEvidenceContext(target, stat, resolution, { mutationGeneration });
+      const guard = prepareReadGuard("read_symbol", args, readContext);
+      const blocked = applyReadGuard("read_symbol", guard, readContext);
+      if (blocked) return blocked;
+      const normalizedArgs = guard.normalizedArgs;
+
       let content;
       try { content = await readCachedTextFile(target, stat); }
       catch (err) {
@@ -1640,7 +1861,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `${startLine}-${endLine}`,
         sha256Text(content)
       );
-      return text(`File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`);
+      const output = `File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`;
+      recordReadSuccess("read_symbol", normalizedArgs, {
+        ...readContext,
+        evidenceHash: sha256Text(content),
+      }, output);
+      return text(output);
     }
 
     if (name === "write_file") {
@@ -1679,11 +1905,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.createDirs) await fsp.mkdir(parent, { recursive: true });
         if (!(await exists(parent))) return fail(`parent directory not found: ${path.relative(WORKSPACE_ROOT, parent)}`);
         const rel = path.relative(WORKSPACE_ROOT, target);
-        const repeat = checkAndRecordMutation("write_file", target, String(args.content || ""));
+        const mutationPayload = String(args.content || "");
+        const repeat = checkMutationDuplicate("write_file", target, mutationPayload);
         if (repeat.duplicate) {
-          return fail(duplicateMutationMessage("write_file", rel, repeat));
+          return fail(duplicateMutationMessage("write_file", rel, repeat), {
+            errorCode: "MUTATION_REPEAT_BLOCKED",
+            retryable: false,
+            doNotRetry: ["write_file"],
+            stopCurrentWorkflow: true,
+          });
         }
-        const contentToWrite = String(args.content || "");
+        const contentToWrite = mutationPayload;
         const targetExists = await exists(target);
         const priorContent = targetExists && ALLOW_EXISTING_SOURCE_WRITE
           ? await fsp.readFile(target, "utf8")
@@ -1707,6 +1939,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
           throw err;
         }
+        recordMutationAttempt("write_file", target, mutationPayload);
         invalidateFileCache(target);
         const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
         if (validationFailed(validation)) {
@@ -1806,13 +2039,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return fail("previous write still in progress on this path; verify file state with read_file before retrying.");
       }
       try {
-        const repeat = checkAndRecordMutation(
-          "replace_in_file",
-          target,
-          `${oldText}\u0000${newText}\u0000${args.expectedOccurrences ?? ""}`
-        );
+        const mutationPayload = `${oldText}\u0000${newText}\u0000${args.expectedOccurrences ?? ""}`;
+        const repeat = checkMutationDuplicate("replace_in_file", target, mutationPayload);
         if (repeat.duplicate) {
-          return fail(duplicateMutationMessage("replace_in_file", path.relative(WORKSPACE_ROOT, target), repeat));
+          return fail(duplicateMutationMessage("replace_in_file", path.relative(WORKSPACE_ROOT, target), repeat), {
+            errorCode: "MUTATION_REPEAT_BLOCKED",
+            retryable: false,
+            doNotRetry: ["replace_in_file"],
+            stopCurrentWorkflow: true,
+          });
         }
         const raw = await readCachedBufferFile(target, s);
         const hasCRLF = raw.includes(Buffer.from("\r\n"));
@@ -1835,7 +2070,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } else {
             hint = "\n\nHint: the first line of oldText was not found anywhere in the file. Use read_file or search_files to verify the exact content before retrying.";
           }
-          return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`);
+          return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`, {
+            errorCode: "OLD_TEXT_NOT_FOUND",
+            retryable: false,
+            doNotRetry: ["replace_in_file"],
+            nextSteps: ["Call read_file_range for the target lines, then retry replace_in_file with corrected oldText."],
+          });
         }
         const isSourcePath = [".h", ".hpp", ".cpp", ".c", ".cc", ".cs"].includes(path.extname(target).toLowerCase());
         const expectedOccurrences = args.expectedOccurrences !== undefined
@@ -1849,11 +2089,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             .map(({ line, index }) => `L${index + 1}: ${line.slice(0, 120)}`)
             .join("\n");
           return fail(
-            `ambiguous replace in ${args.path}: found ${occurrences} matches; specify expectedOccurrences or narrow oldText.${snippets ? `\n\nMatches:\n${snippets}` : ""}`
+            `ambiguous replace in ${args.path}: found ${occurrences} matches; specify expectedOccurrences or narrow oldText.${snippets ? `\n\nMatches:\n${snippets}` : ""}`,
+            {
+              errorCode: "AMBIGUOUS_REPLACE",
+              retryable: false,
+              doNotRetry: ["replace_in_file"],
+            }
           );
         }
         if (expectedOccurrences !== undefined && occurrences !== expectedOccurrences) {
-          return fail(`occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`);
+          return fail(`occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`, {
+            errorCode: "OCCURRENCE_MISMATCH",
+            retryable: false,
+            doNotRetry: ["replace_in_file"],
+          });
         }
 
         // Apply replacement on normalized content, then restore original line endings if needed
@@ -1870,9 +2119,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!casResult.ok) {
           return fail(casResult.error || "replace_in_file blocked by read-hash CAS.", {
             errorCode: casResult.errorCode || "READ_HASH_CAS_MISMATCH",
+            retryable: false,
+            doNotRetry: ["replace_in_file"],
             nextSteps: ["Re-read the file, then retry replace_in_file with exact oldText."],
           });
         }
+        recordMutationAttempt("replace_in_file", target, mutationPayload);
         const updated = casResult.updated;
         invalidateFileCache(target);
         const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
@@ -1942,9 +2194,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "propose_file_deletions") {
-      const activeProject = getActiveProject(CONFIG_PATH);
-      const plan = await buildDeletionProposal(args.files, args.completedEditsSummary, activeProject);
-      return text(JSON.stringify(plan, null, 2));
+      try {
+        const activeProject = getActiveProject(CONFIG_PATH);
+        const plan = await buildDeletionProposal(args.files, args.completedEditsSummary, activeProject);
+        return text(JSON.stringify(plan, null, 2));
+      } catch (err) {
+        const message = err && err.message ? String(err.message) : String(err);
+        return fail(message, {
+          errorCode: "VALIDATION_ERROR",
+          retryable: false,
+          userMessage: message,
+          agentInstruction: "Fix propose_file_deletions arguments (summary/reasons must be concrete sentences) and retry once.",
+        });
+      }
     }
 
     if (name === "delete_file") {
@@ -2191,6 +2453,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const query = String(args.query || "");
       if (!query) return fail("query must not be empty");
 
+      const baseStat = await statSafe(base);
+      if (!baseStat) {
+        return fail(`not found: ${args.path || "."}`, {
+          errorCode: "SEARCH_PATH_NOT_FOUND",
+          retryable: false,
+          doNotRetry: ["search_files"],
+          nextSteps: ["Call get_active_project / list_directory, then search under project://Source."],
+        });
+      }
+      if (!baseStat.isDirectory() && !baseStat.isFile()) {
+        return fail(`not a searchable path: ${args.path || "."}`, {
+          errorCode: "SEARCH_PATH_INVALID",
+          retryable: false,
+        });
+      }
+      const mutationGeneration = await resolveMutationGenerationForRead(resolution, base);
+      const readContext = buildReadEvidenceContext(base, baseStat, resolution, {
+        mutationGeneration,
+        scopeSignature: fileStatSignature(baseStat),
+      });
+      const guard = prepareReadGuard("search_files", args, readContext);
+      const blocked = applyReadGuard("search_files", guard, readContext);
+      if (blocked) return blocked;
+      const normalizedArgs = guard.normalizedArgs;
+
       const ignoreDirs = new Set([
         ".git", ".vs", ".idea", "Binaries", "DerivedDataCache", "Intermediate",
         "Saved", "node_modules", ".gradle", ".cache"
@@ -2248,14 +2535,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       await walk(base);
-      return text(JSON.stringify({
+      const output = JSON.stringify({
         path: pathMetadata(resolution),
         results,
         filesSeen,
         filesSkippedBySize,
         searchComplete: filesSeen < SEARCH_MAX_FILES && filesSkippedBySize === 0,
         incompleteReasons: filesSkippedBySize > 0 ? ["large_files_skipped"] : [],
-      }, null, 2));
+      }, null, 2);
+      recordReadSuccess("search_files", normalizedArgs, {
+        ...readContext,
+        evidenceHash: sha256Text(output),
+      }, output);
+      return text(output);
     }
 
     if (name === "run_command") {
@@ -2437,10 +2729,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   } catch (err) {
     const message = err && err.message ? String(err.message) : String(err);
     console.error(err && err.stack ? err.stack : err);
+    const validationLike = /must be a concrete|must contain at least|may contain at most|write blocked|path escapes|path must be|not found or not file|Duplicate deletion path/i.test(message);
+    if (!validationLike) {
+      recordToolFailure(name, args, "INTERNAL_ERROR");
+    }
     return fail(message, {
-      errorCode: "INTERNAL_ERROR",
+      errorCode: validationLike ? "VALIDATION_ERROR" : "INTERNAL_ERROR",
       retryable: false,
-      userMessage: message.split(/\r?\n/, 1)[0]
+      doNotRetry: validationLike ? [] : [name],
+      userMessage: message.split(/\r?\n/, 1)[0],
+      agentInstruction: validationLike
+        ? `Fix the invalid ${name} arguments and retry once with corrected input.`
+        : `Do not retry ${name} with the same arguments. Stop the current workflow and report the MCP internal error.`,
     });
   }
 });

@@ -164,7 +164,11 @@ def check_repeat_query(
     continuation_token: str = "",
 ) -> dict[str, Any]:
     _prune_expired()
-    if continuation_token and consume_continuation_token(continuation_token, fingerprint):
+    if continuation_token and consume_continuation_token(
+        continuation_token,
+        fingerprint,
+        semantic_key=semantic_key,
+    ):
         return {"repeatDetected": False, "doNotRetry": False, "fullContextSuppressed": False, "continuationConsumed": True}
     if allow_detail_escalation and previous_detail and current_detail:
         order = ("compact", "medium", "large", "full")
@@ -184,37 +188,43 @@ def check_repeat_query(
         except ValueError:
             pass
 
+    def _terminal_entry(entry: dict[str, Any] | None) -> bool:
+        if not entry:
+            return False
+        return bool(entry.get("deliveredFullContext") or entry.get("deliveredTerminalAbsence"))
+
+    def _repeat_payload(entry: dict[str, Any], key: str) -> dict[str, Any]:
+        absence = bool(entry.get("deliveredTerminalAbsence") or entry.get("zeroResult"))
+        return {
+            "repeatDetected": True,
+            "doNotRetry": True,
+            "fullContextSuppressed": True,
+            "message": (
+                "The same RAG query already returned a project_miss / zero-result for the active project."
+                if absence
+                else "The same RAG query already returned results from the current index."
+            ),
+            "requiredNextAction": (
+                "search_files_then_read_file"
+                if absence
+                else (
+                    "Use search_files/read_file, answer from existing evidence, "
+                    "or report the refresh command once."
+                )
+            ),
+            "record": entry,
+            "semanticQueryKey": entry.get("semanticQueryKey") or key,
+        }
+
     lookup_keys = [key for key in (semantic_key, fingerprint) if key]
     for key in lookup_keys:
         for delivery_key in _SEMANTIC_INDEX.get(key, [key]):
             entry = _HISTORY.get(delivery_key)
-            if entry and entry.get("deliveredFullContext"):
-                return {
-                    "repeatDetected": True,
-                    "doNotRetry": True,
-                    "fullContextSuppressed": True,
-                    "message": "The same RAG query already returned results from the current index.",
-                    "requiredNextAction": (
-                        "Use search_files/read_file, answer from existing evidence, "
-                        "or report the refresh command once."
-                    ),
-                    "record": entry,
-                    "semanticQueryKey": entry.get("semanticQueryKey") or key,
-                }
+            if _terminal_entry(entry):
+                return _repeat_payload(entry, key)
         entry = _HISTORY.get(key)
-        if entry and entry.get("deliveredFullContext"):
-            return {
-                "repeatDetected": True,
-                "doNotRetry": True,
-                "fullContextSuppressed": True,
-                "message": "The same RAG query already returned results from the current index.",
-                "requiredNextAction": (
-                    "Use search_files/read_file, answer from existing evidence, "
-                    "or report the refresh command once."
-                ),
-                "record": entry,
-                "semanticQueryKey": entry.get("semanticQueryKey") or key,
-            }
+        if _terminal_entry(entry):
+            return _repeat_payload(entry, key)
     return {"repeatDetected": False, "doNotRetry": False, "fullContextSuppressed": False}
 
 
@@ -227,11 +237,34 @@ def issue_continuation_token(delivery_key: str) -> str:
     return token
 
 
-def consume_continuation_token(token: str, delivery_key: str) -> bool:
+def consume_continuation_token(token: str, delivery_key: str = "", *, semantic_key: str = "") -> bool:
     if not token:
         return False
     expected = _CONTINUATION_TOKENS.pop(str(token), "")
-    return bool(expected) and expected == delivery_key
+    if not expected:
+        return False
+    if delivery_key and expected == delivery_key:
+        return True
+    # Allow detail escalation: token from a prior delivery under the same semantic key.
+    if semantic_key:
+        entry = _HISTORY.get(expected)
+        if entry and str(entry.get("semanticQueryKey") or "") == semantic_key:
+            return True
+        if expected == semantic_key:
+            return True
+    return False
+
+
+def previous_detail_for_semantic(semantic_key: str) -> str | None:
+    if not semantic_key:
+        return None
+    for delivery_key in reversed(list(_SEMANTIC_INDEX.get(semantic_key) or [])):
+        entry = _HISTORY.get(delivery_key)
+        if entry and entry.get("deliveredFullContext"):
+            detail = str(entry.get("detailLevel") or "").strip().lower()
+            if detail:
+                return detail
+    return None
 
 
 def record_query_delivery(
@@ -248,9 +281,12 @@ def record_query_delivery(
     _prune_expired()
     semantic = semantic_key or fingerprint
     delivered_full = int(match_count) > 0
+    # Zero / project_miss deliveries must also arm the repeat guard.
+    delivered_terminal_absence = not delivered_full
     _HISTORY[fingerprint] = {
         "deliveredFullContext": delivered_full,
-        "zeroResult": not delivered_full,
+        "deliveredTerminalAbsence": delivered_terminal_absence,
+        "zeroResult": delivered_terminal_absence,
         "detailLevel": detail_level,
         "matchCount": match_count,
         "activeProject": active_project or "",

@@ -71,6 +71,18 @@ WRITE_INTENT_MARKERS = (
     "implement", "fix", "patch", "create", "add ", "write ", "generate ",
     "구현", "수정", "고쳐", "추가", "생성", "만들", "패치",
 )
+PLAN_REQUEST_MARKERS = (
+    "implementation plan", "implementation roadmap", "make a plan", "draft a plan",
+    "plan this", "work plan", "change plan", "refactor plan",
+    "구현 계획", "작업 계획", "수정 계획", "변경 계획", "리팩터링 계획", "리팩토링 계획",
+    "계획 세워", "계획 세우", "계획 짜", "계획 작성",
+)
+PLAN_AND_EXECUTE_PATTERNS = (
+    r"(?:plan|roadmap).{0,40}(?:and|then).{0,20}(?:implement|fix|apply|execute|patch|write|create)",
+    r"계획.{0,20}(?:세우고|세운 뒤|세운 후|짜고|작성하고|작성한 뒤|작성한 후).{0,20}(?:구현|수정|고쳐|적용|실행|패치|생성)",
+    r"계획(?:대로|에 따라).{0,20}(?:구현|수정|고쳐|적용|실행|패치|생성)",
+    r"계획.{0,20}(?:뿐만 아니라|말고).{0,20}(?:구현|수정|고쳐|적용|실행|패치|생성)",
+)
 ASSET_ANALYSIS_MARKERS = (
     "shader", "usf", "ush", "hlsl", "material", "material node",
     "material graph", "material porting", "blueprint graph", "blueprint verification", "function call", "variable", "pin link", "screenshot",
@@ -220,6 +232,12 @@ def _has_write_intent(text: str) -> bool:
     return True
 
 
+def _is_plan_only_request(text: str) -> bool:
+    if not any(marker in text for marker in PLAN_REQUEST_MARKERS):
+        return False
+    return not any(re.search(pattern, text) for pattern in PLAN_AND_EXECUTE_PATTERNS)
+
+
 def _is_compile_fix_request(text: str) -> bool:
     if any(m in text for m in COMPILE_MARKERS):
         return True
@@ -267,6 +285,8 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "code_sketch"
     if any(m in text for m in REFACTOR_MARKERS):
         return "refactor"
+    if _is_plan_only_request(text):
+        return "inspect_only"
     if _is_runtime_symptom_analysis(text):
         return "runtime_debug"
     if any(m in text for m in ASSET_ANALYSIS_MARKERS) and not _has_write_intent(text):
@@ -326,8 +346,12 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.confidence = 0.6
         plan.files_to_read.append("Source/**/*.h")
     elif task_kind == "cpp_analysis":
+        # Validate negative symbol claims and logic-missing / by-design false positives.
         plan.rag_modes = ["review", "planning"]
-        plan.gates = ["direct_source_evidence", "unreal_review_claim_validate"]
+        plan.gates = [
+            "direct_source_evidence",
+            "unreal_review_claim_validate",  # negative + logic-missing claims
+        ]
         plan.files_to_read.extend(["project://Source/**/*.h", "project://Source/**/*.cpp"])
         plan.writes_allowed = False
         plan.confidence = 0.7
@@ -343,7 +367,10 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
             ]
         else:
             plan.rag_modes = ["review", "planning"]
-            plan.gates = ["unreal_project_architecture", "unreal_review_claim_validate"]
+            plan.gates = [
+                "unreal_project_architecture",
+                "unreal_review_claim_validate",  # negative + logic-missing claims
+            ]
         plan.writes_allowed = False
         plan.confidence = 0.75
     elif task_kind == "compile_fix":
@@ -487,17 +514,76 @@ def build_module_hints(request: str, project_context: dict[str, Any] | None = No
     return hints
 
 
+_FEATURE_STOPWORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "what",
+        "when",
+        "where",
+        "which",
+        "review",
+        "inventory",
+        "missing",
+        "system",
+        "project",
+        "source",
+        "component",
+        "components",
+        "add",
+        "need",
+        "needs",
+        "should",
+        "about",
+        "after",
+        "before",
+        "only",
+        "please",
+        "analyze",
+        "analysis",
+    }
+)
+
+
 def _symbol_candidates_from_text(text: str) -> list[str]:
     found: list[str] = []
     for pattern in (
         r"\b[AUFSI][A-Z][A-Za-z0-9_]{2,}\b",
         r"\b[A-Z][A-Za-z0-9_]+(?:Component|Subsystem|Character|Actor|GameMode|Widget)\b",
+        r"\b[A-Z][a-zA-Z]{2,}\b",
     ):
         for match in re.finditer(pattern, text or ""):
             symbol = match.group(0)
+            if symbol.lower() in _FEATURE_STOPWORDS:
+                continue
             if symbol not in found:
                 found.append(symbol)
     return found[:12]
+
+
+def _feature_search_tokens_from_text(text: str) -> list[str]:
+    """Prefer compact search_files queries over the full user sentence."""
+    tokens = _symbol_candidates_from_text(text)
+    if tokens:
+        return tokens[:3]
+    lowered = (text or "").strip()
+    if "시네마틱" in lowered or "cinematic" in lowered.lower():
+        return ["Cinematic"]
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", text or "")
+    picked: list[str] = []
+    for word in words:
+        if word.lower() in _FEATURE_STOPWORDS:
+            continue
+        if word not in picked:
+            picked.append(word)
+        if len(picked) >= 3:
+            break
+    return picked
 
 
 def build_symbol_graph_hints(request: str) -> list[dict[str, Any]]:
@@ -591,11 +677,20 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
     if task_kind == "cpp_analysis":
         return common + [
             "Read current project .h/.cpp files before diagnosis; RAG is background/API evidence only.",
+            "Claims about what exists or is missing in the active project require search_files/read_file on that project's Source.",
+            "Guideline/engine RAG hits are not project implementation evidence.",
+            "On project_miss / doNotRepeatSearch, stop RAG and use search_files then read_file (or conclude absence from zero Source hits).",
             "Record project-relative files and line ranges in sourceEvidence.filesRead.",
             "If direct source reads fail or filesRead is empty, stop without code or project claims.",
             "Read header, cpp, and relevant callsites for cross-file lifecycle/API claims.",
         ]
     if task_kind == "inspect_only":
+        inventory_steps = [
+            "Claims about what exists or is missing in the active project require search_files/read_file on that project's Source.",
+            "Guideline/engine RAG hits are not project implementation evidence.",
+            "On project_miss / doNotRepeatSearch, stop RAG and use search_files then read_file (or conclude absence from zero Source hits).",
+            "Read target files before findings; do not write files.",
+        ]
         asset_steps = [
             "Call unreal_editor_metadata_status before material/blueprint wire claims.",
             "If export dir has JSONL newer than index, call unreal_sync_editor_metadata.",
@@ -603,8 +698,8 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
             "Validate concrete claims with unreal_material_claim_validate or unreal_blueprint_claim_validate.",
         ]
         if mode in ASSET_METADATA_MODES:
-            return common + asset_steps + ["Read target files before findings; do not write files."]
-        return common + ["Read target files before findings; do not write files."]
+            return common + asset_steps + inventory_steps
+        return common + inventory_steps
     if task_kind == "runtime_debug":
         return common + ["Read logs/config before diagnosis; do not write files by default."]
     edit_steps = [
@@ -613,8 +708,10 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
         "Prefer replace_in_file with expectedOccurrences=1 for existing files.",
         "Use write_file only for brand-new files; never full-rewrite an existing .h/.cpp/.cs.",
         "If write/replace returns static validation findings, fix them before build_unreal_project.",
-        "If cleanup requires deleting files, finish edits first, call propose_file_deletions with count/path/fileName/reason/ifNotDeleted/ifDeleted, report the plan, and wait for explicit user approval before delete_file.",
-        "For more than 2 files, prefer unreal_start_compile_loop + unreal_compile_loop_status.",
+        "If cleanup requires deleting files, finish edits first; deletion tools are Extended-only "
+        "(propose_file_deletions / delete_file). In Essential mode report the duplicate path and stop for user approval.",
+        "For more than 2 files in Essential mode, patch sequentially and run build_unreal_project after each slice; "
+        "prefer unreal_start_compile_loop only when that tool appears in tools/list (Extended).",
         "Do not use run_javascript/js-code-sandbox/Deno file APIs for project file I/O; use unreal-agent file tools.",
     ]
     if "ubt_build" in evidence.gates or task_kind in {"edit", "compile_fix", "refactor"}:
@@ -724,6 +821,12 @@ def build_suggested_tool_calls(
         calls.append({"tool": "search_files", "args": {"query": search_term, "path": browse_path}})
         calls.append({"tool": "read_file", "args": {"path": "<from search_files matches>"}})
         calls.append({"tool": "unreal_rag_search", "args": {"query": text, "mode": "review", "hybrid": False, "top_k": 4}})
+        calls.append(
+            {
+                "tool": "unreal_review_claim_validate",
+                "args": {"claims": ["<paste findings with Bug|ByDesign|Ambiguous|NeedsRuntimeProof labels>"]},
+            }
+        )
         return calls
 
     from asset_hint_resolver import resolve_asset_folder_hint
@@ -767,16 +870,23 @@ def build_suggested_tool_calls(
             )
         return calls
 
-    if task_kind in {"inspect_only", "cpp_analysis"} and (
-        any(marker in lower for marker in REVIEW_MARKERS)
-        or any(marker in lower for marker in ANALYSIS_MARKERS)
-    ):
+    if task_kind in {"inspect_only", "cpp_analysis"}:
         browse_path = "project://Source"
-        search_term = "Cinematic" if "시네마틱" in lower or "cinematic" in lower else text
+        search_tokens = _feature_search_tokens_from_text(text)
         calls = [{"tool": "unreal_get_active_project", "args": {}}]
-        calls.append({"tool": "search_files", "args": {"query": search_term, "path": browse_path}})
+        if search_tokens:
+            for token in search_tokens:
+                calls.append({"tool": "search_files", "args": {"query": token, "path": browse_path}})
+        else:
+            calls.append({"tool": "search_files", "args": {"query": text[:64], "path": browse_path}})
         calls.append({"tool": "read_file", "args": {"path": "<from search_files matches>"}})
         calls.append({"tool": "unreal_rag_search", "args": {"query": text, "mode": "review", "hybrid": False, "top_k": 4}})
+        calls.append(
+            {
+                "tool": "unreal_review_claim_validate",
+                "args": {"claims": ["<paste findings with Bug|ByDesign|Ambiguous|NeedsRuntimeProof labels>"]},
+            }
+        )
         return calls
 
     cpp_like = looks_like_cpp_domain_request(text)
@@ -809,7 +919,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     from load_sampling_preset import profile_agent_policy
     from project_context import resolve_active_project_context
     from rag_search import resolve_mode
-    from tool_policy import tool_sequence_for_task
+    from tool_policy import gates_for_task, tool_sequence_for_task
 
     policy = profile_agent_policy()
     project_context = resolve_active_project_context()
@@ -841,6 +951,13 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
             if resolved_mode in {"module_fix", "reflection_fix"}
             else task_kind
         )
+    orch_gates = gates_for_task(tool_policy_key) or gates_for_task(task_kind)
+    if orch_gates:
+        merged_gates = list(evidence.gates or [])
+        for gate in orch_gates:
+            if gate not in merged_gates:
+                merged_gates.append(gate)
+        evidence.gates = merged_gates
     tool_policy = tool_sequence_for_task(tool_policy_key) or tool_sequence_for_task(task_kind)
     if task_kind == "inspect_only" and mode in ASSET_METADATA_MODES:
         tool_policy = list(ASSET_METADATA_TOOL_POLICY)
@@ -1011,11 +1128,13 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     notes.append("Copy suggestedToolCalls args exactly; never hardcode project paths.")
 
     refactor_embedded = bool(refactor_manager)
-    tool_policy, suggested, exposure_notes = sanitize_tools_for_exposure(
+    tool_policy, suggested, exposure_notes, sanitized_gates = sanitize_tools_for_exposure(
         tool_policy,
         suggested,
         refactor_manager_embedded=refactor_embedded,
+        gates=list(evidence.gates or []),
     )
+    evidence.gates = sanitized_gates
     notes.extend(exposure_notes)
     if refactor_embedded and essential_tools_enabled():
         notes.append("Refactor manager results are embedded in refactorManager; do not call hidden refactor tools.")

@@ -11,10 +11,14 @@
     },
     "inspect_only": {
       "sequence": [
-        "unreal_project_architecture",
-        "unreal_rag_search",
+        "search_files",
         "read_file",
+        "unreal_rag_search",
         "unreal_review_claim_validate"
+      ],
+      "gates": [
+        "direct_source_evidence",
+        "unreal_review_claim_validate_negative_and_logic_missing"
       ],
       "writesAllowed": false
     },
@@ -27,24 +31,39 @@
         "unreal_review_claim_validate",
         "answer_with_evidence"
       ],
+      "gates": [
+        "direct_source_evidence",
+        "unreal_review_claim_validate_negative_and_logic_missing"
+      ],
       "writesAllowed": false
     },
     "project_review": {
       "sequence": [
         "unreal_get_active_project",
+        "search_files",
         "unreal_project_architecture",
         "unreal_editor_metadata_status",
         "unreal_rag_search",
         "unreal_review_claim_validate"
+      ],
+      "gates": [
+        "direct_source_evidence",
+        "unreal_project_architecture",
+        "unreal_review_claim_validate_negative_and_logic_missing"
       ],
       "writesAllowed": false
     },
     "shader_review": {
       "sequence": [
         "unreal_get_active_project",
-        "unreal_rag_search",
+        "search_files",
         "read_file",
+        "unreal_rag_search",
         "unreal_review_claim_validate"
+      ],
+      "gates": [
+        "direct_source_evidence",
+        "unreal_review_claim_validate_negative_and_logic_missing"
       ],
       "writesAllowed": false
     },
