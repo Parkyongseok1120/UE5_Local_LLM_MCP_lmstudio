@@ -216,6 +216,134 @@ def test_dual_mcp_project_switch_and_read(tmp_path: Path, monkeypatch) -> None:
     assert Path(str(saved["activeProject"])).name == "DemoGame.uproject"
 
 
+def _start_agent_client(tmp_path: Path, *, extra_env: dict[str, str] | None = None) -> _StdioJsonRpc:
+    require_agent_mcp_deps()
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(tmp_path),
+            "ALLOW_WRITE": "0",
+            "ALLOW_COMMANDS": "0",
+            "ALLOW_UNREAL_BUILD": "0",
+        }
+    )
+    if extra_env:
+        env.update(extra_env)
+    client = _StdioJsonRpc([_node_exe(), str(AGENT_SERVER)], env=env, cwd=ROOT / "lmstudio-unreal-agent-mcp")
+    init = client.request(
+        "initialize",
+        {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "pytest", "version": "1.0"},
+        },
+        req_id=1,
+    )
+    assert "result" in init
+    client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    return client
+
+
+def test_agent_read_file_range_success(tmp_path: Path) -> None:
+    source_dir = tmp_path / "Source" / "Demo"
+    source_dir.mkdir(parents=True)
+    sample = source_dir / "Demo.cpp"
+    sample.write_text(
+        "\n".join(
+            [
+                "// header",
+                "void UDemo::BeginPlay()",
+                "{",
+                "  Super::BeginPlay();",
+                "}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    client = _start_agent_client(tmp_path)
+    try:
+        result = client.request(
+            "tools/call",
+            {
+                "name": "read_file_range",
+                "arguments": {"path": str(sample), "startLine": 2, "endLine": 4},
+            },
+            req_id=2,
+        )
+        assert result["result"].get("isError") is not True
+        text = result["result"]["content"][0]["text"]
+        assert "2|void UDemo::BeginPlay()" in text
+        assert "4|  Super::BeginPlay();" in text
+        assert "Lines: 2-4" in text
+    finally:
+        client.close()
+
+
+def test_agent_read_symbol_success(tmp_path: Path) -> None:
+    source_dir = tmp_path / "Source" / "Demo"
+    source_dir.mkdir(parents=True)
+    sample = source_dir / "Demo.cpp"
+    sample.write_text(
+        "\n".join(
+            [
+                "void UDemo::BeginPlay()",
+                "{",
+                "  Super::BeginPlay();",
+                "}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    client = _start_agent_client(tmp_path)
+    try:
+        result = client.request(
+            "tools/call",
+            {
+                "name": "read_symbol",
+                "arguments": {"path": str(sample), "symbol": "UDemo::BeginPlay"},
+            },
+            req_id=2,
+        )
+        assert result["result"].get("isError") is not True
+        text = result["result"]["content"][0]["text"]
+        assert "Symbol: UDemo::BeginPlay" in text
+        assert "void UDemo::BeginPlay()" in text
+        assert "Super::BeginPlay();" in text
+    finally:
+        client.close()
+
+
+def test_agent_internal_error_repeat_blocked(tmp_path: Path) -> None:
+    client = _start_agent_client(
+        tmp_path,
+        extra_env={"MCP_TEST_FORCE_TOOL_ERROR": "read_file_range"},
+    )
+    try:
+        args = {"path": str(tmp_path / "missing.cpp"), "startLine": 1, "endLine": 5}
+        first = client.request(
+            "tools/call",
+            {"name": "read_file_range", "arguments": args},
+            req_id=2,
+        )
+        assert first["result"].get("isError") is True
+        assert "INTERNAL_ERROR" in first["result"]["content"][0]["text"]
+
+        second = client.request(
+            "tools/call",
+            {"name": "read_file_range", "arguments": args},
+            req_id=3,
+        )
+        assert second["result"].get("isError") is True
+        assert "TOOL_REPEAT_BLOCKED" in second["result"]["content"][0]["text"]
+    finally:
+        client.close()
+
+
 def test_rag_subprocess_rejects_hidden_tool_call(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["MCP_ESSENTIAL_TOOLS"] = "1"

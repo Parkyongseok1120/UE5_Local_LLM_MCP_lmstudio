@@ -101,13 +101,23 @@ const {
 } = require("./context-ux.js");
 const { callableAgentToolNames, toolNotCallablePayload, projectSwitchGuidance } = require("./tool-exposure");
 const { atomicWriteText, atomicWriteJson } = require("./atomic-io");
-const { sha256Buffer } = require("./safe-write");
+const { sha256Buffer, sha256Text } = require("./safe-write");
+const {
+  beginToolCall,
+  checkToolRepeatBlocked,
+  recordToolFailure,
+  toolRepeatBlockedMessage
+} = require("./tool-failure-history");
 const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
 const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? Math.max(min, value) : fallback;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || process.cwd());
@@ -1217,9 +1227,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const name = request.params.name;
+  const args = request.params.arguments || {};
+  const priorSeq = beginToolCall();
   try {
-    const name = request.params.name;
-    const args = request.params.arguments || {};
     const allowed = callableAgentToolNames(allAgentTools().map((tool) => tool.name));
     if (!allowed.has(name)) {
       const blocked = toolNotCallablePayload(name);
@@ -1229,6 +1240,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         userMessage: blocked.userMessage,
         agentInstruction: blocked.agentInstruction,
       });
+    }
+
+    const repeatBlock = checkToolRepeatBlocked(name, args, priorSeq);
+    if (repeatBlock.blocked) {
+      return fail(toolRepeatBlockedMessage(name, repeatBlock), {
+        errorCode: "TOOL_REPEAT_BLOCKED",
+        retryable: false,
+        stopCurrentWorkflow: true,
+        doNotRetry: [name],
+        agentInstruction:
+          `Do not retry ${name} with the same arguments. `
+          + "Stop the current workflow and report the MCP internal error.",
+      });
+    }
+
+    if (process.env.MCP_TEST_FORCE_TOOL_ERROR === name) {
+      throw new Error(`test-forced internal error for ${name}`);
     }
 
     if (name === "get_workspace_info") {
@@ -2437,10 +2465,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   } catch (err) {
     const message = err && err.message ? String(err.message) : String(err);
     console.error(err && err.stack ? err.stack : err);
+    recordToolFailure(name, args, "INTERNAL_ERROR");
     return fail(message, {
       errorCode: "INTERNAL_ERROR",
       retryable: false,
-      userMessage: message.split(/\r?\n/, 1)[0]
+      doNotRetry: [name],
+      userMessage: message.split(/\r?\n/, 1)[0],
+      agentInstruction:
+        `Do not retry ${name} with the same arguments. `
+        + "Stop the current workflow and report the MCP internal error."
     });
   }
 });
