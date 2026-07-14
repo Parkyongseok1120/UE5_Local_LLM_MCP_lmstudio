@@ -68,6 +68,24 @@ def test_refactor_r0_no_edit(monkeypatch):
     assert payload["suggestedToolCalls"][1]["tool"] == "unreal_refactor_manager_plan"
 
 
+def test_korean_implementation_plan_is_read_only() -> None:
+    plan = build_agent_plan("Project_MJS 스태미나 시스템 구현 계획 세워", "auto")
+    payload = plan.to_dict()
+
+    assert plan.task_kind == "inspect_only"
+    assert plan.edit_strategy == "no_edit"
+    assert payload["writeGate"]["writesAllowed"] is False
+    assert "write_file" not in payload["toolPolicy"]
+    assert "replace_in_file" not in payload["toolPolicy"]
+
+
+def test_plan_then_implement_keeps_edit_intent() -> None:
+    plan = build_agent_plan("스태미나 시스템 계획 세우고 구현해줘", "auto")
+
+    assert plan.task_kind == "edit"
+    assert plan.write_gate["writesAllowed"] is True
+
+
 def test_medium_refactor_requires_approval_gate_before_writes():
     plan = build_agent_plan("Refactor combat system API across inventory and ability subsystem", "refactor_r2")
     payload = plan.to_dict()

@@ -9,6 +9,7 @@ const { ensureStateRootLayout, resolveAgentStateRoot } = require("./state-root")
 const pendingPaths = new Map();
 const OWNER = `${process.pid}:${crypto.randomUUID()}`;
 const HEARTBEAT_INTERVAL_MS = 60_000;
+const STALE_LOCK_AGE_MS = HEARTBEAT_INTERVAL_MS * 3;
 
 function canonicalLockKey(absPath) {
   try {
@@ -47,6 +48,13 @@ function isProcessAlive(pid) {
 
 function isStaleLock(lockPath) {
   if (!fs.existsSync(lockPath)) {
+    return true;
+  }
+  try {
+    if (Date.now() - fs.statSync(lockPath).mtimeMs > STALE_LOCK_AGE_MS) {
+      return true;
+    }
+  } catch {
     return true;
   }
   const owner = readLockOwner(lockPath);

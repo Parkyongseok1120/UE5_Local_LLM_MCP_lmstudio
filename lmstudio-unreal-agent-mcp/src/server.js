@@ -103,7 +103,12 @@ const {
 } = require("./context-ux.js");
 const { callableAgentToolNames, toolNotCallablePayload, projectSwitchGuidance } = require("./tool-exposure");
 const { atomicWriteText, atomicWriteJson } = require("./atomic-io");
-const { sha256Buffer, sha256Text } = require("./safe-write");
+const {
+  createExclusive,
+  replaceWithCAS,
+  sha256Buffer,
+  sha256Text,
+} = require("./safe-write");
 const {
   beginToolCall,
   checkToolRepeatBlocked,

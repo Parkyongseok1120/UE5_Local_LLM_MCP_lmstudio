@@ -217,6 +217,71 @@ def test_dual_mcp_project_switch_and_read(tmp_path: Path, monkeypatch) -> None:
     assert Path(str(saved["activeProject"])).name == "DemoGame.uproject"
 
 
+def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
+    require_agent_mcp_deps()
+    project_dir = tmp_path / "DemoGame"
+    source_dir = project_dir / "Source" / "DemoGame" / "Public"
+    source_dir.mkdir(parents=True)
+    uproject = project_dir / "DemoGame.uproject"
+    uproject.write_text(json.dumps({"FileVersion": 3}), encoding="utf-8")
+
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(json.dumps({"activeProject": str(uproject)}), encoding="utf-8")
+    agent_config = tmp_path / "agent-mcp.json"
+    agent_config.write_text(json.dumps({"projectSearchRoots": [str(tmp_path)]}), encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(tmp_path),
+            "SHARED_UNREAL_CONFIG": str(shared_config),
+            "AGENT_STATE_ROOT": str(tmp_path / "state" / "unreal-agent"),
+            "AGENT_MCP_CONFIG": str(agent_config),
+            "ALLOW_WRITE": "1",
+            "VALIDATE_ON_WRITE": "0",
+        }
+    )
+    client = _StdioJsonRpc([_node_exe(), str(AGENT_SERVER)], env=env, cwd=ROOT / "lmstudio-unreal-agent-mcp")
+    try:
+        client.request(
+            "initialize",
+            {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "pytest", "version": "1.0"}},
+            1,
+        )
+        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        created = client.request(
+            "tools/call",
+            {"name": "write_file", "arguments": {"path": "Source/DemoGame/Public/NewThing.h", "content": "alpha\n"}},
+            2,
+        )
+        assert created["result"].get("isError") is not True, created
+
+        read = client.request(
+            "tools/call",
+            {"name": "read_file", "arguments": {"path": "Source/DemoGame/Public/NewThing.h"}},
+            3,
+        )
+        assert "alpha" in read["result"]["content"][0]["text"]
+
+        replaced = client.request(
+            "tools/call",
+            {
+                "name": "replace_in_file",
+                "arguments": {
+                    "path": "Source/DemoGame/Public/NewThing.h",
+                    "oldText": "alpha",
+                    "newText": "beta",
+                    "expectedOccurrences": 1,
+                },
+            },
+            4,
+        )
+        assert replaced["result"].get("isError") is not True, replaced
+        assert (source_dir / "NewThing.h").read_text(encoding="utf-8") == "beta\n"
+    finally:
+        client.close()
+
+
 def _start_agent_client(tmp_path: Path, *, extra_env: dict[str, str] | None = None) -> _StdioJsonRpc:
     require_agent_mcp_deps()
     env = os.environ.copy()

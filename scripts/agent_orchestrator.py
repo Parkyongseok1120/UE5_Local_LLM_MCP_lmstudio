@@ -71,6 +71,18 @@ WRITE_INTENT_MARKERS = (
     "implement", "fix", "patch", "create", "add ", "write ", "generate ",
     "구현", "수정", "고쳐", "추가", "생성", "만들", "패치",
 )
+PLAN_REQUEST_MARKERS = (
+    "implementation plan", "implementation roadmap", "make a plan", "draft a plan",
+    "plan this", "work plan", "change plan", "refactor plan",
+    "구현 계획", "작업 계획", "수정 계획", "변경 계획", "리팩터링 계획", "리팩토링 계획",
+    "계획 세워", "계획 세우", "계획 짜", "계획 작성",
+)
+PLAN_AND_EXECUTE_PATTERNS = (
+    r"(?:plan|roadmap).{0,40}(?:and|then).{0,20}(?:implement|fix|apply|execute|patch|write|create)",
+    r"계획.{0,20}(?:세우고|세운 뒤|세운 후|짜고|작성하고|작성한 뒤|작성한 후).{0,20}(?:구현|수정|고쳐|적용|실행|패치|생성)",
+    r"계획(?:대로|에 따라).{0,20}(?:구현|수정|고쳐|적용|실행|패치|생성)",
+    r"계획.{0,20}(?:뿐만 아니라|말고).{0,20}(?:구현|수정|고쳐|적용|실행|패치|생성)",
+)
 ASSET_ANALYSIS_MARKERS = (
     "shader", "usf", "ush", "hlsl", "material", "material node",
     "material graph", "material porting", "blueprint graph", "blueprint verification", "function call", "variable", "pin link", "screenshot",
@@ -220,6 +232,12 @@ def _has_write_intent(text: str) -> bool:
     return True
 
 
+def _is_plan_only_request(text: str) -> bool:
+    if not any(marker in text for marker in PLAN_REQUEST_MARKERS):
+        return False
+    return not any(re.search(pattern, text) for pattern in PLAN_AND_EXECUTE_PATTERNS)
+
+
 def _is_compile_fix_request(text: str) -> bool:
     if any(m in text for m in COMPILE_MARKERS):
         return True
@@ -267,6 +285,8 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "code_sketch"
     if any(m in text for m in REFACTOR_MARKERS):
         return "refactor"
+    if _is_plan_only_request(text):
+        return "inspect_only"
     if _is_runtime_symptom_analysis(text):
         return "runtime_debug"
     if any(m in text for m in ASSET_ANALYSIS_MARKERS) and not _has_write_intent(text):

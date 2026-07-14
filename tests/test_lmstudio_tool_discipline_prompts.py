@@ -34,3 +34,20 @@ def test_user_prompts_forbid_js_sandbox_edits() -> None:
         assert "run_javascript" in text
         assert "js-code-sandbox" in text
         assert "replace_in_file" in text
+
+
+def test_qwen35_prompt_has_plan_only_first_tool_gate() -> None:
+    text = read_text("prompts/lmstudio_qwen35_9b_compact_system.md")
+
+    assert "Plan-only hard gate" in text
+    assert "first visible action" in text
+    assert "writeGate.writesAllowed=false" in text
+
+
+def test_lmstudio_setup_requires_base_plus_qwen35_delta() -> None:
+    text = read_text("docs/LMStudio_Unreal_Agent_Setup.md")
+
+    qwen_row = next(line for line in text.splitlines() if "Qwen 3.5 9B / 8B" in line)
+    assert "lmstudio_compact_mcp_base.md" in qwen_row
+    assert "lmstudio_qwen35_9b_compact_system.md" in qwen_row
+    assert "does not load the linked file" in text
