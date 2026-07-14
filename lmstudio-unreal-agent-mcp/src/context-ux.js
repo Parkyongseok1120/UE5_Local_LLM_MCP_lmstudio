@@ -185,9 +185,12 @@ function errorPayload(message, options = {}) {
 function writeDisciplineOptions(existingPath = true) {
   if (!existingPath) return {};
   return {
+    errorCode: "FILE_ALREADY_EXISTS",
     writeToolPolicy: "create_only",
     requiredNextTool: "replace_in_file",
     doNotRetry: "write_file",
+    doNotCall: ["unreal_agent_plan"],
+    authorizationRefreshRequired: false,
     nextSteps: ["Read the existing file, then patch it with replace_in_file. Do not retry write_file on this path."],
     suggestedToolCalls: [
       { tool: "read_file", args: { path: "<path>", detailLevel: "compact" } },

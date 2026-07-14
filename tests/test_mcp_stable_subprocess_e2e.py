@@ -315,7 +315,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
 
         created = client.request(
             "tools/call",
-            {"name": "write_file", "arguments": {**task_auth, "path": "Source/DemoGame/Public/NewThing.h", "content": "alpha\n"}},
+            {"name": "write_file", "arguments": {"taskAuthorization": task_auth, "path": "Source/DemoGame/Public/NewThing.h", "content": "alpha\n"}},
             2,
         )
         assert created["result"].get("isError") is not True, created

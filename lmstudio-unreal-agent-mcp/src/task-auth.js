@@ -53,12 +53,15 @@ function readTaskState(_workspaceRoot, taskSessionId, stateRoot = null) {
 }
 
 function requiredFields(args = {}) {
+  const nested = args.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : (args.task_authorization && typeof args.task_authorization === "object" ? args.task_authorization : {});
   return {
-    taskSessionId: String(args.taskSessionId || args.task_session_id || "").trim(),
-    authToken: String(args.authToken || args.auth_token || args.token || "").trim(),
-    planId: String(args.planId || args.plan_id || "").trim(),
-    planRevision: String(args.planRevision || args.plan_revision || "").trim(),
-    activeSliceId: String(args.activeSliceId || args.active_slice_id || "").trim(),
+    taskSessionId: String(args.taskSessionId || args.task_session_id || nested.taskSessionId || nested.task_session_id || "").trim(),
+    authToken: String(args.authToken || args.auth_token || args.token || nested.authToken || nested.auth_token || nested.token || "").trim(),
+    planId: String(args.planId || args.plan_id || nested.planId || nested.plan_id || "").trim(),
+    planRevision: String(args.planRevision || args.plan_revision || nested.planRevision || nested.plan_revision || "").trim(),
+    activeSliceId: String(args.activeSliceId || args.active_slice_id || nested.activeSliceId || nested.active_slice_id || "").trim(),
   };
 }
 

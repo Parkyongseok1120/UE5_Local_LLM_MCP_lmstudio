@@ -362,7 +362,10 @@ function enforceTaskAuth(args, options = {}) {
     return null;
   }
   const requireSession = Boolean(options.requireSession);
-  const taskSessionId = String(args?.taskSessionId || args?.task_session_id || "").trim();
+  const taskAuthorization = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : (args?.task_authorization && typeof args.task_authorization === "object" ? args.task_authorization : {});
+  const taskSessionId = String(args?.taskSessionId || args?.task_session_id || taskAuthorization.taskSessionId || taskAuthorization.task_session_id || "").trim();
   if (requireSession && !taskSessionId) {
     return fail("taskSessionId is required for project write tools. Call unreal_agent_plan first and copy taskAuthorization into this call.", {
       errorCode: "TASK_SESSION_REQUIRED",
@@ -377,9 +380,17 @@ function enforceTaskAuth(args, options = {}) {
   }
   const auth = validateMutationAuth(WORKSPACE_ROOT, args || {}, { requireAll: true });
   if (!auth.ok) {
+    const incomplete = auth.errorCode === "TASK_AUTH_INCOMPLETE";
     return fail(auth.error || "Task authorization failed.", {
       taskSessionId: auth.taskSessionId,
       errorCode: auth.errorCode || "TASK_AUTH_FAILED",
+      retryable: incomplete,
+      stopCurrentWorkflow: !incomplete,
+      authorizationRefreshRequired: !incomplete,
+      ...(incomplete ? {
+        doNotCall: ["unreal_agent_plan"],
+        agentInstruction: "Do not create another plan. Retry this write once with the complete taskAuthorization object returned by the existing unreal_agent_plan result.",
+      } : {}),
     });
   }
   // Success must return null so write_file/replace_in_file proceed (not return the auth object).
@@ -742,11 +753,19 @@ function makeJsonSchema(properties, required = []) {
 }
 function taskAuthSchemaProperties() {
   return {
-    taskSessionId: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
-    authToken: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
-    planId: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
-    planRevision: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
-    activeSliceId: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
+    taskAuthorization: {
+      type: "object",
+      description: "Copy the complete unreal_agent_plan.taskAuthorization object unchanged. Do not call unreal_agent_plan again merely to refresh it.",
+      properties: {
+        taskSessionId: { type: "string" },
+        authToken: { type: "string" },
+        planId: { type: "string" },
+        planRevision: { type: "string" },
+        activeSliceId: { type: "string" },
+      },
+      required: ["taskSessionId", "authToken", "planId", "planRevision", "activeSliceId"],
+      additionalProperties: false,
+    },
   };
 }
 
@@ -1381,11 +1400,7 @@ function allAgentTools() {
               }
             }
           },
-          taskSessionId: { type: "string" },
-          planId: { type: "string" },
-          planRevision: { type: "string" },
-          activeSliceId: { type: "string" },
-          authToken: { type: "string" }
+          ...taskAuthSchemaProperties()
         })
       },
       {

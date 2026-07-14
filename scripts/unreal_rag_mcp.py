@@ -2008,14 +2008,21 @@ class McpServer:
                     plan_payload=payload,
                 )
                 task_state = task.get("state") or {}
-                payload["taskAuthorization"] = {
+                task_authorization = {
                     "taskSessionId": task.get("taskSessionId"),
                     "authToken": task.get("authToken"),
                     "planId": task_state.get("planId"),
                     "planRevision": task_state.get("planRevision"),
                     "activeSliceId": task_state.get("activeSliceId"),
                 }
+                payload["taskAuthorization"] = task_authorization
                 payload["taskAuthorizationRequiredForWrites"] = True
+                payload["writeToolAuthorizationArgs"] = {"taskAuthorization": task_authorization}
+                payload["authorizationRetryPolicy"] = {
+                    "reuseExistingAuthorization": True,
+                    "doNotReplanFor": ["TASK_AUTH_INCOMPLETE", "FILE_ALREADY_EXISTS", "MUTATION_REPEAT_BLOCKED"],
+                    "replanOnlyFor": ["TASK_SESSION_REQUIRED", "TASK_AUTH_MISMATCH", "TASK_NOT_WRITABLE"],
+                }
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name in {"clangd_goto_definition", "clangd_find_references"}:
                 from clangd_helper import find_references, goto_definition
