@@ -286,6 +286,7 @@ foreach ($mcpPath in $mcpPaths) {
             MAX_OUTPUT_BYTES     = "262144"
             COMMAND_TIMEOUT_MS   = "600000"
             MCP_ESSENTIAL_TOOLS  = "1"
+            MCP_REQUIRE_PLAN_AUTH = "1"
             VALIDATE_ON_WRITE    = if ($EnableAgentMode) { "1" } else { "0" }
         }
         timeout = 720000

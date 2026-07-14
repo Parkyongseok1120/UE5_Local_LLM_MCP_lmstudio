@@ -91,6 +91,12 @@ KNOWN_BAD_API_REPLACEMENTS: dict[str, str] = {
     ),
     "geditor_runtime": "Guard with WITH_EDITOR and keep editor APIs in Editor modules.",
     "isserver_free": "World->GetNetMode() == NM_DedicatedServer or Actor->HasAuthority()",
+    "getcurrentdeltatime_unqualified": (
+        "Use the Tick/TickComponent DeltaTime parameter or GetWorld()->GetDeltaSeconds()."
+    ),
+    "apawn_getcharactermovement": (
+        "ACharacter* Character = Cast<ACharacter>(Pawn); // null-check before Character->GetCharacterMovement()"
+    ),
 }
 
 # Context-sensitive patterns: real API names used in invalid call shapes.
@@ -105,6 +111,25 @@ KNOWN_BAD_API_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             "UWorld has no GetURL() member. For map identity/restart, use "
             "GetMapName() or UGameplayStatics::GetCurrentLevelName(), then "
             "OpenLevel/ServerTravel as appropriate."
+        ),
+    ),
+    (
+        "getcurrentdeltatime_unqualified",
+        re.compile(r"(?<![\w>.-])\bGetCurrentDeltaTime\s*\(", re.IGNORECASE),
+        (
+            "GetCurrentDeltaTime() is not an Unreal Actor/Component helper. Use the "
+            "Tick/TickComponent DeltaTime parameter or GetWorld()->GetDeltaSeconds()."
+        ),
+    ),
+    (
+        "apawn_getcharactermovement",
+        re.compile(
+            r"\bAPawn\s*\*\s*(?P<pawn>[A-Za-z_]\w*)[\s\S]{0,2000}?\b(?P=pawn)\s*->\s*GetCharacterMovement\s*\(",
+            re.IGNORECASE,
+        ),
+        (
+            "APawn has no GetCharacterMovement(). Cast the pawn to ACharacter and "
+            "null-check it, or use the pawn's actual movement component API."
         ),
     ),
     (

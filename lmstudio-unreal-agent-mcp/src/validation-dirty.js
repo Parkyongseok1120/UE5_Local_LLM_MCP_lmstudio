@@ -110,6 +110,34 @@ function clearValidated(projectRoot) {
   return getDirtyState(projectRoot);
 }
 
+function requireValidationProofOrOverride(mutation, { override = false, auditNote = "" } = {}) {
+  const validatedGeneration = Number(mutation && mutation.validatedGeneration || 0);
+  const mutationGeneration = Number(mutation && mutation.mutationGeneration || 0);
+  if (validatedGeneration === mutationGeneration) {
+    return { ok: true, overridden: false, validatedGeneration, mutationGeneration, auditNote: "" };
+  }
+  if (override) {
+    return {
+      ok: true,
+      overridden: true,
+      validatedGeneration,
+      mutationGeneration,
+      auditNote: String(auditNote || "Explicit validationOverride=true"),
+    };
+  }
+  return {
+    ok: false,
+    overridden: false,
+    validatedGeneration,
+    mutationGeneration,
+    error: "build blocked: validation proof stale.",
+    errorCode: "VALIDATION_PROOF_STALE",
+    retryable: false,
+    stopCurrentWorkflow: true,
+    nextSteps: ["Run static_validate_project after the latest edits before building."],
+  };
+}
+
 function requireCleanOrFail(projectRoot, { override = false, auditNote = "" } = {}) {
   const state = getDirtyState(projectRoot);
   if (state.corrupt) {
@@ -141,5 +169,6 @@ module.exports = {
   markUnvalidated,
   clearValidated,
   requireCleanOrFail,
+  requireValidationProofOrOverride,
   stateFilePath,
 };

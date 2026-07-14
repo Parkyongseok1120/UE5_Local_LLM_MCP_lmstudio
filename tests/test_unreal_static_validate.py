@@ -25,6 +25,8 @@ from unreal_static_validate import (  # noqa: E402
     has_blocking_write_errors,
     normalize_rel_path,
     should_block_llm_apply_static_gate,
+    validate_blueprint_assignable_delegate_types,
+    validate_project_uobject_type_visibility,
 )
 from retry_feedback import static_validation_retry_feedback  # noqa: E402
 from bootstrap_local_holdout import write_fixture_case  # noqa: E402
@@ -1140,3 +1142,143 @@ def test_write_mode_include_external_header_is_warning_not_error(tmp_path: Path)
     assert findings
     assert all(item.severity == "warning" for item in findings)
 
+
+def test_blueprint_assignable_delegate_type_must_be_declared(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "StaminaComponent.h"
+    _write(
+        header,
+        """
+#pragma once
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "StaminaComponent.generated.h"
+
+UCLASS()
+class UStaminaComponent : public UActorComponent
+{
+    GENERATED_BODY()
+public:
+    UPROPERTY(BlueprintAssignable)
+    FOnStaminaChangedSignature OnStaminaChanged;
+};
+""",
+    )
+
+    findings = validate_blueprint_assignable_delegate_types(header, header.read_text(encoding="utf-8"), project, set())
+
+    assert [finding.code for finding in findings] == ["BLUEPRINT_ASSIGNABLE_DELEGATE_UNDECLARED"]
+
+
+def test_blueprint_assignable_delegate_declared_macro_passes(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "StaminaComponent.h"
+    _write(
+        header,
+        """
+#pragma once
+#include "CoreMinimal.h"
+#include "StaminaComponent.generated.h"
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStaminaChangedSignature, float, NewValue);
+
+UCLASS()
+class UStaminaComponent : public UObject
+{
+    GENERATED_BODY()
+public:
+    UPROPERTY(BlueprintAssignable)
+    FOnStaminaChangedSignature OnStaminaChanged;
+};
+""",
+    )
+
+    findings = validate_blueprint_assignable_delegate_types(
+        header,
+        header.read_text(encoding="utf-8"),
+        project,
+        {"FOnStaminaChangedSignature"},
+    )
+
+    assert findings == []
+
+
+def test_known_bad_delta_time_and_pawn_movement_are_blocking(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    cpp = project / "Source" / "Demo" / "Private" / "StaminaComponent.cpp"
+    _write(
+        cpp,
+        """
+void UStaminaComponent::Update(APawn* OwnerPawn)
+{
+    CurrentStamina += GetCurrentDeltaTime();
+    OwnerPawn->GetCharacterMovement()->MaxWalkSpeed = 300.0f;
+    // OwnerPawn->GetCharacterMovement() is intentionally ignored in comments.
+}
+""",
+    )
+
+    findings = validate_known_bad_api_patterns(cpp, cpp.read_text(encoding="utf-8"), project)
+    codes = {finding.code for finding in findings}
+
+    assert "INVENTED_DELTA_TIME_API" in codes
+    assert "PAWN_CHARACTER_MOVEMENT_API" in codes
+    assert sum(finding.code == "PAWN_CHARACTER_MOVEMENT_API" for finding in findings) == 1
+
+
+def test_project_uobject_pointer_requires_include_or_forward_declaration(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    data_header = project / "Source" / "Demo" / "Public" / "StaminaDataAsset.h"
+    component_header = project / "Source" / "Demo" / "Public" / "StaminaComponent.h"
+    _write(data_header, "class UStaminaDataAsset {};\n")
+    _write(
+        component_header,
+        """
+#pragma once
+#include "CoreMinimal.h"
+
+class UStaminaComponent
+{
+    void Apply(UStaminaDataAsset* InDataAsset);
+    TObjectPtr<UStaminaDataAsset> DataAsset;
+};
+""",
+    )
+    index = build_source_include_index(project)
+
+    findings = validate_project_uobject_type_visibility(
+        component_header,
+        component_header.read_text(encoding="utf-8"),
+        project,
+        index,
+    )
+
+    assert [finding.code for finding in findings] == ["PROJECT_UOBJECT_TYPE_NOT_VISIBLE"]
+
+
+def test_project_uobject_forward_declaration_is_visible(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    data_header = project / "Source" / "Demo" / "Public" / "StaminaDataAsset.h"
+    component_header = project / "Source" / "Demo" / "Public" / "StaminaComponent.h"
+    _write(data_header, "class UStaminaDataAsset {};\n")
+    _write(
+        component_header,
+        """
+#pragma once
+class UStaminaDataAsset;
+class UStaminaComponent
+{
+    TObjectPtr<UStaminaDataAsset> DataAsset;
+};
+""",
+    )
+    index = build_source_include_index(project)
+
+    findings = validate_project_uobject_type_visibility(
+        component_header,
+        component_header.read_text(encoding="utf-8"),
+        project,
+        index,
+    )
+
+    assert findings == []

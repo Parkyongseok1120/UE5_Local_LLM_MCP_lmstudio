@@ -99,6 +99,8 @@ def test_compact_base_has_loop_guard_and_uht_conditional_rules() -> None:
     assert "byte-identical" in lowered
     assert "identical ... call already attempted" in lowered
     assert "never re-edit a file without re-reading it first" in lowered
+    assert "never alternate unchanged `static_validate_project` and `build_unreal_project`" in lowered
+    assert "validationoverride=true" in lowered
     assert "WITH_EDITORONLY_DATA" in text
     assert "#if !UE_BUILD_SHIPPING" in text or "UE_BUILD_SHIPPING" in text
     assert "GEngine->GetWorld()" in text

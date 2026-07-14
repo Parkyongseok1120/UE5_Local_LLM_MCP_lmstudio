@@ -498,6 +498,7 @@ function Build-ClineMcpConfig {
                     MAX_OUTPUT_BYTES            = "262144"
                     COMMAND_TIMEOUT_MS          = "600000"
                     MCP_ESSENTIAL_TOOLS         = "1"
+                    MCP_REQUIRE_PLAN_AUTH        = "1"
                 }
             }
         }

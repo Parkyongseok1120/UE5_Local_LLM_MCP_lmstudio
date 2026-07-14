@@ -34,6 +34,12 @@ SYMBOL_RES = (
 )
 # Method/member calls the model asserts exist, e.g. Player->SetRestoreState(...).
 MEMBER_CALL_RE = re.compile(r"(?:->|\.)\s*([A-Za-z_][A-Za-z0-9_]{2,})\s*\(")
+LOCAL_TYPE_DECL_RE = re.compile(
+    r"\b(?:class|struct|enum(?:\s+class)?)\s+(?:[A-Z0-9_]+_API\s+)?([AUFSI][A-Z][A-Za-z0-9_]{2,})\b"
+)
+LOCAL_DELEGATE_DECL_RE = re.compile(
+    r"\bDECLARE_(?:DYNAMIC_)?MULTICAST_DELEGATE(?:_[A-Za-z]+Params?)?\s*\(\s*([A-Za-z_]\w*)"
+)
 
 # Identifiers that are ubiquitous UE building blocks; skipping them keeps the
 # report focused on the risky, request-specific symbols.
@@ -42,6 +48,7 @@ COMMON_SAFE = {
     "FString", "FName", "FText", "FVector", "FRotator", "FTransform",
     "UWorld", "APawn", "ACharacter", "APlayerController", "AGameModeBase",
     "UWorldSubsystem", "UGameInstanceSubsystem", "UEngineSubsystem",
+    "UCLASS", "USTRUCT", "UENUM", "UFUNCTION", "UPROPERTY", "UINTERFACE",
 }
 
 
@@ -62,6 +69,13 @@ def extract_member_calls(text: str) -> list[str]:
         if name and name not in found:
             found.append(name)
     return found
+
+def extract_local_declarations(text: str) -> set[str]:
+    """Return symbols introduced by the sketch itself, not claimed as engine APIs."""
+    declared = {match.group(1) for match in LOCAL_TYPE_DECL_RE.finditer(text or "")}
+    declared.update(match.group(1) for match in LOCAL_DELEGATE_DECL_RE.finditer(text or ""))
+    return declared
+
 
 
 def _resolve_index(index: str | Path | None) -> Path:
@@ -125,6 +139,7 @@ def validate_sketch(
 
     candidates = extract_symbols(sketch)
     member_calls = extract_member_calls(sketch)
+    local_declarations = extract_local_declarations(sketch)
 
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -149,6 +164,8 @@ def validate_sketch(
         if key in seen or key in denied_terms:
             return
         if symbol in COMMON_SAFE:
+            return
+        if symbol in local_declarations:
             return
         seen.add(key)
         if not index_exists:
@@ -211,6 +228,7 @@ def validate_sketch(
         "indexPath": str(index_path),
         "indexExists": index_exists,
         "symbolCount": len(results),
+        "localDeclarationCount": len(local_declarations),
         "verifiedCount": verified,
         "knownBadCount": known_bad,
         "unverifiedCount": unverified,

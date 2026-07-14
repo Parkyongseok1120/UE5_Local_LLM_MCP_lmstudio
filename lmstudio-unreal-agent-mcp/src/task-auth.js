@@ -28,7 +28,8 @@ function taskDir(workspaceRoot, taskSessionId, stateRoot = resolveAgentStateRoot
   return taskStateDir(taskSessionId, stateRoot);
 }
 
-function readTaskState(_workspaceRoot, taskSessionId, stateRoot = resolveAgentStateRoot()) {
+function readTaskState(_workspaceRoot, taskSessionId, stateRoot = null) {
+  stateRoot = stateRoot || resolveAgentStateRoot(_workspaceRoot);
   let dir;
   try {
     dir = taskDir(_workspaceRoot, taskSessionId, stateRoot);
@@ -99,18 +100,26 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       taskSessionId: sanitized.taskSessionId,
     };
   }
-  if (String(state.status || "") === "cancelled") {
-    return { ok: false, error: "Task session is cancelled", errorCode: "TASK_CANCELLED" };
+  const status = String(state.status || "");
+  if (status !== "running") {
+    return {
+      ok: false,
+      error: `Task session is not writable in status '${status || "unknown"}'`,
+      errorCode: status === "cancelled" ? "TASK_CANCELLED" : "TASK_NOT_WRITABLE",
+    };
   }
-  const writeGate = state.writeGate || state.writesAllowed;
-  if (writeGate === false || writeGate === "false") {
+  const writeGate = state.writeGate;
+  const writesAllowed = writeGate && typeof writeGate === "object"
+    ? writeGate.writesAllowed
+    : (writeGate !== undefined ? writeGate : state.writesAllowed);
+  if (writesAllowed !== true && writesAllowed !== "true") {
     return { ok: false, error: "Task writeGate denies writes", errorCode: "WRITE_GATE_DENIED" };
   }
   return {
     ok: true,
     taskSessionId: sanitized.taskSessionId,
     state,
-    maxFilesPerEdit: Number(state.maxFilesPerEdit || 2),
+    maxFilesPerEdit: Number(state.maxFilesPerEdit || writeGate?.maxFilesPerEdit || 2),
   };
 }
 

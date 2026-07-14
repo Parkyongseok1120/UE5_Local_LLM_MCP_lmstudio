@@ -26,7 +26,8 @@
         "AGENT_MCP_CONFIG": "{AGENT_MCP_ROOT}/config/agent-mcp.json",
         "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
         "UNREAL58_ROOT": "{REPO_ROOT}",
-        "MCP_ESSENTIAL_TOOLS": "1"
+        "MCP_ESSENTIAL_TOOLS": "1",
+        "MCP_REQUIRE_PLAN_AUTH": "1"
       }
     }
   }

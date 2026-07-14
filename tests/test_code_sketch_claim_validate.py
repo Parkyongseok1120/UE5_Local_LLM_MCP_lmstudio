@@ -214,3 +214,37 @@ def test_denylist_allows_spaced_member_get_net_mode():
     code = "Mode = World -> GetNetMode();"
     terms = {hit["term"] for hit in check_denylist(code)}
     assert "getnetmode_free" not in terms
+
+
+def test_denylist_flags_unqualified_current_delta_time():
+    terms = {hit["term"] for hit in check_denylist("Value += GetCurrentDeltaTime();")}
+    assert "getcurrentdeltatime_unqualified" in terms
+
+
+def test_denylist_flags_get_character_movement_on_apawn_receiver():
+    code = "void Update(APawn* Pawn) { Pawn->GetCharacterMovement()->StopMovementImmediately(); }"
+    terms = {hit["term"] for hit in check_denylist(code)}
+    assert "apawn_getcharactermovement" in terms
+
+
+def test_validate_sketch_skips_locally_declared_types_and_delegate(tmp_path: Path):
+    sketch = """
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStaminaChangedSignature, float, Value);
+UCLASS()
+class UStaminaComponent : public UActorComponent
+{
+    GENERATED_BODY()
+public:
+    UPROPERTY(BlueprintAssignable)
+    FOnStaminaChangedSignature OnStaminaChanged;
+};
+"""
+
+    result = validate_sketch(sketch, NO_INDEX)
+    result_symbols = {item["symbol"] for item in result["results"]}
+
+    assert result["localDeclarationCount"] == 2
+    assert "UStaminaComponent" not in result_symbols
+    assert "FOnStaminaChangedSignature" not in result_symbols
+    assert "UCLASS" not in result_symbols
+    assert "UPROPERTY" not in result_symbols

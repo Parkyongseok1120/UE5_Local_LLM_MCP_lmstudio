@@ -69,6 +69,7 @@ When the user asks for logic / design / bug analysis of project C++ (not a compi
 - After roughly every 3 files in a multi-file task, emit one line in the form `[2/5] Source/.../Foo.cpp patched` and keep going — this re-anchors tool-call formatting without interrupting the user.
 - If a write response says `rollback skipped ... (conflict)`, another operation changed the file: stop, `read_file` the current content, reconcile, then continue.
 - If validation returns `validation skipped (time budget)`, run `static_validate_project` before `build_unreal_project`.
+- If `static_validate_project` fails, never alternate unchanged `static_validate_project` and `build_unreal_project` calls. Fix the first blocking finding, or make exactly one audited build call with `validationOverride=true` and a concrete `validationOverrideNote`; then stop on any build failure.
 - The server rejects byte-identical repeated `write_file`/`replace_in_file` calls (loop guard). If you see `identical ... call already attempted`, do **not** send the same call again: `read_file` the current state, change your patch, or stop and summarize for the user. During build-fix loops, never re-edit a file without re-reading it first.
 
 ## Shader / Material / Blueprint analysis

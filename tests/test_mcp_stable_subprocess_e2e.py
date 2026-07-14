@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -219,6 +220,8 @@ def test_dual_mcp_project_switch_and_read(tmp_path: Path, monkeypatch) -> None:
 
 def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
     require_agent_mcp_deps()
+    workspace_dir = tmp_path / "control-workspace"
+    workspace_dir.mkdir()
     project_dir = tmp_path / "DemoGame"
     source_dir = project_dir / "Source" / "DemoGame" / "Public"
     source_dir.mkdir(parents=True)
@@ -233,7 +236,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
     env.update(
         {
             "MCP_ESSENTIAL_TOOLS": "1",
-            "WORKSPACE_ROOT": str(tmp_path),
+            "WORKSPACE_ROOT": str(workspace_dir),
             "SHARED_UNREAL_CONFIG": str(shared_config),
             "AGENT_STATE_ROOT": str(tmp_path / "state" / "unreal-agent"),
             "AGENT_MCP_CONFIG": str(agent_config),
@@ -241,6 +244,49 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             "VALIDATE_ON_WRITE": "0",
         }
     )
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"")
+    rag = _StdioJsonRpc([_python_exe(), str(RAG_SCRIPT), "--index", str(index)], env=env)
+    try:
+        rag.request(
+            "initialize",
+            {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "pytest", "version": "1.0"}},
+            1,
+        )
+        plan_only = rag.request(
+            "tools/call",
+            {
+                "name": "unreal_agent_plan",
+                "arguments": {"request": "Create an implementation plan only; do not edit files"},
+            },
+            2,
+        )
+        assert plan_only["result"].get("isError") is not True, plan_only
+        plan_only_payload = plan_only["result"].get("structuredContent") or json.loads(
+            plan_only["result"]["content"][0]["text"]
+        )
+        assert plan_only_payload["writeGate"]["writesAllowed"] is False
+        denied_auth = plan_only_payload["taskAuthorization"]
+        assert all(denied_auth.values()), denied_auth
+
+        planned = rag.request(
+            "tools/call",
+            {
+                "name": "unreal_agent_plan",
+                "arguments": {"request": "Plan and then implement a stamina system"},
+            },
+            3,
+        )
+        assert planned["result"].get("isError") is not True, planned
+        plan_payload = planned["result"].get("structuredContent") or json.loads(
+            planned["result"]["content"][0]["text"]
+        )
+        assert plan_payload["writeGate"]["writesAllowed"] is True
+        task_auth = plan_payload["taskAuthorization"]
+        assert all(task_auth.values()), task_auth
+    finally:
+        rag.close()
+
     client = _StdioJsonRpc([_node_exe(), str(AGENT_SERVER)], env=env, cwd=ROOT / "lmstudio-unreal-agent-mcp")
     try:
         client.request(
@@ -249,9 +295,27 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             1,
         )
         client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        unauthorized = client.request(
+            "tools/call",
+            {"name": "write_file", "arguments": {"path": "Source/DemoGame/Public/Blocked.h", "content": "blocked\n"}},
+            2,
+        )
+        assert unauthorized["result"].get("isError") is True
+        assert "TASK_SESSION_REQUIRED" in unauthorized["result"]["content"][0]["text"]
+        assert not (source_dir / "Blocked.h").exists()
+        plan_denied = client.request(
+            "tools/call",
+            {"name": "write_file", "arguments": {**denied_auth, "path": "Source/DemoGame/Public/BlockedPlan.h", "content": "blocked\n"}},
+            20,
+        )
+        assert plan_denied["result"].get("isError") is True
+        assert "WRITE_GATE_DENIED" in plan_denied["result"]["content"][0]["text"]
+        assert not (source_dir / "BlockedPlan.h").exists()
+
+
         created = client.request(
             "tools/call",
-            {"name": "write_file", "arguments": {"path": "Source/DemoGame/Public/NewThing.h", "content": "alpha\n"}},
+            {"name": "write_file", "arguments": {**task_auth, "path": "Source/DemoGame/Public/NewThing.h", "content": "alpha\n"}},
             2,
         )
         assert created["result"].get("isError") is not True, created
@@ -268,6 +332,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             {
                 "name": "replace_in_file",
                 "arguments": {
+                    **task_auth,
                     "path": "Source/DemoGame/Public/NewThing.h",
                     "oldText": "alpha",
                     "newText": "beta",
@@ -278,6 +343,10 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         )
         assert replaced["result"].get("isError") is not True, replaced
         assert (source_dir / "NewThing.h").read_text(encoding="utf-8") == "beta\n"
+        mutation = json.loads((project_dir / ".agent" / "state" / "mutation.json").read_text(encoding="utf-8"))
+        assert mutation["mutationGeneration"] == 2
+        assert set(mutation["paths"]) == {"Source/DemoGame/Public/NewThing.h"}
+        assert mutation["paths"]["Source/DemoGame/Public/NewThing.h"] == hashlib.sha256(b"beta\n").hexdigest()
     finally:
         client.close()
 

@@ -1743,6 +1743,7 @@ class McpServer:
                     request=str(arguments.get("request") or ""),
                     mode=str(arguments.get("mode") or "agent_edit"),
                     project_file=str(arguments.get("projectFile") or arguments.get("project_file") or ""),
+                    plan_id=str(arguments.get("planId") or arguments.get("plan_id") or ""),
                     start_background_job=arguments.get("startBackgroundJob") is True,
                     on_progress=lambda job, msg: self.notify(f"[task {job.get('jobId')}] {msg}"),
                 )
@@ -1994,6 +1995,27 @@ class McpServer:
                     self.tool_result(message_id, "Missing request", is_error=True)
                     return
                 payload = build_agent_plan(request, mode).to_dict()
+                from task_api import task_start
+
+                config = load_shared_config()
+                active_project = str(config.get("activeProject") or "").strip()
+                task_mode = "agent_edit" if (payload.get("writeGate") or {}).get("writesAllowed") is True else "plan_only"
+                task = task_start(
+                    self.workspace,
+                    request=request,
+                    mode=task_mode,
+                    project_file=active_project,
+                    plan_payload=payload,
+                )
+                task_state = task.get("state") or {}
+                payload["taskAuthorization"] = {
+                    "taskSessionId": task.get("taskSessionId"),
+                    "authToken": task.get("authToken"),
+                    "planId": task_state.get("planId"),
+                    "planRevision": task_state.get("planRevision"),
+                    "activeSliceId": task_state.get("activeSliceId"),
+                }
+                payload["taskAuthorizationRequiredForWrites"] = True
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name in {"clangd_goto_definition", "clangd_find_references"}:
                 from clangd_helper import find_references, goto_definition

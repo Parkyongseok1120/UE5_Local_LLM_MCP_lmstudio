@@ -184,9 +184,31 @@ def task_start(
     mode: str = "agent_edit",
     project_file: str = "",
     plan_id: str = "",
+    plan_payload: dict[str, Any] | None = None,
     start_background_job: bool = False,
     on_progress: Callable[[dict[str, Any], str], None] | None = None,
 ) -> dict[str, Any]:
+    if plan_payload is None:
+        from agent_orchestrator import build_agent_plan
+
+        planner_mode = "planning" if mode in {"read_only", "plan_only"} else "auto"
+        plan_payload = build_agent_plan(request, planner_mode).to_dict()
+
+    write_gate = dict(plan_payload.get("writeGate") or {})
+    if mode in {"read_only", "plan_only"}:
+        write_gate["writesAllowed"] = False
+    writes_allowed = write_gate.get("writesAllowed") is True
+
+    slices = list(plan_payload.get("executablePlanSlices") or plan_payload.get("planSlices") or [])
+    active_slice_id = "task"
+    for item in slices:
+        if not isinstance(item, dict):
+            continue
+        candidate = str(item.get("sliceId") or item.get("slice_id") or "").strip()
+        if candidate:
+            active_slice_id = candidate
+            break
+
     task_session_id = uuid.uuid4().hex[:16]
     auth_token = uuid.uuid4().hex
     state = {
@@ -195,11 +217,16 @@ def task_start(
         "request": request,
         "mode": mode,
         "projectFile": project_file,
-        "planId": plan_id or uuid.uuid4().hex[:12],
-        "planRevision": "1",
-        "activeSliceId": "",
+        "planId": plan_id or str(plan_payload.get("planId") or uuid.uuid4().hex[:12]),
+        "planRevision": str(plan_payload.get("planRevision") or "1"),
+        "activeSliceId": active_slice_id,
         "activeJobId": "",
         "authToken": auth_token,
+        "writeGate": write_gate,
+        "writesAllowed": writes_allowed,
+        "maxFilesPerEdit": int(write_gate.get("maxFilesPerEdit") or 2),
+        "taskKind": str(plan_payload.get("taskKind") or ""),
+        "editStrategy": str(plan_payload.get("editStrategy") or ""),
         "createdAt": _utc_now(),
         "updatedAt": _utc_now(),
         "toolDiscoveryCandidates": [

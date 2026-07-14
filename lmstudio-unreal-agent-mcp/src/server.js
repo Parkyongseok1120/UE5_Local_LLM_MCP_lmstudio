@@ -62,7 +62,11 @@ const {
   VALIDATE_ON_WRITE_TIMEOUT_MS,
   clearValidated
 } = require("./validate-write.js");
-const { requireCleanOrFail, getDirtyState } = require("./validation-dirty");
+const {
+  requireCleanOrFail,
+  requireValidationProofOrOverride,
+  getDirtyState,
+} = require("./validation-dirty");
 const { validateMutationAuth } = require("./task-auth");
 const {
   applyBundleTransaction,
@@ -126,6 +130,12 @@ const {
 } = require("./tool-read-history");
 const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
 const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
+const {
+  recordValidationFailure,
+  recordValidationSuccess,
+  beginBuildAttempt,
+  finishBuildAttempt,
+} = require("./workflow-loop-guard");
 const { resolveProjectRootForFile } = require("./validate-write");
 
 function numberEnv(name, fallback, min = 0) {
@@ -196,6 +206,10 @@ const MCP_EXTENDED_TOOLS = ["1", "true", "yes", "on"].includes(
 const CONTROL_PLANE_TOOLS = ["1", "true", "yes", "on"].includes(
   String(process.env.ALLOW_CONTROL_PLANE_TOOLS || "").trim().toLowerCase()
 );
+const REQUIRE_TASK_AUTH_FOR_WRITES = !["0", "false", "no", "off"].includes(
+  String(process.env.MCP_REQUIRE_PLAN_AUTH ?? "1").trim().toLowerCase()
+);
+
 /** Tracks shared activeProject so history clears when rag or agent switches projects. */
 let lastSeenActiveProjectKey = null;
 
@@ -293,7 +307,12 @@ function agentRegisteredToolNames() {
 }
 
 function mutationBookkeepingFailure(message, operation, relPath) {
-  const doNotRetry = operation === "create" ? ["write_file"] : ["replace_in_file"];
+  const retryToolByOperation = {
+    create: "write_file",
+    replace: "replace_in_file",
+    apply_edit_bundle: "apply_edit_bundle",
+  };
+  const doNotRetry = [retryToolByOperation[operation] || operation].filter(Boolean);
   return fail(String(message || "Mutation bookkeeping failed after write."), {
     errorCode: "MUTATION_LOCK_BUSY",
     path: relPath,
@@ -312,11 +331,19 @@ function mutationBookkeepingFailure(message, operation, relPath) {
   });
 }
 
-async function bumpProjectMutationGeneration(relPath, content) {
+async function bumpProjectMutationGeneration(targetPath, content) {
   const uproject = getActiveProject(CONFIG_PATH);
   if (!uproject) return null;
   const projectDir = path.dirname(path.resolve(uproject));
-  return await recordMutation(projectDir, relPath, content);
+  const projectRelativePath = path.relative(projectDir, path.resolve(targetPath)).replace(/\\/g, "/");
+  if (!projectRelativePath || projectRelativePath.startsWith("../") || path.isAbsolute(projectRelativePath)) {
+    const workspaceRelativePath = path.relative(WORKSPACE_ROOT, path.resolve(targetPath)).replace(/\\/g, "/");
+    if (workspaceRelativePath === ".agent" || workspaceRelativePath.startsWith(".agent/")) {
+      return null;
+    }
+    throw new Error(`mutation path outside active project: ${targetPath}`);
+  }
+  return await recordMutation(projectDir, projectRelativePath, content);
 }
 
 async function agentNotify(message, level = "info") {
@@ -331,13 +358,19 @@ async function agentNotify(message, level = "info") {
 }
 
 function enforceTaskAuth(args, options = {}) {
-  if (!CONTROL_PLANE_TOOLS) {
+  if (!CONTROL_PLANE_TOOLS && !REQUIRE_TASK_AUTH_FOR_WRITES) {
     return null;
   }
   const requireSession = Boolean(options.requireSession);
   const taskSessionId = String(args?.taskSessionId || args?.task_session_id || "").trim();
   if (requireSession && !taskSessionId) {
-    return fail("taskSessionId is required for control-plane write tools.", { errorCode: "TASK_SESSION_REQUIRED" });
+    return fail("taskSessionId is required for project write tools. Call unreal_agent_plan first and copy taskAuthorization into this call.", {
+      errorCode: "TASK_SESSION_REQUIRED",
+      retryable: false,
+      stopCurrentWorkflow: true,
+      requiredNextTool: { server: "unreal-rag", name: "unreal_agent_plan" },
+      agentInstruction: "Call unreal_agent_plan with the original user request, then copy all taskAuthorization fields into the write call.",
+    });
   }
   if (!taskSessionId) {
     return null;
@@ -375,7 +408,9 @@ function validationToolResult(summary, validation, options = {}) {
     : slimWriteSuccessPayload(summary, validation, options);
   const passthrough = [
     "mutationGeneration", "validatedGeneration", "validationStale", "proofLevel",
-    "commandSucceeded", "proofSatisfied", "recoveryRequired",
+    "commandSucceeded", "proofSatisfied", "recoveryRequired", "errorCode",
+    "retryable", "doNotRetry", "stopCurrentWorkflow", "suggestedToolCalls",
+    "validationOverrideAvailable",
   ];
   for (const key of passthrough) {
     if (options[key] !== undefined) base[key] = options[key];
@@ -420,7 +455,8 @@ async function buildDeletionProposal(rawFiles, completedEditsSummary, activeProj
   const seen = new Set();
   const files = [];
   for (const item of rawFiles) {
-    const target = normalizeRelPath(String(item && item.path || ""));
+    const resolution = await resolveReadToolPath(String(item && item.path || ""));
+    const target = resolution.absolutePath;
     const guard = isDeleteAllowedPath(target, WORKSPACE_ROOT, activeProject);
     if (!guard.ok) {
       throw new Error(guard.message);
@@ -429,7 +465,7 @@ async function buildDeletionProposal(rawFiles, completedEditsSummary, activeProj
     if (!delStat || !delStat.isFile()) {
       throw new Error(`not found or not file: ${item && item.path}`);
     }
-    const relPath = path.relative(WORKSPACE_ROOT, target).replace(/\\/g, "/");
+    const relPath = displayPath(resolution);
     const relKey = relPath.toLowerCase();
     if (seen.has(relKey)) {
       throw new Error(`duplicate deletion candidate: ${relPath}`);
@@ -704,6 +740,16 @@ function makeJsonSchema(properties, required = []) {
     additionalProperties: false
   };
 }
+function taskAuthSchemaProperties() {
+  return {
+    taskSessionId: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
+    authToken: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
+    planId: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
+    planRevision: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
+    activeSliceId: { type: "string", description: "From unreal_agent_plan.taskAuthorization." },
+  };
+}
+
 
 function fileStatSignature(stat) {
   return `${stat.size}:${stat.mtimeMs}`;
@@ -1044,6 +1090,7 @@ async function buildWorkspaceInfo() {
     projectContext,
     sourceEvidence: sourceEvidenceSummary(activeProject),
     allowWrite: ALLOW_WRITE,
+    requireTaskAuthForWrites: REQUIRE_TASK_AUTH_FOR_WRITES,
     allowCommands: ALLOW_COMMANDS,
     allowUnrealBuild: ALLOW_UNREAL_BUILD,
     validateOnWrite: VALIDATE_ON_WRITE,
@@ -1257,6 +1304,7 @@ function allAgentTools() {
         name: "write_file",
         description: "Create a brand-new UTF-8 file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1. Create-only: any file that already exists is blocked. Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
         inputSchema: makeJsonSchema({
+          ...taskAuthSchemaProperties(),
           path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
           content: { type: "string", description: "Full file content to write." },
           createDirs: { type: "boolean", description: "Create parent directories if needed. Default false." }
@@ -1266,6 +1314,7 @@ function allAgentTools() {
         name: "replace_in_file",
         description: "Safely replace exact text in a file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying. Byte-identical repeat calls are rejected as a loop guard.",
         inputSchema: makeJsonSchema({
+          ...taskAuthSchemaProperties(),
           path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
           oldText: { type: "string", description: "Exact text to replace." },
           newText: { type: "string", description: "Replacement text." },
@@ -1294,9 +1343,10 @@ function allAgentTools() {
       },
       {
         name: "delete_file",
-        description: "Delete one file under the active project's Source/ tree only after propose_file_deletions returned a per-file approvalToken and the user approved that plan. Requires ALLOW_WRITE=1 and ALLOW_SOURCE_DELETE=1. Extended mode only.",
+        description: "Delete one file under the active project's Source/ tree only after propose_file_deletions returned a per-file approvalToken and the user approved that plan. Requires taskAuthorization from unreal_agent_plan, ALLOW_WRITE=1, and ALLOW_SOURCE_DELETE=1. Extended mode only.",
         inputSchema: makeJsonSchema({
-          path: { type: "string", description: "Relative path inside workspace." },
+          ...taskAuthSchemaProperties(),
+          path: { type: "string", description: "workspace:// or project:// path inside the active project's Source tree." },
           completedEditsSummary: { type: "string", description: "Same completedEditsSummary used in propose_file_deletions." },
           reason: { type: "string", description: "Specific reason this file must be deleted." },
           ifNotDeleted: { type: "string", description: "What concretely happens if this file is not deleted." },
@@ -1377,7 +1427,7 @@ function allAgentTools() {
           allowAbsoluteProject: { type: "boolean", description: "Allow absolute .uproject path outside workspace. Default false." },
           timeoutMs: { type: "number", description: "Build timeout in ms. Default COMMAND_TIMEOUT_MS." },
           verboseOutput: { type: "boolean", description: "Include truncated stdout/stderr inline. Default false; prefer fullLogPath." },
-          validationOverride: { type: "boolean", description: "Allow build despite validation-dirty state (audit trail only)." },
+          validationOverride: { type: "boolean", description: "Allow one audited build despite validation-dirty or stale-generation proof state." },
           validationOverrideNote: { type: "string", description: "Reason recorded when validationOverride=true." },
           allowEngineFallback: { type: "boolean", description: "When true, allow build with a non-default engine install if UE 5.8 is missing. Record audit note in agent chat." }
         })
@@ -1871,7 +1921,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "write_file") {
       if (!ALLOW_WRITE) return fail("write_file blocked. Set ALLOW_WRITE=1 to enable.");
-      const authFail = enforceTaskAuth(args);
+      const authFail = enforceTaskAuth(args, { requireSession: REQUIRE_TASK_AUTH_FOR_WRITES });
       if (authFail) return authFail;
       const writeResolution = await resolveWriteToolPath(args.path);
       const target = writeResolution.absolutePath;
@@ -1992,7 +2042,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         let mutation;
         try {
-          mutation = await bumpProjectMutationGeneration(rel, contentToWrite);
+          mutation = await bumpProjectMutationGeneration(target, contentToWrite);
         } catch (err) {
           return mutationBookkeepingFailure(err.message || err, "create", rel);
         }
@@ -2010,7 +2060,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "replace_in_file") {
       if (!ALLOW_WRITE) return fail("replace_in_file blocked. Set ALLOW_WRITE=1 to enable.");
-      const authFail = enforceTaskAuth(args);
+      const authFail = enforceTaskAuth(args, { requireSession: REQUIRE_TASK_AUTH_FOR_WRITES });
       if (authFail) return authFail;
       const writeResolution = await resolveWriteToolPath(args.path);
       const target = writeResolution.absolutePath;
@@ -2177,7 +2227,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         let mutation;
         try {
-          mutation = await bumpProjectMutationGeneration(rel, newText);
+          mutation = await bumpProjectMutationGeneration(target, updated);
         } catch (err) {
           return mutationBookkeepingFailure(err.message || err, "replace", rel);
         }
@@ -2214,13 +2264,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!ALLOW_SOURCE_DELETE) {
         return fail("delete_file blocked. Set ALLOW_SOURCE_DELETE=1 to enable source deletions.");
       }
-      const target = normalizeRelPath(args.path);
+      const authFail = enforceTaskAuth(args, { requireSession: REQUIRE_TASK_AUTH_FOR_WRITES });
+      if (authFail && authFail.isError) return authFail;
+      const resolution = await resolveReadToolPath(args.path);
+      const target = resolution.absolutePath;
       const activeProject = getActiveProject(CONFIG_PATH);
       const guard = isDeleteAllowedPath(target, WORKSPACE_ROOT, activeProject);
       if (!guard.ok) {
         return fail(guard.message);
       }
-      const rel = path.relative(WORKSPACE_ROOT, target).replace(/\\/g, "/");
+      const rel = displayPath(resolution);
       const completedEditsSummary = requireDeletionText(args.completedEditsSummary, "completedEditsSummary");
       const reason = requireDeletionText(args.reason, "reason");
       const ifNotDeleted = requireDeletionText(args.ifNotDeleted, "ifNotDeleted");
@@ -2254,12 +2307,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         await fsp.unlink(target);
         invalidateFileCache(target);
-        const activeProjectForMutation = getActiveProject(CONFIG_PATH);
+        const activeProjectForMutation = activeProject;
         let mutation = null;
         if (activeProjectForMutation) {
           const projectDir = path.dirname(path.resolve(activeProjectForMutation));
+          const projectRelativePath = path.relative(projectDir, target).replace(/\\/g, "/");
+          if (!projectRelativePath || projectRelativePath.startsWith("../") || path.isAbsolute(projectRelativePath)) {
+            return fail(`mutation path outside active project: ${target}`, {
+              deleted: rel,
+              writeApplied: true,
+              bookkeepingFailed: true,
+              retryable: false,
+            });
+          }
           try {
-            mutation = await recordDeletion(projectDir, rel);
+            mutation = await recordDeletion(projectDir, projectRelativePath);
           } catch (error) {
             return fail(String(error.message || error), {
               errorCode: "MUTATION_LOCK_BUSY",
@@ -2355,10 +2417,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         : null;
       let lastMutation = null;
       for (const absPath of tx.writtenAbs) {
-        const relPath = path.relative(WORKSPACE_ROOT, absPath).replace(/\\/g, "/");
-        const contentOrHash = (tx.postWriteHashes && tx.postWriteHashes[relPath]) || "";
+        const relPath = path.relative(projectRoot, absPath).replace(/\\/g, "/");
+        const finalContent = await fsp.readFile(absPath, "utf8");
         try {
-          lastMutation = await recordMutation(projectRoot, relPath, contentOrHash);
+          lastMutation = await recordMutation(projectRoot, relPath, finalContent);
         } catch (error) {
           return mutationBookkeepingFailure(error.message, "apply_edit_bundle", relPath);
         }
@@ -2418,13 +2480,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ? `STATIC VALIDATION FAILED — ${severityCounts.error || 0} error(s), ${severityCounts.warning || 0} warning(s)`
         : `STATIC VALIDATION PASSED — ${severityCounts.warning || 0} warning(s)`;
       if (validationFailed(validation)) {
+        const loopState = recordValidationFailure(projectRoot, validationStart.startGeneration, validation);
+        if (loopState.blocked) {
+          return validationToolResult("WORKFLOW BLOCKED: same validation/build failure repeated without a file mutation.", validation, {
+            ok: false,
+            operation: "static_validate",
+            isError: true,
+            error: "Validation/build loop blocked until the source is changed.",
+            errorCode: "WORKFLOW_LOOP_BLOCKED",
+            retryable: false,
+            doNotRetry: ["static_validate_project", "build_unreal_project"],
+            stopCurrentWorkflow: true,
+            validationOverrideAvailable: false,
+            mutationGeneration: loopState.mutationGeneration,
+            nextSteps: ["Read the first blocking finding, edit the responsible source file, then validate the new mutation generation."],
+          });
+        }
         return validationToolResult(validationSummary, validation, {
           ok: false,
           operation: "static_validate",
           isError: true,
-          nextSteps: ["Fix the first blocking error, then run static_validate_project again."]
+          error: "Static validation found blocking errors.",
+          errorCode: "STATIC_VALIDATION_FAILED",
+          retryable: false,
+          doNotRetry: ["static_validate_project"],
+          stopCurrentWorkflow: true,
+          validationOverrideAvailable: true,
+          nextSteps: ["Fix the first blocking error. One explicit override build is available only after reviewing the findings and supplying a concrete validationOverrideNote."],
         });
       }
+      recordValidationSuccess(projectRoot, validationStart.startGeneration);
       const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration);
       if (finish.validationStale) {
         return fail("Validation stale: project mutated during validation.", {
@@ -2625,25 +2710,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Repair .agent/state/validation.json, then run static_validate_project."],
         });
       }
+      const validationOverride = args.validationOverride === true;
+      const validationOverrideNote = String(args.validationOverrideNote || "").trim();
+      if (validationOverride && validationOverrideNote.length < 12) {
+        return fail("validationOverride requires a concrete validationOverrideNote of at least 12 characters.", {
+          errorCode: "VALIDATION_OVERRIDE_NOTE_REQUIRED",
+          retryable: false,
+          stopCurrentWorkflow: true,
+          nextSteps: ["Review the validation findings and explain why this one-time override is safe, or fix the source instead."],
+        });
+      }
       const dirtyGate = requireCleanOrFail(projectRoot, {
-        override: args.validationOverride === true,
-        auditNote: String(args.validationOverrideNote || "")
+        override: validationOverride,
+        auditNote: validationOverrideNote,
       });
       if (!dirtyGate.ok) {
         return fail(dirtyGate.error, {
           validationDirty: dirtyGate.state,
-          nextSteps: dirtyGate.nextSteps
+          errorCode: "VALIDATION_REQUIRED",
+          retryable: false,
+          stopCurrentWorkflow: true,
+          nextSteps: dirtyGate.nextSteps,
         });
       }
-      const validatedGeneration = Number(mutation.validatedGeneration || 0);
-      const mutationGeneration = Number(mutation.mutationGeneration || 0);
-      if (validatedGeneration !== mutationGeneration) {
-        return fail("build blocked: validation proof stale.", {
-          validatedGeneration,
-          mutationGeneration,
-          nextSteps: [
-            "Run static_validate_project after the latest edits before building.",
-          ],
+      const validationProofGate = requireValidationProofOrOverride(mutation, {
+        override: validationOverride,
+        auditNote: validationOverrideNote,
+      });
+      if (!validationProofGate.ok) {
+        return fail(validationProofGate.error, {
+          errorCode: validationProofGate.errorCode,
+          validatedGeneration: validationProofGate.validatedGeneration,
+          mutationGeneration: validationProofGate.mutationGeneration,
+          retryable: validationProofGate.retryable,
+          stopCurrentWorkflow: validationProofGate.stopCurrentWorkflow,
+          nextSteps: validationProofGate.nextSteps,
         });
       }
 
@@ -2656,6 +2757,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!/^[A-Za-z0-9_]+$/.test(platform)) return fail("invalid platform");
       if (!/^[A-Za-z0-9_]+$/.test(configuration)) return fail("invalid configuration");
 
+      const buildAttempt = beginBuildAttempt(projectRoot, mutation.mutationGeneration);
+      if (!buildAttempt.ok) {
+        return fail("Build loop blocked: this mutation generation already had a build attempt.", {
+          errorCode: "WORKFLOW_LOOP_BLOCKED",
+          retryable: false,
+          stopCurrentWorkflow: true,
+          doNotRetry: ["build_unreal_project", "static_validate_project"],
+          mutationGeneration: buildAttempt.mutationGeneration,
+          nextSteps: ["Read the previous build's first actionable error, edit the responsible source file, then validate and build the new mutation generation."],
+        });
+      }
       const buildTimeout = Number(args.timeoutMs || COMMAND_TIMEOUT_MS);
       const logRel = path.join(".agent", "logs", "latest-build.log");
       const logAbs = path.join(WORKSPACE_ROOT, logRel);
@@ -2669,6 +2781,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         timeoutMs: buildTimeout,
         logPath: logAbs,
       });
+      finishBuildAttempt(projectRoot, mutation.mutationGeneration, execResult);
       if (execResult.errorCode === "ENGINE_VERSION_MISMATCH") {
         return fail(execResult.error, {
           errorCode: execResult.errorCode,
@@ -2706,6 +2819,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       payload.commandSucceeded = execResult.commandSucceeded;
       payload.timedOut = Boolean(execResult.timedOut);
       payload.mutationGeneration = endGen.mutationGeneration;
+      payload.validatedGenerationAtBuild = validationProofGate.validatedGeneration;
+      payload.validationOverrideApplied = Boolean(
+        validationProofGate.overridden || (validationOverride && dirtyGate.state.validationRequired)
+      );
+      if (payload.validationOverrideApplied) {
+        payload.validationOverrideNote = validationProofGate.auditNote || validationOverrideNote || "Explicit validationOverride=true";
+      }
       payload.buildStartGeneration = buildGen.buildStartGeneration;
       payload.buildEndGeneration = endGen.buildEndGeneration;
       if (endGen.buildStale) {

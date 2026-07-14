@@ -552,6 +552,66 @@ def build_delegate_arity_map_from_texts(paths: list[Path], texts: dict[Path, str
     return member_arity
 
 
+def build_declared_delegate_types(root: Path) -> set[str]:
+    declared: set[str] = set()
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        declared.update(match.group(2) for match in DELEGATE_DECLARE_RE.finditer(read_text(path)))
+    return declared
+
+
+def build_declared_delegate_types_from_texts(paths: list[Path], texts: dict[Path, str]) -> set[str]:
+    declared: set[str] = set()
+    for path in paths:
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        declared.update(match.group(2) for match in DELEGATE_DECLARE_RE.finditer(texts.get(path, read_text(path))))
+    return declared
+
+
+def validate_blueprint_assignable_delegate_types(
+    path: Path,
+    text: str,
+    root: Path,
+    declared_delegate_types: set[str] | None = None,
+) -> list[Finding]:
+    """Catch a generated-header failure where a local delegate macro was omitted.
+
+    Name correlation keeps this narrow: `FOnStaminaChangedSignature OnStaminaChanged`
+    is expected to have a project declaration, while unrelated engine delegate types
+    are left to UHT/UBT.
+    """
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return findings
+    declared = declared_delegate_types or set()
+    for _start, end, block in extract_macro_blocks(text, "UPROPERTY"):
+        if not re.search(r"\bBlueprintAssignable\b", block):
+            continue
+        tail = text[end : end + 500]
+        member = re.match(
+            r"\s*(?:[A-Z0-9_]+_API\s+)?(?P<type>FOn[A-Za-z0-9_]+Signature)\s+(?P<name>On[A-Za-z0-9_]+)\s*;",
+            tail,
+        )
+        if not member:
+            continue
+        delegate_type = member.group("type")
+        member_name = member.group("name")
+        if delegate_type in declared or delegate_type != f"F{member_name}Signature":
+            continue
+        findings.append(
+            Finding(
+                "error",
+                str(path.relative_to(root)),
+                line_number(text, end + member.start("type")),
+                "BLUEPRINT_ASSIGNABLE_DELEGATE_UNDECLARED",
+                f"{delegate_type} is used by BlueprintAssignable property {member_name} but no DECLARE_DYNAMIC_MULTICAST_DELEGATE macro declares it in project headers.",
+            )
+        )
+    return findings
+
+
 def validate_delegate_broadcast_consistency(
     path: Path, text: str, root: Path, arity_map: dict[str, int] | None = None
 ) -> list[Finding]:
@@ -868,6 +928,49 @@ def class_bases(root: Path) -> dict[str, str]:
             continue
         bases.update(class_base_names(read_text(path)))
     return bases
+
+
+PROJECT_UOBJECT_REFERENCE_RE = re.compile(
+    r"\b(?:TObjectPtr\s*<\s*)?(U[A-Z][A-Za-z0-9_]*)\s*(?:\*|>)"
+)
+
+
+def validate_project_uobject_type_visibility(
+    path: Path,
+    text: str,
+    root: Path,
+    include_index: dict[str, list[str]],
+) -> list[Finding]:
+    """Require a direct include or forward declaration for project UObject pointer types."""
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return []
+    masked = mask_comments_and_strings(text)
+    included_basenames = {Path(value).name.lower() for _, value in include_lines(text)}
+    project_header_basenames = {Path(key).name.lower() for key in include_index}
+    findings: list[Finding] = []
+    seen: set[str] = set()
+    for match in PROJECT_UOBJECT_REFERENCE_RE.finditer(masked):
+        type_name = match.group(1)
+        if type_name in seen:
+            continue
+        expected_header = f"{type_name[1:]}.h".lower()
+        if expected_header not in project_header_basenames:
+            continue
+        seen.add(type_name)
+        if expected_header in included_basenames:
+            continue
+        if re.search(rf"\bclass\s+(?:[A-Z0-9_]+_API\s+)?{re.escape(type_name)}\s*(?:;|:)", masked):
+            continue
+        findings.append(
+            Finding(
+                "error",
+                str(path.relative_to(root)),
+                line_number(text, match.start()),
+                "PROJECT_UOBJECT_TYPE_NOT_VISIBLE",
+                f"{type_name} is a project UObject pointer type but this header neither includes {type_name[1:]}.h nor forward-declares `class {type_name};`.",
+            )
+        )
+    return findings
 
 
 def validate_required_includes(path: Path, text: str, root: Path) -> list[Finding]:
@@ -1954,6 +2057,10 @@ def validate_component_subsystem_patterns(path: Path, text: str, root: Path) -> 
 
 GENGINE_WORLD_ACCESS_RE = re.compile(r"\bGEngine\s*->\s*(GetWorld|GetGameInstance)\s*\(")
 DISABLE_GRAVITY_RE = re.compile(r"(?:->|\.)\s*DisableGravity\s*\(")
+GET_CURRENT_DELTA_TIME_RE = re.compile(r"(?<!->)(?<!\.)\bGetCurrentDeltaTime\s*\(")
+PAWN_DECL_RE = re.compile(
+    r"\b(?:const\s+)?APawn\s*\*\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+)
 WORLD_GET_URL_RE = re.compile(
     r"\b(?:GetWorld\s*\(\s*\)|(?:[A-Za-z_]\w*)?World)\s*->\s*GetURL\s*\(",
     re.IGNORECASE,
@@ -2002,6 +2109,7 @@ def validate_known_bad_api_patterns(path: Path, text: str, root: Path) -> list[F
     """
     findings: list[Finding] = []
     rel = str(path.relative_to(root))
+    masked = mask_comments_and_strings(text)
     for match in DISABLE_GRAVITY_RE.finditer(text):
         findings.append(
             Finding(
@@ -2041,6 +2149,38 @@ def validate_known_bad_api_patterns(path: Path, text: str, root: Path) -> list[F
                 ),
             )
         )
+    for match in GET_CURRENT_DELTA_TIME_RE.finditer(masked):
+        declaration = re.search(
+            r"\b(?:float|double|auto)\s+GetCurrentDeltaTime\s*\([^;{}]*\)\s*(?:const\s*)?(?:;|\{)",
+            masked,
+        )
+        if declaration:
+            break
+        findings.append(
+            Finding(
+                "error",
+                rel,
+                line_number(text, match.start()),
+                "INVENTED_DELTA_TIME_API",
+                "GetCurrentDeltaTime() is not an Unreal Actor/Component API. Use the TickComponent DeltaTime parameter or GetWorld()->GetDeltaSeconds().",
+            )
+        )
+    pawn_names = {match.group("name") for match in PAWN_DECL_RE.finditer(masked)}
+    for pawn_name in pawn_names:
+        pawn_call = re.compile(rf"\b{re.escape(pawn_name)}\s*->\s*GetCharacterMovement\s*\(")
+        for match in pawn_call.finditer(masked):
+            findings.append(
+                Finding(
+                    "error",
+                    rel,
+                    line_number(text, match.start()),
+                    "PAWN_CHARACTER_MOVEMENT_API",
+                    (
+                        f"{pawn_name} is statically typed as APawn, which has no GetCharacterMovement(). "
+                        "Cast to ACharacter after checking the result, or use a movement component available on the pawn."
+                    ),
+                )
+            )
     return findings
 
 
@@ -3094,6 +3234,7 @@ def _run_per_file_validators(
     headers: dict[str, str],
     bases: dict[str, str],
     delegate_arity_map: dict[str, int],
+    declared_delegate_types: set[str],
     include_index: dict[str, list[str]],
     build_text_value: str,
     skip_include_path_checks: bool,
@@ -3128,6 +3269,7 @@ def _run_per_file_validators(
     if path.suffix.lower() in {".h", ".hpp"}:
         findings.extend(validate_generated_h(path, text, root))
         findings.extend(validate_reflected_namespace(path, text, root))
+        findings.extend(validate_blueprint_assignable_delegate_types(path, text, root, declared_delegate_types))
         findings.extend(validate_uht_macros_in_conditional_blocks(path, text, root))
         findings.extend(validate_static_mutable_container_members(path, text, root))
         findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
@@ -3137,6 +3279,7 @@ def _run_per_file_validators(
         findings.extend(validate_uobject_container_without_uproperty(path, text, root))
         findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
         findings.extend(validate_blueprintpure_missing_const(path, text, root))
+        findings.extend(validate_project_uobject_type_visibility(path, text, root, include_index))
         findings.extend(validate_required_includes(path, text, root))
         findings.extend(validate_component_registration_includes(path, text, root))
     if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
@@ -3236,6 +3379,7 @@ def validate_unreal_readiness(
             )
         bases = class_bases_from_paths(scope, texts)
         delegate_arity_map = build_delegate_arity_map_from_texts(scope, texts)
+        declared_delegate_types = build_declared_delegate_types(root)
         include_index = build_source_include_index(root)
         include_owner_map = load_include_owner_map(module_graph_path) if module_graph_path else {}
         all_source_text = [texts[path] for path in scope]
@@ -3250,6 +3394,7 @@ def validate_unreal_readiness(
                 headers=headers,
                 bases=bases,
                 delegate_arity_map=delegate_arity_map,
+                declared_delegate_types=declared_delegate_types,
                 include_index=include_index,
                 build_text_value=build_text_value,
                 skip_include_path_checks=skip_include_path_checks,
@@ -3285,6 +3430,7 @@ def validate_unreal_readiness(
     headers = class_headers(root)
     bases = class_bases(root)
     delegate_arity_map = build_delegate_arity_map(root)
+    declared_delegate_types = build_declared_delegate_types(root)
     all_source_text = []
     all_paths = iter_source_files(root)
     from domain_validation_context import DomainValidationContext
@@ -3301,6 +3447,7 @@ def validate_unreal_readiness(
             headers=headers,
             bases=bases,
             delegate_arity_map=delegate_arity_map,
+            declared_delegate_types=declared_delegate_types,
             include_index=include_index,
             build_text_value=build_text_value,
             skip_include_path_checks=skip_include_path_checks,
