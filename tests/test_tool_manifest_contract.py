@@ -40,11 +40,12 @@ def test_rag_essential_matches_module(monkeypatch, tmp_path) -> None:
 def test_agent_essential_in_server_js() -> None:
     manifest = load_stable_manifest()
     server_js = (ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js").read_text(encoding="utf-8")
+    exposure_js = (ROOT / "lmstudio-unreal-agent-mcp" / "src" / "tool-exposure.js").read_text(encoding="utf-8")
     for name in manifest["agentEssential"]:
         assert f'"{name}"' in server_js
     for name in manifest["agentHiddenUntilControlPlane"]:
         assert f'"{name}"' in server_js
-        assert "STABLE_HIDDEN_AGENT_TOOL_NAMES" in server_js
+    assert "agentHiddenUntilControlPlane" in exposure_js or "loadStableManifest" in exposure_js
 
 
 def test_all_registered_rag_tools_covered_by_manifest(monkeypatch, tmp_path) -> None:

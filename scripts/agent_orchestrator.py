@@ -326,8 +326,12 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         plan.confidence = 0.6
         plan.files_to_read.append("Source/**/*.h")
     elif task_kind == "cpp_analysis":
+        # Validate negative symbol claims and logic-missing / by-design false positives.
         plan.rag_modes = ["review", "planning"]
-        plan.gates = ["direct_source_evidence", "unreal_review_claim_validate"]
+        plan.gates = [
+            "direct_source_evidence",
+            "unreal_review_claim_validate",  # negative + logic-missing claims
+        ]
         plan.files_to_read.extend(["project://Source/**/*.h", "project://Source/**/*.cpp"])
         plan.writes_allowed = False
         plan.confidence = 0.7
@@ -343,7 +347,10 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
             ]
         else:
             plan.rag_modes = ["review", "planning"]
-            plan.gates = ["unreal_project_architecture", "unreal_review_claim_validate"]
+            plan.gates = [
+                "unreal_project_architecture",
+                "unreal_review_claim_validate",  # negative + logic-missing claims
+            ]
         plan.writes_allowed = False
         plan.confidence = 0.75
     elif task_kind == "compile_fix":
@@ -724,6 +731,12 @@ def build_suggested_tool_calls(
         calls.append({"tool": "search_files", "args": {"query": search_term, "path": browse_path}})
         calls.append({"tool": "read_file", "args": {"path": "<from search_files matches>"}})
         calls.append({"tool": "unreal_rag_search", "args": {"query": text, "mode": "review", "hybrid": False, "top_k": 4}})
+        calls.append(
+            {
+                "tool": "unreal_review_claim_validate",
+                "args": {"claims": ["<paste findings with Bug|ByDesign|Ambiguous|NeedsRuntimeProof labels>"]},
+            }
+        )
         return calls
 
     from asset_hint_resolver import resolve_asset_folder_hint
@@ -777,6 +790,12 @@ def build_suggested_tool_calls(
         calls.append({"tool": "search_files", "args": {"query": search_term, "path": browse_path}})
         calls.append({"tool": "read_file", "args": {"path": "<from search_files matches>"}})
         calls.append({"tool": "unreal_rag_search", "args": {"query": text, "mode": "review", "hybrid": False, "top_k": 4}})
+        calls.append(
+            {
+                "tool": "unreal_review_claim_validate",
+                "args": {"claims": ["<paste findings with Bug|ByDesign|Ambiguous|NeedsRuntimeProof labels>"]},
+            }
+        )
         return calls
 
     cpp_like = looks_like_cpp_domain_request(text)
@@ -809,7 +828,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     from load_sampling_preset import profile_agent_policy
     from project_context import resolve_active_project_context
     from rag_search import resolve_mode
-    from tool_policy import tool_sequence_for_task
+    from tool_policy import gates_for_task, tool_sequence_for_task
 
     policy = profile_agent_policy()
     project_context = resolve_active_project_context()
@@ -841,6 +860,13 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
             if resolved_mode in {"module_fix", "reflection_fix"}
             else task_kind
         )
+    orch_gates = gates_for_task(tool_policy_key) or gates_for_task(task_kind)
+    if orch_gates:
+        merged_gates = list(evidence.gates or [])
+        for gate in orch_gates:
+            if gate not in merged_gates:
+                merged_gates.append(gate)
+        evidence.gates = merged_gates
     tool_policy = tool_sequence_for_task(tool_policy_key) or tool_sequence_for_task(task_kind)
     if task_kind == "inspect_only" and mode in ASSET_METADATA_MODES:
         tool_policy = list(ASSET_METADATA_TOOL_POLICY)
@@ -1011,11 +1037,13 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     notes.append("Copy suggestedToolCalls args exactly; never hardcode project paths.")
 
     refactor_embedded = bool(refactor_manager)
-    tool_policy, suggested, exposure_notes = sanitize_tools_for_exposure(
+    tool_policy, suggested, exposure_notes, sanitized_gates = sanitize_tools_for_exposure(
         tool_policy,
         suggested,
         refactor_manager_embedded=refactor_embedded,
+        gates=list(evidence.gates or []),
     )
+    evidence.gates = sanitized_gates
     notes.extend(exposure_notes)
     if refactor_embedded and essential_tools_enabled():
         notes.append("Refactor manager results are embedded in refactorManager; do not call hidden refactor tools.")

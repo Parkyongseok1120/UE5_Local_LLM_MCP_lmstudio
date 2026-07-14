@@ -16,6 +16,9 @@
         "read_file",
         "unreal_review_claim_validate"
       ],
+      "gates": [
+        "unreal_review_claim_validate_negative_and_logic_missing"
+      ],
       "writesAllowed": false
     },
     "project_source_analysis": {
@@ -27,6 +30,10 @@
         "unreal_review_claim_validate",
         "answer_with_evidence"
       ],
+      "gates": [
+        "direct_source_evidence",
+        "unreal_review_claim_validate_negative_and_logic_missing"
+      ],
       "writesAllowed": false
     },
     "project_review": {
@@ -37,6 +44,10 @@
         "unreal_rag_search",
         "unreal_review_claim_validate"
       ],
+      "gates": [
+        "unreal_project_architecture",
+        "unreal_review_claim_validate_negative_and_logic_missing"
+      ],
       "writesAllowed": false
     },
     "shader_review": {
@@ -45,6 +56,9 @@
         "unreal_rag_search",
         "read_file",
         "unreal_review_claim_validate"
+      ],
+      "gates": [
+        "unreal_review_claim_validate_negative_and_logic_missing"
       ],
       "writesAllowed": false
     },

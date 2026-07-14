@@ -30,10 +30,19 @@ MAX_CANDIDATES = 6
 
 
 def _descriptor(name: str, *, family: str) -> dict[str, Any]:
+    from tool_exposure import agent_essential_tool_names, rag_essential_tool_names
+
     inventory = exposure_inventory()
-    essential = set(inventory.get("essentialProfile") or [])
+    essential = set(inventory.get("essentialProfile") or []) | set(rag_essential_tool_names()) | set(
+        agent_essential_tool_names()
+    )
     extended = set(inventory.get("extendedProfile") or [])
-    profile = "essential" if name in essential else ("extended" if name in extended else "agent")
+    if name in essential:
+        profile = "essential"
+    elif name in extended:
+        profile = "extended"
+    else:
+        profile = "agent"
     return {
         "name": name,
         "family": family,

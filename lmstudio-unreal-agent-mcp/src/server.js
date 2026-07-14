@@ -106,14 +106,16 @@ const {
   beginToolCall,
   checkToolRepeatBlocked,
   recordToolFailure,
-  toolRepeatBlockedMessage
+  toolRepeatBlockedMessage,
+  clearToolFailureHistory
 } = require("./tool-failure-history");
 const {
   checkReadRepeat,
   recordReadSuccess,
   recordReadStagnation,
   normalizeReadToolArgs,
-  cachedReadInstruction
+  cachedReadInstruction,
+  clearReadSuccessHistory
 } = require("./tool-read-history");
 const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
 const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
@@ -184,39 +186,25 @@ const MCP_ESSENTIAL_TOOLS = ["1", "true", "yes", "on"].includes(
 const MCP_EXTENDED_TOOLS = ["1", "true", "yes", "on"].includes(
   String(process.env.MCP_EXTENDED_TOOLS || "").trim().toLowerCase()
 );
-const ESSENTIAL_AGENT_TOOL_NAMES = new Set([
-  "get_workspace_info",
-  "get_active_project",
-  "list_directory",
-  "read_file",
-  "read_file_range",
-  "read_symbol",
-  "replace_in_file",
-  "write_file",
-  "search_files",
-  "static_validate_project",
-  "build_unreal_project",
-  "read_unreal_logs",
-  "write_session_handoff"
-]);
-const EXTENDED_AGENT_TOOL_NAMES = new Set([
-  "set_active_project",
-  "detect_unreal_project",
-  "list_unreal_projects",
-  "open_active_project_picker",
-  "run_command",
-  "refactor_impact_scan",
-  "refactor_plan_validate",
-  "propose_file_deletions",
-  "delete_file",
-  "record_bootstrap_step"
-]);
-const STABLE_HIDDEN_AGENT_TOOL_NAMES = new Set([
-  "apply_edit_bundle"
-]);
 const CONTROL_PLANE_TOOLS = ["1", "true", "yes", "on"].includes(
   String(process.env.ALLOW_CONTROL_PLANE_TOOLS || "").trim().toLowerCase()
 );
+/** Tracks shared activeProject so history clears when rag or agent switches projects. */
+let lastSeenActiveProjectKey = null;
+
+function clearLoopHistoriesOnProjectChange(force = false) {
+  const current = String(getActiveProject(CONFIG_PATH) || "");
+  if (!force && lastSeenActiveProjectKey !== null && current === lastSeenActiveProjectKey) {
+    return false;
+  }
+  const changed = lastSeenActiveProjectKey !== null && current !== lastSeenActiveProjectKey;
+  if (force || changed) {
+    clearReadSuccessHistory();
+    clearToolFailureHistory();
+  }
+  lastSeenActiveProjectKey = current;
+  return force || changed;
+}
 const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
 const fileCache = new Map();
 const readEvidence = new Map();
@@ -759,7 +747,7 @@ function evidenceStagnationFail(tool, guard, options = {}) {
   const errorCode = guard.reason || "EVIDENCE_STAGNATION";
   recordReadStagnation(tool, guard.normalizedArgs, options.context || {});
   return fail(
-    errorCode === "TOOL_REPEAT_BLOCKED"
+    errorCode === "EVIDENCE_STAGNATION_REPEAT"
       ? `identical ${tool} evidence call blocked after stagnation.`
       : "Evidence read stagnating — no new line coverage or soft budget exhausted.",
     {
@@ -787,7 +775,11 @@ function prepareReadGuard(tool, args, context) {
 
 function applyReadGuard(tool, guard, context) {
   if (!guard || guard.action === "allow" || !guard.repeat) return null;
-  if (guard.action === "stagnation" || guard.reason === "EVIDENCE_STAGNATION" || guard.reason === "TOOL_REPEAT_BLOCKED") {
+  if (
+    guard.action === "stagnation"
+    || guard.reason === "EVIDENCE_STAGNATION"
+    || guard.reason === "EVIDENCE_STAGNATION_REPEAT"
+  ) {
     return evidenceStagnationFail(tool, guard, { context });
   }
   // Identical / fully-covered range: return cached success (no wrong-range body injection for uncovered misses).
@@ -1251,18 +1243,18 @@ function allAgentTools() {
       },
       {
         name: "write_file",
-        description: "Create a brand-new UTF-8 file inside WORKSPACE_ROOT. Requires ALLOW_WRITE=1. Create-only: any file that already exists is blocked (every extension, not just source). Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
+        description: "Create a brand-new UTF-8 file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1. Create-only: any file that already exists is blocked. Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
         inputSchema: makeJsonSchema({
-          path: { type: "string", description: "Relative path inside workspace." },
+          path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
           content: { type: "string", description: "Full file content to write." },
           createDirs: { type: "boolean", description: "Create parent directories if needed. Default false." }
         }, ["path", "content"])
       },
       {
         name: "replace_in_file",
-        description: "Safely replace exact text in a file. Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying. Byte-identical repeat calls are rejected as a loop guard.",
+        description: "Safely replace exact text in a file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying. Byte-identical repeat calls are rejected as a loop guard.",
         inputSchema: makeJsonSchema({
-          path: { type: "string", description: "Relative path inside workspace." },
+          path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
           oldText: { type: "string", description: "Exact text to replace." },
           newText: { type: "string", description: "Replacement text." },
           expectedOccurrences: { type: "number", description: "If set, replacement only proceeds when occurrence count matches." }
@@ -1336,7 +1328,7 @@ function allAgentTools() {
       },
       {
         name: "static_validate_project",
-        description: "Run static Unreal compile-readiness validation on the active project Source tree. Extended mode. Call before build_unreal_project when validation findings from writes need a full-project check.",
+        description: "Run static Unreal compile-readiness validation on the active project Source tree. Call before build_unreal_project when validation findings from writes need a full-project check.",
         inputSchema: makeJsonSchema({
           projectRoot: { type: "string", description: "Optional project root or .uproject path. Defaults to active project." }
         })
@@ -1393,6 +1385,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const args = request.params.arguments || {};
   const priorSeq = beginToolCall();
   try {
+    clearLoopHistoriesOnProjectChange(false);
     const allowed = callableAgentToolNames(allAgentTools().map((tool) => tool.name));
     if (!allowed.has(name)) {
       const blocked = toolNotCallablePayload(name);
@@ -1472,6 +1465,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         clear: args.clear === true
       });
       invalidateWorkspaceInfoCache();
+      clearLoopHistoriesOnProjectChange(true);
       return text(JSON.stringify(result, null, 2));
     }
 

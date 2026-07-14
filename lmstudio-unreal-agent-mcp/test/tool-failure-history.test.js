@@ -53,3 +53,19 @@ test("non-consecutive identical failures allow one retry then block", () => {
   assert.strictEqual(blocked.blocked, true);
   assert.strictEqual(blocked.attempts, 3);
 });
+
+test("read-tool failure keys normalize equivalent args", () => {
+  clearToolFailureHistory();
+  const tool = "read_file_range";
+  const first = { path: "Source/Foo.cpp", startLine: 10, endLine: 20 };
+  const equivalent = { endLine: 20, startLine: 10, path: "Source/Foo.cpp" };
+
+  const firstSeq = beginToolCall();
+  assert.strictEqual(checkToolRepeatBlocked(tool, first, firstSeq).blocked, false);
+  recordToolFailure(tool, first, "INTERNAL_ERROR");
+
+  const secondSeq = beginToolCall();
+  const blocked = checkToolRepeatBlocked(tool, equivalent, secondSeq);
+  assert.strictEqual(blocked.blocked, true);
+  assert.strictEqual(blocked.consecutive, true);
+});

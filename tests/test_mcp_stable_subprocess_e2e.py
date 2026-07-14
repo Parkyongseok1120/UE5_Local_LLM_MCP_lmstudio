@@ -104,6 +104,7 @@ def test_rag_mcp_subprocess_tools_list_stable_essential(tmp_path: Path, monkeypa
         tools = client.request("tools/list", {}, req_id=2)
         names = {tool["name"] for tool in tools["result"]["tools"]}
         assert names == set(MANIFEST["ragEssential"])
+        assert "unreal_review_claim_validate" in names
     finally:
         client.close()
 
@@ -468,6 +469,56 @@ def test_agent_evidence_stagnation_is_error_without_wrong_body(tmp_path: Path) -
         assert payload.get("errorCode") == "EVIDENCE_STAGNATION"
         assert payload.get("ok") is False
         assert "content" not in payload or not str(payload.get("content") or "").strip()
+
+        # Second identical stagnation attempt escalates to a distinct error code.
+        blocked_again = client.request(
+            "tools/call",
+            {
+                "name": "search_files",
+                "arguments": {"query": "should_block_now", "path": str(source_dir), "maxResults": 5},
+            },
+            req_id=req_id + 1,
+        )
+        assert blocked_again["result"].get("isError") is True
+        payload2 = json.loads(blocked_again["result"]["content"][0]["text"])
+        assert payload2.get("errorCode") == "EVIDENCE_STAGNATION_REPEAT"
+    finally:
+        client.close()
+
+
+def test_agent_covering_cache_does_not_cross_files(tmp_path: Path) -> None:
+    source_dir = tmp_path / "Source" / "Demo"
+    source_dir.mkdir(parents=True)
+    file_a = source_dir / "A.cpp"
+    file_b = source_dir / "B.cpp"
+    file_a.write_text("\n".join(f"// A line {i}" for i in range(1, 120)) + "\n", encoding="utf-8")
+    file_b.write_text("\n".join(f"// B line {i}" for i in range(1, 120)) + "\n", encoding="utf-8")
+
+    client = _start_agent_client(tmp_path)
+    try:
+        wide_a = client.request(
+            "tools/call",
+            {
+                "name": "read_file_range",
+                "arguments": {"path": str(file_a), "startLine": 1, "endLine": 100},
+            },
+            req_id=2,
+        )
+        assert wide_a["result"].get("isError") is not True
+        assert "A line" in wide_a["result"]["content"][0]["text"]
+
+        nested_b = client.request(
+            "tools/call",
+            {
+                "name": "read_file_range",
+                "arguments": {"path": str(file_b), "startLine": 20, "endLine": 40},
+            },
+            req_id=3,
+        )
+        assert nested_b["result"].get("isError") is not True
+        text_b = nested_b["result"]["content"][0]["text"]
+        assert "B line" in text_b
+        assert "A line" not in text_b
     finally:
         client.close()
 

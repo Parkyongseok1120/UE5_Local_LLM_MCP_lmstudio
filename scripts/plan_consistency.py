@@ -26,6 +26,7 @@ RAG_ESSENTIAL_TOOLS = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
+        "unreal_review_claim_validate",
         "unreal_diagram_validate",
         "unreal_project_status",
     }
@@ -120,11 +121,13 @@ def sanitize_tools_for_exposure(
     suggested_calls: list[dict[str, Any]],
     *,
     refactor_manager_embedded: bool = False,
-) -> tuple[list[str], list[dict[str, Any]], list[str]]:
-    """Filter hidden tools in Essential mode; return notes."""
+    gates: list[str] | None = None,
+) -> tuple[list[str], list[dict[str, Any]], list[str], list[str]]:
+    """Filter hidden tools in Essential mode; return notes and sanitized gates."""
     notes: list[str] = []
+    gate_list = list(gates or [])
     if not essential_tools_enabled():
-        return tool_policy, suggested_calls, notes
+        return tool_policy, suggested_calls, notes, gate_list
 
     allowed = exposed_rag_tools()
     filtered_policy = [tool for tool in tool_policy if tool in allowed or not tool.startswith("unreal_")]
@@ -150,7 +153,18 @@ def sanitize_tools_for_exposure(
             continue
         filtered_calls.append(call)
 
-    return filtered_policy, filtered_calls, notes
+    filtered_gates: list[str] = []
+    for gate in gate_list:
+        g = str(gate or "").strip()
+        if not g:
+            continue
+        if g.startswith("unreal_"):
+            if g in allowed or any(g.startswith(f"{tool}_") for tool in allowed):
+                filtered_gates.append(g)
+            continue
+        filtered_gates.append(g)
+
+    return filtered_policy, filtered_calls, notes, filtered_gates
 
 
 def validate_plan_consistency(plan: Any) -> list[str]:

@@ -136,6 +136,7 @@ function findCoveringCachedContent(requested, versionKey) {
   if (!requested || !versionKey) return null;
   for (const entry of successCache.values()) {
     if (!entry.lineRange) continue;
+    if (entry.fileVersionKey !== versionKey) continue;
     const r = entry.lineRange;
     if (requested.start >= r.start && requested.end <= r.end) {
       return entry.content;
@@ -161,13 +162,13 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
   const requested = lineRangeFromArgs(tool, args);
 
   // Escalating hard-stop: after a stagnation response was recorded, identical
-  // retries escalate to TOOL_REPEAT_BLOCKED (never return a prior code body).
+  // retries escalate to EVIDENCE_STAGNATION_REPEAT (never return a prior code body).
   const stagnant = stagnationEntries.get(key);
   if (stagnant && stagnant.count >= 1) {
     return {
       action: "stagnation",
       repeat: true,
-      reason: "TOOL_REPEAT_BLOCKED",
+      reason: "EVIDENCE_STAGNATION_REPEAT",
       key,
       attempts: stagnant.count + 1,
       escalated: true,
@@ -283,6 +284,7 @@ function recordReadSuccess(tool, args, context = {}, content, options = {}) {
   const key = buildEvidenceKey(tool, args, context);
   const prior = successCache.get(key);
   const lineRange = lineRangeFromArgs(tool, args) || options.lineRange || null;
+  const versionKey = fileVersionKey(context);
   const entry = {
     content: String(content ?? ""),
     at: prior ? prior.at : now,
@@ -290,12 +292,12 @@ function recordReadSuccess(tool, args, context = {}, content, options = {}) {
     attempts: prior ? prior.attempts + 1 : 1,
     evidenceHash: context.evidenceHash || null,
     fileAbsPath: context.fileAbsPath || null,
+    fileVersionKey: versionKey,
     lineRange,
   };
   successCache.set(key, entry);
   stagnationEntries.delete(key);
 
-  const versionKey = fileVersionKey(context);
   if (versionKey) {
     const coverage = fileCoverage.get(versionKey) || {
       ranges: [],
@@ -352,7 +354,11 @@ function normalizeReadToolArgs(tool, args = {}) {
 }
 
 function cachedReadInstruction(reason) {
-  if (reason === "EVIDENCE_STAGNATION" || reason === "TOOL_REPEAT_BLOCKED") {
+  if (
+    reason === "EVIDENCE_STAGNATION"
+    || reason === "EVIDENCE_STAGNATION_REPEAT"
+    || reason === "TOOL_REPEAT_BLOCKED"
+  ) {
     return (
       "Evidence read budget exhausted or stagnating. "
       + "Do not call another evidence tool. Produce the final analysis now."

@@ -29,8 +29,32 @@ function callKey(tool, args) {
   const hash = crypto.createHash("sha256");
   hash.update(String(tool || ""));
   hash.update("\u0000");
-  hash.update(stableStringify(args || {}));
+  hash.update(stableStringify(normalizeArgsForFailureKey(tool, args)));
   return hash.digest("hex");
+}
+
+const READ_FAILURE_NORMALIZE_TOOLS = new Set([
+  "read_file",
+  "read_file_range",
+  "read_symbol",
+  "search_files",
+]);
+
+/**
+ * Align failure-repeat keys with read-history normalization for evidence tools.
+ */
+function normalizeArgsForFailureKey(tool, args) {
+  const name = String(tool || "");
+  if (!READ_FAILURE_NORMALIZE_TOOLS.has(name)) {
+    return args || {};
+  }
+  // Lazy require avoids circular init with tool-read-history (which imports stableStringify).
+  const { normalizeReadToolArgs } = require("./tool-read-history");
+  try {
+    return normalizeReadToolArgs(name, args || {});
+  } catch {
+    return args || {};
+  }
 }
 
 function prune(now, maxEntries, ttlMs) {

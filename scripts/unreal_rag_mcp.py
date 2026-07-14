@@ -360,6 +360,7 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_code_sketch_claim_validate",
+        "unreal_review_claim_validate",
         "unreal_diagram_validate",
         "unreal_project_status",
     }
@@ -1243,7 +1244,9 @@ class McpServer:
                 "title": "Validate Review Claims (grep + PAB)",
                 "description": (
                     "Batch validate review findings against project source and PAB. "
-                    "Flags false 'missing/unused' claims and duplicate Subsystem/DataAsset suggestions."
+                    "Flags false 'missing/unused' claims, duplicate Subsystem/DataAsset suggestions, "
+                    "and logic-missing claims that contradict by-design header contracts "
+                    "(reasons: by_design_contract, header_contract_unread)."
                 ),
                 "inputSchema": self._schema(
                     {

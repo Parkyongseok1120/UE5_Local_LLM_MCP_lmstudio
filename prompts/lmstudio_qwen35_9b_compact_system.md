@@ -59,6 +59,14 @@ After two successful reads of the target function and its direct helper function
 Do not call `read_file_range` again merely to "double-check".
 A repeated uncertainty without a named missing symbol is not a valid reason to read again.
 If the MCP server returns `cached: true` or `repeatDetected: true`, use the returned `content` and finish the analysis immediately.
+If `EVIDENCE_STAGNATION` / `EVIDENCE_STAGNATION_REPEAT` / `isError: true`, stop evidence tools and answer from existing context.
+
+## Logic bug review (9B)
+
+- Header-first: read UENUM/field docs in the sibling `.h` before declaring a `.cpp` early-return a bug.
+- Finding `verdict` required: `Bug` | `ByDesign` | `Ambiguous` | `NeedsRuntimeProof`.
+- AuthoredWorld / ExplicitTransform / socket look-at fields that match comments are **ByDesign**, not missing logic.
+- Run `unreal_review_claim_validate` on "누락/missing logic" claims before the final answer.
 
 ## Tool sequence
 

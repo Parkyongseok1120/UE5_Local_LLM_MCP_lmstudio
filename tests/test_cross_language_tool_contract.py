@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -14,12 +13,8 @@ from tool_policy import exposure_inventory  # noqa: E402
 
 
 def _node_essential_tools() -> set[str]:
-    server = ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js"
-    text = server.read_text(encoding="utf-8")
-    match = re.search(r"ESSENTIAL_AGENT_TOOL_NAMES = new Set\(\[(.*?)\]\)", text, re.S)
-    assert match, "Could not parse ESSENTIAL_AGENT_TOOL_NAMES from server.js"
-    raw = match.group(1)
-    return {item.strip().strip('"').strip("'") for item in raw.split(",") if item.strip()}
+    manifest = json.loads((ROOT / "config" / "stable_tool_manifest.json").read_text(encoding="utf-8-sig"))
+    return set(manifest.get("agentEssential") or [])
 
 
 def test_essential_tools_subset_of_inventory() -> None:
@@ -35,6 +30,8 @@ def test_python_exposure_inventory_includes_hidden_tools() -> None:
         "unreal_task_start",
         "unreal_project_status",
         "unreal_job_log_read",
+        "unreal_review_claim_validate",
+        "unreal_project_architecture",
     ):
         assert tool in names
 
@@ -63,4 +60,7 @@ def test_node_build_proof_unit() -> None:
 
 def test_manifest_matches_node_essential_tools() -> None:
     manifest = json.loads((ROOT / "config" / "stable_tool_manifest.json").read_text(encoding="utf-8-sig"))
-    assert _node_essential_tools() == set(manifest["agentEssential"])
+    exposure = (ROOT / "lmstudio-unreal-agent-mcp" / "src" / "tool-exposure.js").read_text(encoding="utf-8")
+    assert "stable_tool_manifest.json" in exposure
+    assert "agentEssential" in exposure
+    assert set(manifest["agentEssential"]) == _node_essential_tools()

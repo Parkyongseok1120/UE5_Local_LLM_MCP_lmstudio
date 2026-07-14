@@ -27,7 +27,18 @@ python scripts/patch_mcp_config.py
 
 Restart LM Studio after changes.
 
-### unreal-rag (11 tools)
+### Hotfix restart (read-loop / evidence guards)
+
+After pulling Hotfix 1–3 commits that change `lmstudio-unreal-agent-mcp` (`sha256Text` import, failure repeat block, coverage-based read guard), **fully restart the `unreal-agent` MCP server** in LM Studio (or restart LM Studio). An old Node process will keep the previous livelock behavior (returning prior ranges as `ok: true`).
+
+Confirm after restart:
+
+- Novel `read_file_range` windows are still served (not replaced by an older range body).
+- Identical re-reads return `READ_REPEAT_DETECTED` with `cached: true`.
+- Evidence stagnation returns `isError: true` / `EVIDENCE_STAGNATION` (repeat escalation: `EVIDENCE_STAGNATION_REPEAT`) with no substituted prior code body.
+- Cached covering ranges never cross files (file A body is never returned for file B).
+
+### unreal-rag (12 tools)
 
 - `unreal_get_active_project`
 - `unreal_set_active_project`
@@ -38,6 +49,7 @@ Restart LM Studio after changes.
 - `unreal_agent_session`
 - `unreal_rag_capabilities`
 - `unreal_code_sketch_claim_validate` - verify drafted APIs before showing code sketches
+- `unreal_review_claim_validate` - batch-validate review findings (including by-design / header-contract false positives)
 - `unreal_diagram_validate`
 - `unreal_project_status`
 
@@ -51,13 +63,22 @@ Restart LM Studio after changes.
 
 ### Extended tools (`MCP_EXTENDED_TOOLS=1`)
 
-Enable when you need refresh, compile loop jobs, claim validators, refactor helpers, or cleanup:
+Enable when you need refresh, compile loop jobs, extra claim validators, refactor helpers, or cleanup:
 
-**unreal-rag:** `unreal_rag_refresh`, `unreal_start_rag_refresh`, `unreal_rag_refresh_status`, compile-loop tools, editor metadata, asset graph, claim validators, refactor manager, render report.
+**unreal-rag:** `unreal_rag_refresh`, `unreal_start_rag_refresh`, `unreal_rag_refresh_status`, compile-loop tools, editor metadata, asset graph, material/blueprint validators, refactor manager, render report.
 
-**unreal-agent:** `propose_file_deletions`, `delete_file` (requires `ALLOW_SOURCE_DELETE=1` and a matching deletion plan token), `static_validate_project`, `set_active_project`, refactor scan/plan tools.
+**unreal-agent:** `propose_file_deletions`, `delete_file` (requires `ALLOW_SOURCE_DELETE=1` and a matching deletion plan token), `set_active_project`, refactor scan/plan tools.
 
 With `MCP_ESSENTIAL_TOOLS=1` alone, extended tools stay hidden to reduce model confusion.
+
+## Logic review (false-bug guard)
+
+When reviewing gameplay/cinematic logic (not compile errors):
+
+1. Read the sibling `.h` UENUM / field comments **before** calling `read_symbol` / concluding a bug from `.cpp` alone.
+2. Label every finding `Bug` | `ByDesign` | `Ambiguous` | `NeedsRuntimeProof`.
+3. Intentional early returns that match header contracts (e.g. AuthoredWorld = keep asset transform) are **ByDesign**, not "missing logic".
+4. Batch findings through `unreal_review_claim_validate` — it rejects false missing/unused claims **and** logic-missing claims that contradict by-design header text (`by_design_contract`, `header_contract_unread`).
 
 ## Validate-on-write
 
@@ -192,6 +213,8 @@ Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_
 | Writes on review/runtime tasks | Re-call `unreal_agent_plan`; obey `writeGate.writesAllowed=false` |
 | Model calls `run_javascript` / `js-code-sandbox` | Start a new chat with the bootstrap prompt, remove sandbox auto-approval, and hide/disable the sandbox plugin if available |
 | Hallucinated analysis | Force `read_file` before claims or edits |
+| False logic bugs (early return = "missing") | Read sibling `.h` UENUM/field docs first; classify `ByDesign`/`Ambiguous`; run `unreal_review_claim_validate` |
+| `READ_REPEAT_DETECTED` / `EVIDENCE_STAGNATION` / `EVIDENCE_STAGNATION_REPEAT` loops | Stop reading; finish from existing evidence. Restart `unreal-agent` if Hotfix 3+ is not loaded |
 | Repeated no-op patch | Re-read file, patch only missing current text, set `expectedOccurrences=1` |
 | Tool not in list | Essential mode hides advanced tools; use wrapper/Cline for clangd/graph |
 | `unreal_rag_refresh` times out | Re-run `python scripts/patch_mcp_config.py` so `unreal-rag` has `"timeout": 420000` (7 minutes, ms) and `unreal-agent` has `"timeout": 720000` in `%USERPROFILE%\.lmstudio\mcp.json`, then restart LM Studio. Prefer `unreal_start_rag_refresh` + `unreal_rag_refresh_status` for long refresh. Use `scope=project_source` when Editor metadata is not needed. |

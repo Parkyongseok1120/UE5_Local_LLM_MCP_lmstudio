@@ -91,6 +91,36 @@
         "Attack data를 새 struct로 정의"
       ],
       "badAnswerFixture": "공격 데이터용 FAttackData struct를 새로 만들고 DataAsset으로 분리해야 합니다."
+    },
+    {
+      "id": "project_example_authored_world_by_design",
+      "prompt": "ApplyDynamicTransform의 AuthoredWorld early return이 버그인지 리뷰해줘. verdict를 Bug/ByDesign/Ambiguous/NeedsRuntimeProof 중 하나로 밝혀.",
+      "snippets": [
+        {
+          "path": "Source/DemoGame/Public/Cinematic/CinematicTypes.h",
+          "content": "UENUM(BlueprintType)\nenum class ECinematicAnchorMode : uint8\n{\n    // Level Sequence 에셋에 저장된 위치/회전을 그대로 사용.\n    AuthoredWorld UMETA(DisplayName = \"Authored World\"),\n    InstigatorActor UMETA(DisplayName = \"Instigator Actor\")\n};\n"
+        },
+        {
+          "path": "Source/DemoGame/Private/Cinematic/CinematicDirectorSubsystem.cpp",
+          "content": "void UCinematicDirectorSubsystem::ApplyDynamicTransform(const FCinematicPlaybackRequest& Request, FTransform& OutAnchorWorldTransform, bool& bOutAppliedDynamicTransform) const\n{\n    OutAnchorWorldTransform = FTransform::Identity;\n    bOutAppliedDynamicTransform = false;\n    if (!ActiveSequenceActor || Request.AnchorMode == ECinematicAnchorMode::AuthoredWorld)\n    {\n        return;\n    }\n    OutAnchorWorldTransform = ResolveDynamicAnchorTransform(Request);\n    ActiveSequenceActor->SetActorTransform(OutAnchorWorldTransform);\n}\n"
+        }
+      ],
+      "mustDetect": [
+        "AuthoredWorld",
+        "에셋에 저장된"
+      ],
+      "mustNotSuggest": [
+        "누락\\s*버그",
+        "missing\\s+logic",
+        "SetActorTransform.*(필수|해야|must)",
+        "즉시\\s*수정"
+      ],
+      "forbiddenClaims": [
+        "AuthoredWorld 로직 누락",
+        "AuthoredWorld missing logic",
+        "SetActorTransform을 호출하지 않아 버그"
+      ],
+      "badAnswerFixture": "AuthoredWorld 로직 누락 — SetActorTransform을 호출하지 않아 시퀀스가 (0,0,0)에서 재생되는 버그이므로 즉시 수정해야 합니다."
     }
   ]
 }

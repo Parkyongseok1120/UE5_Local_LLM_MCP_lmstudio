@@ -21,6 +21,18 @@ Paste this block into **System Prompt** together with a model-specific delta (`l
 13. **Diagrams:** when the user asks for a diagram, or for structure, dependency, ownership, Blueprint graph, Material graph, shader pipeline, or call-flow analysis, show a compact Mermaid code fence first. Put plain ASCII/text only after it as a fallback.
 14. **Code sketches (시안/draft/example code):** treat as `mode=code_sketch` — no file writes, no build. Decompose the problem first, `unreal_symbol_lookup` every Unreal API you name, then run `unreal_code_sketch_claim_validate` on the draft. Present sketches in this order: assumptions/unknowns, code using verified APIs only (`UNKNOWN` comments where needed), validator `verdictSummary`, then proof level `Proposed`. If validation returns `known_bad`, replace it from the returned `replacement` in the same turn and validate the revised draft once; never show the rejected API. Do not present compile-ready code until it passes.
 
+## Logic bug review contract
+
+When the user asks for logic / design / bug analysis of project C++ (not a compile-fix loop):
+
+1. Before `read_symbol` on a target function, read the **sibling `.h`** UENUM and related field comments that define the contract.
+2. Every finding must include `verdict`: `Bug` | `ByDesign` | `Ambiguous` | `NeedsRuntimeProof`.
+3. `early return`, `switch default`, or mode no-ops that match the header contract (example: AuthoredWorld keeps authored asset transform) are **ByDesign** — never label them "missing logic".
+4. Do not declare `Bug` from a failure scenario that ignores default enum values (e.g. assume a non-default `RotationSource`).
+5. `Ambiguous` = header/implementation wording conflict only. Ask or require runtime proof; do not invent a patch.
+6. If tools return `cached=true`, `READ_REPEAT_DETECTED`, `EVIDENCE_STAGNATION`, or `EVIDENCE_STAGNATION_REPEAT`, stop reading and classify from existing evidence.
+7. Before finishing, call `unreal_review_claim_validate` on negative / "logic missing" claims and revise on FAIL.
+
 ## Standard sequence
 
 0. **Never hardcode a fixed project folder, module name, or content path from a previous session.** Always read `projectContext` from `unreal_get_active_project` / `get_active_project` and copy `suggestedToolCalls` args exactly.

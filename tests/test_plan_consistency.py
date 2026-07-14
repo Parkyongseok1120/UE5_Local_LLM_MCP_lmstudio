@@ -60,14 +60,18 @@ def test_validate_plan_consistency_catches_contradiction():
 
 def test_essential_mode_filters_hidden_refactor_tools(monkeypatch):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
-    policy, calls, notes = sanitize_tools_for_exposure(
+    policy, calls, notes, gates = sanitize_tools_for_exposure(
         ["unreal_rag_search", "unreal_refactor_manager_plan"],
         [{"tool": "unreal_refactor_manager_plan", "args": {}}],
         refactor_manager_embedded=True,
+        gates=["unreal_review_claim_validate", "unreal_review_claim_validate_negative_and_logic_missing", "unreal_editor_metadata_status"],
     )
     assert "unreal_refactor_manager_plan" not in policy
     assert calls == []
     assert notes
+    assert "unreal_review_claim_validate" in gates
+    assert "unreal_review_claim_validate_negative_and_logic_missing" in gates
+    assert "unreal_editor_metadata_status" not in gates
 
 
 def test_build_agent_plan_ambiguity_blocks_writes(monkeypatch):

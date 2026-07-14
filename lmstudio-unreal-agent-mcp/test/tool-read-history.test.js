@@ -128,5 +128,28 @@ test("stagnation records escalate on second identical blocked call", () => {
 
   const second = checkReadRepeat(tool, args, CONTEXT);
   assert.strictEqual(second.action, "stagnation");
-  assert.strictEqual(second.reason, "TOOL_REPEAT_BLOCKED");
+  assert.strictEqual(second.reason, "EVIDENCE_STAGNATION_REPEAT");
+});
+
+test("covering cache does not leak content across files", () => {
+  clearReadSuccessHistory();
+  const tool = "read_file_range";
+  const ctxA = { ...CONTEXT, fileAbsPath: "C:/proj/Source/A.cpp" };
+  const ctxB = { ...CONTEXT, fileAbsPath: "C:/proj/Source/B.cpp" };
+  const wideA = normalizeReadToolArgs(tool, { path: "Source/A.cpp", startLine: 1, endLine: 200 });
+  recordReadSuccess(tool, wideA, ctxA, "FILE-A-BODY");
+
+  const nestedB = normalizeReadToolArgs(tool, { path: "Source/B.cpp", startLine: 50, endLine: 80 });
+  // No prior coverage on B — allow read.
+  const firstB = checkReadRepeat(tool, nestedB, ctxB);
+  assert.strictEqual(firstB.action, "allow");
+
+  // After covering a range on B that is fully covered by A's numbers only, still no A body.
+  const wideB = normalizeReadToolArgs(tool, { path: "Source/B.cpp", startLine: 1, endLine: 100 });
+  recordReadSuccess(tool, wideB, ctxB, "FILE-B-BODY");
+  const nestedOnB = normalizeReadToolArgs(tool, { path: "Source/B.cpp", startLine: 20, endLine: 40 });
+  const covered = checkReadRepeat(tool, nestedOnB, ctxB);
+  assert.strictEqual(covered.action, "cache");
+  assert.strictEqual(covered.cachedContent, "FILE-B-BODY");
+  assert.notStrictEqual(covered.cachedContent, "FILE-A-BODY");
 });
