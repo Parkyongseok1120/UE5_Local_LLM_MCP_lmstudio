@@ -108,8 +108,15 @@ const {
   recordToolFailure,
   toolRepeatBlockedMessage
 } = require("./tool-failure-history");
+const {
+  checkReadRepeat,
+  recordReadSuccess,
+  normalizeReadToolArgs,
+  cachedReadInstruction
+} = require("./tool-read-history");
 const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
 const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
+const { resolveProjectRootForFile } = require("./validate-write");
 
 function numberEnv(name, fallback, min = 0) {
   const value = Number(process.env[name]);
@@ -700,6 +707,56 @@ function makeJsonSchema(properties, required = []) {
 
 function fileStatSignature(stat) {
   return `${stat.size}:${stat.mtimeMs}`;
+}
+
+async function resolveMutationGenerationForRead(resolution, targetPath) {
+  try {
+    const activeProject = resolution.activeProject || getActiveProject(CONFIG_PATH);
+    if (!activeProject) return 0;
+    const projectRoot = await resolveProjectRootForFile(targetPath, () => activeProject);
+    if (!projectRoot) return 0;
+    const state = await readMutationState(projectRoot);
+    return Number(state.mutationGeneration || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function buildReadEvidenceContext(target, stat, resolution, options = {}) {
+  return {
+    fileAbsPath: target ? path.resolve(target) : null,
+    fileSignature: stat ? fileStatSignature(stat) : null,
+    mutationGeneration: options.mutationGeneration ?? 0,
+    scopeSignature: options.scopeSignature || null,
+    evidenceHash: options.evidenceHash || null,
+  };
+}
+
+function cachedReadSuccess(content, options = {}) {
+  const errorCode = options.errorCode || "READ_REPEAT_DETECTED";
+  const payload = {
+    ok: true,
+    cached: true,
+    repeatDetected: true,
+    doNotRepeatRead: true,
+    stopCurrentWorkflow: options.stopCurrentWorkflow !== false,
+    errorCode,
+    retryable: false,
+    phase: "evidence_cached",
+    userMessage: options.userMessage || cachedReadInstruction(errorCode),
+    agentInstruction: options.agentInstruction || cachedReadInstruction(errorCode),
+    content,
+    readAttempts: options.readAttempts || 2,
+  };
+  if (options.readCount != null) payload.readCount = options.readCount;
+  if (options.pingPong) payload.pingPong = true;
+  return text(JSON.stringify(payload, null, 2));
+}
+
+function prepareReadGuard(tool, args, context) {
+  const normalizedArgs = normalizeReadToolArgs(tool, args);
+  const repeat = checkReadRepeat(tool, normalizedArgs, context);
+  return { normalizedArgs, repeat };
 }
 
 function rememberReadEvidence(target, stat, resolution, lineRange = null, contentHash = null) {
@@ -1532,6 +1589,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         suggestedToolCalls: [{ tool: "list_directory", args: { path: displayPath(resolution) } }]
       });
 
+      const mutationGeneration = await resolveMutationGenerationForRead(resolution, target);
+      const readContext = buildReadEvidenceContext(target, s, resolution, { mutationGeneration });
+      const { normalizedArgs, repeat } = prepareReadGuard("read_file", args, readContext);
+      if (repeat.repeat) {
+        return cachedReadSuccess(repeat.cachedContent, {
+          errorCode: repeat.reason,
+          readAttempts: repeat.attempts,
+          readCount: repeat.readCount,
+          pingPong: repeat.pingPong,
+        });
+      }
+
       const detail = resolveCodeDetail(args.detailLevel);
       const tierCap = CODE_DETAIL_READ_BYTES[detail];
       const maxBytes = Math.max(
@@ -1563,7 +1632,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         s.size <= MAX_READ_BYTES ? sha256Buffer(await fsp.readFile(target)) : null
       );
       const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`;
-      return text(metadataHeader + out);
+      const output = metadataHeader + out;
+      recordReadSuccess("read_file", normalizedArgs, {
+        ...readContext,
+        evidenceHash: s.size <= MAX_READ_BYTES ? sha256Text(out) : null,
+      }, output);
+      return text(output);
     }
 
     if (name === "read_file_range") {
@@ -1572,6 +1646,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const s = await statSafe(target);
       if (!s) return fail(`not found: ${args.path}`);
       if (!s.isFile()) return fail(`not a file: ${args.path}`);
+
+      const mutationGeneration = await resolveMutationGenerationForRead(resolution, target);
+      const readContext = buildReadEvidenceContext(target, s, resolution, { mutationGeneration });
+      const { normalizedArgs, repeat } = prepareReadGuard("read_file_range", args, readContext);
+      if (repeat.repeat) {
+        return cachedReadSuccess(repeat.cachedContent, {
+          errorCode: repeat.reason,
+          readAttempts: repeat.attempts,
+          readCount: repeat.readCount,
+          pingPong: repeat.pingPong,
+        });
+      }
 
       const detail = resolveCodeDetail(args.detailLevel);
       const lineCap = CODE_DETAIL_LINE_CAP[detail];
@@ -1604,9 +1690,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `${startLine}-${Math.min(endLine, lines.length)}`,
         sha256Text(content)
       );
-      return text(
-        `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`
-      );
+      const output = `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`;
+      recordReadSuccess("read_file_range", normalizedArgs, {
+        ...readContext,
+        evidenceHash: sha256Text(content),
+      }, output);
+      return text(output);
     }
 
     if (name === "read_symbol") {
@@ -1614,6 +1703,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const target = resolution.absolutePath;
       const stat = await statSafe(target);
       if (!stat || !stat.isFile()) return fail(`not found or not a file: ${args.path}`);
+
+      const mutationGeneration = await resolveMutationGenerationForRead(resolution, target);
+      const readContext = buildReadEvidenceContext(target, stat, resolution, { mutationGeneration });
+      const { normalizedArgs, repeat } = prepareReadGuard("read_symbol", args, readContext);
+      if (repeat.repeat) {
+        return cachedReadSuccess(repeat.cachedContent, {
+          errorCode: repeat.reason,
+          readAttempts: repeat.attempts,
+          readCount: repeat.readCount,
+          pingPong: repeat.pingPong,
+        });
+      }
+
       let content;
       try { content = await readCachedTextFile(target, stat); }
       catch (err) {
@@ -1668,7 +1770,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `${startLine}-${endLine}`,
         sha256Text(content)
       );
-      return text(`File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`);
+      const output = `File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`;
+      recordReadSuccess("read_symbol", normalizedArgs, {
+        ...readContext,
+        evidenceHash: sha256Text(content),
+      }, output);
+      return text(output);
     }
 
     if (name === "write_file") {
@@ -2219,6 +2326,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const query = String(args.query || "");
       if (!query) return fail("query must not be empty");
 
+      const baseStat = await statSafe(base);
+      const mutationGeneration = await resolveMutationGenerationForRead(resolution, base);
+      const readContext = buildReadEvidenceContext(null, baseStat, resolution, {
+        mutationGeneration,
+        scopeSignature: baseStat ? fileStatSignature(baseStat) : String(base),
+      });
+      const { normalizedArgs, repeat } = prepareReadGuard("search_files", args, readContext);
+      if (repeat.repeat) {
+        return cachedReadSuccess(repeat.cachedContent, {
+          errorCode: repeat.reason,
+          readAttempts: repeat.attempts,
+          readCount: repeat.readCount,
+          pingPong: repeat.pingPong,
+        });
+      }
+
       const ignoreDirs = new Set([
         ".git", ".vs", ".idea", "Binaries", "DerivedDataCache", "Intermediate",
         "Saved", "node_modules", ".gradle", ".cache"
@@ -2276,14 +2399,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       await walk(base);
-      return text(JSON.stringify({
+      const output = JSON.stringify({
         path: pathMetadata(resolution),
         results,
         filesSeen,
         filesSkippedBySize,
         searchComplete: filesSeen < SEARCH_MAX_FILES && filesSkippedBySize === 0,
         incompleteReasons: filesSkippedBySize > 0 ? ["large_files_skipped"] : [],
-      }, null, 2));
+      }, null, 2);
+      recordReadSuccess("search_files", normalizedArgs, {
+        ...readContext,
+        evidenceHash: sha256Text(output),
+      }, output);
+      return text(output);
     }
 
     if (name === "run_command") {

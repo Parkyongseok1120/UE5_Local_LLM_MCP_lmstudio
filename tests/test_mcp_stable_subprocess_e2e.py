@@ -344,6 +344,52 @@ def test_agent_internal_error_repeat_blocked(tmp_path: Path) -> None:
         client.close()
 
 
+def test_agent_successful_read_repeat_returns_cached(tmp_path: Path) -> None:
+    source_dir = tmp_path / "Source" / "Demo"
+    source_dir.mkdir(parents=True)
+    sample = source_dir / "Demo.cpp"
+    sample.write_text(
+        "\n".join(
+            [
+                "void UDemo::BeginPlay()",
+                "{",
+                "  Super::BeginPlay();",
+                "}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    args = {"path": str(sample), "startLine": 1, "endLine": 3}
+
+    client = _start_agent_client(tmp_path)
+    try:
+        first = client.request(
+            "tools/call",
+            {"name": "read_file_range", "arguments": args},
+            req_id=2,
+        )
+        assert first["result"].get("isError") is not True
+        first_text = first["result"]["content"][0]["text"]
+        assert "UDemo::BeginPlay" in first_text
+
+        second = client.request(
+            "tools/call",
+            {"name": "read_file_range", "arguments": args},
+            req_id=3,
+        )
+        assert second["result"].get("isError") is not True
+        payload = json.loads(second["result"]["content"][0]["text"])
+        assert payload.get("ok") is True
+        assert payload.get("cached") is True
+        assert payload.get("repeatDetected") is True
+        assert payload.get("doNotRepeatRead") is True
+        assert payload.get("errorCode") == "READ_REPEAT_DETECTED"
+        assert "UDemo::BeginPlay" in payload.get("content", "")
+    finally:
+        client.close()
+
+
 def test_rag_subprocess_rejects_hidden_tool_call(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["MCP_ESSENTIAL_TOOLS"] = "1"

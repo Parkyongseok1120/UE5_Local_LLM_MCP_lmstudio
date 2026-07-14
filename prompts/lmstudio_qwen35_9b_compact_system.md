@@ -53,6 +53,13 @@ Before using `read_file` on a large header:
 2. Use `read_file_range` with a +/-30-line window around the error line, not the full file.
 3. Only read the full file if `read_file_range` is insufficient.
 
+## Analysis stop contract
+
+After two successful reads of the target function and its direct helper functions, stop reading and produce findings.
+Do not call `read_file_range` again merely to "double-check".
+A repeated uncertainty without a named missing symbol is not a valid reason to read again.
+If the MCP server returns `cached: true` or `repeatDetected: true`, use the returned `content` and finish the analysis immediately.
+
 ## Tool sequence
 
 Follow the **Standard sequence** in [`lmstudio_compact_mcp_base.md`](lmstudio_compact_mcp_base.md). The model-specific constraints above still apply.
