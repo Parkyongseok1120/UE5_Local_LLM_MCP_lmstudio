@@ -221,6 +221,96 @@ def test_deliver_rag_suppress_marks_ok_false(tmp_path: Path) -> None:
     assert blocked["ok"] is False
 
 
+def test_compile_diagnostic_and_api_paraphrase_share_semantic_key(tmp_path: Path) -> None:
+    reset_query_history()
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"api")
+    common = {
+        "tool": "unreal_rag_search",
+        "active_project": "C:/Proj/A.uproject",
+        "mode": "compile_fix",
+        "scope": "auto",
+        "index_path": index,
+    }
+    diagnostic = semantic_query_key(
+        query=(
+            "C:/Proj/Source/StaminaComponent.cpp(93,28): error C2039: "
+            "'Empty': 'FGameplayTagContainer' localized text"
+        ),
+        **common,
+    )
+    paraphrase = semantic_query_key(
+        query="Check correct usage of FGameplayTagContainer::Empty()",
+        **common,
+    )
+    assert diagnostic == paraphrase
+
+
+def test_api_paraphrase_is_suppressed_after_compile_result(tmp_path: Path) -> None:
+    reset_query_history()
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"api")
+    first = deliver_rag_result(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="error C2039: 'Empty': 'FGameplayTagContainer'",
+        mode="compile_fix",
+        scope="auto",
+        detail_level="compact",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+        rows=[{"path": "GameplayTagContainer.h"}],
+    )
+    assert first["ok"] is True
+
+    repeated = deliver_rag_result(
+        tool="unreal_rag_search",
+        active_project="C:/Proj/A.uproject",
+        query="Check FGameplayTagContainer::Empty() usage",
+        mode="compile_fix",
+        scope="auto",
+        detail_level="compact",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+        rows=None,
+    )
+    assert repeated["suppressed"] is True
+    assert repeated["repeat"]["repeatDetected"] is True
+
+
+def test_ue_api_topic_budget_blocks_method_hopping(tmp_path: Path) -> None:
+    reset_query_history()
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"api")
+    base = {
+        "tool": "unreal_rag_search",
+        "active_project": "C:/Proj/A.uproject",
+        "mode": "compile_fix",
+        "scope": "auto",
+        "detail_level": "compact",
+        "top_k": 4,
+        "hybrid": False,
+        "index_path": index,
+    }
+    for query in (
+        "FGameplayTagContainer::Empty()",
+        "FGameplayTagContainer::IsEmpty()",
+    ):
+        delivered = deliver_rag_result(query=query, rows=[{"path": "GameplayTagContainer.h"}], **base)
+        assert delivered["ok"] is True
+
+    blocked = deliver_rag_result(
+        query="FGameplayTagContainer::Reset()",
+        rows=None,
+        **base,
+    )
+    assert blocked["suppressed"] is True
+    assert blocked["repeat"]["errorCode"] == "RAG_TOPIC_BUDGET_EXHAUSTED"
+    assert blocked["repeat"]["topicDeliveryCount"] == 2
+
+
 def test_project_sync_capabilities_advisory_when_source_newer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from on_active_project_changed import project_index_sync_capabilities
 

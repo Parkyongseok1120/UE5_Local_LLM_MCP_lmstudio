@@ -102,6 +102,16 @@ def test_gpt_oss_compile_fix_analyze_preset_is_low_temperature(monkeypatch):
     assert limits["contextLength"] == 32768
 
 
+def test_qwen35_flash_profile_uses_verified_long_context():
+    profile = _profiles()["qwen3_5_9b_deepseek_v4_flash"]
+    limits = sampling.profile_edit_limits("qwen3_5_9b_deepseek_v4_flash")
+
+    assert profile["contextLength"] == 140032
+    assert profile["contextLengthVariant_native_max"] == 262144
+    assert limits["contextLength"] == 140032
+    assert limits["recommendedParallelRequests"] == 1
+
+
 def test_all_profiles_context_at_least_24576():
     for name, profile in _profiles().items():
         assert profile["contextLength"] >= 24576, f"{name} context below 24576"

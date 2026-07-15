@@ -8,6 +8,7 @@ const {
   recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
+  recordRecoveryEvidenceCall,
   resetWorkflowLoopGuardForTests,
 } = require("../src/workflow-loop-guard");
 
@@ -57,6 +58,35 @@ test("only one build runs per mutation generation", () => {
   finishBuildAttempt(project, 10, { commandSucceeded: false, error: "UBT failed" });
   assert.equal(beginBuildAttempt(project, 10).ok, false);
   assert.equal(beginBuildAttempt(project, 11).ok, true);
+});
+
+test("failed build caps evidence reads until a mutation changes generation", () => {
+  const project = "/tmp/Demo";
+  finishBuildAttempt(project, 20, {
+    commandSucceeded: false,
+    stderr: "error C2039: missing member",
+  });
+
+  for (let index = 1; index <= 3; index += 1) {
+    const allowed = recordRecoveryEvidenceCall(project, 20, { budget: 3 });
+    assert.equal(allowed.blocked, false);
+    assert.equal(allowed.count, index);
+  }
+  const blocked = recordRecoveryEvidenceCall(project, 20, { budget: 3 });
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.reason, "build_recovery_evidence_budget_exhausted");
+
+  const afterMutation = recordRecoveryEvidenceCall(project, 21, { budget: 3 });
+  assert.equal(afterMutation.blocked, false);
+  assert.equal(afterMutation.active, false);
+});
+
+test("successful build does not activate the recovery evidence budget", () => {
+  const project = "/tmp/Demo";
+  finishBuildAttempt(project, 30, { commandSucceeded: true });
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal(recordRecoveryEvidenceCall(project, 30, { budget: 2 }).blocked, false);
+  }
 });
 
 test("validation success clears a prior validation fingerprint", () => {

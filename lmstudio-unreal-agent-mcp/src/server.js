@@ -136,6 +136,7 @@ const {
   recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
+  recordRecoveryEvidenceCall,
 } = require("./workflow-loop-guard");
 const { resolveProjectRootForFile } = require("./validate-write");
 
@@ -811,6 +812,7 @@ function buildReadEvidenceContext(target, stat, resolution, options = {}) {
     mutationGeneration: options.mutationGeneration ?? 0,
     scopeSignature: options.scopeSignature || null,
     evidenceHash: options.evidenceHash || null,
+    activeProject: resolution?.activeProject || getActiveProject(CONFIG_PATH) || null,
   };
 }
 
@@ -865,6 +867,32 @@ function prepareReadGuard(tool, args, context) {
   const normalizedArgs = normalizeReadToolArgs(tool, args);
   const decision = checkReadRepeat(tool, normalizedArgs, context);
   return { normalizedArgs, decision, ...decision };
+}
+
+function applyBuildRecoveryEvidenceGuard(tool, context = {}) {
+  const activeProject = String(context.activeProject || getActiveProject(CONFIG_PATH) || "");
+  if (!activeProject) return null;
+  const recovery = recordRecoveryEvidenceCall(
+    path.dirname(activeProject),
+    context.mutationGeneration,
+    { budget: numberEnv("MCP_BUILD_RECOVERY_EVIDENCE_BUDGET", 5, 1) }
+  );
+  if (!recovery.blocked) return null;
+  return fail("Build-recovery evidence budget exhausted without a source mutation.", {
+    errorCode: "BUILD_RECOVERY_EVIDENCE_BUDGET_EXHAUSTED",
+    retryable: false,
+    stopCurrentWorkflow: true,
+    doNotRetry: ["unreal_rag_search", "search_files", "read_file", "read_file_range", "read_symbol"],
+    evidenceReadCount: recovery.count,
+    evidenceReadBudget: recovery.budget,
+    buildFingerprint: recovery.buildFingerprint,
+    agentInstruction:
+      "Do not gather more evidence. Apply the smallest fix supported by the compiler error and existing reads, or report the blocker.",
+    nextSteps: [
+      "Patch the first actionable compiler error using evidence already returned.",
+      "If no safe patch is supported, stop and report the exact unresolved error.",
+    ],
+  });
 }
 
 function applyReadGuard(tool, guard, context) {
@@ -1825,6 +1853,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const guard = prepareReadGuard("read_file", args, readContext);
       const blocked = applyReadGuard("read_file", guard, readContext);
       if (blocked) return blocked;
+      const recoveryBlocked = applyBuildRecoveryEvidenceGuard("read_file", readContext);
+      if (recoveryBlocked) return recoveryBlocked;
 
       const detail = resolveCodeDetail(args.detailLevel);
       const tierCap = CODE_DETAIL_READ_BYTES[detail];
@@ -1873,6 +1903,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const guard = prepareReadGuard("read_file_range", args, readContext);
       const blocked = applyReadGuard("read_file_range", guard, readContext);
       if (blocked) return blocked;
+      const recoveryBlocked = applyBuildRecoveryEvidenceGuard("read_file_range", readContext);
+      if (recoveryBlocked) return recoveryBlocked;
       const normalizedArgs = guard.normalizedArgs;
 
       const detail = resolveCodeDetail(args.detailLevel);
@@ -1925,6 +1957,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const guard = prepareReadGuard("read_symbol", args, readContext);
       const blocked = applyReadGuard("read_symbol", guard, readContext);
       if (blocked) return blocked;
+      const recoveryBlocked = applyBuildRecoveryEvidenceGuard("read_symbol", readContext);
+      if (recoveryBlocked) return recoveryBlocked;
       const normalizedArgs = guard.normalizedArgs;
 
       let content;
@@ -2643,6 +2677,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const guard = prepareReadGuard("search_files", args, readContext);
       const blocked = applyReadGuard("search_files", guard, readContext);
       if (blocked) return blocked;
+      const recoveryBlocked = applyBuildRecoveryEvidenceGuard("search_files", readContext);
+      if (recoveryBlocked) return recoveryBlocked;
       const normalizedArgs = guard.normalizedArgs;
 
       const ignoreDirs = new Set([

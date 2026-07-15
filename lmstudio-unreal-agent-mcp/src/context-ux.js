@@ -364,9 +364,30 @@ function firstUsefulLine(lines) {
   return (lines || []).find((line) => String(line).trim()) || "";
 }
 
+function compactCompilerDiagnostic(line, maxChars = 360) {
+  let value = String(line || "").replace(/\s+/g, " ").trim();
+  if (!value) return "";
+
+  // Keep a portable basename/line coordinate instead of leaking a long,
+  // machine-specific absolute path into the next model prompt.
+  const source = value.match(/(?:^|[\\/])([^\\/]+\.(?:cpp|c|cc|cxx|h|hpp)\(\d+(?:,\d+)?\))/i);
+  if (source && Number.isInteger(source.index)) {
+    value = value.slice(source.index + source[0].length - source[1].length);
+  }
+
+  // A compact query needs the stable ASCII error code and C++ symbols. Localized
+  // prose remains available in fullLogPath (and verbose output) after decoding.
+  const firstNonAscii = value.search(/[^\x09\x20-\x7e]/);
+  if (firstNonAscii >= 0) value = value.slice(0, firstNonAscii).trim();
+  value = value.replace(/\ufffd+/g, " ").replace(/\s+/g, " ").replace(/\?+$/, "").trim();
+  return value.slice(0, Math.max(80, Number(maxChars) || 360));
+}
+
 function buildResponsePayload({ result, build, planResult, projectPath, command, logPath, verbose = false }) {
   const errorLines = extractLikelyCompileErrors(result.stdout, result.stderr);
-  const firstError = firstUsefulLine(errorLines);
+  const compactErrorLines = errorLines.map((line) => compactCompilerDiagnostic(line)).filter(Boolean);
+  const responseErrorLines = verbose ? errorLines : Array.from(new Set(compactErrorLines));
+  const firstError = firstUsefulLine(compactErrorLines);
   const execSummary = parseBuildExecutionSummary(result.stdout, result.stderr);
   const proof = parseBuildProof(result.ok, `${result.stdout || ""}\n${result.stderr || ""}`, { logPath });
   const upToDate = proof.targetUpToDate;
@@ -399,7 +420,7 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
     highestObservedActionIndex: proof.highestObservedActionIndex,
     proofLevel,
     responseMode: verbose ? "verbose" : "compact",
-    likelyErrors: errorLines,
+    likelyErrors: responseErrorLines,
     fullLogPath: logPath,
     error: result.error || "",
     nextSteps: [],
@@ -421,13 +442,13 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
   if (!result.ok) {
     payload.nextSteps = [
       "Fix only the first actionable compiler or linker error.",
-      "Run unreal_rag_search with mode=compile_fix and the first error line.",
+      "If API evidence is still needed, run unreal_rag_search with mode=compile_fix at most once using the compact first error.",
       "Rebuild after the smallest patch."
     ];
     if (firstError) {
       payload.suggestedToolCalls = [{
         tool: "unreal_rag_search",
-        args: { query: firstError.slice(0, 800), mode: "compile_fix", hybrid: false, top_k: 4 }
+        args: { query: firstError.slice(0, 360), mode: "compile_fix", hybrid: false, top_k: 4 }
       }];
     }
   } else if (upToDate && actionsExecuted === 0) {
@@ -571,6 +592,7 @@ module.exports = {
   compactValidationPayload,
   errorPayload,
   extractLikelyCompileErrors,
+  compactCompilerDiagnostic,
   firstErrorCluster,
   formatSessionHandoff,
   parseBuildExecutionSummary,

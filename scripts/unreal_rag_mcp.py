@@ -2192,14 +2192,20 @@ class McpServer:
             )
             structured = {
                 "ok": False,
+                "errorCode": repeat.get("errorCode") or "RAG_QUERY_REPEAT_BLOCKED",
                 "repeatDetected": True,
+                "retryable": False,
+                "stopCurrentWorkflow": True,
                 "doNotRetry": True,
+                "doNotRetryTools": ["unreal_agent_session", "unreal_rag_search"],
                 "fullContextSuppressed": True,
                 "sessionId": session_id,
                 "semanticQueryKey": precheck.get("semanticQueryKey"),
+                "topicQueryKey": precheck.get("topicQueryKey"),
                 "deliveryVariantKey": precheck.get("deliveryVariantKey"),
                 "message": repeat.get("message"),
                 "requiredNextAction": repeat.get("requiredNextAction"),
+                "agentInstruction": "Stop RAG calls. Use existing evidence or one direct project-source read, then fix or answer.",
             }
             if handoff:
                 structured["autoHandoff"] = handoff
@@ -2215,7 +2221,9 @@ class McpServer:
             active_project=active_project,
             query=request,
             mode=mode,
-            scope=resolved_scope,
+            # Match the precheck's requested scope. "auto" resolving to a
+            # concrete scope must not create a fresh repeat-history identity.
+            scope=str(arguments.get("scope") or "auto"),
             detail_level=detail,
             top_k=top_k,
             hybrid=use_hybrid,
@@ -2361,13 +2369,19 @@ class McpServer:
                 short,
                 structured={
                     "ok": False,
+                    "errorCode": repeat.get("errorCode") or "RAG_QUERY_REPEAT_BLOCKED",
                     "repeatDetected": True,
+                    "retryable": False,
+                    "stopCurrentWorkflow": True,
                     "doNotRetry": True,
+                    "doNotRetryTools": ["unreal_rag_search"],
                     "fullContextSuppressed": True,
                     "semanticQueryKey": pre_delivery.get("semanticQueryKey"),
+                    "topicQueryKey": pre_delivery.get("topicQueryKey"),
                     "deliveryVariantKey": pre_delivery.get("deliveryVariantKey"),
                     "message": repeat.get("message"),
                     "requiredNextAction": repeat.get("requiredNextAction"),
+                    "agentInstruction": "Stop RAG calls. Use existing evidence or one direct project-source read, then fix or answer.",
                 },
                 char_limit=1200,
                 is_error=True,
@@ -2444,7 +2458,9 @@ class McpServer:
             active_project=active_project,
             query=query,
             mode=mode,
-            scope=resolved_scope,
+            # Match the precheck's requested scope. "auto" resolving to a
+            # concrete scope must not bypass repeat suppression.
+            scope=scope,
             detail_level=detail,
             top_k=top_k,
             hybrid=use_hybrid,

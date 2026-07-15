@@ -12,6 +12,9 @@ const {
   assertEngineContainment,
   resolveBuildExecutable,
   spawnBuildProcess,
+  buildProcessEnv,
+  decodeBuildOutput,
+  localeOutputEncoding,
   buildArgs,
 } = require("../src/build-executor");
 
@@ -152,6 +155,32 @@ test("spawnBuildProcess uses cmd.exe for build bat", () => {
   assert.ok(Array.isArray(child.spawnargs));
   assert.strictEqual(child.spawnargs[0], "cmd.exe");
   child.kill();
+});
+
+test("build process environment requests stable English diagnostics without overriding policy", () => {
+  const defaults = buildProcessEnv({ PATH: "x" });
+  assert.strictEqual(defaults.VSLANG, "1033");
+  assert.strictEqual(defaults.DOTNET_CLI_UI_LANGUAGE, "en-US");
+
+  const explicit = buildProcessEnv({ VSLANG: "1042", DOTNET_CLI_UI_LANGUAGE: "ko-KR" });
+  assert.strictEqual(explicit.VSLANG, "1042");
+  assert.strictEqual(explicit.DOTNET_CLI_UI_LANGUAGE, "ko-KR");
+});
+
+test("build output decoder preserves UTF-8 and decodes Korean Windows output", () => {
+  assert.strictEqual(decodeBuildOutput(Buffer.from("빌드 오류", "utf8")), "빌드 오류");
+  // CP949 bytes for "오류". WHATWG's euc-kr decoder covers Windows-949.
+  assert.strictEqual(decodeBuildOutput(Buffer.from([0xbf, 0xc0, 0xb7, 0xf9]), { encoding: "cp949" }), "오류");
+  const lossyCp949 = Buffer.concat([
+    Buffer.from("error C2039: 'Empty'?", "ascii"),
+    Buffer.from([0xa4, 0xc4, 0x20, 0xa4, 0xb8]),
+  ]);
+  assert.strictEqual(
+    decodeBuildOutput(lossyCp949, { encoding: "cp949" }),
+    "error C2039: 'Empty'"
+  );
+  assert.strictEqual(localeOutputEncoding("ko-KR"), "euc-kr");
+  assert.strictEqual(localeOutputEncoding("ja-JP"), "shift_jis");
 });
 
 test("runUnrealBuildFromPlan reports timedOut", async () => {

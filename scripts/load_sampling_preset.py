@@ -172,6 +172,7 @@ def profile_edit_limits(profile: str = "") -> dict[str, Any]:
         "targetTier": str(policy.get("targetTier") or active.get("targetTier") or ""),
         "promptContract": str(policy.get("promptContract") or active.get("promptContract") or ""),
         "contextLength": int(active.get("contextLength") or 0) or None,
+        "recommendedParallelRequests": int(active.get("recommendedParallelRequests") or 1),
         "mcpEssentialTools": bool(
             policy.get("mcpEssentialTools") if "mcpEssentialTools" in policy else active.get("mcpEssentialTools", False)
         ),
@@ -216,6 +217,7 @@ def main() -> int:
                     "profile": resolve_profile_name(cfg),
                     "assemblyBudgetScale": profile.get("assemblyBudgetScale", 1.0),
                     "contextLength": profile.get("contextLength"),
+                    "recommendedParallelRequests": profile.get("recommendedParallelRequests", 1),
                     "targetTier": profile.get("targetTier", ""),
                     "defaultTopK": (profile.get("agentPolicy") or {}).get("defaultTopK") or profile.get("defaultTopK"),
                     "maxFilesPerEdit": (profile.get("agentPolicy") or {}).get("maxFilesPerEdit") or profile.get("maxFilesPerEdit"),

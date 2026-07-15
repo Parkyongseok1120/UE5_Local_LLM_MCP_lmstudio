@@ -4,7 +4,7 @@ Use with profile `qwen3_5_9b` or `qwen3_5_9b_deepseek_v4_flash`. Combine with [`
 
 **LM Studio:** enable **MCP Essential Tools** (`MCP_ESSENTIAL_TOOLS=1` in `mcp.json`).
 
-> **YaRN 32K tip:** Set context length to 32768 + RoPE scaling = yarn in LM Studio model settings for +33% usable context at same VRAM cost.
+> **Long-context tip:** Read the GGUF's `max_context_length` first. For `qwen3.5-9b-deepseek-v4-flash` (native max 262,144), use context 140,032 and Parallel 1 for a single Unreal agent. Parallel 4 is throughput-oriented and is not recommended for one long tool-calling chat.
 
 ---
 

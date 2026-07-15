@@ -63,6 +63,77 @@ function buildArgs({ kind, target, platform, configuration, projectPath }) {
   return [target, platform, configuration, `-Project=${projectPath}`, "-NoUBA", "-MaxParallelActions=4"];
 }
 
+function buildProcessEnv(baseEnv = process.env) {
+  const env = { ...baseEnv };
+  // Prefer stable ASCII diagnostics from MSVC/UBT without changing the user's
+  // global environment. The decoder below still handles localized output.
+  if (!env.VSLANG) env.VSLANG = "1033";
+  if (!env.DOTNET_CLI_UI_LANGUAGE) env.DOTNET_CLI_UI_LANGUAGE = "en-US";
+  return env;
+}
+
+function normalizeOutputEncoding(value) {
+  const label = String(value || "").trim().toLowerCase().replace(/_/g, "-");
+  const aliases = {
+    utf8: "utf-8",
+    cp949: "euc-kr",
+    "windows-949": "euc-kr",
+    cp932: "shift_jis",
+    "windows-31j": "shift_jis",
+    cp936: "gb18030",
+  };
+  return aliases[label] || label;
+}
+
+function localeOutputEncoding(locale = "") {
+  const normalized = String(locale || "").toLowerCase();
+  if (normalized.startsWith("ko")) return "euc-kr";
+  if (normalized.startsWith("ja")) return "shift_jis";
+  if (normalized.startsWith("zh-tw") || normalized.startsWith("zh-hk")) return "big5";
+  if (normalized.startsWith("zh")) return "gb18030";
+  return "euc-kr";
+}
+
+function sanitizeBrokenCompilerLocalization(text) {
+  return String(text || "").split(/\r?\n/).map((line) => {
+    // Some MSVC/UBT combinations emit already-lossy CP949 compatibility-jamo
+    // bytes. The localized prose cannot be reconstructed; retain the stable
+    // path, error code, and C++ symbols instead of returning mojibake.
+    const brokenAt = line.search(/[\u3130-\u318f\uff61-\uffdc\ufffd]/);
+    if (brokenAt < 0) return line;
+    return line.slice(0, brokenAt).replace(/\?+\s*$/, "").trimEnd();
+  }).join("\n");
+}
+
+function decodeBuildOutput(chunks, options = {}) {
+  const list = Array.isArray(chunks) ? chunks : [chunks];
+  const buffer = Buffer.concat(list.filter(Boolean).map((chunk) => Buffer.from(chunk)));
+  if (!buffer.length) return "";
+
+  try {
+    return sanitizeBrokenCompilerLocalization(
+      new TextDecoder("utf-8", { fatal: true }).decode(buffer)
+    );
+  } catch {
+    // Windows compiler output often follows the installed UI codepage.
+  }
+
+  let locale = options.locale;
+  if (!locale) {
+    try { locale = Intl.DateTimeFormat().resolvedOptions().locale; } catch { locale = ""; }
+  }
+  const requested = normalizeOutputEncoding(
+    options.encoding || process.env.MCP_BUILD_OUTPUT_ENCODING || localeOutputEncoding(locale)
+  );
+  try {
+    return sanitizeBrokenCompilerLocalization(
+      new TextDecoder(requested || "euc-kr").decode(buffer)
+    );
+  } catch {
+    return sanitizeBrokenCompilerLocalization(buffer.toString("utf8"));
+  }
+}
+
 function spawnBuildProcess({ executable, kind, args, workspaceRoot }) {
   if (kind === "build_bat") {
     return spawn("cmd.exe", ["/d", "/s", "/c", executable, ...args], {
@@ -70,6 +141,7 @@ function spawnBuildProcess({ executable, kind, args, workspaceRoot }) {
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
+      env: buildProcessEnv(),
     });
   }
   return spawn(executable, args, {
@@ -77,6 +149,7 @@ function spawnBuildProcess({ executable, kind, args, workspaceRoot }) {
     shell: false,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
+    env: buildProcessEnv(),
   });
 }
 
@@ -149,17 +222,19 @@ async function runUnrealBuildFromPlan(options = {}) {
 
   return await new Promise((resolve) => {
     const child = spawnBuildProcess({ executable, kind, args, workspaceRoot });
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks = [];
+    const stderrChunks = [];
     let settled = false;
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.stdout.on("data", (chunk) => { stdoutChunks.push(Buffer.from(chunk)); });
+    child.stderr.on("data", (chunk) => { stderrChunks.push(Buffer.from(chunk)); });
     const timer = setTimeout(async () => {
       if (settled) {
         return;
       }
       settled = true;
       await killProcessTree(child.pid);
+      const stdout = decodeBuildOutput(stdoutChunks);
+      const stderr = decodeBuildOutput(stderrChunks);
       const fullLog = `${stdout}\n${stderr}`.trim();
       let savedLogPath = logPath;
       if (savedLogPath) {
@@ -193,6 +268,8 @@ async function runUnrealBuildFromPlan(options = {}) {
       }
       settled = true;
       clearTimeout(timer);
+      const stdout = decodeBuildOutput(stdoutChunks);
+      const stderr = decodeBuildOutput(stderrChunks);
       const fullLog = `${stdout}\n${stderr}`.trim();
       let savedLogPath = logPath;
       if (savedLogPath) {
@@ -248,5 +325,9 @@ module.exports = {
   resolveUbtPath,
   resolveBuildExecutable,
   spawnBuildProcess,
+  buildProcessEnv,
+  decodeBuildOutput,
+  sanitizeBrokenCompilerLocalization,
+  localeOutputEncoding,
   buildArgs,
 };

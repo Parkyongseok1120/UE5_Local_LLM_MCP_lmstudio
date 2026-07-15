@@ -12,6 +12,7 @@ from read_query_history import (
     previous_detail_for_semantic,
     record_query_delivery,
     semantic_query_key,
+    topic_query_key,
 )
 
 
@@ -42,6 +43,13 @@ def deliver_rag_result(
         index_path=index_path,
         session_id=session_id,
     )
+    topic_key = topic_query_key(
+        tool=tool,
+        active_project=active_project,
+        query=query,
+        index_path=index_path,
+        session_id=session_id,
+    )
     delivery_key = delivery_variant_key(
         tool=tool,
         active_project=active_project,
@@ -61,12 +69,14 @@ def deliver_rag_result(
         previous_detail=prev_detail,
         current_detail=detail_level,
         semantic_key=semantic_key,
+        topic_key=topic_key,
         continuation_token=continuation_token,
     )
     if repeat.get("repeatDetected"):
         return {
             "ok": False,
             "semanticQueryKey": semantic_key,
+            "topicQueryKey": topic_key,
             "deliveryVariantKey": delivery_key,
             "fingerprint": delivery_key,
             "repeat": repeat,
@@ -78,6 +88,7 @@ def deliver_rag_result(
     payload = {
         "ok": True,
         "semanticQueryKey": semantic_key,
+        "topicQueryKey": topic_key,
         "deliveryVariantKey": delivery_key,
         "fingerprint": delivery_key,
         "repeat": repeat,
@@ -96,6 +107,7 @@ def deliver_rag_result(
             index_path=index_path,
             session_id=session_id,
             semantic_key=semantic_key,
+            topic_key=topic_key,
         )
         if row_list:
             from read_query_history import issue_continuation_token

@@ -29,6 +29,7 @@ function stateFor(projectRoot, mutationGeneration) {
       buildAttempted: false,
       buildFailed: false,
       buildFingerprint: "",
+      recoveryEvidenceCount: 0,
     };
     projectStates.set(key, state);
   }
@@ -110,7 +111,39 @@ function finishBuildAttempt(projectRoot, mutationGeneration, outcome) {
   state.buildAttempted = true;
   state.buildFailed = outcome?.commandSucceeded !== true;
   state.buildFingerprint = state.buildFailed ? buildFingerprint(outcome) : "";
+  state.recoveryEvidenceCount = 0;
   return state;
+}
+
+/**
+ * Limit source-evidence wandering after a failed build. A mutation generation
+ * change creates a fresh state, so the budget never carries across a real fix.
+ */
+function recordRecoveryEvidenceCall(projectRoot, mutationGeneration, options = {}) {
+  const state = stateFor(projectRoot, mutationGeneration);
+  const parsedBudget = Number(options.budget);
+  const budget = Number.isFinite(parsedBudget) ? Math.max(1, Math.floor(parsedBudget)) : 5;
+  if (!state.buildFailed) {
+    return { blocked: false, active: false, count: 0, budget };
+  }
+  if (state.recoveryEvidenceCount >= budget) {
+    return {
+      blocked: true,
+      active: true,
+      count: state.recoveryEvidenceCount,
+      budget,
+      reason: "build_recovery_evidence_budget_exhausted",
+      buildFingerprint: state.buildFingerprint,
+    };
+  }
+  state.recoveryEvidenceCount += 1;
+  return {
+    blocked: false,
+    active: true,
+    count: state.recoveryEvidenceCount,
+    budget,
+    buildFingerprint: state.buildFingerprint,
+  };
 }
 
 function resetWorkflowLoopGuardForTests() {
@@ -125,5 +158,6 @@ module.exports = {
   recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
+  recordRecoveryEvidenceCall,
   resetWorkflowLoopGuardForTests,
 };

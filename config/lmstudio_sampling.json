@@ -249,9 +249,11 @@
       }
     },
     "qwen3_5_9b_deepseek_v4_flash": {
-      "contextLength": 24576,
-      "_contextNote": "YaRN 32K: same as qwen3_5_9b — set contextLength 32768 + RoPE yarn in LM Studio for extended context.",
-      "contextLengthVariant_yarn32k": 32768,
+      "contextLength": 140032,
+      "_contextNote": "This qwen35 GGUF reports maxContextLength=262144. Use 140032 for long single-agent sessions and Parallel=1 to avoid four concurrent slot/checkpoint chains; lower context only when another PC lacks RAM/VRAM.",
+      "contextLengthVariant_portable_64k": 65536,
+      "contextLengthVariant_native_max": 262144,
+      "recommendedParallelRequests": 1,
       "assemblyBudgetScale": 0.78,
       "targetTier": "compact_sonnet_4_5_track",
       "promptContract": "flash_reasoning_compact_patch",

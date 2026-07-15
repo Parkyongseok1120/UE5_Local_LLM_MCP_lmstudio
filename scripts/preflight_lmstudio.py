@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -35,6 +36,34 @@ def fetch_lmstudio_model_ids(url: str, timeout: float | None = None) -> list[str
     return [str(m.get("id") or m) for m in models]
 
 
+def fetch_lmstudio_models_v0(url: str, timeout: float | None = None) -> list[dict]:
+    """Return LM Studio model rows including loaded/max context when available."""
+    if timeout is None:
+        timeout = PREFLIGHT_TIMEOUT
+    base = url.rstrip("/").removesuffix("/v1")
+    req = Request(f"{base}/api/v0/models", method="GET")
+    with urlopen(req, timeout=timeout) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    rows = payload.get("models") or payload.get("data") or []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def fetch_lms_loaded_models(timeout: float | None = None) -> list[dict]:
+    """Read LM Studio load-time context/parallel values when the lms CLI is installed."""
+    try:
+        completed = subprocess.run(
+            ["lms", "ps", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout if timeout is not None else PREFLIGHT_TIMEOUT,
+        )
+        payload = json.loads(completed.stdout or "[]") if completed.returncode == 0 else []
+        return [row for row in payload if isinstance(row, dict)] if isinstance(payload, list) else []
+    except (FileNotFoundError, OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
+        return []
+
+
 def is_embedding_model(model_id: str) -> bool:
     lower = model_id.lower()
     return any(marker in lower for marker in EMBED_MARKERS)
@@ -59,12 +88,8 @@ def resolve_loaded_chat_model(url: str, requested: str = "", timeout: float | No
     if requested and requested not in AUTO_MODEL_ALIASES:
         return requested
     _timeout = timeout if timeout is not None else PREFLIGHT_TIMEOUT
-    base = url.rstrip("/").removesuffix("/v1")
     try:
-        req = Request(f"{base}/api/v0/models", method="GET")
-        with urlopen(req, timeout=_timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        models = payload.get("models") or payload.get("data") or []
+        models = fetch_lmstudio_models_v0(url, timeout=_timeout)
         if isinstance(models, list):
             for row in models:
                 if str(row.get("state") or "").lower() != "loaded":
@@ -95,6 +120,35 @@ def check_lmstudio(url: str, model: str = "", timeout: float = 5.0) -> dict:
         chat_ids = [mid for mid in ids if not is_embedding_model(mid)]
         resolved = resolve_loaded_chat_model(base, model, timeout=timeout)
         result["resolvedModel"] = resolved
+        try:
+            v0_rows = fetch_lmstudio_models_v0(base, timeout=timeout)
+        except Exception:
+            v0_rows = []
+        loaded_row = next(
+            (row for row in v0_rows if str(row.get("state") or "").lower() == "loaded"
+             and str(row.get("id") or row.get("path") or "") == resolved),
+            None,
+        )
+        if loaded_row:
+            loaded_context = int(loaded_row.get("loaded_context_length") or 0)
+            max_context = int(loaded_row.get("max_context_length") or 0)
+            result["loadedContextLength"] = loaded_context or None
+            result["maxContextLength"] = max_context or None
+            result["contextConfigured"] = bool(loaded_context and max_context and loaded_context <= max_context)
+            result["contextHeadroom"] = max(0, max_context - loaded_context) if max_context else None
+        loaded_cli = next(
+            (row for row in fetch_lms_loaded_models(timeout=timeout)
+             if str(row.get("identifier") or row.get("modelKey") or "") == resolved),
+            None,
+        )
+        if loaded_cli:
+            parallel = int(loaded_cli.get("parallel") or 1)
+            result["parallelRequests"] = parallel
+            result["recommendedParallelRequests"] = 1
+            if parallel > 1 and int(result.get("loadedContextLength") or 0) >= 65536:
+                result["longContextSingleAgentWarning"] = (
+                    "Parallel > 1 is throughput-oriented. Reload with Parallel=1 for one long tool-calling chat."
+                )
         if model in AUTO_MODEL_ALIASES:
             result["modelOk"] = bool(chat_ids)
         elif model:
@@ -120,7 +174,10 @@ def main() -> int:
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     elif report.get("ok"):
-        print(f"LM Studio OK at {report['url']} ({report['modelCount']} models)")
+        context = ""
+        if report.get("loadedContextLength"):
+            context = f", context {report['loadedContextLength']}/{report.get('maxContextLength') or '?'}"
+        print(f"LM Studio OK at {report['url']} ({report['modelCount']} models{context})")
     else:
         err = report.get("error") or "unreachable"
         print(f"LM Studio not ready: {err}", file=sys.stderr)

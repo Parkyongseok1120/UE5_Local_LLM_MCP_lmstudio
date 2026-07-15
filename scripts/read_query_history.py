@@ -13,14 +13,44 @@ from typing import Any
 _HISTORY: dict[str, dict[str, Any]] = {}
 _HISTORY_ORDER: list[str] = []
 _SEMANTIC_INDEX: dict[str, list[str]] = {}
+_TOPIC_INDEX: dict[str, list[str]] = {}
 _CONTINUATION_TOKENS: dict[str, str] = {}
 TTL_SECONDS = 30 * 60
 MAX_ENTRIES = 128
 CONTINUATION_TTL_SECONDS = 15 * 60
+TOPIC_DELIVERY_LIMIT = 2
+
+
+_UE_TYPE_RE = re.compile(r"\b[UAFSTIE][A-Z][A-Za-z0-9_]{3,}\b")
+_QUOTED_IDENTIFIER_RE = re.compile(r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]")
+_CALLED_IDENTIFIER_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+
+
+def _api_signature(query: str) -> tuple[str, str]:
+    """Return a stable API query signature and its broader UE type topic."""
+    source = query or ""
+    types = sorted({item.lower() for item in _UE_TYPE_RE.findall(source)})
+    if not types:
+        return "", ""
+
+    quoted = {item.lower() for item in _QUOTED_IDENTIFIER_RE.findall(source)}
+    called = {item.lower() for item in _CALLED_IDENTIFIER_RE.findall(source)}
+    type_set = set(types)
+    file_suffixes = {"c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx"}
+    members = sorted(((quoted | called) - type_set) - file_suffixes)
+    # Compiler diagnostics often quote both the missing member and owning UE type.
+    # Keeping that pair makes translated/mojibake prose irrelevant to repeat identity.
+    signature = "api:" + "|".join(types + members[:4])
+    topic = "api-topic:" + "|".join(types[:3])
+    return signature, topic
 
 
 def _normalize_query(query: str) -> str:
-    text = re.sub(r"\s+", " ", (query or "").strip().lower())
+    api_signature, _ = _api_signature(query)
+    if api_signature:
+        return api_signature
+    text = re.sub(r"[^\w:.+-]+", " ", (query or "").strip().lower(), flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text)
     return text[:512]
 
 
@@ -41,6 +71,11 @@ def _prune_expired() -> None:
                 _SEMANTIC_INDEX[semantic] = [item for item in _SEMANTIC_INDEX[semantic] if item != key]
                 if not _SEMANTIC_INDEX[semantic]:
                     _SEMANTIC_INDEX.pop(semantic, None)
+            topic = str(entry.get("topicQueryKey") or "")
+            if topic in _TOPIC_INDEX:
+                _TOPIC_INDEX[topic] = [item for item in _TOPIC_INDEX[topic] if item != key]
+                if not _TOPIC_INDEX[topic]:
+                    _TOPIC_INDEX.pop(topic, None)
 
 
 def _touch(key: str) -> None:
@@ -54,6 +89,11 @@ def _touch(key: str) -> None:
             semantic = str(entry.get("semanticQueryKey") or "")
             if semantic in _SEMANTIC_INDEX:
                 _SEMANTIC_INDEX[semantic] = [item for item in _SEMANTIC_INDEX[semantic] if item != oldest]
+            topic = str(entry.get("topicQueryKey") or "")
+            if topic in _TOPIC_INDEX:
+                _TOPIC_INDEX[topic] = [item for item in _TOPIC_INDEX[topic] if item != oldest]
+                if not _TOPIC_INDEX[topic]:
+                    _TOPIC_INDEX.pop(topic, None)
 
 
 def index_fingerprint(index_path: Path) -> str:
@@ -87,6 +127,30 @@ def semantic_query_key(
         "query": _normalize_query(query),
         "mode": (mode or "auto").strip().lower(),
         "scope": (scope or "auto").strip().lower(),
+        "indexPath": index_path_identity(index_path),
+        "indexFingerprint": index_fingerprint(index_path),
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def topic_query_key(
+    *,
+    tool: str,
+    active_project: str,
+    query: str,
+    index_path: Path,
+    session_id: str = "",
+) -> str:
+    """Broader per-session UE API topic used to cap query paraphrase loops."""
+    _, topic = _api_signature(query)
+    if not topic:
+        return ""
+    payload = {
+        "tool": tool,
+        "activeProject": active_project or "",
+        "sessionId": session_id or "",
+        "topic": topic,
         "indexPath": index_path_identity(index_path),
         "indexFingerprint": index_fingerprint(index_path),
     }
@@ -161,6 +225,8 @@ def check_repeat_query(
     previous_detail: str | None = None,
     current_detail: str | None = None,
     semantic_key: str = "",
+    topic_key: str = "",
+    topic_delivery_limit: int = TOPIC_DELIVERY_LIMIT,
     continuation_token: str = "",
 ) -> dict[str, Any]:
     _prune_expired()
@@ -225,6 +291,22 @@ def check_repeat_query(
         entry = _HISTORY.get(key)
         if _terminal_entry(entry):
             return _repeat_payload(entry, key)
+
+    topic_deliveries = [
+        _HISTORY[key]
+        for key in _TOPIC_INDEX.get(topic_key, [])
+        if key in _HISTORY and _terminal_entry(_HISTORY.get(key))
+    ] if topic_key else []
+    if len(topic_deliveries) >= max(1, int(topic_delivery_limit)):
+        payload = _repeat_payload(topic_deliveries[-1], topic_key)
+        payload.update({
+            "errorCode": "RAG_TOPIC_BUDGET_EXHAUSTED",
+            "message": "This UE API topic already used the allowed RAG evidence budget.",
+            "requiredNextAction": "use_existing_evidence_or_project_source_then_fix",
+            "topicQueryKey": topic_key,
+            "topicDeliveryCount": len(topic_deliveries),
+        })
+        return payload
     return {"repeatDetected": False, "doNotRetry": False, "fullContextSuppressed": False}
 
 
@@ -277,6 +359,7 @@ def record_query_delivery(
     index_path: Path | None = None,
     session_id: str = "",
     semantic_key: str = "",
+    topic_key: str = "",
 ) -> None:
     _prune_expired()
     semantic = semantic_key or fingerprint
@@ -295,12 +378,17 @@ def record_query_delivery(
         "indexFingerprint": index_fingerprint(index_path) if index_path else "",
         "indexPath": index_path_identity(index_path) if index_path else "",
         "semanticQueryKey": semantic,
+        "topicQueryKey": topic_key,
         "deliveryVariantKey": fingerprint,
         "timestamp": _now(),
     }
     _SEMANTIC_INDEX.setdefault(semantic, [])
     if fingerprint not in _SEMANTIC_INDEX[semantic]:
         _SEMANTIC_INDEX[semantic].append(fingerprint)
+    if topic_key:
+        _TOPIC_INDEX.setdefault(topic_key, [])
+        if fingerprint not in _TOPIC_INDEX[topic_key]:
+            _TOPIC_INDEX[topic_key].append(fingerprint)
     _touch(fingerprint)
 
 
@@ -308,6 +396,7 @@ def reset_query_history() -> None:
     _HISTORY.clear()
     _HISTORY_ORDER.clear()
     _SEMANTIC_INDEX.clear()
+    _TOPIC_INDEX.clear()
     _CONTINUATION_TOKENS.clear()
 
 
@@ -325,6 +414,11 @@ def reset_query_history_for_index(index_path: Path) -> int:
             semantic = str(entry.get("semanticQueryKey") or "")
             if semantic in _SEMANTIC_INDEX:
                 _SEMANTIC_INDEX[semantic] = [item for item in _SEMANTIC_INDEX[semantic] if item != key]
+            topic = str(entry.get("topicQueryKey") or "")
+            if topic in _TOPIC_INDEX:
+                _TOPIC_INDEX[topic] = [item for item in _TOPIC_INDEX[topic] if item != key]
+                if not _TOPIC_INDEX[topic]:
+                    _TOPIC_INDEX.pop(topic, None)
     for key in drop:
         if key in _HISTORY_ORDER:
             _HISTORY_ORDER.remove(key)
