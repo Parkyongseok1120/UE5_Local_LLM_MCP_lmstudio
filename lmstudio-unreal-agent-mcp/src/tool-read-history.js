@@ -24,7 +24,7 @@ const DEFAULT_NON_RANGE_BUDGET = 8;
 
 // evidenceKey -> { content, at, tool, attempts, lineRange }
 const successCache = new Map();
-// fileVersionKey -> { ranges: [{start,end}], nonRangeCount, stagnationCount, lastKey }
+// fileVersionKey -> { ranges, nonRangeCount, stagnationCount, coveredRepeatCount, lastKey }
 const fileCoverage = new Map();
 const recentKeys = [];
 // stagnationKey -> { count, at }
@@ -177,13 +177,25 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
 
   const prior = successCache.get(key);
   if (prior) {
+    prior.attempts += 1;
+    if (prior.attempts >= 3) {
+      return {
+        action: "stagnation",
+        repeat: true,
+        reason: "EVIDENCE_STAGNATION",
+        key,
+        attempts: prior.attempts,
+        escalated: true,
+        exactRepeat: true,
+      };
+    }
     return {
       action: "cache",
       repeat: true,
       reason: "READ_REPEAT_DETECTED",
       key,
       cachedContent: prior.content,
-      attempts: prior.attempts + 1,
+      attempts: prior.attempts,
       firstReadAt: prior.at,
     };
   }
@@ -193,6 +205,21 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
     const priorRanges = coverage ? coverage.ranges : [];
     if (isFullyCovered(requested, priorRanges)) {
       const covering = findCoveringCachedContent(requested, versionKey);
+      if (coverage) {
+        coverage.coveredRepeatCount = (coverage.coveredRepeatCount || 0) + 1;
+        fileCoverage.set(versionKey, coverage);
+        if (coverage.coveredRepeatCount >= 2) {
+          return {
+            action: "stagnation",
+            repeat: true,
+            reason: "EVIDENCE_STAGNATION",
+            key,
+            attempts: coverage.coveredRepeatCount + 1,
+            fullyCovered: true,
+            coveredBy: priorRanges,
+          };
+        }
+      }
       return {
         action: "cache",
         repeat: true,
@@ -258,6 +285,7 @@ function recordReadStagnation(tool, args, context = {}, options = {}) {
       ranges: [],
       nonRangeCount: 0,
       stagnationCount: 0,
+      coveredRepeatCount: 0,
       lastKey: null,
     };
     coverage.stagnationCount = (coverage.stagnationCount || 0) + 1;
@@ -303,10 +331,12 @@ function recordReadSuccess(tool, args, context = {}, content, options = {}) {
       ranges: [],
       nonRangeCount: 0,
       stagnationCount: 0,
+      coveredRepeatCount: 0,
       lastKey: null,
     };
     if (lineRange) {
       coverage.ranges = mergeRanges([...coverage.ranges, lineRange]);
+      coverage.coveredRepeatCount = 0;
     } else {
       coverage.nonRangeCount += 1;
     }

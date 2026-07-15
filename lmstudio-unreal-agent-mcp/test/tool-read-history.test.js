@@ -46,6 +46,11 @@ test("identical successful read returns cached repeat on second call", () => {
   assert.strictEqual(second.action, "cache");
   assert.strictEqual(second.reason, "READ_REPEAT_DETECTED");
   assert.strictEqual(second.cachedContent, content);
+
+  const third = checkReadRepeat(tool, args, CONTEXT);
+  assert.strictEqual(third.action, "stagnation");
+  assert.strictEqual(third.reason, "EVIDENCE_STAGNATION");
+  assert.strictEqual(third.attempts, 3);
 });
 
 test("changed file version allows the same range to be read again", () => {
@@ -95,6 +100,28 @@ test("fully covered sub-range is cache/covered, not stagnation with wrong body",
   assert.strictEqual(decision.reason, "READ_REPEAT_DETECTED");
   assert.strictEqual(decision.fullyCovered, true);
   assert.strictEqual(decision.cachedContent, "wide-100-200");
+});
+
+test("different fully covered sub-ranges share one file stagnation budget", () => {
+  clearReadSuccessHistory();
+  const tool = "read_file_range";
+  const wide = normalizeReadToolArgs(tool, { path: "Source/Foo.cpp", startLine: 1, endLine: 200 });
+  recordReadSuccess(tool, wide, CONTEXT, "wide-1-200");
+
+  const firstNested = normalizeReadToolArgs(
+    tool,
+    { path: "Source/Foo.cpp", startLine: 20, endLine: 80 }
+  );
+  const secondNested = normalizeReadToolArgs(
+    tool,
+    { path: "Source/Foo.cpp", startLine: 90, endLine: 140 }
+  );
+
+  assert.strictEqual(checkReadRepeat(tool, firstNested, CONTEXT).action, "cache");
+  const blocked = checkReadRepeat(tool, secondNested, CONTEXT);
+  assert.strictEqual(blocked.action, "stagnation");
+  assert.strictEqual(blocked.reason, "EVIDENCE_STAGNATION");
+  assert.strictEqual(blocked.fullyCovered, true);
 });
 
 test("novelLineCount and mergeRanges cover unions", () => {

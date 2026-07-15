@@ -24,6 +24,8 @@ function stateFor(projectRoot, mutationGeneration) {
       mutationGeneration: generation,
       validationFingerprint: "",
       validationFailureCount: 0,
+      buildGateFailureCode: "",
+      buildGateFailureCount: 0,
       buildAttempted: false,
       buildFailed: false,
       buildFingerprint: "",
@@ -75,6 +77,20 @@ function recordValidationSuccess(projectRoot, mutationGeneration) {
   return state;
 }
 
+function recordBuildGateFailure(projectRoot, mutationGeneration, errorCode) {
+  const state = stateFor(projectRoot, mutationGeneration);
+  const normalizedCode = String(errorCode || "BUILD_GATE_FAILED");
+  const repeated = state.buildGateFailureCount > 0 && state.buildGateFailureCode === normalizedCode;
+  state.buildGateFailureCode = normalizedCode;
+  state.buildGateFailureCount = repeated ? state.buildGateFailureCount + 1 : 1;
+  return {
+    blocked: repeated,
+    reason: repeated ? "same_build_gate_failure" : "",
+    errorCode: normalizedCode,
+    mutationGeneration: state.mutationGeneration,
+  };
+}
+
 function beginBuildAttempt(projectRoot, mutationGeneration) {
   const state = stateFor(projectRoot, mutationGeneration);
   if (state.buildAttempted) {
@@ -106,6 +122,7 @@ module.exports = {
   buildFingerprint,
   recordValidationFailure,
   recordValidationSuccess,
+  recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
   resetWorkflowLoopGuardForTests,

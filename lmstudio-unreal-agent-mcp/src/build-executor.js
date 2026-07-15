@@ -5,8 +5,6 @@ const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
 
-const DEFAULT_EXPECTED_ENGINE = "5.8";
-
 function normalizeVersion(value) {
   const match = String(value || "").match(/(\d+\.\d+)/);
   return match ? match[1] : "";
@@ -17,6 +15,21 @@ function parseEngineVersionFromRoot(engineRoot) {
   const fromFolder = folder.match(/^UE_(\d+(?:\.\d+)?)$/i);
   if (fromFolder) return normalizeVersion(fromFolder[1]);
   return normalizeVersion(String(engineRoot || ""));
+}
+
+async function detectEngineVersion(engineRoot) {
+  const buildVersionPath = path.join(engineRoot, "Engine", "Build", "Build.version");
+  try {
+    const parsed = JSON.parse(await fsp.readFile(buildVersionPath, "utf8"));
+    const major = Number(parsed.MajorVersion);
+    const minor = Number(parsed.MinorVersion);
+    if (Number.isInteger(major) && Number.isInteger(minor)) {
+      return `${major}.${minor}`;
+    }
+  } catch {
+    // Installed/source builds can omit Build.version. The root name is a useful fallback.
+  }
+  return parseEngineVersionFromRoot(engineRoot);
 }
 
 function resolveUbtPath(engineRoot) {
@@ -93,7 +106,7 @@ async function runUnrealBuildFromPlan(options = {}) {
     workspaceRoot,
     build,
     allowEngineFallback = false,
-    expectedEngineVersion = DEFAULT_EXPECTED_ENGINE,
+    expectedEngineVersion = "",
     timeoutMs = 45 * 60 * 1000,
     logPath = "",
   } = options;
@@ -103,10 +116,11 @@ async function runUnrealBuildFromPlan(options = {}) {
   }
 
   const resolvedEngineRoot = path.resolve(build.engineRoot);
-  const resolvedVersion = normalizeVersion(
-    build.engineAssociation || parseEngineVersionFromRoot(resolvedEngineRoot)
+  const resolvedVersion = normalizeVersion(await detectEngineVersion(resolvedEngineRoot));
+  const projectVersion = normalizeVersion(
+    build.requestedEngineAssociation || build.engineAssociation
   );
-  const expectedVersion = normalizeVersion(expectedEngineVersion);
+  const expectedVersion = normalizeVersion(expectedEngineVersion) || projectVersion;
   const engineMismatch = Boolean(expectedVersion && resolvedVersion && resolvedVersion !== expectedVersion);
   if (engineMismatch && !allowEngineFallback) {
     return {
@@ -114,9 +128,11 @@ async function runUnrealBuildFromPlan(options = {}) {
       commandSucceeded: false,
       engineMismatch: true,
       resolvedEngineVersion: resolvedVersion,
+      expectedEngineVersion: expectedVersion,
+      requestedEngineAssociation: build.requestedEngineAssociation || build.engineAssociation || null,
       resolvedEngineRoot,
       resolvedUbtPath: resolveUbtPath(resolvedEngineRoot),
-      error: `Engine version mismatch: expected ${expectedVersion}, resolved ${resolvedVersion}`,
+      error: `Engine version mismatch: project or policy expects ${expectedVersion}, resolved engine is ${resolvedVersion}`,
       errorCode: "ENGINE_VERSION_MISMATCH",
     };
   }
@@ -158,6 +174,8 @@ async function runUnrealBuildFromPlan(options = {}) {
         errorCode: "BUILD_TIMEOUT",
         error: `Build timed out after ${timeoutMs}ms`,
         resolvedEngineVersion: resolvedVersion,
+        expectedEngineVersion: expectedVersion,
+        requestedEngineAssociation: build.requestedEngineAssociation || build.engineAssociation || null,
         resolvedEngineRoot,
         resolvedUbtPath: resolveUbtPath(resolvedEngineRoot),
         engineMismatch,
@@ -187,6 +205,8 @@ async function runUnrealBuildFromPlan(options = {}) {
         timedOut: false,
         exitCode: code ?? 1,
         resolvedEngineVersion: resolvedVersion,
+        expectedEngineVersion: expectedVersion,
+        requestedEngineAssociation: build.requestedEngineAssociation || build.engineAssociation || null,
         resolvedEngineRoot,
         resolvedUbtPath: resolveUbtPath(resolvedEngineRoot),
         engineMismatch,
@@ -210,6 +230,8 @@ async function runUnrealBuildFromPlan(options = {}) {
         timedOut: false,
         error: String(err.message || err),
         resolvedEngineVersion: resolvedVersion,
+        expectedEngineVersion: expectedVersion,
+        requestedEngineAssociation: build.requestedEngineAssociation || build.engineAssociation || null,
         resolvedEngineRoot,
         resolvedUbtPath: resolveUbtPath(resolvedEngineRoot),
       });
@@ -219,9 +241,9 @@ async function runUnrealBuildFromPlan(options = {}) {
 
 module.exports = {
   runUnrealBuildFromPlan,
-  DEFAULT_EXPECTED_ENGINE,
   normalizeVersion,
   parseEngineVersionFromRoot,
+  detectEngineVersion,
   assertEngineContainment,
   resolveUbtPath,
   resolveBuildExecutable,

@@ -109,7 +109,7 @@ def should_ignore_project_path(path: Path) -> bool:
 
 
 def iter_source_files(root: Path, *, scan_roots: list[Path] | None = None) -> list[Path]:
-    suffixes = {".h", ".hpp", ".cpp", ".c", ".cc", ".cs"}
+    suffixes = {".h", ".hpp", ".inl", ".cpp", ".c", ".cc", ".cs"}
     try:
         from plugin_project_context import iter_scan_root_files
     except Exception:
@@ -619,12 +619,19 @@ def validate_delegate_broadcast_consistency(
     if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
         return findings
     arity_map = arity_map or {}
-    for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\.Broadcast\s*\(\s*\)", text):
+    masked = mask_comments_and_strings(text)
+    for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\.Broadcast\s*\(", masked):
         member_name = match.group(1)
-        # Unknown delegate declaration or a genuinely zero-param delegate: don't guess.
-        # Blocking a write on an uncertain match would be a worse UX outcome than
-        # missing a real mismatch here (the model still gets caught at UBT build time).
-        if not arity_map.get(member_name):
+        if member_name not in arity_map:
+            continue
+        open_index = masked.find("(", match.start())
+        close_index = find_balanced_parens(masked, open_index)
+        if close_index < 0:
+            continue
+        args = _split_top_level_args(masked[open_index + 1 : close_index])
+        expected_arity = arity_map[member_name]
+        actual_arity = len(args)
+        if actual_arity == expected_arity:
             continue
         line_no = text[: match.start()].count("\n") + 1
         findings.append(
@@ -633,7 +640,7 @@ def validate_delegate_broadcast_consistency(
                 str(path.relative_to(root)),
                 line_no,
                 "DELEGATE_BROADCAST_SIGNATURE_MISMATCH",
-                "Delegate Broadcast() is missing required payload arguments.",
+                f"{member_name}.Broadcast(...) passes {actual_arity} argument(s), but its declared delegate requires {expected_arity}.",
             )
         )
     return findings
@@ -1240,7 +1247,7 @@ def validate_component_timer_manager(path: Path, text: str, root: Path, bases: d
 
 
 def find_build_cs_files(root: Path) -> list[Path]:
-    return [path for path in root.rglob("*.Build.cs") if path.is_file() and not should_ignore_project_path(path)]
+    return sorted(path for path in root.rglob("*.Build.cs") if path.is_file() and not should_ignore_project_path(path))
 
 
 def build_cs_text(root: Path) -> str:
@@ -1279,7 +1286,11 @@ def load_include_owner_map(path: Path) -> dict[str, list[str]]:
             if metadata.get("symbol_kind") != "include_owner":
                 continue
             include_path = str(metadata.get("include_path") or metadata.get("symbol_name") or "")
-            owner_modules = [str(value) for value in metadata.get("owner_modules") or [] if value]
+            owner_modules = [
+                str(value)
+                for value in metadata.get("owner_modules") or []
+                if value and str(value).casefold() != "source"
+            ]
             if not include_path or not owner_modules:
                 continue
             keys = {
@@ -1394,6 +1405,35 @@ def _is_class_definition(text: str, class_start: int) -> bool:
     if brace == -1:
         return False
     return semi == -1 or brace < semi
+
+
+def _class_definition_span(text: str, class_start: int) -> tuple[int, int] | None:
+    masked = mask_comments_and_strings(text)
+    brace = masked.find("{", class_start)
+    if brace < 0:
+        return None
+    depth = 0
+    for index in range(brace, len(masked)):
+        token = masked[index]
+        if token == "{":
+            depth += 1
+        elif token == "}":
+            depth -= 1
+            if depth == 0:
+                return class_start, index + 1
+    return None
+
+
+def _class_definition_text(text: str, class_name: str) -> tuple[str, int] | None:
+    pattern = re.compile(rf"\bclass\s+(?:[A-Z0-9_]+_API\s+)?{re.escape(class_name)}\b")
+    for match in pattern.finditer(text):
+        if not _is_class_definition(text, match.start()):
+            continue
+        span = _class_definition_span(text, match.start())
+        if span:
+            start, end = span
+            return text[start:end], start
+    return None
 
 
 def class_headers(root: Path) -> dict[str, str]:
@@ -1537,7 +1577,7 @@ def collect_blueprint_native_event_declarations(root: Path) -> list[tuple[str, s
                         break
                 declaration = " ".join(declaration_parts)
                 name_match = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", declaration)
-                if current_class and name_match:
+                if current_class and not current_class.startswith("I") and name_match:
                     declarations.append((current_class, name_match.group(1), path, index + 1))
                 index = cursor
                 continue
@@ -1622,11 +1662,15 @@ def validate_cpp_definitions_missing(
                 if path.suffix.lower() in {".h", ".hpp"} and class_name in read_text(path):
                     header_path = path
                     break
-        for match in method_decl_re.finditer(header_text):
+        class_definition = _class_definition_text(header_text, class_name)
+        if class_definition is None:
+            continue
+        class_text, class_offset = class_definition
+        for match in method_decl_re.finditer(class_text):
             func_name = match.group("func")
             if func_name.startswith("~") or func_name in UE_DECLARATION_MACROS:
                 continue
-            window = header_text[max(0, match.start() - 240) : match.start()]
+            window = class_text[max(0, match.start() - 240) : match.start()]
             if "BlueprintImplementableEvent" in window:
                 continue
             impl_name = func_name
@@ -1641,7 +1685,7 @@ def validate_cpp_definitions_missing(
                 Finding(
                     "error",
                     str(header_path.relative_to(root)),
-                    line_number(header_text, match.start()),
+                    line_number(header_text, class_offset + match.start()),
                     "CPP_DEFINITION_MISSING",
                     f"{class_name}::{impl_name} is declared in the header but has no matching .cpp definition.",
                 )
@@ -1754,7 +1798,14 @@ def validate_replication_setup(
     return findings
 
 
-def validate_build_modules(root: Path, source_text: str, build_text_value: str) -> list[Finding]:
+def validate_build_modules(
+    root: Path,
+    source_text: str = "",
+    build_text_value: str = "",
+    *,
+    scope_paths: list[Path] | None = None,
+    scope_texts: dict[Path, str] | None = None,
+) -> list[Finding]:
     findings: list[Finding] = []
     module_rules = {
         "GameplayTags": ("FGameplayTag", "FGameplayTagContainer", "UGameplayTagsManager"),
@@ -1767,13 +1818,12 @@ def validate_build_modules(root: Path, source_text: str, build_text_value: str) 
         "MovieScene": ("MovieScene.h", "UMovieScene", "FMovieScene"),
         "LevelSequence": ("LevelSequence.h", "ULevelSequence", "ALevelSequenceActor"),
     }
-    build_files = find_build_cs_files(root)
-    rel = str(build_files[0].relative_to(root)) if build_files else "Source/*.Build.cs"
-    declared_modules = declared_build_modules(build_text_value)
-    for module_name, tokens in module_rules.items():
-        if module_name in declared_modules:
-            continue
-        if any(token in source_text for token in tokens):
+
+    def append_missing_modules(module_source: str, module_build: str, rel: str) -> None:
+        declared_modules = declared_build_modules(module_build)
+        for module_name, tokens in module_rules.items():
+            if module_name in declared_modules or not any(token in module_source for token in tokens):
+                continue
             severity = "error" if module_name == "GameplayTags" else "warning"
             findings.append(
                 Finding(
@@ -1781,9 +1831,53 @@ def validate_build_modules(root: Path, source_text: str, build_text_value: str) 
                     rel,
                     1,
                     "POSSIBLE_MISSING_MODULE",
-                    f"Code appears to use {module_name} types; verify Build.cs dependencies.",
+                    f"Code in this module appears to use {module_name} types; add or verify the dependency in this Build.cs.",
                 )
             )
+
+    build_files = find_build_cs_files(root)
+    if not build_files:
+        append_missing_modules(source_text, build_text_value, "Source/*.Build.cs")
+        return findings
+
+    all_source_paths = [
+        path.resolve()
+        for path in iter_source_files(root)
+        if path.suffix.lower() in SOURCE_ONLY_SUFFIXES
+    ]
+    scoped_paths = [Path(path).resolve() for path in scope_paths] if scope_paths is not None else None
+    scoped_text_by_path = {
+        Path(path).resolve(): text for path, text in (scope_texts or {}).items()
+    }
+
+    for build_file in build_files:
+        build_file = build_file.resolve()
+        module_root = build_file.parent
+        module_paths = [
+            path for path in all_source_paths if _source_module_root(path, root) == module_root
+        ]
+        if scoped_paths is not None:
+            scoped_module_paths = [
+                path
+                for path in scoped_paths
+                if path.suffix.lower() in SOURCE_ONLY_SUFFIXES
+                and _source_module_root(path, root) == module_root
+            ]
+            build_file_is_scoped = build_file in scoped_paths
+            if not scoped_module_paths and not build_file_is_scoped:
+                continue
+            if not build_file_is_scoped:
+                module_paths = scoped_module_paths
+
+        module_source = "\n".join(
+            scoped_text_by_path[path] if path in scoped_text_by_path else read_text(path)
+            for path in module_paths
+        )
+        append_missing_modules(
+            module_source,
+            read_text(build_file),
+            str(build_file.relative_to(root.resolve())),
+        )
     return findings
 
 
@@ -2240,23 +2334,51 @@ def validate_typo_includes(path: Path, text: str, root: Path) -> list[Finding]:
     return findings
 
 
+def validate_bool_member_parameter_types(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return findings
+    masked = mask_comments_and_strings(text)
+    bool_members = set(re.findall(r"\bbool\s+(b[A-Z][A-Za-z0-9_]*)\b", masked))
+    if not bool_members:
+        return findings
+    numeric_type = r"(?:signed\s+|unsigned\s+)?(?:float|double|short|long|int|int8|int16|int32|int64|uint8|uint16|uint32|uint64)"
+    declaration = re.compile(rf"\b(?P<type>{numeric_type})\s+(?P<name>b[A-Z][A-Za-z0-9_]*)\b")
+    seen: set[int] = set()
+    for call in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(", masked):
+        open_index = masked.find("(", call.start())
+        close_index = find_balanced_parens(masked, open_index)
+        if close_index < 0:
+            continue
+        for match in declaration.finditer(masked, open_index + 1, close_index):
+            parameter_name = match.group("name")
+            member_name = f"b{parameter_name[3:]}" if parameter_name.startswith("bIn") else parameter_name
+            if member_name not in bool_members or match.start() in seen:
+                continue
+            seen.add(match.start())
+            findings.append(
+                Finding(
+                    "warning",
+                    str(path.relative_to(root)),
+                    line_number(text, match.start()),
+                    "BOOL_MEMBER_PARAMETER_TYPE_MISMATCH",
+                    (
+                        f"Parameter {parameter_name} is declared as {match.group('type')} but corresponds to bool member "
+                        f"{member_name}; declare the parameter as bool in both header and .cpp to avoid MSVC C4800."
+                    ),
+                )
+            )
+    return findings
+
+
 def build_source_include_index(root: Path) -> dict[str, list[str]]:
     index: dict[str, list[str]] = {}
-    source = root / "Source"
-    if not source.is_dir():
-        return index
-    for path in source.rglob("*"):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+    for path in iter_source_files(root):
+        if path.suffix.lower() not in {".h", ".hpp", ".inl"}:
             continue
         if should_ignore_project_path(path):
             continue
-        parts = path.parts
-        rel = path.name
-        if "Public" in parts:
-            rel = "/".join(parts[parts.index("Public") + 1 :])
-        elif "Private" in parts:
-            rel = "/".join(parts[parts.index("Private") + 1 :])
-        rel = rel.replace("\\", "/")
+        rel = module_relative_key(path, root) or path.name
         index.setdefault(rel, []).append(str(path))
         index.setdefault(path.name, []).append(str(path))
     return index
@@ -2351,16 +2473,27 @@ def validate_include_paths_exist(
             continue
         if not (normalized.endswith(".h") or normalized.endswith(".hpp")):
             continue
+        local_basename_candidates = include_index.get(Path(normalized).name, [])
+        if not local_basename_candidates:
+            # No local header with this basename means the include is most likely
+            # supplied by Unreal Engine or another module. UBT is authoritative.
+            continue
         severity = "error"
         if write_mode and "/" not in normalized and "\\" not in normalized:
             severity = "warning"
+        known_locations = ", ".join(
+            sorted({str(Path(candidate).relative_to(root)).replace("\\", "/") for candidate in local_basename_candidates})[:3]
+        )
         findings.append(
             Finding(
                 severity,
                 rel,
                 line,
                 "INCLUDE_PATH_NOT_FOUND",
-                f'Include "{include_path}" was not found under the project Source/ tree.',
+                (
+                    f'Include "{include_path}" does not resolve to a local project/plugin header. '
+                    f"Known header location(s): {known_locations}."
+                ),
             )
         )
     return findings
@@ -2791,6 +2924,42 @@ BLUEPRINTPURE_NON_CONST_RE = re.compile(
 )
 
 
+def validate_uproperty_category_without_exposure(path: Path, text: str, root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if path.suffix.lower() not in {".h", ".hpp"}:
+        return findings
+    masked = mask_comments_and_strings(text)
+    exposure_specifiers = re.compile(
+        r"\b(?:EditAnywhere|EditDefaultsOnly|EditInstanceOnly|"
+        r"VisibleAnywhere|VisibleDefaultsOnly|VisibleInstanceOnly|"
+        r"BlueprintReadOnly|BlueprintReadWrite|BlueprintAssignable|BlueprintCallable)\b"
+    )
+    for match in re.finditer(r"\bUPROPERTY\s*\(", masked):
+        open_index = masked.find("(", match.start())
+        close_index = find_balanced_parens(masked, open_index)
+        if close_index < 0:
+            continue
+        specifiers = text[open_index + 1 : close_index]
+        if not re.search(r"\bCategory\s*=", specifiers):
+            continue
+        if exposure_specifiers.search(specifiers):
+            continue
+        findings.append(
+            Finding(
+                "error",
+                str(path.relative_to(root)),
+                line_number(text, match.start()),
+                "UPROPERTY_CATEGORY_WITHOUT_EXPOSURE",
+                (
+                    "UPROPERTY sets Category without an editor or Blueprint exposure specifier; "
+                    "UHT -WarningsAsErrors rejects this. Remove Category for internal state, or add "
+                    "an intentional Edit/Visible/Blueprint specifier."
+                ),
+            )
+        )
+    return findings
+
+
 def validate_uobject_container_without_uproperty(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
     if path.suffix.lower() not in {".h", ".hpp"}:
@@ -3175,7 +3344,7 @@ def _append_validator_internal_error(
     rel = str(path.relative_to(root)).replace("\\", "/") if path.is_file() else str(path)
     findings.append(
         Finding(
-            "error",
+            "warning",
             rel,
             1,
             "DOMAIN_VALIDATOR_INTERNAL_ERROR",
@@ -3265,12 +3434,14 @@ def _run_per_file_validators(
         findings.extend(validate_component_subsystem_patterns(path, text, root))
         findings.extend(validate_gengine_world_context(path, text, root))
         findings.extend(validate_known_bad_api_patterns(path, text, root))
+        findings.extend(validate_bool_member_parameter_types(path, text, root))
         _run_domain_validators(findings, path, text, root, domain_context)
     if path.suffix.lower() in {".h", ".hpp"}:
         findings.extend(validate_generated_h(path, text, root))
         findings.extend(validate_reflected_namespace(path, text, root))
         findings.extend(validate_blueprint_assignable_delegate_types(path, text, root, declared_delegate_types))
         findings.extend(validate_uht_macros_in_conditional_blocks(path, text, root))
+        findings.extend(validate_uproperty_category_without_exposure(path, text, root))
         findings.extend(validate_static_mutable_container_members(path, text, root))
         findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
         findings.extend(validate_blueprint_native_event_declarations(path, text, root))
@@ -3402,7 +3573,15 @@ def validate_unreal_readiness(
                 include_owner_map=include_owner_map,
                 domain_context=domain_context,
             )
-        findings.extend(validate_build_modules(root, "\n".join(all_source_text), build_text_value))
+        findings.extend(
+            validate_build_modules(
+                root,
+                "\n".join(all_source_text),
+                build_text_value,
+                scope_paths=scope,
+                scope_texts=texts,
+            )
+        )
         if cpp_scope:
             findings.extend(
                 validate_cpp_definitions_missing(
@@ -3476,6 +3655,7 @@ def validate_unreal_readiness_lightweight(root: Path) -> list[Finding]:
         text = read_text(path)
         findings.extend(validate_typo_includes(path, text, root))
         if path.suffix.lower() in {".h", ".hpp"}:
+            findings.extend(validate_uproperty_category_without_exposure(path, text, root))
             findings.extend(validate_generated_h(path, text, root))
             findings.extend(validate_reflected_namespace(path, text, root))
             findings.extend(validate_unreal_lifecycle_overrides(path, text, root))

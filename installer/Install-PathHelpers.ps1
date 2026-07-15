@@ -317,12 +317,18 @@ function Sync-SharedWorkspaceEngine {
     . (Join-Path (Split-Path $PSScriptRoot -Parent) "scripts\unreal_workspace_config.ps1")
     $config = Read-SharedConfig -Path $SharedConfigPath
     $config.defaultEngineRoot = $EngineRoot
+    if ($config.activeProject -and -not (Test-Path -LiteralPath ([string]$config.activeProject))) {
+        $config.activeProject = $null
+    }
 
     $expandedRoots = [System.Collections.Generic.List[string]]::new()
     foreach ($root in @($config.projectSearchRoots)) {
         $expanded = Expand-ConfigPathString ([string]$root)
-        if ($expanded -and -not $expandedRoots.Contains($expanded)) {
-            [void]$expandedRoots.Add($expanded)
+        if ($expanded -and (Test-Path -LiteralPath $expanded)) {
+            $resolved = (Resolve-Path -LiteralPath $expanded).Path
+            if (-not $expandedRoots.Contains($resolved)) {
+                [void]$expandedRoots.Add($resolved)
+            }
         }
     }
     foreach ($root in $SearchRoots) {
@@ -334,9 +340,7 @@ function Sync-SharedWorkspaceEngine {
             }
         }
     }
-    if ($expandedRoots.Count -gt 0) {
-        $config.projectSearchRoots = @($expandedRoots)
-    }
+    $config.projectSearchRoots = @($expandedRoots)
 
     Save-SharedConfig -Path $SharedConfigPath -Config $config
     return $config

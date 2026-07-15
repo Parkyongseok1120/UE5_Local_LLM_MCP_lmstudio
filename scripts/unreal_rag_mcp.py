@@ -313,6 +313,8 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                     "default": "md",
                 },
                 "outputPath": {"type": "string", "description": "Optional output file path."},
+                "diagramMode": {"type": "string", "enum": ["sanitize", "strict", "passthrough"], "default": "sanitize"},
+                "allowOverwrite": {"type": "boolean", "default": False},
             },
             handler=_handle_unreal_render_report,
         )
@@ -749,6 +751,8 @@ class McpServer:
                             "description": "If true, clear activeProject and disable default filtering.",
                             "default": False,
                         },
+                        "prepare": {"type": "boolean", "default": False},
+                        "force": {"type": "boolean", "default": False},
                     },
                 ),
             },
@@ -857,6 +861,8 @@ class McpServer:
                             "description": "If true and job_id omitted, list recent jobs.",
                             "default": False,
                         },
+                        "sinceProgressSequence": {"type": "integer", "minimum": 0, "default": 0},
+                        "verbose": {"type": "boolean", "default": False},
                     },
                 ),
             },
@@ -1001,6 +1007,11 @@ class McpServer:
                             "description": "Use hybrid embedding search. Default false for speed.",
                             "default": False,
                         },
+                        "scope": {"type": "string", "enum": ["auto", "engine", "project", "mixed"], "default": "auto"},
+                        "detailLevel": {"type": "string", "enum": ["compact", "medium", "large", "full"], "default": "compact"},
+                        "continuationToken": {"type": "string"},
+                        "sessionId": {"type": "string"},
+                        "includeRawMatches": {"type": "boolean", "default": False},
                     },
                     ["request"],
                 ),
@@ -1249,6 +1260,8 @@ class McpServer:
                             "default": "md",
                         },
                         "outputPath": {"type": "string"},
+                        "diagramMode": {"type": "string", "enum": ["sanitize", "strict", "passthrough"], "default": "sanitize"},
+                        "allowOverwrite": {"type": "boolean", "default": False},
                     },
                     ["text"],
                 ),
@@ -1358,6 +1371,7 @@ class McpServer:
                         },
                         "projectFile": {"type": "string", "description": "Optional .uproject path override."},
                         "planId": {"type": "string"},
+                        "startBackgroundJob": {"type": "boolean", "default": False},
                     },
                     ["request"],
                 ),
@@ -1461,7 +1475,9 @@ class McpServer:
                         "projectPath": {"type": "string"},
                         "planRevision": {"type": "string", "default": "1"},
                         "ambiguityGate": {"type": "object"},
+                        "approvalToken": {"type": "string"},
                     },
+                    ["approvalToken"],
                 ),
             },
             {
@@ -1664,7 +1680,8 @@ class McpServer:
 
         from tool_exposure import callable_rag_tool_names, tool_not_callable_payload
 
-        all_names = [tool["name"] for tool in self._all_tool_definitions_unfiltered()]
+        tool_definitions = self._all_tool_definitions_unfiltered()
+        all_names = [tool["name"] for tool in tool_definitions]
         if name not in callable_rag_tool_names(all_names):
             payload = tool_not_callable_payload(str(name or ""))
             self.tool_result(
@@ -1672,6 +1689,43 @@ class McpServer:
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 structured=payload,
                 is_error=True,
+            )
+            return
+        if not isinstance(arguments, dict):
+            self.structured_tool_result(
+                message_id,
+                {
+                    "ok": False,
+                    "errorCode": "INVALID_TOOL_ARGUMENTS",
+                    "error": "Tool arguments must be a JSON object.",
+                    "tool": str(name or ""),
+                    "retryable": True,
+                    "agentInstruction": "Retry this tool once with arguments encoded as a JSON object.",
+                },
+            )
+            return
+
+        tool_definition = next((tool for tool in tool_definitions if tool["name"] == name), {})
+        required = list((tool_definition.get("inputSchema") or {}).get("required") or [])
+        missing = [
+            key for key in required
+            if key not in arguments
+            or arguments.get(key) is None
+            or (isinstance(arguments.get(key), str) and not arguments.get(key).strip())
+        ]
+        if missing:
+            self.structured_tool_result(
+                message_id,
+                {
+                    "ok": False,
+                    "errorCode": "INVALID_TOOL_ARGUMENTS",
+                    "error": f"Missing required argument(s): {', '.join(missing)}",
+                    "tool": str(name or ""),
+                    "requiredArguments": required,
+                    "providedArguments": sorted(arguments),
+                    "retryable": True,
+                    "agentInstruction": "Retry this same tool once with the missing required arguments. Do not create a new plan.",
+                },
             )
             return
 
@@ -2072,7 +2126,21 @@ class McpServer:
             else:
                 self.error(message_id, -32602, f"Unknown tool: {name}")
         except Exception as exc:
-            self.tool_result(message_id, f"ERROR: {exc}", is_error=True)
+            self.log(f"tool {name} failed: {type(exc).__name__}: {exc}")
+            self.structured_tool_result(
+                message_id,
+                {
+                    "ok": False,
+                    "errorCode": "INTERNAL_TOOL_ERROR",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "tool": str(name or ""),
+                    "retryable": False,
+                    "stopCurrentWorkflow": True,
+                    "doNotRetry": [str(name)] if name else [],
+                    "userMessage": "The Unreal RAG MCP tool failed internally.",
+                    "agentInstruction": "Do not repeat the same tool call. Report the MCP internal error and preserve the current task state.",
+                },
+            )
 
     def handle_agent_session(self, message_id: Any, arguments: dict[str, Any]) -> None:
         request = str(arguments.get("request") or "").strip()

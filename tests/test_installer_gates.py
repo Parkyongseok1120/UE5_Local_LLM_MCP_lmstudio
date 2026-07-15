@@ -111,3 +111,41 @@ def test_portable_package_content_scan_passes_slim_build(tmp_path: Path) -> None
     assert build.returncode == 0, build.stderr or build.stdout
     scan = _run_ps1("Test-PortablePackageContents.ps1", "-ZipPath", str(zip_path))
     assert scan.returncode == 0, scan.stderr or scan.stdout
+
+
+def test_sync_shared_workspace_drops_paths_from_another_pc(tmp_path: Path) -> None:
+    valid_root = tmp_path / "current-pc-projects"
+    valid_root.mkdir()
+    stale_root = tmp_path / "old-pc-projects"
+    stale_project = stale_root / "OldMachineGame.uproject"
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(
+        json.dumps(
+            {
+                "activeProject": str(stale_project),
+                "projectSearchRoots": [str(stale_root), str(valid_root)],
+                "defaultEngineRoot": "Z:/OldPc/UE_Custom",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    helper = INSTALLER / "Install-PathHelpers.ps1"
+    command = (
+        f". '{helper}'; "
+        f"Sync-SharedWorkspaceEngine -SharedConfigPath '{shared_config}' "
+        "-EngineRoot '' | Out-Null"
+    )
+    ps = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        timeout=120,
+    )
+    assert ps.returncode == 0, ps.stderr or ps.stdout
+
+    synced = json.loads(shared_config.read_text(encoding="utf-8-sig"))
+    assert synced["activeProject"] is None
+    assert synced["defaultEngineRoot"] == ""
+    assert synced["projectSearchRoots"] == [str(valid_root.resolve())]

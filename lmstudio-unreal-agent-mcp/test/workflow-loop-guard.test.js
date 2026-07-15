@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const {
   recordValidationFailure,
   recordValidationSuccess,
+  recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
   resetWorkflowLoopGuardForTests,
@@ -65,4 +66,18 @@ test("validation success clears a prior validation fingerprint", () => {
   const later = recordValidationFailure(project, 12, validation);
 
   assert.equal(later.blocked, false);
+});
+
+test("same pre-build gate failure is blocked on the second call", () => {
+  const project = "/tmp/Demo";
+  const first = recordBuildGateFailure(project, 14, "VALIDATION_PROOF_STALE");
+  const repeated = recordBuildGateFailure(project, 14, "VALIDATION_PROOF_STALE");
+  const differentGate = recordBuildGateFailure(project, 14, "VALIDATION_REQUIRED");
+  const afterMutation = recordBuildGateFailure(project, 15, "VALIDATION_PROOF_STALE");
+
+  assert.equal(first.blocked, false);
+  assert.equal(repeated.blocked, true);
+  assert.equal(repeated.reason, "same_build_gate_failure");
+  assert.equal(differentGate.blocked, false);
+  assert.equal(afterMutation.blocked, false);
 });

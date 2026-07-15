@@ -42,6 +42,26 @@ def test_classify_cinematic_runtime_bug():
 def test_classify_cinematic_implement_is_edit():
     assert classify_task("시네마틱 시스템에 Stop 기능 구현", "auto") == "edit"
 
+def test_improve_request_is_edit():
+    assert classify_task("Improve this code", "auto") == "edit"
+    assert classify_task("\ucf54\ub4dc \uac1c\uc120 \ud574\uc918", "auto") == "edit"
+
+
+def test_runtime_debug_mode_keeps_explicit_fix_intent():
+    assert classify_task("StaminaComponent runtime bug: fix it", "runtime_debug") == "edit"
+    assert classify_task("Fix runtime crash in StaminaComponent", "auto") == "edit"
+
+
+def test_negated_refactor_does_not_escalate_local_fix():
+    plan = build_agent_plan(
+        "No cross-file refactoring; fix only the StaminaComponent bug.",
+        "implementation",
+    )
+
+    assert plan.task_kind == "edit"
+    assert plan.write_gate["writesAllowed"] is True
+
+
 
 def test_cinematic_analysis_plan_source_first():
     plan = build_agent_plan("현재 프로젝트의 시네마틱 시스템 분석", "auto")

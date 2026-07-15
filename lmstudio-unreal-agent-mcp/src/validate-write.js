@@ -321,6 +321,15 @@ async function runStaticValidation(projectRoot, options = {}) {
     };
   }
 }
+const VALIDATION_INFRASTRUCTURE_CODES = new Set(["VALIDATOR_MISSING", "VALIDATOR_EXEC_FAILED"]);
+
+function isValidationInfrastructureFailure(result) {
+  const blockingCodes = (result?.findings || [])
+    .filter((finding) => finding?.severity === "error")
+    .map((finding) => String(finding.code || ""));
+  return blockingCodes.length > 0 && blockingCodes.every((code) => VALIDATION_INFRASTRUCTURE_CODES.has(code));
+}
+
 
 async function validateAfterWrite(absPath, getActiveProject) {
   if (!VALIDATE_ON_WRITE) {
@@ -380,20 +389,25 @@ async function validateAfterWrite(absPath, getActiveProject) {
     timeoutMs: VALIDATE_ON_WRITE_TIMEOUT_MS,
     writeTarget,
   });
-  // Fail OPEN only when validation timed out: the write persists and we flag that
-  // validation was skipped so the model runs static_validate_project before building.
-  // Real findings still fail CLOSED exactly as before.
-  if (result && result.timedOut) {
-    const writeTarget = path.relative(projectRoot, absPath).split(path.sep).join("/");
-    markUnvalidated(projectRoot, writeTarget, result.note || "validation skipped (time budget)");
+  // Validator availability is not evidence that the edited source is invalid. Keep the
+  // write, mark validation dirty, and require an explicit full scan before the build gate.
+  // Actual source findings still fail closed exactly as before.
+  const infrastructureError = isValidationInfrastructureFailure(result);
+  if (result && (result.timedOut || infrastructureError)) {
+    const skipReason = result.timedOut
+      ? "validation skipped (time budget)"
+      : "validation unavailable (validator infrastructure failure)";
+    markUnvalidated(projectRoot, writeTarget, skipReason);
     return {
       ok: true,
       skipped: true,
-      timedOut: true,
+      timedOut: Boolean(result.timedOut),
+      infrastructureError,
       projectRoot,
       findingCount: 0,
       findings: [],
-      note: "validation skipped (time budget); run static_validate_project before build",
+      advisoryFindings: result.findings || [],
+      note: skipReason + "; run static_validate_project before build",
     };
   }
   if (result && result.ok) {
@@ -477,6 +491,7 @@ module.exports = {
   validateAfterWrite,
   formatValidationResult,
   runStaticValidation,
+  isValidationInfrastructureFailure,
   resolveProjectRootForFile,
   blockingErrorsOf,
   clearValidated,

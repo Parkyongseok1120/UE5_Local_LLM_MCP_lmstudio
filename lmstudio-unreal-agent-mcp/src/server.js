@@ -128,11 +128,12 @@ const {
   cachedReadInstruction,
   clearReadSuccessHistory
 } = require("./tool-read-history");
-const { runUnrealBuildFromPlan, DEFAULT_EXPECTED_ENGINE } = require("./build-executor");
+const { runUnrealBuildFromPlan } = require("./build-executor");
 const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
 const {
   recordValidationFailure,
   recordValidationSuccess,
+  recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
 } = require("./workflow-loop-guard");
@@ -367,12 +368,16 @@ function enforceTaskAuth(args, options = {}) {
     : (args?.task_authorization && typeof args.task_authorization === "object" ? args.task_authorization : {});
   const taskSessionId = String(args?.taskSessionId || args?.task_session_id || taskAuthorization.taskSessionId || taskAuthorization.task_session_id || "").trim();
   if (requireSession && !taskSessionId) {
-    return fail("taskSessionId is required for project write tools. Call unreal_agent_plan first and copy taskAuthorization into this call.", {
+    return fail("taskAuthorization is required for project write tools.", {
       errorCode: "TASK_SESSION_REQUIRED",
-      retryable: false,
-      stopCurrentWorkflow: true,
-      requiredNextTool: { server: "unreal-rag", name: "unreal_agent_plan" },
-      agentInstruction: "Call unreal_agent_plan with the original user request, then copy all taskAuthorization fields into the write call.",
+      retryable: true,
+      stopCurrentWorkflow: false,
+      doNotCreateDuplicatePlan: true,
+      nextSteps: [
+        "If unreal_agent_plan already returned taskAuthorization in this chat, copy that complete object unchanged and retry this write once.",
+        "Only when no plan exists yet, call unreal_agent_plan once with the original user request.",
+      ],
+      agentInstruction: "Reuse the existing unreal_agent_plan.taskAuthorization when available. Do not create another plan merely to refresh or recover omitted authorization.",
     });
   }
   if (!taskSessionId) {
@@ -421,7 +426,7 @@ function validationToolResult(summary, validation, options = {}) {
     "mutationGeneration", "validatedGeneration", "validationStale", "proofLevel",
     "commandSucceeded", "proofSatisfied", "recoveryRequired", "errorCode",
     "retryable", "doNotRetry", "stopCurrentWorkflow", "suggestedToolCalls",
-    "validationOverrideAvailable",
+    "validationOverrideAvailable", "buildAllowedForValidatedGeneration", "requiredNextTool",
   ];
   for (const key of passthrough) {
     if (options[key] !== undefined) base[key] = options[key];
@@ -583,6 +588,18 @@ function filterAgentTools(tools) {
   const allowed = callableAgentToolNames(tools.map((tool) => tool.name));
   return tools.filter((tool) => allowed.has(tool.name));
 }
+function requiredArgumentCheck(tool, args) {
+  const required = Array.isArray(tool?.inputSchema?.required) ? tool.inputSchema.required : [];
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return { required, missing: required, invalidShape: true, provided: [] };
+  }
+  const missing = required.filter((key) => {
+    const value = args[key];
+    return !(key in args) || value == null || (typeof value === "string" && !value.trim());
+  });
+  return { required, missing, invalidShape: false, provided: Object.keys(args).sort() };
+}
+
 
 function truncateOutput(s, maxBytes = MAX_OUTPUT_BYTES) {
   const buf = Buffer.from(String(s), "utf8");
@@ -1228,7 +1245,7 @@ function allAgentTools() {
       },
       {
         name: "read_unreal_logs",
-        description: "Read a compact error-focused slice from the newest Unreal log. Defaults to one file and 60 tail lines to protect chat context.",
+        description: "Read a compact error-focused slice from the newest MCP build log or Unreal runtime log. Defaults to one file and 60 tail lines to protect chat context.",
         inputSchema: makeJsonSchema({
           maxLines: { type: "number", description: "Max tail lines per log file. Default 60, max 500." },
           maxFiles: { type: "number", description: "Newest log files to inspect. Default 1, max 3." },
@@ -1327,7 +1344,7 @@ function allAgentTools() {
           path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
           content: { type: "string", description: "Full file content to write." },
           createDirs: { type: "boolean", description: "Create parent directories if needed. Default false." }
-        }, ["path", "content"])
+        }, ["taskAuthorization", "path", "content"])
       },
       {
         name: "replace_in_file",
@@ -1338,7 +1355,7 @@ function allAgentTools() {
           oldText: { type: "string", description: "Exact text to replace." },
           newText: { type: "string", description: "Replacement text." },
           expectedOccurrences: { type: "number", description: "If set, replacement only proceeds when occurrence count matches." }
-        }, ["path", "oldText", "newText"])
+        }, ["taskAuthorization", "path", "oldText", "newText"])
       },
       {
         name: "propose_file_deletions",
@@ -1372,7 +1389,7 @@ function allAgentTools() {
           ifDeleted: { type: "string", description: "What concretely happens if this file is deleted." },
           approvalToken: { type: "string", description: "Per-file approvalToken returned by propose_file_deletions after user approval." },
           expectedContent: { type: "string", description: "Optional exact file content guard before delete." }
-        }, ["path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"])
+        }, ["taskAuthorization", "path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"])
       },
       {
         name: "apply_edit_bundle",
@@ -1401,11 +1418,11 @@ function allAgentTools() {
             }
           },
           ...taskAuthSchemaProperties()
-        })
+        }, ["taskAuthorization"])
       },
       {
         name: "static_validate_project",
-        description: "Run static Unreal compile-readiness validation on the active project Source tree. Call before build_unreal_project when validation findings from writes need a full-project check.",
+        description: "Run static Unreal compile-readiness validation on active project and enabled plugin source. A completed scan stamps the current mutation generation even when findings remain, so one authoritative UBT build can follow without an override.",
         inputSchema: makeJsonSchema({
           projectRoot: { type: "string", description: "Optional project root or .uproject path. Defaults to active project." }
         })
@@ -1431,7 +1448,7 @@ function allAgentTools() {
       },
       {
         name: "build_unreal_project",
-        description: "Run Unreal Build.bat after C++ or Build.cs edits. Compact by default: returns summary, up to 40 likely error lines, and a fullLogPath. Set verboseOutput=true only when compact evidence is insufficient.",
+        description: "Run Unreal Build.bat after C++ or Build.cs edits. Requires one completed static scan for the current mutation generation; remaining findings do not require an override. Returns compact errors and a project-local fullLogPath.",
         inputSchema: makeJsonSchema({
           hint: { type: "string", description: "Optional project folder or .uproject name fragment for auto-detection." },
           engineRoot: { type: "string", description: "Optional UE engine root. Auto-detected from EngineAssociation when omitted." },
@@ -1444,7 +1461,7 @@ function allAgentTools() {
           verboseOutput: { type: "boolean", description: "Include truncated stdout/stderr inline. Default false; prefer fullLogPath." },
           validationOverride: { type: "boolean", description: "Allow one audited build despite validation-dirty or stale-generation proof state." },
           validationOverrideNote: { type: "string", description: "Reason recorded when validationOverride=true." },
-          allowEngineFallback: { type: "boolean", description: "When true, allow build with a non-default engine install if UE 5.8 is missing. Record audit note in agent chat." }
+          allowEngineFallback: { type: "boolean", description: "When true, allow build when the resolved engine version differs from the active project's numeric EngineAssociation. Record an audit note in agent chat." }
         })
       }
   ];
@@ -1463,7 +1480,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const priorSeq = beginToolCall();
   try {
     clearLoopHistoriesOnProjectChange(false);
-    const allowed = callableAgentToolNames(allAgentTools().map((tool) => tool.name));
+    const toolDefinitions = allAgentTools();
+    const allowed = callableAgentToolNames(toolDefinitions.map((tool) => tool.name));
     if (!allowed.has(name)) {
       const blocked = toolNotCallablePayload(name);
       return fail(blocked.error, {
@@ -1473,19 +1491,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         agentInstruction: blocked.agentInstruction,
       });
     }
-
-    const repeatBlock = checkToolRepeatBlocked(name, args, priorSeq);
-    if (repeatBlock.blocked) {
-      return fail(toolRepeatBlockedMessage(name, repeatBlock), {
+    const earlyRepeatBlock = checkToolRepeatBlocked(name, args, priorSeq);
+    if (earlyRepeatBlock.blocked) {
+      return fail(toolRepeatBlockedMessage(name, earlyRepeatBlock), {
         errorCode: "TOOL_REPEAT_BLOCKED",
         retryable: false,
         stopCurrentWorkflow: true,
         doNotRetry: [name],
-        agentInstruction:
-          `Do not retry ${name} with the same arguments. `
-          + "Stop the current workflow and report the MCP internal error.",
+        agentInstruction: "Do not retry " + name + " with the same arguments. Stop the current workflow and report the MCP internal error.",
       });
     }
+
+    const argumentCheck = requiredArgumentCheck(
+      toolDefinitions.find((tool) => tool.name === name),
+      args
+    );
+    if (argumentCheck.invalidShape) {
+      recordToolFailure(name, args, "INVALID_TOOL_ARGUMENTS");
+      return fail("Tool arguments must be a JSON object.", {
+        errorCode: "INVALID_TOOL_ARGUMENTS",
+        requiredArguments: argumentCheck.required,
+        providedArguments: argumentCheck.provided,
+        retryable: true,
+        stopCurrentWorkflow: false,
+        agentInstruction: "Retry this same tool once with arguments encoded as a JSON object.",
+      });
+    }
+    const missingNonAuthorizationArgs = argumentCheck.missing.filter((key) => key !== "taskAuthorization");
+    if (missingNonAuthorizationArgs.length) {
+      recordToolFailure(name, args, "INVALID_TOOL_ARGUMENTS");
+      return fail("Missing required argument(s): " + missingNonAuthorizationArgs.join(", "), {
+        errorCode: "INVALID_TOOL_ARGUMENTS",
+        requiredArguments: argumentCheck.required,
+        providedArguments: argumentCheck.provided,
+        retryable: true,
+        stopCurrentWorkflow: false,
+        agentInstruction: "Retry this same tool once with the missing required arguments. Do not create a new plan.",
+      });
+    }
+
 
     if (process.env.MCP_TEST_FORCE_TOOL_ERROR === name) {
       throw new Error(`test-forced internal error for ${name}`);
@@ -1644,20 +1688,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
       }
       const projectDir = path.dirname(path.resolve(activeProject));
-      const logsDir = path.join(projectDir, "Saved", "Logs");
-      if (!(await exists(logsDir))) {
-        return fail(`logs directory not found: ${logsDir}`, {
-          nextSteps: ["Run the project or build once so Unreal creates Saved/Logs."]
+      const candidateLogDirs = [
+        path.join(projectDir, ".agent", "logs"),
+        path.join(projectDir, "Saved", "Logs"),
+      ];
+      const logsDirs = [];
+      for (const candidate of candidateLogDirs) {
+        if (await exists(candidate)) logsDirs.push(candidate);
+      }
+      if (logsDirs.length === 0) {
+        return fail(`logs directories not found under: ${projectDir}`, {
+          nextSteps: ["Run build_unreal_project or launch the project once to create a log."]
         });
       }
       const maxLines = Math.max(20, Math.min(Number(args.maxLines || 60), 500));
       const maxFiles = Math.max(1, Math.min(Number(args.maxFiles || 1), 3));
       const summaryOnly = args.summaryOnly !== false;
       const filterText = String(args.filter || "").toLowerCase();
-      const entries = await fsp.readdir(logsDir, { withFileTypes: true });
-      const logFiles = entries
-        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".log"))
-        .map((entry) => path.join(logsDir, entry.name));
+      const logFiles = [];
+      for (const logsDir of logsDirs) {
+        const entries = await fsp.readdir(logsDir, { withFileTypes: true });
+        logFiles.push(...entries
+          .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".log"))
+          .map((entry) => path.join(logsDir, entry.name)));
+      }
       logFiles.sort((a, b) => {
         const sa = fs.statSync(a);
         const sb = fs.statSync(b);
@@ -1668,15 +1722,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       for (const logPath of picked) {
         const content = await fsp.readFile(logPath, "utf8");
         const lines = content.split(/\r?\n/);
-        const tail = lines.slice(-maxLines);
         let filtered = filterText
-          ? tail.filter((line) => line.toLowerCase().includes(filterText))
-          : tail;
+          ? lines.filter((line) => line.toLowerCase().includes(filterText))
+          : lines;
         if (summaryOnly) {
           filtered = firstErrorCluster(filtered, 4, 30);
+        } else {
+          filtered = filtered.slice(-maxLines);
         }
         chunks.push({
-          file: path.basename(logPath),
+          file: path.relative(projectDir, logPath).replace(/\\/g, "/"),
           lineCount: filtered.length,
           lines: filtered
         });
@@ -1685,10 +1740,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const payload = compactLogPayload({
         summary: chunks.length
           ? `LOGS READY — ${chunks.length} file(s), ${chunks.reduce((n, chunk) => n + chunk.lineCount, 0)} line(s)${firstLine ? `; first: ${firstLine}` : ""}`
-          : "NO LOG FILES — Saved/Logs contains no .log files.",
+          : "NO LOG FILES — project .agent/logs and Saved/Logs contain no .log files.",
         ok: chunks.length > 0,
         projectDir,
-        logsDir,
+        logsDirs,
         responseMode: summaryOnly ? "summary" : "tail",
         suggestedRagMode: filterText.includes("error") || filterText.includes("fatal")
           ? "compile_fix"
@@ -2511,17 +2566,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             nextSteps: ["Read the first blocking finding, edit the responsible source file, then validate the new mutation generation."],
           });
         }
+        const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration);
+        if (finish.validationStale) {
+          return fail("Validation stale: project mutated during validation.", {
+            validationStale: true,
+            mutationGeneration: finish.mutationGeneration,
+            nextSteps: ["Re-run static_validate_project after edits settle."],
+          });
+        }
+        await agentNotify(validationSummary);
         return validationToolResult(validationSummary, validation, {
           ok: false,
           operation: "static_validate",
-          isError: true,
-          error: "Static validation found blocking errors.",
+          error: "Static validation found blocking errors; the completed scan is fresh for this mutation generation.",
           errorCode: "STATIC_VALIDATION_FAILED",
           retryable: false,
           doNotRetry: ["static_validate_project"],
-          stopCurrentWorkflow: true,
-          validationOverrideAvailable: true,
-          nextSteps: ["Fix the first blocking error. One explicit override build is available only after reviewing the findings and supplying a concrete validationOverrideNote."],
+          stopCurrentWorkflow: false,
+          validationOverrideAvailable: false,
+          buildAllowedForValidatedGeneration: true,
+          requiredNextTool: "build_unreal_project",
+          validatedGeneration: finish.validatedGeneration,
+          mutationGeneration: finish.mutationGeneration,
+          nextSteps: ["Fix the first blocking finding, or run build_unreal_project exactly once without validationOverride to obtain authoritative UBT errors."],
         });
       }
       recordValidationSuccess(projectRoot, validationStart.startGeneration);
@@ -2725,26 +2792,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Repair .agent/state/validation.json, then run static_validate_project."],
         });
       }
+      const failBuildGate = (errorCode, error, details = {}) => {
+        const gateLoop = recordBuildGateFailure(projectRoot, mutation.mutationGeneration, errorCode);
+        if (gateLoop.blocked) {
+          return fail("Build gate loop blocked: the same pre-build failure repeated without a file mutation.", {
+            errorCode: "WORKFLOW_LOOP_BLOCKED",
+            retryable: false,
+            stopCurrentWorkflow: true,
+            doNotRetry: ["build_unreal_project"],
+            requiredNextTool: details.requiredNextTool,
+            mutationGeneration: gateLoop.mutationGeneration,
+            nextSteps: ["Do not call build_unreal_project again with unchanged project state. Follow the required next tool or stop and report the blocker."],
+          });
+        }
+        return fail(error, { errorCode, retryable: false, ...details });
+      };
       const validationOverride = args.validationOverride === true;
       const validationOverrideNote = String(args.validationOverrideNote || "").trim();
       if (validationOverride && validationOverrideNote.length < 12) {
-        return fail("validationOverride requires a concrete validationOverrideNote of at least 12 characters.", {
-          errorCode: "VALIDATION_OVERRIDE_NOTE_REQUIRED",
-          retryable: false,
-          stopCurrentWorkflow: true,
-          nextSteps: ["Review the validation findings and explain why this one-time override is safe, or fix the source instead."],
-        });
+        return failBuildGate(
+          "VALIDATION_OVERRIDE_NOTE_REQUIRED",
+          "validationOverride requires a concrete validationOverrideNote of at least 12 characters.",
+          {
+            stopCurrentWorkflow: false,
+            requiredNextTool: "build_unreal_project",
+            nextSteps: ["Retry at most once with a concrete validationOverrideNote, or remove validationOverride and run static_validate_project."],
+          }
+        );
       }
       const dirtyGate = requireCleanOrFail(projectRoot, {
         override: validationOverride,
         auditNote: validationOverrideNote,
       });
       if (!dirtyGate.ok) {
-        return fail(dirtyGate.error, {
+        return failBuildGate("VALIDATION_REQUIRED", dirtyGate.error, {
           validationDirty: dirtyGate.state,
-          errorCode: "VALIDATION_REQUIRED",
-          retryable: false,
-          stopCurrentWorkflow: true,
+          stopCurrentWorkflow: false,
+          doNotRetry: ["build_unreal_project"],
+          requiredNextTool: "static_validate_project",
           nextSteps: dirtyGate.nextSteps,
         });
       }
@@ -2753,12 +2838,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         auditNote: validationOverrideNote,
       });
       if (!validationProofGate.ok) {
-        return fail(validationProofGate.error, {
-          errorCode: validationProofGate.errorCode,
+        return failBuildGate(validationProofGate.errorCode, validationProofGate.error, {
           validatedGeneration: validationProofGate.validatedGeneration,
           mutationGeneration: validationProofGate.mutationGeneration,
-          retryable: validationProofGate.retryable,
-          stopCurrentWorkflow: validationProofGate.stopCurrentWorkflow,
+          stopCurrentWorkflow: false,
+          doNotRetry: ["build_unreal_project"],
+          requiredNextTool: "static_validate_project",
           nextSteps: validationProofGate.nextSteps,
         });
       }
@@ -2779,20 +2864,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           retryable: false,
           stopCurrentWorkflow: true,
           doNotRetry: ["build_unreal_project", "static_validate_project"],
+          requiredNextTool: "read_unreal_logs",
           mutationGeneration: buildAttempt.mutationGeneration,
-          nextSteps: ["Read the previous build's first actionable error, edit the responsible source file, then validate and build the new mutation generation."],
+          suggestedToolCalls: [{ tool: "read_unreal_logs", args: { summaryOnly: true, maxFiles: 1, maxLines: 200 } }],
+          nextSteps: ["Read the newest build log once. Fix its first actionable error; if it contains no actionable source error, stop and report that evidence instead of making a synthetic edit."],
         });
       }
       const buildTimeout = Number(args.timeoutMs || COMMAND_TIMEOUT_MS);
       const logRel = path.join(".agent", "logs", "latest-build.log");
-      const logAbs = path.join(WORKSPACE_ROOT, logRel);
+      const logAbs = path.join(projectRoot, logRel);
       const buildGen = await beginBuild(path.dirname(projectPath));
       await agentNotify(`Building ${target} ${platform} ${configuration}…`);
       const execResult = await runUnrealBuildFromPlan({
         workspaceRoot: path.dirname(projectPath),
         build: { ...build, target, platform, configuration, projectPath },
         allowEngineFallback: args.allowEngineFallback === true,
-        expectedEngineVersion: DEFAULT_EXPECTED_ENGINE,
+        expectedEngineVersion: process.env.UNREAL_EXPECTED_ENGINE_VERSION || "",
         timeoutMs: buildTimeout,
         logPath: logAbs,
       });
@@ -2801,10 +2888,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return fail(execResult.error, {
           errorCode: execResult.errorCode,
           resolvedEngineVersion: execResult.resolvedEngineVersion,
+          expectedEngineVersion: execResult.expectedEngineVersion,
+          requestedEngineAssociation: execResult.requestedEngineAssociation,
           resolvedUbtPath: execResult.resolvedUbtPath,
           engineMismatch: true,
           retryable: false,
-          nextSteps: ["Install UE 5.8 or pass allowEngineFallback=true with audit note."],
+          nextSteps: [
+            `Install or select Unreal Engine ${execResult.expectedEngineVersion}, or pass allowEngineFallback=true with an audit note if the project is compatible.`,
+          ],
         });
       }
       const endGen = await finishBuild(path.dirname(projectPath), buildGen.buildStartGeneration);
@@ -2830,6 +2921,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         verbose,
       });
       payload.resolvedEngineVersion = execResult.resolvedEngineVersion;
+      payload.expectedEngineVersion = execResult.expectedEngineVersion;
+      payload.requestedEngineAssociation = execResult.requestedEngineAssociation;
       payload.resolvedUbtPath = execResult.resolvedUbtPath;
       payload.commandSucceeded = execResult.commandSucceeded;
       payload.timedOut = Boolean(execResult.timedOut);

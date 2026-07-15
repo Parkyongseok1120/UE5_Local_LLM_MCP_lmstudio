@@ -94,3 +94,21 @@ def test_tracked_workspace_config_is_sanitized() -> None:
 
     assert not data.get("rootPath")
     assert not data.get("defaultEngineRoot")
+
+
+def test_generated_agent_config_backups_are_absent() -> None:
+    import subprocess
+
+    config_dir = ROOT / "lmstudio-unreal-agent-mcp" / "config"
+    backups = sorted(path.name for path in config_dir.glob("agent-mcp.json.bak-*"))
+    assert not backups, "Generated machine-specific agent config backups must not be in the repository"
+
+    future_backup = config_dir / "agent-mcp.json.bak-portability-check"
+    ignored = subprocess.run(
+        ["git", "check-ignore", str(future_backup)],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        check=False,
+    )
+    assert ignored.returncode == 0, "Generated agent config backups must remain ignored"

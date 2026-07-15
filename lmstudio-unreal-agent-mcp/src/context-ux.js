@@ -344,6 +344,8 @@ const { parseBuildProof } = require("./build-proof");
 
 function extractLikelyCompileErrors(stdout, stderr, maxLines = DEFAULT_BUILD_ERROR_LINES) {
   const combined = `${stdout || ""}\n${stderr || ""}`;
+  const uhtWarningsAreErrors = /UnrealHeaderTool[^\r\n]*-WarningsAsErrors/i.test(combined)
+    || /Running Internal UnrealHeaderTool[^\r\n]*-WarningsAsErrors/i.test(combined);
   const interesting = combined.split(/\r?\n/).filter((line) => (
     /\berror\s+(C\d+|LNK\d+|MSB\d+|UHT\d*)\b/i.test(line)
     || /\bfatal error\b/i.test(line)
@@ -351,6 +353,9 @@ function extractLikelyCompileErrors(stdout, stderr, maxLines = DEFAULT_BUILD_ERR
     || /\bUBT ERROR\b/i.test(line)
     || /\bBuild failed\b/i.test(line)
     || /\berror:/i.test(line)
+    || (uhtWarningsAreErrors && /\([^\r\n]*\):\s*Warning:/i.test(line))
+    || /\bOtherCompilationError\b/i.test(line)
+    || /\bUnhandled\s+\d+\s+aggregate exceptions?\b/i.test(line)
   ));
   return interesting.slice(0, clampInt(maxLines, DEFAULT_BUILD_ERROR_LINES, 1, 120));
 }
@@ -482,6 +487,8 @@ function isInterestingLogLine(line) {
     || /\bassert(?:ion)? failed\b/i.test(line)
     || /\bensure condition failed\b/i.test(line)
     || /\bUnhandled Exception\b/i.test(line)
+    || /\bUnhandled\s+\d+\s+aggregate exceptions?\b/i.test(line)
+    || /\bOtherCompilationError\b/i.test(line)
     || /\bLog\w+:\s*Error:/i.test(line)
     || /\berror:/i.test(line)
   );

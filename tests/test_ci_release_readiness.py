@@ -141,4 +141,4 @@ def test_agent_delete_file_requires_structured_deletion_plan() -> None:
     assert 'No files were deleted' in server_js
     assert 'wait for explicit user approval' in server_js
     assert 'approvalToken does not match this deletion explanation' in server_js
-    assert '["path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"]' in server_js
+    assert '["taskAuthorization", "path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"]' in server_js

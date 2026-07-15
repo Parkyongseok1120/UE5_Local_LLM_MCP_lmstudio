@@ -107,6 +107,8 @@ def infer_module_name(root: Path, path: Path) -> str:
 
     parts = list(path.relative_to(root).parts)
     lowered = [part.lower() for part in parts]
+    if root.name.lower() in {"source", "runtime", "editor", "developer", "programs"} and parts:
+        return parts[0]
     for marker in ("source", "runtime", "editor", "developer", "programs"):
         if marker in lowered:
             index = lowered.index(marker)

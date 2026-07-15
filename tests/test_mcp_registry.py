@@ -55,3 +55,28 @@ def test_no_duplicate_tool_names(tmp_path):
     assert len(names) == len(set(names)), f"Duplicate tool names: {[n for n in names if names.count(n) > 1]}"
     registry = mod.build_mcp_tool_registry()
     assert len(registry.names()) == len(set(registry.names()))
+def test_public_schemas_cover_handler_consumed_arguments(tmp_path):
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    definitions = {tool["name"]: tool for tool in _tool_descriptions(server)}
+
+    expected = {
+        "unreal_set_active_project": {"prepare", "force"},
+        "unreal_compile_loop_status": {"sinceProgressSequence", "verbose"},
+        "unreal_agent_session": {
+            "scope", "detailLevel", "continuationToken", "sessionId", "includeRawMatches",
+        },
+        "unreal_render_report": {"diagramMode", "allowOverwrite"},
+        "unreal_task_start": {"startBackgroundJob"},
+        "unreal_architecture_decision_approve": {"approvalToken"},
+    }
+
+    for name, required_properties in expected.items():
+        schema = definitions[name]["inputSchema"]
+        properties = set(schema["properties"])
+        assert required_properties.issubset(properties), (name, required_properties - properties)
+
+    approval_schema = definitions["unreal_architecture_decision_approve"]["inputSchema"]
+    assert "approvalToken" in approval_schema["required"]
+
+    registry_render = mod._MCP_TOOL_REGISTRY.get("unreal_render_report")

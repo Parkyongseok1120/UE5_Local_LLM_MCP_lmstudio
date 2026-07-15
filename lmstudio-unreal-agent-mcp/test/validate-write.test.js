@@ -8,7 +8,8 @@ const path = require("path");
 
 const {
   resolveProjectRootForFile,
-  validateReplaceOccurrences
+  validateReplaceOccurrences,
+  isValidationInfrastructureFailure
 } = require("../src/validate-write");
 
 test("expectedOccurrences=1 rejects ambiguous replace", () => {
@@ -33,4 +34,23 @@ test("resolveProjectRootForFile finds game root from plugin source", async () =>
   fs.writeFileSync(uproject, "{}");
   const resolved = await resolveProjectRootForFile(file, () => uproject);
   assert.equal(path.normalize(resolved), path.normalize(projectRoot));
+});
+test("validator infrastructure failures are advisory", () => {
+  for (const code of ["VALIDATOR_MISSING", "VALIDATOR_EXEC_FAILED"]) {
+    assert.equal(isValidationInfrastructureFailure({
+      findings: [{ severity: "error", code }]
+    }), true);
+  }
+});
+
+test("real source findings remain blocking", () => {
+  assert.equal(isValidationInfrastructureFailure({
+    findings: [{ severity: "error", code: "MOCK_FINDING" }]
+  }), false);
+  assert.equal(isValidationInfrastructureFailure({
+    findings: [
+      { severity: "error", code: "VALIDATOR_EXEC_FAILED" },
+      { severity: "error", code: "CPP_DEFINITION_MISSING" }
+    ]
+  }), false);
 });

@@ -27,7 +27,10 @@ from unreal_static_validate import (  # noqa: E402
     should_block_llm_apply_static_gate,
     validate_blueprint_assignable_delegate_types,
     validate_project_uobject_type_visibility,
+    validate_uproperty_category_without_exposure,
+    load_include_owner_map,
 )
+from collect_unreal_symbols import infer_module_name  # noqa: E402
 from retry_feedback import static_validation_retry_feedback  # noqa: E402
 from bootstrap_local_holdout import write_fixture_case  # noqa: E402
 
@@ -102,7 +105,7 @@ void RefreshEditorPreview()
     assert any(item.code == "EDITOR_ONLY_INCLUDE_IN_RUNTIME_MODULE" for item in findings)
 
 
-def test_module_fix_build_cs_patch_skips_include_path_gate(tmp_path: Path) -> None:
+def test_module_fix_build_cs_patch_reports_module_not_include_path(tmp_path: Path) -> None:
     project = tmp_path / "CompileFixTags"
     source_root = FIXTURE / "Source"
     for path in source_root.rglob("*"):
@@ -117,7 +120,8 @@ def test_module_fix_build_cs_patch_skips_include_path_gate(tmp_path: Path) -> No
     )
 
     before = validate_unreal_readiness(project)
-    assert any(item.code == "INCLUDE_PATH_NOT_FOUND" for item in before)
+    assert any(item.code == "POSSIBLE_MISSING_MODULE" for item in before)
+    assert not any(item.code == "INCLUDE_PATH_NOT_FOUND" for item in before)
 
     build_cs = project / "Source" / "CompileFixTags" / "CompileFixTags.Build.cs"
     build_cs.write_text(
@@ -128,6 +132,102 @@ def test_module_fix_build_cs_patch_skips_include_path_gate(tmp_path: Path) -> No
     after = validate_unreal_readiness(project, skip_include_path_checks=True)
     assert not any(item.code == "INCLUDE_PATH_NOT_FOUND" for item in after)
     assert not has_static_errors(after)
+
+
+def test_missing_module_is_attributed_to_own_build_cs_not_first_plugin(tmp_path: Path) -> None:
+    project = tmp_path / "ModuleOwnership"
+    plugin_build = project / "Plugins" / "AAAPlugin" / "Source" / "AAAPlugin" / "AAAPlugin.Build.cs"
+    game_build = project / "Source" / "ModuleOwnership" / "ModuleOwnership.Build.cs"
+    game_header = project / "Source" / "ModuleOwnership" / "Public" / "TaggedState.h"
+    _write(
+        plugin_build,
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core" });\n',
+    )
+    _write(
+        game_build,
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });\n',
+    )
+    _write(
+        game_header,
+        '#pragma once\n#include "GameplayTagContainer.h"\nstruct FTaggedState { FGameplayTagContainer Tags; };\n',
+    )
+
+    before = validate_unreal_readiness(project, skip_include_path_checks=True)
+    missing = [
+        item
+        for item in before
+        if item.code == "POSSIBLE_MISSING_MODULE" and "GameplayTags" in item.message
+    ]
+
+    assert [Path(item.path).as_posix() for item in missing] == [
+        "Source/ModuleOwnership/ModuleOwnership.Build.cs"
+    ]
+
+    _write(
+        game_build,
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "GameplayTags" });\n',
+    )
+    after = validate_unreal_readiness(project, skip_include_path_checks=True)
+    assert not any(
+        item.code == "POSSIBLE_MISSING_MODULE" and "GameplayTags" in item.message
+        for item in after
+    )
+
+
+def test_source_root_symbol_collection_infers_real_project_module(tmp_path: Path) -> None:
+    source_root = tmp_path / "Project" / "Source"
+    header = source_root / "DemoGame" / "Public" / "DemoComponent.h"
+    _write(header, "#pragma once\n")
+
+    assert infer_module_name(source_root, header) == "DemoGame"
+
+
+def test_stale_source_include_owner_sentinel_is_ignored(tmp_path: Path) -> None:
+    graph = tmp_path / "module_graph.jsonl"
+    _write(
+        graph,
+        (
+            '{"metadata":{"symbol_kind":"include_owner","include_path":"DemoComponent.h",'
+            '"owner_modules":["Source"]}}\n'
+        ),
+    )
+
+    assert load_include_owner_map(graph) == {}
+
+
+def test_uproperty_category_without_exposure_matches_uht_warning(tmp_path: Path) -> None:
+    project = tmp_path / "UhtCategory"
+    header = project / "Source" / "UhtCategory" / "Public" / "UhtCategoryComponent.h"
+    _write(
+        header,
+        """#pragma once
+UCLASS()
+class UUhtCategoryComponent
+{
+    GENERATED_BODY()
+
+    UPROPERTY(Transient, Category="Internal")
+    bool bInternal = false;
+
+    UPROPERTY(Transient)
+    int32 Counter = 0;
+
+    UPROPERTY(VisibleAnywhere, Category="State")
+    int32 VisibleCounter = 0;
+};
+""",
+    )
+
+    findings = validate_uproperty_category_without_exposure(
+        header,
+        header.read_text(encoding="utf-8"),
+        project,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].code == "UPROPERTY_CATEGORY_WITHOUT_EXPOSURE"
+    assert findings[0].line == 7
 
 
 def test_ufunction_declaration_with_cpp_definition_not_flagged_missing(tmp_path: Path) -> None:
@@ -1126,7 +1226,7 @@ def test_uproperty_in_comment_does_not_mask_missing_annotation(tmp_path: Path) -
     assert any(item.code == "TOBJECTPTR_WITHOUT_UPROPERTY" and "Value" in item.message for item in findings)
 
 
-def test_write_mode_include_external_header_is_warning_not_error(tmp_path: Path) -> None:
+def test_write_mode_external_header_is_left_to_ubt(tmp_path: Path) -> None:
     header = tmp_path / "Source" / "Demo" / "Public" / "Actor.h"
     header.parent.mkdir(parents=True)
     header.write_text('#include "ExternalPluginHeader.h"\n', encoding="utf-8")
@@ -1139,8 +1239,42 @@ def test_write_mode_include_external_header_is_warning_not_error(tmp_path: Path)
         write_mode=True,
         include_owner_map={},
     )
-    assert findings
-    assert all(item.severity == "warning" for item in findings)
+    assert not any(item.code == "INCLUDE_PATH_NOT_FOUND" for item in findings)
+
+
+def test_engine_and_module_headers_are_not_assumed_project_local(tmp_path: Path) -> None:
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "Actor.cpp"
+    _write(
+        cpp,
+        """#include "Camera/CameraComponent.h"
+#include "TimerManager.h"
+#include "Modules/ModuleManager.h"
+#include "FMODEvent.h"
+""",
+    )
+    index = build_source_include_index(tmp_path)
+    findings = validate_include_paths_exist(cpp, cpp.read_text(encoding="utf-8"), tmp_path, index)
+    assert not any(item.code == "INCLUDE_PATH_NOT_FOUND" for item in findings)
+
+
+def test_plugin_headers_are_indexed_for_local_path_diagnostics(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    plugin_root = project / "Plugins" / "DemoPlugin"
+    _write(
+        plugin_root / "DemoPlugin.uplugin",
+        '{"FileVersion": 3, "Modules": [{"Name": "DemoPlugin", "Type": "Runtime"}]}',
+    )
+    _write(plugin_root / "Source" / "DemoPlugin" / "DemoPlugin.Build.cs", "// fixture\n")
+    plugin_header = plugin_root / "Source" / "DemoPlugin" / "Public" / "PluginThing.h"
+    _write(plugin_header, "#pragma once\n")
+    cpp = project / "Source" / "Demo" / "Private" / "Consumer.cpp"
+    _write(cpp, '#include "Wrong/PluginThing.h"\n')
+
+    index = build_source_include_index(project)
+    findings = validate_include_paths_exist(cpp, cpp.read_text(encoding="utf-8"), project, index)
+
+    assert str(plugin_header) in index["PluginThing.h"]
+    assert any(item.code == "INCLUDE_PATH_NOT_FOUND" and "DemoPlugin" in item.message for item in findings)
 
 
 def test_blueprint_assignable_delegate_type_must_be_declared(tmp_path: Path) -> None:
@@ -1282,3 +1416,122 @@ class UStaminaComponent
     )
 
     assert findings == []
+
+def test_interface_blueprint_native_event_does_not_require_base_implementation(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "DemoParticipant.h"
+    _write(
+        header,
+        """#pragma once
+#include "CoreMinimal.h"
+#include "UObject/Interface.h"
+#include "DemoParticipant.generated.h"
+
+UINTERFACE()
+class UDemoParticipant : public UInterface
+{
+    GENERATED_BODY()
+};
+
+class IDemoParticipant
+{
+    GENERATED_BODY()
+public:
+    UFUNCTION(BlueprintNativeEvent)
+    void OnStarted();
+};
+""",
+    )
+
+    findings = validate_unreal_readiness(project, skip_include_path_checks=True)
+
+    assert not any(item.code == "BLUEPRINT_NATIVE_EVENT_IMPL_MISSING" for item in findings)
+    assert not any(item.code == "CPP_DEFINITION_MISSING" and "OnStarted" in item.message for item in findings)
+
+
+def test_cpp_definition_check_is_scoped_to_each_class_body(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "MultiClass.h"
+    cpp = project / "Source" / "Demo" / "Private" / "MultiClass.cpp"
+    _write(
+        header,
+        """#pragma once
+#include "CoreMinimal.h"
+#include "MultiClass.generated.h"
+
+/* Example usage: Call(TEXT("Name")); */
+UCLASS()
+class UFirst : public UObject
+{
+    GENERATED_BODY()
+public:
+    void RealMethod();
+};
+
+class ISecond
+{
+public:
+    void InterfaceOnly();
+};
+""",
+    )
+    _write(cpp, '#include "MultiClass.h"\nvoid UFirst::RealMethod() {}\n')
+
+    findings = validate_unreal_readiness(project, skip_include_path_checks=True)
+
+    missing_messages = [item.message for item in findings if item.code == "CPP_DEFINITION_MISSING"]
+    assert not any("UFirst::InterfaceOnly" in message for message in missing_messages)
+    assert not any("UFirst::TEXT" in message for message in missing_messages)
+
+def test_bool_member_numeric_parameter_is_advisory(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "StaminaComponent.h"
+    _write(
+        header,
+        """#pragma once
+#include "CoreMinimal.h"
+#include "StaminaComponent.generated.h"
+UCLASS()
+class UStaminaComponent : public UObject
+{
+    GENERATED_BODY()
+public:
+    void Configure(float bInRegenRate, float bInDepleteOnDeath);
+private:
+    bool bDepleteOnDeath = false;
+    float StaminaRegenRate = 20.0f;
+};
+""",
+    )
+
+    findings = validate_unreal_readiness(project, skip_include_path_checks=True)
+    matches = [item for item in findings if item.code == "BOOL_MEMBER_PARAMETER_TYPE_MISMATCH"]
+
+    assert len(matches) == 1
+    assert matches[0].severity == "warning"
+    assert "bInDepleteOnDeath" in matches[0].message
+    assert "bInRegenRate" not in matches[0].message
+
+
+def test_bool_member_bool_parameter_is_allowed(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "StaminaComponent.h"
+    _write(
+        header,
+        """#pragma once
+#include "CoreMinimal.h"
+#include "StaminaComponent.generated.h"
+UCLASS()
+class UStaminaComponent : public UObject
+{
+    GENERATED_BODY()
+public:
+    void Configure(float RegenRate, bool bInDepleteOnDeath);
+private:
+    bool bDepleteOnDeath = false;
+};
+""",
+    )
+
+    findings = validate_unreal_readiness(project, skip_include_path_checks=True)
+    assert not any(item.code == "BOOL_MEMBER_PARAMETER_TYPE_MISMATCH" for item in findings)

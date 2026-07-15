@@ -106,6 +106,13 @@ def test_rag_mcp_subprocess_tools_list_stable_essential(tmp_path: Path, monkeypa
         names = {tool["name"] for tool in tools["result"]["tools"]}
         assert names == set(MANIFEST["ragEssential"])
         assert "unreal_review_claim_validate" in names
+        invalid = client.request("tools/call", {"name": "unreal_agent_plan", "arguments": {}}, req_id=3)
+        invalid_result = invalid["result"]
+        invalid_payload = invalid_result.get("structuredContent") or json.loads(invalid_result["content"][0]["text"])
+        assert invalid_result["isError"] is True
+        assert invalid_payload["errorCode"] == "INVALID_TOOL_ARGUMENTS"
+        assert "request" in invalid_payload["requiredArguments"]
+        assert invalid_payload["retryable"] is True
     finally:
         client.close()
 
@@ -134,10 +141,27 @@ def test_agent_mcp_subprocess_tools_list_stable_essential(tmp_path: Path) -> Non
         )
         assert "result" in init
         client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        tools = client.request("tools/list", {}, req_id=2)
-        names = {tool["name"] for tool in tools["result"]["tools"]}
+        tools_result = client.request("tools/list", {}, req_id=2)
+        tools = tools_result["result"]["tools"]
+        names = {tool["name"] for tool in tools}
         assert names == set(MANIFEST["agentEssential"])
         assert "apply_edit_bundle" not in names
+        definitions = {tool["name"]: tool for tool in tools}
+        for mutation_tool in ("write_file", "replace_in_file"):
+            schema = definitions[mutation_tool]["inputSchema"]
+            assert "taskAuthorization" in schema["required"]
+        invalid = client.request("tools/call", {"name": "read_file", "arguments": {}}, req_id=3)
+        invalid_result = invalid["result"]
+        invalid_payload = json.loads(invalid_result["content"][0]["text"])
+        assert invalid_result["isError"] is True
+        assert invalid_payload["errorCode"] == "INVALID_TOOL_ARGUMENTS"
+        assert "path" in invalid_payload["requiredArguments"]
+        assert invalid_payload["retryable"] is True
+        repeated = client.request("tools/call", {"name": "read_file", "arguments": {}}, req_id=4)
+        repeated_result = repeated["result"]
+        repeated_payload = json.loads(repeated_result["content"][0]["text"])
+        assert repeated_payload["errorCode"] == "TOOL_REPEAT_BLOCKED"
+        assert repeated_payload["retryable"] is False
     finally:
         client.close()
 
@@ -758,5 +782,88 @@ def test_agent_build_plan_fail_is_error(tmp_path: Path) -> None:
         assert result["result"].get("isError") is True
         text = result["result"]["content"][0]["text"]
         assert "BUILD_PLAN_RESOLUTION_FAILED" in text or '"ok": false' in text
+    finally:
+        client.close()
+
+def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(tmp_path: Path) -> None:
+    require_agent_mcp_deps()
+    project_dir = tmp_path / "DemoGame"
+    source_dir = project_dir / "Source" / "DemoGame"
+    source_dir.mkdir(parents=True)
+    (project_dir / "DemoGame.uproject").write_text(
+        json.dumps({"FileVersion": 3, "EngineAssociation": "5.4"}),
+        encoding="utf-8",
+    )
+    (source_dir / "HealthComponent.h").write_text("#pragma once\n", encoding="utf-8")
+    (source_dir / "Demo.cpp").write_text(
+        '#include "Wrong/HealthComponent.h"\n',
+        encoding="utf-8",
+    )
+
+    state_dir = project_dir / ".agent" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "mutation.json").write_text(
+        json.dumps({
+            "mutationGeneration": 2,
+            "validatedGeneration": 0,
+            "paths": {"Source/DemoGame/Demo.cpp": "fixture"},
+        }),
+        encoding="utf-8",
+    )
+    log_dir = project_dir / ".agent" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "latest-build.log").write_text(
+        "Demo.cpp(1): error C2065: fixture failure\n",
+        encoding="utf-8",
+    )
+
+    shared = tmp_path / "shared.json"
+    shared.write_text(json.dumps({"activeProject": str(project_dir / "DemoGame.uproject")}), encoding="utf-8")
+    config = tmp_path / "agent-mcp.json"
+    config.write_text(json.dumps({"projectSearchRoots": [str(tmp_path)]}), encoding="utf-8")
+    env = os.environ.copy()
+    env.update({
+        "MCP_ESSENTIAL_TOOLS": "1",
+        "WORKSPACE_ROOT": str(tmp_path),
+        "UNREAL58_ROOT": str(ROOT),
+        "SHARED_UNREAL_CONFIG": str(shared),
+        "AGENT_MCP_CONFIG": str(config),
+        "ALLOW_WRITE": "0",
+        "ALLOW_UNREAL_BUILD": "0",
+    })
+    client = _StdioJsonRpc([_node_exe(), str(AGENT_SERVER)], env=env, cwd=ROOT / "lmstudio-unreal-agent-mcp")
+    try:
+        client.request(
+            "initialize",
+            {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "pytest", "version": "1.0"}},
+            req_id=1,
+        )
+        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+        result = client.request(
+            "tools/call",
+            {"name": "static_validate_project", "arguments": {}},
+            req_id=2,
+        )
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert result["result"].get("isError") is not True
+        assert payload["errorCode"] == "STATIC_VALIDATION_FAILED"
+        assert payload["validatedGeneration"] == 2
+        assert payload["mutationGeneration"] == 2
+        assert payload["buildAllowedForValidatedGeneration"] is True
+        assert payload["validationOverrideAvailable"] is False
+
+        mutation = json.loads((state_dir / "mutation.json").read_text(encoding="utf-8"))
+        assert mutation["validatedGeneration"] == 2
+
+        logs = client.request(
+            "tools/call",
+            {"name": "read_unreal_logs", "arguments": {"filter": "error"}},
+            req_id=3,
+        )
+        logs_text = logs["result"]["content"][0]["text"]
+        assert logs["result"].get("isError") is not True
+        assert "latest-build.log" in logs_text
+        assert "error C2065" in logs_text
     finally:
         client.close()

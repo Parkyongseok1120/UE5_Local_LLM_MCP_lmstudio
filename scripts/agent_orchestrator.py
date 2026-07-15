@@ -68,8 +68,15 @@ ANALYSIS_MARKERS = (
     "전체 동작", "구조 설명", "현재 시스템", "시네마틱",
 )
 WRITE_INTENT_MARKERS = (
-    "implement", "fix", "patch", "create", "add ", "write ", "generate ",
+    "implement", "improve", "fix", "patch", "create", "add ", "write ", "generate ",
+    "\uac1c\uc120",
     "구현", "수정", "고쳐", "추가", "생성", "만들", "패치",
+)
+NEGATED_REFACTOR_PATTERNS = (
+    r"\b(?:no|not|without)\s+(?:cross[- ]file\s+)?refactor(?:ing)?\b",
+    r"\bdo\s+not\s+refactor\b",
+    r"\ub9ac\ud329\ud130\ub9c1(?:\uc740|\uc744)?\s*(?:\ud558\uc9c0\s*\ub9d0|\uc81c\uc678|\uc5c6\uc774)",
+    r"\ub9ac\ud329\ud1a0\ub9c1(?:\uc740|\uc744)?\s*(?:\ud558\uc9c0\s*\ub9d0|\uc81c\uc678|\uc5c6\uc774)",
 )
 PLAN_REQUEST_MARKERS = (
     "implementation plan", "implementation roadmap", "make a plan", "draft a plan",
@@ -231,6 +238,12 @@ def _has_write_intent(text: str) -> bool:
         return any(m in text for m in CREATE_TARGET_MARKERS)
     return True
 
+def _has_refactor_intent(text: str) -> bool:
+    if any(re.search(pattern, text) for pattern in NEGATED_REFACTOR_PATTERNS):
+        return False
+    return any(marker in text for marker in REFACTOR_MARKERS)
+
+
 
 def _is_plan_only_request(text: str) -> bool:
     if not any(marker in text for marker in PLAN_REQUEST_MARKERS):
@@ -268,7 +281,7 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
     if mode in {"shader", "material_analysis", "material_porting", "blueprint_analysis", "blueprint_verification"}:
         return "inspect_only"
     if mode == "runtime_debug":
-        return "runtime_debug"
+        return "edit" if _has_write_intent(request.lower()) else "runtime_debug"
     if mode in {"cpp_analysis", "code_analysis"}:
         return "cpp_analysis"
     if mode in {"review", "planning"}:
@@ -283,11 +296,11 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "compile_fix"
     if any(m in text for m in SKETCH_MARKERS):
         return "code_sketch"
-    if any(m in text for m in REFACTOR_MARKERS):
+    if _has_refactor_intent(text):
         return "refactor"
     if _is_plan_only_request(text):
         return "inspect_only"
-    if _is_runtime_symptom_analysis(text):
+    if _is_runtime_symptom_analysis(text) and not _has_write_intent(text):
         return "runtime_debug"
     if any(m in text for m in ASSET_ANALYSIS_MARKERS) and not _has_write_intent(text):
         return "inspect_only"

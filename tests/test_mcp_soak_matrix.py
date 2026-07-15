@@ -102,10 +102,17 @@ def test_agent_repeated_read_file_calls(agent_env: dict[str, str], tmp_path: Pat
     client = StdioJsonRpc(["node", str(AGENT_SERVER)], env=agent_env, cwd=ROOT / "lmstudio-unreal-agent-mcp")
     try:
         _init_client(client, name="soak-agent")
-        for idx in range(SOAK_CALLS):
+        for idx in range(min(2, SOAK_CALLS)):
             resp = _tools_call(client, 100 + idx, "read_file", {"path": str(sample)})
             assert "result" in resp
             assert resp["result"].get("isError") is not True
+        for idx in range(2, SOAK_CALLS):
+            resp = _tools_call(client, 100 + idx, "read_file", {"path": str(sample)})
+            assert "result" in resp
+            assert resp["result"].get("isError") is True
+            if idx == 2:
+                body = resp["result"]["content"][0]["text"]
+                assert "EVIDENCE_STAGNATION" in body
     finally:
         client.close()
 
