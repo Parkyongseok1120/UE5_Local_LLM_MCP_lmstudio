@@ -30,6 +30,12 @@ from prompt_history import (
     count_compact_summary_messages,
     prepare_messages_for_attempt,
 )
+from context_compaction import (
+    budget_decision as context_budget_decision,
+    build_checkpoint as build_context_checkpoint,
+    compact_messages as compact_context_messages,
+    estimate_tokens as estimate_context_tokens,
+)
 from symbol_graph import load_symbol_graph, lookup_symbol
 from ubt_utils import build_ubt_command, sanitize_ubt_target, split_ubt_target_spec, ubt_subprocess_env
 from apply_patch import apply_patch as apply_single_patch, apply_patch_content, patch_apply_hint, validate_patch_item
@@ -3131,6 +3137,64 @@ def run(args: argparse.Namespace) -> int:
             attempt=attempt,
             history_turns=int(edit_limits.get("historyTurns") or 0) or None,
         )
+        configured_context_length = int(getattr(args, "context_length", 0) or 0)
+        if configured_context_length > 0:
+            input_tokens = estimate_context_tokens(
+                "\n".join(str(item.get("content") or "") for item in messages) + "\n" + prompt
+            )
+            context_decision = context_budget_decision(
+                context_length=configured_context_length,
+                input_tokens=input_tokens,
+                next_tool_name="build_unreal_project" if last_build_records else "read_file_range",
+            )
+            if context_decision.action != "normal":
+                checkpoint = build_context_checkpoint(messages)
+                checkpoint["buildState"] = {
+                    "attempt": attempt,
+                    "latestRetry": previous_retry_record,
+                    "recommendation": last_recommendation,
+                    "activeRoute": active_route,
+                    "blockedRepeatPaths": blocked_repeat_paths,
+                }
+                retained_messages = 12
+                post_decision = context_decision
+                compacted_messages = messages
+                while True:
+                    candidate = compact_context_messages(messages, checkpoint, recent_messages=retained_messages)
+                    candidate_tokens = estimate_context_tokens(
+                        "\n".join(str(item.get("content") or "") for item in candidate) + "\n" + prompt
+                    )
+                    candidate_decision = context_budget_decision(
+                        context_length=configured_context_length,
+                        input_tokens=candidate_tokens,
+                        next_tool_name="build_unreal_project" if last_build_records else "read_file_range",
+                    )
+                    compacted_messages = candidate
+                    post_decision = candidate_decision
+                    if post_decision.remaining_tokens >= 20_000 or retained_messages == 0:
+                        break
+                    retained_messages -= 1
+                messages = compacted_messages
+                if post_decision.remaining_tokens < 5_000:
+                    error_message = (
+                        "Context remains below the 5,000-token hard margin after maximum compaction: "
+                        f"{post_decision.remaining_tokens} tokens remain. Increase --context-length or reduce prompt/tool context."
+                    )
+                    write_file(attempt_dir / "context_compaction_error.txt", error_message + "\n")
+                    print(error_message, file=sys.stderr)
+                    return 1
+                history_metrics["contextCompaction"] = {
+                    "action": context_decision.action,
+                    "inputTokens": context_decision.input_tokens,
+                    "remainingTokens": context_decision.remaining_tokens,
+                    "reservedTokens": context_decision.reserved_tokens,
+                    "checkpointGeneration": checkpoint["checkpointGeneration"],
+                    "postInputTokens": post_decision.input_tokens,
+                    "postRemainingTokens": post_decision.remaining_tokens,
+                    "retainedMessages": retained_messages,
+                }
+                write_json(attempt_dir / "context_checkpoint.json", checkpoint)
+
         compile_patch_turn = (
             attempt >= 2
             or first_attempt_patch_route
@@ -4049,6 +4113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--max-tokens", type=int, default=0)
+    parser.add_argument("--context-length", type=int, default=0, help="Model context length for pre-tool compaction. 0 disables the wrapper-side token gate.")
     parser.add_argument("--max-attempts", type=int, default=4)
     parser.add_argument("--max-total-model-calls", type=int, default=40)
     parser.add_argument("--max-retries-per-slice", type=int, default=5)

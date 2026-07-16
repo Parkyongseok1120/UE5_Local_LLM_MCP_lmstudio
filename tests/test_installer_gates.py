@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,8 @@ def test_main_install_whatif_zero_mutations(tmp_path: Path) -> None:
         str(ROOT),
     )
     assert ps.returncode == 0, ps.stderr or ps.stdout
+    assert "Would install LM Studio plugin" in ps.stdout
+    assert "Installation file available: Y" in ps.stdout
     after = {p.name for p in tmp_path.iterdir()}
     assert before == after
     assert marker.read_text(encoding="utf-8") == "before"
@@ -111,6 +114,87 @@ def test_portable_package_content_scan_passes_slim_build(tmp_path: Path) -> None
     assert build.returncode == 0, build.stderr or build.stdout
     scan = _run_ps1("Test-PortablePackageContents.ps1", "-ZipPath", str(zip_path))
     assert scan.returncode == 0, scan.stderr or scan.stdout
+
+
+def test_portable_package_scan_ignores_dependency_server_entries(tmp_path: Path) -> None:
+    zip_path = tmp_path / "full-layout.zip"
+    entries = {
+        "package/lmstudio-unreal-agent-mcp/src/server.js": "module.exports = {};\n",
+        "package/lmstudio-unreal-agent-mcp/node_modules/example/server.js": "module.exports = {};\n",
+        "package/Unreal58-RAG/lmstudio-context-compactor-plugin/manifest.json": "{}\n",
+        "package/Unreal58-RAG/lmstudio-context-compactor-plugin/package.json": "{}\n",
+        "package/Unreal58-RAG/lmstudio-context-compactor-plugin/src/generator.ts": "export {};\n",
+        "package/Unreal58-RAG/scripts/install_context_compactor.ps1": "Write-Host ok\n",
+        "package/Unreal58-RAG/scripts/Test-ContextCompactorActivation.ps1": "Write-Host ok\n",
+        "package/Unreal58-RAG/installer/INSTALL-AGENT-MODE.bat": "@echo off\n",
+    }
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+
+    scan = _run_ps1("Test-PortablePackageContents.ps1", "-ZipPath", str(zip_path))
+    assert scan.returncode == 0, scan.stderr or scan.stdout
+
+
+def _run_activation_status(state_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ROOT / "scripts" / "Test-ContextCompactorActivation.ps1"),
+            "-StateRoot",
+            str(state_root),
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        timeout=120,
+    )
+
+
+def test_context_compactor_status_rejects_install_only_state(tmp_path: Path) -> None:
+    status = _run_activation_status(tmp_path / "missing")
+    assert status.returncode == 2
+    assert "No context compactor proxy activation evidence" in status.stdout
+    assert "underlying Qwen/GPT model directly bypasses" in status.stdout
+
+
+def test_context_compactor_status_reports_runtime_route_and_compaction(tmp_path: Path) -> None:
+    session = tmp_path / "session-a"
+    session.mkdir()
+    events = [
+        {
+            "type": "context_measurement",
+            "at": "2026-07-17T03:00:00.000Z",
+            "proxyActive": True,
+            "targetModel": "test-qwen",
+            "inputTokens": 65000,
+            "contextLength": 70656,
+            "decision": {"action": "hard_compact"},
+        },
+        {
+            "type": "compaction_decision",
+            "at": "2026-07-17T03:00:01.000Z",
+            "applied": True,
+            "postRemainingTokens": 21000,
+        },
+    ]
+    (session / "events.jsonl").write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    status = _run_activation_status(tmp_path, "-Json", "-RequireCompaction")
+    assert status.returncode == 0, status.stderr or status.stdout
+    payload = json.loads(status.stdout)
+    assert payload["active"] is True
+    assert payload["targetModel"] == "test-qwen"
+    assert payload["compactionApplied"] is True
+    assert payload["postRemainingTokens"] == 21000
 
 
 def test_sync_shared_workspace_drops_paths_from_another_pc(tmp_path: Path) -> None:

@@ -40,7 +40,7 @@ test("compiler failure is a recoverable build outcome, not an MCP tool error", (
 });
 
 test("compact compiler diagnostics remove machine path and mojibake tail", () => {
-  const raw = "C:\\Users\\dev\\Game\\Source\\StaminaComponent.cpp(93,28): error C2039: 'Empty': 'FGameplayTagContainer'?占쏙옙 깨진 설명";
+  const raw = "D:\\BuildAgent\\Game\\Source\\StaminaComponent.cpp(93,28): error C2039: 'Empty': 'FGameplayTagContainer'?占쏙옙 깨진 설명";
   const compact = compactCompilerDiagnostic(raw);
   assert.strictEqual(
     compact,
@@ -60,7 +60,7 @@ test("compact compiler diagnostics remove machine path and mojibake tail", () =>
   assert.strictEqual(payload.suggestedToolCalls[0].tool, "unreal_symbol_lookup");
   assert.strictEqual(payload.suggestedToolCalls[0].args.query, "Empty");
   assert.strictEqual(payload.recovery.owner, "FGameplayTagContainer");
-  assert.ok(!payload.summary.includes("C:\\Users"));
+  assert.ok(!payload.summary.includes("D:\\BuildAgent"));
 });
 
 test("two compiler failures keep deterministic recovery before a successful rebuild", () => {

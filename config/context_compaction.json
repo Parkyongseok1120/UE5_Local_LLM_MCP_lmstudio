@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "description": "Shared context compaction policy. Control-plane state is never represented only by a natural-language summary.",
+  "enabled": true,
+  "observeOnly": false,
+  "strictToolControlPlane": false,
+  "softRemainingTokens": 10000,
+  "hardRemainingTokens": 5000,
+  "maxOutputReserve": 4096,
+  "temperature": 0.1,
+  "normalToolResultReserve": 3000,
+  "buildToolResultReserve": 8000,
+  "recentCompleteTurns": 6,
+  "minimumTurnsBetweenCompactions": 3,
+  "targetRemainingTokensAfterCompaction": 20000,
+  "maxCheckpointFacts": 32
+}

@@ -30,7 +30,8 @@ function Copy-FullTreeFiltered {
         [Parameter(Mandatory = $true)][string]$Source,
         [Parameter(Mandatory = $true)][string]$Dest,
         [string[]]$ExtraExcludeDirs = @(),
-        [string[]]$ExtraExcludeFiles = @()
+        [string[]]$ExtraExcludeFiles = @(),
+        [switch]$IncludeNodeModules
     )
 
     if (-not (Test-Path -LiteralPath $Source)) {
@@ -39,6 +40,9 @@ function Copy-FullTreeFiltered {
 
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
     $excludeDirs = @($packExcludes.ExcludeDirs + $ExtraExcludeDirs)
+    if ($IncludeNodeModules) {
+        $excludeDirs = @($excludeDirs | Where-Object { $_ -ne "node_modules" })
+    }
     $excludeFiles = @($packExcludes.ExcludeFiles + $ExtraExcludeFiles)
     $args = @($Source, $Dest, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS", "/NP")
     foreach ($d in $excludeDirs) { $args += "/XD"; $args += $d }
@@ -70,14 +74,15 @@ Write-Host "Source agent    : $agentRoot"
 
 Write-Host "Copying full RAG workspace..."
 Copy-FullTreeFiltered -Source $ragRoot -Dest (Join-Path $OutputDir "Unreal58-RAG") `
-    -ExtraExcludeFiles @("config\unreal-workspace.json", "config\cline-workspace.json")
+    -ExtraExcludeFiles @("config\unreal-workspace.json", "config\cline-workspace.json") `
+    -IncludeNodeModules
 
 Write-Host "Copying full lmstudio-unreal-agent-mcp folder..."
-Copy-FullTreeFiltered -Source $agentRoot -Dest (Join-Path $OutputDir "lmstudio-unreal-agent-mcp")
+Copy-FullTreeFiltered -Source $agentRoot -Dest (Join-Path $OutputDir "lmstudio-unreal-agent-mcp") -IncludeNodeModules
 
 if (Test-Path -LiteralPath $mcpToolsRoot) {
     Write-Host "Copying mcp-tools folder..."
-    Copy-FullTreeFiltered -Source $mcpToolsRoot -Dest (Join-Path $OutputDir "mcp-tools")
+    Copy-FullTreeFiltered -Source $mcpToolsRoot -Dest (Join-Path $OutputDir "mcp-tools") -IncludeNodeModules
 }
 else {
     Write-Host "Skipping mcp-tools (not present at $mcpToolsRoot)."

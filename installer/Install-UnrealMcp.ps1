@@ -6,6 +6,7 @@ param(
     [switch]$SkipPythonDeps,
     [switch]$EnableAgentMode,
     [switch]$SkipProjectSetup,
+    [switch]$SkipContextCompactor,
     [switch]$InstallCline,
     [switch]$WhatIf
 )
@@ -210,6 +211,25 @@ if (-not $SkipPythonDeps -and -not $WhatIf) {
     }
 }
 
+# LM Studio context compactor generator plugin
+$contextCompactorInstaller = Join-Path $ragRoot "scripts\install_context_compactor.ps1"
+if ($SkipContextCompactor) {
+    Write-Host "Context compactor: SKIPPED by request." -ForegroundColor Yellow
+}
+else {
+    if (-not (Test-Path -LiteralPath $contextCompactorInstaller)) {
+        throw "Context compactor installer missing: $contextCompactorInstaller"
+    }
+    Write-Host "Installing LM Studio context compactor..."
+    $contextCompactorArgs = @{
+        SourcePath   = (Join-Path $ragRoot "lmstudio-context-compactor-plugin")
+        LmStudioHome = $lmHome
+    }
+    if ($SkipNpm) { $contextCompactorArgs.SkipNpm = $true }
+    if ($WhatIf) { $contextCompactorArgs.WhatIf = $true }
+    & $contextCompactorInstaller @contextCompactorArgs
+}
+
 # shared workspace config
 $sharedConfigPath = Join-Path $lmHome "config\unreal-workspace.json"
 if (-not (Test-Path $sharedConfigPath)) {
@@ -387,18 +407,24 @@ Write-Host "=== Install complete ===" -ForegroundColor Green
 Write-Host "RAG index path : $ragIndex"
 Write-Host "Agent mode     : $(if ($EnableAgentMode) { 'ENABLED (write/build/commands)' } else { 'Safe (read-only agent)' })"
 Write-Host "Shared config  : $sharedConfigPath"
+Write-Host "Context plugin : $(if ($SkipContextCompactor) { 'SKIPPED' } elseif ($WhatIf) { 'WOULD INSTALL' } else { 'INSTALLED' })"
+if (-not $SkipContextCompactor) {
+    Write-Host "Context route  : NOT PROVEN until this chat sends through unreal-context-compactor" -ForegroundColor Yellow
+}
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "1. Restart LM Studio (required after MCP config changes)"
 Write-Host "2. Enable MCP servers: unreal-rag, unreal-agent"
-Write-Host "3. Workflow doc: docs/Project_Overview.md"
+Write-Host "3. In EACH expansion chat, select unreal-context-compactor in the model dropdown (direct Qwen/GPT bypasses it)" -ForegroundColor Yellow
+Write-Host "4. After one message, verify routing: .\scripts\Test-ContextCompactorActivation.ps1"
+Write-Host "5. Workflow doc: docs/Project_Overview.md"
 if (-not (Test-Path -LiteralPath $ragIndex)) {
-    Write-Host "4. Build RAG index: cd `"$ragRoot`"; .\rag.ps1 build" -ForegroundColor Yellow
+    Write-Host "6. Build RAG index: cd `"$ragRoot`"; .\rag.ps1 build" -ForegroundColor Yellow
 }
 if ($SkipProjectSetup) {
-    Write-Host "5. Pick project: cd `"$ragRoot`"; .\rag.ps1 pick-project"
-    Write-Host "6. Verify: .\installer\Verify-UnrealMcp.ps1 -PortableRoot `"$root`""
+    Write-Host "7. Pick project: cd `"$ragRoot`"; .\rag.ps1 pick-project"
+    Write-Host "8. Verify: .\installer\Verify-UnrealMcp.ps1 -PortableRoot `"$root`""
 }
 else {
-    Write-Host "4. Verify: .\installer\Verify-UnrealMcp.ps1 -PortableRoot `"$root`""
+    Write-Host "6. Verify: .\installer\Verify-UnrealMcp.ps1 -PortableRoot `"$root`""
 }

@@ -88,7 +88,13 @@ cd UE5_Local_LLM_MCP_lmstudio
 .\rag.ps1 doctor
 ```
 
-Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unreal-agent`, and build your index:
+Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unreal-agent`, and build your index. The installer also installs `unreal-context-compactor`. To enable automatic context expansion, keep exactly one underlying LLM loaded (or set its exact `targetModel` in the plugin settings), then **select `unreal-context-compactor` in the model dropdown for every chat that should use expansion. Installation does not change the model already selected in an existing chat; selecting the underlying Qwen/GPT model directly bypasses the installed proxy.** The proxy compacts only the model-facing history; the visible chat and the existing MCP servers remain unchanged.
+
+After sending one message through that selection, verify actual routing—not just installed files—with:
+
+```powershell
+.\scripts\Test-ContextCompactorActivation.ps1
+```
 
 ### Rider + Cline (optional)
 
@@ -129,11 +135,11 @@ Ask a question:
 
 ## Real-Use Session Tips
 
-Holdout evals run in fresh, bounded turns. **Long LM Studio chats** are a different problem: context grows with every tool result, build log, and retry until requests fail even when MCP is healthy.
+Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context grows with every tool result, build log, and retry. When `unreal-context-compactor` is selected as the chat model, it measures the underlying model's tokenizer budget and replaces only the model-facing old history with a deterministic checkpoint before the hard margin is exhausted.
 
 | Symptom in LM Studio logs | What to do |
 |---|---|
-| `request (...) exceeds the available context size (54272)` | **Start a new chat.** Summarize progress in 5–10 lines first. Do not keep retrying in the same thread. |
+| `request (...) exceeds the available context size (54272)` | Run `.\scripts\Test-ContextCompactorActivation.ps1` first. If it has no route evidence, select `unreal-context-compactor` for this chat. If the proxy already reports that it cannot meet the 5,000-token hard margin, use a larger context or start a new chat with a 5–10-line handoff. |
 | `failed to restore kv cache` / `cache size limit reached` | Same as above — session memory is saturated. New chat is faster than raising context alone. |
 | `Model failed to generate a tool call` after a long edit loop | Stop, summarize changed files + remaining errors, new chat. |
 | `js-code-sandbox` appears in logs during Unreal work | Disable it (see Quick Install note above). |
@@ -144,9 +150,9 @@ Practical rules for day-to-day Unreal project work:
 - **Do not paste full UBT/linker logs** into chat. Use `read_unreal_logs` or the log file path; share only the first meaningful error slice.
 - **Header-then-.cpp is normal.** `write_file` on a new header may show advisory `CPP_DEFINITION_MISSING` until the matching `.cpp` is written — that is expected, not a rollback trigger on its own.
 - **Avoid invented UE APIs** the model often hallucinates: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. Prefer `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, `SpawnTransform` by value, and the owning actor/subsystem's `GetWorld()`.
-- **Compact tool responses (v1.2.5):** `build_unreal_project` returns a one-line summary + up to 40 likely errors + `.agent/logs/latest-build.log` path (not full stdout/stderr). `read_unreal_logs` defaults to the newest log and first error cluster. If context pressure builds up, call `write_session_handoff`, start a fresh chat, and resume from `.agent/handoff/latest.md`.
+- **Compact tool responses (v1.2.5):** `build_unreal_project` returns a one-line summary + up to 40 likely errors + `.agent/logs/latest-build.log` path (not full stdout/stderr). `read_unreal_logs` defaults to the newest log and first error cluster. The context proxy preserves control fields such as the required next tool, modified files, diagnostics, and build state across compaction.
 
-When a long session hits context/KV-cache limits, **new chat + short turns** is still the most reliable recovery. v1.3.0 will add stronger automatic session budgeting.
+Automatic compaction extends a session but cannot shrink an oversized system prompt/tool schema or repair a saturated KV cache. If the proxy cannot restore its hard safety margin, use `write_session_handoff`, start a fresh chat, and resume from `.agent/handoff/latest.md`.
 
 Details: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md), [Troubleshooting.md](docs/Troubleshooting.md).
 

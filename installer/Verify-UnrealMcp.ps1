@@ -1,6 +1,9 @@
 param(
     [string]$PortableRoot = "",
-    [switch]$RepoOnly
+    [switch]$RepoOnly,
+    [switch]$SkipContextCompactor,
+    [switch]$RequireContextCompactorActivation,
+    [switch]$RequireContextCompaction
 )
 
 $ErrorActionPreference = "Stop"
@@ -106,17 +109,39 @@ Check "agent MCP startup smoke" {
         Warn "agent node_modules missing - skipped startup smoke (run npm ci in lmstudio-unreal-agent-mcp)"
         return
     }
-    $env:MCP_ESSENTIAL_TOOLS = "1"
-    $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify","version":"1.0"}}}'
-    $list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-    $input = "$init`n$list`n"
-    $stdout = ($input | & node (Join-Path $agentRoot "src\server.js") 2>$null | Out-String)
-    if ($stdout -notmatch '"tools"') { throw "tools/list did not return tools array" }
-    if ($stdout -notmatch 'read_file') { throw "essential tool read_file missing from tools/list" }
+    $previousEssential = $env:MCP_ESSENTIAL_TOOLS
+    $previousStateRoot = $env:AGENT_STATE_ROOT
+    $previousSharedConfig = $env:SHARED_UNREAL_CONFIG
+    $verifyRoot = Join-Path $env:TEMP ("unreal-agent-verify-" + [guid]::NewGuid().ToString("N"))
+    try {
+        $env:MCP_ESSENTIAL_TOOLS = "1"
+        $env:AGENT_STATE_ROOT = Join-Path $verifyRoot "state\unreal-agent"
+        $env:SHARED_UNREAL_CONFIG = Join-Path $verifyRoot "config\unreal-workspace.json"
+        $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify","version":"1.0"}}}'
+        $list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+        $input = "$init`n$list`n"
+        $stdout = ($input | & node (Join-Path $agentRoot "src\server.js") 2>$null | Out-String)
+        if ($stdout -notmatch '"tools"') { throw "tools/list did not return tools array" }
+        if ($stdout -notmatch 'read_file') { throw "essential tool read_file missing from tools/list" }
+    }
+    finally {
+        if ($null -eq $previousEssential) { Remove-Item Env:MCP_ESSENTIAL_TOOLS -ErrorAction SilentlyContinue } else { $env:MCP_ESSENTIAL_TOOLS = $previousEssential }
+        if ($null -eq $previousStateRoot) { Remove-Item Env:AGENT_STATE_ROOT -ErrorAction SilentlyContinue } else { $env:AGENT_STATE_ROOT = $previousStateRoot }
+        if ($null -eq $previousSharedConfig) { Remove-Item Env:SHARED_UNREAL_CONFIG -ErrorAction SilentlyContinue } else { $env:SHARED_UNREAL_CONFIG = $previousSharedConfig }
+        if (Test-Path -LiteralPath $verifyRoot) { Remove-Item -LiteralPath $verifyRoot -Recurse -Force }
+    }
 }
 Check "agent state-root module" { if (-not (Test-Path (Join-Path $agentRoot "src\state-root.js"))) { throw "missing state-root.js" } }
 Check "rag shared state_root.py" { if (-not (Test-Path (Join-Path $root "scripts\state_root.py"))) { throw "missing scripts/state_root.py" } }
 Check "tool contract registry" { if (-not (Test-Path (Join-Path $root "config\tool_contract.json"))) { throw "missing config/tool_contract.json" } }
+Check "context compactor source" {
+    $pluginRoot = Join-Path $ragRoot "lmstudio-context-compactor-plugin"
+    foreach ($required in @("manifest.json", "package.json", "src\generator.ts", "src\compaction-core.js")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $pluginRoot $required))) {
+            throw "missing lmstudio-context-compactor-plugin\$required"
+        }
+    }
+}
 Check "agent write-locks.js" { if (-not (Test-Path (Join-Path $agentRoot "src\write-locks.js"))) { throw "missing write-locks.js (single-flight write guard)" } }
 Check "agent mutation-history.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-history.js"))) { throw "missing mutation-history.js (duplicate-call loop breaker)" } }
 Check "python version" {
@@ -143,6 +168,56 @@ Check "Unreal Engine install" {
     }
 }
 if (-not $RepoOnly) {
+if (-not $SkipContextCompactor) {
+Check "installed context compactor" {
+    $sourceManifestPath = Join-Path $ragRoot "lmstudio-context-compactor-plugin\manifest.json"
+    $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $installedRoot = Join-Path $HOME ".lmstudio\extensions\plugins\$($sourceManifest.owner)\$($sourceManifest.name)"
+    $installedManifestPath = Join-Path $installedRoot "manifest.json"
+    if (-not (Test-Path -LiteralPath $installedManifestPath)) {
+        throw "plugin not installed - run INSTALL-AGENT-MODE.bat or Install_Context_Compactor.cmd"
+    }
+    $installedManifest = Get-Content -LiteralPath $installedManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([int]$installedManifest.revision -ne [int]$sourceManifest.revision) {
+        throw "revision mismatch: source=$($sourceManifest.revision) installed=$($installedManifest.revision)"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $installedRoot ".lmstudio\production.js"))) {
+        throw "installed plugin production entry missing"
+    }
+    $sourceGenerator = Join-Path $ragRoot "lmstudio-context-compactor-plugin\dist\generator.js"
+    $installedGenerator = Join-Path $installedRoot "dist\generator.js"
+    if (Test-Path -LiteralPath $sourceGenerator) {
+        if (-not (Test-Path -LiteralPath $installedGenerator)) {
+            throw "installed plugin generator missing"
+        }
+        if ((Get-FileHash -LiteralPath $sourceGenerator -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $installedGenerator -Algorithm SHA256).Hash) {
+            throw "installed plugin does not match the local tested build"
+        }
+    }
+}
+$activationScript = Join-Path $ragRoot "scripts\Test-ContextCompactorActivation.ps1"
+if (-not (Test-Path -LiteralPath $activationScript)) {
+    Check "context compactor activation checker" { throw "missing scripts\Test-ContextCompactorActivation.ps1" }
+}
+else {
+    $activationArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $activationScript, "-Json")
+    if ($RequireContextCompaction) { $activationArgs += "-RequireCompaction" }
+    $activationOutput = & powershell @activationArgs 2>&1 | Out-String
+    $activationExit = $LASTEXITCODE
+    if ($activationExit -eq 0) {
+        Write-Host "[PASS] Context compactor activation evidence" -ForegroundColor Green
+    }
+    elseif ($RequireContextCompactorActivation -or $RequireContextCompaction) {
+        Check "context compactor activation evidence" {
+            throw "proxy activation was not proven: $($activationOutput.Trim())"
+        }
+    }
+    else {
+        Warn "Context compactor is installed but has no runtime activation evidence. Select unreal-context-compactor as the chat model; selecting the underlying model bypasses it."
+    }
+}
+}
 Check "mcp.json unreal-rag python" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
     if (-not (Test-Path $mcp)) { throw "mcp.json missing - run INSTALL-SAFE-MODE.bat" }
