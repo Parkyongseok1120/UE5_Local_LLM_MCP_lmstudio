@@ -45,10 +45,18 @@ function stripProjectNamePrefix(input, projectDir) {
   if (!projectDir) return input;
   const normalized = String(input || "").replace(/\\/g, "/");
   const projectName = path.basename(projectDir);
-  if (normalized.toLowerCase().startsWith(projectName.toLowerCase() + "/")) {
-    return normalized.slice(projectName.length + 1);
+  const parts = normalized.split("/").filter(Boolean);
+  const projectIndex = parts.findIndex(
+    (part) => part.toLowerCase() === projectName.toLowerCase()
+  );
+  if (projectIndex < 0 || projectIndex + 1 >= parts.length) {
+    return input;
   }
-  return input;
+  const projectRelativeParts = parts.slice(projectIndex + 1);
+  if (!PROJECT_PREFIXES.has(projectRelativeParts[0])) {
+    return input;
+  }
+  return projectRelativeParts.join("/");
 }
 
 function chooseRelativeRoot(input, workspaceRoot, projectDir) {

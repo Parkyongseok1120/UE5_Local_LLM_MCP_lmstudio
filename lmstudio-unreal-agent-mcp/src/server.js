@@ -2041,7 +2041,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         allowExistingWrite: ALLOW_EXISTING_SOURCE_WRITE
       });
       if (!guard.ok) {
-        const rel = path.relative(WORKSPACE_ROOT, target).replace(/\\/g, "/");
+        const rel = displayPath(writeResolution);
         const fileExists = await exists(target);
         const discipline = writeDisciplineOptions(fileExists);
         return fail(guard.message, {
@@ -2059,7 +2059,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       try {
         if (args.createDirs) await fsp.mkdir(parent, { recursive: true });
         if (!(await exists(parent))) return fail(`parent directory not found: ${path.relative(WORKSPACE_ROOT, parent)}`);
-        const rel = path.relative(WORKSPACE_ROOT, target);
+        const rel = displayPath(writeResolution);
         const mutationPayload = String(args.content || "");
         const repeat = checkMutationDuplicate("write_file", target, mutationPayload);
         if (repeat.duplicate) {
@@ -2197,7 +2197,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const mutationPayload = `${oldText}\u0000${newText}\u0000${args.expectedOccurrences ?? ""}`;
         const repeat = checkMutationDuplicate("replace_in_file", target, mutationPayload);
         if (repeat.duplicate) {
-          return fail(duplicateMutationMessage("replace_in_file", path.relative(WORKSPACE_ROOT, target), repeat), {
+          return fail(duplicateMutationMessage("replace_in_file", displayPath(writeResolution), repeat), {
             errorCode: "MUTATION_REPEAT_BLOCKED",
             retryable: false,
             doNotRetry: ["replace_in_file"],
@@ -2283,7 +2283,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const updated = casResult.updated;
         invalidateFileCache(target);
         const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
-        const rel = path.relative(WORKSPACE_ROOT, target);
+        const rel = displayPath(writeResolution);
         if (validationFailed(validation)) {
           // Stale-safe rollback: only restore if the file still holds exactly what this
           // request wrote; otherwise a newer operation owns the file — skip and warn.

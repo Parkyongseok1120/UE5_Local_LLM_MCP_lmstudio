@@ -81,6 +81,38 @@ from mcp_tool_registry import McpToolRegistry, ToolSpec
 
 configure_stdio_utf8()
 
+def symbol_signature_contract(query: str) -> dict[str, Any]:
+    return {
+        "mode": "exact_declaration",
+        "query": str(query or "").strip(),
+        "mustPreserve": [
+            "qualified function name",
+            "parameter count",
+            "parameter order",
+            "parameter types",
+        ],
+        "forbidden": [
+            "omit a declared parameter",
+            "invent a convenience overload",
+            "replace the symbol with a memory-based alternative",
+        ],
+        "nextAction": (
+            "Choose one exact declaration from matches, read the failing source range once, "
+            "patch the call to match that declaration exactly, then validate and rebuild."
+        ),
+    }
+
+
+def symbol_signature_instruction(contract: dict[str, Any]) -> str:
+    return (
+        "[EXACT SIGNATURE CONTRACT]\n"
+        "Use one exact declaration from the returned matches. Preserve the qualified name, "
+        "parameter count, order, and types. Do not omit a required parameter or invent an overload. "
+        "Then read the failing source range once, patch, validate, and rebuild.\n"
+        f"Query: {contract.get('query') or ''}\n"
+    )
+
+
 
 def _handle_unreal_rag_refresh(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
     from rag_refresh import refresh_active_project
@@ -2510,12 +2542,19 @@ class McpServer:
             max_assembly_chars=int(limits["assembly_chars"]),
             max_chars_per_row=int(limits["row_chars"]),
         )
+        contract = symbol_signature_contract(query)
+        context = symbol_signature_instruction(contract) + "\n" + context
         truncated = "assembly budget truncated" in context
         next_detail = next_code_detail(detail) if truncated else None
         self.tool_result(
             message_id,
             context,
-            structured={"matches": rows, "detailLevel": detail, "nextDetailLevel": next_detail},
+            structured={
+                "matches": rows,
+                "detailLevel": detail,
+                "nextDetailLevel": next_detail,
+                "signatureContract": contract,
+            },
             char_limit=int(limits["max_tool_chars"]),
         )
 
