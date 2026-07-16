@@ -94,6 +94,7 @@ const {
 } = require("./mutation-history.js");
 const {
   buildResponsePayload,
+  buildToolDisposition,
   compactLogPayload,
   compactMcpContent,
   compactValidationPayload,
@@ -875,7 +876,7 @@ function applyBuildRecoveryEvidenceGuard(tool, context = {}) {
   const recovery = recordRecoveryEvidenceCall(
     path.dirname(activeProject),
     context.mutationGeneration,
-    { budget: numberEnv("MCP_BUILD_RECOVERY_EVIDENCE_BUDGET", 5, 1) }
+    { budget: numberEnv("MCP_BUILD_RECOVERY_EVIDENCE_BUDGET", 2, 1) }
   );
   if (!recovery.blocked) return null;
   return fail("Build-recovery evidence budget exhausted without a source mutation.", {
@@ -2981,9 +2982,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         payload.errorCode = "BUILD_TIMEOUT";
         payload.ok = false;
       }
-      await agentNotify(payload.userMessage || payload.summary, payload.ok ? "info" : "error");
+      const disposition = buildToolDisposition(payload);
+      payload.buildOutcome = disposition.buildOutcome;
+      payload.toolExecutionSucceeded = disposition.toolExecutionSucceeded;
+      payload.recoverable = disposition.recoverable;
+      await agentNotify(
+        payload.userMessage || payload.summary,
+        payload.ok || disposition.recoverable ? "info" : "error"
+      );
       const response = text(JSON.stringify(payload, null, 2));
-      if (!payload.ok || payload.timedOut || payload.errorCode === "BUILD_TIMEOUT") {
+      if (disposition.mcpIsError) {
         response.isError = true;
       }
       return response;

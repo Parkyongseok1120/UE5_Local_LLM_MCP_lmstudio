@@ -113,6 +113,13 @@
       "writesAllowed": false
     },
     "compile_fix": {
+      "recoveryRouteField": "build_unreal_project.recovery.requiredNextTool",
+      "recoveryRouteOverridesSequence": true,
+      "recoveryRules": [
+        "copy requiredNextToolArgs exactly",
+        "one required evidence lookup per compiler diagnostic",
+        "new build error replaces the previous recovery state"
+      ],
       "sequence": [
         "parse_build_log",
         "unreal_rag_search",

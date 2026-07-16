@@ -15,7 +15,7 @@ UBT / compile failed. Fix with tools only. Do not answer with code until the fai
 **Steps:**
 
 1. `unreal_agent_plan` with `mode=compile_fix` and a request summarizing the error above
-2. Follow `toolPolicy` from the plan; typically `unreal_rag_search` with `mode=compile_fix`, then `read_file_range` / `read_file` on the failing file
+2. If a build response is available, its `recovery.requiredNextTool` overrides the generic plan: copy its args exactly, then read the failing range once
 3. `replace_in_file` on **one file** per turn
 4. `build_unreal_project`
 5. Repeat until success or state the blocker with the exact log line

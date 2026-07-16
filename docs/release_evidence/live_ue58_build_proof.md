@@ -16,7 +16,8 @@ Status: NOT RUN
    - `docs/release_evidence/live_ue58_build.log`
 4. Confirm response fields:
    - `payload.ok=true` on success
-   - `payload.ok=false` and MCP `isError=true` on failure
+   - compiler/UHT/linker failure: `payload.ok=false`, `buildOutcome=compile_failed`, `recoverable=true`, and MCP `isError` absent/false
+   - infrastructure failure (timeout, spawn error, stale build): `buildOutcome=tool_failed` and MCP `isError=true`
    - `resolvedEngineVersion=5.8`
 5. Update `docs/release_evidence/e6396af_final_gate_summary.txt` Gates 10-12 to PASS
 
@@ -24,4 +25,4 @@ Status: NOT RUN
 
 - `BUILD_TIMEOUT` without log artifact
 - Engine mismatch without explicit `allowEngineFallback`
-- Build failure returned without MCP `isError=true`
+- Infrastructure failure returned without MCP `isError=true`, or compiler failure incorrectly returned with MCP `isError=true`

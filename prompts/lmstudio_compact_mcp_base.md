@@ -53,7 +53,10 @@ When the user asks for logic / design / bug analysis of project C++ (not a compi
 7. `replace_in_file` preferred with `expectedOccurrences=1`; use `write_file` only for brand-new files. Before creating a new `.h`/`.cpp`, run `search_files` for basename collisions under `Source/`. If a replacement fails, re-read a narrower range and patch again; do not rewrite an existing `.h`/`.cpp` with `write_file`.
 8. If deletion cleanup is needed: Essential mode — report the duplicate path and stop for user approval (deletion tools are Extended-only). Extended mode (`tools/list` has `propose_file_deletions`) — finish edits first, call `propose_file_deletions`, wait for explicit approval, then `delete_file`.
 9. `build_unreal_project` after C++ / Build.cs changes
-10. On UBT failure: `unreal_rag_search` `mode=compile_fix` with only the current error context, then patch and rebuild
+10. On `buildOutcome=compile_failed`, the build command ran successfully and returned a normal, recoverable compiler result; do not treat it as an MCP/tool failure.
+    - Follow `recovery.requiredNextTool` with `recovery.requiredNextToolArgs` exactly once. Never substitute `unreal_rag_search` when the response requires `unreal_symbol_lookup`.
+    - `missing_member`, `unknown_symbol`, and `api_signature` errors are symbol-first. After that lookup, read the failing range once, patch, validate, and rebuild.
+    - A second compiler failure starts a new recovery state from its new first error. Do not return to an older diagnostic or alternate evidence tools without a mutation.
 11. For UHT/generated.h/include/module errors, read the failing file and the actual `*.Build.cs` before editing. Patch one root cause per build loop.
 
 ## Write safety and flow

@@ -47,7 +47,9 @@ Before searching RAG or patching, classify the first actionable error into exact
 | `generated.h order` | generated.h must be last include |
 | `syntax` | unexpected token, expected ';', expected '}' |
 
-After classifying, search RAG with `mode=compile_fix` for the classified error type. Do NOT use generic `mode=auto` for compile errors.
+After classifying, follow `build_unreal_project.recovery.requiredNextTool` and copy `requiredNextToolArgs` exactly.
+For `missing_member`, `unknown_symbol`, or `api_signature`, this must be `unreal_symbol_lookup`; never replace it with RAG or alternate RAG/read calls.
+Use `unreal_rag_search mode=compile_fix` only when the build response explicitly requires it. Then read once, patch once, validate, and rebuild.
 
 ## Symbol-first file access
 

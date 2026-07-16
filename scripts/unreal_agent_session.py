@@ -126,7 +126,7 @@ def main() -> int:
             "replace_in_file minimal patch (unreal-agent; write_file only for brand-new files)",
             "do not use run_javascript/js-code-sandbox/Deno file APIs for project file I/O",
             "build_unreal_project (unreal-agent)",
-            "on failure: unreal_rag_search mode=compile_fix with log excerpt",
+            "on compile failure: follow build response recovery.requiredNextTool exactly; use compile_fix RAG only when requested",
         ],
     }
     if args.include_matches:

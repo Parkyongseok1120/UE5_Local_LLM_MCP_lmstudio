@@ -59,6 +59,11 @@ If this project has been useful to you, please consider sponsoring — it helps 
 </p>
 
 These are internal UE 5.8 RAG/MCP/UBT workflow measurements, not public standardized model benchmarks.
+### Model-size and language caveat
+
+The 9B profile is the current **minimum floor**, not a reliability target. It is still under active stabilization, and tool selection, argument construction, repeated MCP calls, and long edit/build loops can remain unstable even when the MCP server and validation logic are healthy. This is a model-capability limitation, not automatically an MCP bug. The gap between the measured 9B and 27B workflows is large enough that their Pass@1 numbers should not be read as equivalent agent behavior.
+
+For autonomous multi-step Unreal work, prefer a **24B–27B instruction/tool-calling model**. Keep 9B for bounded, short tasks after the target file, symbol, and intended change are already known. For Korean-first use, validate the exact local checkpoint: Qwen3 advertises support for 100+ languages and tool calling, while coding-specialized models such as Devstral Small 2 may be stronger at codebase operations but should not be assumed to have the same Korean fluency. See the [Qwen3 model card](https://huggingface.co/Qwen/Qwen3-30B-A3B) and [Devstral Small 2 model card](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512).
 
 > `Harness average attempts=0.389` in the best run means many cases were solved by deterministic static autofix before an LLM edit attempt. It is not a general model reasoning-depth metric.
 

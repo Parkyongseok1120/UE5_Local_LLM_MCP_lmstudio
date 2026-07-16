@@ -383,6 +383,141 @@ function compactCompilerDiagnostic(line, maxChars = 360) {
   return value.slice(0, Math.max(80, Number(maxChars) || 360));
 }
 
+function compilerDiagnosticDetails(line) {
+  const compact = compactCompilerDiagnostic(line);
+  const codeMatch = compact.match(/\b(?:fatal\s+)?error\s+([A-Z]+\d+)\b/i);
+  const locationMatch = compact.match(/^(.+\.(?:cpp|c|cc|cxx|h|hpp))\((\d+)(?:,(\d+))?\)/i);
+  const quoted = [];
+  const quotedPattern = /'([^']+)'|"([^"]+)"/g;
+  let match;
+  while ((match = quotedPattern.exec(compact)) !== null) {
+    quoted.push(String(match[1] || match[2] || "").trim());
+  }
+  return {
+    compact,
+    diagnosticCode: codeMatch ? codeMatch[1].toUpperCase() : "",
+    targetFile: locationMatch ? locationMatch[1] : "",
+    targetLine: locationMatch ? Number(locationMatch[2]) : null,
+    targetColumn: locationMatch && locationMatch[3] ? Number(locationMatch[3]) : null,
+    quoted: quoted.filter(Boolean),
+  };
+}
+
+function symbolLeaf(value) {
+  const normalized = String(value || "").trim().replace(/\(\s*\)$/, "");
+  const leaf = normalized.split("::").filter(Boolean).pop() || normalized;
+  return leaf.replace(/^[*&\s]+|[&*\s]+$/g, "");
+}
+
+function buildFailureRecovery(firstError) {
+  const diagnostic = compilerDiagnosticDetails(firstError);
+  const code = diagnostic.diagnosticCode;
+  const firstQuoted = diagnostic.quoted[0] || "";
+  const secondQuoted = diagnostic.quoted[1] || "";
+  let category = "compile_error";
+  let symbolQuery = "";
+
+  if (code === "C2039") {
+    category = "missing_member";
+    symbolQuery = symbolLeaf(firstQuoted);
+  } else if (code === "C3861" || code === "C2065" || code === "C2061") {
+    category = "unknown_symbol";
+    symbolQuery = symbolLeaf(firstQuoted);
+  } else if ([
+    "C2660", "C2661", "C2664", "C2672", "C2780", "C2784", "C2893",
+  ].includes(code)) {
+    category = "api_signature";
+    symbolQuery = symbolLeaf(firstQuoted);
+  } else if (/^LNK\d+$/i.test(code)) {
+    category = "linker";
+  } else if (code === "C1083") {
+    category = "include_or_module";
+  } else if (/\b(?:UHT|UnrealHeaderTool|generated\.h)\b/i.test(diagnostic.compact)) {
+    category = "uht_or_reflection";
+  } else if (diagnostic.targetFile) {
+    category = "source_compile_error";
+  }
+
+  const common = {
+    protocolVersion: 1,
+    state: "evidence_required",
+    category,
+    diagnosticCode: code || null,
+    targetFile: diagnostic.targetFile || null,
+    targetLine: diagnostic.targetLine,
+    targetColumn: diagnostic.targetColumn,
+    firstError: diagnostic.compact,
+    stopIfNoNewEvidence: true,
+  };
+
+  if (symbolQuery) {
+    const args = { query: symbolQuery, top_k: 8, detailLevel: "compact" };
+    return {
+      ...common,
+      member: code === "C2039" ? symbolQuery : null,
+      owner: code === "C2039" ? secondQuoted || null : null,
+      requiredNextTool: "unreal_symbol_lookup",
+      requiredNextToolArgs: args,
+      requiredSequence: [
+        "unreal_symbol_lookup",
+        "read_file_range",
+        "replace_in_file",
+        "static_validate_project",
+        "build_unreal_project",
+      ],
+      forbiddenUntilMutation: ["unreal_rag_search", "unreal_agent_plan"],
+      maxEvidenceCallsBeforeMutation: 2,
+    };
+  }
+
+  const args = {
+    query: diagnostic.compact.slice(0, 360),
+    mode: "compile_fix",
+    hybrid: false,
+    top_k: 4,
+    detailLevel: "compact",
+  };
+  return {
+    ...common,
+    requiredNextTool: "unreal_rag_search",
+    requiredNextToolArgs: args,
+    requiredSequence: [
+      "unreal_rag_search",
+      "read_file_range",
+      "replace_in_file",
+      "static_validate_project",
+      "build_unreal_project",
+    ],
+    forbiddenUntilMutation: ["unreal_agent_plan"],
+    maxEvidenceCallsBeforeMutation: 2,
+  };
+}
+
+function buildToolDisposition(payload = {}) {
+  if (payload.ok) {
+    return {
+      buildOutcome: "succeeded",
+      toolExecutionSucceeded: true,
+      recoverable: false,
+      mcpIsError: false,
+    };
+  }
+  const likelyErrors = Array.isArray(payload.likelyErrors) ? payload.likelyErrors : [];
+  const compileFailed = (
+    payload.phase !== "stale"
+    && !payload.timedOut
+    && !String(payload.errorCode || "").trim()
+    && !String(payload.error || "").trim()
+    && likelyErrors.length > 0
+  );
+  return {
+    buildOutcome: compileFailed ? "compile_failed" : "tool_failed",
+    toolExecutionSucceeded: compileFailed,
+    recoverable: compileFailed,
+    mcpIsError: !compileFailed,
+  };
+}
+
 function buildResponsePayload({ result, build, planResult, projectPath, command, logPath, verbose = false }) {
   const errorLines = extractLikelyCompileErrors(result.stdout, result.stderr);
   const compactErrorLines = errorLines.map((line) => compactCompilerDiagnostic(line)).filter(Boolean);
@@ -423,6 +558,8 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
     likelyErrors: responseErrorLines,
     fullLogPath: logPath,
     error: result.error || "",
+    timedOut: Boolean(result.timedOut),
+    errorCode: result.errorCode || "",
     nextSteps: [],
     suggestedToolCalls: [],
     phase: result.ok ? "complete" : "failed",
@@ -440,16 +577,30 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
   };
 
   if (!result.ok) {
-    payload.nextSteps = [
-      "Fix only the first actionable compiler or linker error.",
-      "If API evidence is still needed, run unreal_rag_search with mode=compile_fix at most once using the compact first error.",
-      "Rebuild after the smallest patch."
-    ];
-    if (firstError) {
+    const actionable = firstError && (
+      /\b(?:fatal\s+)?error\s+[A-Z]+\d+\b/i.test(firstError)
+      || /\b(?:UHT|UnrealHeaderTool|generated\.h)\b/i.test(firstError)
+      || /\.[ch](?:pp)?\(\d+(?:,\d+)?\).*\bWarning:/i.test(firstError)
+    );
+    if (actionable) {
+      const recovery = buildFailureRecovery(firstError);
+      payload.recovery = recovery;
+      payload.requiredNextTool = recovery.requiredNextTool;
+      payload.requiredNextToolArgs = recovery.requiredNextToolArgs;
+      payload.nextSteps = [
+        "Call " + recovery.requiredNextTool + " exactly once with requiredNextToolArgs; do not substitute another evidence tool.",
+        "Read the failing source range once, apply the smallest mutation, then run static_validate_project.",
+        "Rebuild only after a mutation; a new compiler error starts a new recovery state."
+      ];
       payload.suggestedToolCalls = [{
-        tool: "unreal_rag_search",
-        args: { query: firstError.slice(0, 360), mode: "compile_fix", hybrid: false, top_k: 4 }
+        tool: recovery.requiredNextTool,
+        args: recovery.requiredNextToolArgs,
       }];
+    } else {
+      payload.nextSteps = [
+        "No actionable compiler diagnostic was extracted.",
+        "Inspect fullLogPath once; do not guess an API or alternate evidence tools.",
+      ];
     }
   } else if (upToDate && actionsExecuted === 0) {
     payload.nextSteps = [
@@ -498,6 +649,10 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
     };
   }
 
+  const disposition = buildToolDisposition(payload);
+  payload.buildOutcome = disposition.buildOutcome;
+  payload.toolExecutionSucceeded = disposition.toolExecutionSucceeded;
+  payload.recoverable = disposition.recoverable;
   return payload;
 }
 
@@ -585,8 +740,11 @@ module.exports = {
   DEFAULT_BUILD_ERROR_LINES,
   DEFAULT_LOG_RESULT_MAX_CHARS,
   DEFAULT_VALIDATION_FINDING_CAP,
+  buildFailureRecovery,
   buildResponsePayload,
+  buildToolDisposition,
   clampInt,
+  compilerDiagnosticDetails,
   compactLogPayload,
   compactMcpContent,
   compactValidationPayload,
