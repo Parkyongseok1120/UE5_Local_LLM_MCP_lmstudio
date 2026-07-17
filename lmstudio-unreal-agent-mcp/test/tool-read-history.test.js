@@ -158,6 +158,23 @@ test("stagnation records escalate on second identical blocked call", () => {
   assert.strictEqual(second.reason, "EVIDENCE_STAGNATION_REPEAT");
 });
 
+test("search_files cache key distinguishes filename-aware discovery", () => {
+  const contentOnly = normalizeReadToolArgs("search_files", {
+    query: "Stamina",
+    path: "project://Source",
+    matchFileNames: false,
+  });
+  const withFileNames = normalizeReadToolArgs("search_files", {
+    query: "Stamina",
+    path: "project://Source",
+    matchFileNames: true,
+  });
+
+  assert.strictEqual(contentOnly.matchFileNames, false);
+  assert.strictEqual(withFileNames.matchFileNames, true);
+  assert.notDeepStrictEqual(contentOnly, withFileNames);
+});
+
 test("covering cache does not leak content across files", () => {
   clearReadSuccessHistory();
   const tool = "read_file_range";

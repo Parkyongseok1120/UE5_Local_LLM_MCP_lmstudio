@@ -44,6 +44,16 @@ def test_qwen35_prompt_has_plan_only_first_tool_gate() -> None:
     assert "writeGate.writesAllowed=false" in text
 
 
+def test_qwen35_prompt_requires_filename_aware_component_discovery() -> None:
+    text = read_text("prompts/lmstudio_qwen35_9b_compact_system.md")
+
+    assert "Project component discovery hard gate" in text
+    assert 'matchFileNames=true' in text
+    assert 'path="project://Source"' in text
+    assert "fileNameResults=[]" in text
+    assert "RAG misses are not proof of absence" in text
+
+
 def test_lmstudio_setup_requires_base_plus_qwen35_delta() -> None:
     text = read_text("docs/LMStudio_Unreal_Agent_Setup.md")
 

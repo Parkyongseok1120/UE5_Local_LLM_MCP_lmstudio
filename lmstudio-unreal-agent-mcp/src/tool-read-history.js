@@ -377,6 +377,7 @@ function normalizeReadToolArgs(tool, args = {}) {
     normalized.query = String(args.query || "");
     if (args.path != null) normalized.path = String(args.path);
     if (args.regex != null) normalized.regex = Boolean(args.regex);
+    if (args.matchFileNames != null) normalized.matchFileNames = Boolean(args.matchFileNames);
     if (args.maxResults != null) normalized.maxResults = Number(args.maxResults);
     return normalized;
   }

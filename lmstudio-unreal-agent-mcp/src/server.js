@@ -1463,6 +1463,10 @@ function allAgentTools() {
           query: { type: "string", description: "Regex or plain text to search." },
           path: { type: "string", description: "Relative directory/file to search. Default '.'." },
           regex: { type: "boolean", description: "Use query as regex. Default false." },
+          matchFileNames: {
+            type: "boolean",
+            description: "Also return file paths whose basename matches query. Default false; use for exact component/class discovery."
+          },
           maxResults: { type: "number", description: "Max matching lines. Default 100." }
         }, ["query"])
       },
@@ -2652,6 +2656,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const base = resolution.absolutePath;
       const maxResults = Math.max(1, Math.min(Number(args.maxResults || 100), 1000));
       const useRegex = !!args.regex;
+      const matchFileNames = args.matchFileNames === true;
       const query = String(args.query || "");
       if (!query) return fail("query must not be empty");
 
@@ -2692,11 +2697,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         : null;
 
       const results = [];
+      const fileNameResults = [];
       let filesSeen = 0;
       let filesSkippedBySize = 0;
 
+      function resultLimitReached() {
+        return results.length >= maxResults
+          && (!matchFileNames || fileNameResults.length >= maxResults);
+      }
+
       async function walk(p) {
-        if (results.length >= maxResults || filesSeen >= SEARCH_MAX_FILES) return;
+        if (resultLimitReached() || filesSeen >= SEARCH_MAX_FILES) return;
         await assertReadChildContained(p, resolution);
         const st = await statSafe(p);
         if (!st) return;
@@ -2707,13 +2718,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const entries = await fsp.readdir(p, { withFileTypes: true });
           for (const e of entries) {
             await walk(path.join(p, e.name));
-            if (results.length >= maxResults || filesSeen >= SEARCH_MAX_FILES) break;
+            if (resultLimitReached() || filesSeen >= SEARCH_MAX_FILES) break;
           }
           return;
         }
 
         if (!st.isFile()) return;
         filesSeen++;
+
+        if (matchFileNames && fileNameResults.length < maxResults) {
+          const relativeFile = path.relative(base, p).replace(/\\/g, "/");
+          const basename = path.basename(p);
+          const fileNameHit = useRegex
+            ? matcher.test(basename)
+            : basename.toLowerCase().includes(query.toLowerCase());
+          if (fileNameHit) {
+            fileNameResults.push({
+              file: `${displayPath(resolution).replace(/\/$/, "")}/${relativeFile}`,
+              basename,
+            });
+          }
+        }
 
         if (st.size > MAX_READ_BYTES) {
           filesSkippedBySize++;
@@ -2727,7 +2752,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           const hit = useRegex ? matcher.test(line) : line.toLowerCase().includes(query.toLowerCase());
-          if (hit) {
+          if (hit && results.length < maxResults) {
             results.push({
               file: `${displayPath(resolution).replace(/\/$/, "")}/${path.relative(base, p).replace(/\\/g, "/")}`,
               line: i + 1,
@@ -2739,14 +2764,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       await walk(base);
-      const output = JSON.stringify({
+      const payload = {
         path: pathMetadata(resolution),
         results,
         filesSeen,
         filesSkippedBySize,
         searchComplete: filesSeen < SEARCH_MAX_FILES && filesSkippedBySize === 0,
         incompleteReasons: filesSkippedBySize > 0 ? ["large_files_skipped"] : [],
-      }, null, 2);
+      };
+      if (matchFileNames) payload.fileNameResults = fileNameResults;
+      const output = JSON.stringify(payload, null, 2);
       recordReadSuccess("search_files", normalizedArgs, {
         ...readContext,
         evidenceHash: sha256Text(output),

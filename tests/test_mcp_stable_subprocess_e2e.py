@@ -644,6 +644,61 @@ def test_agent_evidence_stagnation_is_error_without_wrong_body(tmp_path: Path) -
         client.close()
 
 
+def test_agent_search_files_opt_in_matches_component_filename(tmp_path: Path) -> None:
+    source_dir = tmp_path / "Source" / "Demo" / "Private" / "Character" / "SharedComponent"
+    source_dir.mkdir(parents=True)
+    sample = source_dir / "StaminaComponent.cpp"
+    sample.write_text("// intentionally no component identifier in file content\n", encoding="utf-8")
+    (source_dir / "AReference.cpp").write_text("// Stamina appears before the target filename\n", encoding="utf-8")
+
+    client = _start_agent_client(tmp_path)
+    try:
+        default_response = client.request(
+            "tools/call",
+            {
+                "name": "search_files",
+                "arguments": {
+                    "query": "Stamina",
+                    "path": str(tmp_path / "Source"),
+                    "regex": False,
+                    "maxResults": 1,
+                },
+            },
+            req_id=2,
+        )
+        assert default_response["result"].get("isError") is not True
+        default_payload = json.loads(default_response["result"]["content"][0]["text"])
+        assert len(default_payload["results"]) == 1
+        assert "fileNameResults" not in default_payload
+
+        response = client.request(
+            "tools/call",
+            {
+                "name": "search_files",
+                "arguments": {
+                    "query": "Stamina",
+                    "path": str(tmp_path / "Source"),
+                    "matchFileNames": True,
+                    "regex": False,
+                    "maxResults": 1,
+                },
+            },
+            req_id=3,
+        )
+        assert response["result"].get("isError") is not True
+        payload = json.loads(response["result"]["content"][0]["text"])
+        assert len(payload["results"]) == 1
+        assert payload["fileNameResults"] == [
+            {
+                "file": "workspace://Source/Demo/Private/Character/SharedComponent/StaminaComponent.cpp",
+                "basename": "StaminaComponent.cpp",
+            }
+        ]
+        assert payload["searchComplete"] is True
+    finally:
+        client.close()
+
+
 def test_agent_covering_cache_does_not_cross_files(tmp_path: Path) -> None:
     source_dir = tmp_path / "Source" / "Demo"
     source_dir.mkdir(parents=True)
