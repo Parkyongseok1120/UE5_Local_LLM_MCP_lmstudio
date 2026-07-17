@@ -79,4 +79,3 @@ def test_public_schemas_cover_handler_consumed_arguments(tmp_path):
     approval_schema = definitions["unreal_architecture_decision_approve"]["inputSchema"]
     assert "approvalToken" in approval_schema["required"]
 
-    registry_render = mod._MCP_TOOL_REGISTRY.get("unreal_render_report")
