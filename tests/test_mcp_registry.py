@@ -78,4 +78,3 @@ def test_public_schemas_cover_handler_consumed_arguments(tmp_path):
 
     approval_schema = definitions["unreal_architecture_decision_approve"]["inputSchema"]
     assert "approvalToken" in approval_schema["required"]
-
