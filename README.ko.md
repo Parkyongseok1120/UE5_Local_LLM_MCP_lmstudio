@@ -82,6 +82,17 @@ cd UE5_Local_LLM_MCP_lmstudio
 .\rag.ps1 doctor
 ```
 
+### 설치 파일 선택
+
+| 파일 | 하는 일 | 설치 후 MCP 권한 |
+|---|---|---|
+| [`INSTALL-SAFE-MODE.bat`](installer/INSTALL-SAFE-MODE.bat) | MCP 설정과 의존성을 설치하고 로컬 프로젝트 경로를 구성합니다. RAG 인덱스는 별도로 생성합니다. | Safe mode: 읽기 전용 에이전트입니다. MCP가 요청한 파일 수정, 명령 실행, Unreal 빌드는 비활성화됩니다. |
+| [`INSTALL-SAFE-MODE-BUILD-RAG.bat`](installer/INSTALL-SAFE-MODE-BUILD-RAG.bat) | Safe mode 설치에 프로젝트/지식 설정, 전체 RAG 인덱싱 파이프라인, `rag.ps1 doctor`를 추가로 실행합니다. | Safe mode가 유지됩니다. 인덱스까지 한 번에 준비하려는 첫 설치에 권장합니다. |
+| [`INSTALL-AGENT-MODE.bat`](installer/INSTALL-AGENT-MODE.bat) | RAG 인덱스를 만들지 않고 MCP 설정과 의존성을 설치합니다. | Agent mode: MCP 파일 수정, 명령 실행, UBT 빌드가 활성화됩니다. 신뢰하는 프로젝트에서만 사용하세요. |
+| [`INSTALL-AGENT-MODE-BUILD-RAG.bat`](installer/INSTALL-AGENT-MODE-BUILD-RAG.bat) | Agent mode 설치에 프로젝트/지식 설정, 전체 RAG 인덱싱 파이프라인, `rag.ps1 doctor`를 추가로 실행합니다. | Agent mode가 유지됩니다. |
+
+이 저장소에는 `installer/Build.bat`이 없습니다. `*-BUILD-RAG.bat`의 **BUILD-RAG는 Unreal 프로젝트 빌드가 아니라 RAG 검색 인덱스 생성**(선택적 Editor metadata export 포함)을 뜻합니다. Safe mode 설치도 설치 과정에서는 LM Studio/MCP 설정과 인덱스 파일을 쓸 수 있지만, 설치 후 MCP가 요청하는 파일 수정, 셸 명령 실행, Unreal/UBT 빌드만 차단합니다.
+
 그 다음 LM Studio에서 모델을 로드하고 Local Server를 시작한 뒤, `unreal-rag` / `unreal-agent` MCP를 활성화하고 index를 빌드합니다. 설치 프로그램은 `unreal-context-compactor`도 함께 설치합니다. 자동 컨텍스트 확장을 쓰려면 기반 LLM을 정확히 하나만 로드하거나 플러그인 설정의 `targetModel`에 정확한 모델 키를 지정한 뒤, **컨텍스트 확장을 쓸 채팅마다 모델 드롭다운에서 `unreal-context-compactor`를 선택하세요. 기존 채팅의 선택 모델은 설치로 자동 변경되지 않으며, Qwen/GPT 기반 모델을 직접 선택하면 설치된 프록시를 우회합니다.** 프록시는 모델에 전달되는 과거 대화만 압축하며, 화면에 보이는 채팅과 기존 MCP 서버는 바꾸지 않습니다.
 
 선택 후 메시지를 한 번 보낸 다음 아래 명령으로 실제 프록시 경유 증거를 확인할 수 있습니다. `PASS` 없이 설치 파일/리비전만 일치하는 상태는 활성화가 아닙니다.

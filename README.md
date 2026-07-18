@@ -88,6 +88,17 @@ cd UE5_Local_LLM_MCP_lmstudio
 .\rag.ps1 doctor
 ```
 
+### Choose an installer
+
+| File | What it does | MCP access after installation |
+|---|---|---|
+| [`INSTALL-SAFE-MODE.bat`](installer/INSTALL-SAFE-MODE.bat) | Installs MCP settings and dependencies, then configures the local project paths. Build the RAG index separately. | Safe mode: read-only agent; MCP-triggered file writes, commands, and Unreal builds are disabled. |
+| [`INSTALL-SAFE-MODE-BUILD-RAG.bat`](installer/INSTALL-SAFE-MODE-BUILD-RAG.bat) | Safe-mode installation plus project/knowledge configuration, the full RAG indexing pipeline, and `rag.ps1 doctor`. | Safe mode remains enabled. Recommended first-time option when you also want the index ready. |
+| [`INSTALL-AGENT-MODE.bat`](installer/INSTALL-AGENT-MODE.bat) | Installs MCP settings and dependencies without building the RAG index. | Agent mode: MCP file writes, commands, and UBT builds are enabled. Use only for trusted projects. |
+| [`INSTALL-AGENT-MODE-BUILD-RAG.bat`](installer/INSTALL-AGENT-MODE-BUILD-RAG.bat) | Agent-mode installation plus project/knowledge configuration, the full RAG indexing pipeline, and `rag.ps1 doctor`. | Agent mode remains enabled. |
+
+There is no `installer/Build.bat` in this repository. In the `*-BUILD-RAG.bat` filenames, **BUILD-RAG means building the RAG search index** (including optional Editor metadata export), **not building an Unreal project**. The safe-mode installers may still write LM Studio/MCP configuration and index files during setup; the restriction applies to MCP-initiated writes, shell commands, and Unreal/UBT builds after installation.
+
 Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unreal-agent`, and build your index. The installer also installs `unreal-context-compactor`. To enable automatic context expansion, keep exactly one underlying LLM loaded (or set its exact `targetModel` in the plugin settings), then **select `unreal-context-compactor` in the model dropdown for every chat that should use expansion. Installation does not change the model already selected in an existing chat; selecting the underlying Qwen/GPT model directly bypasses the installed proxy.** The proxy compacts only the model-facing history; the visible chat and the existing MCP servers remain unchanged.
 
 After sending one message through that selection, verify actual routing—not just installed files—with:
