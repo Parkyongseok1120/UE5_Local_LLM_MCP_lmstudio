@@ -14,7 +14,7 @@ Do **not** commit, publish, or share:
 - `data/unreal*/raw_source.jsonl` or other exports of Epic proprietary source
 - Any Epic-owned content extracted from your engine install
 
-Clonees must run `installer/Configure-Knowledge.ps1` (or equivalent `collect-source` + `build`) on **their** machine with **their** UE install.
+Clonees must run `scripts/installer_support/Configure-Knowledge.ps1` (or equivalent `collect-source` + `build`) on **their** machine with **their** UE install.
 
 ## Trademarks
 

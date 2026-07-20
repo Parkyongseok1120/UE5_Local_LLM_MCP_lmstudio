@@ -40,16 +40,8 @@ Legacy standalone layout (still supported):
 ## 설치
 
 ```powershell
-cd $HOME\.lmstudio\UE5_Local_LLM_MCP_lmstudio\lmstudio-unreal-agent-mcp
-npm install
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_lmstudio_mcp.ps1
-```
-
-Or run the root installer from the repo root:
-
-```powershell
 cd $HOME\.lmstudio\UE5_Local_LLM_MCP_lmstudio
-.\installer\INSTALL-SAFE-MODE.bat
+.\INSTALL.bat
 ```
 
 LM Studio를 재시작하거나 MCP 목록을 새로고침하세요.
@@ -104,7 +96,7 @@ Or narrow it to a project root, e.g. `%USERPROFILE%\Documents\Git`.
 
 ## LM Studio MCP 설정 예시
 
-`scripts/install_lmstudio_mcp.ps1`가 `mcp.json`에 자동 등록합니다.
+루트 통합 설치기가 `mcp.json`에 자동 등록합니다.
 
 ## 에이전트 사용 예
 

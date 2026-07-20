@@ -10,8 +10,8 @@ function Resolve-RepoRoot {
         return (Resolve-Path $Override).Path
     }
     $here = $PSScriptRoot
-    if (Test-Path (Join-Path $here "..\rag.ps1")) {
-        return (Resolve-Path (Join-Path $here "..")).Path
+    if (Test-Path (Join-Path $here "..\..\rag.ps1")) {
+        return (Resolve-Path (Join-Path $here "..\..")).Path
     }
     return (Resolve-Path $here).Path
 }

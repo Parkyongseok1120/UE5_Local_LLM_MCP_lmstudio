@@ -381,7 +381,7 @@ def main() -> int:
         checks.append(
             warn(
                 "mcp_json",
-                f"{mcp_config} — run INSTALL-SAFE-MODE.bat after cloning",
+                f"{mcp_config} — run the root integrated installer after cloning",
             )
         )
     else:

@@ -67,7 +67,23 @@ if (-not $SkipEval) {
     powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 eval-game-design
 }
 
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_lmstudio_mcp.ps1
+$installArgs = @(
+    ".\install.py",
+    "--profile", "standard",
+    "--yes",
+    "--skip-deps",
+    "--workspace-root", $workspace
+)
+$pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+if ($pyLauncher) {
+    & $pyLauncher.Source -3 @installArgs
+}
+else {
+    $pythonCommand = Get-Command python3, python -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $pythonCommand) { throw "Python 3.10+ is required to refresh the integrated installation." }
+    & $pythonCommand.Source @installArgs
+}
+if ($LASTEXITCODE -ne 0) { throw "Integrated installer failed while refreshing LM Studio paths." }
 
 $mcpPath = Join-Path $HOME ".lmstudio\mcp.json"
 $syncPath = Join-Path $HOME ".lmstudio\.internal\last-synced-mcp-state.json"

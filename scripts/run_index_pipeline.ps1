@@ -29,7 +29,7 @@ function Read-SharedConfigJson {
 function Get-EngineSourceRoot {
     param($SharedConfig, [string]$Workspace)
 
-    . (Join-Path $PSScriptRoot "..\installer\Install-PathHelpers.ps1")
+    . (Join-Path $PSScriptRoot "installer_support\Install-PathHelpers.ps1")
     return Get-WorkspaceEngineSourcePath -RagRoot $Workspace
 }
 

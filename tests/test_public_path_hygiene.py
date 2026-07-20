@@ -21,7 +21,7 @@ SCAN_DIRS = (
 SCAN_ROOT_MARKDOWN = True
 TEXT_SUFFIXES = {".bat", ".json", ".ps1", ".py", ".txt", ".yml", ".yaml", ".md"}
 SKIP_FILES = {
-    ROOT / "installer" / "Verify-Oss-Ready.ps1",
+    ROOT / "scripts" / "installer_support" / "Verify-Oss-Ready.ps1",
     ROOT / "CONTRIBUTING.md",
     ROOT / "SECURITY.md",
     ROOT / "tests" / "test_public_path_hygiene.py",

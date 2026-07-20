@@ -46,5 +46,5 @@ Manual re-run:
 .\rag.ps1 sync-active-project
 .\rag.ps1 collect-symbols
 .\rag.ps1 collect-source
-installer\Export-EditorMetadata.ps1 -IngestOnly
+scripts\installer_support\Export-EditorMetadata.ps1 -IngestOnly
 ```

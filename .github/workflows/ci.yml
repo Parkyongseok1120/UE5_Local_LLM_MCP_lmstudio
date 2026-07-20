@@ -183,7 +183,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Verify-Oss-Ready.ps1
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\installer_support\Verify-Oss-Ready.ps1
 
   powershell-syntax:
     name: PowerShell syntax gate
@@ -240,25 +240,4 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Verify-UnrealMcp.ps1 -RepoOnly
-
-      - name: Cline install WhatIf
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Install-ClineUnrealMcp.ps1 -WhatIf
-
-      - name: Main install WhatIf
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Install-UnrealMcp.ps1 -WhatIf -SkipNpm -SkipPythonDeps
-
-      - name: Portable package build and content scan
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:TEMP ('Unreal58-RAG-Portable-CI-' + [guid]::NewGuid().ToString('n'))
-          $zip = Join-Path $env:TEMP ('Unreal58-RAG-Portable-CI-' + [guid]::NewGuid().ToString('n') + '.zip')
-          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Build-PortablePackage.ps1 -OutputDir $out -ZipPath $zip -SourceRoot $PWD
-          powershell -NoProfile -ExecutionPolicy Bypass -File installer\Test-PortablePackageContents.ps1 -ZipPath $zip
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\installer_support\Verify-UnrealMcp.ps1 -RepoOnly

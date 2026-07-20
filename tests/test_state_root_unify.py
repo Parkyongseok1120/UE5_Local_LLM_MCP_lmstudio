@@ -67,7 +67,7 @@ def test_build_cline_mcp_config_includes_agent_state_root(tmp_path: Path) -> Non
             "Bypass",
             "-Command",
             (
-                f". '{ROOT / 'installer' / 'Install-PathHelpers.ps1'}'; "
+                    f". '{ROOT / 'scripts' / 'installer_support' / 'Install-PathHelpers.ps1'}'; "
                 f"$cfg = Build-ClineMcpConfig "
                 f"-RagRoot '{tmp_path / 'rag'}' "
                 f"-AgentRoot '{tmp_path / 'agent'}' "

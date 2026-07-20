@@ -69,4 +69,4 @@ Compare deltas in `Reports/eval/deltas/`. See [Eval_Regression_Workflow.md](Eval
 
 ## Agent wrote files unexpectedly
 
-Run `.\installer\Disable-AgentMode.ps1` to restore safe read-only defaults.
+Rerun `python install.py --profile standard --yes` to restore SAFE read-only defaults.

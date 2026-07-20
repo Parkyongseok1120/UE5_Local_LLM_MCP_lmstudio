@@ -23,11 +23,10 @@ For local development, run lms dev from this directory. The plugin uses the exis
 
 ## Installation file: Y
 
-The normal user path is `installer/INSTALL-AGENT-MODE.bat`; it now installs the MCP stack and
-the context compactor together. The slim portable package restores the plugin dependencies,
+The normal user path is the root `INSTALL.bat` (or `install.sh` on Linux/macOS); choose the FULL
+profile to install the MCP stack and context compactor together. The portable package restores the plugin dependencies,
 runs its tests/build, installs it through LM Studio, and verifies the installed revision.
 
-For a plugin-only repair, double-click `Install_Context_Compactor.cmd`. It checks Node/npm and
-the LM Studio CLI, restores locked dependencies, runs unit tests and the TypeScript build, then
-installs revision 5 through `lms dev --install -y`. Use
-`Install_Context_Compactor.cmd --no-pause` for automation.
+For a plugin-only repair, use the integrated CUSTOM profile with the `context_compactor` component.
+It checks Node/npm and the LM Studio CLI, restores locked dependencies, runs unit tests and the
+TypeScript build, then installs the plugin through `lms dev --install -y`.

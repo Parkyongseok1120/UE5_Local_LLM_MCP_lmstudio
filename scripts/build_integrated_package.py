@@ -147,17 +147,15 @@ def _write_launchers(staging: Path) -> None:
         "SCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
         "exec python3 \"$SCRIPT_DIR/install.py\" \"$@\"\n"
     )
-    for name in ("install.sh", "INSTALL.command"):
-        target = staging / name
-        target.write_text(shell, encoding="utf-8", newline="\n")
-        target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    target = staging / "install.sh"
+    target.write_text(shell, encoding="utf-8", newline="\n")
+    target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     (staging / "PORTABLE-INSTALL.md").write_text(
         "# Integrated portable installer\n\n"
         "Requirements: Python 3.10+. STANDARD/FULL also require Node.js 20+. "
         "FULL context compaction requires npm and the LM Studio `lms` CLI.\n\n"
         "- Windows: `INSTALL.bat`\n"
-        "- Linux: `./install.sh`\n"
-        "- macOS: `./INSTALL.command`\n\n"
+        "- Linux and macOS: `./install.sh`\n\n"
         "The installer asks for SAFE, STANDARD, FULL, or CUSTOM. All profiles remain "
         "read-only unless agent mode and its separate risk acknowledgement are both supplied.\n"
         "Run `python3 install.py --help` for automation flags. Generated indexes and machine "

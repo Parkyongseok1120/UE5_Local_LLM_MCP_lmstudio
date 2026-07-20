@@ -16,7 +16,7 @@ No new features. Remaining work after Stable Gate Stabilization.
 
 | Item | Owner action |
 |------|--------------|
-| Manual clean Win11 install smoke | Run `INSTALL-SAFE-MODE.bat` → Verify → first MCP health |
+| Manual clean Win11 install smoke | Run root `INSTALL.bat` → select SAFE → Verify → first MCP health |
 | GitHub Actions green on release commit | Push and confirm all jobs including portable scan |
 
 ## P2 — polish

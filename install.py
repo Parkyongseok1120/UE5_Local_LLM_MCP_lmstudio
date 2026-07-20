@@ -271,6 +271,30 @@ def _interactive_profile() -> str:
     return {"1": "safe", "2": "standard", "3": "full", "4": "custom"}.get(choice, "safe")
 
 
+def _interactive_agent_authority() -> bool:
+    print("\nUnreal adapter authority:")
+    print("  1. SAFE (recommended: analysis only; no writes, commands, or builds)")
+    print("  2. AGENT (allows project writes, commands, and Unreal builds)")
+    choice = input("Select [1]: ").strip() or "1"
+    return choice == "2"
+
+
+def _confirm_interactive_install(
+    profile: str, components: set[str], args: argparse.Namespace
+) -> None:
+    authority = "AGENT (writes / commands / builds enabled)" if args.enable_agent_mode else "SAFE (read-only)"
+    print("\nInstall summary:")
+    print(f"  Profile    : {profile.upper()}")
+    print(f"  Components : {', '.join(sorted(components)) or 'none'}")
+    print(f"  Authority  : {authority}")
+    if args.build_rag:
+        print(f"  RAG index  : build ({args.index_tier})")
+    else:
+        print("  RAG index  : do not build")
+    if not _prompt_yes_no("Continue with this installation?", True):
+        raise RuntimeError("installation cancelled by user")
+
+
 def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
     interactive = not args.yes and sys.stdin.isatty()
     profile = args.profile or (_interactive_profile() if interactive else "safe")
@@ -286,9 +310,6 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         components = set(PROFILE_DEFAULTS[profile])
 
     if interactive:
-        if profile in {"safe", "standard"}:
-            if _prompt_yes_no("Install optional Unreal adapter?", False):
-                components.add("unreal")
         if "unreal" in components:
             if _prompt_yes_no("Install LM Studio context compactor?", profile == "full"):
                 components.add("context_compactor")
@@ -307,13 +328,15 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
                 if value:
                     args.cline_settings = Path(value)
         if "unreal" in components and not args.enable_agent_mode:
-            args.enable_agent_mode = _prompt_yes_no(
-                "Enable project writes, commands, and Unreal builds? SAFE mode is recommended.", False
-            )
-            if args.enable_agent_mode:
-                args.accept_agent_risk = _prompt_yes_no(
-                    "I understand this grants filesystem writes, commands, and build execution.", False
+            requested_agent_mode = _interactive_agent_authority()
+            if requested_agent_mode:
+                accepted = _prompt_yes_no(
+                    "Enable AGENT authority for this trusted project?", False
                 )
+                args.enable_agent_mode = accepted
+                args.accept_agent_risk = accepted
+                if not accepted:
+                    print("AGENT authority was not confirmed; continuing in SAFE read-only mode.")
 
     if args.no_codex:
         components.discard("codex")
@@ -337,6 +360,8 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         raise ValueError("--enable-agent-mode requires the unreal component")
     if args.enable_agent_mode and not args.accept_agent_risk:
         raise ValueError("agent mode requires explicit --accept-agent-risk")
+    if interactive:
+        _confirm_interactive_install(profile, components, args)
     return profile, components
 
 
@@ -472,6 +497,7 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
         "profile": profile,
         "components": sorted(components),
         "safeMode": not args.enable_agent_mode,
+        "agentMode": args.enable_agent_mode,
         "dryRun": args.dry_run,
         "platform": platform.system(),
         "safetyNormalizations": [],

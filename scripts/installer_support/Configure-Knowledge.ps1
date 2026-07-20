@@ -12,7 +12,7 @@ function Resolve-WorkspaceRoot {
     if ($Override) {
         return (Resolve-Path $Override).Path
     }
-    $here = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    $here = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
     if (Test-Path (Join-Path $here "rag.ps1")) {
         return $here
     }

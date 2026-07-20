@@ -175,7 +175,7 @@ Check "installed context compactor" {
     $installedRoot = Join-Path $HOME ".lmstudio\extensions\plugins\$($sourceManifest.owner)\$($sourceManifest.name)"
     $installedManifestPath = Join-Path $installedRoot "manifest.json"
     if (-not (Test-Path -LiteralPath $installedManifestPath)) {
-        throw "plugin not installed - run INSTALL-AGENT-MODE.bat or Install_Context_Compactor.cmd"
+        throw "plugin not installed - run the root integrated installer and choose the FULL profile"
     }
     $installedManifest = Get-Content -LiteralPath $installedManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([int]$installedManifest.revision -ne [int]$sourceManifest.revision) {
@@ -220,7 +220,7 @@ else {
 }
 Check "mcp.json unreal-rag python" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
-    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run INSTALL-SAFE-MODE.bat" }
+    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run the root integrated installer" }
     $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $cfg.mcpServers."unreal-rag") { throw "unreal-rag not in mcp.json" }
     $cmd = [string]$cfg.mcpServers."unreal-rag".command
@@ -246,13 +246,13 @@ Check "node.js version" {
 }
 Check "mcp.json unreal-rag entry" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
-    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run INSTALL-SAFE-MODE.bat" }
+    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run the root integrated installer" }
     $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $cfg.mcpServers."unreal-rag") { throw "unreal-rag not in mcp.json" }
 }
 Check "mcp.json AGENT_STATE_ROOT parity" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
-    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run INSTALL-SAFE-MODE.bat" }
+    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run the root integrated installer" }
     $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
     $ragRoot = [string]$cfg.mcpServers."unreal-rag".env.AGENT_STATE_ROOT
     $agentRoot = [string]$cfg.mcpServers."unreal-agent".env.AGENT_STATE_ROOT
@@ -277,7 +277,7 @@ Check "Cline MCP settings" {
         if (-not (Test-Path $p)) { continue }
         $raw = Get-Content -LiteralPath $p -Raw -Encoding UTF8
         if (Test-ClineMcpHasUnresolvedPlaceholders $raw) {
-            throw "unresolved placeholders in $p - re-run Install-ClineUnrealMcp.ps1"
+            throw "unresolved placeholders in $p - rerun the root integrated installer with the Cline component"
         }
         $cfg = $raw | ConvertFrom-Json
         foreach ($name in @("unreal-rag", "unreal-agent")) {
@@ -300,7 +300,7 @@ Check "Cline MCP settings" {
         }
     }
     if (-not $found) {
-        Warn "Cline MCP settings not configured; run Install-ClineUnrealMcp.ps1 only if you use Cline."
+        Warn "Cline MCP settings not configured; rerun the root integrated installer with the Cline component only if you use Cline."
     }
 }
 Check "clinerules" {

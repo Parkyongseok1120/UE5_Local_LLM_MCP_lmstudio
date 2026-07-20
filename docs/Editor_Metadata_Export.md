@@ -54,7 +54,7 @@ UE 5.8 protects `EdGraph.Nodes` from Python, so full Blueprint node and pin link
 Or install for an explicit project:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\Install-EditorGraphPlugin.ps1 -ProjectFile C:\Path\Game.uproject
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\installer_support\Install-EditorGraphPlugin.ps1 -ProjectFile C:\Path\Game.uproject
 ```
 
 The installer copies `tools\ue_plugins\LmStudioGraphExporter` into `<ProjectRoot>\Plugins`, enables it in the `.uproject`, hash-checks existing project plugin copies, updates stale copies, and runs UnrealBuildTool when the module needs compiling. Close Unreal Editor before installing. Then run:

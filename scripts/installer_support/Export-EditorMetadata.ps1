@@ -14,7 +14,7 @@ $workspace = if ($WorkspaceRoot) {
     (Resolve-Path $WorkspaceRoot).Path
 }
 else {
-    (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 }
 
 . (Join-Path $workspace "scripts\unreal_workspace_config.ps1")

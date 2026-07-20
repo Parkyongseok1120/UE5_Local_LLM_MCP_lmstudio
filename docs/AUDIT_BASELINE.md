@@ -25,7 +25,7 @@ collect_* → raw_*.jsonl → build_rag_index.py → rag.sqlite (FTS)
 
 - Feature flags: `UNREAL_RAG_LEGACY_PROJECT_FILTER=1`, `UNREAL_RAG_PROJECT_ROUTING=v1`
 - Reindex rollback: keep prior `data/unreal58/rag.sqlite` + `build_manifest.json` before Phase 1 reindex
-- Installer: `installer/Disable-AgentMode.ps1` restores safe profile
+- Installer: `python install.py --profile standard --yes` restores the SAFE profile
 
 ## Known gaps at baseline
 

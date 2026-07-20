@@ -189,7 +189,7 @@ function Get-SharedActiveProjectInfo {
     }
 }
 
-. (Join-Path $PSScriptRoot "installer\Install-PathHelpers.ps1")
+. (Join-Path $PSScriptRoot "scripts\installer_support\Install-PathHelpers.ps1")
 $namespaceOverride = if ($IndexNamespace) { $IndexNamespace } else { "" }
 $ragPaths = Get-RagDataPaths -RagRoot $PSScriptRoot -NamespaceOverride $namespaceOverride
 $resolvedNamespace = $ragPaths.Namespace

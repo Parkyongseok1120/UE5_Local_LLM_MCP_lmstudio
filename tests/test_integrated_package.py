@@ -30,7 +30,6 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     for relative in (
         "INSTALL.bat",
         "install.sh",
-        "INSTALL.command",
         "install.py",
         "skills/evidence-first-code-audit/SKILL.md",
         "skills/evidence-first-code-audit/assets/lmstudio-evidence-first.preset.json",
@@ -41,6 +40,20 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "package-manifest.json",
     ):
         assert (output / relative).is_file(), relative
+    public_launchers = {
+        path.relative_to(output).as_posix()
+        for path in output.rglob("*")
+        if path.is_file()
+        and (
+            path.suffix.lower() in {".bat", ".cmd", ".command"}
+            or path.name == "install.sh"
+        )
+    }
+    assert public_launchers == {"INSTALL.bat", "install.sh"}
+    assert {path.name for path in (output / "installer").iterdir()} == {
+        "README.md",
+        "manifest.json",
+    }
     forbidden = {".git", ".venv", "node_modules", "tests", "Reports", ".agent"}
     assert not any(forbidden.intersection(path.relative_to(output).parts) for path in output.rglob("*"))
     assert not any(path.suffix in {".sqlite", ".db"} for path in output.rglob("*"))
@@ -52,6 +65,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     with zipfile.ZipFile(archive) as bundle:
         names = bundle.namelist()
     assert any(name.endswith("/install.sh") for name in names)
+    assert not any(name.endswith("/INSTALL.command") for name in names)
     assert not any("node_modules" in name or "/.git/" in name for name in names)
     installed = subprocess.run(
         [

@@ -73,8 +73,8 @@ For autonomous multi-step Unreal work, prefer a **24B–27B instruction/tool-cal
 
 | Distribution | Index | Install |
 |--------------|-------|---------|
-| **GitHub clone (this repo)** | You build `rag.sqlite` locally (`rag.ps1 build`) | [`installer/INSTALL-SAFE-MODE.bat`](installer/INSTALL-SAFE-MODE.bat) |
-| **Portable ZIP** | May include a pre-built index (see [`installer/README-PORTABLE.md`](installer/README-PORTABLE.md)) | `INSTALL.bat` inside the ZIP |
+| **GitHub clone (this repo)** | You build `rag.sqlite` locally (`rag.ps1 build`) | Root `INSTALL.bat` / `install.sh` |
+| **Portable ZIP** | May include a pre-built index | Root `INSTALL.bat` / `install.sh` |
 
 See [`docs/VERSIONING.md`](docs/VERSIONING.md) for product vs component version numbers.
 
@@ -84,22 +84,14 @@ See [`docs/VERSIONING.md`](docs/VERSIONING.md) for product vs component version 
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
 cd UE5_Local_LLM_MCP_lmstudio
 # Windows: INSTALL.bat
-# Linux:   sh ./install.sh
-# macOS:   sh ./INSTALL.command
+# Linux/macOS: ./install.sh
 ```
 
-The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. FULL adds the context compactor but remains read-only. Agent writes/builds require separate explicit risk acknowledgement. See [Integrated Installer](docs/Integrated_Installer.md).
+The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal adapter is included, it presents a numbered SAFE/AGENT authority choice and shows the final authority in a confirmation summary. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. FULL adds the context compactor but remains read-only unless AGENT authority is explicitly confirmed. See [Integrated Installer](docs/Integrated_Installer.md).
 
-### Choose an installer
+### One installer, two platform launchers
 
-| File | What it does | MCP access after installation |
-|---|---|---|
-| [`INSTALL-SAFE-MODE.bat`](installer/INSTALL-SAFE-MODE.bat) | Installs MCP settings and dependencies, then configures the local project paths. Build the RAG index separately. | Safe mode: read-only agent; MCP-triggered file writes, commands, and Unreal builds are disabled. |
-| [`INSTALL-SAFE-MODE-BUILD-RAG.bat`](installer/INSTALL-SAFE-MODE-BUILD-RAG.bat) | Safe-mode installation plus project/knowledge configuration, the full RAG indexing pipeline, and `rag.ps1 doctor`. | Safe mode remains enabled. Recommended first-time option when you also want the index ready. |
-| [`INSTALL-AGENT-MODE.bat`](installer/INSTALL-AGENT-MODE.bat) | Installs MCP settings and dependencies without building the RAG index. | Agent mode: MCP file writes, commands, and UBT builds are enabled. Use only for trusted projects. |
-| [`INSTALL-AGENT-MODE-BUILD-RAG.bat`](installer/INSTALL-AGENT-MODE-BUILD-RAG.bat) | Agent-mode installation plus project/knowledge configuration, the full RAG indexing pipeline, and `rag.ps1 doctor`. | Agent mode remains enabled. |
-
-There is no `installer/Build.bat` in this repository. In the `*-BUILD-RAG.bat` filenames, **BUILD-RAG means building the RAG search index** (including optional Editor metadata export), **not building an Unreal project**. The safe-mode installers may still write LM Studio/MCP configuration and index files during setup; the restriction applies to MCP-initiated writes, shell commands, and Unreal/UBT builds after installation.
+`INSTALL.bat` and `install.sh` are thin platform launchers for the same `install.py` implementation. There are no separate SAFE, AGENT, RAG, Cline, or context-compactor installers. Choose those options inside the integrated installer. `installer/` now contains only the manifest and an explanation; advanced maintenance tools live under `scripts/installer_support/`.
 
 Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unreal-agent`, and build your index. The installer also installs `unreal-context-compactor`. To enable automatic context expansion, keep exactly one underlying LLM loaded (or set its exact `targetModel` in the plugin settings), then **select `unreal-context-compactor` in the model dropdown for every chat that should use expansion. Installation does not change the model already selected in an existing chat; selecting the underlying Qwen/GPT model directly bypasses the installed proxy.** The proxy compacts only the model-facing history; the visible chat and the existing MCP servers remain unchanged.
 
@@ -114,9 +106,9 @@ After sending one message through that selection, verify actual routing—not ju
 For JetBrains Rider + [Cline](https://github.com/cline/cline) instead of LM Studio chat:
 
 ```powershell
-.\installer\Install-UnrealMcp.ps1 -InstallCline
-# or agent writes/builds:
-.\installer\Install-ClineUnrealMcp.ps1 -All -EnableAgentMode
+python install.py --profile custom --components codex,lmstudio,unreal,cline --cline-settings C:\path\to\cline_mcp_settings.json
+# Add AGENT authority only for a trusted project:
+python install.py --profile custom --components codex,lmstudio,unreal,cline --cline-settings C:\path\to\cline_mcp_settings.json --enable-agent-mode --accept-agent-risk
 ```
 
 See [Rider_Cline_Smoke_Checklist.md](docs/Rider_Cline_Smoke_Checklist.md) and [cline_unreal_agent_system.md](prompts/cline_unreal_agent_system.md). Default workflow: `unreal_task_start` → plan → edit → Rider Build.
@@ -135,8 +127,8 @@ See [Rider_Cline_Smoke_Checklist.md](docs/Rider_Cline_Smoke_Checklist.md) and [c
 Use safe mode first. Enable file writes and UBT only for trusted projects:
 
 ```powershell
-.\installer\Enable-AgentMode.ps1
-.\installer\Disable-AgentMode.ps1
+python install.py --profile standard --yes --enable-agent-mode --accept-agent-risk
+python install.py --profile standard --yes
 ```
 
 Ask a question:

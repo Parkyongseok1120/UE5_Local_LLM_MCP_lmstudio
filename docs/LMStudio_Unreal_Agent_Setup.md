@@ -7,7 +7,7 @@ Use this guide for **LM Studio basic chat** with `unreal-rag` + `unreal-agent` M
 ```powershell
 cd $HOME\.lmstudio\Unreal58-RAG
 .\rag.ps1 doctor
-.\installer\Verify-UnrealMcp.ps1
+.\scripts\installer_support\Verify-UnrealMcp.ps1
 ```
 
 Both should PASS. Engine default: **UE 5.8**.
@@ -110,7 +110,7 @@ Agent: **Cline** with MCP — see [`docs/Cline_Rider_Unreal_Agent_Setup.md`](Cli
 Install MCP into Cline:
 
 ```powershell
-.\installer\Install-ClineUnrealMcp.ps1
+python install.py --profile custom --components codex,lmstudio,unreal,cline --cline-settings C:\path\to\cline_mcp_settings.json
 ```
 
 Legacy Continue: [`docs/Continue_Qwen_Unreal_Agent_Setup.md`](Continue_Qwen_Unreal_Agent_Setup.md) (not recommended).

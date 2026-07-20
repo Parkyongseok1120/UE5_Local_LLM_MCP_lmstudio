@@ -13,7 +13,7 @@ $workspace = if ($WorkspaceRoot) {
     (Resolve-Path -LiteralPath $WorkspaceRoot).Path
 }
 else {
-    (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+    (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 }
 
 $py = & {

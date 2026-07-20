@@ -55,16 +55,15 @@ Required software:
 ```powershell
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
 cd UE5_Local_LLM_MCP_lmstudio
-.\installer\INSTALL-SAFE-MODE.bat
-.\installer\Configure-Knowledge.ps1
+.\INSTALL.bat
 .\rag.ps1 doctor
 ```
 
 Build the RAG index:
 
 ```powershell
-.\installer\INSTALL-SAFE-MODE-BUILD-RAG.bat
-.\installer\INSTALL-AGENT-MODE-BUILD-RAG.bat
+python install.py --profile standard --yes --build-rag
+python install.py --profile standard --yes --build-rag --enable-agent-mode --accept-agent-risk
 ```
 
 Use safe mode first unless you intentionally want MCP file writes, commands, and Unreal builds enabled.
@@ -96,8 +95,8 @@ LM Studio can run on a Mac mini / Mac Studio while Windows handles UE / UBT / th
 Default install is read-only safe mode (`ALLOW_WRITE=0`). Enable file writes and UBT only when you trust the project:
 
 ```powershell
-.\installer\Enable-AgentMode.ps1
-.\installer\Disable-AgentMode.ps1
+python install.py --profile standard --yes --enable-agent-mode --accept-agent-risk
+python install.py --profile standard --yes
 ```
 
 Never enable agent mode for untrusted project paths.
@@ -165,16 +164,15 @@ v1.2.5는 1.2 라인의 마지막 minor release로 봅니다. 앞으로 1.2.x에
 ```powershell
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
 cd UE5_Local_LLM_MCP_lmstudio
-.\installer\INSTALL-SAFE-MODE.bat
-.\installer\Configure-Knowledge.ps1
+.\INSTALL.bat
 .\rag.ps1 doctor
 ```
 
 RAG index까지 한 번에 빌드:
 
 ```powershell
-.\installer\INSTALL-SAFE-MODE-BUILD-RAG.bat
-.\installer\INSTALL-AGENT-MODE-BUILD-RAG.bat
+python install.py --profile standard --yes --build-rag
+python install.py --profile standard --yes --build-rag --enable-agent-mode --accept-agent-risk
 ```
 
 처음에는 safe mode를 권장합니다. MCP file write, command, Unreal build 권한은 신뢰하는 프로젝트에서만 켜세요.
@@ -206,8 +204,8 @@ LM Studio는 Mac mini / Mac Studio에서 실행하고, Windows PC가 UE / UBT / 
 기본 설치는 read-only safe mode (`ALLOW_WRITE=0`)입니다. 신뢰하는 프로젝트에서만 file write와 UBT를 켜세요.
 
 ```powershell
-.\installer\Enable-AgentMode.ps1
-.\installer\Disable-AgentMode.ps1
+python install.py --profile standard --yes --enable-agent-mode --accept-agent-risk
+python install.py --profile standard --yes
 ```
 
 신뢰하지 않는 project path에서는 agent mode를 켜지 마세요.

@@ -39,7 +39,7 @@ function Resolve-StackLayout {
         }
     }
 
-    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
     if ((Test-Path (Join-Path $repoRoot "rag.ps1")) -and
         (Test-Path (Join-Path $repoRoot "lmstudio-unreal-agent-mcp\src\server.js"))) {

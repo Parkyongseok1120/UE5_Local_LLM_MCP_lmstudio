@@ -1,6 +1,6 @@
 {
   "name": "Evidence-First Integrated Coding Stack",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "requires": {
     "python": "3.10+",
     "node": "20+",
@@ -23,10 +23,11 @@
   "safety": {
     "defaultReadOnly": true,
     "agentModeRequires": ["--enable-agent-mode", "--accept-agent-risk"],
+    "interactiveAgentModeSelector": true,
     "indexTierIsIndependent": true
   },
   "portablePackage": {
-    "launchers": ["INSTALL.bat", "install.sh", "INSTALL.command"],
+    "launchers": ["INSTALL.bat", "install.sh"],
     "indexIncludedByDefault": false,
     "supportedHosts": ["windows", "linux", "macos"]
   }

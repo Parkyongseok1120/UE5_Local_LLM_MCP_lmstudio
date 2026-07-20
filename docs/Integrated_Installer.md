@@ -13,12 +13,18 @@ The repository has one canonical installer for the portable evidence-first reaso
 
 ```text
 Windows: INSTALL.bat
-Linux:   sh ./install.sh
-macOS:   sh ./INSTALL.command
+Linux/macOS: ./install.sh
 Any OS:  python3 install.py
 ```
 
-Without `--yes`, the installer asks for a profile and optional components.
+Without `--yes`, the installer asks for a profile and optional components. If the Unreal adapter is included, it then shows a numbered authority selector:
+
+```text
+1. SAFE (recommended: analysis only; no writes, commands, or builds)
+2. AGENT (allows project writes, commands, and Unreal builds)
+```
+
+AGENT requires a second confirmation. Declining that confirmation continues safely in read-only mode instead of failing the installation. A final summary displays the profile, components, authority, and RAG choice before any installation work starts.
 
 | Profile | Installed components | Runtime authority |
 |---|---|---|
@@ -36,6 +42,8 @@ python3 install.py --profile standard --yes --enable-agent-mode --accept-agent-r
 ```
 
 SAFE rejects agent mode. FULL alone never enables it.
+
+`INSTALL.bat` and `install.sh` only select the host shell. Both launch the same `install.py`; `installer/` contains only its manifest and an explanation. Advanced maintenance tools are separated under `scripts/installer_support/`.
 
 ## Automation and recovery
 

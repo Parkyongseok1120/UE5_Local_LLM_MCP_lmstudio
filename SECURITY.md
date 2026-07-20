@@ -25,4 +25,4 @@ If you discover a security issue in this repository's tooling, open a private re
 
 ## Pre-push check
 
-Run `installer/Verify-Oss-Ready.ps1` before your first public push.
+Run `scripts/installer_support/Verify-Oss-Ready.ps1` before your first public push.

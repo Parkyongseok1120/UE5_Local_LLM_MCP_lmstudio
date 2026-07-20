@@ -9,15 +9,13 @@ Default install uses **Safe mode** (read-only unreal-agent):
 Enable agent mode when you trust the project and want file writes + UBT:
 
 ```powershell
-.\installer\Enable-AgentMode.ps1
-# or reinstall with:
-.\installer\Install-UnrealMcp.ps1 -EnableAgentMode
+python install.py --profile standard --yes --enable-agent-mode --accept-agent-risk
 ```
 
-Disable again:
+Return to SAFE authority by rerunning the same integrated installer without the agent flags:
 
 ```powershell
-.\installer\Disable-AgentMode.ps1
+python install.py --profile standard --yes
 ```
 
 RAG search (`unreal-rag`) remains read-only in both modes.

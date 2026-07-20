@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import importlib.util
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,21 +12,56 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.py"
 
 
-def test_installer_profiles_are_manifest_driven() -> None:
+def _load_installer_module():
     spec = importlib.util.spec_from_file_location("integrated_install", INSTALLER)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.modules.pop(spec.name, None)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_installer_profiles_are_manifest_driven() -> None:
+    module = _load_installer_module()
+    sys.modules.pop("integrated_install", None)
     manifest = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
         if name != "custom"
     }
+
+
+@pytest.mark.parametrize(
+    ("answers", "expected_agent_mode"),
+    [
+        (["n", "n", "n", "2", "y", "y"], True),
+        (["n", "n", "n", "2", "n", "y"], False),
+    ],
+)
+def test_interactive_agent_selector_confirms_or_falls_back_to_safe(
+    monkeypatch: pytest.MonkeyPatch,
+    answers: list[str],
+    expected_agent_mode: bool,
+) -> None:
+    module = _load_installer_module()
+
+    class InteractiveInput:
+        @staticmethod
+        def isatty() -> bool:
+            return True
+
+    responses = iter(answers)
+    monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
+    args = module.build_parser().parse_args(["--profile", "standard"])
+    profile, components = module._resolve_components(args)
+    sys.modules.pop("integrated_install", None)
+
+    assert profile == "standard"
+    assert "unreal" in components
+    assert args.enable_agent_mode is expected_agent_mode
+    assert args.accept_agent_risk is expected_agent_mode
 
 
 def _run(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -63,6 +97,7 @@ def test_safe_profile_installs_codex_lmstudio_and_preserves_other_mcp(tmp_path: 
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["safeMode"] is True
+    assert payload["agentMode"] is False
     assert (tmp_path / "codex" / "skills" / "evidence-first-code-audit" / "SKILL.md").is_file()
     assert (lmstudio / "config-presets" / "evidence-first-code-audit.preset.json").is_file()
     mcp = json.loads((lmstudio / "mcp.json").read_text(encoding="utf-8"))
@@ -159,6 +194,34 @@ def test_noninteractive_agent_mode_requires_explicit_risk_acceptance(tmp_path: P
     assert "--accept-agent-risk" in result.stdout
 
 
+def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        "--profile",
+        "standard",
+        "--enable-agent-mode",
+        "--accept-agent-risk",
+        "--skip-deps",
+        "--workspace-root",
+        str(tmp_path / "projects"),
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["agentMode"] is True
+    assert payload["safeMode"] is False
+    mcp = json.loads((tmp_path / "lmstudio" / "mcp.json").read_text(encoding="utf-8"))
+    env = mcp["mcpServers"]["unreal-agent"]["env"]
+    assert {
+        env[key]
+        for key in (
+            "ALLOW_WRITE",
+            "ALLOW_COMMANDS",
+            "ALLOW_UNREAL_BUILD",
+            "VALIDATE_ON_WRITE",
+        )
+    } == {"1"}
+
+
 def test_custom_rule_and_cline_install(tmp_path: Path) -> None:
     rule = tmp_path / "agent" / "rule.md"
     cline = tmp_path / "cline" / "mcp.json"
@@ -230,66 +293,3 @@ def test_standard_adds_read_only_unreal_and_index_tier_is_orthogonal(tmp_path: P
         (tmp_path / "lmstudio" / "config" / "unreal-workspace.json").read_text(encoding="utf-8")
     )
     assert shared["indexingTier"] == "lite"
-
-
-@pytest.mark.skipif(shutil.which("powershell") is None, reason="Windows PowerShell not installed")
-def test_legacy_agent_mode_toggles_resolve_lmstudio_home(tmp_path: Path) -> None:
-    lmstudio = tmp_path / "lmstudio"
-    lmstudio.mkdir()
-    mcp_path = lmstudio / "mcp.json"
-    mcp_path.write_text(
-        json.dumps(
-            {
-                "mcpServers": {
-                    "unreal-agent": {
-                        "command": "node",
-                        "args": [],
-                        "env": {
-                            "ALLOW_WRITE": "0",
-                            "ALLOW_COMMANDS": "0",
-                            "ALLOW_UNREAL_BUILD": "0",
-                            "VALIDATE_ON_WRITE": "0",
-                        },
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    enable = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(ROOT / "installer" / "Enable-AgentMode.ps1"),
-            "-LmStudioHome",
-            str(lmstudio),
-        ],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert enable.returncode == 0, enable.stderr or enable.stdout
-    assert json.loads(mcp_path.read_text(encoding="utf-8-sig"))["mcpServers"]["unreal-agent"]["env"]["ALLOW_WRITE"] == "1"
-    disable = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(ROOT / "installer" / "Disable-AgentMode.ps1"),
-            "-LmStudioHome",
-            str(lmstudio),
-        ],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert disable.returncode == 0, disable.stderr or disable.stdout
-    env = json.loads(mcp_path.read_text(encoding="utf-8-sig"))["mcpServers"]["unreal-agent"]["env"]
-    assert {env[key] for key in ("ALLOW_WRITE", "ALLOW_COMMANDS", "ALLOW_UNREAL_BUILD")} == {"0"}

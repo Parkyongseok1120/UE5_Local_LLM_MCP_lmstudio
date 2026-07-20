@@ -6,7 +6,7 @@ Build your local RAG index from a licensed Epic UE install. **Never commit** `da
 
 ```powershell
 cd Unreal58-RAG
-.\installer\Configure-Knowledge.ps1   # pick UE_5.x, sets indexNamespace
+.\scripts\installer_support\Configure-Knowledge.ps1   # pick UE_5.x, sets indexNamespace
 .\rag.ps1 update-engine              # collect source + symbols + graph + build
 .\rag.ps1 doctor
 ```

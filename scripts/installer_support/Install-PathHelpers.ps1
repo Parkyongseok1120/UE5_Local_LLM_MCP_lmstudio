@@ -314,7 +314,7 @@ function Sync-SharedWorkspaceEngine {
         return $null
     }
 
-    . (Join-Path (Split-Path $PSScriptRoot -Parent) "scripts\unreal_workspace_config.ps1")
+    . (Join-Path (Split-Path $PSScriptRoot -Parent) "unreal_workspace_config.ps1")
     $config = Read-SharedConfig -Path $SharedConfigPath
     $config.defaultEngineRoot = $EngineRoot
     if ($config.activeProject -and -not (Test-Path -LiteralPath ([string]$config.activeProject))) {

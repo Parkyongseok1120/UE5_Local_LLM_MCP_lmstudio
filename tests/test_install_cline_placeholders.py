@@ -12,6 +12,8 @@ def test_cline_template_still_has_placeholders() -> None:
 
 
 def test_install_path_helpers_has_cline_sync() -> None:
-    helpers = (ROOT / "installer" / "Install-PathHelpers.ps1").read_text(encoding="utf-8")
+    helpers = (
+        ROOT / "scripts" / "installer_support" / "Install-PathHelpers.ps1"
+    ).read_text(encoding="utf-8")
     assert "Sync-ClineMcpSettings" in helpers
     assert "Test-ClineMcpHasUnresolvedPlaceholders" in helpers

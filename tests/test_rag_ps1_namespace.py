@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-INSTALLER = ROOT / "installer"
+INSTALLER_SUPPORT = ROOT / "scripts" / "installer_support"
 
 
 def _run_ps1(script: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -17,7 +17,7 @@ def _run_ps1(script: str, *args: str) -> subprocess.CompletedProcess[str]:
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        str(INSTALLER / script),
+        str(INSTALLER_SUPPORT / script),
         *args,
     ]
     return subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT), timeout=180)

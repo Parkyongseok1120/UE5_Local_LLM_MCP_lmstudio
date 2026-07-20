@@ -1807,7 +1807,7 @@ class McpServer:
             "cliAlternatives": [
                 ".\\rag.ps1 pick-project",
                 ".\\rag.ps1 pick-project -Explorer",
-                "Pick-Unreal-Project.bat",
+                "rag.ps1 pick-project",
             ],
         }
 

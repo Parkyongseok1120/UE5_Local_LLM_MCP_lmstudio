@@ -1,6 +1,6 @@
 # Rider + Cline Smoke Checklist (stable install)
 
-Use after `installer\Install-ClineUnrealMcp.ps1 -All` (or `Install-UnrealMcp.ps1 -InstallCline`).
+Use after running the root integrated installer with the Cline component.
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@ Use after `installer\Install-ClineUnrealMcp.ps1 -All` (or `Install-UnrealMcp.ps1
 ## Install verification
 
 ```powershell
-.\installer\Verify-UnrealMcp.ps1
+.\scripts\installer_support\Verify-UnrealMcp.ps1
 python scripts\rag_doctor.py
 ```
 
@@ -47,7 +47,7 @@ python scripts\rag_doctor.py
 All checked items succeed without manual JSON editing. If Cline shows unresolved paths:
 
 ```powershell
-.\installer\Install-ClineUnrealMcp.ps1 -All [-EnableAgentMode]
+python install.py --profile custom --components codex,lmstudio,unreal,cline --cline-settings C:\path\to\cline_mcp_settings.json --dry-run
 ```
 
-Re-run with `-WhatIf` first to preview MCP server key changes.
+Use `--dry-run` first to preview managed changes.

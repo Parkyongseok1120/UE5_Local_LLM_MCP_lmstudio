@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "Install-PathHelpers.ps1")
 
 if (-not $RagRoot) {
-    $RagRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    $RagRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 }
 
 $configPath = Join-Path $RagRoot "config\workspace.json"

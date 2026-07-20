@@ -14,8 +14,8 @@
 | `npm test` + `node --check` | node-install | Checks server, context-ux, build-proof |
 | OSS readiness | oss-ready | Extra |
 | `Verify-UnrealMcp.ps1 -RepoOnly` | installer-gates | Repo layout; BYOI index = WARN |
-| `Install-ClineUnrealMcp.ps1 -WhatIf` | installer-gates | Zero mutations |
-| `Install-UnrealMcp.ps1 -WhatIf -SkipNpm -SkipPythonDeps` | installer-gates | Zero mutations |
+| `install.py --dry-run` | integrated-installer | Zero mutations |
+| `build_integrated_package.py` | integrated-package | Reproducible cross-platform bundle |
 
 Local full matrix (optional):
 
@@ -25,9 +25,9 @@ pytest -q
 python scripts/verify_encoding.py
 npm test --prefix lmstudio-unreal-agent-mcp
 node --check lmstudio-unreal-agent-mcp/src/server.js
-installer\Verify-UnrealMcp.ps1 -RepoOnly
-installer\Install-ClineUnrealMcp.ps1 -WhatIf
-installer\Install-UnrealMcp.ps1 -WhatIf -SkipNpm -SkipPythonDeps
+scripts\installer_support\Verify-UnrealMcp.ps1 -RepoOnly
+python install.py --profile safe --yes --dry-run
+python scripts/build_integrated_package.py --output OUTSIDE_REPO_PATH
 pytest tests/test_tool_manifest_contract.py tests/test_tool_call_authorization.py tests/test_project_cache_generation.py tests/test_atomic_io.py tests/test_mcp_envelope.py tests/test_mcp_stable_subprocess_e2e.py tests/test_installer_gates.py -q
 ```
 
@@ -56,7 +56,7 @@ pytest tests/test_tool_manifest_contract.py tests/test_tool_call_authorization.p
 | Cline reinstall identical content | Second run: no backup, no write |
 | MCP kill mid-write (manual) | Original source file intact |
 | UBT timeout (manual) | No orphan compiler processes |
-| Portable ZIP build | `Build-PortablePackage.ps1` succeeds from monorepo clone |
+| Portable ZIP build | `build_integrated_package.py` succeeds from the repository clone |
 
 ## Release gate
 

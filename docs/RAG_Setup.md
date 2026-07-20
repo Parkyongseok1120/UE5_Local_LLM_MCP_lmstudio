@@ -60,7 +60,7 @@ For reliable Blueprint node/pin/link analysis, install the editor graph exporter
 .\rag.ps1 install-editor-graph-plugin
 ```
 
-During `INSTALL-SAFE-MODE-BUILD-RAG.bat` and `INSTALL-AGENT-MODE-BUILD-RAG.bat`, the setup asks:
+When project metadata setup is run, it asks:
 
 ```text
 Install Blueprint graph exporter plugin into this active project? [Y/n]
@@ -78,6 +78,6 @@ Choose `Y` to copy `tools\ue_plugins\LmStudioGraphExporter` into `<YourProject>\
 ## One-Command Setup
 
 ```powershell
-.\installer\INSTALL-SAFE-MODE-BUILD-RAG.bat     # safe (read-only)
-.\installer\INSTALL-AGENT-MODE-BUILD-RAG.bat    # agent (writes + UBT)
+python install.py --profile standard --yes --build-rag
+python install.py --profile standard --yes --build-rag --enable-agent-mode --accept-agent-risk
 ```

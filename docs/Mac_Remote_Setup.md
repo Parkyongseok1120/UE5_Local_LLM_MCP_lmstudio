@@ -16,7 +16,7 @@ You don't need a high-end Windows GPU to run this stack. If you have a **Mac min
    ```powershell
    git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
    cd UE5_Local_LLM_MCP_lmstudio
-   .\installer\INSTALL-AGENT-MODE.bat
+   python install.py --profile standard --yes --enable-agent-mode --accept-agent-risk
    ```
 
 2. Verify LM Link is reachable from Windows before running evals:

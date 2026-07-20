@@ -6,8 +6,8 @@ P0/P1 findings addressed in Release Readiness Plan implementation.
 
 | Finding | Fix |
 |---------|-----|
-| Portable build assumed `.lmstudio` layout | [`Build-PortablePackage.ps1`](../installer/Build-PortablePackage.ps1) uses `Resolve-StackLayout` |
-| Full portable build expected sibling repos | [`Build-PortablePackage-Full.ps1`](../installer/Build-PortablePackage-Full.ps1) uses monorepo paths |
+| Legacy portable builders created multiple install paths | Replaced by [`build_integrated_package.py`](../scripts/build_integrated_package.py) |
+| Full portable build expected sibling repos | Integrated package builder resolves one repository root and emits one inventory |
 | CI missing installer gates | [`ci.yml`](../.github/workflows/ci.yml) `installer-gates` job |
 | Non-atomic installer JSON for workspace/agent | `Write-JsonUtf8Atomic` in `Sync-WorkspaceJson` / `Sync-AgentMcpJson` |
 | Partial mcp.json install on failure | `Write-McpConfigBatch` with backup restore |

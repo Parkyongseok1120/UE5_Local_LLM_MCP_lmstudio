@@ -10,7 +10,7 @@ Use this path when you want Rider to remain the source of truth for project stat
 ```powershell
 cd $HOME\.lmstudio\Unreal58-RAG
 .\rag.ps1 doctor
-.\installer\Verify-UnrealMcp.ps1
+.\scripts\installer_support\Verify-UnrealMcp.ps1
 ```
 
 LM Studio should have a tool-capable local model loaded at `http://localhost:1234/v1`.
@@ -46,7 +46,7 @@ Common Windows path:
 Install helper:
 
 ```powershell
-.\installer\Install-ClineUnrealMcp.ps1
+python install.py --profile custom --components codex,lmstudio,unreal,cline --cline-settings C:\path\to\cline_mcp_settings.json
 ```
 
 ## 4. Project Rules
@@ -89,7 +89,7 @@ Continue setup is kept for migration reference only and is not the recommended p
 
 | Issue | Fix |
 |-------|-----|
-| Cline MCP empty | Run `Install-ClineUnrealMcp.ps1`, then restart LM Studio/Cline |
+| Cline MCP empty | Rerun the root integrated installer with the Cline component, then restart LM Studio/Cline |
 | Wrong project in RAG | Run `pick-project` or use shared `unreal-workspace.json` |
 | Slow search | Use `hybrid=false` on `unreal_rag_search` |
 | Validation errors | Fix the reported include/reflection/module issue, then rebuild in Rider |

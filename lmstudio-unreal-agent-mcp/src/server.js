@@ -2797,7 +2797,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "build_unreal_project") {
       if (!ALLOW_UNREAL_BUILD) {
         return fail("build_unreal_project blocked. Set ALLOW_UNREAL_BUILD=1 to enable.", {
-          nextSteps: ["Run installer/Enable-AgentMode.ps1 for a trusted project, restart LM Studio, then retry."]
+          nextSteps: ["Rerun the root integrated installer, choose AGENT authority for a trusted project, restart LM Studio, then retry."]
         });
       }
 
