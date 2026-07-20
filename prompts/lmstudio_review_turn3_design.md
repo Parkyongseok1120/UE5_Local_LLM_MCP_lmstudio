@@ -4,7 +4,7 @@
 
 ## Steps
 
-1. Turn 2 findings must be PASS after `unreal_review_claim_validate`.
+1. Turn 2 structured findings must be PASS after `unreal_review_claim_validate`, including framework-semantics, behavior-path, wiring, and counterevidence gates for P0/P1 claims.
 2. Propose **delta-only** design improvements — reuse existing classes/subsystems/DataAssets.
 3. `unreal_genre_scope_validate` if genre adapter applies (action_combat, shooter, etc.).
 

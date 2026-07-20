@@ -58,6 +58,73 @@ MODE_TOKEN_RE = re.compile(
 CPP_CITATION_RE = re.compile(r"([\w./\\-]+\.cpp)(?::\d+)?", re.IGNORECASE)
 H_CITATION_RE = re.compile(r"([\w./\\-]+\.(?:h|hpp))(?::\d+)?", re.IGNORECASE)
 BUG_CLAIM_RE = re.compile(r"(버그|bug|logical\s+error|논리적\s+오류)", re.IGNORECASE)
+FRAMEWORK_SYMBOL_RE = re.compile(
+    r"(Super::[A-Za-z_][A-Za-z0-9_]*|AActor::TakeDamage|UGameplayStatics::ApplyDamage|"
+    r"FDamageEvent|base\s+class|부모\s*(?:클래스|구현)|프레임워크\s*(?:기본|구현))",
+    re.IGNORECASE,
+)
+SEMANTIC_ASSERTION_RE = re.compile(
+    r"(때문|원인|감소|증가|호출|발생|반환|처리|"
+    r"cause|because|reduce|decrease|increase|call|emit|return|handle|does\s+not|is\s+not|아니)",
+    re.IGNORECASE,
+)
+FRAMEWORK_EVIDENCE_RE = re.compile(
+    r"(framework_source|official_docs|Engine[/\\]Source|Unreal\s+Engine\s+source|"
+    r"Epic\s+(?:documentation|docs)|공식\s*문서|엔진\s*소스)",
+    re.IGNORECASE,
+)
+WIRING_ASSERTION_RE = re.compile(
+    r"(연결|연동|통합|작동|처리한다|사용\s*중|구현\s*(?:완료|됨)|"
+    r"wired|connected|integrated|functional|works|handles|is\s+used|fully\s+implemented)",
+    re.IGNORECASE,
+)
+BEHAVIOR_PATH_MARKER_RE = re.compile(
+    r"(BehaviorPath\s*:|행동\s*경로\s*:|동작\s*경로\s*:|→|->)",
+    re.IGNORECASE,
+)
+CODE_CITATION_RE = re.compile(r"[A-Za-z0-9_./\\-]+\.(?:h|hpp|cpp|cs|py|js|ts):\d+", re.IGNORECASE)
+
+PACKET_VERDICTS = {"Bug", "ByDesign", "Ambiguous", "NeedsRuntimeProof"}
+PACKET_SEVERITIES = {"P0", "P1", "P2", "P3"}
+PACKET_PROOF_LEVELS = {
+    "Proposed",
+    "SourceVerified",
+    "StaticVerified",
+    "BuildVerified",
+    "TestVerified",
+    "RuntimeVerified",
+}
+PACKET_EVIDENCE_KINDS = {
+    "requirement",
+    "project_source",
+    "framework_source",
+    "official_docs",
+    "static_analysis",
+    "build",
+    "test",
+    "runtime",
+    "generated_metadata",
+}
+PACKET_PATH_STAGES = {"entry", "decision", "dispatch", "mutation", "side_effect", "observer"}
+PACKET_PATH_STATUSES = {"present", "expected_missing", "unknown"}
+PACKET_CLAIM_TYPES = {
+    "existence",
+    "behavior",
+    "framework_semantics",
+    "wiring",
+    "state_transition",
+    "data_flow",
+    "architecture",
+    "codegen",
+}
+PACKET_BEHAVIORAL_CLAIM_TYPES = {"behavior", "wiring", "state_transition", "data_flow"}
+PACKET_PROOF_EVIDENCE_REQUIREMENTS = {
+    "SourceVerified": {"project_source", "framework_source", "official_docs"},
+    "StaticVerified": {"static_analysis"},
+    "BuildVerified": {"build"},
+    "TestVerified": {"test"},
+    "RuntimeVerified": {"runtime"},
+}
 
 SKIP_DIRS = {".git", ".vs", "Binaries", "DerivedDataCache", "Intermediate", "Saved"}
 SOURCE_EXTENSIONS = {".h", ".hpp", ".cpp", ".cs", ".ini"}
@@ -259,10 +326,278 @@ def check_logic_missing_guards(
     return ok, issues, evidence, reasons
 
 
+def _packet_evidence_kinds(entries: Any) -> set[str]:
+    kinds: set[str] = set()
+    if not isinstance(entries, list):
+        return kinds
+    for entry in entries:
+        if isinstance(entry, dict):
+            kind = str(entry.get("kind") or "").strip()
+            if kind:
+                kinds.add(kind)
+        elif isinstance(entry, str):
+            prefix = entry.partition(":")[0].strip()
+            if prefix:
+                kinds.add(prefix)
+    return kinds
+
+
+def _packet_path_stages(entries: Any) -> set[str]:
+    if not isinstance(entries, list):
+        return set()
+    return {
+        str(entry.get("stage") or "").strip()
+        for entry in entries
+        if isinstance(entry, dict) and str(entry.get("stage") or "").strip()
+    }
+
+
+def _packet_has_ordered_flow(entries: Any, final_stages: set[str]) -> bool:
+    if not isinstance(entries, list):
+        return False
+    stages = [
+        str(entry.get("stage") or "").strip()
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
+    try:
+        entry_index = stages.index("entry")
+        decision_index = next(
+            index
+            for index in range(entry_index + 1, len(stages))
+            if stages[index] in {"decision", "dispatch"}
+        )
+        next(
+            index
+            for index in range(decision_index + 1, len(stages))
+            if stages[index] in final_stages
+        )
+    except (StopIteration, ValueError):
+        return False
+    return True
+
+
+def _packet_shape_issues(packet: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for field in ("evidence", "counterEvidence"):
+        entries = packet.get(field)
+        if not isinstance(entries, list):
+            issues.append(f"Structured claim {field} must be an array.")
+            continue
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                issues.append(f"Structured claim {field}[{index}] must be an object.")
+                continue
+            if str(entry.get("kind") or "") not in PACKET_EVIDENCE_KINDS:
+                issues.append(
+                    f"Structured claim {field}[{index}].kind must be one of "
+                    f"{sorted(PACKET_EVIDENCE_KINDS)}."
+                )
+            for required in ("location", "observation"):
+                if not str(entry.get(required) or "").strip():
+                    issues.append(f"Structured claim {field}[{index}].{required} is required.")
+
+    behavior_path = packet.get("behaviorPath")
+    if not isinstance(behavior_path, list):
+        issues.append("Structured claim behaviorPath must be an array.")
+    else:
+        for index, entry in enumerate(behavior_path):
+            if not isinstance(entry, dict):
+                issues.append(f"Structured claim behaviorPath[{index}] must be an object.")
+                continue
+            if str(entry.get("stage") or "") not in PACKET_PATH_STAGES:
+                issues.append(
+                    f"Structured claim behaviorPath[{index}].stage must be one of "
+                    f"{sorted(PACKET_PATH_STAGES)}."
+                )
+            if str(entry.get("stageStatus") or "") not in PACKET_PATH_STATUSES:
+                issues.append(
+                    f"Structured claim behaviorPath[{index}].stageStatus must be one of "
+                    f"{sorted(PACKET_PATH_STATUSES)}."
+                )
+            for required in ("location", "symbol"):
+                if not str(entry.get(required) or "").strip():
+                    issues.append(
+                        f"Structured claim behaviorPath[{index}].{required} is required."
+                    )
+    unknowns = packet.get("unknowns")
+    if isinstance(unknowns, list):
+        for index, unknown in enumerate(unknowns):
+            if not isinstance(unknown, str) or not unknown.strip():
+                issues.append(
+                    f"Structured claim unknowns[{index}] must be a non-empty string."
+                )
+    return issues
+
+
+def check_evidence_packet_guards(
+    claim_text: str,
+    packet: dict[str, Any] | None,
+) -> tuple[bool, list[str], list[str], list[str]]:
+    """Validate optional structured evidence without breaking legacy string claims."""
+    ok = True
+    issues: list[str] = []
+    warnings: list[str] = []
+    reasons: list[str] = []
+
+    framework_semantics = bool(
+        FRAMEWORK_SYMBOL_RE.search(claim_text) and SEMANTIC_ASSERTION_RE.search(claim_text)
+    )
+    if packet is None:
+        if framework_semantics and not FRAMEWORK_EVIDENCE_RE.search(claim_text):
+            ok = False
+            reasons.append("framework_semantics_unverified")
+            issues.append(
+                "Framework/base-class behavior is used as a causal claim without a direct "
+                "framework-source or authoritative-documentation citation."
+            )
+        existence_plus_wiring = bool(
+            EXISTS_CLAIM_RE.search(claim_text) and WIRING_ASSERTION_RE.search(claim_text)
+        )
+        if existence_plus_wiring and not BEHAVIOR_PATH_MARKER_RE.search(claim_text):
+            if len(CODE_CITATION_RE.findall(claim_text)) < 2:
+                ok = False
+                reasons.append("presence_not_wiring")
+                issues.append(
+                    "Claim promotes symbol presence/implementation to runtime wiring without an "
+                    "entry-to-mutation BehaviorPath or multiple source citations."
+                )
+        return ok, issues, warnings, reasons
+
+    verdict = str(packet.get("verdict") or "").strip()
+    severity = str(packet.get("severity") or "").strip()
+    proof_level = str(packet.get("proofLevel") or "").strip()
+    claim_type = str(packet.get("claimType") or "").strip()
+    evidence_entries = packet.get("evidence") or []
+    counter_entries = packet.get("counterEvidence") or []
+    behavior_path = packet.get("behaviorPath") or []
+    evidence_kinds = _packet_evidence_kinds(evidence_entries)
+    stages = _packet_path_stages(behavior_path)
+    path_statuses = {
+        str(entry.get("stageStatus") or "").strip()
+        for entry in behavior_path
+        if isinstance(entry, dict)
+    } if isinstance(behavior_path, list) else set()
+
+    if verdict not in PACKET_VERDICTS:
+        ok = False
+        reasons.append("verdict_missing")
+        issues.append(f"Structured claim verdict must be one of {sorted(PACKET_VERDICTS)}.")
+    if severity not in PACKET_SEVERITIES:
+        ok = False
+        reasons.append("severity_missing")
+        issues.append(f"Structured claim severity must be one of {sorted(PACKET_SEVERITIES)}.")
+    if proof_level not in PACKET_PROOF_LEVELS:
+        ok = False
+        reasons.append("proof_level_missing")
+        issues.append(f"Structured claim proofLevel must be one of {sorted(PACKET_PROOF_LEVELS)}.")
+    if claim_type not in PACKET_CLAIM_TYPES:
+        ok = False
+        reasons.append("claim_type_missing")
+        issues.append(f"Structured claim claimType must be one of {sorted(PACKET_CLAIM_TYPES)}.")
+    if not isinstance(packet.get("unknowns"), list):
+        ok = False
+        reasons.append("unknowns_missing")
+        issues.append("Structured claim unknowns must be an array, even when empty.")
+
+    shape_issues = _packet_shape_issues(packet)
+    if shape_issues:
+        ok = False
+        reasons.append("evidence_packet_invalid")
+        issues.extend(shape_issues)
+
+    critical = severity in {"P0", "P1"}
+    if not evidence_entries:
+        ok = False
+        reasons.append("evidence_missing")
+        issues.append(
+            "Structured claims require requirement, source, static, build, test, or runtime evidence."
+        )
+    if critical and not counter_entries:
+        ok = False
+        reasons.append("counterevidence_missing")
+        issues.append("P0/P1 claims require counterEvidence or an explicitly checked alternative path.")
+
+    framework_claim = (
+        claim_type == "framework_semantics"
+        or bool(packet.get("frameworkClaim"))
+        or framework_semantics
+    )
+    if framework_claim and not evidence_kinds.intersection({"framework_source", "official_docs"}):
+        ok = False
+        reasons.append("framework_semantics_unverified")
+        issues.append(
+            "Framework semantic claim requires evidence kind framework_source or official_docs."
+        )
+
+    required_proof_evidence = PACKET_PROOF_EVIDENCE_REQUIREMENTS.get(proof_level)
+    if required_proof_evidence and not evidence_kinds.intersection(required_proof_evidence):
+        ok = False
+        reasons.append("proof_evidence_mismatch")
+        issues.append(
+            f"{proof_level} requires evidence kind from {sorted(required_proof_evidence)}."
+        )
+
+    behavioral_claim = (
+        claim_type in PACKET_BEHAVIORAL_CLAIM_TYPES
+        or bool(packet.get("behavioralClaim"))
+        or bool(packet.get("wiringClaim"))
+    )
+    if behavioral_claim and (not isinstance(behavior_path, list) or len(behavior_path) < 3):
+        ok = False
+        reasons.append("behavior_path_incomplete")
+        issues.append("Behavioral/wiring claim requires at least three BehaviorPath stages.")
+    if behavioral_claim and "entry" not in stages:
+        ok = False
+        reasons.append("behavior_path_incomplete")
+        issues.append("Behavioral claim requires an entry stage.")
+    if behavioral_claim and not stages.intersection({"decision", "dispatch"}):
+        ok = False
+        reasons.append("behavior_path_incomplete")
+        issues.append("Behavioral claim requires a decision or dispatch stage.")
+    if behavioral_claim and not stages.intersection({"mutation", "side_effect", "observer"}):
+        ok = False
+        reasons.append("behavior_path_incomplete")
+        issues.append("Behavioral claim requires a final effect or observer stage.")
+    wiring_claim = claim_type == "wiring" or bool(packet.get("wiringClaim"))
+    ordered_final_stages = (
+        {"mutation", "side_effect"}
+        if wiring_claim
+        else {"mutation", "side_effect", "observer"}
+    )
+    if behavioral_claim and not _packet_has_ordered_flow(behavior_path, ordered_final_stages):
+        ok = False
+        reasons.append("behavior_path_incomplete")
+        issues.append(
+            "BehaviorPath must order entry before decision/dispatch before the final effect."
+        )
+    if wiring_claim and not stages.intersection({"mutation", "side_effect"}):
+        ok = False
+        reasons.append("presence_not_wiring")
+        issues.append(
+            "Wiring claim must identify a mutation or side_effect stage and its stageStatus."
+        )
+    if "unknown" in path_statuses and verdict not in {"Ambiguous", "NeedsRuntimeProof"}:
+        ok = False
+        reasons.append("behavior_path_unknown")
+        issues.append(
+            "Unknown BehaviorPath stages require verdict Ambiguous or NeedsRuntimeProof."
+        )
+    if critical and proof_level == "Proposed":
+        ok = False
+        reasons.append("proof_level_too_weak")
+        issues.append("P0/P1 findings cannot remain at Proposed proof level.")
+    if verdict in {"Ambiguous", "NeedsRuntimeProof"} and not packet.get("unknowns"):
+        warnings.append(f"{verdict} claim should list the remaining unknowns.")
+
+    return ok, issues, warnings, reasons
+
+
 def validate_claim(
     claim_text: str,
     project_root: Path,
     pab: dict[str, Any] | None = None,
+    claim_packet: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     pab = pab or load_pab(project_root)
     pab_names = pab_symbol_names(pab)
@@ -337,6 +672,16 @@ def validate_claim(
         evidence.extend(logic_evidence)
         reasons.extend(logic_reasons)
 
+    packet_ok, packet_issues, packet_warnings, packet_reasons = check_evidence_packet_guards(
+        claim_text,
+        claim_packet,
+    )
+    if not packet_ok:
+        ok = False
+        issues.extend(packet_issues)
+        reasons.extend(packet_reasons)
+    warnings.extend(packet_warnings)
+
     return {
         "ok": ok,
         "issues": issues,
@@ -349,7 +694,7 @@ def validate_claim(
 
 
 def validate_claims(
-    claims: list[str],
+    claims: list[Any],
     project_root: str | Path | None = None,
     pab_path: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -357,10 +702,17 @@ def validate_claims(
     pab = load_pab(root, Path(pab_path) if pab_path else None)
     results = []
     for claim in claims:
-        if not str(claim).strip():
+        packet = claim if isinstance(claim, dict) else None
+        claim_text = str(
+            (packet or {}).get("claim")
+            or (packet or {}).get("text")
+            or (claim if isinstance(claim, str) else "")
+        ).strip()
+        if not claim_text:
             continue
-        row = validate_claim(claim, root, pab)
-        row["claim"] = claim[:500]
+        row = validate_claim(claim_text, root, pab, packet)
+        row["claim"] = claim_text[:500]
+        row["structured"] = packet is not None
         results.append(row)
 
     fail_count = sum(1 for r in results if not r.get("ok"))
@@ -384,11 +736,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    claims = list(args.claim or [])
+    claims: list[Any] = list(args.claim or [])
     if args.claims_file:
         data = json.loads(Path(args.claims_file).read_text(encoding="utf-8-sig"))
         if isinstance(data, list):
-            claims.extend([str(c) for c in data])
+            claims.extend(data)
         elif isinstance(data, dict):
             for key in ("claims", "findings"):
                 if isinstance(data.get(key), list):
@@ -396,7 +748,7 @@ def main() -> int:
                         if isinstance(item, str):
                             claims.append(item)
                         elif isinstance(item, dict):
-                            claims.append(str(item.get("text") or item.get("claim") or ""))
+                            claims.append(item)
 
     if not claims:
         print("No claims provided. Use --claim or --claims-file.", file=__import__("sys").stderr)

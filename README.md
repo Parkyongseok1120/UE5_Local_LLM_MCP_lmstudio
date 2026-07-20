@@ -3,7 +3,7 @@
 
 # UE5_Local_LLM_MCP_lmstudio 1.2.5
 
-> **Platform: Windows 10/11 only.** All install scripts are PowerShell/BAT. macOS and Linux are not supported.
+> **Integrated installer:** the portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install on Windows, Linux, and macOS. Legacy Unreal indexing/Editor helpers remain PowerShell- and engine-dependent; see [Integrated Installer](docs/Integrated_Installer.md) for the exact boundary.
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -80,13 +80,15 @@ See [`docs/VERSIONING.md`](docs/VERSIONING.md) for product vs component version 
 
 ## Quick Install
 
-```powershell
+```text
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
 cd UE5_Local_LLM_MCP_lmstudio
-.\installer\INSTALL-SAFE-MODE.bat
-.\installer\Configure-Knowledge.ps1
-.\rag.ps1 doctor
+# Windows: INSTALL.bat
+# Linux:   sh ./install.sh
+# macOS:   sh ./INSTALL.command
 ```
+
+The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. FULL adds the context compactor but remains read-only. Agent writes/builds require separate explicit risk acknowledgement. See [Integrated Installer](docs/Integrated_Installer.md).
 
 ### Choose an installer
 

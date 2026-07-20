@@ -1,5 +1,15 @@
 function Resolve-StackLayout {
-    param([string]$PortableRootOverride)
+    param(
+        [Alias("PortableRoot")]
+        [string]$PortableRootOverride,
+        [string]$LmStudioHome = ""
+    )
+
+    $resolvedLmStudioHome = if ($LmStudioHome) {
+        [System.IO.Path]::GetFullPath($LmStudioHome)
+    } else {
+        Join-Path $HOME ".lmstudio"
+    }
 
     if ($PortableRootOverride) {
         $portable = (Resolve-Path $PortableRootOverride).Path
@@ -25,6 +35,7 @@ function Resolve-StackLayout {
             RagRoot      = $ragRoot
             AgentRoot    = $agentRoot
             McpToolsRoot = Join-Path $portable "mcp-tools"
+            LmStudioHome = $resolvedLmStudioHome
         }
     }
 
@@ -37,6 +48,7 @@ function Resolve-StackLayout {
             RagRoot      = $repoRoot
             AgentRoot    = Join-Path $repoRoot "lmstudio-unreal-agent-mcp"
             McpToolsRoot = Join-Path $repoRoot "mcp-tools"
+            LmStudioHome = $resolvedLmStudioHome
         }
     }
 
@@ -49,6 +61,7 @@ function Resolve-StackLayout {
                 RagRoot      = $repoRoot
                 AgentRoot    = $agentRoot
                 McpToolsRoot = Join-Path $grand "mcp-tools"
+                LmStudioHome = $resolvedLmStudioHome
             }
         }
     }

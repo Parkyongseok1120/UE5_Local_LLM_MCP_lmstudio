@@ -121,6 +121,51 @@
         "SetActorTransform을 호출하지 않아 버그"
       ],
       "badAnswerFixture": "AuthoredWorld 로직 누락 — SetActorTransform을 호출하지 않아 시퀀스가 (0,0,0)에서 재생되는 버그이므로 즉시 수정해야 합니다."
+    },
+    {
+      "id": "project_example_damage_semantics_and_wiring",
+      "prompt": "플레이어와 적의 데미지 경로를 리뷰해줘. Super::TakeDamage의 실제 역할, HealthComponent 연결 여부, 가장 심각한 문제를 근거와 종단 BehaviorPath로 판정해.",
+      "snippets": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
+          "content": "float AActor::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)\n{\n    const float ActualDamage = DamageAmount;\n    ReceiveAnyDamage(ActualDamage, DamageEvent.DamageTypeClass, EventInstigator, DamageCauser);\n    OnTakeAnyDamage.Broadcast(this, ActualDamage, DamageEvent.DamageTypeClass, EventInstigator, DamageCauser);\n    return ActualDamage;\n}\n"
+        },
+        {
+          "path": "Source/DemoGame/Private/Character/PlayerCharacter.cpp",
+          "content": "APlayerCharacter::APlayerCharacter()\n{\n    HealthComponent = CreateDefaultSubobject<UHealthComponent>(TEXT(\"HealthComponent\"));\n}\n\nfloat APlayerCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)\n{\n    if (bIsDodging)\n    {\n        return 0.0f;\n    }\n    return Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);\n}\n"
+        },
+        {
+          "path": "Source/DemoGame/Private/Character/EnemyCharacter.cpp",
+          "content": "float AEnemyCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)\n{\n    const float AppliedDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);\n    HealthComponent->ReceiveDamage(AppliedDamage);\n    return AppliedDamage;\n}\n"
+        },
+        {
+          "path": "Source/DemoGame/Public/Character/HealthComponent.h",
+          "content": "UCLASS()\nclass DEMOGAME_API UHealthComponent : public UActorComponent\n{\n    GENERATED_BODY()\npublic:\n    void ReceiveDamage(float DamageAmount);\nprivate:\n    float CurrentHealth = 100.0f;\n};\n"
+        }
+      ],
+      "mustDetect": [
+        "AActor::TakeDamage",
+        "ReceiveAnyDamage",
+        "APlayerCharacter::TakeDamage",
+        "HealthComponent->ReceiveDamage",
+        "Super::TakeDamage"
+      ],
+      "requiredOutputPatterns": [
+        "BehaviorPath\\s*:",
+        "Counterevidence\\s*:",
+        "ProofLevel\\s*:"
+      ],
+      "mustNotSuggest": [
+        "Super::TakeDamage.*(?:기본|engine|UE).*(?:HP|health).*(?:감소|reduce|subtract)",
+        "Super::TakeDamage.*(?:이중|double|parallel).*(?:HP|health)",
+        "플레이어.*HealthComponent.*(?:연결|연동).*(?:완료|되어|됨)"
+      ],
+      "forbiddenClaims": [
+        "Super::TakeDamage 때문에 UE 기본 HP와 HealthComponent가 병렬로 감소",
+        "Super::TakeDamage causes both engine health and HealthComponent health to decrease",
+        "플레이어 HealthComponent는 데미지 경로에 연결되어 있다"
+      ],
+      "badAnswerFixture": "Super::TakeDamage 때문에 UE 기본 HP와 HealthComponent가 병렬로 감소하므로 Super 호출을 제거해야 합니다. 플레이어 HealthComponent는 이미 데미지 경로에 연결되어 있습니다."
     }
   ]
 }

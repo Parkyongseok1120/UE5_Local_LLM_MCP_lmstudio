@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "description": "Paired skill-OFF/ON benchmark for portable code reasoning.",
+  "cases": [
+    {
+      "id": "audit_python_persistence",
+      "domain": "causal_bug",
+      "task": "Audit whether the endpoint completes the requested profile update. Report the most important issue.",
+      "snippets": [
+        {"path": "app/routes.py", "content": "def update_profile(request, service):\n    payload = validate(request.json)\n    service.update(payload)\n    return {\"status\": \"accepted\"}\n"},
+        {"path": "app/service.py", "content": "class ProfileService:\n    def __init__(self, repository): self.repository = repository\n    def update(self, payload): return self.repository.build_update(payload)\n"},
+        {"path": "app/repository.py", "content": "class ProfileRepository:\n    def build_update(self, payload): return {\"name\": payload[\"name\"]}\n    def save(self, update): self.database.write(update)\n"}
+      ],
+      "requiredPatterns": ["(never|does not|missing).*(persist|save|write)", "build_update"],
+      "forbiddenPatterns": ["fully persisted", "construction.*proves.*wiring"],
+      "structurePatterns": ["(claimType|claim type)", "BehaviorPath", "Counterevidence", "ProofLevel", "stageStatus"],
+      "goodAnswerFixture": "ClaimType: wiring. The request never persists: build_update only constructs a value and save/database.write is not reached. BehaviorPath uses stageStatus present for entry/dispatch, expected_missing for save, and present for the accepted observer. Counterevidence: save exists but has no caller here. ProofLevel: SourceVerified.",
+      "badAnswerFixture": "The repository exists, so the update is fully persisted."
+    },
+    {
+      "id": "framework_java_publisher",
+      "domain": "framework_semantics",
+      "task": "Audit the claim that the supplied base publish method persists an order.",
+      "snippets": [
+        {"path": "framework/BasePublisher.java", "content": "public abstract class BasePublisher {\n  protected void publish(Object event) {\n    for (Listener listener : listeners) listener.onEvent(event);\n  }\n}\n"},
+        {"path": "orders/OrderService.java", "content": "public final class OrderService extends BasePublisher {\n  public void submit(Order order) { publish(new OrderSubmitted(order.id())); }\n}\n"},
+        {"path": "orders/OrderRepository.java", "content": "public final class OrderRepository {\n  public void save(Order order) { database.insert(order); }\n}\n"}
+      ],
+      "requiredPatterns": ["publish.*(listener|event).*(not|does not|never).*(persist|save|insert)", "OrderRepository.*save"],
+      "forbiddenPatterns": ["BasePublisher\\s+persists", "publish\\s+calls\\s+save"],
+      "structurePatterns": ["framework_semantics", "framework_source", "Counterevidence", "ProofLevel"],
+      "goodAnswerFixture": "claimType framework_semantics: BasePublisher.publish only notifies each listener and does not persist, save, or insert. Evidence framework_source BasePublisher.java. Counterevidence: OrderRepository.save inserts, but submit never reaches it. ProofLevel SourceVerified.",
+      "badAnswerFixture": "BasePublisher persists the order because publish calls save internally."
+    },
+    {
+      "id": "dataflow_typescript_retry",
+      "domain": "wiring_data_flow",
+      "task": "Audit whether the declared retry setting controls worker behavior.",
+      "snippets": [
+        {"path": "src/config.ts", "content": "export const config = { retryLimit: 8 };\n"},
+        {"path": "src/retry.ts", "content": "export async function runWithRetry(job: () => Promise<void>) {\n  for (let attempt = 0; attempt < 3; attempt += 1) {\n    try { await job(); return; } catch (error) { if (attempt === 2) throw error; }\n  }\n}\n"},
+        {"path": "src/worker.ts", "content": "import { runWithRetry } from './retry';\nexport const processJob = (job: () => Promise<void>) => runWithRetry(job);\n"}
+      ],
+      "requiredPatterns": ["retryLimit.*(unused|not read|ignored|does not reach)", "(hard.?cod|attempt < 3|three attempts)"],
+      "forbiddenPatterns": ["retryLimit.*controls.*runtime"],
+      "structurePatterns": ["data_flow", "BehaviorPath", "expected_missing", "Counterevidence", "ProofLevel"],
+      "goodAnswerFixture": "claimType data_flow: retryLimit is unused and does not reach the loop; attempt < 3 is hard-coded. BehaviorPath marks the config handoff expected_missing. Counterevidence: retryLimit is declared but never imported. ProofLevel SourceVerified.",
+      "badAnswerFixture": "retryLimit controls runtime because it is declared in config."
+    },
+    {
+      "id": "state_go_breaker",
+      "domain": "state_transition",
+      "task": "Audit the breaker state lifecycle and identify its most important correctness issue.",
+      "snippets": [
+        {"path": "breaker/breaker.go", "content": "type State int\nconst ( Closed State = iota; Open )\ntype Breaker struct { state State; successes int }\nfunc (b *Breaker) OnFailure() { b.state = Open; b.successes = 0 }\nfunc (b *Breaker) OnSuccess() { if b.state == Open { b.successes++ } }\nfunc (b *Breaker) Allow() bool { return b.state == Closed }\n"}
+      ],
+      "requiredPatterns": ["(never|does not|missing).*(Closed|recover|reset)", "OnSuccess"],
+      "forbiddenPatterns": ["OnSuccess\\s+(sets|returns).*Closed", "breaker.*can recover"],
+      "structurePatterns": ["state_transition", "BehaviorPath", "expected_missing", "Counterevidence", "ProofLevel"],
+      "goodAnswerFixture": "claimType state_transition: OnSuccess increments successes but never resets state to Closed, so the breaker does not recover. BehaviorPath marks the Closed mutation expected_missing. Counterevidence: OnFailure owns the opposite transition. ProofLevel SourceVerified.",
+      "badAnswerFixture": "OnSuccess sets Closed, so the breaker can recover."
+    },
+    {
+      "id": "architecture_existing_owner",
+      "domain": "architecture",
+      "task": "Design the smallest change to add scheduled email delivery without duplicating existing ownership.",
+      "snippets": [
+        {"path": "notify/service.py", "content": "class NotificationService:\n    def __init__(self, queue, repository):\n        self.queue = queue\n        self.repository = repository\n    def send_now(self, message):\n        self.repository.record(message)\n        self.queue.publish(message)\n"},
+        {"path": "notify/scheduler.py", "content": "class DeliveryScheduler:\n    def __init__(self, clock, notifications):\n        self.clock = clock\n        self.notifications = notifications\n    def tick(self):\n        for message in self.clock.due_messages():\n            self.notifications.send_now(message)\n"}
+      ],
+      "requiredPatterns": ["(reuse|extend).*(DeliveryScheduler|NotificationService)", "DoNotDuplicate", "Existing", "Proposed"],
+      "forbiddenPatterns": ["new NotificationManager", "replace NotificationService"],
+      "structurePatterns": ["architecture", "impacted|surface|dependency", "validation", "owner"],
+      "goodAnswerFixture": "ClaimType architecture. Existing: DeliveryScheduler owns due-time processing and NotificationService owns recording/publishing. Proposed: extend the existing scheduler input/API and reuse NotificationService. DoNotDuplicate: both owners. Impacted surfaces and validation are listed.",
+      "badAnswerFixture": "Create a new NotificationManager and replace NotificationService."
+    },
+    {
+      "id": "architecture_async_lifecycle",
+      "domain": "architecture",
+      "task": "Plan cancellation support for the existing importer while preserving lifecycle ownership.",
+      "snippets": [
+        {"path": "importer/job.py", "content": "class ImportJob:\n    def __init__(self, worker, events):\n        self.worker = worker\n        self.events = events\n        self.running = False\n    async def run(self, source):\n        self.running = True\n        try:\n            await self.worker.consume(source)\n            self.events.completed()\n        finally:\n            self.running = False\n"},
+        {"path": "importer/controller.py", "content": "class ImportController:\n    def __init__(self, job): self.job = job\n    async def start(self, source): return await self.job.run(source)\n"}
+      ],
+      "requiredPatterns": ["ImportJob.*(own|cancel)", "finally", "DoNotDuplicate", "Existing", "Proposed"],
+      "forbiddenPatterns": ["new ImportCancellationService", "controller.*owns.*worker"],
+      "structurePatterns": ["architecture", "lifecycle", "impacted", "validation"],
+      "goodAnswerFixture": "ClaimType architecture. Existing: ImportJob owns worker execution and running lifecycle. Proposed: add cancellation state/API to ImportJob and preserve finally cleanup. DoNotDuplicate: no ImportCancellationService. List impacted controller/tests and validation.",
+      "badAnswerFixture": "Create a new ImportCancellationService; the controller owns the worker lifecycle."
+    },
+    {
+      "id": "codegen_python_registration",
+      "domain": "codegen",
+      "task": "Provide the minimal code change that makes registration persist an account using the existing store. Include implementation obligations.",
+      "snippets": [
+        {"path": "api.py", "content": "def register(request, service):\n    account = service.prepare(request.json)\n    return {\"id\": account[\"id\"], \"status\": \"created\"}\n"},
+        {"path": "service.py", "content": "class AccountService:\n    def __init__(self, store): self.store = store\n    def prepare(self, raw): return {\"id\": raw[\"id\"], \"email\": raw[\"email\"]}\n"},
+        {"path": "store.py", "content": "class AccountStore:\n    def insert(self, account): self.database.insert(account)\n"}
+      ],
+      "requiredPatterns": ["self\\.store\\.insert|store\\.insert", "invariants?", "impactedSurfaces|impacted surfaces", "validationPlan|validation plan"],
+      "forbiddenPatterns": ["AccountStore\\(\\)", "new.*repository", "RuntimeVerified"],
+      "structurePatterns": ["codegen", "Proposed", "rollback|failure", "test"],
+      "goodAnswerFixture": "claimType codegen, ProofLevel Proposed. Invariants: use the injected store and report created only after persistence. Minimal code calls self.store.insert(account). impactedSurfaces: service and tests. validationPlan: unit test successful insert and failed insert. Failure behavior is defined.",
+      "badAnswerFixture": "Instantiate AccountStore() in the route. ProofLevel RuntimeVerified."
+    },
+    {
+      "id": "codegen_typescript_retry",
+      "domain": "codegen",
+      "task": "Provide the minimal code change that makes the worker honor config.retryLimit. Include implementation obligations.",
+      "snippets": [
+        {"path": "src/config.ts", "content": "export const config = { retryLimit: 8 };\n"},
+        {"path": "src/retry.ts", "content": "export async function runWithRetry(job: () => Promise<void>) {\n  for (let attempt = 0; attempt < 3; attempt += 1) {\n    try { await job(); return; } catch (error) { if (attempt === 2) throw error; }\n  }\n}\n"},
+        {"path": "src/worker.ts", "content": "import { runWithRetry } from './retry';\nexport const processJob = (job: () => Promise<void>) => runWithRetry(job);\n"}
+      ],
+      "requiredPatterns": ["retryLimit", "runWithRetry.*(limit|retry)", "invariants?", "impactedSurfaces|impacted surfaces", "validationPlan|validation plan"],
+      "forbiddenPatterns": ["attempt < 3", "attempt === 2", "RuntimeVerified"],
+      "structurePatterns": ["codegen", "Proposed", "config", "test"],
+      "goodAnswerFixture": "claimType codegen, ProofLevel Proposed. Invariant: total attempts equal retryLimit. Pass config.retryLimit into runWithRetry(job, retryLimit) and replace both fixed numeric boundaries with retryLimit-derived conditions. impactedSurfaces include config, worker, retry, tests. validationPlan covers 1 and 8 attempts.",
+      "badAnswerFixture": "Keep attempt < 3 and attempt === 2. ProofLevel RuntimeVerified."
+    }
+  ]
+}

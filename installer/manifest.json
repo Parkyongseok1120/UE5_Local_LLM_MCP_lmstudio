@@ -1,16 +1,33 @@
 {
-  "name": "Unreal58-RAG Portable MCP",
-  "version": "1.1.0",
+  "name": "Evidence-First Integrated Coding Stack",
+  "version": "2.0.0",
   "requires": {
     "python": "3.10+",
     "node": "20+",
-    "lmStudio": "0.3+"
+    "lmStudio": "0.4+"
+  },
+  "profiles": {
+    "safe": ["codex", "lmstudio"],
+    "standard": ["codex", "lmstudio", "unreal"],
+    "full": ["codex", "lmstudio", "unreal", "context_compactor"],
+    "custom": []
   },
   "components": [
-    "UE5_Local_LLM_MCP_lmstudio",
-    "lmstudio-unreal-agent-mcp",
-    "lmstudio-context-compactor-plugin",
-    "mcp-tools",
-    "config"
-  ]
+    "codex",
+    "lmstudio",
+    "portable_rule",
+    "unreal",
+    "context_compactor",
+    "cline"
+  ],
+  "safety": {
+    "defaultReadOnly": true,
+    "agentModeRequires": ["--enable-agent-mode", "--accept-agent-risk"],
+    "indexTierIsIndependent": true
+  },
+  "portablePackage": {
+    "launchers": ["INSTALL.bat", "install.sh", "INSTALL.command"],
+    "indexIncludedByDefault": false,
+    "supportedHosts": ["windows", "linux", "macos"]
+  }
 }

@@ -32,6 +32,10 @@ When the user asks for logic / design / bug analysis of project C++ (not a compi
 5. `Ambiguous` = header/implementation wording conflict only. Ask or require runtime proof; do not invent a patch.
 6. If tools return `cached=true` / `evidenceStatus=cached`, `READ_REPEAT_DETECTED`, `EVIDENCE_STAGNATION`, `EVIDENCE_STAGNATION_REPEAT`, or `TOOL_REPEAT_BLOCKED`, stop reading and classify from existing evidence (or hand off after an internal MCP error).
 7. Before finishing, call `unreal_review_claim_validate` on negative / "logic missing" claims and revise on FAIL.
+8. A framework/base-class behavior used as a cause requires direct version-matched framework source or authoritative documentation. A project callsite is not proof of base semantics.
+9. For behavioral findings, trace `entry → decision/dispatch → mutation/side_effect`; declarations, constructor registration, events, requests, and `Super::` calls do not prove the final mutation.
+10. Distinguish `declared → constructed → registered → reachable → called → mutates → observed`. Compare symmetric paths and trace declared data fields to runtime readers.
+11. Submit P0/P1 or causal findings to `unreal_review_claim_validate` as structured packets with an explicit `claimType`, evidence, BehaviorPath, counterEvidence, proofLevel, and unknowns. Match each verified proof level to its evidence kind. Challenge the leading cause once and scan for a more severe failure before finalizing.
 
 ## Standard sequence
 

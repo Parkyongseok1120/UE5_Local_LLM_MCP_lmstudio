@@ -1304,15 +1304,168 @@ class McpServer:
                 "description": (
                     "Batch validate review findings against project source and PAB. "
                     "Flags false 'missing/unused' claims, duplicate Subsystem/DataAsset suggestions, "
-                    "and logic-missing claims that contradict by-design header contracts "
-                    "(reasons: by_design_contract, header_contract_unread)."
+                    "logic-missing claims that contradict by-design header contracts, unverified "
+                    "framework semantics, and structured evidence packets with incomplete behavior paths."
                 ),
                 "inputSchema": self._schema(
                     {
                         "claims": {
                             "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Finding or claim texts from Turn 2 review.",
+                            "items": {
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "claim": {"type": "string"},
+                                            "verdict": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "Bug",
+                                                    "ByDesign",
+                                                    "Ambiguous",
+                                                    "NeedsRuntimeProof",
+                                                ],
+                                            },
+                                            "severity": {
+                                                "type": "string",
+                                                "enum": ["P0", "P1", "P2", "P3"],
+                                            },
+                                            "proofLevel": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "Proposed",
+                                                    "SourceVerified",
+                                                    "StaticVerified",
+                                                    "BuildVerified",
+                                                    "TestVerified",
+                                                    "RuntimeVerified",
+                                                ],
+                                            },
+                                            "claimType": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "existence",
+                                                    "behavior",
+                                                    "framework_semantics",
+                                                    "wiring",
+                                                    "state_transition",
+                                                    "data_flow",
+                                                    "architecture",
+                                                    "codegen",
+                                                ],
+                                            },
+                                            "frameworkClaim": {"type": "boolean", "default": False},
+                                            "behavioralClaim": {"type": "boolean", "default": False},
+                                            "wiringClaim": {"type": "boolean", "default": False},
+                                            "evidence": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "kind": {
+                                                            "type": "string",
+                                                            "enum": [
+                                                                "requirement",
+                                                                "project_source",
+                                                                "framework_source",
+                                                                "official_docs",
+                                                                "static_analysis",
+                                                                "build",
+                                                                "test",
+                                                                "runtime",
+                                                                "generated_metadata",
+                                                            ],
+                                                        },
+                                                        "location": {"type": "string"},
+                                                        "observation": {"type": "string"},
+                                                    },
+                                                    "required": ["kind", "location", "observation"],
+                                                    "additionalProperties": False,
+                                                },
+                                            },
+                                            "behaviorPath": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "stage": {
+                                                            "type": "string",
+                                                            "enum": [
+                                                                "entry",
+                                                                "decision",
+                                                                "dispatch",
+                                                                "mutation",
+                                                                "side_effect",
+                                                                "observer",
+                                                            ],
+                                                        },
+                                                        "stageStatus": {
+                                                            "type": "string",
+                                                            "enum": [
+                                                                "present",
+                                                                "expected_missing",
+                                                                "unknown",
+                                                            ],
+                                                        },
+                                                        "location": {"type": "string"},
+                                                        "symbol": {"type": "string"},
+                                                    },
+                                                    "required": [
+                                                        "stage",
+                                                        "stageStatus",
+                                                        "location",
+                                                        "symbol",
+                                                    ],
+                                                    "additionalProperties": False,
+                                                },
+                                            },
+                                            "counterEvidence": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "kind": {
+                                                            "type": "string",
+                                                            "enum": [
+                                                                "requirement",
+                                                                "project_source",
+                                                                "framework_source",
+                                                                "official_docs",
+                                                                "static_analysis",
+                                                                "build",
+                                                                "test",
+                                                                "runtime",
+                                                                "generated_metadata",
+                                                            ],
+                                                        },
+                                                        "location": {"type": "string"},
+                                                        "observation": {"type": "string"},
+                                                    },
+                                                    "required": ["kind", "location", "observation"],
+                                                    "additionalProperties": False,
+                                                },
+                                            },
+                                            "unknowns": {"type": "array", "items": {"type": "string"}},
+                                        },
+                                        "required": [
+                                            "claim",
+                                            "verdict",
+                                            "severity",
+                                            "proofLevel",
+                                            "claimType",
+                                            "evidence",
+                                            "behaviorPath",
+                                            "counterEvidence",
+                                            "unknowns",
+                                        ],
+                                        "additionalProperties": False,
+                                    },
+                                ]
+                            },
+                            "description": (
+                                "Legacy finding strings or structured evidence packets from Turn 2 review."
+                            ),
                         },
                         "projectRoot": {"type": "string"},
                     },

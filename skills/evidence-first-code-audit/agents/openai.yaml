@@ -1,0 +1,4 @@
+interface:
+  display_name: "Evidence-First Code Audit"
+  short_description: "Trace code behavior and challenge architecture claims"
+  default_prompt: "Use $evidence-first-code-audit to audit this code path with evidence and counterevidence before proposing changes."

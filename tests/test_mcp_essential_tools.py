@@ -117,6 +117,32 @@ def test_unreal_agent_plan_description_mentions_chat_first(monkeypatch, tmp_path
     assert "toolPolicy" in plan["description"]
 
 
+def test_review_claim_validator_accepts_legacy_strings_and_evidence_packets(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    tool = next(
+        item for item in server.all_tool_definitions() if item["name"] == "unreal_review_claim_validate"
+    )
+    claim_items = tool["inputSchema"]["properties"]["claims"]["items"]
+    variants = claim_items["oneOf"]
+    assert {variant.get("type") for variant in variants} == {"string", "object"}
+    packet = next(variant for variant in variants if variant.get("type") == "object")
+    assert {
+        "claim",
+        "verdict",
+        "severity",
+        "proofLevel",
+        "claimType",
+        "evidence",
+        "behaviorPath",
+        "counterEvidence",
+        "unknowns",
+    }.issubset(set(packet["required"]))
+    behavior_item = packet["properties"]["behaviorPath"]["items"]
+    assert "stageStatus" in behavior_item["required"]
+
+
 def test_agent_essential_tool_names_documented():
     """Keep Python test set aligned with server.js ESSENTIAL_AGENT_TOOL_NAMES."""
     server_js = (ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js").read_text(encoding="utf-8")

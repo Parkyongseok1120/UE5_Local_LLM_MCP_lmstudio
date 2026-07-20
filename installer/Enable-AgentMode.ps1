@@ -28,7 +28,11 @@ $config.mcpServers."unreal-agent".env.ALLOW_UNREAL_BUILD = "1"
 $config.mcpServers."unreal-agent".env.VALIDATE_ON_WRITE = "1"
 # Validation-on-write time budget: fail open past this so a slow validator never
 # stalls the write past the client tool timeout (prevents the -32001 retry spiral).
-$config.mcpServers."unreal-agent".env.VALIDATE_ON_WRITE_TIMEOUT_MS = "45000"
+if (-not $config.mcpServers."unreal-agent".env.PSObject.Properties.Name.Contains("VALIDATE_ON_WRITE_TIMEOUT_MS")) {
+    $config.mcpServers."unreal-agent".env | Add-Member -NotePropertyName VALIDATE_ON_WRITE_TIMEOUT_MS -NotePropertyValue "45000"
+} else {
+    $config.mcpServers."unreal-agent".env.VALIDATE_ON_WRITE_TIMEOUT_MS = "45000"
+}
 if (-not $config.mcpServers."unreal-agent".PSObject.Properties.Name.Contains("timeout")) {
     $config.mcpServers."unreal-agent" | Add-Member -NotePropertyName timeout -NotePropertyValue 720000
 } else {

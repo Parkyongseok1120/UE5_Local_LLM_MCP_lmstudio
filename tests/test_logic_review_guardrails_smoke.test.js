@@ -43,6 +43,17 @@ test("core review case list includes authored world false positive", () => {
   const cases = JSON.parse(fs.readFileSync(casesPath, "utf8"));
   const ids = cases.cases.map((row) => row.id);
   assert.ok(ids.includes("project_example_authored_world_by_design"));
+  assert.ok(ids.includes("project_example_damage_semantics_and_wiring"));
+});
+
+test("damage semantics bad fixture contains the framework and wiring traps", () => {
+  const casesPath = path.join(__dirname, "..", "config", "rag_eval_project_review_cases.json");
+  const cases = JSON.parse(fs.readFileSync(casesPath, "utf8"));
+  const c = cases.cases.find((row) => row.id === "project_example_damage_semantics_and_wiring");
+  assert.ok(c, "case missing");
+  assert.match(c.badAnswerFixture, /Super::TakeDamage/);
+  assert.match(c.badAnswerFixture, /HealthComponent/);
+  assert.ok(c.requiredOutputPatterns.some((pattern) => pattern.includes("BehaviorPath")));
 });
 
 test("tool_orchestration review gates mention logic-missing validate", () => {

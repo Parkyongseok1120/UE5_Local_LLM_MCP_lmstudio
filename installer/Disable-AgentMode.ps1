@@ -26,6 +26,7 @@ if (-not $config.mcpServers."unreal-agent".env) {
 $config.mcpServers."unreal-agent".env.ALLOW_WRITE = "0"
 $config.mcpServers."unreal-agent".env.ALLOW_COMMANDS = "0"
 $config.mcpServers."unreal-agent".env.ALLOW_UNREAL_BUILD = "0"
+$config.mcpServers."unreal-agent".env.VALIDATE_ON_WRITE = "0"
 
 $json = $config | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText($mcpPath, $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding $false))

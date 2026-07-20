@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "description": "Project-neutral, multi-language holdouts for evidence-first code reasoning.",
+  "cases": [
+    {
+      "id": "python_persistence_wiring",
+      "language": "Python",
+      "task": "Audit whether an accepted profile update is persisted.",
+      "snippets": [
+        {
+          "path": "app/routes.py",
+          "content": "def update_profile(request, service):\n    payload = validate(request.json)\n    service.update(payload)\n    return {\"status\": \"accepted\"}\n"
+        },
+        {
+          "path": "app/service.py",
+          "content": "class ProfileService:\n    def __init__(self, repository):\n        self.repository = repository\n\n    def update(self, payload):\n        return self.repository.build_update(payload)\n"
+        },
+        {
+          "path": "app/repository.py",
+          "content": "class ProfileRepository:\n    def build_update(self, payload):\n        return {\"name\": payload[\"name\"]}\n\n    def save(self, update):\n        self.database.write(update)\n"
+        }
+      ],
+      "requiredFindings": ["(never|does not|missing).*(persist|save|write)", "build_update"],
+      "forbiddenClaims": ["(is|fully) persisted", "construction.*proves.*wiring"],
+      "requiredOutputPatterns": ["ClaimType\\s*:\\s*wiring", "BehaviorPath\\s*:", "stageStatus", "Counterevidence\\s*:", "ProofLevel\\s*:", "Unknowns\\s*:"],
+      "goodAnswerFixture": "ClaimType: wiring\nVerdict: Bug (P0)\nClaim: The accepted update is never persisted; build_update only constructs a value and ProfileService.update never calls save or database.write.\nEvidence: project_source app/routes.py, app/service.py, app/repository.py.\nBehaviorPath: entry(stageStatus=present) update_profile -> decision(stageStatus=present) validate/service.update -> side_effect(stageStatus=expected_missing) repository.save -> observer(stageStatus=present) accepted response.\nCounterevidence: ProfileRepository.save contains database.write, but no supplied caller reaches it.\nProofLevel: SourceVerified\nUnknowns: Dependency decorators or production middleware were not supplied.",
+      "badAnswerFixture": "The repository is constructed, so the update is fully persisted."
+    },
+    {
+      "id": "typescript_retry_data_flow",
+      "language": "TypeScript",
+      "task": "Audit whether the declared retry setting controls runtime retry behavior.",
+      "snippets": [
+        {
+          "path": "src/config.ts",
+          "content": "export type WorkerConfig = { retryLimit: number };\nexport const config: WorkerConfig = { retryLimit: 8 };\n"
+        },
+        {
+          "path": "src/retry.ts",
+          "content": "export async function runWithRetry(job: () => Promise<void>) {\n  for (let attempt = 0; attempt < 3; attempt += 1) {\n    try { await job(); return; } catch (error) {\n      if (attempt === 2) throw error;\n    }\n  }\n}\n"
+        },
+        {
+          "path": "src/worker.ts",
+          "content": "import { runWithRetry } from './retry';\nexport const processJob = (job: () => Promise<void>) => runWithRetry(job);\n"
+        }
+      ],
+      "requiredFindings": ["retryLimit.*(unused|not read|does not reach|ignored)", "hard.?cod(ed|es).*3|attempt < 3"],
+      "forbiddenClaims": ["retryLimit.*controls.*runtime", "declaration.*proves.*consumed"],
+      "requiredOutputPatterns": ["ClaimType\\s*:\\s*data_flow", "BehaviorPath\\s*:", "stageStatus", "Counterevidence\\s*:", "ProofLevel\\s*:", "Unknowns\\s*:"],
+      "goodAnswerFixture": "ClaimType: data_flow\nVerdict: Bug (P1)\nClaim: retryLimit is unused and does not reach the runtime loop; runWithRetry hard-codes attempt < 3.\nEvidence: project_source src/config.ts and src/retry.ts.\nBehaviorPath: entry(stageStatus=present) processJob -> dispatch(stageStatus=expected_missing) retryLimit handoff -> observer(stageStatus=present) loop bound attempt < 3.\nCounterevidence: config.ts declares retryLimit = 8, but neither worker.ts nor retry.ts imports or reads config.\nProofLevel: SourceVerified\nUnknowns: Generated wrappers and runtime injection were not supplied.",
+      "badAnswerFixture": "The retryLimit declaration proves it controls runtime retries."
+    },
+    {
+      "id": "go_state_recovery",
+      "language": "Go",
+      "task": "Audit whether the breaker can recover after opening.",
+      "snippets": [
+        {
+          "path": "breaker/breaker.go",
+          "content": "package breaker\n\ntype State int\nconst ( Closed State = iota; Open )\ntype Breaker struct { state State; successes int }\n\nfunc (b *Breaker) OnFailure() { b.state = Open; b.successes = 0 }\nfunc (b *Breaker) OnSuccess() {\n    if b.state == Open { b.successes++ }\n}\nfunc (b *Breaker) Allow() bool { return b.state == Closed }\n"
+        }
+      ],
+      "requiredFindings": ["(never|does not|missing).*(Closed|recover|reset)", "OnSuccess"],
+      "forbiddenClaims": ["OnSuccess\\s+(sets|returns)\\s+.*Closed", "breaker.*can recover"],
+      "requiredOutputPatterns": ["ClaimType\\s*:\\s*state_transition", "BehaviorPath\\s*:", "stageStatus", "Counterevidence\\s*:", "ProofLevel\\s*:", "Unknowns\\s*:"],
+      "goodAnswerFixture": "ClaimType: state_transition\nVerdict: Bug (P0)\nClaim: After OnFailure opens the breaker, OnSuccess increments successes but never resets state to Closed, so it does not recover.\nEvidence: project_source breaker/breaker.go.\nBehaviorPath: entry(stageStatus=present) OnFailure -> decision(stageStatus=present) OnSuccess checks Open -> mutation(stageStatus=expected_missing) reset to Closed -> observer(stageStatus=present) Allow remains false.\nCounterevidence: Closed exists and Allow reads it, but no supplied transition writes Closed after initialization.\nProofLevel: SourceVerified\nUnknowns: Other files and concurrent access policy were not supplied.",
+      "badAnswerFixture": "OnSuccess sets the state to Closed, so the breaker can recover."
+    },
+    {
+      "id": "java_base_publisher_semantics",
+      "language": "Java",
+      "task": "Audit the claim that calling the supplied base publisher persists an order.",
+      "snippets": [
+        {
+          "path": "framework/BasePublisher.java",
+          "content": "package framework;\npublic abstract class BasePublisher {\n  protected void publish(Object event) {\n    for (Listener listener : listeners) listener.onEvent(event);\n  }\n}\n"
+        },
+        {
+          "path": "orders/OrderService.java",
+          "content": "package orders;\npublic final class OrderService extends BasePublisher {\n  public void submit(Order order) {\n    publish(new OrderSubmitted(order.id()));\n  }\n}\n"
+        },
+        {
+          "path": "orders/OrderRepository.java",
+          "content": "package orders;\npublic final class OrderRepository {\n  public void save(Order order) { database.insert(order); }\n}\n"
+        }
+      ],
+      "requiredFindings": ["publish.*(listeners|event).*(not|does not|never).*(persist|save|insert)", "OrderRepository.*save"],
+      "forbiddenClaims": ["BasePublisher\\s+persists", "publish\\s+calls\\s+save"],
+      "requiredOutputPatterns": ["ClaimType\\s*:\\s*framework_semantics", "BehaviorPath\\s*:", "stageStatus", "Counterevidence\\s*:", "ProofLevel\\s*:", "Unknowns\\s*:"],
+      "goodAnswerFixture": "ClaimType: framework_semantics\nVerdict: Bug (P1)\nClaim: BasePublisher.publish only notifies listeners and does not persist, save, or insert the order.\nEvidence: framework_source framework/BasePublisher.java and project_source orders/OrderService.java.\nBehaviorPath: entry(stageStatus=present) OrderService.submit -> dispatch(stageStatus=present) BasePublisher.publish -> side_effect(stageStatus=present) listener.onEvent only.\nCounterevidence: OrderRepository.save calls database.insert, but the supplied submit path never references OrderRepository.save.\nProofLevel: SourceVerified\nUnknowns: Listener implementations and dependency wiring were not supplied.",
+      "badAnswerFixture": "BasePublisher persists the order because publish calls save internally."
+    }
+  ]
+}

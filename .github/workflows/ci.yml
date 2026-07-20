@@ -7,6 +7,59 @@ on:
     branches: ["main", "master", "Develop"]
 
 jobs:
+  integrated-cross-platform:
+    name: Integrated installer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: Cross-platform installer and package tests
+        run: >
+          python -m pytest
+          tests/test_integrated_installer.py
+          tests/test_integrated_package.py
+          tests/test_evidence_first_mcp.py
+          tests/test_evidence_first_benchmark.py
+          -q --tb=short
+
+      - name: SAFE dry-run performs no target writes
+        run: >
+          python install.py --profile safe --yes --dry-run
+          --codex-home "${{ runner.temp }}/codex-dry"
+          --lmstudio-home "${{ runner.temp }}/lmstudio-dry"
+          --state-home "${{ runner.temp }}/state-dry"
+
+      - name: SAFE isolated install and MCP stdio smoke
+        run: >
+          python install.py --profile safe --yes
+          --codex-home "${{ runner.temp }}/codex"
+          --lmstudio-home "${{ runner.temp }}/lmstudio"
+          --state-home "${{ runner.temp }}/state"
+
+      - name: Build relocatable package
+        run: >
+          python scripts/build_integrated_package.py
+          --output "${{ runner.temp }}/Evidence-First-Integrated"
+          --zip "${{ runner.temp }}/Evidence-First-Integrated.zip"
+
   python-tests:
     name: Python tests (pytest)
     runs-on: windows-latest

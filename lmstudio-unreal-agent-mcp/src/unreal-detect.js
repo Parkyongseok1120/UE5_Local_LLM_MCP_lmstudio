@@ -225,13 +225,18 @@ function resolveSearchRoots(workspaceRoot, configPath) {
     .map((s) => s.trim())
     .filter(Boolean);
   const fromConfig = Array.isArray(config.projectSearchRoots) ? config.projectSearchRoots : [];
+  const explicitRoots = [...fromEnv, ...fromConfig];
+  const fallbackRoots = explicitRoots.length === 0
+    ? [
+      path.join(os.homedir(), "Documents", "Git"),
+      path.join(os.homedir(), "Documents", "Unreal Projects")
+    ]
+    : [];
   const roots = uniquePaths([
     workspaceRoot,
     process.env.ACTIVE_PROJECT ? path.dirname(path.resolve(process.env.ACTIVE_PROJECT)) : "",
-    ...fromEnv,
-    ...fromConfig,
-    path.join(os.homedir(), "Documents", "Git"),
-    path.join(os.homedir(), "Documents", "Unreal Projects")
+    ...explicitRoots,
+    ...fallbackRoots
   ]);
   return { config, roots };
 }

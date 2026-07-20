@@ -66,6 +66,8 @@ def build_retry_feedback(row: dict, case: dict) -> str:
         parts.append(f"- Forbidden claim: {pattern}")
     for pattern in row.get("detectMiss") or []:
         parts.append(f"- Must mention: {pattern}")
+    for pattern in row.get("outputPatternMiss") or []:
+        parts.append(f"- Required evidence output missing: {pattern}")
     parts.append(build_symbol_manifest(case))
     parts.append("Ground every claim in the snippets. Do not claim symbols in the manifest are missing or unused.")
     return "\n".join(parts)
@@ -105,12 +107,14 @@ def score_case(case: dict, answer: str) -> dict:
     must_detect = [str(p) for p in case.get("mustDetect") or []]
     must_not = [str(p) for p in case.get("mustNotSuggest") or []]
     forbidden_claims = [str(p) for p in case.get("forbiddenClaims") or []]
+    required_output = [str(p) for p in case.get("requiredOutputPatterns") or []]
     snippets = snippet_text(case)
 
     detect_hits = [p for p in must_detect if must_detect_hit(p, answer, snippets)]
     detect_miss = [p for p in must_detect if p not in detect_hits]
     forbidden_hits = [p for p in must_not if forbidden_pattern_hit(p, answer)]
     claim_failures = [p for p in forbidden_claims if regex_match(p, answer)]
+    output_pattern_miss = [p for p in required_output if not regex_match(p, answer)]
 
     recall = len(detect_hits) / len(must_detect) if must_detect else 1.0
     pass_recall = recall >= float(case.get("minRecall", 0.8))
@@ -126,7 +130,7 @@ def score_case(case: dict, answer: str) -> dict:
     else:
         pass_citation = True
 
-    passed = pass_recall and claim_validate_ok and pass_citation
+    passed = pass_recall and claim_validate_ok and pass_citation and not output_pattern_miss
 
     return {
         "id": case_id,
@@ -136,6 +140,7 @@ def score_case(case: dict, answer: str) -> dict:
         "detectMiss": detect_miss,
         "forbiddenHits": forbidden_hits,
         "claimFailures": claim_failures,
+        "outputPatternMiss": output_pattern_miss,
         "hasCitation": citation_ok,
         "claimValidate": claim_detail,
     }
@@ -158,6 +163,14 @@ def fixture_answer(case: dict) -> str:
         if pattern in snippet_text and not any(pattern in line for line in lines):
             lines.append(f"- Snippet cites existing `{pattern}` (see paths above)")
     lines.append("DoNotDuplicate: reuse existing Subsystem/DataAsset instead of new classes.")
+    if case.get("requiredOutputPatterns"):
+        lines.extend(
+            [
+                "BehaviorPath: entry -> decision/dispatch -> mutation/side_effect -> observer",
+                "Counterevidence: checked the symmetric path and direct base implementation.",
+                "ProofLevel: SourceVerified",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -193,6 +206,10 @@ def run_live(workspace: Path, cases: list[dict], model: str, url: str) -> list[d
             "You are reviewing Unreal C++ project snippets. Ground every claim in the snippets provided.",
             "Never claim a symbol is missing, unused, or absent if it appears in the snippets.",
             "Never claim DataAssets are missing if UDataAsset or *DataAsset types are present.",
+            (
+                "For every major behavioral claim include `BehaviorPath:`, `Counterevidence:`, and "
+                "`ProofLevel:`. Trace entry through decision/dispatch to final mutation or side effect."
+            ),
             build_symbol_manifest(case),
             format_plan_for_prompt(plan),
             prompt_text,
@@ -206,7 +223,8 @@ def run_live(workspace: Path, cases: list[dict], model: str, url: str) -> list[d
                 "role": "system",
                 "content": (
                     "Inspect-only review. Cite file paths. "
-                    "Never claim snippet symbols are missing, unused, or unreferenced."
+                    "Never claim snippet symbols are missing, unused, or unreferenced. "
+                    "Directly verify framework semantics and do not equate symbol presence with wiring."
                 ),
             },
             {"role": "user", "content": "\n".join(prompt_parts)},
