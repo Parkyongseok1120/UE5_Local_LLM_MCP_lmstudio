@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -92,9 +93,20 @@ def is_plugin_enabled(uproject: Path) -> bool:
     return False
 
 
-def plugin_binary_path(project: Path) -> Path:
+def host_unreal_platform(host_platform: str | None = None) -> str:
+    host = host_platform or sys.platform
+    if host == "win32":
+        return "Win64"
+    if host == "darwin":
+        return "Mac"
+    return "Linux"
+
+
+def plugin_binary_path(project: Path, host_platform: str | None = None) -> Path:
     project_root = project.parent.resolve()
-    return project_root / "Plugins" / PLUGIN_NAME / "Binaries" / "Win64" / f"UnrealEditor-{PLUGIN_NAME}.dll"
+    platform = host_unreal_platform(host_platform)
+    extension = ".dll" if platform == "Win64" else ".dylib" if platform == "Mac" else ".so"
+    return project_root / "Plugins" / PLUGIN_NAME / "Binaries" / platform / f"UnrealEditor-{PLUGIN_NAME}{extension}"
 
 
 def plugin_needs_setup(project: Path, workspace: Path) -> tuple[bool, str]:
@@ -219,13 +231,17 @@ def _project_engine_association(project: Path) -> str:
     return str(data.get("EngineAssociation") or "").strip()
 
 
-def _program_files_epic_roots() -> list[Path]:
-    roots: list[Path] = []
-    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
-        value = os.environ.get(env_name, "").strip()
-        if value:
-            roots.append(Path(value) / "Epic Games")
-    return roots
+def _common_engine_locations() -> list[Path]:
+    if sys.platform == "win32":
+        roots: list[Path] = []
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+            value = os.environ.get(env_name, "").strip()
+            if value:
+                roots.append(Path(value) / "Epic Games")
+        return roots
+    if sys.platform == "darwin":
+        return [Path("/Users/Shared/Epic Games"), Path("/Applications/Epic Games")]
+    return [Path.home() / "Epic Games", Path("/opt/Epic Games")]
 
 
 def _engine_roots_from_association(association: str) -> list[Path]:
@@ -237,7 +253,7 @@ def _engine_roots_from_association(association: str) -> list[Path]:
         folder_names.append(association)
     elif association[0].isdigit():
         folder_names.append(f"UE_{association}")
-    for epic_root in _program_files_epic_roots():
+    for epic_root in _common_engine_locations():
         for folder in folder_names:
             candidates.append(epic_root / folder)
     return candidates
@@ -291,12 +307,13 @@ def maybe_build_plugin(
     install_payload: dict[str, Any],
     dry_run: bool = False,
     target: str = "",
-    platform: str = "Win64",
+    platform: str = "",
     configuration: str = "Development",
     timeout_sec: int = 1800,
 ) -> dict[str, Any]:
     project_root = project.parent.resolve()
-    binary = project_root / "Plugins" / PLUGIN_NAME / "Binaries" / "Win64" / f"UnrealEditor-{PLUGIN_NAME}.dll"
+    platform = platform.strip() or host_unreal_platform()
+    binary = plugin_binary_path(project)
     needs_build = bool(
         install_payload.get("copied")
         or install_payload.get("pluginWouldCopy")
@@ -374,7 +391,7 @@ def main() -> int:
     parser.add_argument("--update", action="store_true", help="Replace the project plugin copy only when repo plugin files differ.")
     parser.add_argument("--build", action="store_true", help="Run UnrealBuildTool when the plugin needs compiling.")
     parser.add_argument("--target", default="", help="UBT target. Defaults to <ProjectName>Editor.")
-    parser.add_argument("--platform", default="Win64")
+    parser.add_argument("--platform", default="", help="UBT platform (defaults to the host: Win64, Mac, or Linux).")
     parser.add_argument("--configuration", default="Development")
     parser.add_argument("--timeout-sec", type=int, default=1800)
     parser.add_argument("--dry-run", action="store_true")

@@ -3,7 +3,7 @@
 
 # UE5_Local_LLM_MCP_lmstudio 1.2.5
 
-> **Integrated installer:** the portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install on Windows, Linux, and macOS. Legacy Unreal indexing/Editor helpers remain PowerShell- and engine-dependent; see [Integrated Installer](docs/Integrated_Installer.md) for the exact boundary.
+> **Integrated installer:** the portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install on Windows, Linux, and macOS. Native Unreal engine discovery, indexing paths, Editor export, and agent build launchers are host-aware; Linux/macOS RAG indexing still requires `pwsh`, and live platform certification is pending. See [Integrated Installer](docs/Integrated_Installer.md) for the exact boundary.
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 

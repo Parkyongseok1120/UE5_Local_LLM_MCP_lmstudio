@@ -1,5 +1,20 @@
 $ErrorActionPreference = "Stop"
 
+function Get-UnrealHostPlatform {
+    if ($env:OS -eq "Windows_NT") { return "Win64" }
+    if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+            [System.Runtime.InteropServices.OSPlatform]::OSX)) {
+        return "Mac"
+    }
+    return "Linux"
+}
+
+function Get-LocalAppDataRoot {
+    if ($env:LOCALAPPDATA) { return $env:LOCALAPPDATA }
+    if ($env:XDG_DATA_HOME) { return $env:XDG_DATA_HOME }
+    return Join-Path (Join-Path $HOME ".local") "share"
+}
+
 function Expand-ConfigPathString {
     param([string]$Value)
     if ([string]::IsNullOrWhiteSpace($Value)) {
@@ -34,12 +49,12 @@ function Read-SharedConfig {
         return [ordered]@{
             activeProject        = $null
             projectSearchRoots   = @(
-                (Join-Path $HOME "Documents\Github"),
-                (Join-Path $HOME "Documents\Git"),
-                (Join-Path $HOME "Documents\Unreal Projects")
+                (Join-Path (Join-Path $HOME "Documents") "Github"),
+                (Join-Path (Join-Path $HOME "Documents") "Git"),
+                (Join-Path (Join-Path $HOME "Documents") "Unreal Projects")
             )
             defaultEngineRoot    = ""
-            defaultPlatform      = "Win64"
+            defaultPlatform      = (Get-UnrealHostPlatform)
             defaultConfiguration = "Development"
             indexingTier            = "standard"
             editorExportDir         = $null
@@ -64,10 +79,10 @@ function Resolve-EditorExportDir {
     }
 
     $default = if ($projectRoot) {
-        Join-Path $projectRoot "Saved\LmStudioMetadataExports"
+        Join-Path (Join-Path $projectRoot "Saved") "LmStudioMetadataExports"
     }
     else {
-        Join-Path $env:LOCALAPPDATA "LmStudio\UnrealMetadataExports"
+        Join-Path (Join-Path (Get-LocalAppDataRoot) "LmStudio") "UnrealMetadataExports"
     }
 
     $configured = Expand-ConfigPathString ([string]$Config.editorExportDir)
@@ -87,6 +102,12 @@ function Resolve-EditorExportDir {
             if ($configured -eq $projectRoot) {
                 return $default
             }
+        }
+        $configuredNormalized = ([string]$configured).Replace('\', '/').TrimEnd('/').ToLowerInvariant()
+        $projectNormalized = ([string]$projectRoot).Replace('\', '/').TrimEnd('/').ToLowerInvariant()
+        if ($configuredNormalized.EndsWith('/saved/lmstudiometadataexports') -and
+            -not $configuredNormalized.StartsWith($projectNormalized + '/')) {
+            return $default
         }
     }
 
@@ -132,9 +153,9 @@ function Save-SharedConfig {
 
 function Get-DefaultProjectSearchRoots {
     $candidates = @(
-        (Join-Path $HOME "Documents\Github"),
-        (Join-Path $HOME "Documents\Git"),
-        (Join-Path $HOME "Documents\Unreal Projects")
+        (Join-Path (Join-Path $HOME "Documents") "Github"),
+        (Join-Path (Join-Path $HOME "Documents") "Git"),
+        (Join-Path (Join-Path $HOME "Documents") "Unreal Projects")
     )
     return @($candidates | Where-Object { Test-Path -LiteralPath $_ })
 }
@@ -145,7 +166,8 @@ function Resolve-ProjectSearchRoots {
     $roots = [System.Collections.Generic.List[string]]::new()
     foreach ($root in $ConfiguredRoots) {
         $expanded = Expand-ConfigPathString ([string]$root)
-        if (-not $expanded -or ($expanded -like "*\Unreal58-RAG\data")) {
+        $normalized = ([string]$expanded).Replace('\', '/')
+        if (-not $expanded -or ($normalized -like "*/Unreal58-RAG/data")) {
             continue
         }
         if (Test-Path -LiteralPath $expanded) {
@@ -155,8 +177,8 @@ function Resolve-ProjectSearchRoots {
             }
             continue
         }
-        if ($expanded -like "*\Documents\Git") {
-            $github = Join-Path $HOME "Documents\Github"
+        if ($normalized -like "*/Documents/Git") {
+            $github = Join-Path (Join-Path $HOME "Documents") "Github"
             if ((Test-Path -LiteralPath $github) -and -not $roots.Contains($github)) {
                 [void]$roots.Add((Resolve-Path -LiteralPath $github).Path)
             }

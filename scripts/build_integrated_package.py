@@ -129,26 +129,9 @@ def _sha256(path: Path) -> str:
 
 
 def _write_launchers(staging: Path) -> None:
-    (staging / "INSTALL.bat").write_text(
-        "@echo off\r\n"
-        "setlocal\r\n"
-        "cd /d \"%~dp0\"\r\n"
-        "where py >nul 2>nul\r\n"
-        "if errorlevel 1 goto use_python\r\n"
-        "py -3 install.py %*\r\n"
-        "exit /b %ERRORLEVEL%\r\n"
-        ":use_python\r\n"
-        "python install.py %*\r\n",
-        encoding="ascii",
-    )
-    shell = (
-        "#!/usr/bin/env sh\n"
-        "set -eu\n"
-        "SCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
-        "exec python3 \"$SCRIPT_DIR/install.py\" \"$@\"\n"
-    )
+    shutil.copy2(ROOT / "INSTALL.bat", staging / "INSTALL.bat")
     target = staging / "install.sh"
-    target.write_text(shell, encoding="utf-8", newline="\n")
+    shutil.copy2(ROOT / "install.sh", target)
     target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     (staging / "PORTABLE-INSTALL.md").write_text(
         "# Integrated portable installer\n\n"
@@ -159,7 +142,8 @@ def _write_launchers(staging: Path) -> None:
         "The installer asks for SAFE, STANDARD, FULL, or CUSTOM. All profiles remain "
         "read-only unless agent mode and its separate risk acknowledgement are both supplied.\n"
         "Run `python3 install.py --help` for automation flags. Generated indexes and machine "
-        "configuration are not bundled by default.\n",
+        "configuration are not bundled by default. RAG indexing on Linux/macOS requires `pwsh`; "
+        "custom Unreal installs can be supplied with `--engine-root` or `UNREAL_ENGINE_ROOT`.\n",
         encoding="utf-8",
         newline="\n",
     )

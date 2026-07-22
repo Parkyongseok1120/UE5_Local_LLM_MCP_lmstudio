@@ -12,7 +12,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from install_editor_graph_plugin import PLUGIN_NAME, install_plugin, plugin_needs_setup
+from install_editor_graph_plugin import (
+    PLUGIN_NAME,
+    host_unreal_platform,
+    install_plugin,
+    plugin_binary_path,
+    plugin_needs_setup,
+)
 from on_active_project_changed import (
     active_project_check_status,
     auto_setup_enabled,
@@ -165,6 +171,16 @@ def test_plugin_needs_setup_when_missing(tmp_path: Path) -> None:
     needed, reason = plugin_needs_setup(project, workspace)
     assert needed is True
     assert reason == "plugin_missing"
+
+
+def test_plugin_binary_path_uses_native_host_layout(tmp_path: Path) -> None:
+    project = tmp_path / "Demo.uproject"
+    assert host_unreal_platform("darwin") == "Mac"
+    assert host_unreal_platform("linux") == "Linux"
+    assert plugin_binary_path(project, "darwin").name.endswith(".dylib")
+    assert "Mac" in plugin_binary_path(project, "darwin").parts
+    assert plugin_binary_path(project, "linux").name.endswith(".so")
+    assert "Linux" in plugin_binary_path(project, "linux").parts
 
 
 def test_plugin_skips_when_installed_enabled_and_compiled(tmp_path: Path) -> None:

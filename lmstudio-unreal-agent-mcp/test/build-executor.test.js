@@ -12,10 +12,12 @@ const {
   assertEngineContainment,
   resolveBuildExecutable,
   spawnBuildProcess,
+  buildSpawnSpec,
   buildProcessEnv,
   decodeBuildOutput,
   localeOutputEncoding,
   buildArgs,
+  defaultBuildPlatform,
 } = require("../src/build-executor");
 
 function createFakeEngine(version, folderPrefix = "UE-portable-") {
@@ -135,6 +137,32 @@ test("resolveBuildExecutable prefers ubt over build bat", async () => {
   const resolved = await resolveBuildExecutable(root);
   assert.strictEqual(resolved.kind, "ubt");
   assert.strictEqual(resolved.executable, ubt);
+});
+
+test("resolveBuildExecutable selects host Build.sh on macOS and Linux", async () => {
+  for (const [hostPlatform, hostFolder] of [["darwin", "Mac"], ["linux", "Linux"]]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `ue-${hostPlatform}-`));
+    const scriptDir = path.join(root, "Engine", "Build", "BatchFiles", hostFolder);
+    fs.mkdirSync(scriptDir, { recursive: true });
+    const script = path.join(scriptDir, "Build.sh");
+    fs.writeFileSync(script, "#!/usr/bin/env sh\nexit 0\n", "utf8");
+    const resolved = await resolveBuildExecutable(root, hostPlatform);
+    assert.deepStrictEqual(resolved, { executable: script, kind: "build_sh" });
+  }
+});
+
+test("Unix UBT DLL is launched through dotnet and Build.sh through /bin/sh", () => {
+  const args = ["GameEditor", "Mac", "Development"];
+  assert.deepStrictEqual(
+    buildSpawnSpec({ executable: "/Engine/Build.sh", kind: "build_sh", args }),
+    { command: "/bin/sh", args: ["/Engine/Build.sh", ...args] }
+  );
+  assert.deepStrictEqual(
+    buildSpawnSpec({ executable: "/Engine/UnrealBuildTool.dll", kind: "ubt_dotnet", args }),
+    { command: "dotnet", args: ["/Engine/UnrealBuildTool.dll", ...args] }
+  );
+  assert.strictEqual(defaultBuildPlatform("darwin"), "Mac");
+  assert.strictEqual(defaultBuildPlatform("linux"), "Linux");
 });
 
 test("spawnBuildProcess uses cmd.exe for build bat", () => {

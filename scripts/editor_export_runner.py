@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -79,7 +80,7 @@ def _maybe_persist_export_dir(path: Path) -> None:
     if current == normalized:
         return
     try:
-        if current and Path(os.path.expandvars(current.replace("/", "\\"))).expanduser().resolve() == path.resolve():
+        if current and Path(os.path.expandvars(current)).expanduser().resolve() == path.resolve():
             return
     except OSError:
         pass
@@ -87,24 +88,41 @@ def _maybe_persist_export_dir(path: Path) -> None:
     save_shared_config(config)
 
 
-def resolve_editor_executable(engine_root: Path) -> Path:
-    win64 = engine_root / "Engine" / "Binaries" / "Win64"
-    for name in ("UnrealEditor-Cmd.exe", "UnrealEditor.exe"):
-        candidate = win64 / name
+def resolve_editor_executable(engine_root: Path, host_platform: str | None = None) -> Path:
+    host = host_platform or sys.platform
+    if host == "win32":
+        binary_dir = engine_root / "Engine" / "Binaries" / "Win64"
+        candidates = (binary_dir / "UnrealEditor-Cmd.exe", binary_dir / "UnrealEditor.exe")
+    elif host == "darwin":
+        binary_dir = engine_root / "Engine" / "Binaries" / "Mac"
+        candidates = (
+            binary_dir / "UnrealEditor-Cmd",
+            binary_dir / "UnrealEditor",
+            binary_dir / "UnrealEditor-Cmd.app" / "Contents" / "MacOS" / "UnrealEditor-Cmd",
+            binary_dir / "UnrealEditor.app" / "Contents" / "MacOS" / "UnrealEditor",
+        )
+    else:
+        binary_dir = engine_root / "Engine" / "Binaries" / "Linux"
+        candidates = (binary_dir / "UnrealEditor-Cmd", binary_dir / "UnrealEditor")
+    for candidate in candidates:
         if candidate.is_file():
             return candidate
-    raise FileNotFoundError(f"Unreal Editor executable not found under: {win64}")
+    raise FileNotFoundError(f"Unreal Editor executable not found under: {binary_dir}")
 
 
 def project_editor_running(uproject: Path) -> bool:
     project_text = str(uproject.resolve()).lower()
-    command = (
-        "Get-CimInstance Win32_Process -Filter \"Name='UnrealEditor.exe' OR Name='UnrealEditor-Cmd.exe'\" "
-        "| Select-Object -ExpandProperty CommandLine"
-    )
+    if sys.platform == "win32":
+        command = (
+            "Get-CimInstance Win32_Process -Filter \"Name='UnrealEditor.exe' OR Name='UnrealEditor-Cmd.exe'\" "
+            "| Select-Object -ExpandProperty CommandLine"
+        )
+        argv = ["powershell", "-NoProfile", "-Command", command]
+    else:
+        argv = ["ps", "-ax", "-o", "command="]
     try:
         proc = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
+            argv,
             capture_output=True,
             text=True,
             check=False,
@@ -113,7 +131,7 @@ def project_editor_running(uproject: Path) -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     output = (proc.stdout or "").lower()
-    return project_text in output
+    return project_text in output and "unrealeditor" in output
 
 
 def _clear_markers(export_dir: Path) -> None:

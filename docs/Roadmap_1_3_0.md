@@ -24,7 +24,7 @@ v1.3.0 starts from the following delivered baseline; these are not remaining v1.
 | v1.2.x maintenance | Until v1.3.0 | Simple bug fixes, documentation corrections, and low-risk stability patches only. |
 | v1.3.0 | Development starts about 4 months after v1.2.5 | Evaluation tier separation, advanced Unreal C++ capability suites, Rider + Cline evaluation parity, and Ollama app support. |
 | v1.3.1 | After v1.3.0 stabilization | Polish for additional frontends, installer cleanup, docs, and failure-memory improvements. |
-| v1.3.2 | Later 1.3.x | Linux and macOS support targets, with platform-specific install/test paths separated from Windows. |
+| v1.3.2 | Later 1.3.x | Certify the implemented Linux/macOS native paths with platform-specific live Unreal install, indexing, build, and evaluation runs. |
 
 ## Direction
 
@@ -105,18 +105,18 @@ Planned scope:
 - Document known differences: streaming behavior, context limits, tool/MCP availability, and JSON strictness.
 - Initial support goal is compile-fix wrapper compatibility, not full MCP chat parity.
 
-### Linux and macOS Support Target for v1.3.2
+### Linux and macOS Certification Target for v1.3.2
 
-Linux and macOS support are not v1.3.0 promises. They are v1.3.2 targets. Existing Mac remote-server guidance is not equivalent to a supported native macOS install/test path.
+The native installer/runtime path now exists: the POSIX launcher uses `python3`, indexing passes that exact interpreter through `pwsh`, engine discovery is host-specific, macOS maps to Unreal's `Mac` platform, and agent builds use host `Build.sh` or `dotnet UnrealBuildTool.dll`. Static, parser, and fixture tests cover those contracts. This is not yet equivalent to live release certification on physical macOS/Linux Unreal installations.
 
-Expected work:
+Remaining certification work:
 
-- Replace Windows-only PowerShell/BAT assumptions with shell equivalents where practical.
-- Separate Windows UE/UBT path discovery from Linux and macOS discovery.
-- Add POSIX-safe path handling, permissions, and encoding checks.
+- Run the installer and each indexing tier on physical Linux and macOS hosts.
+- Prove native Unreal Editor metadata export and a real UBT build on each host.
+- Verify packaged executable permissions, paths containing spaces/non-ASCII text, and localized output on each filesystem.
 - Document Linux distribution assumptions and required packages.
 - Document macOS prerequisites, Apple Silicon/Intel differences where relevant, and Unreal Engine source/binary installation requirements.
-- Keep Linux and macOS support opt-in until the eval harness can run at least dry-run and a small live subset reliably on each platform.
+- Keep native claims qualified until the eval harness can run at least a dry-run and small live subset reliably on each platform.
 
 ## Forbidden Fake Fixes
 
@@ -141,7 +141,7 @@ v1.3.0 should report field-level scores, not one combined score. Compile-fix, se
 - Do not claim general Sonnet/GPT equivalence from local holdout results.
 - Do not merge compile-fix, semantic-refactor, runtime-debug, and C++ capability into one headline score.
 - Do not treat UBT green as sufficient for advanced C++ capability cases.
-- Do not promise Linux or macOS support in v1.3.0; keep both as v1.3.2 targets.
+- Do not present fixture-tested Linux/macOS paths as live platform certification; keep that proof target in v1.3.2.
 
 ## Korean
 
@@ -165,7 +165,7 @@ v1.3.0은 아래의 완료된 기준선에서 시작합니다. 이 항목들은 
 | v1.2.x maintenance | v1.3.0 전까지 | 간단한 bug fix, 문서 수정, 낮은 위험도의 안정화 patch만 진행. |
 | v1.3.0 | v1.2.5 이후 약 4개월 뒤 개발 시작 | 평가 tier 분리, advanced Unreal C++ capability suite, Rider + Cline 평가 동등성, Ollama app 지원. |
 | v1.3.1 | v1.3.0 안정화 이후 | 추가 frontend polish, installer 정리, docs, failure-memory 개선. |
-| v1.3.2 | 이후 1.3.x | Linux와 macOS 지원 목표. Windows와 분리된 platform-specific install/test path 구성. |
+| v1.3.2 | 이후 1.3.x | 구현된 Linux/macOS native path를 실제 플랫폼의 Unreal 설치·인덱싱·빌드·평가 run으로 인증. |
 
 ## 방향
 
@@ -246,18 +246,18 @@ v1.3.0에서는 LM Studio와 분리된 local model frontend로 Ollama app 경로
 - streaming behavior, context limit, tool/MCP availability, JSON strictness 차이 문서화.
 - 초기 목표는 compile-fix wrapper 호환성이고, full MCP chat parity는 아님.
 
-### Linux와 macOS 지원은 v1.3.2 목표
+### Linux와 macOS 인증은 v1.3.2 목표
 
-Linux와 macOS 지원은 v1.3.0 약속이 아니라 v1.3.2 목표입니다. 기존 Mac remote server 안내는 지원되는 native macOS 설치·검증 경로와 같지 않습니다.
+native installer/runtime 경로는 구현되어 있습니다. POSIX launcher는 `python3`를 사용하고, indexing은 동일 interpreter를 `pwsh`에 전달하며, engine discovery는 host별로 분리됩니다. macOS는 Unreal `Mac` platform으로 매핑되고 agent build는 host `Build.sh` 또는 `dotnet UnrealBuildTool.dll`을 사용합니다. static/parser/fixture test로 이 계약을 검증했지만, 실제 macOS/Linux Unreal 설치에서의 live release 인증과 동일한 근거는 아닙니다.
 
-예상 작업:
+남은 인증 작업:
 
-- Windows-only PowerShell/BAT 가정을 가능한 범위에서 shell equivalent로 분리.
-- Windows UE/UBT path discovery와 Linux/macOS path discovery 분리.
-- POSIX-safe path handling, permission, encoding check 추가.
+- 실제 Linux/macOS host에서 installer와 각 indexing tier 실행.
+- 각 host에서 Unreal Editor metadata export와 실제 UBT build 증명.
+- package executable permission, 공백·비ASCII path, localized output을 각 filesystem에서 검증.
 - Linux distro 가정과 required package 문서화.
 - macOS prerequisite, 해당되는 경우 Apple Silicon/Intel 차이, Unreal Engine source/binary install 요구사항 문서화.
-- 각 플랫폼에서 eval harness가 dry-run과 작은 live subset을 안정적으로 실행할 때까지 Linux와 macOS 지원은 opt-in으로 유지.
+- 각 플랫폼에서 eval harness가 dry-run과 작은 live subset을 안정적으로 실행할 때까지 native 지원 claim을 제한적으로 유지.
 
 ## 금지해야 하는 Fake Fix
 
@@ -282,4 +282,4 @@ v1.3.0은 하나의 합산 점수로 보고하지 않습니다. compile-fix, sem
 - local holdout 결과만으로 일반적인 Sonnet/GPT 동등성을 주장하지 않음.
 - compile-fix, semantic-refactor, runtime-debug, C++ capability를 하나의 headline score로 합치지 않음.
 - advanced C++ capability case에서 UBT green만으로 충분하다고 보지 않음.
-- Linux와 macOS 지원을 v1.3.0에 약속하지 않음. 둘 다 v1.3.2 목표로 유지.
+- fixture test를 통과한 Linux/macOS 경로를 실제 플랫폼 live 인증처럼 표현하지 않음. 해당 증명은 v1.3.2 목표로 유지.

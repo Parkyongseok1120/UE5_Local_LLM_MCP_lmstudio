@@ -92,6 +92,9 @@ def switch_active_project(
         }
 
     config["activeProject"] = str(resolved)
+    export_dir = str(config.get("editorExportDir") or "").replace("\\", "/").rstrip("/").lower()
+    if not export_dir or export_dir.endswith("/saved/lmstudiometadataexports"):
+        config["editorExportDir"] = str(resolved.parent / "Saved" / "LmStudioMetadataExports")
     try:
         save_shared_config(config)
     except Exception as exc:

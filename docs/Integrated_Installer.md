@@ -7,7 +7,7 @@ The repository has one canonical installer for the portable evidence-first reaso
 - SAFE: Python 3.10+ and LM Studio 0.4+ for native MCP API use.
 - STANDARD: SAFE requirements plus Node.js 20+.
 - FULL: STANDARD requirements plus npm and the LM Studio `lms` CLI.
-- RAG index generation is a separate opt-in action. Some Unreal/Editor indexing helpers require PowerShell and an installed Unreal Engine.
+- RAG index generation is a separate opt-in action. Lite/Standard/Full indexing requires PowerShell Core (`pwsh`) and an installed Unreal Engine on Linux/macOS.
 
 ## Start
 
@@ -35,6 +35,25 @@ AGENT requires a second confirmation. Declining that confirmation continues safe
 
 Install profile and RAG indexing depth are independent. Use `--index-tier lite|standard|full`; selecting FULL does not select full indexing and never builds an index unless `--build-rag` is also supplied.
 
+Interactive Unreal installs first restore the project-indexing picker. Choose a `.uproject` in the native file explorer to set the active project, or choose one or more folders to add project search roots. No typed path is required.
+
+The installer then shows a separate RAG indexing selector: **Skip** (default), **Lite**, **Standard** (recommended), or **Full**. Choosing Lite, Standard, or Full runs the complete tier-aware collection pipeline before building: Standard refreshes project text, active-project symbols/profile/architecture, engine API symbols, and the module graph; Full additionally refreshes the complete `Engine/Source` text input. For non-interactive use, the equivalents are:
+
+```text
+python3 install.py --profile standard --yes --build-rag
+python3 install.py --profile standard --yes --build-rag --index-tier full
+python3 install.py --profile standard --yes --build-rag --active-project /path/to/Game.uproject
+python3 install.py --profile standard --yes --engine-root /path/to/UnrealEngine
+```
+
+The Unreal Engine root is saved automatically when found. Windows scans Epic Games under Program Files; macOS scans `/Users/Shared/Epic Games` and `/Applications/Epic Games`; Linux checks `~/UnrealEngine`, `~/Epic Games`, `/opt/UnrealEngine`, and `/opt/Epic Games`. For a source build in another location, set `UNREAL_ENGINE_ROOT` before running the installer or pass `--engine-root`; the resolved path is persisted into the shared workspace and MCP configuration.
+
+Native builds use `Build.bat`/UBT `.exe` on Windows, `Mac/Build.sh` on macOS, and `Linux/Build.sh` on Linux. `dotnet UnrealBuildTool.dll` is the Unix fallback. Automatic Editor metadata export resolves both macOS app-bundle and direct binary layouts under `Engine/Binaries/Mac`, plus the Linux editor under `Engine/Binaries/Linux`.
+
+Selecting the optional `portable_rule` component no longer asks for an output path. It saves the rule to `<state-home>/portable-rules/evidence-first-code-audit.md` by default; use `--rule-path` only when an agent requires a specific rules-file location.
+
+Selecting the optional `cline` component likewise patches Cline's conventional per-user MCP file, `~/.cline/data/settings/cline_mcp_settings.json`, without a path prompt. Use `--cline-settings` only for a non-standard Cline installation.
+
 Project writes, commands, and Unreal builds require both flags:
 
 ```text
@@ -44,6 +63,10 @@ python3 install.py --profile standard --yes --enable-agent-mode --accept-agent-r
 SAFE rejects agent mode. FULL alone never enables it.
 
 `INSTALL.bat` and `install.sh` only select the host shell. Both launch the same `install.py`; `installer/` contains only its manifest and an explanation. Advanced maintenance tools are separated under `scripts/installer_support/`.
+
+`install.sh` is POSIX `sh`, resolves its own directory safely, and launches the same installer with `python3`. The packaged launcher is copied from this canonical file and retains executable permissions.
+
+On Windows, `INSTALL.bat` keeps the console open after success or failure and waits for a key press. Set `INSTALL_NO_PAUSE=1` only for scripted automation that invokes the batch launcher.
 
 ## Automation and recovery
 

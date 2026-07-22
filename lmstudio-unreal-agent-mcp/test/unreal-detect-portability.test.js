@@ -5,7 +5,12 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const test = require("node:test");
-const { resolveProjectSelection, resolveSearchRoots } = require("../src/unreal-detect");
+const {
+  resolveProjectSelection,
+  resolveSearchRoots,
+  findEngineInstalls,
+  defaultPlatform,
+} = require("../src/unreal-detect");
 
 function createProject(root, name, engineAssociation) {
   const projectDir = path.join(root, name);
@@ -91,6 +96,32 @@ test("explicit projectSearchRoots do not mix in machine-specific default folders
   } finally {
     if (previousSharedConfig === undefined) delete process.env.SHARED_UNREAL_CONFIG;
     else process.env.SHARED_UNREAL_CONFIG = previousSharedConfig;
+  }
+});
+
+test("host platform maps macOS to Mac instead of Linux", () => {
+  assert.strictEqual(defaultPlatform("win32"), "Win64");
+  assert.strictEqual(defaultPlatform("darwin"), "Mac");
+  assert.strictEqual(defaultPlatform("linux"), "Linux");
+});
+
+test("engine discovery accepts native Mac and Linux Build.sh layouts", async () => {
+  for (const [hostPlatform, hostFolder] of [["darwin", "Mac"], ["linux", "Linux"]]) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), `unreal-${hostPlatform}-engines-`));
+    const engineRoot = path.join(parent, "UE_5.8");
+    const script = path.join(engineRoot, "Engine", "Build", "BatchFiles", hostFolder, "Build.sh");
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, "#!/usr/bin/env sh\nexit 0\n", "utf8");
+
+    const installs = await findEngineInstalls({
+      hostPlatform,
+      roots: [parent],
+      env: {},
+    });
+    assert.strictEqual(installs.length, 1);
+    assert.strictEqual(installs[0].engineRoot, path.resolve(engineRoot));
+    assert.strictEqual(installs[0].buildTool, script);
+    assert.strictEqual(installs[0].buildToolKind, "build_sh");
   }
 });
 

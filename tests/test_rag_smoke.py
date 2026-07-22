@@ -13,6 +13,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 from rag_index_ops import index_health, rebuild_status  # noqa: E402
 from workspace_paths import (  # noqa: E402
+    _discover_engine_roots,
+    _engine_location_candidates,
     active_project_names,
     normalize_locator,
     resolve_engine_root,
@@ -112,3 +114,11 @@ def test_engine_root_has_no_hardcoded_unreal_install_fallback(tmp_path, monkeypa
 
     assert str(resolve_engine_root(workspace)) in {"", "."}
     assert resolve_ubt_path(workspace) == Path("UnrealBuildTool.exe")
+
+
+def test_engine_discovery_supports_mac_and_linux_common_layouts(tmp_path):
+    assert Path("/Users/Shared/Epic Games") in _engine_location_candidates("darwin", {}, tmp_path)
+
+    direct = tmp_path / "UnrealEngine"
+    (direct / "Engine" / "Source").mkdir(parents=True)
+    assert direct.resolve() in _discover_engine_roots("linux", {}, tmp_path)

@@ -14,6 +14,7 @@ from editor_export_runner import (  # noqa: E402
     build_export_job,
     submit_export_request,
     wait_for_export_markers,
+    resolve_editor_executable,
     REQUEST_NAME,
     DONE_NAME,
 )
@@ -87,3 +88,40 @@ def test_normalize_editor_export_dir_rejects_project_root(monkeypatch, tmp_path)
 
     normalized = normalize_editor_export_dir(str(project_root))
     assert normalized == project_root / "Saved" / "LmStudioMetadataExports"
+
+
+def test_normalize_editor_export_dir_replaces_stale_other_project_default(monkeypatch, tmp_path):
+    project_root = tmp_path / "NewGame"
+    project_root.mkdir()
+    uproject = project_root / "NewGame.uproject"
+    uproject.write_text("{}", encoding="utf-8")
+    cfg_path = tmp_path / "unreal-workspace.json"
+    cfg_path.write_text(json.dumps({"activeProject": str(uproject)}), encoding="utf-8")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(cfg_path))
+
+    stale = tmp_path / "OldGame" / "Saved" / "LmStudioMetadataExports"
+    assert normalize_editor_export_dir(stale) == project_root / "Saved" / "LmStudioMetadataExports"
+
+
+def test_resolve_editor_executable_supports_mac_and_linux_layouts(tmp_path):
+    for host, folder in (("darwin", "Mac"), ("linux", "Linux")):
+        engine = tmp_path / host
+        executable = engine / "Engine" / "Binaries" / folder / "UnrealEditor-Cmd"
+        executable.parent.mkdir(parents=True)
+        executable.write_text("", encoding="utf-8")
+        assert resolve_editor_executable(engine, host) == executable
+
+    mac_bundle = tmp_path / "mac-bundle"
+    bundled_executable = (
+        mac_bundle
+        / "Engine"
+        / "Binaries"
+        / "Mac"
+        / "UnrealEditor.app"
+        / "Contents"
+        / "MacOS"
+        / "UnrealEditor"
+    )
+    bundled_executable.parent.mkdir(parents=True)
+    bundled_executable.write_text("", encoding="utf-8")
+    assert resolve_editor_executable(mac_bundle, "darwin") == bundled_executable

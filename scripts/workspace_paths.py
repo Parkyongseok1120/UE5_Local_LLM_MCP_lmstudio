@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 DEFAULT_LMSTUDIO_ROOT = Path.home() / ".lmstudio"
@@ -163,27 +164,55 @@ def resolve_engine_version(start: Path | None = None) -> str:
     return DEFAULT_ENGINE_VERSION
 
 
-def _program_files_epic_roots() -> list[Path]:
-    roots: list[Path] = []
-    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
-        value = os.environ.get(env_name, "").strip()
-        if value:
-            roots.append(Path(value) / "Epic Games")
-    return roots
+def _engine_location_candidates(
+    host_platform: str | None = None,
+    environ: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> list[Path]:
+    host = host_platform or sys.platform
+    env = os.environ if environ is None else environ
+    user_home = Path.home() if home is None else home
+    if host == "win32":
+        roots = []
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+            value = env.get(env_name, "").strip()
+            if value:
+                roots.append(Path(value) / "Epic Games")
+        return roots
+    if host == "darwin":
+        return [Path("/Users/Shared/Epic Games"), Path("/Applications/Epic Games")]
+    return [
+        user_home / "UnrealEngine",
+        user_home / "Epic Games",
+        Path("/opt/UnrealEngine"),
+        Path("/opt/Epic Games"),
+    ]
 
 
-def _discover_engine_roots() -> list[Path]:
+def _is_engine_root(path: Path) -> bool:
+    engine = path / "Engine"
+    return engine.is_dir() and ((engine / "Source").is_dir() or (engine / "Build").is_dir())
+
+
+def _discover_engine_roots(
+    host_platform: str | None = None,
+    environ: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> list[Path]:
     candidates: list[Path] = []
-    for epic_root in _program_files_epic_roots():
-        if not epic_root.is_dir():
+    seen: set[str] = set()
+    for location in _engine_location_candidates(host_platform, environ, home):
+        if not location.is_dir():
             continue
-        candidates.extend(
-            sorted(
-                (path for path in epic_root.glob("UE_5.*") if path.is_dir()),
-                key=lambda path: path.name,
-                reverse=True,
-            )
-        )
+        roots = [location] if _is_engine_root(location) else []
+        roots.extend(path for path in location.glob("UE_5.*") if _is_engine_root(path))
+        for root in roots:
+            resolved = root.resolve()
+            key = str(resolved).casefold() if (host_platform or sys.platform) == "win32" else str(resolved)
+            if key not in seen:
+                seen.add(key)
+                candidates.append(resolved)
+    candidates.sort(key=lambda path: path.name, reverse=True)
     return candidates
 
 
@@ -242,15 +271,20 @@ def resolve_ubt_path(start: Path | None = None) -> Path:
         return Path(env_ubt).expanduser().resolve()
     engine_root = resolve_engine_root(start)
     if str(engine_root) in {"", "."}:
-        return Path("UnrealBuildTool.exe")
-    return (
+        return Path("UnrealBuildTool.exe" if sys.platform == "win32" else "UnrealBuildTool.dll")
+    ubt_root = (
         engine_root
         / "Engine"
         / "Binaries"
         / "DotNET"
         / "UnrealBuildTool"
-        / "UnrealBuildTool.exe"
     )
+    names = ("UnrealBuildTool.exe", "UnrealBuildTool.dll") if sys.platform == "win32" else (
+        "UnrealBuildTool.dll",
+        "UnrealBuildTool.exe",
+    )
+    candidates = [ubt_root / name for name in names]
+    return next((path for path in candidates if path.is_file()), candidates[0])
 
 
 def resolve_engine_source_root(start: Path | None = None) -> Path:
@@ -305,7 +339,13 @@ def default_editor_export_dir(start: Path | None = None) -> Path:
     if root:
         return (root / "Saved" / "LmStudioMetadataExports").resolve()
     local_app = os.environ.get("LOCALAPPDATA", "").strip()
-    base = Path(local_app) if local_app else Path.home() / "AppData" / "Local"
+    if local_app:
+        base = Path(local_app)
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        xdg_data = os.environ.get("XDG_DATA_HOME", "").strip()
+        base = Path(xdg_data) if xdg_data else Path.home() / ".local" / "share"
     return (base / "LmStudio" / "UnrealMetadataExports").resolve()
 
 
@@ -318,7 +358,7 @@ def normalize_editor_export_dir(
     raw = str(configured or "").strip()
     if not raw:
         return default
-    path = Path(os.path.expandvars(raw.replace("/", "\\"))).expanduser()
+    path = Path(os.path.expandvars(raw)).expanduser()
     try:
         resolved = path.resolve()
     except OSError:
@@ -331,6 +371,12 @@ def normalize_editor_export_dir(
             pass
         if resolved.name.lower() == project_root.name.lower() and resolved.parent == project_root.parent:
             return default
+        normalized = resolved.as_posix().casefold()
+        if normalized.endswith("/saved/lmstudiometadataexports"):
+            try:
+                resolved.relative_to(project_root.resolve())
+            except ValueError:
+                return default
     return resolved if str(resolved) else default
 
 

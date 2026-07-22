@@ -91,7 +91,7 @@ function ragRootPath() {
 
 async function invokeProjectController(argv) {
   const script = path.join(ragRootPath(), "scripts", "project_controller.py");
-  const python = process.env.PYTHON_EXE || "python";
+  const python = process.env.PYTHON_EXE || (process.platform === "win32" ? "python" : "python3");
   try {
     const { stdout } = await execFile(python, [script, ...argv], {
       timeout: Number(process.env.PROJECT_CONTROLLER_TIMEOUT_MS || 600000),
@@ -274,28 +274,89 @@ function engineFolderFromAssociation(value) {
   return null;
 }
 
-async function findEngineInstalls() {
-  const installs = [];
-  const epicRoot = process.env.UNREAL_ENGINE_ROOT
-    ? path.dirname(path.resolve(process.env.UNREAL_ENGINE_ROOT))
-    : DEFAULT_EPIC_ROOT;
-
-  if (!(await exists(epicRoot))) {
-    return installs;
+function engineBuildToolCandidates(engineRoot, hostPlatform = process.platform) {
+  const batchRoot = path.join(engineRoot, "Engine", "Build", "BatchFiles");
+  const ubtRoot = path.join(engineRoot, "Engine", "Binaries", "DotNET", "UnrealBuildTool");
+  if (hostPlatform === "win32") {
+    return [
+      { path: path.join(ubtRoot, "UnrealBuildTool.exe"), kind: "ubt" },
+      { path: path.join(batchRoot, "Build.bat"), kind: "build_bat" },
+      { path: path.join(ubtRoot, "UnrealBuildTool.dll"), kind: "ubt_dotnet" },
+    ];
   }
+  const hostFolder = hostPlatform === "darwin" ? "Mac" : "Linux";
+  return [
+    { path: path.join(batchRoot, hostFolder, "Build.sh"), kind: "build_sh" },
+    { path: path.join(batchRoot, "Build.sh"), kind: "build_sh" },
+    { path: path.join(ubtRoot, "UnrealBuildTool.dll"), kind: "ubt_dotnet" },
+    { path: path.join(ubtRoot, "UnrealBuildTool.exe"), kind: "ubt" },
+  ];
+}
 
-  const entries = await fsp.readdir(epicRoot, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (!/^UE_/i.test(entry.name)) continue;
-    const root = path.join(epicRoot, entry.name);
-    const buildBat = path.join(root, "Engine", "Build", "BatchFiles", "Build.bat");
-    if (await exists(buildBat)) {
-      installs.push({
-        engineRoot: root,
-        folderName: entry.name,
-        buildBat
-      });
+async function resolveEngineBuildTool(engineRoot, hostPlatform = process.platform) {
+  for (const candidate of engineBuildToolCandidates(engineRoot, hostPlatform)) {
+    if (await exists(candidate.path)) return candidate;
+  }
+  return null;
+}
+
+function defaultEngineLocations(
+  hostPlatform = process.platform,
+  env = process.env,
+  homeDirectory = os.homedir()
+) {
+  if (hostPlatform === "win32") {
+    return uniquePaths([
+      env.ProgramFiles ? path.join(env.ProgramFiles, "Epic Games") : "",
+      env["ProgramFiles(x86)"] ? path.join(env["ProgramFiles(x86)"], "Epic Games") : "",
+      DEFAULT_EPIC_ROOT,
+    ]);
+  }
+  if (hostPlatform === "darwin") {
+    return ["/Users/Shared/Epic Games", "/Applications/Epic Games"];
+  }
+  return uniquePaths([
+    path.join(homeDirectory, "UnrealEngine"),
+    path.join(homeDirectory, "Epic Games"),
+    "/opt/UnrealEngine",
+    "/opt/Epic Games",
+  ]);
+}
+
+async function findEngineInstalls(options = {}) {
+  const hostPlatform = options.hostPlatform || process.platform;
+  const env = options.env || process.env;
+  const explicitEngineRoot = options.explicitEngineRoot ?? env.UNREAL_ENGINE_ROOT ?? "";
+  const locations = options.roots || defaultEngineLocations(hostPlatform, env, options.homeDirectory);
+  const installs = [];
+  const seen = new Set();
+
+  const addInstall = async (candidateRoot, source) => {
+    if (!candidateRoot) return;
+    const root = path.resolve(candidateRoot);
+    const key = hostPlatform === "win32" ? root.toLowerCase() : root;
+    if (seen.has(key)) return;
+    const buildTool = await resolveEngineBuildTool(root, hostPlatform);
+    if (!buildTool) return;
+    seen.add(key);
+    installs.push({
+      engineRoot: root,
+      folderName: path.basename(root),
+      buildTool: buildTool.path,
+      buildToolKind: buildTool.kind,
+      buildBat: buildTool.path,
+      source,
+    });
+  };
+
+  await addInstall(explicitEngineRoot, "environment");
+  for (const location of locations) {
+    if (!(await exists(location))) continue;
+    await addInstall(location, "common-location");
+    const entries = await fsp.readdir(location, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^UE_/i.test(entry.name)) continue;
+      await addInstall(path.join(location, entry.name), "discovered");
     }
   }
 
@@ -303,17 +364,20 @@ async function findEngineInstalls() {
   return installs;
 }
 
-async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot) {
-  const installs = await findEngineInstalls();
+async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, options = {}) {
+  const hostPlatform = options.hostPlatform || process.platform;
+  const env = options.env || process.env;
   const requestedFolder = engineFolderFromAssociation(engineAssociation);
 
   if (explicitEngineRoot) {
     const resolved = path.resolve(explicitEngineRoot);
-    const buildBat = path.join(resolved, "Engine", "Build", "BatchFiles", "Build.bat");
-    if (await exists(buildBat)) {
+    const buildTool = await resolveEngineBuildTool(resolved, hostPlatform);
+    if (buildTool) {
       return {
         engineRoot: resolved,
-        buildBat,
+        buildTool: buildTool.path,
+        buildToolKind: buildTool.kind,
+        buildBat: buildTool.path,
         source: "argument",
         requestedEngineAssociation: engineAssociation,
         warning: null
@@ -321,11 +385,34 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot) 
     }
   }
 
+  const environmentEngineRoot = String(env.UNREAL_ENGINE_ROOT || "").trim();
+  if (environmentEngineRoot) {
+    const resolved = path.resolve(environmentEngineRoot);
+    const buildTool = await resolveEngineBuildTool(resolved, hostPlatform);
+    if (buildTool) {
+      return {
+        engineRoot: resolved,
+        buildTool: buildTool.path,
+        buildToolKind: buildTool.kind,
+        buildBat: buildTool.path,
+        source: "environment",
+        requestedEngineAssociation: engineAssociation,
+        warning: requestedFolder && path.basename(resolved).toLowerCase() !== requestedFolder.toLowerCase()
+          ? `Using UNREAL_ENGINE_ROOT for EngineAssociation ${engineAssociation}.`
+          : null,
+      };
+    }
+  }
+
+  const installs = await findEngineInstalls({ ...options, hostPlatform, env });
+
   if (requestedFolder) {
     const exact = installs.find((item) => item.folderName.toLowerCase() === requestedFolder.toLowerCase());
     if (exact) {
       return {
         engineRoot: exact.engineRoot,
+        buildTool: exact.buildTool,
+        buildToolKind: exact.buildToolKind,
         buildBat: exact.buildBat,
         source: "EngineAssociation",
         requestedEngineAssociation: engineAssociation,
@@ -336,11 +423,13 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot) 
 
   if (config.defaultEngineRoot) {
     const resolved = path.resolve(config.defaultEngineRoot);
-    const buildBat = path.join(resolved, "Engine", "Build", "BatchFiles", "Build.bat");
-    if (await exists(buildBat)) {
+    const buildTool = await resolveEngineBuildTool(resolved, hostPlatform);
+    if (buildTool) {
       return {
         engineRoot: resolved,
-        buildBat,
+        buildTool: buildTool.path,
+        buildToolKind: buildTool.kind,
+        buildBat: buildTool.path,
         source: "config.defaultEngineRoot",
         requestedEngineAssociation: engineAssociation,
         warning: requestedFolder
@@ -354,8 +443,10 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot) 
   if (fallback) {
     return {
       engineRoot: fallback.engineRoot,
+      buildTool: fallback.buildTool,
+      buildToolKind: fallback.buildToolKind,
       buildBat: fallback.buildBat,
-      source: "latest-installed",
+      source: fallback.source === "environment" ? "environment" : "latest-installed",
       requestedEngineAssociation: engineAssociation,
       warning: requestedFolder
         ? `EngineAssociation ${engineAssociation} not installed; using ${fallback.folderName}.`
@@ -751,7 +842,7 @@ async function resolveBuildPlan(workspaceRoot, configPath, args = {}) {
     args.platform
     || selection.config.defaultPlatform
     || process.env.UNREAL_PLATFORM
-    || (process.platform === "win32" ? "Win64" : "Linux")
+    || defaultPlatform()
   ).trim();
   const configuration = String(
     args.configuration
@@ -765,6 +856,8 @@ async function resolveBuildPlan(workspaceRoot, configPath, args = {}) {
     ...selection,
     build: {
       engineRoot: engine.engineRoot,
+      buildTool: engine.buildTool,
+      buildToolKind: engine.buildToolKind,
       buildBat: engine.buildBat,
       engineSource: engine.source,
       engineWarning: engine.warning,
@@ -782,8 +875,10 @@ async function resolveBuildPlan(workspaceRoot, configPath, args = {}) {
   };
 }
 
-function defaultPlatform() {
-  return process.platform === "win32" ? "Win64" : "Linux";
+function defaultPlatform(hostPlatform = process.platform) {
+  if (hostPlatform === "win32") return "Win64";
+  if (hostPlatform === "darwin") return "Mac";
+  return "Linux";
 }
 
 function buildProjectBrowsePaths(activeProjectPath, workspaceRoot) {
@@ -856,6 +951,9 @@ module.exports = {
   setActiveProject,
   listUnrealProjects,
   resolveSearchRoots,
+  defaultEngineLocations,
+  engineBuildToolCandidates,
+  resolveEngineBuildTool,
   findEngineInstalls,
   discoverProjects,
   resolveProjectSelection,

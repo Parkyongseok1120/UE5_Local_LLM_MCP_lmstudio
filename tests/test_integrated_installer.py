@@ -32,11 +32,26 @@ def test_installer_profiles_are_manifest_driven() -> None:
     }
 
 
+def test_engine_auto_detection_accepts_native_build_sh_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    parent = tmp_path / "engines"
+    engine = parent / "UE_5.8"
+    script = engine / "Engine" / "Build" / "BatchFiles" / "Linux" / "Build.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+    monkeypatch.setattr(module, "_common_engine_locations", lambda: [parent])
+    assert module._detect_engine_root("5.8") == engine.resolve()
+    sys.modules.pop("integrated_install", None)
+
+
 @pytest.mark.parametrize(
     ("answers", "expected_agent_mode"),
     [
-        (["n", "n", "n", "2", "y", "y"], True),
-        (["n", "n", "n", "2", "n", "y"], False),
+        (["n", "n", "n", "n", "1", "2", "y", "y"], True),
+        (["n", "n", "n", "n", "1", "2", "n", "y"], False),
     ],
 )
 def test_interactive_agent_selector_confirms_or_falls_back_to_safe(
@@ -62,6 +77,90 @@ def test_interactive_agent_selector_confirms_or_falls_back_to_safe(
     assert "unreal" in components
     assert args.enable_agent_mode is expected_agent_mode
     assert args.accept_agent_risk is expected_agent_mode
+
+
+@pytest.mark.parametrize(
+    ("choice", "expected_tier"),
+    [("3", "standard"), ("4", "full")],
+)
+def test_interactive_index_selector_builds_selected_tier(
+    monkeypatch: pytest.MonkeyPatch,
+    choice: str,
+    expected_tier: str,
+) -> None:
+    module = _load_installer_module()
+
+    class InteractiveInput:
+        @staticmethod
+        def isatty() -> bool:
+            return True
+
+    responses = iter(["n", "n", "n", "n", choice, "1", "y"])
+    monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
+    args = module.build_parser().parse_args(["--profile", "standard"])
+    _, components = module._resolve_components(args)
+    sys.modules.pop("integrated_install", None)
+
+    assert "unreal" in components
+    assert args.build_rag is True
+    assert args.index_tier == expected_tier
+
+
+def test_interactive_cline_selection_uses_default_settings_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_installer_module()
+
+    class InteractiveInput:
+        @staticmethod
+        def isatty() -> bool:
+            return True
+
+    responses = iter(["n", "n", "y", "n", "1", "1", "y"])
+    monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
+    args = module.build_parser().parse_args(["--profile", "standard"])
+    _, components = module._resolve_components(args)
+    sys.modules.pop("integrated_install", None)
+
+    assert "cline" in components
+    assert args.cline_settings == Path.home() / ".cline" / "data" / "settings" / "cline_mcp_settings.json"
+
+
+@pytest.mark.parametrize(
+    ("menu_choice", "target_kind"),
+    [("1", "uproject"), ("2", "folder")],
+)
+def test_interactive_project_picker_restores_uproject_and_folder_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    menu_choice: str,
+    target_kind: str,
+) -> None:
+    module = _load_installer_module()
+
+    class InteractiveInput:
+        @staticmethod
+        def isatty() -> bool:
+            return True
+
+    project_dir = tmp_path / "PickedProject"
+    project_dir.mkdir()
+    project_file = project_dir / "PickedProject.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    selected = project_file if target_kind == "uproject" else project_dir
+    responses = iter(["n", "n", "n", "y", menu_choice, "n", "1", "1", "y"])
+    monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
+    monkeypatch.setattr(module, "_pick_indexing_target", lambda kind, initial: selected)
+    args = module.build_parser().parse_args(["--profile", "standard"])
+    _, components = module._resolve_components(args)
+    sys.modules.pop("integrated_install", None)
+
+    assert "unreal" in components
+    assert args.workspace_root == [project_dir]
+    assert args.active_project == (project_file if target_kind == "uproject" else None)
 
 
 def _run(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -242,6 +341,22 @@ def test_custom_rule_and_cline_install(tmp_path: Path) -> None:
     assert "evidence-first" in cline_payload["mcpServers"]
 
 
+def test_portable_rule_uses_managed_default_path_when_not_supplied(tmp_path: Path) -> None:
+    state_home = tmp_path / "state"
+    rule = state_home / "portable-rules" / "evidence-first-code-audit.md"
+    result = _run(
+        tmp_path,
+        "--profile",
+        "custom",
+        "--components",
+        "portable_rule",
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout)
+    assert "work evidence-first" in rule.read_text(encoding="utf-8")
+    assert payload["portableRulePaths"] == [str(rule)]
+
+
 def test_last_install_can_be_rolled_back(tmp_path: Path) -> None:
     original = tmp_path / "lmstudio" / "mcp.json"
     original.parent.mkdir()
@@ -293,3 +408,81 @@ def test_standard_adds_read_only_unreal_and_index_tier_is_orthogonal(tmp_path: P
         (tmp_path / "lmstudio" / "config" / "unreal-workspace.json").read_text(encoding="utf-8")
     )
     assert shared["indexingTier"] == "lite"
+
+
+def test_explicit_active_project_is_persisted_for_project_indexing(tmp_path: Path) -> None:
+    project_dir = tmp_path / "projects" / "Demo"
+    project_dir.mkdir(parents=True)
+    project_file = project_dir / "Demo.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    result = _run(
+        tmp_path,
+        "--profile",
+        "standard",
+        "--skip-deps",
+        "--active-project",
+        str(project_file),
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    shared = json.loads(
+        (tmp_path / "lmstudio" / "config" / "unreal-workspace.json").read_text(encoding="utf-8")
+    )
+    assert shared["activeProject"] == str(project_file)
+    assert str(project_dir) in shared["projectSearchRoots"]
+    assert shared["editorExportDir"] == str(project_dir / "Saved" / "LmStudioMetadataExports")
+
+
+def test_explicit_engine_root_is_persisted_and_forwarded_to_mcp(tmp_path: Path) -> None:
+    engine = tmp_path / "CustomEngine"
+    (engine / "Engine" / "Source").mkdir(parents=True)
+    result = _run(
+        tmp_path,
+        "--profile",
+        "standard",
+        "--skip-deps",
+        "--engine-root",
+        str(engine),
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    shared = json.loads(
+        (tmp_path / "lmstudio" / "config" / "unreal-workspace.json").read_text(encoding="utf-8")
+    )
+    mcp = json.loads((tmp_path / "lmstudio" / "mcp.json").read_text(encoding="utf-8"))
+    assert shared["defaultEngineRoot"] == str(engine)
+    assert mcp["mcpServers"]["unreal-rag"]["env"]["UNREAL_ENGINE_ROOT"] == str(engine)
+    assert mcp["mcpServers"]["unreal-agent"]["env"]["UNREAL_ENGINE_ROOT"] == str(engine)
+
+
+@pytest.mark.parametrize("tier", ["standard", "full"])
+def test_rag_build_uses_tier_aware_collection_pipeline(tmp_path: Path, tier: str) -> None:
+    result = _run(
+        tmp_path,
+        "--profile",
+        "standard",
+        "--skip-deps",
+        "--dry-run",
+        "--build-rag",
+        "--index-tier",
+        tier,
+        "--workspace-root",
+        str(tmp_path / "projects"),
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "run_index_pipeline.ps1" in result.stdout
+    assert f"-Tier {tier}" in result.stdout
+    assert "-PythonExe" in result.stdout
+    assert "rag.ps1 build" not in result.stdout
+
+
+def test_tier_pipeline_removes_inputs_excluded_by_standard_and_lite() -> None:
+    pipeline = (ROOT / "scripts" / "run_index_pipeline.ps1").read_text(encoding="utf-8")
+    assert 'if ($resolvedTier -ne "full")' in pipeline
+    assert 'Remove-TierInput -Path $sourcePath -Reason "excluded by $resolvedTier tier"' in pipeline
+    for path_name in (
+        "$symbolsPath",
+        "$moduleGraphPath",
+        "$projectSymbolsPath",
+        "$projectProfilesPath",
+        "$projectArchitecturePath",
+    ):
+        assert path_name in pipeline

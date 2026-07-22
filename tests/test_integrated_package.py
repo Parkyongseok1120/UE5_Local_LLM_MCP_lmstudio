@@ -54,6 +54,9 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "README.md",
         "manifest.json",
     }
+    assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
+    assert (output / "install.sh").read_bytes() == (ROOT / "install.sh").read_bytes()
+    assert "pause >nul" in (output / "INSTALL.bat").read_text(encoding="utf-8")
     forbidden = {".git", ".venv", "node_modules", "tests", "Reports", ".agent"}
     assert not any(forbidden.intersection(path.relative_to(output).parts) for path in output.rglob("*"))
     assert not any(path.suffix in {".sqlite", ".db"} for path in output.rglob("*"))

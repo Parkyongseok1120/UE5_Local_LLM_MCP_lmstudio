@@ -1,5 +1,14 @@
 $ErrorActionPreference = "Stop"
 
+function Get-HostUnrealPlatformValue {
+    if ($env:OS -eq "Windows_NT") { return "Win64" }
+    if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+            [System.Runtime.InteropServices.OSPlatform]::OSX)) {
+        return "Mac"
+    }
+    return "Linux"
+}
+
 function Expand-ConfigPathString {
     param([string]$Value)
     if ([string]::IsNullOrWhiteSpace($Value)) {
@@ -9,41 +18,91 @@ function Expand-ConfigPathString {
     return [Environment]::ExpandEnvironmentVariables($expanded)
 }
 
-function Get-EpicGamesRoot {
+function Test-UnrealEngineRoot {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
+    $engineDir = Join-Path $Path "Engine"
+    return (Test-Path -LiteralPath (Join-Path $engineDir "Source") -PathType Container)
+}
+
+function Get-UnrealEngineParentCandidates {
     param([string]$Override = "")
-    if ($Override -and (Test-Path -LiteralPath $Override)) {
-        return (Resolve-Path -LiteralPath $Override).Path
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if ($Override) { [void]$candidates.Add($Override) }
+    if ($env:UNREAL_ENGINE_ROOT) {
+        [void]$candidates.Add([string]$env:UNREAL_ENGINE_ROOT)
+        [void]$candidates.Add((Split-Path -Parent ([string]$env:UNREAL_ENGINE_ROOT)))
     }
-    $candidates = @(
-        (Join-Path ${env:ProgramFiles} "Epic Games"),
-        (Join-Path ${env:ProgramFiles(x86)} "Epic Games")
-    )
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            return (Resolve-Path -LiteralPath $candidate).Path
+
+    if ($env:OS -eq "Windows_NT") {
+        foreach ($base in @(${env:ProgramFiles}, ${env:ProgramFiles(x86)})) {
+            if ($base) { [void]$candidates.Add((Join-Path $base "Epic Games")) }
         }
     }
-    return ""
+    elseif ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+            [System.Runtime.InteropServices.OSPlatform]::OSX)) {
+        [void]$candidates.Add("/Users/Shared/Epic Games")
+        [void]$candidates.Add("/Applications/Epic Games")
+    }
+    else {
+        [void]$candidates.Add((Join-Path $HOME "UnrealEngine"))
+        [void]$candidates.Add((Join-Path $HOME "Epic Games"))
+        [void]$candidates.Add("/opt/UnrealEngine")
+        [void]$candidates.Add("/opt/Epic Games")
+    }
+
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($candidate in $candidates) {
+        if (-not $candidate -or -not (Test-Path -LiteralPath $candidate)) { continue }
+        $resolved = (Resolve-Path -LiteralPath $candidate).Path
+        if ($seen.Add($resolved)) { $resolved }
+    }
+}
+
+function Get-EpicGamesRoot {
+    param([string]$Override = "")
+    return [string](Get-UnrealEngineParentCandidates -Override $Override | Select-Object -First 1)
+}
+
+function Get-UnrealEngineVersionFromRoot {
+    param([string]$Root)
+    $folder = Split-Path -Leaf $Root
+    if ($folder -match "UE_(\d+\.\d+)") { return $Matches[1] }
+    $buildVersion = Join-Path (Join-Path (Join-Path $Root "Engine") "Build") "Build.version"
+    try {
+        $parsed = Get-Content -LiteralPath $buildVersion -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -ne $parsed.MajorVersion -and $null -ne $parsed.MinorVersion) {
+            return "$($parsed.MajorVersion).$($parsed.MinorVersion)"
+        }
+    }
+    catch { }
+    return "0.0"
 }
 
 function Get-DetectedUnrealEngineInstalls {
     param([string]$EpicGamesRoot = "")
-    $root = Get-EpicGamesRoot -Override $EpicGamesRoot
-    if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) {
-        return @()
+
+    $installs = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($candidate in (Get-UnrealEngineParentCandidates -Override $EpicGamesRoot)) {
+        $roots = @()
+        if (Test-UnrealEngineRoot -Path $candidate) { $roots += $candidate }
+        $roots += @(Get-ChildItem -LiteralPath $candidate -Directory -Filter "UE_5.*" -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty FullName)
+        foreach ($root in $roots) {
+            if (-not (Test-UnrealEngineRoot -Path $root)) { continue }
+            $resolved = (Resolve-Path -LiteralPath $root).Path
+            if (-not $seen.Add($resolved)) { continue }
+            $version = Get-UnrealEngineVersionFromRoot -Root $resolved
+            [void]$installs.Add([PSCustomObject]@{
+                    FolderName = Split-Path -Leaf $resolved
+                    Version    = $version
+                    Root       = $resolved
+                })
+        }
     }
-    Get-ChildItem -LiteralPath $root -Directory -Filter "UE_5.*" -ErrorAction SilentlyContinue |
-        ForEach-Object {
-            $folder = $_.Name
-            if ($folder -match "UE_5\.(\d+)") {
-                [PSCustomObject]@{
-                    FolderName = $folder
-                    Version    = "5.$($Matches[1])"
-                    Root       = $_.FullName
-                }
-            }
-        } |
-        Sort-Object { [version]$_.Version } -Descending
+    return @($installs | Sort-Object { [version]$_.Version } -Descending)
 }
 
 function Get-DefaultProjectSearchRoots {
@@ -295,7 +354,7 @@ function Sync-AgentMcpJson {
     $payload = [ordered]@{
         projectSearchRoots    = @($roots)
         defaultEngineRoot     = $EngineRoot
-        defaultPlatform       = "Win64"
+        defaultPlatform       = (Get-HostUnrealPlatformValue)
         defaultConfiguration  = "Development"
         activeProject         = $null
     }
@@ -420,9 +479,20 @@ function Write-JsonUtf8NoBom([string]$Path, $Object) {
 }
 
 function Get-ClineMcpSettingsPaths {
+    $vsCodeRoot = if ($env:APPDATA) {
+        Join-Path $env:APPDATA "Code"
+    }
+    elseif ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+            [System.Runtime.InteropServices.OSPlatform]::OSX)) {
+        Join-Path (Join-Path (Join-Path $HOME "Library") "Application Support") "Code"
+    }
+    else {
+        $configHome = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME ".config" }
+        Join-Path $configHome "Code"
+    }
     return [ordered]@{
-        VsCode = Join-Path $env:APPDATA "Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json"
-        Cli    = Join-Path $HOME ".cline\data\settings\cline_mcp_settings.json"
+        VsCode = Join-Path $vsCodeRoot "User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
+        Cli    = Join-Path $HOME ".cline/data/settings/cline_mcp_settings.json"
     }
 }
 
@@ -664,7 +734,7 @@ function Sync-ClineMcpSettings {
         $DocumentsRoot = Join-Path $HOME "Documents"
     }
     if (-not $SharedConfigPath) {
-        $SharedConfigPath = Join-Path $HOME ".lmstudio\config\unreal-workspace.json"
+        $SharedConfigPath = Join-Path (Join-Path (Join-Path $HOME ".lmstudio") "config") "unreal-workspace.json"
     }
     if (-not $PortableRoot) {
         $PortableRoot = Split-Path -Parent $RagRoot
@@ -673,16 +743,24 @@ function Sync-ClineMcpSettings {
     $agentStateRoot = Join-Path (Split-Path (Split-Path $SharedConfigPath -Parent) -Parent) "state\unreal-agent"
 
     if (-not $PythonExe) {
-        foreach ($path in @(
-                (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
-                (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
-                (Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe")
-            )) {
-            if (Test-Path $path) { $PythonExe = $path; break }
+        if ($env:LOCALAPPDATA) {
+            foreach ($relative in @(
+                    "Programs/Python/Python312/python.exe",
+                    "Programs/Python/Python311/python.exe",
+                    "Programs/Python/Python310/python.exe"
+                )) {
+                $path = Join-Path $env:LOCALAPPDATA $relative
+                if (Test-Path $path) { $PythonExe = $path; break }
+            }
         }
         if (-not $PythonExe) {
-            $cmd = Get-Command python -ErrorAction SilentlyContinue
-            if ($cmd -and $cmd.Source -notlike "*\WindowsApps\*") { $PythonExe = $cmd.Source }
+            foreach ($name in @("python3", "python")) {
+                $cmd = Get-Command $name -ErrorAction SilentlyContinue
+                if ($cmd -and $cmd.Source -notlike "*\WindowsApps\*") {
+                    $PythonExe = $cmd.Source
+                    break
+                }
+            }
         }
     }
     if (-not $NodeExe) {
@@ -733,7 +811,7 @@ function Get-WorkspaceEngineRootPath {
         [string]$FallbackEngineRoot = ""
     )
 
-    $configPath = Join-Path $RagRoot "config\workspace.json"
+    $configPath = Join-Path (Join-Path $RagRoot "config") "workspace.json"
     $cfg = Read-JsonObject $configPath
     if ($cfg -and $cfg.defaultEngineRoot) {
         $engineRoot = Expand-ConfigPathString ([string]$cfg.defaultEngineRoot)
@@ -742,7 +820,7 @@ function Get-WorkspaceEngineRootPath {
         }
     }
 
-    $sharedPath = Join-Path $HOME ".lmstudio\config\unreal-workspace.json"
+    $sharedPath = Join-Path (Join-Path (Join-Path $HOME ".lmstudio") "config") "unreal-workspace.json"
     $shared = Read-JsonObject $sharedPath
     if ($shared -and $shared.defaultEngineRoot) {
         $engineRoot = Expand-ConfigPathString ([string]$shared.defaultEngineRoot)
@@ -769,7 +847,7 @@ function Get-WorkspaceEngineSourcePath {
     if (-not $engineRoot) {
         return ""
     }
-    return Join-Path $engineRoot "Engine\Source"
+    return Join-Path (Join-Path $engineRoot "Engine") "Source"
 }
 
 function Get-WorkspaceUbtPath {
@@ -780,7 +858,17 @@ function Get-WorkspaceUbtPath {
 
     $engineRoot = Get-WorkspaceEngineRootPath -RagRoot $RagRoot -FallbackEngineRoot $FallbackEngineRoot
     if (-not $engineRoot) {
-        return "UnrealBuildTool.exe"
+        return $(if ($env:OS -eq "Windows_NT") { "UnrealBuildTool.exe" } else { "UnrealBuildTool.dll" })
     }
-    return Join-Path $engineRoot "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
+    $ubtDir = Join-Path (Join-Path (Join-Path (Join-Path $engineRoot "Engine") "Binaries") "DotNET") "UnrealBuildTool"
+    $candidates = if ($env:OS -eq "Windows_NT") {
+        @((Join-Path $ubtDir "UnrealBuildTool.exe"), (Join-Path $ubtDir "UnrealBuildTool.dll"))
+    }
+    else {
+        @((Join-Path $ubtDir "UnrealBuildTool.dll"), (Join-Path $ubtDir "UnrealBuildTool.exe"))
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return $candidates[0]
 }

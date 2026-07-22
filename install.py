@@ -36,6 +36,8 @@ PROFILE_DEFAULTS = {
     if name != "custom"
 }
 ALL_COMPONENTS = set(INSTALL_MANIFEST["components"])
+PORTABLE_RULE_FILENAME = "evidence-first-code-audit.md"
+CLINE_SETTINGS_RELATIVE_PATH = Path(".cline") / "data" / "settings" / "cline_mcp_settings.json"
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -44,6 +46,176 @@ def _is_within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _default_portable_rule_path(args: argparse.Namespace) -> Path:
+    """Return a neutral, managed location when no agent-specific path was supplied."""
+    return args.state_home / "portable-rules" / PORTABLE_RULE_FILENAME
+
+
+def _default_cline_settings_path() -> Path:
+    """Return Cline's conventional per-user MCP settings location."""
+    return Path.home() / CLINE_SETTINGS_RELATIVE_PATH
+
+
+def _engine_root_is_valid(root: Path) -> bool:
+    engine = root / "Engine"
+    if not engine.is_dir():
+        return False
+    candidates = [
+        engine / "Source",
+        engine / "Build" / "BatchFiles" / "Build.bat",
+        engine / "Build" / "BatchFiles" / "Mac" / "Build.sh",
+        engine / "Build" / "BatchFiles" / "Linux" / "Build.sh",
+        engine / "Binaries" / "DotNET" / "UnrealBuildTool" / "UnrealBuildTool.dll",
+    ]
+    return any(path.exists() for path in candidates)
+
+
+def _common_engine_locations() -> list[Path]:
+    explicit = os.environ.get("UNREAL_ENGINE_ROOT", "").strip()
+    locations: list[Path] = [Path(explicit).expanduser()] if explicit else []
+    if sys.platform == "win32":
+        for name in ("ProgramFiles", "ProgramFiles(x86)"):
+            value = os.environ.get(name, "").strip()
+            if value:
+                locations.append(Path(value) / "Epic Games")
+    elif sys.platform == "darwin":
+        locations.extend((Path("/Users/Shared/Epic Games"), Path("/Applications/Epic Games")))
+    else:
+        locations.extend(
+            (
+                Path.home() / "UnrealEngine",
+                Path.home() / "Epic Games",
+                Path("/opt/UnrealEngine"),
+                Path("/opt/Epic Games"),
+            )
+        )
+    return locations
+
+
+def _detect_engine_root(engine_association: str = "") -> Path | None:
+    candidates: list[Path] = []
+    for location in _common_engine_locations():
+        if _engine_root_is_valid(location):
+            candidates.append(location)
+        if location.is_dir():
+            candidates.extend(path for path in location.glob("UE_5.*") if _engine_root_is_valid(path))
+    unique = {str(path.resolve()).casefold(): path.resolve() for path in candidates}
+    ordered = sorted(unique.values(), key=lambda path: path.name, reverse=True)
+    requested = engine_association.strip()
+    if requested and requested[0:1].isdigit():
+        requested = f"UE_{requested}"
+    if requested:
+        exact = next((path for path in ordered if path.name.casefold() == requested.casefold()), None)
+        if exact:
+            return exact
+    return ordered[0] if ordered else None
+
+
+def _default_editor_export_path(project: Path) -> Path:
+    return project.parent / "Saved" / "LmStudioMetadataExports"
+
+
+def _editor_export_path_is_default_like(value: Any) -> bool:
+    raw = str(value or "").replace("\\", "/").rstrip("/").casefold()
+    return not raw or raw.endswith("/saved/lmstudiometadataexports")
+
+
+def _project_picker_initial_directory(args: argparse.Namespace) -> Path:
+    config_path = args.lmstudio_home.expanduser() / "config" / "unreal-workspace.json"
+    try:
+        existing = _load_json(config_path, {})
+    except (OSError, ValueError, json.JSONDecodeError):
+        existing = {}
+    active = Path(str(existing.get("activeProject") or "")).expanduser() if isinstance(existing, dict) else None
+    if active and active.is_file():
+        return active.parent
+    for root in args.workspace_root:
+        candidate = root.expanduser()
+        if candidate.is_dir():
+            return candidate
+    return Path.home()
+
+
+def _pick_indexing_target(kind: str, initial_directory: Path) -> Path | None:
+    """Open the native file picker through tkinter without asking for a typed path."""
+    root: Any | None = None
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        if kind == "uproject":
+            selected = filedialog.askopenfilename(
+                parent=root,
+                title="Select Unreal project (.uproject) to index",
+                initialdir=str(initial_directory),
+                filetypes=(("Unreal Project", "*.uproject"),),
+            )
+        else:
+            selected = filedialog.askdirectory(
+                parent=root,
+                title="Select folder to scan for Unreal projects",
+                initialdir=str(initial_directory),
+                mustexist=True,
+            )
+    except Exception as exc:  # GUI backends fail differently across supported desktop platforms.
+        print(f"  Project picker unavailable: {exc}")
+        return None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+    if not selected:
+        return None
+    path = Path(selected).expanduser().resolve()
+    if kind == "uproject" and (not path.is_file() or path.suffix.lower() != ".uproject"):
+        print(f"  Ignoring invalid Unreal project selection: {path}")
+        return None
+    if kind == "folder" and not path.is_dir():
+        print(f"  Ignoring invalid folder selection: {path}")
+        return None
+    return path
+
+
+def _interactive_project_indexing(args: argparse.Namespace) -> None:
+    print("\nProject indexing setup:")
+    if not _prompt_yes_no("Select .uproject files or folders to index?", True):
+        print("  Using configured/default project search roots.")
+        return
+
+    initial_directory = _project_picker_initial_directory(args)
+    replaced_default_roots = False
+    while True:
+        print("  1. Select .uproject file (sets the active project)")
+        print("  2. Select folder (adds a project search root)")
+        choice = input("Select [1]: ").strip() or "1"
+        kind = "folder" if choice == "2" else "uproject"
+        selected = _pick_indexing_target(kind, initial_directory)
+        if selected is None:
+            print("  Selection cancelled.")
+        else:
+            search_root = selected if kind == "folder" else selected.parent
+            if getattr(args, "_workspace_root_defaulted", False) and not replaced_default_roots:
+                args.workspace_root = []
+                replaced_default_roots = True
+            if search_root not in args.workspace_root:
+                args.workspace_root.append(search_root)
+            if kind == "uproject":
+                args.active_project = selected
+            initial_directory = search_root
+            print(f"  Added: {selected}")
+        if not _prompt_yes_no("Add another project or folder?", False):
+            break
 
 
 def _json_bytes(payload: Any) -> bytes:
@@ -279,6 +451,24 @@ def _interactive_agent_authority() -> bool:
     return choice == "2"
 
 
+def _interactive_rag_indexing(args: argparse.Namespace) -> None:
+    """Let interactive users opt into an index build independently of the install profile."""
+    if args.build_rag:
+        print(f"\nRAG indexing: build ({args.index_tier}, selected by command-line option)")
+        return
+
+    print("\nRAG indexing (independent of install profile):")
+    print("  1. SKIP (default: configure the adapter only)")
+    print("  2. LITE (project text + asset paths; fastest)")
+    print("  3. STANDARD (recommended: project/engine symbols + module graph)")
+    print("  4. FULL (STANDARD + complete Engine\\Source text; large and slow)")
+    choice = input("Select [1]: ").strip() or "1"
+    selected = {"2": "lite", "3": "standard", "4": "full"}.get(choice)
+    if selected:
+        args.build_rag = True
+        args.index_tier = selected
+
+
 def _confirm_interactive_install(
     profile: str, components: set[str], args: argparse.Namespace
 ) -> None:
@@ -291,12 +481,23 @@ def _confirm_interactive_install(
         print(f"  RAG index  : build ({args.index_tier})")
     else:
         print("  RAG index  : do not build")
+    if "unreal" in components:
+        print(f"  Search roots: {', '.join(str(path) for path in args.workspace_root)}")
+        if args.active_project:
+            print(f"  Active project: {args.active_project}")
+        if args.engine_root:
+            print(f"  Engine root: {args.engine_root}")
     if not _prompt_yes_no("Continue with this installation?", True):
         raise RuntimeError("installation cancelled by user")
 
 
 def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
     interactive = not args.yes and sys.stdin.isatty()
+    if not args.workspace_root:
+        args.workspace_root = [Path.home() / "Documents"]
+        args._workspace_root_defaulted = True
+    else:
+        args._workspace_root_defaulted = False
     profile = args.profile or (_interactive_profile() if interactive else "safe")
     if profile == "custom":
         components = {
@@ -318,15 +519,16 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         if _prompt_yes_no("Install a rule into another coding agent?", False):
             components.add("portable_rule")
             if not args.rule_path:
-                value = input("Agent rule output path: ").strip()
-                if value:
-                    args.rule_path = [Path(value)]
-        if _prompt_yes_no("Patch an explicit Cline MCP settings file?", False):
+                args.rule_path = [_default_portable_rule_path(args)]
+                print(f"  Portable rule path: {args.rule_path[0]}")
+        if _prompt_yes_no("Patch Cline MCP settings at its default location?", False):
             components.add("cline")
             if not args.cline_settings:
-                value = input("Cline MCP settings JSON path: ").strip()
-                if value:
-                    args.cline_settings = Path(value)
+                args.cline_settings = _default_cline_settings_path()
+                print(f"  Cline MCP settings: {args.cline_settings}")
+        if "unreal" in components:
+            _interactive_project_indexing(args)
+            _interactive_rag_indexing(args)
         if "unreal" in components and not args.enable_agent_mode:
             requested_agent_mode = _interactive_agent_authority()
             if requested_agent_mode:
@@ -349,8 +551,12 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         components.discard("context_compactor")
     if args.rule_path:
         components.add("portable_rule")
+    elif "portable_rule" in components:
+        args.rule_path = [_default_portable_rule_path(args)]
     if args.cline_settings:
         components.add("cline")
+    elif "cline" in components:
+        args.cline_settings = _default_cline_settings_path()
     unknown = components - ALL_COMPONENTS
     if unknown:
         raise ValueError(f"unknown components: {sorted(unknown)}")
@@ -432,6 +638,9 @@ def _unreal_entries(
             "VALIDATE_ON_WRITE": allow,
         },
     }
+    if args.engine_root:
+        rag_entry["env"]["UNREAL_ENGINE_ROOT"] = str(args.engine_root)
+        agent_entry["env"]["UNREAL_ENGINE_ROOT"] = str(args.engine_root)
     return {"unreal-rag": rag_entry, "unreal-agent": agent_entry}
 
 
@@ -481,6 +690,16 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
     args.lmstudio_home = args.lmstudio_home.expanduser().resolve()
     args.state_home = args.state_home.expanduser().resolve()
     args.workspace_root = [path.expanduser().resolve() for path in args.workspace_root]
+    if args.active_project:
+        args.active_project = args.active_project.expanduser().resolve()
+        if not args.active_project.is_file() or args.active_project.suffix.lower() != ".uproject":
+            raise ValueError(f"active project must be an existing .uproject file: {args.active_project}")
+        if args.active_project.parent not in args.workspace_root:
+            args.workspace_root.append(args.active_project.parent)
+    if args.engine_root:
+        args.engine_root = args.engine_root.expanduser().resolve()
+        if not _engine_root_is_valid(args.engine_root):
+            raise ValueError(f"engine root does not contain a usable Unreal Engine layout: {args.engine_root}")
     args.rule_path = [path.expanduser().resolve() for path in args.rule_path]
     if args.cline_settings:
         args.cline_settings = args.cline_settings.expanduser().resolve()
@@ -501,6 +720,11 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
         "dryRun": args.dry_run,
         "platform": platform.system(),
         "safetyNormalizations": [],
+        "portableRulePaths": [],
+        "clineSettingsPath": str(args.cline_settings) if args.cline_settings else None,
+        "activeProject": str(args.active_project) if args.active_project else None,
+        "projectSearchRoots": [str(path) for path in args.workspace_root],
+        "engineRoot": str(args.engine_root) if args.engine_root else None,
     }
     lock.acquire()
     try:
@@ -555,13 +779,35 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
             shared = _load_json(shared_path, {})
             if not isinstance(shared, dict):
                 raise ValueError("unreal-workspace.json must contain a JSON object")
-            shared.setdefault("activeProject", None)
+            if args.active_project:
+                shared["activeProject"] = str(args.active_project)
+                if _editor_export_path_is_default_like(shared.get("editorExportDir")):
+                    shared["editorExportDir"] = str(_default_editor_export_path(args.active_project))
+            else:
+                shared.setdefault("activeProject", None)
             shared["projectSearchRoots"] = [str(path) for path in args.workspace_root]
-            shared.setdefault("defaultEngineRoot", "")
+            existing_engine = Path(str(shared.get("defaultEngineRoot") or "")).expanduser()
+            association = ""
+            if args.active_project:
+                try:
+                    project_data = _load_json(args.active_project, {})
+                    association = str(project_data.get("EngineAssociation") or "")
+                except (OSError, ValueError, json.JSONDecodeError):
+                    association = ""
+            detected_engine = args.engine_root
+            if detected_engine is None and _engine_root_is_valid(existing_engine):
+                detected_engine = existing_engine.resolve()
+            if detected_engine is None:
+                detected_engine = _detect_engine_root(association)
+            args.engine_root = detected_engine
+            shared["defaultEngineRoot"] = str(detected_engine) if detected_engine else ""
             shared["defaultPlatform"] = _default_platform()
             shared.setdefault("defaultConfiguration", "Development")
             shared["indexingTier"] = args.index_tier
             tx.write_file(shared_path, _json_bytes(shared))
+            report["activeProject"] = shared.get("activeProject")
+            report["projectSearchRoots"] = list(shared.get("projectSearchRoots") or [])
+            report["engineRoot"] = shared.get("defaultEngineRoot") or None
             agent_payload = {
                 "projectSearchRoots": [str(path) for path in args.workspace_root],
                 "defaultEngineRoot": str(shared.get("defaultEngineRoot") or ""),
@@ -599,6 +845,7 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
             rule = (SKILL_SOURCE / "references" / "portable-rule.md").read_bytes()
             for path in args.rule_path:
                 tx.write_file(path, rule)
+            report["portableRulePaths"] = [str(path) for path in args.rule_path]
 
         if "cline" in components:
             if not args.cline_settings:
@@ -619,7 +866,23 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
             pwsh = shutil.which("pwsh") or shutil.which("powershell")
             if not pwsh:
                 raise FileNotFoundError("--build-rag requires PowerShell (pwsh or powershell)")
-            _run([pwsh, "-NoProfile", "-File", str(ROOT / "rag.ps1"), "build"], cwd=ROOT, dry_run=args.dry_run)
+            _run(
+                [
+                    pwsh,
+                    "-NoProfile",
+                    "-File",
+                    str(ROOT / "scripts" / "run_index_pipeline.ps1"),
+                    "-WorkspaceRoot",
+                    str(ROOT),
+                    "-Tier",
+                    args.index_tier,
+                    "-PythonExe",
+                    str(python_exe),
+                    "-NonInteractive",
+                ],
+                cwd=ROOT,
+                dry_run=args.dry_run,
+            )
 
         if not args.dry_run and "lmstudio" in components:
             smoke = SKILL_SOURCE / "scripts" / "smoke_evidence_first_mcp.py"
@@ -683,8 +946,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lmstudio-home", type=Path, default=Path(os.environ.get("LMSTUDIO_HOME", Path.home() / ".lmstudio")))
     parser.add_argument("--state-home", type=Path, default=Path.home() / ".evidence-first")
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
-    parser.add_argument("--rule-path", type=Path, action="append", default=[])
-    parser.add_argument("--cline-settings", type=Path)
+    parser.add_argument("--active-project", type=Path)
+    parser.add_argument(
+        "--engine-root",
+        type=Path,
+        help="Unreal Engine root. Otherwise uses UNREAL_ENGINE_ROOT, saved config, or host common locations.",
+    )
+    parser.add_argument(
+        "--rule-path",
+        type=Path,
+        action="append",
+        default=[],
+        help="Target rule file (defaults to STATE_HOME/portable-rules when portable_rule is selected).",
+    )
+    parser.add_argument(
+        "--cline-settings",
+        type=Path,
+        help="Cline MCP settings file (defaults to ~/.cline/data/settings/cline_mcp_settings.json).",
+    )
     parser.add_argument("--lmstudio-url", default="http://localhost:1234/v1")
     return parser
 
@@ -692,8 +971,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    if not args.workspace_root:
-        args.workspace_root = [Path.home() / "Documents"]
     try:
         if args.rollback:
             result = rollback_last_install(args.state_home.expanduser().resolve(), dry_run=args.dry_run)

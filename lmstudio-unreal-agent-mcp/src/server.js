@@ -1481,7 +1481,7 @@ function allAgentTools() {
       },
       {
         name: "build_unreal_project",
-        description: "Run Unreal Build.bat after C++ or Build.cs edits. Requires one completed static scan for the current mutation generation; remaining findings do not require an override. Returns compact errors and a project-local fullLogPath.",
+        description: "Run the host Unreal build tool after C++ or Build.cs edits. Requires one completed static scan for the current mutation generation; remaining findings do not require an override. Returns compact errors and a project-local fullLogPath.",
         inputSchema: makeJsonSchema({
           hint: { type: "string", description: "Optional project folder or .uproject name fragment for auto-detection." },
           engineRoot: { type: "string", description: "Optional UE engine root. Auto-detected from EngineAssociation when omitted." },
@@ -2817,8 +2817,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const build = planResult.build;
-      if (!(await exists(build.buildBat))) {
-        return fail(`Build.bat not found: ${build.buildBat}`);
+      if (!build.buildTool || !(await exists(build.buildTool))) {
+        return fail(`Unreal build tool not found: ${build.buildTool || "not resolved"}`);
       }
 
       let projectPath = build.projectPath;

@@ -3,7 +3,7 @@
 
 # UE5_Local_LLM_MCP_lmstudio 1.2.5
 
-> **지원 플랫폼: Windows 10/11 전용.** 설치 스크립트는 PowerShell/BAT 기반입니다. macOS와 Linux는 현재 지원하지 않습니다.
+> **통합 설치 지원:** portable skill, LM Studio MCP, Node/Python adapter는 Windows, Linux, macOS에서 설치할 수 있습니다. Unreal engine 탐색·인덱싱 경로·Editor export·agent build launcher는 host별 경로를 사용합니다. Linux/macOS의 RAG indexing에는 `pwsh`가 필요하며, 실제 플랫폼 live 인증은 아직 남아 있습니다.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
