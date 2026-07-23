@@ -651,6 +651,18 @@ def _run(command: list[str], *, cwd: Path, dry_run: bool) -> None:
     subprocess.run(command, cwd=str(cwd), check=True)
 
 
+def _powershell_file_command(
+    executable: str,
+    script: Path,
+    script_args: list[str],
+) -> list[str]:
+    command = [executable, "-NoProfile"]
+    if platform.system() == "Windows":
+        command.extend(["-ExecutionPolicy", "Bypass"])
+    command.extend(["-File", str(script), *script_args])
+    return command
+
+
 def _install_context_compactor(args: argparse.Namespace) -> None:
     plugin = ROOT / "lmstudio-context-compactor-plugin"
     if not plugin.is_dir():
@@ -867,19 +879,19 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
             if not pwsh:
                 raise FileNotFoundError("--build-rag requires PowerShell (pwsh or powershell)")
             _run(
-                [
+                _powershell_file_command(
                     pwsh,
-                    "-NoProfile",
-                    "-File",
-                    str(ROOT / "scripts" / "run_index_pipeline.ps1"),
-                    "-WorkspaceRoot",
-                    str(ROOT),
-                    "-Tier",
-                    args.index_tier,
-                    "-PythonExe",
-                    str(python_exe),
-                    "-NonInteractive",
-                ],
+                    ROOT / "scripts" / "run_index_pipeline.ps1",
+                    [
+                        "-WorkspaceRoot",
+                        str(ROOT),
+                        "-Tier",
+                        args.index_tier,
+                        "-PythonExe",
+                        str(python_exe),
+                        "-NonInteractive",
+                    ],
+                ),
                 cwd=ROOT,
                 dry_run=args.dry_run,
             )

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -472,6 +474,101 @@ def test_rag_build_uses_tier_aware_collection_pipeline(tmp_path: Path, tier: str
     assert f"-Tier {tier}" in result.stdout
     assert "-PythonExe" in result.stdout
     assert "rag.ps1 build" not in result.stdout
+    if sys.platform == "win32":
+        assert "-NoProfile -ExecutionPolicy Bypass -File" in result.stdout
+    else:
+        assert "-ExecutionPolicy" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("system_name", "expected"),
+    [
+        (
+            "Windows",
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "pipeline.ps1",
+                "-Tier",
+                "full",
+            ],
+        ),
+        (
+            "Linux",
+            [
+                "pwsh",
+                "-NoProfile",
+                "-File",
+                "pipeline.ps1",
+                "-Tier",
+                "full",
+            ],
+        ),
+        (
+            "Darwin",
+            [
+                "pwsh",
+                "-NoProfile",
+                "-File",
+                "pipeline.ps1",
+                "-Tier",
+                "full",
+            ],
+        ),
+    ],
+)
+def test_powershell_file_command_is_host_aware(
+    monkeypatch: pytest.MonkeyPatch,
+    system_name: str,
+    expected: list[str],
+) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr(module.platform, "system", lambda: system_name)
+    executable = "powershell" if system_name == "Windows" else "pwsh"
+
+    command = module._powershell_file_command(
+        executable,
+        Path("pipeline.ps1"),
+        ["-Tier", "full"],
+    )
+    sys.modules.pop("integrated_install", None)
+
+    assert command == expected
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows execution policies only")
+def test_powershell_file_command_bypasses_restricted_process_policy(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    powershell = shutil.which("powershell")
+    assert powershell is not None
+    script = tmp_path / "policy-smoke.ps1"
+    script.write_text("Write-Output 'policy-smoke'\n", encoding="utf-8")
+    environment = os.environ.copy()
+    environment["PSExecutionPolicyPreference"] = "Restricted"
+
+    blocked = subprocess.run(
+        [powershell, "-NoProfile", "-File", str(script)],
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
+    command = module._powershell_file_command(powershell, script, [])
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
+    sys.modules.pop("integrated_install", None)
+
+    assert blocked.returncode != 0
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.stdout.strip() == "policy-smoke"
 
 
 def test_tier_pipeline_removes_inputs_excluded_by_standard_and_lite() -> None:
