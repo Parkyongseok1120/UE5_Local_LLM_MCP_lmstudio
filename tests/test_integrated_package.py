@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import zipfile
@@ -11,7 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_integrated_package.py"
 
 
-def _build(tmp_path: Path, name: str) -> tuple[Path, Path]:
+def _legacy_stdout_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "cp1252"
+    return env
+
+
+def _build(tmp_path: Path, name: str, *, legacy_stdout: bool = False) -> tuple[Path, Path]:
     output = tmp_path / name
     archive = tmp_path / f"{name}.zip"
     result = subprocess.run(
@@ -20,13 +27,14 @@ def _build(tmp_path: Path, name: str) -> tuple[Path, Path]:
         capture_output=True,
         text=True,
         timeout=180,
+        env=_legacy_stdout_env() if legacy_stdout else None,
     )
     assert result.returncode == 0, result.stderr or result.stdout
     return output, archive
 
 
 def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -> None:
-    output, archive = _build(tmp_path, "portable 한글 one")
+    output, archive = _build(tmp_path, "portable 한글 one", legacy_stdout=True)
     for relative in (
         "INSTALL.bat",
         "install.sh",
@@ -118,3 +126,24 @@ def test_builder_rejects_source_or_nested_destinations(tmp_path: Path) -> None:
         )
         assert result.returncode == 1
         assert "disjoint" in result.stdout
+
+
+def test_builder_error_json_is_safe_with_legacy_stdout_encoding(tmp_path: Path) -> None:
+    missing_source = tmp_path / "없는 source"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(BUILDER),
+            "--source",
+            str(missing_source),
+            "--output",
+            str(tmp_path / "output"),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=_legacy_stdout_env(),
+    )
+    assert result.returncode == 1
+    assert str(missing_source) in json.loads(result.stdout)["error"]

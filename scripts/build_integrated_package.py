@@ -263,9 +263,9 @@ def main() -> int:
     try:
         result = build(args.source, args.output, args.zip_path, include_index=args.include_index)
     except (OSError, ValueError) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2))
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=True, indent=2))
         return 1
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0
 
 
