@@ -453,6 +453,31 @@ def _path_key(path: Path) -> str:
     return os.path.normcase(os.path.abspath(path))
 
 
+def source_inventory_signature(source_root: Path) -> str:
+    """Return a cheap process-cache key for the current source inventory.
+
+    This signature deliberately uses file identity/stat data instead of reading
+    file contents.  It is suitable for invalidating read-only, in-process
+    analysis caches.  Write/architecture gates must continue to use
+    ``graph_is_fresh_for_root`` for content-hash verification.
+    """
+    root = source_root.resolve()
+    digest = hashlib.sha1()
+    digest.update(os.path.normcase(str(root)).encode("utf-8", errors="replace"))
+    for path in _iter_source_files(root):
+        try:
+            stat = path.stat()
+        except OSError:
+            digest.update(f"\0unreadable:{_relative_path(path, root)}".encode("utf-8", errors="replace"))
+            continue
+        row = (
+            f"\0{_relative_path(path, root)}\0{stat.st_size}\0"
+            f"{stat.st_mtime_ns}\0{stat.st_ctime_ns}"
+        )
+        digest.update(row.encode("utf-8", errors="replace"))
+    return digest.hexdigest()
+
+
 def graph_is_fresh_for_root(graph: dict[str, Any], source_root: Path) -> bool:
     """Verify that a persisted graph exactly matches current source inventory/content."""
     if not isinstance(graph, dict):

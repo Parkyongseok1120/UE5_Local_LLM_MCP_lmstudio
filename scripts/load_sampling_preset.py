@@ -202,11 +202,14 @@ def main() -> int:
     parser.add_argument("--mode", default="")
     parser.add_argument("--turn", default="")
     parser.add_argument("--sampling-profile", default="", help="Override active profile for this invocation.")
+    parser.add_argument("--model", default="", help="Resolve the sampling profile from an LM Studio model id/alias.")
     parser.add_argument("--show-profile", action="store_true", help="Print active profile name and scale.")
     args = parser.parse_args()
 
     if args.sampling_profile:
         set_sampling_profile(args.sampling_profile)
+    elif args.model:
+        set_sampling_profile_for_model(args.model)
 
     if args.show_profile:
         cfg = load_sampling_config()

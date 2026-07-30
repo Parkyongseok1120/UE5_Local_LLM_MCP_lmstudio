@@ -473,6 +473,7 @@ def analyze_architecture(
     symbols: list[str] | None = None,
     proposal: dict[str, Any] | None = None,
     graph: dict[str, Any] | None = None,
+    validate_supplied_graph: bool = True,
 ) -> dict[str, Any]:
     root = _resolve_root(project_root)
     if not root:
@@ -481,7 +482,10 @@ def analyze_architecture(
     graph_matches_root = (
         bool(supplied_graph_root)
         and Path(supplied_graph_root).resolve() == root.resolve()
-        and graph_is_fresh_for_root(graph, root)
+        and (
+            not validate_supplied_graph
+            or graph_is_fresh_for_root(graph, root)
+        )
     )
     active_graph = graph if graph_matches_root else build_symbol_graph(_source_root(root))
     focus_symbols = list(dict.fromkeys(str(symbol).strip() for symbol in (symbols or []) if str(symbol).strip()))

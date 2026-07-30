@@ -134,6 +134,68 @@ def test_eval_regression_compare_flags_unexpected_missing_green_step() -> None:
     assert "step report_tier_kpi missing from current run" in delta["regressions"]
 
 
+def test_eval_regression_compares_pass_at_1_and_safety_counters():
+    baseline = {
+        "steps": [],
+        "metrics": {
+            "passAtKComparable": True,
+            "passAtKMode": "live",
+            "passAtKTier": "holdout",
+            "passAtKConfig": "same.json",
+            "passAt1Rate": 0.80,
+            "passAtKRate": 0.95,
+            "averageAttempts": 1.2,
+            "wrongFileEditCount": 0,
+            "buildCsFalsePositiveCount": 0,
+            "forbiddenPatchHitCount": 0,
+            "sameErrorRepeatedCount": 0,
+            "noOpEditCount": 0,
+        },
+    }
+    current = {
+        "steps": [],
+        "metrics": {
+            **baseline["metrics"],
+            "passAt1Rate": 0.70,
+            "wrongFileEditCount": 1,
+        },
+    }
+
+    delta = run_eval_regression.compare_reports(current, baseline)
+
+    assert any("Pass@1" in item for item in delta["regressions"])
+    assert any("wrong-file edits" in item for item in delta["regressions"])
+
+
+def test_eval_regression_does_not_compare_mismatched_live_suites():
+    baseline = {
+        "steps": [],
+        "metrics": {
+            "passAtKComparable": True,
+            "passAtKMode": "live",
+            "passAtKTier": "27b",
+            "passAtKConfig": "suite-a.json",
+            "passAt1Rate": 1.0,
+        },
+    }
+    current = {
+        "steps": [],
+        "metrics": {
+            "passAtKComparable": True,
+            "passAtKMode": "live",
+            "passAtKTier": "9b",
+            "passAtKConfig": "suite-b.json",
+            "passAt1Rate": 0.0,
+        },
+    }
+
+    delta = run_eval_regression.compare_reports(current, baseline)
+
+    assert delta["qualityComparable"] is False
+    assert not any("Pass@1" in item for item in delta["regressions"])
+    assert delta["warnings"]
+
+
 def test_agent_delete_file_requires_structured_deletion_plan() -> None:
     server_js = _read("lmstudio-unreal-agent-mcp/src/server.js")
 

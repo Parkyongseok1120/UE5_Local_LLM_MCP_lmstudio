@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -49,6 +50,25 @@ def test_model_alias_resolves_qwen36_lmstudio_gguf_profile(monkeypatch):
         )
         == "qwen3_6_27b"
     )
+
+
+def test_sampling_cli_can_resolve_profile_from_model_alias():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "load_sampling_preset.py"),
+            "--model",
+            "qwen3.5-9b",
+            "--show-profile",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["profile"] == "qwen3_5_9b"
 
 
 def test_qwen36_profile_mcp_meta(monkeypatch):

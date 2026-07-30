@@ -7,8 +7,13 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from atomic_io import atomic_write_text  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
@@ -53,11 +58,14 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int =
                 "stderrTail": "",
             }
     try:
+        started = time.perf_counter()
         proc = subprocess.run(
             cmd,
             cwd=str(ROOT),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=step_timeout,
         )
         return {
@@ -66,6 +74,8 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int =
             "pass": proc.returncode == 0,
             "stdoutTail": (proc.stdout or "")[-3000:],
             "stderrTail": (proc.stderr or "")[-1500:],
+            "durationMs": round((time.perf_counter() - started) * 1000, 2),
+            "proofLevel": "executed",
         }
     except subprocess.TimeoutExpired:
         return {
@@ -76,6 +86,8 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int =
             "reason": f"step timed out after {step_timeout}s",
             "stdoutTail": "",
             "stderrTail": "",
+            "durationMs": round((time.perf_counter() - started) * 1000, 2),
+            "proofLevel": "executed",
         }
 
 
@@ -90,18 +102,43 @@ def collect_kpi_metrics() -> dict:
         metrics["reasoningScore"] = float(reasoning.get("score") or 0)
     if pass_at_k:
         metrics["passAtKRate"] = float(pass_at_k.get("passRate") or 0)
+        metrics["passAt1Rate"] = float(pass_at_k.get("passAt1Rate") or 0)
+        metrics["averageAttempts"] = float(pass_at_k.get("averageAttempts") or 0)
         metrics["passAtKMode"] = pass_at_k.get("mode")
+        metrics["passAtKTier"] = pass_at_k.get("tier")
+        metrics["passAtKConfig"] = pass_at_k.get("config")
+        metrics["passAtKComparable"] = pass_at_k.get("mode") != "metrics-only"
+        for field in (
+            "wrongFileEditCount",
+            "buildCsFalsePositiveCount",
+            "forbiddenPatchHitCount",
+            "sameErrorRepeatedCount",
+            "noOpEditCount",
+        ):
+            metrics[field] = int(pass_at_k.get(field) or 0)
     if project_review:
         metrics["projectReviewRecall"] = float(project_review.get("aggregateRecall") or 0)
     if mcp_bench:
-        metrics["mcpBench"] = mcp_bench.get("results") or mcp_bench
+        benchmarks = mcp_bench.get("benchmarks") or mcp_bench.get("results") or []
+        metrics["mcpBench"] = benchmarks
+        if isinstance(benchmarks, list):
+            metrics["mcpBenchFailureCount"] = sum(
+                1 for row in benchmarks if isinstance(row, dict) and row.get("pass") is False
+            )
     return metrics
+
+
+def load_quality_gates() -> dict:
+    path = ROOT / "config" / "live_test_quality_gates.json"
+    payload = load_json(path) or {}
+    return payload.get("regressionThresholds") or {}
 
 
 def compare_reports(current: dict, baseline: dict | None, *, ignored_missing_labels: set[str] | None = None) -> dict:
     if not baseline:
-        return {"hasBaseline": False, "regressions": [], "improvements": []}
+        return {"hasBaseline": False, "regressions": [], "warnings": [], "improvements": []}
     regressions: list[str] = []
+    warnings: list[str] = []
     improvements: list[str] = []
     ignored_missing_labels = ignored_missing_labels or set()
 
@@ -125,12 +162,83 @@ def compare_reports(current: dict, baseline: dict | None, *, ignored_missing_lab
 
     cur_metrics = current.get("metrics") or {}
     base_metrics = baseline.get("metrics") or {}
-    pak = cur_metrics.get("passAtKRate")
-    base_pak = base_metrics.get("passAtKRate")
-    if pak is not None and base_pak is not None and pak < base_pak - 0.10:
-        regressions.append(f"Pass@K rate dropped {base_pak:.0%} -> {pak:.0%}")
+    thresholds = load_quality_gates()
+    comparable_fields = ("passAtKMode", "passAtKTier", "passAtKConfig")
+    mismatches = [
+        field
+        for field in comparable_fields
+        if cur_metrics.get(field) and base_metrics.get(field)
+        and cur_metrics.get(field) != base_metrics.get(field)
+    ]
+    quality_comparable = (
+        bool(cur_metrics.get("passAtKComparable", True))
+        and bool(base_metrics.get("passAtKComparable", True))
+        and not mismatches
+    )
+    if mismatches:
+        warnings.append(
+            "Pass@K quality metrics not compared because mode/tier/config differ: "
+            + ", ".join(mismatches)
+        )
+    if not quality_comparable and not mismatches:
+        warnings.append("Pass@K quality metrics not compared because one run is metrics-only.")
 
-    return {"hasBaseline": True, "regressions": regressions, "improvements": improvements}
+    if quality_comparable:
+        for field, label, threshold_key, default in (
+            ("passAt1Rate", "Pass@1", "passAt1MaxDrop", 0.03),
+            ("passAtKRate", "Pass@K", "passAtKMaxDrop", 0.01),
+        ):
+            current_value = cur_metrics.get(field)
+            baseline_value = base_metrics.get(field)
+            max_drop = float(thresholds.get(threshold_key, default))
+            if (
+                current_value is not None
+                and baseline_value is not None
+                and float(current_value) < float(baseline_value) - max_drop
+            ):
+                regressions.append(
+                    f"{label} rate dropped {float(baseline_value):.1%} -> {float(current_value):.1%}"
+                )
+
+        attempt_increase = (
+            float(cur_metrics.get("averageAttempts") or 0)
+            - float(base_metrics.get("averageAttempts") or 0)
+        )
+        if attempt_increase > float(thresholds.get("averageAttemptsMaxIncrease", 0.5)):
+            regressions.append(
+                "average attempts increased "
+                f"{float(base_metrics.get('averageAttempts') or 0):.2f} -> "
+                f"{float(cur_metrics.get('averageAttempts') or 0):.2f}"
+            )
+
+        for field, label in (
+            ("wrongFileEditCount", "wrong-file edits"),
+            ("buildCsFalsePositiveCount", "Build.cs false positives"),
+            ("forbiddenPatchHitCount", "forbidden patch hits"),
+            ("sameErrorRepeatedCount", "same-error repeats"),
+            ("noOpEditCount", "no-op edits"),
+        ):
+            current_count = int(cur_metrics.get(field) or 0)
+            baseline_count = int(base_metrics.get(field) or 0)
+            if current_count > baseline_count:
+                regressions.append(
+                    f"{label} increased {baseline_count} -> {current_count}"
+                )
+
+    current_bench_failures = int(cur_metrics.get("mcpBenchFailureCount") or 0)
+    baseline_bench_failures = int(base_metrics.get("mcpBenchFailureCount") or 0)
+    if current_bench_failures > baseline_bench_failures:
+        regressions.append(
+            f"MCP benchmark failures increased {baseline_bench_failures} -> {current_bench_failures}"
+        )
+
+    return {
+        "hasBaseline": True,
+        "qualityComparable": quality_comparable,
+        "regressions": regressions,
+        "warnings": warnings,
+        "improvements": improvements,
+    }
 
 
 def main() -> int:
@@ -230,7 +338,7 @@ def main() -> int:
         (history_json, report),
         (delta_json, report["delta"]),
     ]:
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
     md = [
         f"# Eval regression {stamp}",
@@ -246,7 +354,9 @@ def main() -> int:
         md.extend(["", "## Metrics", json.dumps(report["metrics"], indent=2)])
     if report["delta"].get("regressions"):
         md.extend(["", "## Regressions"] + [f"- {r}" for r in report["delta"]["regressions"]])
-    latest_md.write_text("\n".join(md) + "\n", encoding="utf-8")
+    if report["delta"].get("warnings"):
+        md.extend(["", "## Comparison warnings"] + [f"- {r}" for r in report["delta"]["warnings"]])
+    atomic_write_text(latest_md, "\n".join(md) + "\n")
 
     print(f"Wrote {latest_json}")
     print(f"Wrote {latest_md}")

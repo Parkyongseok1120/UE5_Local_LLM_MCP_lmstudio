@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -17,11 +18,11 @@ from workspace_paths import (
     find_workspace_root,
     load_shared_config,
     resolve_index_path,
-    save_shared_config,
     shared_config_path,
 )
 from mcp_tool_compact import (
     compact_asset_graph_payload,
+    compact_architecture_payload,
     compact_export_payload,
     compact_json_text,
     compact_metadata_status_payload,
@@ -349,8 +350,44 @@ def _handle_unreal_architecture_reasoning(
         _invalid_tool_argument(server, message_id, "unreal_architecture_reasoning", argument_error)
         return
     proposal = arguments.get("proposal")
-    payload = analyze_architecture(project_root, symbols=symbols, proposal=proposal)
-    server.structured_tool_result(message_id, payload)
+    detail_level = str(arguments.get("detailLevel") or "compact")
+    started = time.perf_counter()
+    if not project_root:
+        payload = analyze_architecture(
+            project_root,
+            symbols=symbols,
+            proposal=proposal,
+        )
+        payload["performance"] = {
+            "graphSource": "unavailable",
+            "graphPreparationMs": 0.0,
+            "totalMs": round((time.perf_counter() - started) * 1000, 2),
+        }
+        server.structured_tool_result(
+            message_id,
+            compact_architecture_payload(payload, detail_level),
+        )
+        return
+    graph, graph_source, graph_ms = server.architecture_graph(
+        project_root,
+        require_content_verification=proposal is not None,
+    )
+    payload = analyze_architecture(
+        project_root,
+        symbols=symbols,
+        proposal=proposal,
+        graph=graph,
+        validate_supplied_graph=False,
+    )
+    payload["performance"] = {
+        "graphSource": graph_source,
+        "graphPreparationMs": round(graph_ms, 2),
+        "totalMs": round((time.perf_counter() - started) * 1000, 2),
+    }
+    server.structured_tool_result(
+        message_id,
+        compact_architecture_payload(payload, detail_level),
+    )
 
 
 def _handle_unreal_node_plan_validate(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
@@ -478,6 +515,12 @@ def build_mcp_tool_registry() -> McpToolRegistry:
             schema_dict={
                 "projectRoot": {"type": "string", "description": "Optional project root/.uproject; defaults to active project."},
                 "symbols": {"type": "array", "items": {"type": "string"}, "description": "Optional symbols to focus data-flow/state analysis on."},
+                "detailLevel": {
+                    "type": "string",
+                    "enum": ["compact", "standard", "full"],
+                    "default": "compact",
+                    "description": "Response detail. Safety/proposal gates are never compacted away.",
+                },
                 "proposal": {
                     **_architecture_proposal_schema(),
                     "description": "Optional architecture proposal with explicit design and validation obligations.",
@@ -586,6 +629,7 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_symbol_lookup",
         "unreal_agent_session",
         "unreal_rag_capabilities",
+        "unreal_architecture_reasoning",
         "unreal_code_sketch_claim_validate",
         "unreal_review_claim_validate",
         "unreal_diagram_validate",
@@ -678,6 +722,7 @@ class McpServer:
         self._cache_refresh_required = False
         self._cache_partial_clear: list[str] = []
         self._applied_cache_generation = self._cache_generation
+        self._architecture_graph_cache: dict[str, dict[str, Any]] = {}
         try:
             from reconcile_jobs import reconcile_stale_jobs
 
@@ -704,8 +749,52 @@ class McpServer:
             self._cache_refresh_required = False
             self._applied_cache_generation = current
             self._cache_generation = current
+            self._architecture_graph_cache.clear()
         except Exception:
             self._cache_refresh_required = True
+
+    def architecture_graph(
+        self,
+        project_root: str | Path,
+        *,
+        require_content_verification: bool = False,
+    ) -> tuple[dict[str, Any], str, float]:
+        """Load/reuse a project graph with a stronger check for write gates."""
+        from build_symbol_graph import (
+            build_symbol_graph,
+            graph_is_fresh_for_root,
+            source_inventory_signature,
+        )
+        from symbol_graph import load_symbol_graph
+
+        started = time.perf_counter()
+        root = Path(project_root).expanduser().resolve()
+        if root.is_file() and root.suffix.lower() == ".uproject":
+            root = root.parent
+        key = os.path.normcase(str(root))
+        signature = source_inventory_signature(root)
+        cached = self._architecture_graph_cache.get(key)
+        if cached and cached.get("signature") == signature:
+            graph = cached.get("graph")
+            if isinstance(graph, dict) and (
+                not require_content_verification
+                or graph_is_fresh_for_root(graph, root)
+            ):
+                source = "memory_verified" if require_content_verification else "memory"
+                return graph, source, (time.perf_counter() - started) * 1000
+
+        candidate = load_symbol_graph(self.workspace)
+        if graph_is_fresh_for_root(candidate, root):
+            graph = candidate
+            source = "persistent_verified"
+        else:
+            graph = build_symbol_graph(root)
+            source = "rebuilt"
+        self._architecture_graph_cache[key] = {
+            "signature": source_inventory_signature(root),
+            "graph": graph,
+        }
+        return graph, source, (time.perf_counter() - started) * 1000
 
     def run(self) -> None:
         for line in sys.stdin:
@@ -1272,6 +1361,12 @@ class McpServer:
                     {
                         "projectRoot": {"type": "string", "description": "Optional project root/.uproject; defaults to active project."},
                         "symbols": {"type": "array", "items": {"type": "string"}, "description": "Optional symbols to focus on."},
+                        "detailLevel": {
+                            "type": "string",
+                            "enum": ["compact", "standard", "full"],
+                            "default": "compact",
+                            "description": "Response detail. Safety/proposal gates are never compacted away.",
+                        },
                         "proposal": {
                             **_architecture_proposal_schema(),
                             "description": "Optional architecture proposal to validate before implementation.",

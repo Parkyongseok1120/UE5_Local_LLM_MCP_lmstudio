@@ -114,7 +114,7 @@ SKETCH_MARKERS = (
     "대략 어떻게 구현할지", "c++로 표현해줘", "apply하지 말", "draft only",
 )
 from rag_modes import ASSET_METADATA_MODES  # single source of truth
-from tool_policy import tool_sequence_for_task, writes_allowed_for_task
+from tool_policy import tool_sequence_for_task
 
 ASSET_METADATA_TOOL_POLICY = tool_sequence_for_task("asset_metadata_inspect")
 PROJECT_SOURCE_ANALYSIS_POLICY_KEY = "project_source_analysis"
@@ -183,6 +183,7 @@ class AgentPlan:
     source_evidence: dict[str, Any] = field(default_factory=dict)
     tool_discovery_candidates: list[dict[str, Any]] = field(default_factory=list)
     plan_graph_delta: dict[str, Any] = field(default_factory=dict)
+    orchestration: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -226,7 +227,82 @@ class AgentPlan:
             payload["toolDiscoveryCandidates"] = self.tool_discovery_candidates
         if self.plan_graph_delta:
             payload["planGraphDelta"] = self.plan_graph_delta
+        if self.orchestration:
+            payload["orchestration"] = self.orchestration
         return payload
+
+
+def build_orchestration_decision(
+    *,
+    task_kind: TaskKind,
+    file_count_hint: int,
+    domain_kind: str,
+    architecture_required: bool,
+    policy: dict[str, Any],
+    profile_name: str,
+) -> dict[str, Any]:
+    """Select a bounded reasoning/validation route for the active model profile."""
+    write_task = task_kind in {"edit", "compile_fix", "refactor"}
+    high_risk = (
+        task_kind == "refactor"
+        or file_count_hint > 2
+        or architecture_required
+        or domain_kind in {"architecture", "subsystem", "replication"}
+    )
+    if high_risk:
+        risk_tier = "high"
+        strategy = "architecture_first"
+    elif write_task:
+        risk_tier = "medium"
+        strategy = "guarded"
+    else:
+        risk_tier = "low"
+        strategy = "evidence_first"
+
+    required_before_write: list[str] = []
+    if write_task and high_risk:
+        required_before_write.append("unreal_architecture_reasoning")
+    if write_task and task_kind == "edit":
+        required_before_write.append("unreal_code_sketch_claim_validate")
+
+    validation_stages = ["direct_source_evidence"]
+    if write_task:
+        validation_stages.extend(["static_validate_project", "build_unreal_project"])
+    if high_risk:
+        validation_stages.append("targeted_regression")
+
+    return {
+        "riskTier": risk_tier,
+        "strategy": strategy,
+        "profile": profile_name,
+        "targetTier": str(policy.get("targetTier") or ""),
+        "promptContract": str(policy.get("promptContract") or ""),
+        "requiredBeforeWrite": required_before_write,
+        "validationStages": validation_stages,
+        "escalationTriggers": [
+            "more_than_two_files",
+            "ownership_or_lifetime_ambiguity",
+            "new_cross_module_dependency",
+            "same_error_repeated",
+            "runtime_claim_without_runtime_evidence",
+        ],
+        "toolBudget": {
+            "defaultTopK": int(policy.get("defaultTopK") or 0),
+            "maxFilesPerEdit": int(policy.get("maxFilesPerEdit") or 0),
+            "oneToolPerTurn": str(policy.get("mcpToolDiscipline") or "") == "one_tool_per_turn",
+        },
+        "routingBoundary": (
+            "This selects reasoning and tool phases for the currently loaded model. "
+            "It does not prove that LM Studio has multiple models loaded or perform model switching."
+        ),
+    }
+
+
+def _insert_tool_before(policy: list[str], tool: str, anchors: tuple[str, ...]) -> None:
+    if tool in policy:
+        return
+    positions = [policy.index(anchor) for anchor in anchors if anchor in policy]
+    policy.insert(min(positions) if positions else len(policy), tool)
 
 
 def _has_write_intent(text: str) -> bool:
@@ -934,7 +1010,7 @@ def build_suggested_tool_calls(
 
 
 def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int = 0) -> AgentPlan:
-    from load_sampling_preset import profile_agent_policy
+    from load_sampling_preset import profile_agent_policy, resolve_profile_name
     from project_context import resolve_active_project_context
     from rag_search import resolve_mode
     from tool_policy import gates_for_task, tool_sequence_for_task
@@ -1149,6 +1225,32 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     if plan_slices:
         notes.append(f"Executable plan slices ({domain_kind}): {len(plan_slices)} slice(s), max 2 files per slice.")
 
+    orchestration = build_orchestration_decision(
+        task_kind=task_kind,
+        file_count_hint=file_count_hint,
+        domain_kind=domain_kind,
+        architecture_required=architecture_required,
+        policy=policy,
+        profile_name=resolve_profile_name(),
+    )
+    for required_tool in orchestration["requiredBeforeWrite"]:
+        _insert_tool_before(
+            tool_policy,
+            required_tool,
+            ("replace_in_file", "write_file", "build_unreal_project"),
+        )
+    if task_kind in {"edit", "compile_fix", "refactor"}:
+        _insert_tool_before(
+            tool_policy,
+            "static_validate_project",
+            ("build_unreal_project",),
+        )
+    notes.append(
+        "Orchestration route: "
+        f"{orchestration['strategy']} ({orchestration['riskTier']} risk, "
+        f"profile={orchestration['profile']})."
+    )
+
     suggested = build_suggested_tool_calls(request, task_kind, mode, project_context)
     checkpoints = build_checkpoints(task_kind, evidence, mode)
     if error_route:
@@ -1241,6 +1343,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         source_evidence=source_evidence,
         tool_discovery_candidates=tool_discovery_candidates,
         plan_graph_delta=plan_graph_delta,
+        orchestration=orchestration,
     )
     consistency_issues = validate_plan_consistency(plan)
     if consistency_issues:
@@ -1263,6 +1366,7 @@ def format_plan_for_prompt(plan: AgentPlan) -> str:
         f"RAG modes: {', '.join(plan.evidence.rag_modes)}\n"
         f"Gates: {', '.join(plan.evidence.gates) or 'none'}\n"
         f"Tool policy: {' -> '.join(plan.tool_policy)}\n"
+        f"Orchestration: {json.dumps(plan.orchestration, ensure_ascii=False)}\n"
         f"Suggested tool calls: {json.dumps(plan.suggested_tool_calls, ensure_ascii=False)}\n"
         f"Project: {plan.project_context.get('projectName') or 'unset'}\n"
         f"Write gate: writesAllowed={plan.write_gate.get('writesAllowed')}, "

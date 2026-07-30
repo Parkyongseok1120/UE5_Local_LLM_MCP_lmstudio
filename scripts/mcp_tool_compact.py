@@ -210,6 +210,109 @@ def compact_asset_graph_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _sample_nested_rows(rows: Any, *, row_limit: int, nested_limit: int) -> list[Any]:
+    sampled: list[Any] = []
+    for item in list(rows or [])[:row_limit]:
+        if not isinstance(item, dict):
+            sampled.append(item)
+            continue
+        row = dict(item)
+        for key in ("files", "evidence", "members", "paths", "edges"):
+            if isinstance(row.get(key), list):
+                row[key] = row[key][:nested_limit]
+        sampled.append(row)
+    return sampled
+
+
+def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "compact") -> dict[str, Any]:
+    """Bound architecture context while preserving all fail-closed gate fields."""
+    level = str(detail_level or "compact").strip().lower()
+    if level not in {"compact", "standard", "full"}:
+        level = "compact"
+    if level == "full" or not payload.get("ok"):
+        result = dict(payload)
+        result["detailLevel"] = level
+        result["truncated"] = False
+        return result
+
+    limits = {
+        "compact": (8, 8, 12, 12, 3),
+        "standard": (16, 16, 30, 30, 6),
+    }
+    owner_limit, dependency_limit, flow_limit, transition_limit, nested_limit = limits[level]
+    topology = payload.get("topology") if isinstance(payload.get("topology"), dict) else {}
+    data_flow = payload.get("dataFlow") if isinstance(payload.get("dataFlow"), dict) else {}
+    state = payload.get("stateTransitions") if isinstance(payload.get("stateTransitions"), dict) else {}
+    owners = list(topology.get("owners") or [])
+    dependencies = list(topology.get("boundaryDependencies") or topology.get("dependencies") or [])
+    cycles = list(topology.get("sourceDependencyCycles") or topology.get("cycles") or [])
+    flows = list(data_flow.get("flows") or data_flow.get("candidates") or [])
+    transitions = list(state.get("transitions") or [])
+
+    compact: dict[str, Any] = {
+        "ok": payload.get("ok"),
+        "projectRoot": payload.get("projectRoot"),
+        "detailLevel": level,
+        "truncated": any(
+            (
+                len(owners) > owner_limit,
+                len(dependencies) > dependency_limit,
+                len(flows) > flow_limit,
+                len(transitions) > transition_limit,
+            )
+        ),
+        "focus": payload.get("focus") or {},
+        "graphEvidence": payload.get("graphEvidence") or {},
+        "summary": {
+            "ownerCount": len(owners),
+            "dependencyCount": len(dependencies),
+            "cycleCount": len(cycles),
+            "dataFlowCandidateCount": len(flows),
+            "stateTransitionCandidateCount": len(transitions),
+        },
+        "topology": {
+            "owners": _sample_nested_rows(owners, row_limit=owner_limit, nested_limit=nested_limit),
+            "boundaryDependencies": _sample_nested_rows(
+                dependencies,
+                row_limit=dependency_limit,
+                nested_limit=nested_limit,
+            ),
+            # Cycles affect safety and are never silently sampled.
+            "sourceDependencyCycles": cycles,
+        },
+        "dataFlow": {
+            key: value
+            for key, value in data_flow.items()
+            if key not in {"flows", "candidates"}
+        },
+        "stateTransitions": {
+            key: value
+            for key, value in state.items()
+            if key != "transitions"
+        },
+        "proofBoundary": payload.get("proofBoundary"),
+    }
+    compact["dataFlow"]["flows"] = _sample_nested_rows(
+        flows,
+        row_limit=flow_limit,
+        nested_limit=nested_limit,
+    )
+    compact["stateTransitions"]["transitions"] = _sample_nested_rows(
+        transitions,
+        row_limit=transition_limit,
+        nested_limit=nested_limit,
+    )
+    for key in ("proposalValidation", "implementationGate", "warnings", "nextActions", "performance"):
+        if key in payload:
+            compact[key] = payload[key]
+    if compact["truncated"]:
+        compact["nextDetailLevel"] = "standard" if level == "compact" else "full"
+        compact["contextHint"] = (
+            "Request the next detailLevel or narrow symbols when more evidence is needed."
+        )
+    return compact
+
+
 def envelope_fields(
     *,
     phase: str | None = None,

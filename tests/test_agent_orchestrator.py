@@ -201,6 +201,39 @@ def test_tool_policy_nonempty():
     assert len(plan.tool_policy) >= 3
 
 
+def test_single_surface_codegen_uses_guarded_orchestration():
+    plan = build_agent_plan(
+        "Implement dodge component in the existing component file",
+        "agent_edit",
+        file_count_hint=1,
+    )
+    payload = plan.to_dict()
+    assert payload["orchestration"]["riskTier"] == "medium"
+    assert payload["orchestration"]["strategy"] == "guarded"
+    assert "unreal_code_sketch_claim_validate" in payload["toolPolicy"]
+    assert payload["toolPolicy"].index("unreal_code_sketch_claim_validate") < payload["toolPolicy"].index("replace_in_file")
+    assert payload["toolPolicy"].index("static_validate_project") < payload["toolPolicy"].index("build_unreal_project")
+
+
+def test_multifile_codegen_escalates_to_architecture_first():
+    plan = build_agent_plan(
+        "Implement a feature across the subsystem, component, and actor",
+        "agent_edit",
+        file_count_hint=3,
+    )
+    payload = plan.to_dict()
+    assert payload["orchestration"]["riskTier"] == "high"
+    assert payload["orchestration"]["strategy"] == "architecture_first"
+    assert "unreal_architecture_reasoning" in payload["orchestration"]["requiredBeforeWrite"]
+    assert payload["toolPolicy"].index("unreal_architecture_reasoning") < payload["toolPolicy"].index("replace_in_file")
+
+
+def test_orchestration_reports_active_profile_without_claiming_model_switching():
+    route = build_agent_plan("Fix C1083 missing include", "compile_fix").to_dict()["orchestration"]
+    assert route["profile"]
+    assert "does not" in route["routingBoundary"].lower()
+
+
 def test_plan_includes_small_model_execution_contract():
     plan = build_agent_plan("Fix C1083 missing include in MyActor.h", "compile_fix")
     payload = plan.to_dict()

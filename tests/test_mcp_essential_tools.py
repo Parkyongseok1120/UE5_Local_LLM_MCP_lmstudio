@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 from pathlib import Path
 
@@ -21,6 +20,7 @@ RAG_ESSENTIAL = {
     "unreal_symbol_lookup",
     "unreal_agent_session",
     "unreal_rag_capabilities",
+    "unreal_architecture_reasoning",
     "unreal_code_sketch_claim_validate",
     "unreal_review_claim_validate",
     "unreal_diagram_validate",
@@ -260,6 +260,38 @@ def test_architecture_reasoning_is_available_in_extended_profile(monkeypatch, tm
     payload = sent[-1]["result"]["structuredContent"]
     assert payload["ok"] is True
     assert payload["stateTransitions"]["transitions"]
+
+
+def test_architecture_reasoning_is_available_in_essential_profile(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.delenv("MCP_EXTENDED_TOOLS", raising=False)
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    assert "unreal_architecture_reasoning" in {
+        tool["name"] for tool in server.all_tool_definitions()
+    }
+
+
+def test_architecture_reasoning_reuses_graph_until_source_changes(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    target = source / "Worker.cpp"
+    target.write_text("void Run() { CurrentState = 1; }\n", encoding="utf-8")
+
+    first_graph, first_source, _ = server.architecture_graph(str(project))
+    second_graph, second_source, _ = server.architecture_graph(str(project))
+    target.write_text("void Run() { CurrentState = 2; }\n", encoding="utf-8")
+    third_graph, third_source, _ = server.architecture_graph(str(project))
+
+    assert first_source == "rebuilt"
+    assert second_source == "memory"
+    assert second_graph is first_graph
+    assert third_source == "rebuilt"
+    assert third_graph is not first_graph
 
 
 def test_architecture_reasoning_rejects_non_object_proposal(monkeypatch, tmp_path):

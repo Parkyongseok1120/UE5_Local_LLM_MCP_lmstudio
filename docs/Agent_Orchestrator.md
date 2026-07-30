@@ -7,10 +7,11 @@ Small planner module, not a heavy framework. Its job is to make compact 9-20B mo
 1. **classify** request -> `TaskKind`
 2. **build evidence plan** -> RAG modes, gates, writes_allowed
 3. **choose edit strategy** -> patch / no_edit / new_file
-4. **tool policy** -> ordered tools from `config/tool_orchestration.json`
-5. **write gate** -> whether writes are allowed, max edit count, read-before-write/build requirements
-6. **checkpoints** -> conditions the model must satisfy before moving to the next tool
-7. **stop/retry policy** -> when to stop, and how to retry compile failures
+4. **orchestration route** -> risk tier, active model profile, direct/guarded/architecture-first strategy
+5. **tool policy** -> ordered tools from `config/tool_orchestration.json`
+6. **write gate** -> whether writes are allowed, max edit count, read-before-write/build requirements
+7. **checkpoints** -> conditions the model must satisfy before moving to the next tool
+8. **stop/retry policy** -> when to stop, and how to retry compile failures
 
 ## CLI
 
@@ -26,12 +27,15 @@ Small planner module, not a heavy framework. Its job is to make compact 9-20B mo
 - `evidencePlan`
 - `editStrategy`
 - `toolPolicy`
+- `orchestration`
 - `writeGate`
 - `checkpoints`
 - `stopConditions`
 - `retryPolicy`
 
 LM Studio chat should call it first after `unreal_get_active_project`.
+
+The orchestration route controls reasoning/tool phases for the model currently loaded in LM Studio. It does not claim that multiple models are loaded or switch models by itself. Multi-file, subsystem, replication, and architecture work escalates to `architecture_first`; bounded edits use `guarded`.
 
 ## Wrapper
 

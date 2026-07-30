@@ -3,6 +3,7 @@
 # Default holdout gate is scripts/run_dryrun_holdout.ps1 (golden/ + UBT, no LM Studio).
 param(
     [string]$Model = "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max",
+    [string]$ModelProfile = "",
     [int]$AbortAfterConsecutiveFailures = 5,
     [int]$WrapperTimeout = 1800,
     [string]$UbtPath = ""
@@ -78,7 +79,27 @@ Write-Host "LM Studio OK ($($preflight.modelCount) models, resolved: $resolvedMo
 
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUNBUFFERED = "1"
-$env:UNREAL_RAG_MODEL_PROFILE = "qwen3_6_27b"
+if ($ModelProfile) {
+    $resolvedProfile = $ModelProfile
+}
+else {
+    $profileJson = & $py scripts/load_sampling_preset.py --model $resolvedModel --show-profile 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not resolve sampling profile for '$resolvedModel': $profileJson"
+    }
+    try {
+        $profileInfo = $profileJson | ConvertFrom-Json
+        $resolvedProfile = [string]$profileInfo.profile
+    }
+    catch {
+        throw "Sampling profile resolver returned invalid JSON: $profileJson"
+    }
+}
+if (-not $resolvedProfile) {
+    throw "Sampling profile is empty for model '$resolvedModel'. Pass -ModelProfile explicitly."
+}
+$env:UNREAL_RAG_MODEL_PROFILE = $resolvedProfile
+Write-Host "Sampling profile: $resolvedProfile"
 
 $ts = Get-Date -Format "yyyyMMdd-HHmmss"
 $runDir = Join-Path $Root "data\baseline\live_holdout\$ts"
@@ -143,6 +164,7 @@ $monitorProc = Start-Process -FilePath $py `
     evalPid = $evalProc.Id
     monitorPid = $monitorProc.Id
     model = $Model
+    modelProfile = $resolvedProfile
     startedAt = (Get-Date).ToString("o")
 } | ConvertTo-Json | Set-Content -Path (Join-Path $runDir "run_meta.json") -Encoding UTF8
 

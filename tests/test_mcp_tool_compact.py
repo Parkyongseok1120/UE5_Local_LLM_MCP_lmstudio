@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from asset_graph_lookup import graph_detail_limits, lookup_asset_graph  # noqa: E402
 from mcp_tool_compact import (  # noqa: E402
+    compact_architecture_payload,
     compact_asset_graph_payload,
     compact_json_text,
     compact_sync_metadata_payload,
@@ -199,4 +200,41 @@ def test_lookup_medium_detail_returns_more_nodes(tmp_path: Path):
     assert payload["detailLevel"] == "medium"
     assert len(payload["primary"]["expressions"]) == 36
     assert payload["primary"]["nextDetailLevel"] == "large"
+
+
+def test_architecture_compaction_preserves_safety_gate_and_counts():
+    payload = {
+        "ok": True,
+        "projectRoot": "Demo",
+        "focus": {"symbols": ["Run"], "unmatchedSymbols": []},
+        "graphEvidence": {"complete": True},
+        "topology": {
+            "owners": [{"name": f"Owner{index}", "files": [f"F{n}" for n in range(8)]} for index in range(12)],
+            "boundaryDependencies": [{"from": f"A{index}", "to": "B", "evidence": list(range(8))} for index in range(12)],
+            "sourceDependencyCycles": [["A", "B", "A"]],
+        },
+        "dataFlow": {"flows": [{"symbol": str(index)} for index in range(20)]},
+        "stateTransitions": {"transitions": [{"symbol": str(index)} for index in range(20)]},
+        "proposalValidation": {
+            "ok": False,
+            "implementationGate": {"writesAllowed": False, "requiredValidation": ["build"]},
+        },
+        "proofBoundary": "candidates are not runtime proof",
+    }
+
+    compact = compact_architecture_payload(payload, "compact")
+
+    assert compact["summary"]["ownerCount"] == 12
+    assert len(compact["topology"]["owners"]) == 8
+    assert compact["topology"]["sourceDependencyCycles"] == [["A", "B", "A"]]
+    assert compact["proposalValidation"]["implementationGate"]["writesAllowed"] is False
+    assert compact["truncated"] is True
+    assert compact["nextDetailLevel"] == "standard"
+
+
+def test_architecture_full_detail_is_not_sampled():
+    payload = {"ok": True, "topology": {"owners": list(range(20))}}
+    full = compact_architecture_payload(payload, "full")
+    assert full["topology"]["owners"] == list(range(20))
+    assert full["truncated"] is False
 

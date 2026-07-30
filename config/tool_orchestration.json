@@ -96,7 +96,9 @@
         "unreal_rag_search",
         "unreal_symbol_lookup",
         "read_file",
+        "unreal_code_sketch_claim_validate",
         "replace_in_file",
+        "static_validate_project",
         "build_unreal_project"
       ],
       "writesAllowed": true
@@ -125,7 +127,7 @@
         "unreal_rag_search",
         "read_file",
         "replace_in_file",
-        "static_validate",
+        "static_validate_project",
         "build_unreal_project"
       ],
       "writesAllowed": true
@@ -155,10 +157,11 @@
       "sequence": [
         "unreal_refactor_manager_plan",
         "unreal_refactor_impact_scan",
-        "unreal_project_architecture",
+        "unreal_architecture_reasoning",
         "unreal_refactor_plan_validate",
         "read_file",
         "replace_in_file",
+        "static_validate_project",
         "build_unreal_project"
       ],
       "writesAllowed": true

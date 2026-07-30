@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "description": "Release gates for comparable live/model eval runs. Mode, tier, and suite config must match.",
+  "regressionThresholds": {
+    "passAt1MaxDrop": 0.03,
+    "passAtKMaxDrop": 0.01,
+    "averageAttemptsMaxIncrease": 0.5,
+    "safetyCounterMaxIncrease": 0,
+    "mcpBenchmarkFailureMaxIncrease": 0
+  },
+  "releaseAcceptance": {
+    "routingAccuracyMin": 0.98,
+    "toolSelectionAccuracyMin": 0.97,
+    "argumentAccuracyMin": 0.99,
+    "recoveryAccuracyMin": 0.95,
+    "wrongFileEditCountMax": 0,
+    "buildCsFalsePositiveCountMax": 0,
+    "forbiddenPatchHitCountMax": 0,
+    "sameErrorRepeatedCountMax": 0,
+    "noOpEditCountMax": 0
+  }
+}

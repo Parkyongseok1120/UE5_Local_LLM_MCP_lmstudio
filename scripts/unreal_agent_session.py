@@ -120,6 +120,7 @@ def main() -> int:
         },
         "taskPlan": plan.to_dict(),
         "toolPolicy": plan.tool_policy,
+        "orchestration": plan.orchestration,
         "nextSteps": plan.tool_policy or [
             "unreal_get_active_project (confirm .uproject)",
             "read_file_range/read_file on target Source files (unreal-agent)",
