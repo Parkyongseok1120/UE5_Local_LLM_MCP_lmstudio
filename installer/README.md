@@ -18,7 +18,8 @@ installer presents independent RAG-indexing and Unreal-authority choices. RAG
 indexing can be skipped, or built at Lite, Standard, or Full depth; it is not
 implied by the install profile. Before choosing the tier, the installer restores
 the native `.uproject` / folder picker used to configure the active project and
-project search roots. The authority choice is:
+project search roots, then asks whether to auto-detect an Epic Games Launcher
+engine or select a custom/source engine folder. The authority choice is:
 
 1. SAFE (read-only, recommended)
 2. AGENT (project writes, commands, and Unreal builds)

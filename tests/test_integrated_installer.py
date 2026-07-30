@@ -52,8 +52,8 @@ def test_engine_auto_detection_accepts_native_build_sh_layout(
 @pytest.mark.parametrize(
     ("answers", "expected_agent_mode"),
     [
-        (["n", "n", "n", "n", "1", "2", "y", "y"], True),
-        (["n", "n", "n", "n", "1", "2", "n", "y"], False),
+        (["n", "n", "n", "n", "1", "1", "2", "y", "y"], True),
+        (["n", "n", "n", "n", "1", "1", "2", "n", "y"], False),
     ],
 )
 def test_interactive_agent_selector_confirms_or_falls_back_to_safe(
@@ -97,7 +97,7 @@ def test_interactive_index_selector_builds_selected_tier(
         def isatty() -> bool:
             return True
 
-    responses = iter(["n", "n", "n", "n", choice, "1", "y"])
+    responses = iter(["n", "n", "n", "n", "1", choice, "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -119,7 +119,7 @@ def test_interactive_cline_selection_uses_default_settings_path(
         def isatty() -> bool:
             return True
 
-    responses = iter(["n", "n", "y", "n", "1", "1", "y"])
+    responses = iter(["n", "n", "y", "n", "1", "1", "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -152,7 +152,7 @@ def test_interactive_project_picker_restores_uproject_and_folder_selection(
     project_file = project_dir / "PickedProject.uproject"
     project_file.write_text("{}", encoding="utf-8")
     selected = project_file if target_kind == "uproject" else project_dir
-    responses = iter(["n", "n", "n", "y", menu_choice, "n", "1", "1", "y"])
+    responses = iter(["n", "n", "n", "y", menu_choice, "n", "1", "1", "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     monkeypatch.setattr(module, "_pick_indexing_target", lambda kind, initial: selected)
@@ -163,6 +163,95 @@ def test_interactive_project_picker_restores_uproject_and_folder_selection(
     assert "unreal" in components
     assert args.workspace_root == [project_dir]
     assert args.active_project == (project_file if target_kind == "uproject" else None)
+
+
+def test_interactive_engine_selector_accepts_valid_custom_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    engine = tmp_path / "CustomEngine"
+    (engine / "Engine" / "Source").mkdir(parents=True)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
+    monkeypatch.setattr(module, "_pick_indexing_target", lambda kind, initial: engine)
+    args = module.build_parser().parse_args(["--profile", "standard"])
+
+    module._interactive_engine_selection(args)
+    sys.modules.pop("integrated_install", None)
+
+    assert args.engine_root == engine.resolve()
+    assert args._engine_selection == "custom"
+
+
+def test_interactive_engine_selector_marks_launcher_auto_detection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "1")
+    args = module.build_parser().parse_args(["--profile", "standard"])
+
+    module._interactive_engine_selection(args)
+    sys.modules.pop("integrated_install", None)
+
+    assert args.engine_root is None
+    assert args._engine_selection == "launcher"
+
+
+def test_launcher_selection_ignores_saved_custom_engine(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    lmstudio = tmp_path / "lmstudio"
+    stale_engine = tmp_path / "SavedCustomEngine"
+    detected_engine = tmp_path / "LauncherEngine"
+    for engine in (stale_engine, detected_engine):
+        (engine / "Engine" / "Source").mkdir(parents=True)
+    (lmstudio / "config").mkdir(parents=True)
+    (lmstudio / "config" / "unreal-workspace.json").write_text(
+        json.dumps({"defaultEngineRoot": str(stale_engine)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "_detect_engine_root", lambda association: detected_engine)
+    args = module.build_parser().parse_args(
+        [
+            "--profile",
+            "standard",
+            "--yes",
+            "--skip-deps",
+            "--codex-home",
+            str(tmp_path / "codex"),
+            "--lmstudio-home",
+            str(lmstudio),
+            "--state-home",
+            str(tmp_path / "state"),
+            "--workspace-root",
+            str(tmp_path / "projects"),
+        ]
+    )
+    args._engine_selection = "launcher"
+
+    module.install(args)
+    sys.modules.pop("integrated_install", None)
+
+    shared = json.loads(
+        (lmstudio / "config" / "unreal-workspace.json").read_text(encoding="utf-8")
+    )
+    assert shared["defaultEngineRoot"] == str(detected_engine)
+
+
+def test_interactive_engine_selector_rejects_invalid_custom_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
+    monkeypatch.setattr(module, "_pick_indexing_target", lambda kind, initial: tmp_path)
+    args = module.build_parser().parse_args(["--profile", "standard"])
+
+    with pytest.raises(ValueError, match="usable Unreal Engine layout"):
+        module._interactive_engine_selection(args)
+    sys.modules.pop("integrated_install", None)
 
 
 def _run(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:

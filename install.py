@@ -158,6 +158,13 @@ def _pick_indexing_target(kind: str, initial_directory: Path) -> Path | None:
                 initialdir=str(initial_directory),
                 filetypes=(("Unreal Project", "*.uproject"),),
             )
+        elif kind == "engine":
+            selected = filedialog.askdirectory(
+                parent=root,
+                title="Select Unreal Engine root folder",
+                initialdir=str(initial_directory),
+                mustexist=True,
+            )
         else:
             selected = filedialog.askdirectory(
                 parent=root,
@@ -181,7 +188,7 @@ def _pick_indexing_target(kind: str, initial_directory: Path) -> Path | None:
     if kind == "uproject" and (not path.is_file() or path.suffix.lower() != ".uproject"):
         print(f"  Ignoring invalid Unreal project selection: {path}")
         return None
-    if kind == "folder" and not path.is_dir():
+    if kind in {"folder", "engine"} and not path.is_dir():
         print(f"  Ignoring invalid folder selection: {path}")
         return None
     return path
@@ -216,6 +223,52 @@ def _interactive_project_indexing(args: argparse.Namespace) -> None:
             print(f"  Added: {selected}")
         if not _prompt_yes_no("Add another project or folder?", False):
             break
+
+
+def _engine_picker_initial_directory() -> Path:
+    for candidate in _common_engine_locations():
+        candidate = candidate.expanduser()
+        if candidate.is_dir():
+            return candidate
+    return Path.home()
+
+
+def _interactive_engine_selection(args: argparse.Namespace) -> None:
+    if args.engine_root:
+        args._engine_selection = "explicit"
+        return
+
+    explicit = os.environ.get("UNREAL_ENGINE_ROOT", "").strip()
+    if explicit:
+        configured = Path(explicit).expanduser()
+        if not _engine_root_is_valid(configured):
+            raise ValueError(
+                f"UNREAL_ENGINE_ROOT does not contain a usable Unreal Engine layout: {configured}"
+            )
+        args.engine_root = configured
+        args._engine_selection = "explicit"
+        print(f"  Using UNREAL_ENGINE_ROOT: {configured}")
+        return
+
+    print("\nUnreal Engine setup:")
+    print("  1. Epic Games Launcher engine (auto-detect)")
+    print("  2. Custom/source engine folder (select folder)")
+    choice = input("Select [1]: ").strip() or "1"
+    if choice != "2":
+        args._engine_selection = "launcher"
+        print("  Using Epic Games Launcher auto-detection.")
+        return
+
+    selected = _pick_indexing_target("engine", _engine_picker_initial_directory())
+    if selected is None:
+        raise RuntimeError("custom Unreal Engine folder selection cancelled")
+    if not _engine_root_is_valid(selected):
+        raise ValueError(
+            f"selected folder does not contain a usable Unreal Engine layout: {selected}"
+        )
+    args.engine_root = selected
+    args._engine_selection = "custom"
+    print(f"  Engine root: {selected}")
 
 
 def _json_bytes(payload: Any) -> bytes:
@@ -528,6 +581,7 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
                 print(f"  Cline MCP settings: {args.cline_settings}")
         if "unreal" in components:
             _interactive_project_indexing(args)
+            _interactive_engine_selection(args)
             _interactive_rag_indexing(args)
         if "unreal" in components and not args.enable_agent_mode:
             requested_agent_mode = _interactive_agent_authority()
@@ -807,7 +861,12 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
                 except (OSError, ValueError, json.JSONDecodeError):
                     association = ""
             detected_engine = args.engine_root
-            if detected_engine is None and _engine_root_is_valid(existing_engine):
+            selection = getattr(args, "_engine_selection", "")
+            if (
+                selection != "launcher"
+                and detected_engine is None
+                and _engine_root_is_valid(existing_engine)
+            ):
                 detected_engine = existing_engine.resolve()
             if detected_engine is None:
                 detected_engine = _detect_engine_root(association)

@@ -37,6 +37,8 @@ Install profile and RAG indexing depth are independent. Use `--index-tier lite|s
 
 Interactive Unreal installs first restore the project-indexing picker. Choose a `.uproject` in the native file explorer to set the active project, or choose one or more folders to add project search roots. No typed path is required.
 
+Interactive Unreal installs without an explicit `--engine-root` or `UNREAL_ENGINE_ROOT` then ask how to resolve the engine: choose **Epic Games Launcher auto-detection**, or choose a **custom/source engine folder** in the native folder picker. The selected custom folder must contain a usable Unreal Engine layout. Explicit `--engine-root` and `UNREAL_ENGINE_ROOT` values remain authoritative.
+
 The installer then shows a separate RAG indexing selector: **Skip** (default), **Lite**, **Standard** (recommended), or **Full**. Choosing Lite, Standard, or Full runs the complete tier-aware collection pipeline before building: Standard refreshes project text, active-project symbols/profile/architecture, engine API symbols, and the module graph; Full additionally refreshes the complete `Engine/Source` text input. For non-interactive use, the equivalents are:
 
 ```text
