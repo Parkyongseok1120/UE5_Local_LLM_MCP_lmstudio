@@ -617,6 +617,11 @@ def build_symbol_graph_hints(request: str) -> list[dict[str, Any]]:
                     "lineEnd": row.get("line_end", row.get("line_start", 0)),
                     "module": row.get("module_name", ""),
                     "ownerBuildCs": row.get("owner_build_cs", ""),
+                    "evidenceKind": "project_source",
+                    "proofBoundary": row.get(
+                        "proofBoundary",
+                        "Source-located symbol hint only; it does not prove behavior, wiring, or data flow.",
+                    ),
                 }
             )
             if len(hints) >= 6:
@@ -988,11 +993,19 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
             from refactor_plan import build_refactor_manager_plan, extract_refactor_symbols
 
             refactor_symbols = list(dict.fromkeys([*evidence.symbols_to_scan, *extract_refactor_symbols(request)]))
+            try:
+                from symbol_graph import load_symbol_graph
+
+                refactor_graph = load_symbol_graph()
+            except (OSError, ValueError):
+                refactor_graph = None
             refactor_manager = build_refactor_manager_plan(
                 request,
                 project_root=str(project_context.get("projectDir") or "") or None,
                 symbols=refactor_symbols,
                 max_files=40,
+                graph=refactor_graph,
+                build_graph_if_needed=False,
             )
             refactor_scope = refactor_manager["scope"]
             notes.append(
@@ -1001,6 +1014,19 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
                 f"(requiresHumanApproval={refactor_scope['requiresHumanApproval']})"
             )
             notes.append(f"Refactor manager nextAction: {refactor_manager.get('nextAction')}")
+            graph_impact = refactor_manager.get("changeImpact") or {}
+            if graph_impact:
+                notes.append(
+                    "Graph impact: "
+                    f"direct={len(graph_impact.get('directImpacts') or [])}, "
+                    f"candidate={len(graph_impact.get('candidateImpacts') or [])}, "
+                    f"truncated={bool(graph_impact.get('truncated'))}."
+                )
+                if any(
+                    isinstance(item, dict) and item.get("status") == "coverage_gap"
+                    for item in (graph_impact.get("regressionPlan") or [])
+                ):
+                    notes.append("Targeted regression coverage was not found; define a focused regression check before claiming behavior is preserved.")
             if refactor_scope.get("requiresHumanApproval"):
                 notes.append("Medium/large refactors require impact plan and explicit approval before code edits.")
             if not refactor_manager.get("writePolicy", {}).get("writesAllowedNow"):
@@ -1272,6 +1298,25 @@ def format_plan_for_prompt(plan: AgentPlan) -> str:
                     "nextAction": plan.refactor_manager.get("nextAction"),
                     "writePolicy": plan.refactor_manager.get("writePolicy"),
                     "missingRequiredRoles": plan.refactor_manager.get("impact", {}).get("missingRequiredRoles", []),
+                    "directImpactPaths": [
+                        item.get("path")
+                        for item in (plan.refactor_manager.get("changeImpact", {}).get("directImpacts") or [])[:6]
+                        if isinstance(item, dict)
+                    ],
+                    "candidateImpactPaths": [
+                        item.get("path")
+                        for item in (plan.refactor_manager.get("changeImpact", {}).get("candidateImpacts") or [])[:6]
+                        if isinstance(item, dict)
+                    ],
+                    "regressionPlan": [
+                        {
+                            "kind": item.get("kind"),
+                            "required": item.get("required"),
+                            "status": item.get("status"),
+                        }
+                        for item in (plan.refactor_manager.get("changeImpact", {}).get("regressionPlan") or [])
+                        if isinstance(item, dict)
+                    ],
                 },
                 ensure_ascii=False,
             )

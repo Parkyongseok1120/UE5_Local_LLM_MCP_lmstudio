@@ -704,10 +704,10 @@ def build_replace_project(args: argparse.Namespace) -> None:
         build(args)
         return
 
+    conn: sqlite3.Connection | None = None
     try:
         conn = sqlite3.connect(sqlite_path)
         deleted = delete_project_chunks(conn, project_name)
-        conn.commit()
 
         new_jsonl_lines: list[str] = []
         total_chunks = 0
@@ -749,10 +749,16 @@ def build_replace_project(args: argparse.Namespace) -> None:
                 insert_batch,
             )
 
+        if total_chunks <= 0:
+            raise RuntimeError(
+                f"replace-project produced zero searchable chunks for {project_name}; "
+                "existing project chunks were preserved"
+            )
         rebuild_fts_index(conn)
         conn.execute("select count(*) from chunks_fts").fetchone()
         conn.commit()
         conn.close()
+        conn = None
         rewrite_chunks_jsonl(chunks_path, project_name=project_name, new_lines=new_jsonl_lines)
 
         manifest_path = out_dir / "build_manifest.json"
@@ -776,8 +782,17 @@ def build_replace_project(args: argparse.Namespace) -> None:
         print(f"done: replace-project {project_name} deleted={deleted} inserted={total_chunks}")
         print(f"sqlite: {sqlite_path}")
     except sqlite3.DatabaseError as exc:
+        if conn is not None:
+            conn.rollback()
+            conn.close()
+            conn = None
         print(f"warning: incremental replace-project failed ({exc}); falling back to full rebuild", flush=True)
         build(args)
+    except BaseException:
+        if conn is not None:
+            conn.rollback()
+            conn.close()
+        raise
 
 
 def build(args: argparse.Namespace) -> None:
@@ -785,22 +800,16 @@ def build(args: argparse.Namespace) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     chunks_path = out_dir / "chunks.jsonl"
     sqlite_path = out_dir / "rag.sqlite"
+    manifest_path = out_dir / "build_manifest.json"
+    build_id = f"{os.getpid()}"
+    chunks_staging_path = out_dir / f"chunks.building.{build_id}.jsonl"
+    sqlite_staging_path = out_dir / f"rag.building.{build_id}.sqlite"
+    manifest_staging_path = out_dir / f"build_manifest.building.{build_id}.json"
     workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else find_workspace_root()
 
     input_paths = [Path(value) for value in args.input]
 
-    if sqlite_path.exists():
-        try:
-            sqlite_path.unlink()
-        except PermissionError:
-            staging_path = sqlite_path.with_name(f"{sqlite_path.stem}.staging{sqlite_path.suffix}")
-            if staging_path.exists():
-                staging_path.unlink()
-            sqlite_path = staging_path
-            print(f"warning: main index locked; writing staging index to {sqlite_path}", flush=True)
-
-    conn = sqlite3.connect(sqlite_path)
-    create_schema(conn)
+    conn: sqlite3.Connection | None = None
 
     total_chunks = 0
     module_edge_count = 0
@@ -812,6 +821,8 @@ def build(args: argparse.Namespace) -> None:
     def _flush_batch() -> None:
         if not _insert_batch:
             return
+        if conn is None:
+            raise RuntimeError("RAG index connection is not available")
         conn.executemany(
             """
             insert into chunks(
@@ -824,91 +835,122 @@ def build(args: argparse.Namespace) -> None:
         )
         _insert_batch.clear()
 
-    with chunks_path.open("w", encoding="utf-8") as chunks_file:
-        for _, _, doc in read_jsonl(input_paths):
-            source = str(doc.get("source") or "unknown")
-            metadata = doc.get("metadata") or {}
-            if isinstance(metadata, dict):
-                metadata = dict(metadata)
-            else:
-                metadata = {}
-
-            if source == "module_graph":
-                ingest_module_graph(conn, doc)
-                symbol_kind = str(metadata.get("symbol_kind") or "")
-                if symbol_kind == "include_owner":
-                    include_owner_count += 1
+    try:
+        conn = sqlite3.connect(sqlite_staging_path)
+        create_schema(conn)
+        with chunks_staging_path.open("w", encoding="utf-8") as chunks_file:
+            for _, _, doc in read_jsonl(input_paths):
+                source = str(doc.get("source") or "unknown")
+                metadata = doc.get("metadata") or {}
+                if isinstance(metadata, dict):
+                    metadata = dict(metadata)
                 else:
-                    module_edge_count += 1
-                continue
+                    metadata = {}
 
-            text = str(doc.get("text") or "").strip()
-            if not text:
-                continue
+                if source == "module_graph":
+                    ingest_module_graph(conn, doc)
+                    symbol_kind = str(metadata.get("symbol_kind") or "")
+                    if symbol_kind == "include_owner":
+                        include_owner_count += 1
+                    else:
+                        module_edge_count += 1
+                    continue
 
-            base_document_id = str(doc.get("id") or "")
-            document_id_count = document_id_counts.get(base_document_id, 0)
-            document_id_counts[base_document_id] = document_id_count + 1
-            document_id = base_document_id if document_id_count == 0 else f"{base_document_id}:{document_id_count}"
-            title = str(doc.get("title") or document_id or "Untitled")
-            locator = normalize_locator(str(doc.get("url") or doc.get("path") or document_id), workspace_root)
-            for key in ("root", "relative_path", "path", "source_path"):
-                if metadata.get(key):
-                    metadata[key] = normalize_locator(str(metadata[key]), workspace_root)
-            fields = metadata_fields(source, title, locator, metadata)
-            chunk_tokens, overlap_tokens = resolve_chunk_params(
-                source,
-                metadata,
-                default_chunk_tokens=args.chunk_tokens,
-                default_overlap_tokens=args.overlap_tokens,
-            )
-            if chunk_tokens is None or overlap_tokens is None:
-                continue
+                text = str(doc.get("text") or "").strip()
+                if not text:
+                    continue
 
-            for index, chunk in enumerate(chunk_text(text, chunk_tokens, overlap_tokens)):
-                chunk_id = f"{document_id}:{index}"
-                item = {
-                    "chunk_id": chunk_id,
-                    "document_id": document_id,
-                    "source": source,
-                    "title": title,
-                    "locator": locator,
-                    "chunk_index": index,
-                    "text": chunk,
-                    "metadata": metadata,
-                    **fields,
-                }
-                chunks_file.write(json.dumps(item, ensure_ascii=False) + "\n")
-                _insert_batch.append((
-                    chunk_id,
-                    document_id,
+                base_document_id = str(doc.get("id") or "")
+                document_id_count = document_id_counts.get(base_document_id, 0)
+                document_id_counts[base_document_id] = document_id_count + 1
+                document_id = (
+                    base_document_id
+                    if document_id_count == 0
+                    else f"{base_document_id}:{document_id_count}"
+                )
+                title = str(doc.get("title") or document_id or "Untitled")
+                locator = normalize_locator(
+                    str(doc.get("url") or doc.get("path") or document_id),
+                    workspace_root,
+                )
+                for key in ("root", "relative_path", "path", "source_path"):
+                    if metadata.get(key):
+                        metadata[key] = normalize_locator(str(metadata[key]), workspace_root)
+                fields = metadata_fields(source, title, locator, metadata)
+                chunk_tokens, overlap_tokens = resolve_chunk_params(
                     source,
-                    title,
-                    locator,
-                    fields["project"],
-                    fields["relative_path"],
-                    fields["extension"],
-                    fields["layer"],
-                    fields["doc_type"],
-                    fields["genre"],
-                    fields["symbol_name"],
-                    fields["symbol_kind"],
-                    fields["module_name"],
-                    fields["error_code"],
-                    fields["error_file"],
-                    int(fields["path_only"]),
-                    index,
-                    chunk,
-                    json.dumps(metadata, ensure_ascii=False),
-                ))
-                if len(_insert_batch) >= _INSERT_BATCH_SIZE:
-                    _flush_batch()
-                total_chunks += 1
+                    metadata,
+                    default_chunk_tokens=args.chunk_tokens,
+                    default_overlap_tokens=args.overlap_tokens,
+                )
+                if chunk_tokens is None or overlap_tokens is None:
+                    continue
 
-    _flush_batch()
+                for index, chunk in enumerate(chunk_text(text, chunk_tokens, overlap_tokens)):
+                    chunk_id = f"{document_id}:{index}"
+                    item = {
+                        "chunk_id": chunk_id,
+                        "document_id": document_id,
+                        "source": source,
+                        "title": title,
+                        "locator": locator,
+                        "chunk_index": index,
+                        "text": chunk,
+                        "metadata": metadata,
+                        **fields,
+                    }
+                    chunks_file.write(json.dumps(item, ensure_ascii=False) + "\n")
+                    _insert_batch.append(
+                        (
+                            chunk_id,
+                            document_id,
+                            source,
+                            title,
+                            locator,
+                            fields["project"],
+                            fields["relative_path"],
+                            fields["extension"],
+                            fields["layer"],
+                            fields["doc_type"],
+                            fields["genre"],
+                            fields["symbol_name"],
+                            fields["symbol_kind"],
+                            fields["module_name"],
+                            fields["error_code"],
+                            fields["error_file"],
+                            int(fields["path_only"]),
+                            index,
+                            chunk,
+                            json.dumps(metadata, ensure_ascii=False),
+                        )
+                    )
+                    if len(_insert_batch) >= _INSERT_BATCH_SIZE:
+                        _flush_batch()
+                    total_chunks += 1
 
-    conn.commit()
-    conn.close()
+        _flush_batch()
+        if total_chunks <= 0:
+            raise RuntimeError(
+                "RAG build produced zero searchable chunks; existing index was preserved"
+            )
+        conn.commit()
+        stored_chunks = int(conn.execute("select count(*) from chunks").fetchone()[0])
+        if stored_chunks != total_chunks:
+            raise RuntimeError(
+                f"RAG build validation failed: expected {total_chunks} chunks, stored {stored_chunks}"
+            )
+        conn.close()
+        conn = None
+    except BaseException:
+        if conn is not None:
+            conn.rollback()
+            conn.close()
+        for staging_path in (sqlite_staging_path, chunks_staging_path):
+            try:
+                staging_path.unlink()
+            except OSError:
+                pass
+        raise
 
     manifest = {
         "workspaceRoot": str(canonical_workspace_root(workspace_root)),
@@ -935,8 +977,27 @@ def build(args: argparse.Namespace) -> None:
             "sqlite": str(sqlite_path.resolve()),
         },
     }
-    manifest_path = out_dir / "build_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    manifest_staging_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        os.replace(sqlite_staging_path, sqlite_path)
+    except OSError as exc:
+        raise RuntimeError(
+            "RAG build completed but could not atomically promote its validated index; "
+            f"the existing index was left in place. Staging index: {sqlite_staging_path}"
+        ) from exc
+
+    try:
+        os.replace(chunks_staging_path, chunks_path)
+        os.replace(manifest_staging_path, manifest_path)
+    except OSError as exc:
+        raise RuntimeError(
+            "The validated RAG index was promoted, but a companion output could not be "
+            "promoted. Inspect the remaining staging chunks or manifest before rebuilding."
+        ) from exc
 
     print(f"done: wrote {total_chunks} chunks")
     print(f"module graph side tables: {module_edge_count} module_edges, {include_owner_count} include_owners")

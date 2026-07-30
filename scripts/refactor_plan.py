@@ -412,13 +412,17 @@ def _source_candidates(root: Path) -> list[Path]:
 
 
 def scan_symbol_impact(project_root: str, symbol: str, *, max_files: int = 40) -> dict[str, Any]:
-    root = Path(project_root)
-    if not root.exists():
+    root = Path(project_root).resolve()
+    if root.is_file() and root.suffix.lower() == ".uproject":
+        root = root.parent
+    if not root.is_dir():
         return {"ok": False, "error": f"Project root not found: {root}", "matches": []}
 
     query = str(symbol or "").strip()
     if len(query) < 2:
         return {"ok": False, "error": "symbol must be at least 2 characters", "matches": []}
+    if max_files < 1:
+        return {"ok": False, "error": "max_files must be at least 1", "matches": []}
 
     # The masked-text scan remains the canonical schema. Clangd may be used by a
     # higher-level caller, but must not return a reduced payload without roles/risks.
@@ -426,20 +430,27 @@ def scan_symbol_impact(project_root: str, symbol: str, *, max_files: int = 40) -
     role_counts: dict[str, int] = {}
     risk_counts: dict[str, int] = {}
     pattern = _identifier_pattern(query)
+    truncated = False
+    read_errors: list[str] = []
 
     for path in _source_candidates(root):
         try:
             raw_text = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+        except OSError as exc:
+            read_errors.append(f"{path}: {type(exc).__name__}: {exc}")
             continue
         text = _mask_comments_and_strings(raw_text)
         if not pattern.search(text):
             continue
+        if len(matches) >= max_files:
+            truncated = True
+            break
         line_hits: list[dict[str, Any]] = []
+        raw_lines = raw_text.splitlines()
         for index, line in enumerate(text.splitlines()):
             if not pattern.search(line):
                 continue
-            raw_line = raw_text.splitlines()[index] if index < len(raw_text.splitlines()) else line
+            raw_line = raw_lines[index] if index < len(raw_lines) else line
             role = classify_impact_role(path, raw_line, query)
             role_counts[role] = role_counts.get(role, 0) + 1
             line_hits.append(
@@ -455,7 +466,11 @@ def scan_symbol_impact(project_root: str, symbol: str, *, max_files: int = 40) -
         matches.append(
             {
                 "path": str(path),
-                "relativePath": str(path.relative_to(root)) if str(path).startswith(str(root)) else str(path),
+                "relativePath": (
+                    path.resolve().relative_to(root).as_posix()
+                    if path.resolve().is_relative_to(root)
+                    else str(path)
+                ),
                 "lineNumbers": [hit["line"] for hit in line_hits[:8]],
                 "roles": sorted({hit["role"] for hit in line_hits}),
                 "lineHits": line_hits[:8],
@@ -463,11 +478,8 @@ def scan_symbol_impact(project_root: str, symbol: str, *, max_files: int = 40) -
                 "riskFlags": risks,
             }
         )
-        if len(matches) >= max_files:
-            break
-
     return {
-        "ok": True,
+        "ok": not read_errors,
         "symbol": query,
         "projectRoot": str(root),
         "matchCount": len(matches),
@@ -478,7 +490,9 @@ def scan_symbol_impact(project_root: str, symbol: str, *, max_files: int = 40) -
             impact_match_count=len(matches),
         ),
         "matches": matches,
-        "truncated": len(matches) >= max_files,
+        "truncated": truncated,
+        "readErrors": read_errors[:20],
+        "readErrorsTruncated": len(read_errors) > 20,
     }
 
 
@@ -603,14 +617,24 @@ def build_refactor_manager_plan(
     symbols: list[str] | None = None,
     approval: bool = False,
     max_files: int = 40,
+    graph: dict[str, Any] | None = None,
+    build_graph_if_needed: bool = True,
 ) -> dict[str, Any]:
     """Build a deterministic manager plan that controls R0-R4 refactor execution."""
     text = str(request or "").strip()
     symbol_list = _unique_items(symbols or [])
     scans: list[dict[str, Any]] = []
     scan_status = "not_requested"
+    change_impact: dict[str, Any] = {
+        "ok": False,
+        "issues": ["Impact contract not requested because target symbols or project root are missing."],
+        "directImpacts": [],
+        "candidateImpacts": [],
+        "regressionPlan": [],
+    }
 
     root = str(project_root or "").strip()
+    impact_required = bool(symbol_list and root)
     if symbol_list and root:
         scan_status = "completed"
         for symbol in symbol_list:
@@ -618,6 +642,27 @@ def build_refactor_manager_plan(
             scans.append(scan)
             if not scan.get("ok"):
                 scan_status = "partial_error"
+        # This adds graph-backed source/test scope to the existing textual
+        # impact scan.  The graph's candidate calls remain advisory; the scan
+        # above stays canonical for its declaration/definition role schema.
+        try:
+            from change_impact_contract import build_change_impact_contract
+
+            change_impact = build_change_impact_contract(
+                root,
+                symbol_list,
+                max_files=max_files,
+                graph=graph,
+                build_if_needed=build_graph_if_needed,
+            )
+        except Exception as exc:
+            change_impact = {
+                "ok": False,
+                "issues": [f"graph impact contract unavailable: {type(exc).__name__}: {exc}"],
+                "directImpacts": [],
+                "candidateImpacts": [],
+                "regressionPlan": [],
+            }
     elif symbol_list:
         scan_status = "project_root_missing"
     elif root:
@@ -625,6 +670,7 @@ def build_refactor_manager_plan(
 
     role_counts = _aggregate_scan_counts(scans, "roleCounts")
     risk_counts = _aggregate_scan_counts(scans, "riskCounts")
+    scan_truncated = any(bool(scan.get("truncated")) for scan in scans)
     unique_paths = sorted(
         {
             str(match.get("relativePath") or match.get("path") or "")
@@ -646,6 +692,12 @@ def build_refactor_manager_plan(
 
     if scan_status in {"project_root_missing", "no_symbols"}:
         next_action = "collect_impact_scan_inputs"
+    elif change_impact.get("graphRefreshRequired"):
+        next_action = "refresh_symbol_graph"
+    elif scan_truncated or change_impact.get("truncated"):
+        next_action = "narrow_graph_impact_scope"
+    elif scan_status == "partial_error" or (impact_required and not change_impact.get("ok")):
+        next_action = "resolve_incomplete_impact_evidence"
     elif missing_roles and scope_name != "small_single_surface_refactor":
         next_action = "collect_missing_impact_roles"
     elif approval_required and not approval_satisfied:
@@ -663,6 +715,9 @@ def build_refactor_manager_plan(
             or (approval and scope_name == "medium_system_local_refactor")
         )
         and scope_name != "large_migration"
+        and (not impact_required or bool(change_impact.get("ok")))
+        and not scan_truncated
+        and not bool(change_impact.get("truncated"))
     )
 
     return {
@@ -691,8 +746,10 @@ def build_refactor_manager_plan(
             "roleCounts": role_counts,
             "riskCounts": risk_counts,
             "missingRequiredRoles": missing_roles,
+            "truncated": scan_truncated,
             "scans": scans,
         },
+        "changeImpact": change_impact,
         "requiredEvidence": {
             "impactRoles": _required_impact_roles(scope_name, role_counts),
             "gates": _unique_items(
@@ -704,7 +761,16 @@ def build_refactor_manager_plan(
                     *list(scope.get("requiredGates") or []),
                 ]
             ),
-            "validation": _validation_steps(risk_counts),
+            "validation": _unique_items(
+                [
+                    *_validation_steps(risk_counts),
+                    *[
+                        str(item.get("kind") or "")
+                        for item in (change_impact.get("regressionPlan") or [])
+                        if isinstance(item, dict) and str(item.get("kind") or "")
+                    ],
+                ]
+            ),
         },
         "stages": _stage_contracts(scope_name),
         "nextAction": next_action,

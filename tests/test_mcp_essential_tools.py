@@ -117,6 +117,172 @@ def test_unreal_agent_plan_description_mentions_chat_first(monkeypatch, tmp_path
     assert "toolPolicy" in plan["description"]
 
 
+def test_code_sketch_tool_exposes_project_generation_contract(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    tool = next(item for item in server.all_tool_definitions() if item["name"] == "unreal_code_sketch_claim_validate")
+    properties = tool["inputSchema"]["properties"]
+    assert {"projectRoot", "targetFiles", "changeKind", "validationPlan", "architectureProposal", "architectureSymbols"}.issubset(properties)
+
+    project = tmp_path / "Project"
+    target = project / "Source" / "Demo" / "Private" / "Worker.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void Run() {}\n", encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        17,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "AActor* Actor = nullptr;",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/Private/Worker.cpp"],
+                "changeKind": "modify_existing",
+            },
+        },
+    )
+    payload = sent[-1]["result"]["structuredContent"]
+    contract = payload["generationContract"]
+    assert contract["mode"] == "project_specific"
+    assert contract["targets"][0]["exists"] is True
+    assert contract["writeGate"]["requiresReadBeforeWrite"] is True
+
+
+def test_code_sketch_architecture_proposal_blocks_incomplete_implementation(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    target = project / "Source" / "Demo" / "Worker.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void Run() {}\n", encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        19,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "AActor* Actor = nullptr;",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/Worker.cpp"],
+                "architectureProposal": {"decision": "add service"},
+            },
+        },
+    )
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["architectureProposalValidation"]["ok"] is False
+    assert payload["generationContract"]["writeGate"]["writesAllowed"] is False
+
+
+def test_code_sketch_architecture_cycle_closes_generation_write_gate(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    module_a = project / "Source" / "A"
+    module_b = project / "Source" / "B"
+    module_a.mkdir(parents=True)
+    module_b.mkdir(parents=True)
+    target = module_a / "A.h"
+    target.write_text('#include "../B/B.h"\n', encoding="utf-8")
+    (module_b / "B.h").write_text('#include "../A/A.h"\n', encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        21,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "void Run();",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/A/A.h"],
+                "architectureProposal": {
+                    "decision": "preserve module direction",
+                    "invariants": ["no dependency cycle"],
+                    "impactedSurfaces": ["Source/A/A.h"],
+                    "validationPlan": ["compile"],
+                    "alternatives": ["extract a shared module"],
+                },
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["architectureProposalValidation"]["ok"] is True
+    assert payload["generationContract"]["architectureImplementationGate"]["writesAllowed"] is False
+    assert payload["generationContract"]["writeGate"]["writesAllowed"] is False
+
+
+def test_code_sketch_rejects_non_array_object_arguments(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        22,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "void Run();",
+                "targetFiles": {"path": "Source/A.h"},
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "INVALID_TOOL_ARGUMENTS"
+
+
+def test_architecture_reasoning_is_available_in_extended_profile(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_EXTENDED_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    assert "unreal_architecture_reasoning" in {tool["name"] for tool in server.all_tool_definitions()}
+
+    project = tmp_path / "Project"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "Worker.cpp").write_text("void Run() { CurrentState = 1; }\n", encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        23,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {"projectRoot": str(project), "symbols": ["Run"]},
+        },
+    )
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True
+    assert payload["stateTransitions"]["transitions"]
+
+
+def test_architecture_reasoning_rejects_non_object_proposal(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_EXTENDED_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    project.mkdir()
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        24,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {"projectRoot": str(project), "proposal": "not-an-object"},
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["proposalValidation"]["ok"] is False
+    assert payload["proposalValidation"]["implementationGate"]["writesAllowed"] is False
+
+
 def test_review_claim_validator_accepts_legacy_strings_and_evidence_packets(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     mod = _load_rag_mcp_module()

@@ -18,6 +18,8 @@ def test_rag_doctor_repo_only_passes_without_ue() -> None:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=str(ROOT),
         timeout=60,
     )

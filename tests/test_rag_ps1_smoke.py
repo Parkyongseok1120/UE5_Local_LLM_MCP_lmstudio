@@ -20,6 +20,8 @@ def test_rag_ps1_doctor_parses_and_runs() -> None:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=str(ROOT),
         timeout=60,
     )

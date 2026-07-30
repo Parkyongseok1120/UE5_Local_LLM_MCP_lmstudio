@@ -1999,7 +1999,10 @@ def optional_symbol_graph_context(text: str, *, limit: int = 6) -> str:
     graph = load_symbol_graph()
     if not graph.get("symbols"):
         return ""
-    lines = ["Symbol graph hints (optional, compact):"]
+    lines = [
+        "Symbol graph hints (optional, compact; source-location/navigation only):",
+        "Do not treat these hints as proof of runtime behavior, wiring, data flow, ownership, or API semantics; read cited source and validate the relevant path.",
+    ]
     count = 0
     for symbol in _symbol_candidates_from_text(text):
         for row in lookup_symbol(symbol, graph, limit=2):
@@ -2013,6 +2016,7 @@ def optional_symbol_graph_context(text: str, *, limit: int = 6) -> str:
                         f"lines={row.get('line_start', 0)}-{row.get('line_end', row.get('line_start', 0))}",
                         f"module={row.get('module_name', '')}",
                         f"ownerBuildCs={row.get('owner_build_cs', '')}",
+                        "evidence=project_source",
                     ]
                 )
             )

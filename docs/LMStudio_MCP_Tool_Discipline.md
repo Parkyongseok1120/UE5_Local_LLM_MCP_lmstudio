@@ -66,7 +66,7 @@ Confirm after restart:
 
 Enable when you need refresh, compile loop jobs, extra claim validators, refactor helpers, or cleanup:
 
-**unreal-rag:** `unreal_rag_refresh`, `unreal_start_rag_refresh`, `unreal_rag_refresh_status`, compile-loop tools, editor metadata, asset graph, material/blueprint validators, refactor manager, render report.
+**unreal-rag:** `unreal_rag_refresh`, `unreal_start_rag_refresh`, `unreal_rag_refresh_status`, compile-loop tools, editor metadata, asset graph, material/blueprint validators, refactor manager, `unreal_architecture_reasoning`, render report.
 
 **unreal-agent:** `propose_file_deletions`, `delete_file` (requires `ALLOW_SOURCE_DELETE=1` and a matching deletion plan token), `set_active_project`, refactor scan/plan tools.
 
@@ -107,6 +107,8 @@ Validation on write runs under a time budget (`VALIDATE_ON_WRITE_TIMEOUT_MS`, de
 ### Generation self-check (non-blocking)
 
 Before introducing new UObject/Component/Subsystem APIs in a write turn, call `unreal_code_sketch_claim_validate` on the draft surface. Fix `known_bad` findings before writing; the tool does not auto-block writes.
+
+For a project-specific draft, also supply `projectRoot`, `targetFiles`, and `changeKind`. Read every returned `generationContract.requiredReads`, preserve its invariants, and run its static/build/targeted-regression requirements. No target files means the result is a generic example, not a claim that the draft matches the active project. Unsupported target types, invalid change-kind cardinality, stale/incomplete source evidence, or an unmatched requested symbol leave the corresponding gate closed. For an architecture-level change, enable `MCP_EXTENDED_TOOLS=1` and validate a `decision`/`invariants`/`impactedSurfaces`/`validationPlan`/`alternatives` proposal with `unreal_architecture_reasoning` before implementing it. A detected source dependency cycle closes the architecture implementation gate even when the proposal shape itself is valid.
 
 `write_file` is **create-only**. It creates brand-new files and refuses to overwrite any file that already exists (every extension, not just source). To modify an existing file, use `replace_in_file`.
 

@@ -35,6 +35,7 @@ RAG_EXTENDED_PROFILE_TOOLS = frozenset(
         "unreal_genre_scope_validate",
         "unreal_open_project_picker",
         "unreal_project_architecture",
+        "unreal_architecture_reasoning",
         "unreal_project_graph_query",
         "unreal_review_claim_validate",
         "unreal_runtime_config_check",

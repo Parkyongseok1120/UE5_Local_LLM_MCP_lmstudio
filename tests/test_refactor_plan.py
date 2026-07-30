@@ -175,3 +175,62 @@ void ReadScore(UScoreComponent* Component)
     assert plan["writePolicy"]["requiresStagedPatch"] is True
     assert "blueprint_compile_or_asset_validation" in plan["requiredEvidence"]["validation"]
     assert [stage["stage"] for stage in plan["stages"]] == ["R0", "R1", "R2", "R3", "R4"]
+
+
+def test_refactor_manager_attaches_graph_impact_and_regression_contract(tmp_path):
+    source = tmp_path / "Source" / "Demo"
+    public = source / "Public"
+    private = source / "Private"
+    tests = tmp_path / "Tests"
+    public.mkdir(parents=True)
+    private.mkdir(parents=True)
+    tests.mkdir()
+    (public / "Worker.h").write_text("class FWorker { public: void Run(); };\n", encoding="utf-8")
+    (private / "Worker.cpp").write_text(
+        '#include "Worker.h"\nvoid FWorker::Run() { Finish(); }\nvoid Finish() {}\n',
+        encoding="utf-8",
+    )
+    (tests / "WorkerTests.cpp").write_text("void TestWorker() { FWorker Worker; }\n", encoding="utf-8")
+
+    plan = build_refactor_manager_plan(
+        "Update FWorker behavior across declaration and implementation",
+        project_root=str(tmp_path),
+        symbols=["FWorker", "Finish"],
+    )
+
+    impact = plan["changeImpact"]
+    assert impact["ok"] is True
+    assert impact["candidateImpacts"]
+    assert any(item["kind"] == "targeted_regression" for item in impact["regressionPlan"])
+    assert "targeted_regression" in plan["requiredEvidence"]["validation"]
+
+
+def test_refactor_scan_distinguishes_exact_limit_from_real_truncation(tmp_path):
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "One.cpp").write_text("void Target() {}\n", encoding="utf-8")
+
+    exact = scan_symbol_impact(str(tmp_path), "Target", max_files=1)
+    (source / "Two.cpp").write_text("void Use() { Target(); }\n", encoding="utf-8")
+    truncated = scan_symbol_impact(str(tmp_path), "Target", max_files=1)
+
+    assert exact["truncated"] is False
+    assert truncated["truncated"] is True
+
+
+def test_refactor_manager_blocks_when_textual_impact_scope_is_truncated(tmp_path):
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "One.cpp").write_text("void Target() {}\n", encoding="utf-8")
+    (source / "Two.cpp").write_text("void Use() { Target(); }\n", encoding="utf-8")
+
+    plan = build_refactor_manager_plan(
+        "Refactor Target",
+        project_root=str(tmp_path),
+        symbols=["Target"],
+        max_files=1,
+    )
+
+    assert plan["impact"]["truncated"] is True
+    assert plan["writePolicy"]["writesAllowedNow"] is False
+    assert plan["nextAction"] == "narrow_graph_impact_scope"

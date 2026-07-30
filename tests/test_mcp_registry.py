@@ -67,6 +67,8 @@ def test_public_schemas_cover_handler_consumed_arguments(tmp_path):
             "scope", "detailLevel", "continuationToken", "sessionId", "includeRawMatches",
         },
         "unreal_render_report": {"diagramMode", "allowOverwrite"},
+        "unreal_code_sketch_claim_validate": {"projectRoot", "targetFiles", "changeKind", "validationPlan", "architectureProposal", "architectureSymbols"},
+        "unreal_architecture_reasoning": {"projectRoot", "symbols", "proposal"},
         "unreal_task_start": {"startBackgroundJob"},
         "unreal_architecture_decision_approve": {"approvalToken"},
     }

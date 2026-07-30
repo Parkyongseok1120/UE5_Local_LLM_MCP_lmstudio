@@ -118,6 +118,8 @@ def test_medium_refactor_requires_approval_gate_before_writes():
     assert payload["refactorManager"]["nextAction"] in {
         "collect_impact_scan_inputs",
         "collect_missing_impact_roles",
+        "refresh_symbol_graph",
+        "resolve_incomplete_impact_evidence",
         "request_human_approval",
     }
     assert any("Medium/large refactors require impact plan" in note for note in payload["notes"])

@@ -143,6 +143,11 @@ def fetch_symbol_graph_sidecar(query: str, mode: str, limit: int = 5) -> list[di
                     "lineEnd": row.get("line_end", row.get("line_start", 0)),
                     "module": row.get("module_name", ""),
                     "ownerBuildCs": row.get("owner_build_cs", ""),
+                    "evidenceKind": "project_source",
+                    "proofBoundary": row.get(
+                        "proofBoundary",
+                        "Source-located symbol hint only; it does not prove behavior, wiring, or data flow.",
+                    ),
                 }
             )
             if len(items) >= limit:

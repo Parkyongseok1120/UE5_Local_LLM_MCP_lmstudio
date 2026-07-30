@@ -68,6 +68,8 @@ from blueprint_claim_validate import validate_blueprint_claims
 from material_claim_validate import validate_material_claims
 from node_plan_validate import validate_node_plan
 from code_sketch_claim_validate import validate_sketch
+from code_generation_contract import build_generation_contract
+from architecture_reasoning import analyze_architecture
 from render_report import render_report
 from asset_graph_lookup import analyze_asset_folder, graph_detail_limits, lookup_asset_graph, search_asset_graphs
 from project_context import resolve_active_project_context
@@ -169,6 +171,78 @@ def _handle_unreal_cancel_compile_loop(server: McpServer, message_id: Any, argum
     _emit_structured_result(server, message_id, payload)
 
 
+def _string_list_argument(value: Any, name: str) -> tuple[list[str], str]:
+    if value is None:
+        return [], ""
+    if isinstance(value, str):
+        normalized = value.strip()
+        return ([normalized] if normalized else []), ""
+    if not isinstance(value, list):
+        return [], f"{name} must be an array of strings"
+    if any(not isinstance(item, str) for item in value):
+        return [], f"{name} must contain strings only"
+    return list(dict.fromkeys(item.strip() for item in value if item.strip())), ""
+
+
+def _invalid_tool_argument(server: McpServer, message_id: Any, tool: str, error: str) -> None:
+    server.structured_tool_result(
+        message_id,
+        {
+            "ok": False,
+            "errorCode": "INVALID_TOOL_ARGUMENTS",
+            "error": error,
+            "tool": tool,
+            "retryable": True,
+        },
+    )
+
+
+def _architecture_proposal_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "decision": {"type": "string", "minLength": 1},
+            "invariants": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+            },
+            "impactedSurfaces": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+            },
+            "validationPlan": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+            },
+            "alternatives": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+            },
+            "implementationFiles": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "boundaryChanges": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "from": {"type": "string", "minLength": 1},
+                        "to": {"type": "string", "minLength": 1},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["from", "to"],
+                },
+            },
+        },
+        "required": ["decision", "invariants", "impactedSurfaces", "validationPlan", "alternatives"],
+    }
+
+
 def _handle_unreal_code_sketch_claim_validate(
     server: McpServer, message_id: Any, arguments: dict[str, Any]
 ) -> None:
@@ -181,7 +255,102 @@ def _handle_unreal_code_sketch_claim_validate(
         server.index,
         top_k=max(1, min(16, int(arguments.get("topK") or 5))),
     )
+    project_root = str(arguments.get("projectRoot") or "").strip()
+    if not project_root:
+        active = str(load_shared_config().get("activeProject") or "").strip()
+        if active:
+            active_path = Path(active).resolve()
+            project_root = str(active_path.parent if active_path.suffix.lower() == ".uproject" else active_path)
+    target_files, argument_error = _string_list_argument(arguments.get("targetFiles"), "targetFiles")
+    if argument_error:
+        _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
+        return
+    validation_plan, argument_error = _string_list_argument(arguments.get("validationPlan"), "validationPlan")
+    if argument_error:
+        _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
+        return
+    graph: dict[str, Any] | None = None
+    if project_root:
+        try:
+            from build_symbol_graph import graph_is_fresh_for_root
+            from symbol_graph import load_symbol_graph
+
+            candidate = load_symbol_graph(server.workspace)
+            resolved_project_root = Path(project_root).resolve()
+            if resolved_project_root.is_file() and resolved_project_root.suffix.lower() == ".uproject":
+                resolved_project_root = resolved_project_root.parent
+            candidate_source_root = str(candidate.get("sourceRoot") or "").strip()
+            candidate_root = Path(candidate_source_root).resolve() if candidate_source_root else None
+            accepted_roots = {resolved_project_root, (resolved_project_root / "Source").resolve()}
+            if (
+                candidate_root is not None
+                and candidate_root in accepted_roots
+                and graph_is_fresh_for_root(candidate, candidate_root)
+            ):
+                graph = candidate
+        except (OSError, ValueError):
+            graph = None
+    payload["generationContract"] = build_generation_contract(
+        str(arguments.get("request") or sketch),
+        project_root=project_root or None,
+        target_files=target_files,
+        change_kind=str(arguments.get("changeKind") or "modify_existing"),
+        validation_plan=validation_plan,
+        graph=graph,
+    )
+    architecture_proposal = arguments.get("architectureProposal")
+    if architecture_proposal is not None:
+        if not project_root:
+            payload["architectureProposalValidation"] = {
+                "ok": False,
+                "issues": ["projectRoot is required to validate an architecture proposal before implementation."],
+            }
+            payload["generationContract"]["writeGate"]["writesAllowed"] = False
+            payload["generationContract"]["writeGate"]["reason"] = "architecture proposal has no project root"
+        else:
+            architecture_symbols, argument_error = _string_list_argument(
+                arguments.get("architectureSymbols"),
+                "architectureSymbols",
+            )
+            if argument_error:
+                _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
+                return
+            architecture = analyze_architecture(
+                project_root,
+                symbols=architecture_symbols,
+                proposal=architecture_proposal,
+                graph=graph,
+            )
+            validation = architecture.get("proposalValidation") or {"ok": False, "issues": ["architecture proposal could not be validated"]}
+            implementation_gate = validation.get("implementationGate") or {}
+            payload["architectureProposalValidation"] = validation
+            payload["generationContract"]["architectureImplementationGate"] = implementation_gate
+            if not validation.get("ok") or not implementation_gate.get("writesAllowed"):
+                payload["generationContract"]["writeGate"]["writesAllowed"] = False
+                payload["generationContract"]["writeGate"]["reason"] = (
+                    "architecture proposal contract is incomplete"
+                    if not validation.get("ok")
+                    else "architecture implementation gate is closed"
+                )
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+
+
+def _handle_unreal_architecture_reasoning(
+    server: McpServer, message_id: Any, arguments: dict[str, Any]
+) -> None:
+    project_root = str(arguments.get("projectRoot") or "").strip()
+    if not project_root:
+        active = str(load_shared_config().get("activeProject") or "").strip()
+        if active:
+            active_path = Path(active).resolve()
+            project_root = str(active_path.parent if active_path.suffix.lower() == ".uproject" else active_path)
+    symbols, argument_error = _string_list_argument(arguments.get("symbols"), "symbols")
+    if argument_error:
+        _invalid_tool_argument(server, message_id, "unreal_architecture_reasoning", argument_error)
+        return
+    proposal = arguments.get("proposal")
+    payload = analyze_architecture(project_root, symbols=symbols, proposal=proposal)
+    server.structured_tool_result(message_id, payload)
 
 
 def _handle_unreal_node_plan_validate(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
@@ -305,6 +474,20 @@ def build_mcp_tool_registry() -> McpToolRegistry:
     )
     registry.register(
         ToolSpec(
+            name="unreal_architecture_reasoning",
+            schema_dict={
+                "projectRoot": {"type": "string", "description": "Optional project root/.uproject; defaults to active project."},
+                "symbols": {"type": "array", "items": {"type": "string"}, "description": "Optional symbols to focus data-flow/state analysis on."},
+                "proposal": {
+                    **_architecture_proposal_schema(),
+                    "description": "Optional architecture proposal with explicit design and validation obligations.",
+                },
+            },
+            handler=_handle_unreal_architecture_reasoning,
+        )
+    )
+    registry.register(
+        ToolSpec(
             name="unreal_code_sketch_claim_validate",
             schema_dict={
                 "sketch": {
@@ -312,6 +495,16 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                     "description": "Drafted code / API list to validate before presenting it.",
                 },
                 "topK": {"type": "integer", "minimum": 1, "maximum": 16, "default": 5},
+                "request": {"type": "string", "description": "User intent used to establish the generated-code contract."},
+                "projectRoot": {"type": "string", "description": "Optional project root/.uproject. Defaults to active project."},
+                "targetFiles": {"type": "array", "items": {"type": "string"}, "description": "Target paths for a project-specific patch; omit only for a clearly labeled generic example."},
+                "changeKind": {"type": "string", "enum": ["new_file", "modify_existing", "single_file", "multifile"], "default": "modify_existing"},
+                "validationPlan": {"type": "array", "items": {"type": "string"}, "description": "Optional extra validation evidence requested for this change."},
+                "architectureProposal": {
+                    **_architecture_proposal_schema(),
+                    "description": "Optional architecture design proposal to validate before implementation.",
+                },
+                "architectureSymbols": {"type": "array", "items": {"type": "string"}, "description": "Optional symbols to focus architecture/data/state analysis on."},
             },
             handler=_handle_unreal_code_sketch_claim_validate,
         )
@@ -424,6 +617,7 @@ EXTENDED_TOOL_NAMES = frozenset(
         "unreal_compile_loop_status",
         "unreal_cancel_compile_loop",
         "unreal_refactor_manager_plan",
+        "unreal_architecture_reasoning",
         "unreal_material_porting_plan_validate",
         "unreal_editor_metadata_status",
         "unreal_run_editor_export",
@@ -1066,6 +1260,26 @@ class McpServer:
                 ),
             },
             {
+                "name": "unreal_architecture_reasoning",
+                "title": "Analyze source architecture, candidate flow, and design gate",
+                "description": (
+                    "Read-only, dependency-free source analysis for architecture boundaries, candidate data flow, "
+                    "and candidate state transitions. Optional proposal validates decision/invariants/impacted surfaces/"
+                    "validation/alternatives before implementation. Source candidates are not runtime proof; use direct "
+                    "reads and build/test/runtime evidence for behavioral conclusions."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "projectRoot": {"type": "string", "description": "Optional project root/.uproject; defaults to active project."},
+                        "symbols": {"type": "array", "items": {"type": "string"}, "description": "Optional symbols to focus on."},
+                        "proposal": {
+                            **_architecture_proposal_schema(),
+                            "description": "Optional architecture proposal to validate before implementation.",
+                        },
+                    },
+                ),
+            },
+            {
                 "name": "unreal_material_porting_plan_validate",
                 "title": "Validate Material Graph Porting Plan",
                 "description": (
@@ -1219,14 +1433,18 @@ class McpServer:
             },
             {
                 "name": "unreal_code_sketch_claim_validate",
-                "title": "Validate Unreal API names in a code sketch",
+                "title": "Validate code sketch APIs and target contract",
                 "description": (
                     "Anti-hallucination check for plain-chat code sketches (시안). "
                     "Extracts Unreal-style symbols and member calls from drafted code, "
                     "verifies each against the local symbol index, and flags invented "
                     "APIs (denylist) and unverified names. Call this BEFORE presenting "
                     "compile-ready code; remove or mark UNKNOWN any known_bad/unverified "
-                    "symbol. Evidence only: never writes files or builds."
+                    "symbol. Optional targetFiles/projectRoot additionally produce a source-backed "
+                    "generation contract (required reads, paired surfaces, invariants, and validation). Optional "
+                    "architectureProposal is validated for decision/invariants/impacted surfaces/validation/alternatives "
+                    "before its implementation gate can pass. "
+                    "Without targets, the draft is explicitly generic only. Evidence only: never writes files or builds."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -1235,6 +1453,16 @@ class McpServer:
                             "description": "Drafted code / API list to validate before presenting it.",
                         },
                         "topK": {"type": "integer", "minimum": 1, "maximum": 16, "default": 5},
+                        "request": {"type": "string", "description": "User intent for the source-backed generation contract."},
+                        "projectRoot": {"type": "string", "description": "Optional project root/.uproject; defaults to active project."},
+                        "targetFiles": {"type": "array", "items": {"type": "string"}, "description": "Target paths for project-specific code; omit only for a generic example."},
+                        "changeKind": {"type": "string", "enum": ["new_file", "modify_existing", "single_file", "multifile"], "default": "modify_existing"},
+                        "validationPlan": {"type": "array", "items": {"type": "string"}},
+                        "architectureProposal": {
+                            **_architecture_proposal_schema(),
+                            "description": "Optional architecture design proposal to validate before implementation.",
+                        },
+                        "architectureSymbols": {"type": "array", "items": {"type": "string"}},
                     },
                     ["sketch"],
                 ),

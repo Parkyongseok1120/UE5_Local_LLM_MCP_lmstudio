@@ -6,6 +6,8 @@ Generated architecture hints. Review before treating as project truth.
 
 The architecture understanding layer scans Unreal project source text and produces compact, structured context for review and refactor planning. It is designed to help local models reason about module ownership, reflected surfaces, header/cpp pairs, component and subsystem boundaries, Blueprint-facing risk, and editor/runtime boundary risk.
 
+The portable code-intelligence companion adds a dependency-free source graph, impact/regression scope, and candidate data/state analysis for non-Unreal projects as well. It is deliberately source-text conservative.
+
 It does not call LM Studio, Unreal Editor, UnrealBuildTool, or network services.
 
 ## What It Does
@@ -18,6 +20,11 @@ It does not call LM Studio, Unreal Editor, UnrealBuildTool, or network services.
 - Labels responsibility hints from deterministic name/base-type heuristics.
 - Flags conservative risk hints such as Blueprint-facing surface, Blueprint event surface, serialized reflected surface, possible asset reference, missing cpp pair, and runtime/editor boundary risk.
 - Validates structured architecture claims against the generated map.
+- Builds a portable v2 symbol graph with direct `defines`, `includes`/`imports`, and `inherits` edges, plus explicitly heuristic `calls_candidate` edges.
+- Produces source-backed generation contracts for generic examples, existing-file changes, and multifile changes.
+- Builds graph-backed impact/regression contracts that distinguish direct source surfaces from candidate callers and declare a test-coverage gap when no focused test is found.
+- Analyzes source-boundary dependencies plus candidate assignments/returns/call boundaries and state-looking assignments/setters.
+- Validates an architecture proposal's decision, invariants, impacted surfaces, validation plan, and alternatives before allowing its implementation gate to pass.
 
 ## What It Does Not Do
 
@@ -26,6 +33,7 @@ It does not call LM Studio, Unreal Editor, UnrealBuildTool, or network services.
 - It does not inspect Blueprint graphs, Material graphs, or loaded assets.
 - It does not prove that assets are unused.
 - It does not replace compile-fix routing, UBT validation, or live project review.
+- It does not prove call dispatch, data flow, state reachability, ownership, framework semantics, or runtime behavior from a graph edge or source-text pattern.
 
 ## Generate A Map
 
@@ -36,6 +44,32 @@ python scripts/architecture_map.py --project "<PROJECT_ROOT_OR_UPROJECT>" --out 
 If `--project` is omitted, the script falls back to the configured active project when available.
 
 Generated files under `data/architecture/` are local artifacts and should not be committed.
+
+## Portable P0–P3 code intelligence
+
+Build a full-project graph with `--project-root`; this includes project plugins and test source while pruning generated/state directories before recursion. Use `--source-root` only when an intentionally narrower graph is required. The default output location remains compatible with the existing LM Studio sidecar consumer.
+
+```powershell
+python scripts/build_symbol_graph.py --project-root "<PROJECT_ROOT>"
+python scripts/build_symbol_graph.py --source-root "<INTENTIONALLY_SCOPED_SOURCE_ROOT>"
+python scripts/architecture_reasoning.py --project-root "<PROJECT_ROOT_OR_UPROJECT>" --symbol "TargetSymbol"
+```
+
+`symbol_graph.json` v2 preserves the legacy `symbols` list and adds `files`, `edges`, per-edge evidence, confidence, and a proof boundary. Direct edges prove only source-located declarations/textual relations. `calls_candidate`, candidate data flow, and candidate state transitions are navigation/review inputs; they must not be promoted to behavioral conclusions without a behavior path and the appropriate static/build/test/runtime evidence. Persisted graphs are content-checked before architecture/impact gates reuse them; stale or partial graphs are rebuilt or leave the write gate closed.
+
+For a source-backed code proposal, call `unreal_code_sketch_claim_validate` with `projectRoot`, `targetFiles`, and `changeKind`. It returns paired declaration/definition reads, invariants, and validation requirements. With `MCP_EXTENDED_TOOLS=1`, call `unreal_architecture_reasoning` to inspect boundaries and to validate an architecture proposal. A proposal contains at least:
+
+```json
+{
+  "decision": "Keep the public contract in Core",
+  "invariants": ["Game does not create a reverse Core dependency"],
+  "impactedSurfaces": ["Source/Core/Public/Contract.h"],
+  "validationPlan": ["build", "targeted regression"],
+  "alternatives": ["Move implementation only, keep contract stable"]
+}
+```
+
+The proposal validator checks planning completeness, not design correctness. Wrong field types, unreadable/incomplete source, unmatched focus symbols, and detected source dependency cycles close the implementation gate. It still requires staged implementation, static validation, build/compile, and targeted regression evidence.
 
 ## Validate Claims
 
