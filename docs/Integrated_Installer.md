@@ -2,6 +2,8 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
+Product release: **1.3.0 Beta1**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest remains at `2.1.0`.
+
 ## Requirements
 
 - SAFE: Python 3.10+ and LM Studio 0.4+ for native MCP API use.
@@ -88,6 +90,8 @@ python3 scripts/build_integrated_package.py --output /safe/output/Evidence-First
 ```
 
 The package contains Windows, Linux, and macOS launchers plus a deterministic SHA-256 inventory. It excludes user configuration, machine paths, caches, dependencies, tests, and RAG indexes by default. `--include-index` is explicit.
+
+Package-builder status JSON is ASCII-safe so successful and failed builds remain machine-readable when a Windows runner or legacy console uses `cp1252`. Package contents and manifests remain UTF-8.
 
 ## LM Studio runtime proof and paired measurement
 

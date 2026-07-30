@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.2.5
+# UE5_Local_LLM_MCP_lmstudio 1.3.0 Beta1
 
-> **통합 설치 지원:** portable skill, LM Studio MCP, Node/Python adapter는 Windows, Linux, macOS에서 설치할 수 있습니다. Unreal engine 탐색·인덱싱 경로·Editor export·agent build launcher는 host별 경로를 사용합니다. Linux/macOS의 RAG indexing에는 `pwsh`가 필요하며, 실제 플랫폼 live 인증은 아직 남아 있습니다.
+> **Beta 릴리스:** portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows, Linux, macOS에서 하나의 통합 workflow로 설치할 수 있습니다. Unreal engine 탐색·인덱싱 경로·Editor export·agent build launcher는 host별 경로를 사용합니다. Linux/macOS의 RAG indexing에는 `pwsh`가 필요하며, 실제 플랫폼 live 인증은 아직 남아 있습니다. [1.3.0 Beta1 릴리스 노트](docs/Release_Notes_1_3_0_Beta1.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
@@ -28,9 +28,9 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 > **프로젝트 현황 — 2026년 7월**
 >
-> 이 프로젝트의 초기 목표였던 "로컬 환경에서 Claude Sonnet 4에 근접한 수준의 Unreal Engine 에이전트 워크플로 구축"은 상당 부분 달성되었습니다. **최신 v1.2.5 (2026-07-09):** multifile holdout 수정(`UPROPERTY` return-type drift, callback param expansion) 이후 NavigationSystem module routing, editor-runtime boundary, UObject lifecycle autofix 회귀를 안정화했습니다. dry-run compile gate **36/36** (`20260709-142052`). Live 재검증 **36/36 Pass@K**, **36/36 Pass@1** (`20260709-144441-pass1-target`); multifile tier **12/12 Pass@1**.
+> **현재 릴리스는 1.3.0 Beta1입니다.** 1.3 라인에는 특정 프로젝트에 종속되지 않는 evidence-first 분석 skill, LM Studio MCP 통합, 프로젝트 전역 symbol/dependency/call/data-flow 분석, fail-closed architecture/change-impact/code-generation contract, risk-tier orchestration, 단일 cross-platform installer, 강화된 release/live-test gate가 포함됩니다.
 >
-> v1.2.5는 1.2 라인의 마지막 minor release로 봅니다. 이후 1.2.x 업데이트가 있다면 간단한 bug fix, 문서 수정, 낮은 위험도의 안정화 patch로 제한합니다. v1.3.0 개발은 **v1.2.5 이후 약 4개월 뒤부터 시작**하는 것을 목표로 하며, C++ capability, semantic-refactor, runtime-debug, negative-control scorecard를 분리하는 방향입니다. **프로젝트 자체가 멈춘 것은 아니고**, **대학교 수업과 졸업 작품**에 집중해야 해서 어쩔 수 없이 잠시 일시중단하게 되었습니다. 빠르게 정리하고 돌아와서 **v1.3.0**으로 뵙겠습니다!
+> Beta1에는 저장소 자동 검증 근거가 있지만 새로운 live-model 점수는 아직 없습니다. 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline이며 Beta1의 측정 성능 향상으로 해석하면 안 됩니다. 실제 Linux/macOS Unreal 인증, Ollama 지원, 분리된 runtime/semantic capability scorecard는 계속 진행 중입니다.
 
 ---
 
@@ -38,6 +38,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
+  <a href="docs/Release_Notes_1_3_0_Beta1.md"><img alt="1.3.0 Beta1 Release Notes" src="https://img.shields.io/badge/Release-1.3.0%20Beta1-yellow?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
   <a href="docs/Roadmap_1_3_0.md"><img alt="v1.3.0 Roadmap" src="https://img.shields.io/badge/Roadmap-v1.3.0-orange?logo=gitbook"></a>
@@ -45,6 +46,8 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 </p>
 
 ## 최신 결과
+
+아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 Beta1 paired live 재측정은 아직 완료되지 않았습니다.
 
 | 모델 / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
@@ -135,7 +138,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 - **UBT/linker 전체 로그를 채팅에 붙여넣지 마세요.** `read_unreal_logs` 또는 로그 파일 경로를 쓰고, 첫 번째 의미 있는 에러 구간만 공유하세요.
 - **헤더 → .cpp 순서는 정상입니다.** 새 헤더에 `write_file` 후 `CPP_DEFINITION_MISSING` advisory가 보일 수 있습니다. 매칭 `.cpp`를 쓰기 전까지는 기대되는 동작이며, 그 자체로 롤백 사유가 아닙니다.
 - 모델이 자주 지어내는 **UE API**는 피하세요: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. 대신 `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, 값으로 넘기는 `SpawnTransform`, 소유 actor/subsystem의 `GetWorld()`를 쓰세요.
-- **compact tool 응답 (v1.2.5):** `build_unreal_project`는 한 줄 summary + likely error 최대 40줄 + `.agent/logs/latest-build.log` 경로만 반환합니다(stdout/stderr 전체 아님). `read_unreal_logs`는 최신 로그 1개와 첫 error cluster가 기본입니다. 컨텍스트 프록시는 압축 뒤에도 required next tool, 변경 파일, diagnostic, build state 같은 제어 필드를 유지합니다.
+- **compact tool 응답 (v1.2.5 baseline, Beta1 유지):** `build_unreal_project`는 한 줄 summary + likely error 최대 40줄 + `.agent/logs/latest-build.log` 경로만 반환합니다(stdout/stderr 전체 아님). `read_unreal_logs`는 최신 로그 1개와 첫 error cluster가 기본입니다. 컨텍스트 프록시는 압축 뒤에도 required next tool, 변경 파일, diagnostic, build state 같은 제어 필드를 유지합니다.
 
 자동 압축은 세션을 연장하지만, 이미 너무 큰 system prompt/tool schema를 줄이거나 포화된 KV cache를 복구할 수는 없습니다. 프록시가 hard safety margin을 회복하지 못하면 `write_session_handoff`를 호출하고 새 채팅에서 `.agent/handoff/latest.md`를 이어가세요.
 
@@ -147,6 +150,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 | 주제 | 파일 |
 |---|---|
+| 1.3.0 Beta1 릴리스 노트 | [docs/Release_Notes_1_3_0_Beta1.md](docs/Release_Notes_1_3_0_Beta1.md) |
 | 상세 프로젝트 개요 | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | 모델 측정 결과 | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | 버전별 성능 이력 | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -167,7 +171,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 ## 요약
 
-아직 experimental 프로젝트이지만, 이제 더 엄격하게 측정됩니다.
+1.3.0 Beta1은 prerelease이지만, 아키텍처·설치·릴리스 경로를 더 넓은 자동 검증으로 보호합니다.
 
 좁은 UE 5.8 compile-fix 작업에서는 현재 community fine-tuned Qwen 3.6 27B local workflow가 live UBT validation에서 강한 결과를 냈습니다(36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B도 compact-model 결과를 저장했습니다(35/36 Pass@K, 33/36 Pass@1). 이 결과는 내부 workflow 측정이며, Claude/GPT 계열과의 일반 모델 동등성 주장이 아닙니다.
 

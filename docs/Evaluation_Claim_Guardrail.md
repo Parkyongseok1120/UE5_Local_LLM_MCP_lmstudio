@@ -2,7 +2,9 @@
 
 Current Tier/KPI numbers are internal UE RAG/MCP/UBT scorecard results, not external standardized model benchmarks. Do not claim that Qwen, GPT OSS, or any other local model is generally Sonnet-grade.
 
-Safer wording: inside this Unreal-specific validation loop, the community fine-tuned Qwen 3.6 27B model used here behaves like a strong local compile-fix agent with practical results in the upper Sonnet 4 / Sonnet 4.5-oriented workflow band for narrow UE C++ compile-fix tasks. Latest v1.2.5 live revalidation reached **36/36 Pass@K** and **36/36 Pass@1**, including **12/12 multifile Pass@1**. This is still an internal UE RAG/MCP/UBT workflow result, not a base-model or general model-grade claim.
+The current product is **1.3.0 Beta1**, but it has no new paired live-model score yet. Do not attribute the v1.2.5 measurements below to Beta1 architecture or orchestration changes.
+
+Safer wording: inside this Unreal-specific validation loop, the community fine-tuned Qwen 3.6 27B model used here behaves like a strong local compile-fix agent with practical results in the upper Sonnet 4 / Sonnet 4.5-oriented workflow band for narrow UE C++ compile-fix tasks. The latest saved v1.2.5 live revalidation reached **36/36 Pass@K** and **36/36 Pass@1**, including **12/12 multifile Pass@1**. This is still an internal UE RAG/MCP/UBT workflow result, not a base-model or general model-grade claim.
 
 The forward target remains a Sonnet 4.5-oriented local Unreal workflow. This is a target, not a current model-grade claim. See [docs/Sonnet45_Target_Plan.md](Sonnet45_Target_Plan.md).
 

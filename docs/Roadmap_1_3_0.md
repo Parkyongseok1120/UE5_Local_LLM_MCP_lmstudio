@@ -1,10 +1,10 @@
-# v1.3.0 Roadmap
+# v1.3.0 Roadmap and Beta Status
 
 [English](#english) | [한국어](#korean)
 
 ## English
 
-v1.3.0 development is expected to start roughly four months after v1.2.5. Until then, the v1.2.x line is in maintenance mode: small bug fixes, documentation corrections, and low-risk stability patches only.
+The v1.3 line is now active at **1.3.0 Beta1**. This document separates what Beta1 already ships from the evidence and capability work still required for a stable 1.3.0.
 
 ## v1.2.5 Completed Baseline
 
@@ -17,12 +17,22 @@ v1.3.0 starts from the following delivered baseline; these are not remaining v1.
 - Rider + Cline has an installer path, setup guide, and smoke checklist. It is supported as a tool-backed workflow, not yet as a separately benchmarked frontend.
 - Hint-only failure memory can be collected, rejected, and incrementally indexed; it never outranks engine evidence.
 
+## 1.3.0 Beta1 Delivered
+
+- Portable `evidence-first-code-audit` skill plus LM Studio MCP and preset integration.
+- Project-wide symbol, dependency, call, and conservative data-flow graphs with freshness/completeness checks.
+- Fail-closed architecture proposal, change-impact, and code-generation contracts.
+- Cached compact architecture analysis, risk-tiered orchestration, and architecture-first routing.
+- One integrated installer with explicit SAFE/AGENT authority selection and independent RAG depth.
+- Host-aware Windows/Linux/macOS installation and Unreal paths, with physical Linux/macOS certification still pending.
+- Stronger release verification, atomic reports/index builds, live-test quality gates, and Windows encoding regression coverage.
+
 ## Release Targets
 
 | Version | Target Window | Scope |
 |---|---|---|
-| v1.2.x maintenance | Until v1.3.0 | Simple bug fixes, documentation corrections, and low-risk stability patches only. |
-| v1.3.0 | Development starts about 4 months after v1.2.5 | Evaluation tier separation, advanced Unreal C++ capability suites, Rider + Cline evaluation parity, and Ollama app support. |
+| 1.3.0 Beta1 | Current prerelease | Evidence-first architecture/codegen foundation, integrated installer, orchestration, and release hardening. |
+| v1.3.0 stable | After beta exit gates | Fresh separated live scorecards, beta regression closure, and evidence-backed release documentation. Ollama and frontend-parity work must be reported as delivered or explicitly deferred. |
 | v1.3.1 | After v1.3.0 stabilization | Polish for additional frontends, installer cleanup, docs, and failure-memory improvements. |
 | v1.3.2 | Later 1.3.x | Certify the implemented Linux/macOS native paths with platform-specific live Unreal install, indexing, build, and evaluation runs. |
 
@@ -58,11 +68,11 @@ v1.2.5 closes the compile-fix stabilization line with a saved 36-case live Pass@
 | Negative control | Add cases where the correct behavior is "do not edit" or "do not touch Build.cs". | Wrong-file edits, Build.cs false positives, and unsafe deletion attempts are first-class metrics. |
 | Documentation | Keep model measurement, version history, and roadmap bilingual. | README stays short and links to detailed pages. |
 
-### Remaining Gaps After v1.2.5
+### Remaining Gaps for Stable v1.3.0 and Later
 
-The completed v1.2.5 transport and safety baseline is recorded above. The rows below name only work that remains after that baseline; they are not regressions in the completed compile-fix suite.
+The completed v1.2.5 performance baseline and Beta1 infrastructure are recorded above. The rows below name remaining work; they are not regressions in the completed compile-fix suite.
 
-| Gap | v1.2.5 state | Planned work | Target |
+| Gap | Beta1 state | Planned work | Target |
 |---|---|---|---|
 | Long-session context collapse (~60K tokens) | **Delivered for the LM Studio model-facing history:** automatic compaction uses a hard margin, while oversized schemas and saturated KV cache still require a fresh chat/handoff. | Add activation/compaction telemetry and define equivalent compaction behavior for additional frontends. | v1.3.0 |
 | UBT / build log token bloat | **Delivered for MCP tool output:** compact responses and full-log artifacts are the default; some wrapper retry paths can still repeat more context than needed. | Apply one compact error-slice contract across wrapper, MCP, and retry loops. | v1.3.0 |
@@ -71,7 +81,7 @@ The completed v1.2.5 transport and safety baseline is recorded above. The rows b
 | Autonomous long-running design + implement flows | Strong on single compile-fix turns; weak on multi-hour architecture + multi-file feature work. | N-turn planning contract enforcement, phase gates with progress artifacts, scoped task handoff between sessions, separate eval tier for long-horizon tasks (not merged into compile-fix KPI). | v1.3.1 |
 | UE version-pinned API hallucination (real-project compile failures) | **Partially delivered:** denylist, sketch/static warnings, RAG blocklist, component-registration include validation/routing, and hint-only failure-memory collection are present. | Generalize include-before-use checks for project `U*` types and expand the version-pinned engine-symbol allowlist. | v1.3.0 |
 
-These are UX and transport maturity items, not compile-fix regressions. v1.2.x maintenance should not attempt them without a v1.3.0 design pass.
+These are UX, transport, and evidence-maturity items, not compile-fix regressions. Stable-release claims must follow the separated evaluation and proof rules above.
 
 #### Real-project failure patterns to seed v1.3.0 (from v1.2.5 live use)
 
@@ -145,7 +155,7 @@ v1.3.0 should report field-level scores, not one combined score. Compile-fix, se
 
 ## Korean
 
-v1.3.0 개발은 v1.2.5 이후 약 4개월 뒤부터 시작하는 것을 목표로 합니다. 그 전까지 v1.2.x 라인은 maintenance mode입니다. 간단한 bug fix, 문서 수정, 낮은 위험도의 안정화 patch만 예정합니다.
+v1.3 라인은 이제 **1.3.0 Beta1**로 활성화되었습니다. 이 문서는 Beta1에 이미 포함된 기능과 stable 1.3.0 전에 필요한 근거·capability 작업을 분리합니다.
 
 ## v1.2.5 완료 기준선
 
@@ -158,12 +168,22 @@ v1.3.0은 아래의 완료된 기준선에서 시작합니다. 이 항목들은 
 - Rider + Cline은 설치 경로, setup guide, smoke checklist를 갖춘 tool-backed workflow로 지원합니다. 다만 별도 frontend benchmark로 측정되지는 않았습니다.
 - hint-only failure memory는 수집·거절·incremental index가 가능하며 engine evidence보다 우선하지 않습니다.
 
+## 1.3.0 Beta1 완료 항목
+
+- Portable `evidence-first-code-audit` skill과 LM Studio MCP/preset 통합.
+- freshness/completeness 검사를 포함한 프로젝트 전역 symbol, dependency, call, 보수적 data-flow graph.
+- Fail-closed architecture proposal, change-impact, code-generation contract.
+- Cached compact architecture 분석, risk-tier orchestration, architecture-first routing.
+- 명시적 SAFE/AGENT 권한 선택과 독립 RAG depth를 제공하는 단일 통합 설치기.
+- Host-aware Windows/Linux/macOS 설치·Unreal 경로. 실제 Linux/macOS 인증은 아직 남아 있음.
+- 강화된 release verification, atomic report/index build, live-test quality gate, Windows encoding 회귀 검증.
+
 ## Release Targets
 
 | 버전 | 목표 시점 | 범위 |
 |---|---|---|
-| v1.2.x maintenance | v1.3.0 전까지 | 간단한 bug fix, 문서 수정, 낮은 위험도의 안정화 patch만 진행. |
-| v1.3.0 | v1.2.5 이후 약 4개월 뒤 개발 시작 | 평가 tier 분리, advanced Unreal C++ capability suite, Rider + Cline 평가 동등성, Ollama app 지원. |
+| 1.3.0 Beta1 | 현재 prerelease | Evidence-first architecture/codegen 기반, 통합 설치기, orchestration, release hardening. |
+| v1.3.0 stable | Beta 종료 gate 통과 후 | 새로운 분리 live scorecard, Beta regression 종료, 근거 기반 release 문서. Ollama와 frontend parity는 완료 또는 명시적 연기로 보고. |
 | v1.3.1 | v1.3.0 안정화 이후 | 추가 frontend polish, installer 정리, docs, failure-memory 개선. |
 | v1.3.2 | 이후 1.3.x | 구현된 Linux/macOS native path를 실제 플랫폼의 Unreal 설치·인덱싱·빌드·평가 run으로 인증. |
 
@@ -199,11 +219,11 @@ v1.2.5는 compile-fix 안정화 라인을 36-case live Pass@1 36/36 결과로 �
 | Negative control | 정답이 "수정하지 않기" 또는 "Build.cs 건드리지 않기"인 case 추가. | wrong-file edit, Build.cs false positive, unsafe deletion attempt가 주요 metric으로 기록됨. |
 | 문서 | model measurement, version history, roadmap을 한국어/영어로 유지. | README는 짧게 유지하고 상세 문서로 연결. |
 
-### v1.2.5 완료 후 남은 과제
+### Stable v1.3.0 이후까지 남은 과제
 
-완료된 v1.2.5 transport·safety 기준선은 위에 기록했습니다. 아래 표는 그 기준선 이후에도 남은 작업만 다루며, 완료된 compile-fix suite의 회귀를 뜻하지 않습니다.
+완료된 v1.2.5 성능 baseline과 Beta1 infrastructure는 위에 기록했습니다. 아래 표는 남은 작업만 다루며 완료된 compile-fix suite의 회귀를 뜻하지 않습니다.
 
-| Gap | v1.2.5 상태 | 계획 작업 | 목표 버전 |
+| Gap | Beta1 상태 | 계획 작업 | 목표 버전 |
 |---|---|---|---|
 | 긴 세션 컨텍스트 붕괴 (~60K tokens) | **LM Studio 모델 전달 히스토리에는 완료:** 자동 압축이 hard margin을 사용합니다. 다만 과도하게 큰 schema나 포화된 KV cache는 새 채팅/handoff가 필요합니다. | activation/compaction telemetry를 추가하고 다른 frontend의 동등한 compaction 동작을 정의. | v1.3.0 |
 | UBT / build log 토큰 비대 | **MCP tool 응답에는 완료:** compact 응답과 full-log artifact가 기본이며, 일부 wrapper retry 경로는 필요한 것보다 많은 context를 반복할 수 있습니다. | wrapper, MCP, retry loop 전체에 하나의 compact error-slice 계약 적용. | v1.3.0 |
@@ -212,7 +232,7 @@ v1.2.5는 compile-fix 안정화 라인을 36-case live Pass@1 36/36 결과로 �
 | 자율 장시간 설계 + 구현 흐름 | 단일 compile-fix turn은 강하지만, 수 시간짜리 architecture + multi-file feature 작업은 약함. | N-turn planning contract 강제, phase gate + progress artifact, session 간 scoped task handoff, long-horizon task용 별도 eval tier(compile-fix KPI와 합산 금지). | v1.3.1 |
 | UE 버전 고정 API 환각 (실프로젝트 compile 실패) | **부분 완료:** denylist, sketch/static warning, RAG blocklist, component-registration include validation/routing, hint-only failure-memory 수집이 있습니다. | 프로젝트 `U*` 타입 전반으로 include-before-use 검사 일반화, 버전 고정 engine-symbol allowlist 확장. | v1.3.0 |
 
-이 항목들은 compile-fix 회귀가 아니라 UX·transport 성숙도 과제입니다. v1.2.x maintenance에서 v1.3.0 설계 없이 시도하지 않습니다.
+이 항목들은 compile-fix 회귀가 아니라 UX·transport·근거 성숙도 과제입니다. Stable release 주장은 위의 분리 평가·증명 규칙을 따라야 합니다.
 
 #### v1.3.0에 넣을 실프로젝트 실패 패턴 (v1.2.5 live use)
 

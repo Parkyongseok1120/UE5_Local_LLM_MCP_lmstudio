@@ -21,6 +21,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 INSTALL_MANIFEST = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
+PRODUCT_VERSION = str(INSTALL_MANIFEST["productVersion"])
 SKILL_NAME = "evidence-first-code-audit"
 SKILL_SOURCE = ROOT / "skills" / SKILL_NAME
 PRESET_SOURCE = SKILL_SOURCE / "assets" / "lmstudio-evidence-first.preset.json"
@@ -995,6 +996,7 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {PRODUCT_VERSION}")
     parser.add_argument("--profile", choices=["safe", "standard", "full", "custom"])
     parser.add_argument("--components", help="Comma-separated components for CUSTOM profile.")
     parser.add_argument("--yes", action="store_true", help="Use profile defaults without prompts.")

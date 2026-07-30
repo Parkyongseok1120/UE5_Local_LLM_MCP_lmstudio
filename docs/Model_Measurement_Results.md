@@ -6,13 +6,15 @@
 
 These results are internal UE 5.8 RAG/MCP/UBT workflow measurements. They are not public standardized model benchmarks and must not be described as general Claude, GPT, or Qwen model rankings.
 
+The current product is **1.3.0 Beta1**, but no paired Beta1 live-model rerun has been completed. All scores on this page remain historical v1.2.5 baselines until a new artifact is published.
+
 Full validation write-up for the 2026-07-11 post-stabilization run: [Live_Validation_Results_20260711.md](Live_Validation_Results_20260711.md).
 
 ### Latest 36-Case Live Holdout
 
 | Model loaded in LM Studio | Profile | Artifact | Live time | Pass@K | Pass@1 | Notes |
 |---|---|---|---:|---:|---:|---|
-| `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | `qwen3_6_27b` | `20260709-144441-pass1-target` | ~33m 37s | 36/36 | 36/36 | Community fine-tuned Qwen 3.6 27B local model; current v1.2.5 best run. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
+| `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | `qwen3_6_27b` | `20260709-144441-pass1-target` | ~33m 37s | 36/36 | 36/36 | Community fine-tuned Qwen 3.6 27B local model; best saved v1.2.5 run. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
 | `qwen3.5-9b-deepseek-v4-flash` | `qwen3_5_9b_deepseek_v4_flash` | `20260711-090534-qwen35-9b` | ~26m 34s | 36/36 | 35/36 | Post scoped-write-stabilization compact run. Pass@1 miss: `local_component_registration_missing_include`. Recovered prior `local_lnk2019_missing_cpp_definition` failure. |
 | `qwen3.5` | `qwen3_5_9b` | `20260709-153021-qwen35-9b` | ~27m 22s | 35/36 | 33/36 | Prior compact baseline. Failed `local_lnk2019_missing_cpp_definition`; single-file compile-fix tier was the weak point. |
 
@@ -37,13 +39,15 @@ Full validation write-up for the 2026-07-11 post-stabilization run: [Live_Valida
 
 이 결과는 UE 5.8 RAG/MCP/UBT 워크플로 내부 측정입니다. 공개 표준 벤치마크가 아니며, Claude/GPT/Qwen의 일반 성능 순위로 해석하면 안 됩니다.
 
+현재 제품은 **1.3.0 Beta1**이지만 Beta1 paired live-model 재측정은 아직 완료되지 않았습니다. 새로운 artifact가 공개되기 전까지 이 문서의 모든 점수는 historical v1.2.5 baseline입니다.
+
 2026-07-11 stabilization 이후 검증 전체 기록: [Live_Validation_Results_20260711.md](Live_Validation_Results_20260711.md).
 
 ### 최신 36-case Live Holdout
 
 | LM Studio 로드 모델 | Profile | Artifact | Live 시간 | Pass@K | Pass@1 | 비고 |
 |---|---|---|---:|---:|---:|---|
-| `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | `qwen3_6_27b` | `20260709-144441-pass1-target` | 약 33분 37초 | 36/36 | 36/36 | LM Studio에 로드한 community fine-tuned Qwen 3.6 27B local model; 현재 v1.2.5 최고 결과. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
+| `qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max` | `qwen3_6_27b` | `20260709-144441-pass1-target` | 약 33분 37초 | 36/36 | 36/36 | LM Studio에 로드한 community fine-tuned Qwen 3.6 27B local model; 저장된 v1.2.5 최고 결과. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
 | `qwen3.5-9b-deepseek-v4-flash` | `qwen3_5_9b_deepseek_v4_flash` | `20260711-090534-qwen35-9b` | 약 26분 34초 | 36/36 | 35/36 | scoped write stabilization 이후 compact run. Pass@1 miss: `local_component_registration_missing_include`. 이전 `local_lnk2019_missing_cpp_definition` 실패 회복. |
 | `qwen3.5` | `qwen3_5_9b` | `20260709-153021-qwen35-9b` | 약 27분 22초 | 35/36 | 33/36 | 이전 compact baseline. `local_lnk2019_missing_cpp_definition` 실패; single-file compile-fix tier가 약점. |
 

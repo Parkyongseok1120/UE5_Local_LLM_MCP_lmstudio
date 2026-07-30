@@ -8,30 +8,33 @@ This page holds the detailed project status and usage notes that used to live in
 
 ## Current Status
 
-v1.2.5 is the final planned minor release in the 1.2 line. Future 1.2.x updates, if any, are limited to simple bug fixes, documentation corrections, and low-risk stability patches.
+The current product release is **1.3.0 Beta1**. It begins the 1.3 prerelease line with portable evidence-first analysis, deeper architecture/code-generation guardrails, cross-platform integrated installation, and stronger release verification.
 
-Latest measured results:
+The latest measured live-model results remain the v1.2.5 baseline. Beta1 has automated repository evidence but has not completed a new paired live-model benchmark, so the table below must not be used to claim a measured Beta1 model-quality uplift.
 
 See also: [Live Validation Results — 2026-07-11](Live_Validation_Results_20260711.md) (Project_MJS scoped smoke + post-stabilization 36-case live run). [9B Domain Expansion Roadmap](Roadmap_9B_Domain_Expansion.md).
 
 | Run | Artifact | Wall-clock time | Pass@K | Pass@1 | Notes |
 |---|---|---:|---:|---:|---|
-| Qwen 3.6 27B community fine-tune live holdout | `20260709-144441-pass1-target` | ~33m 37s | 36/36 | 36/36 | Best v1.2.5 result. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
+| Qwen 3.6 27B community fine-tune live holdout | `20260709-144441-pass1-target` | ~33m 37s | 36/36 | 36/36 | Best v1.2.5 historical baseline. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
 | Qwen 3.5 9B live holdout (deepseek-v4-flash) | `20260711-090534-qwen35-9b` | ~26m 34s | 36/36 | 35/36 | Post scoped-write-stabilization. Pass@1 miss: `local_component_registration_missing_include`. |
 | Qwen 3.5 9B live holdout | `20260709-153021-qwen35-9b` | ~27m 22s | 35/36 | 33/36 | Prior compact baseline. Failed one LNK missing-definition case. |
 | Dry-run compile gate | `20260709-142052` | ~23m 29s | 36/36 | 36/36 | Golden oracle + UBT; no LM Studio model. |
 
 `Harness average attempts=0.389` in the best 27B run is not a general reasoning-depth metric. Static autofix successes can count as `attempts=0`, so it means many cases were solved before an LLM edit attempt.
 
-## What Changed in v1.2.5
+## What Changed in 1.3.0 Beta1
 
-- Multifile compile-fix stabilization reached **12/12 Pass@1**.
-- `CPP_RETURN_TYPE_MISMATCH` detection and autofix were hardened.
-- Callback parameter expansion no longer corrupts C++ return types or emits `public:` / duplicate `static` in `.cpp` definitions.
-- NavigationSystem module fixes are no longer blocked by `UFUNCTION` false positives.
-- Editor-runtime boundary fixes no longer add `UnrealEd` to runtime `Build.cs`.
-- UObject lifecycle `NewObject` macro shadowing now has deterministic static autofix coverage.
-- Static autofix runs through snapshot/rollback, transactional apply, and static/UBT gates.
+- Added a project-independent `evidence-first-code-audit` skill plus LM Studio MCP/preset integration.
+- Added project-wide symbol, dependency, call, and conservative data-flow graphs, including freshness, completeness, truncation, and missing-evidence checks.
+- Added fail-closed architecture proposal, change-impact, and code-generation contracts that guard cycles, unmatched symbols, unsafe targets, and edit scope.
+- Added cached/compact architecture analysis, Essential-profile exposure, risk-tiered planning, and architecture-first orchestration.
+- Consolidated user installation into `INSTALL.bat`, `install.sh`, and shared `install.py`, including explicit SAFE/AGENT authority confirmation and independent RAG depth selection.
+- Added host-aware Windows/Linux/macOS engine discovery, indexing, Editor export, and build launch paths. Physical Linux/macOS Unreal certification is still pending.
+- Strengthened atomic RAG builds, release verification, timeouts, live-test quality gates, sampling-profile resolution, and regression metrics.
+- Fixed package-builder JSON output on legacy Windows encodings and added forced-`cp1252` success/error regression coverage.
+
+See [1.3.0 Beta1 Release Notes](Release_Notes_1_3_0_Beta1.md) for the evidence boundary and component versions.
 
 ## Minimum Requirements
 
@@ -47,7 +50,7 @@ Required software:
 
 - Python 3.10+
 - Node.js 20+
-- LM Studio 0.3+
+- LM Studio 0.4+
 - Licensed Unreal Engine 5.x, with UE 5.8 recommended
 
 ## Quick Install
@@ -117,30 +120,33 @@ Never enable agent mode for untrusted project paths.
 
 ## 현재 상태
 
-v1.2.5는 1.2 라인의 마지막 minor release로 봅니다. 앞으로 1.2.x에는 추가적인 minor feature update를 계획하지 않고, 간단한 bug fix, 문서 수정, 낮은 위험도의 안정화 patch만 예정합니다.
+현재 제품 릴리스는 **1.3.0 Beta1**입니다. 범용 evidence-first 분석, 강화된 architecture/code-generation guardrail, cross-platform 통합 설치, 강화된 release verification을 포함한 1.3 prerelease 라인의 첫 버전입니다.
 
-최신 측정 결과:
+최신 live-model 측정 결과는 여전히 v1.2.5 baseline입니다. Beta1에는 저장소 자동 검증 근거가 있지만 새로운 paired live-model benchmark는 아직 완료되지 않았으므로, 아래 표를 Beta1 모델 품질 향상 수치로 사용하면 안 됩니다.
 
 자세한 검증 기록: [Live Validation Results — 2026-07-11](Live_Validation_Results_20260711.md) (Project_MJS scoped smoke + stabilization 이후 36-case live run).
 
 | Run | Artifact | 측정 시간 | Pass@K | Pass@1 | 비고 |
 |---|---|---:|---:|---:|---|
-| Qwen 3.6 27B community fine-tune live holdout | `20260709-144441-pass1-target` | 약 33분 37초 | 36/36 | 36/36 | v1.2.5 최고 결과. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
+| Qwen 3.6 27B community fine-tune live holdout | `20260709-144441-pass1-target` | 약 33분 37초 | 36/36 | 36/36 | v1.2.5 최고 historical baseline. `wrong_file_edits=0`, `build_cs_false_positives=0`, `no_op_edits=0`. |
 | Qwen 3.5 9B live holdout (deepseek-v4-flash) | `20260711-090534-qwen35-9b` | 약 26분 34초 | 36/36 | 35/36 | scoped write stabilization 이후. Pass@1 miss 1건. |
 | Qwen 3.5 9B live holdout | `20260709-153021-qwen35-9b` | 약 27분 22초 | 35/36 | 33/36 | 이전 compact baseline. LNK missing-definition 1건 실패. |
 | Dry-run compile gate | `20260709-142052` | 약 23분 29초 | 36/36 | 36/36 | Golden oracle + UBT; LM Studio 모델 없음. |
 
 최고 27B run의 `Harness average attempts=0.389`는 일반적인 모델 reasoning depth 지표가 아닙니다. Static autofix 성공은 `attempts=0`으로 기록될 수 있으므로, 많은 케이스가 LLM 편집 시도 전에 해결되었다는 뜻입니다.
 
-## v1.2.5 주요 변경
+## 1.3.0 Beta1 주요 변경
 
-- Multifile compile-fix 안정화가 **12/12 Pass@1**에 도달했습니다.
-- `CPP_RETURN_TYPE_MISMATCH` 감지와 autofix가 강화되었습니다.
-- Callback parameter expansion이 `.cpp` 정의에 `public:` 또는 중복 `static`을 만들지 않도록 수정되었습니다.
-- NavigationSystem module fix가 `UFUNCTION` false positive 때문에 막히지 않습니다.
-- Editor-runtime boundary fix가 runtime `Build.cs`에 `UnrealEd`를 추가하지 않습니다.
-- UObject lifecycle `NewObject` macro shadowing에 deterministic static autofix가 추가되었습니다.
-- Static autofix는 snapshot/rollback, transactional apply, static/UBT gate를 거칩니다.
+- 특정 프로젝트에 종속되지 않는 `evidence-first-code-audit` skill과 LM Studio MCP/preset 통합을 추가했습니다.
+- 프로젝트 전역 symbol, dependency, call, 보수적 data-flow graph와 freshness, completeness, truncation, missing-evidence 검사를 추가했습니다.
+- cycle, unmatched symbol, unsafe target, edit scope를 방어하는 fail-closed architecture proposal, change-impact, code-generation contract를 추가했습니다.
+- architecture cache/compact 분석, Essential profile 노출, risk-tier planning, architecture-first orchestration을 추가했습니다.
+- 사용자 설치 진입점을 `INSTALL.bat`, `install.sh`, 공통 `install.py`로 통합하고 SAFE/AGENT 권한 확인과 RAG depth 선택을 분리했습니다.
+- Windows/Linux/macOS별 engine 탐색, indexing, Editor export, build launcher 경로를 구현했습니다. 실제 Linux/macOS Unreal 인증은 아직 남아 있습니다.
+- atomic RAG build, release verification, timeout, live-test quality gate, sampling-profile resolution, regression metric을 강화했습니다.
+- legacy Windows encoding의 package-builder JSON 출력을 수정하고 강제 `cp1252` 성공·오류 회귀 테스트를 추가했습니다.
+
+근거 범위와 컴포넌트 버전은 [1.3.0 Beta1 릴리스 노트](Release_Notes_1_3_0_Beta1.md)를 참고하세요.
 
 ## 최소 요구사항
 
@@ -156,7 +162,7 @@ v1.2.5는 1.2 라인의 마지막 minor release로 봅니다. 앞으로 1.2.x에
 
 - Python 3.10+
 - Node.js 20+
-- LM Studio 0.3+
+- LM Studio 0.4+
 - 라이선스가 있는 Unreal Engine 5.x, UE 5.8 권장
 
 ## 빠른 설치
