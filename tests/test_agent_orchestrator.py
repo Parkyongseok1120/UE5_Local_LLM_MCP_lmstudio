@@ -49,6 +49,27 @@ def test_improve_request_is_edit():
 
 def test_runtime_debug_mode_keeps_explicit_fix_intent():
     assert classify_task("StaminaComponent runtime bug: fix it", "runtime_debug") == "edit"
+
+
+def test_runtime_debug_fix_preserves_causal_workflow_and_write_gates(monkeypatch):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    plan = build_agent_plan("StaminaComponent runtime bug in PIE: fix it", "runtime_debug")
+    assert plan.task_kind == "edit"
+    assert plan.write_gate["writesAllowed"] is True
+    assert plan.orchestration["strategy"] == "runtime_causal_loop"
+    assert plan.orchestration["runtimeVerificationRequired"] is True
+    assert {
+        "unreal_runtime_debug_session",
+        "unreal_code_sketch_claim_validate",
+    }.issubset(plan.orchestration["requiredBeforeWrite"])
+    assert "unreal_runtime_debug_session" in plan.tool_policy
+    roles = plan.orchestration["roleContract"]
+    assert roles["planner"]["mayWrite"] is False
+    assert roles["implementer"]["startsAfter"] == plan.orchestration["requiredBeforeWrite"]
+    assert roles["verifier"]["mustUseFreshPostWriteEvidence"] is True
+    assert roles["verifier"]["mustNotAcceptImplementerSelfReport"] is True
+    assert "same_observer_runtime_verification" in roles["verifier"]["requiredEvidence"]
+    assert any("same reproductionFingerprint" in item for item in plan.stop_conditions)
     assert classify_task("Fix runtime crash in StaminaComponent", "auto") == "edit"
 
 
@@ -132,6 +153,10 @@ def test_compile_fix_patch_strategy():
     plan = build_agent_plan("Fix LNK2019 unresolved external", "compile_fix")
     assert plan.edit_strategy == "exact_patch"
     assert "compile_fix" in plan.evidence.rag_modes
+    assert "unreal_code_sketch_claim_validate" in plan.orchestration["requiredBeforeWrite"]
+    assert plan.tool_policy.index("unreal_code_sketch_claim_validate") < plan.tool_policy.index(
+        "replace_in_file"
+    )
 
 
 def test_multifile_refactor_mode_is_compile_fix_track():

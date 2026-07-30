@@ -21,6 +21,8 @@ RAG_ESSENTIAL = {
     "unreal_agent_session",
     "unreal_rag_capabilities",
     "unreal_architecture_reasoning",
+    "unreal_runtime_config_check",
+    "unreal_runtime_debug_session",
     "unreal_code_sketch_claim_validate",
     "unreal_review_claim_validate",
     "unreal_diagram_validate",
@@ -35,6 +37,7 @@ AGENT_ESSENTIAL = {
     "read_file_range",
     "read_symbol",
     "replace_in_file",
+    "apply_edit_bundle",
     "write_file",
     "search_files",
     "static_validate_project",
@@ -313,6 +316,66 @@ def test_architecture_reasoning_rejects_non_object_proposal(monkeypatch, tmp_pat
     payload = sent[-1]["result"]["structuredContent"]
     assert payload["proposalValidation"]["ok"] is False
     assert payload["proposalValidation"]["implementationGate"]["writesAllowed"] is False
+
+
+def test_runtime_debug_prepare_persists_session_and_completes_gate(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    from task_api import task_start, task_status
+
+    started = task_start(
+        tmp_path,
+        request="Fix runtime damage bug",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": ["unreal_runtime_debug_session"]},
+        },
+    )
+    state = started["state"]
+    authorization = {
+        "taskSessionId": started["taskSessionId"],
+        "authToken": started["authToken"],
+        "planId": state["planId"],
+        "planRevision": state["planRevision"],
+        "activeSliceId": state["activeSliceId"],
+    }
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        25,
+        {
+            "name": "unreal_runtime_debug_session",
+            "arguments": {
+                "action": "prepare",
+                "taskAuthorization": authorization,
+                "symptom": "health does not decrease",
+                "reproductionSteps": ["start PIE", "apply damage"],
+                "observer": {"id": "health-log", "signal": "health value"},
+                "baselineEvidence": {
+                    "kind": "log",
+                    "location": "Saved/Logs/Demo.log",
+                    "observation": "health remains 100",
+                },
+                "hypotheses": [
+                    {
+                        "claim": "TakeDamage never forwards to HealthComponent",
+                        "falsification": "trace the same damage event into ReceiveDamage",
+                    }
+                ],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True
+    assert payload["persisted"] is True
+    assert payload["gateCompletion"]["ok"] is True
+    current = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert current["runtimeDebugSession"]["status"] == "ready_for_patch"
+    assert current["pendingGates"] == []
 
 
 def test_review_claim_validator_accepts_legacy_strings_and_evidence_packets(monkeypatch, tmp_path):

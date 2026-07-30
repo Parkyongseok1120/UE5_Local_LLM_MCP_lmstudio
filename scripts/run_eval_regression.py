@@ -44,6 +44,7 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int =
                 "pass": True,
                 "skipped": True,
                 "reason": "UBT-dependent step skipped in CI",
+                "proofLevel": "not_executed",
                 "stdoutTail": "",
                 "stderrTail": "",
             }
@@ -54,6 +55,7 @@ def run_cmd(label: str, cmd: list[str], *, ci: bool = False, step_timeout: int =
                 "pass": True,
                 "skipped": True,
                 "reason": "RAG index/performance-dependent step skipped in CI",
+                "proofLevel": "not_executed",
                 "stdoutTail": "",
                 "stderrTail": "",
             }
@@ -126,6 +128,40 @@ def collect_kpi_metrics() -> dict:
                 1 for row in benchmarks if isinstance(row, dict) and row.get("pass") is False
             )
     return metrics
+
+
+def summarize_execution_readiness(steps: list[dict], *, live_requested: bool) -> dict:
+    executed = [step for step in steps if not step.get("skipped")]
+    skipped = [step for step in steps if step.get("skipped")]
+    failed = [step for step in executed if not step.get("pass")]
+    gate_passed = bool(executed) and not failed
+    fully_validated = gate_passed and not skipped
+    if not executed and not failed:
+        evidence_level = "not_executed"
+    elif not gate_passed:
+        evidence_level = "failed"
+    elif live_requested and fully_validated:
+        evidence_level = "live_verified"
+    elif fully_validated:
+        evidence_level = "static_verified_live_not_requested"
+    else:
+        evidence_level = "static_partial_live_pending"
+    return {
+        "gatePassed": gate_passed,
+        "fullyValidated": fully_validated,
+        "liveRequested": live_requested,
+        "evidenceLevel": evidence_level,
+        "executedCount": len(executed),
+        "executedPassCount": sum(1 for step in executed if step.get("pass")),
+        "skippedCount": len(skipped),
+        "failedCount": len(failed),
+        "skippedLabels": [str(step.get("label") or "") for step in skipped],
+        "claimsAllowed": {
+            "staticRegressionGatePassed": gate_passed,
+            "liveUbtLmStudioValidated": bool(live_requested and fully_validated),
+            "fullyReleaseValidated": bool(live_requested and fully_validated),
+        },
+    }
 
 
 def load_quality_gates() -> dict:
@@ -319,8 +355,13 @@ def main() -> int:
             if row.get("timedOut"):
                 (fail_dir / "timeout.txt").write_text(row.get("reason") or "", encoding="utf-8")
 
-    report["passCount"] = sum(1 for s in report["steps"] if s["pass"])
+    report["executionReadiness"] = summarize_execution_readiness(
+        report["steps"],
+        live_requested=args.live,
+    )
+    report["passCount"] = report["executionReadiness"]["executedPassCount"]
     report["total"] = len(report["steps"])
+    report["skippedCount"] = report["executionReadiness"]["skippedCount"]
     report["metrics"] = collect_kpi_metrics()
 
     baseline_path = Path(args.compare) if args.compare else EVAL_DIR / "latest.json"
@@ -343,13 +384,26 @@ def main() -> int:
     md = [
         f"# Eval regression {stamp}",
         f"Tier: {report['tier']}",
-        f"Pass: {report['passCount']}/{report['total']}",
+        (
+            f"Executed pass: {report['passCount']}/"
+            f"{report['executionReadiness']['executedCount']} "
+            f"(skipped: {report['skippedCount']}, declared steps: {report['total']})"
+        ),
+        f"Evidence: {report['executionReadiness']['evidenceLevel']}",
         "",
         "## Steps",
     ]
     for step in report["steps"]:
         suffix = " (SKIP)" if step.get("skipped") else ""
         md.append(f"- {step['label']}: {'PASS' if step['pass'] else 'FAIL'}{suffix}")
+    if report["skippedCount"]:
+        md.extend(
+            [
+                "",
+                "> Skipped steps are not execution proof and are not counted as passes. "
+                "Run the live gate with LM Studio and UBT before making full release-readiness claims.",
+            ]
+        )
     if report["metrics"]:
         md.extend(["", "## Metrics", json.dumps(report["metrics"], indent=2)])
     if report["delta"].get("regressions"):
@@ -362,7 +416,7 @@ def main() -> int:
     print(f"Wrote {latest_md}")
     if report["delta"].get("regressions"):
         print("REGRESSIONS:", "; ".join(report["delta"]["regressions"]), file=sys.stderr)
-    ok = report["passCount"] == report["total"] and not report["delta"].get("regressions")
+    ok = report["executionReadiness"]["gatePassed"] and not report["delta"].get("regressions")
     return 0 if ok else 1
 
 

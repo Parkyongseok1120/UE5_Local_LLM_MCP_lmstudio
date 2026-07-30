@@ -80,3 +80,29 @@ def test_impact_contract_includes_project_plugin_source(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     assert result["directImpacts"][0]["path"].startswith("Plugins/DemoPlugin/Source/")
+
+
+def test_impact_contract_includes_config_redirects_and_requires_asset_validation(tmp_path: Path) -> None:
+    source = tmp_path / "Source" / "Demo"
+    config = tmp_path / "Config"
+    source.mkdir(parents=True)
+    config.mkdir()
+    (source / "OldActor.h").write_text(
+        "UCLASS()\nclass AOldActor : public AActor {};\n",
+        encoding="utf-8",
+    )
+    (config / "DefaultEngine.ini").write_text(
+        '+ActiveClassRedirects=(OldClassName="AOldActor",NewClassName="ANewActor")\n',
+        encoding="utf-8",
+    )
+
+    result = build_change_impact_contract(tmp_path, ["AOldActor"])
+
+    direct_paths = {item["path"] for item in result["directImpacts"]}
+    assert "Config/DefaultEngine.ini" in direct_paths
+    assert result["textSurfaceImpacts"][0]["kind"] == "config_reference"
+    assert result["assetInspectionRequired"] is True
+    assert result["assetCoverage"] == "editor_or_asset_registry_required"
+    kinds = {item["kind"] for item in result["regressionPlan"]}
+    assert "asset_registry_reference_scan" in kinds
+    assert "blueprint_compile_or_load_validation" in kinds

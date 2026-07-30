@@ -34,6 +34,23 @@ SYMBOL_RES = (
 )
 # Method/member calls the model asserts exist, e.g. Player->SetRestoreState(...).
 MEMBER_CALL_RE = re.compile(r"(?:->|\.)\s*([A-Za-z_][A-Za-z0-9_]{2,})\s*\(")
+MEMBER_CALL_CLAIM_RE = re.compile(
+    r"\b(?P<receiver>[A-Za-z_][A-Za-z0-9_]*)\s*(?:->|\.)\s*"
+    r"(?P<member>[A-Za-z_][A-Za-z0-9_]{2,})\s*\("
+)
+STATIC_CALL_CLAIM_RE = re.compile(
+    r"\b(?P<receiver>[AUFSI][A-Z][A-Za-z0-9_]*)\s*::\s*"
+    r"(?P<member>[A-Za-z_][A-Za-z0-9_]{2,})\s*\("
+)
+VARIABLE_TYPE_RE = re.compile(
+    r"\b(?P<type>[AUFSI][A-Z][A-Za-z0-9_:]*)\s*(?:[*&]\s*)?"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+)
+TEMPLATE_VARIABLE_TYPE_RE = re.compile(
+    r"\b(?:TObjectPtr|TWeakObjectPtr|TSoftObjectPtr|TSubclassOf)\s*<\s*"
+    r"(?P<type>[AUFSI][A-Z][A-Za-z0-9_:]*)\s*>\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+)
 LOCAL_TYPE_DECL_RE = re.compile(
     r"\b(?:class|struct|enum(?:\s+class)?)\s+(?:[A-Z0-9_]+_API\s+)?([AUFSI][A-Z][A-Za-z0-9_]{2,})\b"
 )
@@ -70,6 +87,47 @@ def extract_member_calls(text: str) -> list[str]:
             found.append(name)
     return found
 
+
+def extract_member_call_claims(text: str) -> list[dict[str, str]]:
+    variable_types: dict[str, str] = {}
+    for pattern in (VARIABLE_TYPE_RE, TEMPLATE_VARIABLE_TYPE_RE):
+        for match in pattern.finditer(text or ""):
+            variable_types[match.group("name")] = match.group("type").split("::")[-1]
+
+    claims: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for match in MEMBER_CALL_CLAIM_RE.finditer(text or ""):
+        receiver = match.group("receiver")
+        member = match.group("member")
+        receiver_type = variable_types.get(receiver, "")
+        key = (receiver, receiver_type, member)
+        if key not in seen:
+            seen.add(key)
+            claims.append(
+                {
+                    "receiver": receiver,
+                    "receiverType": receiver_type,
+                    "member": member,
+                    "callKind": "member",
+                }
+            )
+    for match in STATIC_CALL_CLAIM_RE.finditer(text or ""):
+        receiver_type = match.group("receiver").split("::")[-1]
+        member = match.group("member")
+        key = (receiver_type, receiver_type, member)
+        if key not in seen:
+            seen.add(key)
+            claims.append(
+                {
+                    "receiver": receiver_type,
+                    "receiverType": receiver_type,
+                    "member": member,
+                    "callKind": "static",
+                }
+            )
+    return claims
+
+
 def extract_local_declarations(text: str) -> set[str]:
     """Return symbols introduced by the sketch itself, not claimed as engine APIs."""
     declared = {match.group(1) for match in LOCAL_TYPE_DECL_RE.finditer(text or "")}
@@ -95,7 +153,97 @@ def _lookup(index: Path, symbol: str, top_k: int = 5) -> list[dict[str, Any]]:
         return []
 
 
-def _classify_symbol(symbol: str, rows: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+def _graph_symbol_index(graph: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    if not isinstance(graph, dict):
+        return index
+    for raw in graph.get("symbols") or []:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("symbol_name") or "").casefold()
+        if name:
+            index.setdefault(name, []).append(raw)
+    return index
+
+
+def _graph_lookup(
+    graph: dict[str, Any] | None,
+    symbol: str,
+    top_k: int = 5,
+    *,
+    symbol_index: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    if not isinstance(graph, dict):
+        return []
+    target = symbol.casefold()
+    exact: list[dict[str, Any]] = []
+    prefix: list[dict[str, Any]] = []
+    active_index = symbol_index if symbol_index is not None else _graph_symbol_index(graph)
+    candidate_rows: list[dict[str, Any]] = list(active_index.get(target, []))
+    if len(candidate_rows) < top_k:
+        for folded, rows in active_index.items():
+            if folded != target and (folded.startswith(target) or target.startswith(folded)):
+                candidate_rows.extend(rows)
+    for raw in candidate_rows:
+        name = str(raw.get("symbol_name") or "")
+        folded = name.casefold()
+        if folded == target:
+            bucket = exact
+        elif folded.startswith(target) or target.startswith(folded):
+            bucket = prefix
+        else:
+            continue
+        row = dict(raw)
+        row.setdefault("title", row.get("qualified_name") or name)
+        path = str(row.get("file_path") or "")
+        line = int(row.get("line_start") or 1)
+        row.setdefault("locator", f"{path}:{line}" if path else "")
+        row["evidence_source"] = "project_symbol_graph"
+        bucket.append(row)
+    return (exact + prefix)[:top_k]
+
+
+def _receiver_owner_chain(graph: dict[str, Any] | None, receiver_type: str) -> set[str]:
+    """Return the receiver and project-local base types allowed to own a member."""
+    receiver = receiver_type.split("::")[-1].strip()
+    if not receiver:
+        return set()
+    bases: dict[str, str] = {}
+    for row in (graph or {}).get("symbols") or []:
+        if not isinstance(row, dict) or row.get("symbol_kind") not in {"class", "struct"}:
+            continue
+        name = str(row.get("symbol_name") or "").split("::")[-1]
+        base = str(row.get("base_class") or "").split("::")[-1]
+        if name:
+            bases[name.casefold()] = base
+    owners = {receiver.casefold()}
+    current = receiver
+    while current and len(owners) < 32:
+        base = bases.get(current.casefold(), "")
+        folded = base.casefold()
+        if not base or folded in owners:
+            break
+        owners.add(folded)
+        current = base
+    return owners
+
+
+def _row_qualified_owner(row: dict[str, Any], symbol: str) -> str:
+    qualified = str(row.get("qualified_name") or "").strip()
+    if "::" in qualified:
+        owner, member = qualified.rsplit("::", 1)
+        if member.casefold() == symbol.casefold():
+            return owner.split("::")[-1]
+    return ""
+
+
+def _classify_symbol(
+    symbol: str,
+    rows: list[dict[str, Any]],
+    *,
+    receiver_type: str = "",
+    acceptable_owners: set[str] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
     target = symbol.lower()
     exact: list[dict[str, Any]] = []
     prefix: list[dict[str, Any]] = []
@@ -111,12 +259,26 @@ def _classify_symbol(symbol: str, rows: list[dict[str, Any]]) -> tuple[str, list
         {
             "symbol_name": r.get("symbol_name"),
             "symbol_kind": r.get("symbol_kind"),
+            "qualified_name": r.get("qualified_name"),
             "title": r.get("title"),
             "locator": r.get("locator"),
+            "source": r.get("evidence_source") or "rag_index",
         }
         for r in (exact or prefix)[:3]
     ]
     if exact:
+        if receiver_type:
+            expected_owners = acceptable_owners or {receiver_type.split("::")[-1].casefold()}
+            qualified_owners = {
+                _row_qualified_owner(row, symbol).casefold()
+                for row in exact
+                if _row_qualified_owner(row, symbol)
+            }
+            if expected_owners & qualified_owners:
+                return "verified", evidence
+            if qualified_owners:
+                return "unverified", evidence
+            return "weak", evidence
         return "verified", evidence
     if prefix:
         return "weak", evidence
@@ -128,17 +290,20 @@ def validate_sketch(
     index: str | Path | None = None,
     *,
     top_k: int = 5,
+    graph: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from unreal_api_denylist import check_denylist
 
     index_path = _resolve_index(index)
     index_exists = index_path.exists()
+    graph_available = isinstance(graph, dict) and bool(graph.get("symbols"))
+    graph_index = _graph_symbol_index(graph)
 
     denylist_hits = check_denylist(sketch)
     denied_terms = {hit["term"] for hit in denylist_hits}
 
     candidates = extract_symbols(sketch)
-    member_calls = extract_member_calls(sketch)
+    member_claims = extract_member_call_claims(sketch)
     local_declarations = extract_local_declarations(sketch)
 
     results: list[dict[str, Any]] = []
@@ -159,16 +324,16 @@ def validate_sketch(
             }
         )
 
-    def _consider(symbol: str, *, is_member: bool) -> None:
-        key = symbol.lower()
-        if key in seen or key in denied_terms:
+    def _consider(symbol: str, *, is_member: bool, receiver_type: str = "", receiver: str = "") -> None:
+        key = f"{receiver_type.casefold()}::{symbol.casefold()}" if is_member else symbol.casefold()
+        if key in seen or symbol.casefold() in denied_terms:
             return
         if symbol in COMMON_SAFE:
             return
         if symbol in local_declarations:
             return
         seen.add(key)
-        if not index_exists:
+        if not index_exists and not graph_available:
             results.append(
                 {
                     "symbol": symbol,
@@ -178,8 +343,28 @@ def validate_sketch(
                 }
             )
             return
-        rows = _lookup(index_path, symbol, top_k=top_k)
-        verdict, evidence = _classify_symbol(symbol, rows)
+        graph_rows = _graph_lookup(
+            graph,
+            symbol,
+            top_k=top_k,
+            symbol_index=graph_index,
+        )
+        rag_rows = _lookup(index_path, symbol, top_k=top_k) if index_exists else []
+        rows = graph_rows + [
+            row for row in rag_rows
+            if not any(
+                str(existing.get("symbol_name") or "").casefold() == str(row.get("symbol_name") or "").casefold()
+                and str(existing.get("qualified_name") or "").casefold()
+                == str(row.get("qualified_name") or "").casefold()
+                for existing in graph_rows
+            )
+        ]
+        verdict, evidence = _classify_symbol(
+            symbol,
+            rows,
+            receiver_type=receiver_type if is_member else "",
+            acceptable_owners=_receiver_owner_chain(graph, receiver_type) if is_member else None,
+        )
         note = ""
         if verdict == "unverified":
             note = (
@@ -187,12 +372,24 @@ def validate_sketch(
                 "confirm against the engine header or mark UNKNOWN."
             )
         elif verdict == "weak":
-            note = "Only a fuzzy match found; confirm the exact name/signature before use."
-        if is_member and verdict != "verified":
-            note = note or "Member/method call not confirmed in index; verify the exact signature."
+            note = "Only a fuzzy or owner-less match found; confirm the exact receiver and signature before use."
+        if is_member and receiver_type and verdict == "unverified" and evidence:
+            note = (
+                f"{symbol} exists, but no exact {receiver_type}::{symbol} owner match was found. "
+                "Do not treat a method on another receiver as valid."
+            )
+        elif is_member and not receiver_type and verdict == "verified":
+            verdict = "weak"
+            note = (
+                f"Receiver type for {receiver or 'member call'}->{symbol} could not be inferred; "
+                "confirm the receiver class and exact signature."
+            )
+        elif is_member and verdict != "verified":
+            note = note or "Member/method call not confirmed on the receiver type; verify the exact signature."
         results.append(
             {
                 "symbol": symbol,
+                **({"receiver": receiver, "receiverType": receiver_type} if is_member else {}),
                 "verdict": verdict,
                 "evidence": [] if verdict == "verified" else evidence,
                 "note": note,
@@ -201,8 +398,13 @@ def validate_sketch(
 
     for symbol in candidates:
         _consider(symbol, is_member=False)
-    for symbol in member_calls:
-        _consider(symbol, is_member=True)
+    for claim in member_claims:
+        _consider(
+            claim["member"],
+            is_member=True,
+            receiver_type=claim["receiverType"],
+            receiver=claim["receiver"],
+        )
 
     known_bad = sum(1 for r in results if r["verdict"] == "known_bad")
     unverified = sum(1 for r in results if r["verdict"] == "unverified")
@@ -223,10 +425,12 @@ def validate_sketch(
     results.sort(key=lambda item: (verdict_order.get(str(item.get("verdict")), 9), str(item.get("symbol"))))
 
     return {
-        "ok": known_bad == 0 and unverified == 0,
+        "ok": known_bad == 0 and unverified == 0 and weak == 0,
         "verdictSummary": verdict_summary,
         "indexPath": str(index_path),
         "indexExists": index_exists,
+        "projectGraphAvailable": graph_available,
+        "projectGraphSymbolCount": sum(len(rows) for rows in graph_index.values()),
         "symbolCount": len(results),
         "localDeclarationCount": len(local_declarations),
         "verifiedCount": verified,
@@ -235,8 +439,8 @@ def validate_sketch(
         "weakCount": weak,
         "results": results,
         "guidance": (
-            "Replace every known_bad item using its replacement, downgrade unverified "
-            "symbols to UNKNOWN, then validate the revised draft once before presenting it. "
+            "Replace every known_bad item using its replacement, downgrade unverified or weak "
+            "symbols to UNKNOWN, then validate receiver types and exact signatures before presenting it. "
             "Keep proof level at Proposed."
         ),
     }

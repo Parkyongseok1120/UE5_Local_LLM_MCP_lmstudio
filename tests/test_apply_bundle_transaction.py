@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from autofix_runtime import AutofixResult, AutofixStep, run_autofix_pipeline  # noqa: E402
-from lmstudio_unreal_wrapper import apply_bundle, read_text  # noqa: E402
+from lmstudio_unreal_wrapper import apply_bundle, read_text, rollback_terminal_failure  # noqa: E402
 from unreal_static_validate import Finding  # noqa: E402
 
 
@@ -62,6 +62,28 @@ def test_stage_bundle_apply_commits_only_after_success(tmp_path: Path) -> None:
     written = apply_bundle(tmp_path, bundle, before_apply=before)
     assert written
     assert read_text(target) == "void Foo() { return; }\n"
+
+
+def test_terminal_failure_restores_baseline_and_preserves_rejected_diff(tmp_path: Path) -> None:
+    source = tmp_path / "Source" / "Game"
+    source.mkdir(parents=True)
+    existing = source / "Holdout.cpp"
+    created = source / "Generated.cpp"
+    existing.write_text("void Foo() {}\n", encoding="utf-8")
+    baseline = {"Source/Game/Holdout.cpp": "void Foo() {}\n"}
+
+    existing.write_text("void Foo() { BROKEN }\n", encoding="utf-8")
+    created.write_text("void Generated() { BROKEN }\n", encoding="utf-8")
+    run_dir = tmp_path / ".agent-runs" / "failed"
+    run_dir.mkdir(parents=True)
+
+    restored = rollback_terminal_failure(tmp_path, baseline, run_dir)
+
+    assert restored == ["Source/Game/Generated.cpp", "Source/Game/Holdout.cpp"]
+    assert read_text(existing) == "void Foo() {}\n"
+    assert not created.exists()
+    rejected_diff = read_text(run_dir / "rejected_final_diff.patch")
+    assert "BROKEN" in rejected_diff
 
 
 def test_autofix_pipeline_rollback_restores_true_pre_step_content(tmp_path: Path) -> None:

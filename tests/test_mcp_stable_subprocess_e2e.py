@@ -145,7 +145,7 @@ def test_agent_mcp_subprocess_tools_list_stable_essential(tmp_path: Path) -> Non
         tools = tools_result["result"]["tools"]
         names = {tool["name"] for tool in tools}
         assert names == set(MANIFEST["agentEssential"])
-        assert "apply_edit_bundle" not in names
+        assert "apply_edit_bundle" in names
         definitions = {tool["name"]: tool for tool in tools}
         for mutation_tool in ("write_file", "replace_in_file"):
             schema = definitions[mutation_tool]["inputSchema"]
@@ -308,6 +308,25 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         assert plan_payload["writeGate"]["writesAllowed"] is True
         task_auth = plan_payload["taskAuthorization"]
         assert all(task_auth.values()), task_auth
+        gated = rag.request(
+            "tools/call",
+            {
+                "name": "unreal_code_sketch_claim_validate",
+                "arguments": {
+                    "sketch": "alpha\n",
+                    "request": "Create NewThing.h with the supplied content",
+                    "projectRoot": str(project_dir),
+                    "targetFiles": ["Source/DemoGame/Public/NewThing.h"],
+                    "changeKind": "new_file",
+                    "taskAuthorization": task_auth,
+                },
+            },
+            4,
+        )
+        gated_payload = gated["result"].get("structuredContent") or json.loads(
+            gated["result"]["content"][0]["text"]
+        )
+        assert gated_payload["gateCompletion"]["ok"] is True, gated_payload
     finally:
         rag.close()
 
@@ -351,12 +370,57 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         )
         assert "alpha" in read["result"]["content"][0]["text"]
 
+        rag_replace = _StdioJsonRpc([_python_exe(), str(RAG_SCRIPT), "--index", str(index)], env=env)
+        try:
+            rag_replace.request(
+                "initialize",
+                {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "pytest", "version": "1.0"},
+                },
+                1,
+            )
+            replace_plan = rag_replace.request(
+                "tools/call",
+                {
+                    "name": "unreal_agent_plan",
+                    "arguments": {"request": "Fix NewThing.h by replacing alpha with beta"},
+                },
+                2,
+            )
+            replace_plan_payload = replace_plan["result"].get("structuredContent") or json.loads(
+                replace_plan["result"]["content"][0]["text"]
+            )
+            replace_auth = replace_plan_payload["taskAuthorization"]
+            replace_gate = rag_replace.request(
+                "tools/call",
+                {
+                    "name": "unreal_code_sketch_claim_validate",
+                    "arguments": {
+                        "sketch": "beta\n",
+                            "request": "Fix NewThing.h by replacing alpha with beta",
+                        "projectRoot": str(project_dir),
+                        "targetFiles": ["Source/DemoGame/Public/NewThing.h"],
+                        "changeKind": "single_file",
+                        "taskAuthorization": replace_auth,
+                    },
+                },
+                3,
+            )
+            replace_gate_payload = replace_gate["result"].get("structuredContent") or json.loads(
+                replace_gate["result"]["content"][0]["text"]
+            )
+            assert replace_gate_payload["gateCompletion"]["ok"] is True, replace_gate_payload
+        finally:
+            rag_replace.close()
+
         replaced = client.request(
             "tools/call",
             {
                 "name": "replace_in_file",
                 "arguments": {
-                    **task_auth,
+                    **replace_auth,
                     "path": "Source/DemoGame/Public/NewThing.h",
                     "oldText": "alpha",
                     "newText": "beta",
@@ -765,7 +829,7 @@ def test_rag_subprocess_rejects_hidden_tool_call(tmp_path: Path) -> None:
         client.close()
 
 
-def test_agent_subprocess_rejects_apply_edit_bundle(tmp_path: Path) -> None:
+def test_agent_subprocess_exposes_apply_edit_bundle_but_requires_authorization(tmp_path: Path) -> None:
     require_agent_mcp_deps()
     env = os.environ.copy()
     env.update(
@@ -794,7 +858,7 @@ def test_agent_subprocess_rejects_apply_edit_bundle(tmp_path: Path) -> None:
             req_id=2,
         )
         assert result["result"].get("isError") is True
-        assert "TOOL_NOT_CALLABLE" in result["result"]["content"][0]["text"]
+        assert "TASK_SESSION_REQUIRED" in result["result"]["content"][0]["text"]
     finally:
         client.close()
 

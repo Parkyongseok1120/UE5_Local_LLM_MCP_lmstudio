@@ -1108,6 +1108,22 @@ def rollback_bundle_apply(
     restore_changed_paths(root, before_apply, changed_paths)
 
 
+def rollback_terminal_failure(
+    root: Path,
+    baseline_snapshot: dict[str, str],
+    run_dir: Path,
+) -> list[str]:
+    """Restore the pre-run project state while preserving the rejected diff as evidence."""
+    current_snapshot = snapshot_project_files(root)
+    changed_paths = changed_paths_between(baseline_snapshot, current_snapshot)
+    if not changed_paths:
+        return []
+    write_file(run_dir / "rejected_final_diff.patch", diff_snapshots(baseline_snapshot, current_snapshot) + "\n")
+    restore_changed_paths(root, baseline_snapshot, changed_paths)
+    invalidate_project_snapshot_cache(root, relative_paths=changed_paths)
+    return changed_paths
+
+
 def apply_generated_h_missing_autofix(root: Path, findings: list[Finding]) -> list[Path]:
     written: list[Path] = []
     for finding in findings:
@@ -1783,6 +1799,7 @@ def _record_message_for_priority(record: dict[str, Any]) -> str:
 def build_error_record_priority(record: dict[str, Any]) -> tuple[int, str, str]:
     """Rank actual compile/link/UHT failures above toolchain or API warnings."""
     metadata = record.get("metadata") or {}
+    causal_role = str(metadata.get("causal_role") or "")
     severity = str(metadata.get("severity") or "").lower()
     code = str(metadata.get("error_code") or "").upper()
     subkind = str(metadata.get("error_subkind") or "")
@@ -1792,6 +1809,12 @@ def build_error_record_priority(record: dict[str, Any]) -> tuple[int, str, str]:
         or "please update your code to the new api before upgrading" in message
         or code in {"C4996"}
     )
+    if causal_role == "primary":
+        return (-100, code, message)
+    if causal_role == "duplicate":
+        return (70, code, message)
+    if causal_role == "cascade_candidate":
+        return (60, code, message)
     if low_signal:
         return (90, code, message)
     if code.startswith("LNK") and severity in {"error", "fatal error"}:
@@ -1809,6 +1832,65 @@ def build_error_record_priority(record: dict[str, Any]) -> tuple[int, str, str]:
     if severity == "warning":
         return (80, code, message)
     return (50, code, message)
+
+
+def annotate_build_error_causality(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Label first diagnostic vs. likely cascades without claiming compiler-proven causality."""
+    error_rows = [
+        record
+        for record in records
+        if str((record.get("metadata") or {}).get("severity") or "").lower()
+        in {"error", "fatal error"}
+    ]
+    if not error_rows:
+        return records
+    primary = min(
+        error_rows,
+        key=lambda record: int((record.get("metadata") or {}).get("diagnostic_order") or 0),
+    )
+    primary_meta = primary.setdefault("metadata", {})
+    primary_meta["causal_role"] = "primary"
+    primary_meta["causal_confidence"] = "first_diagnostic"
+    primary_id = str(primary.get("id") or "")
+    primary_unit = str(primary_meta.get("translation_unit") or "")
+    primary_file = str(primary_meta.get("error_file") or "")
+    seen_signatures: set[tuple[str, str, str]] = set()
+
+    for record in sorted(
+        records,
+        key=lambda item: int((item.get("metadata") or {}).get("diagnostic_order") or 0),
+    ):
+        metadata = record.setdefault("metadata", {})
+        severity = str(metadata.get("severity") or "").lower()
+        signature = (
+            str(metadata.get("error_code") or ""),
+            str(metadata.get("error_file") or ""),
+            _record_message_for_priority(record),
+        )
+        if record is primary:
+            seen_signatures.add(signature)
+            continue
+        if severity not in {"error", "fatal error"}:
+            metadata["causal_role"] = "warning_or_note"
+            metadata["causal_confidence"] = "not_root_ranked"
+            continue
+        if signature in seen_signatures:
+            role = "duplicate"
+            confidence = "exact_diagnostic_repeat"
+        else:
+            unit = str(metadata.get("translation_unit") or "")
+            error_file = str(metadata.get("error_file") or "")
+            same_surface = bool(
+                (primary_unit and unit and primary_unit == unit)
+                or (primary_file and error_file and primary_file == error_file)
+            )
+            role = "cascade_candidate" if same_surface else "independent_candidate"
+            confidence = "same_translation_unit_or_file" if same_surface else "separate_error_surface"
+        metadata["causal_role"] = role
+        metadata["causal_confidence"] = confidence
+        metadata["primary_error_id"] = primary_id
+        seen_signatures.add(signature)
+    return records
 
 
 def prioritize_build_error_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1829,7 +1911,7 @@ def parse_build_feedback(log_path: Path, project_root: Path, output: str, contex
                 records.append(item)
     if not records:
         records.append(fallback_build_error_record(log_path, project_root, output))
-    return prioritize_build_error_records(records)[:12]
+    return prioritize_build_error_records(annotate_build_error_causality(records))[:12]
 
 
 def mode_from_error_kind(error_kind: str) -> str:
@@ -1900,6 +1982,8 @@ def format_build_records(records: list[dict[str, Any]]) -> str:
                     f"kind={metadata.get('error_kind', '')}",
                     f"code={metadata.get('error_code', '')}",
                     f"file={metadata.get('error_file', '')}",
+                    f"translation_unit={metadata.get('translation_unit', '')}",
+                    f"causal_role={metadata.get('causal_role', '')}",
                     f"symbol={metadata.get('symbol_name', '')}",
                     f"title={record.get('title', '')}",
                 ]
@@ -4085,6 +4169,14 @@ def run(args: argparse.Namespace) -> int:
         )
         write_file(attempt_dir / "validation_feedback.txt", previous_feedback)
 
+    terminal_rollback_paths = rollback_terminal_failure(project_root, baseline_snapshot, run_dir)
+    if terminal_rollback_paths:
+        last_written = []
+        rollback_note = (
+            "Terminal validation/build failure rolled back the project to its pre-run state. "
+            "The rejected candidate diff is preserved in rejected_final_diff.patch."
+        )
+        last_answer = f"{last_answer}\n\n{rollback_note}".strip()
     write_file(final_diff_path, diff_snapshots(baseline_snapshot, snapshot_project_files(project_root)) + "\n")
     summary = final_summary(
         status="FAILED",

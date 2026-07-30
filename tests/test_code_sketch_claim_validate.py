@@ -9,6 +9,7 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from code_sketch_claim_validate import (  # noqa: E402
+    extract_member_call_claims,
     extract_member_calls,
     extract_symbols,
     validate_sketch,
@@ -30,6 +31,19 @@ def test_extract_member_calls():
     calls = extract_member_calls("P->SetRestoreState(true); Actor->GetActorTransform();")
     assert "SetRestoreState" in calls
     assert "GetActorTransform" in calls
+
+
+def test_extract_member_call_claims_infers_receiver_types():
+    claims = extract_member_call_claims(
+        "UMyComponent* Comp; Comp->SetState(true); UGameplayStatics::GetPlayerController(World, 0);"
+    )
+    assert {
+        (claim["receiverType"], claim["member"], claim["callKind"])
+        for claim in claims
+    } == {
+        ("UMyComponent", "SetState", "member"),
+        ("UGameplayStatics", "GetPlayerController", "static"),
+    }
 
 
 def test_denylist_flags_known_hallucinations():
@@ -248,3 +262,135 @@ public:
     assert "FOnStaminaChangedSignature" not in result_symbols
     assert "UCLASS" not in result_symbols
     assert "UPROPERTY" not in result_symbols
+
+
+def test_member_method_on_different_receiver_is_not_verified(monkeypatch, tmp_path: Path):
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"index")
+
+    def fake_lookup(_index, symbol, top_k=5):
+        if symbol == "SetState":
+            return [
+                {
+                    "symbol_name": "SetState",
+                    "symbol_kind": "function",
+                    "qualified_name": "UDifferentComponent::SetState",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr("code_sketch_claim_validate._lookup", fake_lookup)
+    result = validate_sketch(
+        "class UMyComponent {}; UMyComponent* Comp; Comp->SetState(true);",
+        index,
+    )
+    method = next(item for item in result["results"] if item["symbol"] == "SetState")
+    assert method["verdict"] == "unverified"
+    assert method["receiverType"] == "UMyComponent"
+    assert result["ok"] is False
+
+
+def test_member_method_requires_exact_receiver_owner(monkeypatch, tmp_path: Path):
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"index")
+
+    def fake_lookup(_index, symbol, top_k=5):
+        if symbol == "SetState":
+            return [
+                {
+                    "symbol_name": "SetState",
+                    "symbol_kind": "function",
+                    "qualified_name": "UMyComponent::SetState",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr("code_sketch_claim_validate._lookup", fake_lookup)
+    result = validate_sketch(
+        "class UMyComponent {}; UMyComponent* Comp; Comp->SetState(true);",
+        index,
+    )
+    method = next(item for item in result["results"] if item["symbol"] == "SetState")
+    assert method["verdict"] == "verified"
+    assert method["receiverType"] == "UMyComponent"
+    assert result["ok"] is True
+
+
+def test_ownerless_exact_member_evidence_is_weak_and_fail_closed(monkeypatch, tmp_path: Path):
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"index")
+
+    monkeypatch.setattr(
+        "code_sketch_claim_validate._lookup",
+        lambda *_args, **_kwargs: [{"symbol_name": "SetState", "symbol_kind": "function"}],
+    )
+    result = validate_sketch(
+        "class UMyComponent {}; UMyComponent* Comp; Comp->SetState(true);",
+        index,
+    )
+    method = next(item for item in result["results"] if item["symbol"] == "SetState")
+    assert method["verdict"] == "weak"
+    assert result["weakCount"] == 1
+    assert result["ok"] is False
+
+
+def test_project_graph_verifies_project_member_without_rag_index():
+    graph = {
+        "symbols": [
+            {
+                "symbol_name": "UMyComponent",
+                "symbol_kind": "class",
+                "base_class": "UActorComponent",
+                "file_path": "Source/Game/MyComponent.h",
+                "line_start": 8,
+            },
+            {
+                "symbol_name": "SetState",
+                "symbol_kind": "function",
+                "qualified_name": "UMyComponent::SetState",
+                "file_path": "Source/Game/MyComponent.cpp",
+                "line_start": 14,
+            },
+        ]
+    }
+    result = validate_sketch(
+        "UMyComponent* Comp; Comp->SetState(true);",
+        NO_INDEX,
+        graph=graph,
+    )
+    method = next(item for item in result["results"] if item["symbol"] == "SetState")
+    assert method["verdict"] == "verified"
+    assert result["projectGraphAvailable"] is True
+    assert result["ok"] is True
+
+
+def test_project_graph_accepts_member_declared_on_local_base_class():
+    graph = {
+        "symbols": [
+            {
+                "symbol_name": "UMyComponent",
+                "symbol_kind": "class",
+                "base_class": "UMyBaseComponent",
+            },
+            {
+                "symbol_name": "UMyBaseComponent",
+                "symbol_kind": "class",
+                "base_class": "UActorComponent",
+            },
+            {
+                "symbol_name": "SetState",
+                "symbol_kind": "function",
+                "qualified_name": "UMyBaseComponent::SetState",
+                "file_path": "Source/Game/MyBaseComponent.cpp",
+                "line_start": 14,
+            },
+        ]
+    }
+    result = validate_sketch(
+        "UMyComponent* Comp; Comp->SetState(true);",
+        NO_INDEX,
+        graph=graph,
+    )
+    method = next(item for item in result["results"] if item["symbol"] == "SetState")
+    assert method["verdict"] == "verified"
+    assert result["ok"] is True

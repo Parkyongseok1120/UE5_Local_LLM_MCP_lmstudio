@@ -11,6 +11,8 @@
     "unreal_agent_session",
     "unreal_rag_capabilities",
     "unreal_architecture_reasoning",
+    "unreal_runtime_config_check",
+    "unreal_runtime_debug_session",
     "unreal_code_sketch_claim_validate",
     "unreal_review_claim_validate",
     "unreal_diagram_validate",
@@ -38,15 +40,14 @@
     "search_files",
     "write_file",
     "replace_in_file",
+    "apply_edit_bundle",
     "static_validate_project",
     "build_unreal_project",
     "read_unreal_logs",
     "write_session_handoff",
     "record_bootstrap_step"
   ],
-  "agentHiddenUntilControlPlane": [
-    "apply_edit_bundle"
-  ],
+  "agentHiddenUntilControlPlane": [],
   "projectSwitchCanonical": "unreal_set_active_project",
   "docReferencedTools": [
     "unreal_rag_health",

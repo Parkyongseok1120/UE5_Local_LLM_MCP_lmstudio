@@ -36,7 +36,7 @@ TERMINAL_STATUSES = frozenset({
 VALID_TRANSITIONS: dict[str, frozenset[str]] = {
     "created": frozenset({"queued", "cancelled", "cancel_requested"}),
     "starting": frozenset({"queued", "running", "cancelled", "cancel_requested", "failed", "cancellation_uncertain"}),
-    "queued": frozenset({"starting", "running", "cancelled", "cancel_requested"}),
+    "queued": frozenset({"starting", "running", "cancelled", "cancel_requested", "failed"}),
     "running": frozenset({"completed", "failed", "timed_out", "cancelled", "cancel_requested", "cancellation_uncertain"}),
     "cancel_requested": frozenset({"cancelled", "cancellation_uncertain"}),
 }

@@ -622,28 +622,95 @@ def write_outputs(arch: dict[str, Any], out: Path, markdown: Path | None = None)
 
 
 def semantic_graph_v1(arch: dict[str, Any]) -> dict[str, Any]:
+    """Return the portable semantic graph for either architecture inventory schema.
+
+    ``generate_architecture_map`` emits canonical ``types`` rows while the
+    lightweight PAB collector historically emitted ``classes`` rows.  MCP
+    callers use both producers, so normalize them here instead of silently
+    returning an empty graph for one producer.
+    """
+
+    rows = arch.get("types")
+    if not isinstance(rows, list):
+        rows = arch.get("classes")
+    if not isinstance(rows, list):
+        rows = []
+
+    def row_path(row: dict[str, Any]) -> str:
+        return str(row.get("header") or row.get("path") or "")
+
+    def row_module(row: dict[str, Any]) -> str:
+        explicit = str(row.get("module") or "").strip()
+        if explicit:
+            return explicit
+        parts = [part for part in row_path(row).replace("\\", "/").split("/") if part]
+        if "Source" in parts:
+            index = parts.index("Source")
+            if index + 1 < len(parts):
+                return parts[index + 1]
+        return ""
+
+    normalized: list[dict[str, Any]] = [
+        row for row in rows if isinstance(row, dict) and str(row.get("name") or "").strip()
+    ]
+    ids_by_name: dict[str, list[str]] = {}
+    for row in normalized:
+        name = str(row.get("name") or "").strip()
+        node_id = f"{row_module(row)}::{name}"
+        ids_by_name.setdefault(name, []).append(node_id)
+
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
-    for row in arch.get("types") or []:
+    node_ids: set[str] = set()
+    referenced_bases: set[str] = set()
+    for row in normalized:
+        name = str(row.get("name") or "").strip()
+        module = row_module(row)
+        node_id = f"{module}::{name}"
+        evidence_path = row_path(row)
         nodes.append(
             {
-                "id": f"{row.get('module','')}::{row.get('name','')}",
-                "kind": str(row.get("category") or "Class"),
-                "evidenceFiles": [row.get("header") or ""],
+                "id": node_id,
+                "kind": str(row.get("category") or row.get("kind") or "Class"),
+                "evidenceFiles": [evidence_path] if evidence_path else [],
                 "confidence": "inferred",
-                "status": "confirmed" if row.get("header") else "unknown",
+                "status": "confirmed" if evidence_path else "unknown",
             }
         )
-        base = row.get("base")
+        node_ids.add(node_id)
+        base = str(row.get("baseClass") or row.get("base") or "").strip()
         if base:
+            candidates = ids_by_name.get(base) or []
+            same_module_id = f"{module}::{base}"
+            if same_module_id in candidates:
+                target_id = same_module_id
+            elif len(candidates) == 1:
+                target_id = candidates[0]
+            else:
+                target_id = f"external::{base}"
+                referenced_bases.add(base)
             edges.append(
                 {
-                    "from": f"{row.get('module','')}::{row.get('name','')}",
-                    "to": str(base),
+                    "from": node_id,
+                    "to": target_id,
                     "kind": "INHERITS",
                     "confidence": "inferred",
                 }
             )
+    for base in sorted(referenced_bases):
+        node_id = f"external::{base}"
+        if node_id in node_ids:
+            continue
+        nodes.append(
+            {
+                "id": node_id,
+                "kind": "ExternalType",
+                "evidenceFiles": [],
+                "confidence": "referenced",
+                "status": "unknown",
+            }
+        )
+        node_ids.add(node_id)
     return {"version": 1, "nodes": nodes, "edges": edges}
 
 

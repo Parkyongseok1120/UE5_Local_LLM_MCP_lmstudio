@@ -39,11 +39,15 @@ KPI scorecard: `data/baseline/tier-kpi-latest.json`
 
 ## Interpretation guardrail
 
-Tier/KPI output is an internal UE RAG/MCP/UBT scorecard, not an external model benchmark. Keep Pass@1 separate from Pass@K, and do not claim that Qwen 27B itself is Sonnet 4-grade.
+The KPI output keeps `compile_fix`, `architecture`, `semantic_refactor`,
+`runtime_debug`, `negative_control`, and `orchestration_ux` separate. Keep
+Pass@1 separate from Pass@K. Do not publish a combined AI grade or a
+cross-model equivalence claim from these internal suites.
 
-Use this wording instead:
-
-> For UE C++ compile-fix/project-review only, this system showed practical behavior near upper Sonnet 3.7 to lower Sonnet 4 range inside the RAG/MCP/UBT validation loop.
+For a live claim, each dedicated scorecard must contain a passing non-empty
+measurement plus `generatedAt`, `commit`/`commitSha`, `model`/`modelId`, and
+`suite`/`config`. Labels that merely contain the word `live` are not accepted
+as live proof.
 
 See [Evaluation_Risk_Register.md](Evaluation_Risk_Register.md) and [Real_Project_Validation_Plan.md](Real_Project_Validation_Plan.md).
 

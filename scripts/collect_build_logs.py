@@ -22,6 +22,15 @@ CODE_RE = re.compile(r"\b(C\d{4}|LNK\d{4}|MSB\d{4}|UHT|UnrealHeaderTool)\b", re.
 FILE_RE = re.compile(r"([A-Za-z]:\\[^:\r\n]+?\.(?:h|hpp|cpp|cs|inl|Build\.cs|uproject|uplugin)|[A-Za-z0-9_./\\-]+\.(?:h|hpp|cpp|cs|inl|Build\.cs|uproject|uplugin))")
 INCLUDE_RE = re.compile(r"Cannot open include file:\s*'([^']+)'", re.IGNORECASE)
 SYMBOL_RE = re.compile(r"(?:unresolved external symbol|Undefined symbols).*?([A-Za-z_][A-Za-z0-9_:~<>]*)", re.IGNORECASE)
+COMPILE_UNIT_RE = re.compile(
+    r"(?:\bCompile(?:\s+\[[^\]]+\])?|\bCompiling)\b.*?"
+    r"(?P<file>[A-Za-z]:\\[^\r\n]+?\.(?:cpp|cc|cxx|c|m|mm)|[A-Za-z0-9_./\\-]+\.(?:cpp|cc|cxx|c|m|mm))",
+    re.IGNORECASE,
+)
+INCLUDE_TRACE_RES = (
+    re.compile(r"\bNote:\s+including file:\s*(?P<file>.+)$", re.IGNORECASE),
+    re.compile(r"\bIn file included from\s+(?P<file>.+?)(?::\d+(?::\d+)?)?[,:]?$", re.IGNORECASE),
+)
 
 
 def stable_id(value: str) -> str:
@@ -77,6 +86,28 @@ def context_block(lines: list[str], index: int, radius: int) -> str:
     start = max(0, index - radius)
     end = min(len(lines), index + radius + 1)
     return "\n".join(lines[start:end]).strip()
+
+
+def nearest_translation_unit(lines: list[str], index: int, *, lookback: int = 120) -> str:
+    for candidate in reversed(lines[max(0, index - lookback):index + 1]):
+        match = COMPILE_UNIT_RE.search(candidate)
+        if match:
+            return match.group("file").strip()
+    return ""
+
+
+def include_trace(lines: list[str], index: int, *, lookback: int = 40, limit: int = 8) -> list[str]:
+    found: list[str] = []
+    for candidate in lines[max(0, index - lookback):index]:
+        for pattern in INCLUDE_TRACE_RES:
+            match = pattern.search(candidate)
+            if not match:
+                continue
+            value = match.group("file").strip()
+            if value and value not in found:
+                found.append(value)
+            break
+    return found[-limit:]
 
 
 def extract_error(path: Path, root: Path, lines: list[str], index: int, radius: int) -> dict | None:
@@ -139,6 +170,9 @@ def extract_error(path: Path, root: Path, lines: list[str], index: int, radius: 
         "module_name": "",
         "line": str(groups.get("line") or ""),
         "severity": severity,
+        "diagnostic_order": index,
+        "translation_unit": nearest_translation_unit(lines, index),
+        "include_stack": include_trace(lines, index),
     }
     title_bits = [error_kind]
     if error_code:

@@ -63,13 +63,19 @@ ENUM_RE = re.compile(r"^\s*enum\s+(?:class\s+)?(?P<name>[A-Za-z_]\w*)")
 FUNC_RE = re.compile(
     r"^\s*(?:[A-Za-z_][\w:<>,~*&\s]+\s+)+(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:const\s*)?(?:;|\{)?\s*$"
 )
-# Like FUNC_RE, but accepts the contents following an opening brace.  This is
-# needed for the common one-line C++ definition form: ``void F::Run() { X();
-# }``.  It still requires a declaration-looking prefix, so a naked call is not
-# promoted into a function symbol.
+# Like FUNC_RE, but accepts qualified definitions and both same-line and
+# next-line opening braces.  It still requires a declaration-looking prefix,
+# so a naked call is not promoted into a function symbol.
 CPP_FUNCTION_RE = re.compile(
     r"^\s*(?:[A-Za-z_][\w:<>,~*&\s]+\s+)+(?:(?P<owner>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)::)?"
-    r"(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:const\s*)?(?:;|\{)"
+    r"(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*"
+    r"(?:(?:const|override|final|noexcept(?:\s*\([^)]*\))?|&&?|=\s*0)\s*)*"
+    r"(?:;|\{|$)"
+)
+CPP_CTOR_DTOR_RE = re.compile(
+    r"^\s*(?P<owner>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)::"
+    r"(?P<name>~?[A-Za-z_]\w*)\s*\([^;{}]*\)\s*"
+    r"(?:noexcept(?:\s*\([^)]*\))?\s*)?(?::[^{}]*)?(?:\{|$)"
 )
 QUALIFIED_FUNC_RE = re.compile(
     r"\b(?P<owner>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)::(?P<name>[A-Za-z_]\w*)\s*\("
@@ -217,9 +223,22 @@ def _function_match(line: str, language: str) -> tuple[str, str] | None:
         "go": (GO_FUNC_RE,),
         "rust": (RUST_FUNC_RE,),
     }
+    stripped = line.strip()
+    starts_with_statement = re.match(
+        r"^(?:if|else|for|while|do|switch|return|co_return|co_await|throw|new|delete|case|goto)\b",
+        stripped,
+    )
+    if language in {"c", "cpp"} and not starts_with_statement:
+        ctor = CPP_CTOR_DTOR_RE.match(line)
+        if ctor:
+            owner_name = ctor.group("owner")
+            name = ctor.group("name")
+            owner_leaf = owner_name.rsplit("::", 1)[-1]
+            if name.lstrip("~") == owner_leaf:
+                return name, f"{owner_name}::{name}"
     for pattern in patterns.get(language, (CPP_FUNCTION_RE, FUNC_RE)):
         match = pattern.match(line)
-        if match and not line.strip().startswith(("if", "for", "while", "switch")):
+        if match and not starts_with_statement:
             name = match.group("name")
             owner_name = (match.groupdict().get("owner") or "").strip()
             qualified = f"{owner_name}::{name}" if owner_name else ""

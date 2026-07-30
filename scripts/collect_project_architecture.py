@@ -19,7 +19,8 @@ SKIP_DIRS = {".git", ".vs", "Binaries", "DerivedDataCache", "Intermediate", "Sav
 UCLASS_RE = re.compile(
     r"\b(UCLASS|USTRUCT|UINTERFACE|UENUM)\s*\((?P<meta>.*?)\)\s*"
     r"(?:class|struct|enum\s+class|enum)\s+"
-    r"(?:[A-Z0-9_]+_API\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
+    r"(?:[A-Z0-9_]+_API\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:\s*:\s*(?:public|protected|private)?\s*(?P<base>[A-Za-z_][A-Za-z0-9_:]*))?",
     re.DOTALL,
 )
 SUBOBJECT_RE = re.compile(
@@ -64,6 +65,32 @@ def rel_path(root: Path, path: Path) -> str:
 
 def should_skip(path: Path) -> bool:
     return any(part in SKIP_DIRS for part in path.parts)
+
+
+def module_from_relative_path(relative_path: str) -> str:
+    parts = [part for part in relative_path.replace("\\", "/").split("/") if part]
+    if "Source" in parts:
+        index = parts.index("Source")
+        if index + 1 < len(parts):
+            return parts[index + 1]
+    return ""
+
+
+def architecture_category(name: str, base_class: str, macro: str) -> str:
+    lowered = f"{name} {base_class}".lower()
+    if "subsystem" in lowered:
+        return "Subsystem"
+    if "component" in lowered:
+        return "Component"
+    if macro == "UINTERFACE" or name.startswith("I"):
+        return "Interface"
+    if "dataasset" in lowered:
+        return "DataAsset"
+    if macro == "USTRUCT":
+        return "Struct"
+    if macro == "UENUM":
+        return "Enum"
+    return "Class"
 
 
 def resolve_project_root(project_arg: str | None) -> Path:
@@ -124,6 +151,7 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
             "projectRoot": str(project_root),
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "classes": classes,
+            "types": classes,
             "subsystems": subsystems,
             "components": components,
             "interfaces": interfaces,
@@ -143,6 +171,7 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
             continue
         text = read_text(path) or ""
         rel = rel_path(project_root, path)
+        owner_module = module_from_relative_path(rel)
         owner_class = ""
 
         if path.name.endswith(".Build.cs"):
@@ -162,11 +191,17 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
         for match in UCLASS_RE.finditer(text):
             macro = match.group(1)
             name = match.group("name")
+            base_class = match.group("base") or ""
             meta = match.group("meta") or ""
             entry = {
                 "name": name,
                 "macro": macro,
                 "path": rel,
+                "header": rel,
+                "module": owner_module,
+                "baseClass": base_class,
+                "kind": macro,
+                "category": architecture_category(name, base_class, macro),
                 "meta": meta.strip()[:200],
             }
             classes.append(entry)
@@ -227,6 +262,7 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
         "projectRoot": str(project_root),
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "classes": classes,
+        "types": classes,
         "subsystems": subsystems,
         "components": components,
         "interfaces": interfaces,

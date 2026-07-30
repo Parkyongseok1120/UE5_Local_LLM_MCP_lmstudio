@@ -262,7 +262,7 @@ def build_orchestration_decision(
     required_before_write: list[str] = []
     if write_task and high_risk:
         required_before_write.append("unreal_architecture_reasoning")
-    if write_task and task_kind == "edit":
+    if write_task:
         required_before_write.append("unreal_code_sketch_claim_validate")
 
     validation_stages = ["direct_source_evidence"]
@@ -279,6 +279,23 @@ def build_orchestration_decision(
         "promptContract": str(policy.get("promptContract") or ""),
         "requiredBeforeWrite": required_before_write,
         "validationStages": validation_stages,
+        "roleContract": {
+            "planner": {
+                "mayWrite": False,
+                "output": "bounded targets, invariants, evidence gaps, and validation plan",
+            },
+            "implementer": {
+                "mayWrite": write_task,
+                "startsAfter": required_before_write,
+                "output": "minimal authorized patch or atomic bundle",
+            },
+            "verifier": {
+                "mayWrite": False,
+                "mustUseFreshPostWriteEvidence": True,
+                "mustNotAcceptImplementerSelfReport": True,
+                "requiredEvidence": validation_stages,
+            },
+        },
         "escalationTriggers": [
             "more_than_two_files",
             "ownership_or_lifetime_ambiguity",
@@ -824,7 +841,7 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
     return common + edit_steps
 
 
-def build_stop_conditions(task_kind: TaskKind) -> list[str]:
+def build_stop_conditions(task_kind: TaskKind, *, runtime_write: bool = False) -> list[str]:
     if task_kind == "code_sketch":
         return [
             "Stop after presenting a labeled Proposed sketch backed by symbol evidence.",
@@ -840,13 +857,21 @@ def build_stop_conditions(task_kind: TaskKind) -> list[str]:
             "If evidence is missing, report the exact missing file/log/index instead of guessing.",
             "For cpp_analysis, zero direct source reads is a hard stop; never substitute RAG snippets.",
         ]
-    return [
+    conditions = [
         "Stop only when build_unreal_project returns proofLevel=Built for the current changed-file set.",
         "BuiltStale and BuiltUnverified do not complete a compile-oriented plan slice.",
         "Runtime-oriented work remains runtimePending until PIE/runtime evidence is recorded.",
         "If build fails, report the first actionable error line and retry with compile_fix RAG.",
         "If required file or activeProject is missing, stop and report the blocker.",
     ]
+    if runtime_write:
+        conditions.extend(
+            [
+                "After the patch, record it in unreal_runtime_debug_session with build evidence.",
+                "Do not claim the runtime bug fixed until the same reproductionFingerprint and observer produce RuntimeVerified evidence.",
+            ]
+        )
+    return conditions
 
 
 def build_retry_policy(task_kind: TaskKind, policy: dict[str, Any]) -> list[str]:
@@ -1020,11 +1045,32 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     resolved_mode = resolve_mode(request, mode)
     task_kind = classify_task(request, mode)
     evidence = build_evidence_plan(request, task_kind, mode)
+    runtime_write = bool(
+        task_kind == "edit"
+        and (
+            mode == "runtime_debug"
+            or (_is_runtime_symptom_analysis(request.lower()) and _has_write_intent(request.lower()))
+        )
+    )
+    if runtime_write:
+        evidence.rag_modes = ["runtime_debug", "review", "compile_fix"]
+        evidence.gates = [
+            "unreal_runtime_config_check",
+            "read_unreal_logs",
+            "unreal_runtime_debug_session",
+            "unreal_code_sketch_claim_validate",
+            "static_validate",
+            "ubt_build",
+        ]
+        evidence.writes_allowed = True
+        evidence.confidence = min(evidence.confidence, 0.65)
     error_route = build_error_route(request, task_kind, mode)
     strategy = choose_edit_strategy(task_kind, request, file_count_hint=file_count_hint)
     if not evidence.writes_allowed:
         strategy = "no_edit"
-    if task_kind == "code_sketch":
+    if runtime_write:
+        tool_policy_key = "runtime_edit"
+    elif task_kind == "code_sketch":
         tool_policy_key = "code_sketch"
     elif task_kind in {"inspect_only", "cpp_analysis"}:
         from code_hint_resolver import looks_like_cpp_domain_request
@@ -1233,6 +1279,25 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         policy=policy,
         profile_name=resolve_profile_name(),
     )
+    if runtime_write:
+        required = list(orchestration.get("requiredBeforeWrite") or [])
+        for gate_name in ("unreal_runtime_debug_session", "unreal_code_sketch_claim_validate"):
+            if gate_name not in required:
+                required.append(gate_name)
+        orchestration["requiredBeforeWrite"] = required
+        orchestration["strategy"] = "runtime_causal_loop"
+        orchestration["runtimeVerificationRequired"] = True
+        (orchestration.get("roleContract") or {}).get("implementer", {})[
+            "startsAfter"
+        ] = list(required)
+        verifier_evidence = (
+            (orchestration.get("roleContract") or {}).get("verifier", {}).get(
+                "requiredEvidence"
+            )
+            or []
+        )
+        if "same_observer_runtime_verification" not in verifier_evidence:
+            verifier_evidence.append("same_observer_runtime_verification")
     for required_tool in orchestration["requiredBeforeWrite"]:
         _insert_tool_before(
             tool_policy,
@@ -1253,6 +1318,13 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
 
     suggested = build_suggested_tool_calls(request, task_kind, mode, project_context)
     checkpoints = build_checkpoints(task_kind, evidence, mode)
+    if runtime_write:
+        checkpoints.extend(
+            [
+                "Prepare unreal_runtime_debug_session with a fixed symptom, reproduction fingerprint, observer, and falsifiable hypotheses before writes.",
+                "Record the patch/build proof, then verify with the same reproduction fingerprint and observer.",
+            ]
+        )
     if error_route:
         apply_error_route_to_plan(evidence, checkpoints, error_route)
         allowed = ", ".join(str(item) for item in error_route.get("allowedPatchTargets") or [])
@@ -1326,7 +1398,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         project_context=project_context,
         write_gate=write_gate,
         checkpoints=checkpoints,
-        stop_conditions=build_stop_conditions(task_kind),
+        stop_conditions=build_stop_conditions(task_kind, runtime_write=runtime_write),
         retry_policy=build_retry_policy(task_kind, policy),
         notes=notes,
         error_route=error_route,

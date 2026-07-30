@@ -56,6 +56,107 @@ public:
     assert matches[0]["owner_build_cs"].endswith("Demo.Build.cs")
 
 
+def test_symbol_graph_parses_next_line_qualified_definition_without_promoting_calls(
+    tmp_path,
+):
+    source = tmp_path / "Source"
+    source.mkdir()
+    (source / "Worker.cpp").write_text(
+        """
+void FWorker::Run()
+{
+    return Finish();
+}
+
+void FWorker::Finish()
+{
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_symbol_graph.build_symbol_graph(source)
+    functions = [
+        (row["symbol_name"], row["qualified_name"])
+        for row in graph["symbols"]
+        if row["symbol_kind"] == "function"
+    ]
+
+    assert ("Run", "FWorker::Run") in functions
+    assert ("Finish", "FWorker::Finish") in functions
+    assert functions.count(("Finish", "FWorker::Finish")) == 1
+
+
+def test_symbol_graph_does_not_promote_control_flow_statements_to_functions(tmp_path):
+    source = tmp_path / "Source"
+    source.mkdir()
+    (source / "Worker.cpp").write_text(
+        """
+void FWorker::Run()
+{
+    if (bReady)
+        Start();
+    else Finish();
+    do Poll(); while (bWaiting);
+    co_await Resume();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_symbol_graph.build_symbol_graph(source)
+    functions = {
+        row["symbol_name"]
+        for row in graph["symbols"]
+        if row["symbol_kind"] == "function"
+    }
+
+    assert "Run" in functions
+    assert functions.isdisjoint({"Finish", "Poll", "Resume"})
+
+
+def test_symbol_graph_captures_override_and_qualified_constructor_destructor(
+    tmp_path,
+):
+    source = tmp_path / "Source"
+    source.mkdir()
+    (source / "Worker.h").write_text(
+        """
+class FWorker
+{
+public:
+    virtual void BeginPlay() override;
+};
+""",
+        encoding="utf-8",
+    )
+    (source / "Worker.cpp").write_text(
+        """
+FWorker::FWorker()
+    : Value(0)
+{
+}
+
+FWorker::~FWorker()
+{
+    ClearTimer();
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_symbol_graph.build_symbol_graph(source)
+    functions = {
+        (row["symbol_name"], row["qualified_name"])
+        for row in graph["symbols"]
+        if row["symbol_kind"] == "function"
+    }
+
+    assert ("BeginPlay", "") in functions
+    assert ("FWorker", "FWorker::FWorker") in functions
+    assert ("~FWorker", "FWorker::~FWorker") in functions
+
+
 def test_symbol_graph_v2_keeps_direct_and_heuristic_evidence_separate(tmp_path):
     source = tmp_path / "Source"
     source.mkdir()

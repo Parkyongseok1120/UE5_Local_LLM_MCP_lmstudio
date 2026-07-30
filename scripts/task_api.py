@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-import os
+import hashlib
 import re
 import uuid
 from contextlib import contextmanager
@@ -12,14 +12,46 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from atomic_io import atomic_write_text
+from state_root import ensure_state_root_layout, resolve_agent_state_root, task_state_dir
 from task_phase import task_phase_from_state
 
 TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled", "failed", "cancellation_uncertain"})
 APPROVABLE_TASK_STATUSES = frozenset({"pending_approval", "awaiting_approval"})
 
 
+class TaskStateReadError(RuntimeError):
+    """Raised when a persisted task record exists but cannot be trusted."""
+
+
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _canonical_hash(value: Any) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def required_gate_set_hash(
+    *,
+    task_session_id: str,
+    plan_id: str,
+    plan_revision: str,
+    active_slice_id: str,
+    project_file: str,
+    required_gates: list[str],
+) -> str:
+    return _canonical_hash(
+        {
+            "taskSessionId": task_session_id,
+            "planId": plan_id,
+            "planRevision": plan_revision,
+            "activeSliceId": active_slice_id,
+            "projectFile": project_file,
+            "requiredBeforeWrite": required_gates,
+        }
+    )
 
 
 TASK_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -32,9 +64,6 @@ def _validate_task_session_id(task_session_id: str) -> str:
     if not TASK_SESSION_ID_RE.fullmatch(value):
         raise ValueError("taskSessionId must match [A-Za-z0-9_-]{8,64}")
     return value
-
-
-from state_root import ensure_state_root_layout, resolve_agent_state_root, task_state_dir
 
 
 def task_root(workspace: Path, task_session_id: str) -> Path:
@@ -55,15 +84,37 @@ def _read_state(workspace: Path, task_session_id: str) -> dict[str, Any] | None:
     path = _state_path(workspace, task_session_id)
     if not path.is_file():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TaskStateReadError(f"Task state is unreadable: {path.name}") from exc
+    if not isinstance(payload, dict):
+        raise TaskStateReadError(f"Task state must be a JSON object: {path.name}")
+    persisted_id = str(payload.get("taskSessionId") or "").strip()
+    if persisted_id != task_session_id:
+        raise TaskStateReadError(
+            f"Task state identity mismatch: expected {task_session_id}, found {persisted_id or 'missing'}"
+        )
+    return payload
 
 
 def _write_state(workspace: Path, task_session_id: str, state: dict[str, Any]) -> None:
     root = task_root(workspace, task_session_id)
     root.mkdir(parents=True, exist_ok=True)
-    temp = root / f"state.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-    temp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp.replace(_state_path(workspace, task_session_id))
+    atomic_write_text(
+        _state_path(workspace, task_session_id),
+        json.dumps(state, ensure_ascii=False, indent=2),
+    )
+
+
+def _task_state_error(task_session_id: str, exc: TaskStateReadError) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": str(exc),
+        "errorCode": "TASK_STATE_CORRUPT",
+        "taskSessionId": task_session_id,
+        "recovery": "Preserve the corrupt state file for diagnosis and start a new task.",
+    }
 
 
 @contextmanager
@@ -86,7 +137,10 @@ def _mutate_task_state(
     mutator: Callable[[dict[str, Any]], dict[str, Any] | None],
 ) -> dict[str, Any]:
     with _task_lock(workspace, task_session_id):
-        state = _read_state(workspace, task_session_id)
+        try:
+            state = _read_state(workspace, task_session_id)
+        except TaskStateReadError as exc:
+            return _task_state_error(task_session_id, exc)
         if not state:
             return {"ok": False, "error": f"Unknown task: {task_session_id}"}
         updated = mutator(state)
@@ -211,19 +265,42 @@ def task_start(
 
     task_session_id = uuid.uuid4().hex[:16]
     auth_token = uuid.uuid4().hex
+    required_before_write = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in ((plan_payload.get("orchestration") or {}).get("requiredBeforeWrite") or [])
+            if str(item).strip()
+        )
+    )
+    resolved_plan_id = plan_id or str(plan_payload.get("planId") or uuid.uuid4().hex[:12])
+    resolved_plan_revision = str(plan_payload.get("planRevision") or "1")
+    gate_set_hash = required_gate_set_hash(
+        task_session_id=task_session_id,
+        plan_id=resolved_plan_id,
+        plan_revision=resolved_plan_revision,
+        active_slice_id=active_slice_id,
+        project_file=project_file,
+        required_gates=required_before_write,
+    )
+    write_gate["requiredBeforeWrite"] = required_before_write
+    write_gate["pendingBeforeWrite"] = list(required_before_write)
     state = {
         "taskSessionId": task_session_id,
         "status": "running",
         "request": request,
         "mode": mode,
         "projectFile": project_file,
-        "planId": plan_id or str(plan_payload.get("planId") or uuid.uuid4().hex[:12]),
-        "planRevision": str(plan_payload.get("planRevision") or "1"),
+        "planId": resolved_plan_id,
+        "planRevision": resolved_plan_revision,
         "activeSliceId": active_slice_id,
         "activeJobId": "",
         "authToken": auth_token,
         "writeGate": write_gate,
         "writesAllowed": writes_allowed,
+        "requiredBeforeWrite": required_before_write,
+        "requiredGateSetHash": gate_set_hash,
+        "completedGates": {},
+        "pendingGates": list(required_before_write),
         "maxFilesPerEdit": int(write_gate.get("maxFilesPerEdit") or 2),
         "taskKind": str(plan_payload.get("taskKind") or ""),
         "editStrategy": str(plan_payload.get("editStrategy") or ""),
@@ -262,7 +339,41 @@ def task_start(
             if on_progress:
                 on_progress(job, message)
 
-        job = create_job(workspace, job_args)
+        try:
+            job = create_job(workspace, job_args)
+        except Exception as exc:
+            create_error = str(exc)
+
+            def mark_create_failed(current: dict[str, Any]) -> dict[str, Any]:
+                current["status"] = "failed"
+                current["jobCreateError"] = create_error
+                current["updatedAt"] = _utc_now()
+                _append_log(
+                    workspace,
+                    task_session_id,
+                    f"Background job creation failed: {create_error}",
+                    level="error",
+                )
+                return current
+
+            failed = _mutate_task_state(
+                workspace,
+                task_session_id,
+                mark_create_failed,
+            )
+            if not failed.get("ok"):
+                failed["backgroundJobError"] = create_error
+                failed["authToken"] = auth_token
+                return failed
+            failed.update(
+                {
+                    "ok": False,
+                    "error": f"Background job creation failed: {create_error}",
+                    "errorCode": "JOB_CREATE_FAILED",
+                    "authToken": auth_token,
+                }
+            )
+            return failed
         job_id = str(job.get("jobId") or "")
 
         def bind_job(current: dict[str, Any]) -> dict[str, Any] | None:
@@ -277,14 +388,228 @@ def task_start(
             latest["taskBindFailed"] = True
             job_append_progress(latest, "Task bind failed before worker launch.")
             save_job(workspace, latest)
+            bound["error"] = bound.get("error") or "Task bind failed before worker launch."
+            bound["errorCode"] = bound.get("errorCode") or "JOB_BIND_FAILED"
+            bound["backgroundJobId"] = job_id
+            bound["authToken"] = auth_token
+            return bound
         else:
-            launch_job(workspace, job_id, on_progress=_progress)
+            try:
+                launch_job(workspace, job_id, on_progress=_progress)
+            except Exception as exc:
+                launch_error = str(exc)
+                latest = read_job(workspace, job_id) or job
+                if not transition_job_status(latest, "failed"):
+                    latest["status"] = "failed"
+                latest["launchFailed"] = True
+                job_append_progress(
+                    latest,
+                    f"Background worker launch failed: {launch_error}",
+                    level="error",
+                )
+                save_job(workspace, latest)
+
+                def mark_launch_failed(current: dict[str, Any]) -> dict[str, Any]:
+                    current["status"] = "failed"
+                    current["launchError"] = launch_error
+                    current["updatedAt"] = _utc_now()
+                    _append_log(
+                        workspace,
+                        task_session_id,
+                        f"Background worker launch failed: {launch_error}",
+                        level="error",
+                    )
+                    return current
+
+                failed = _mutate_task_state(
+                    workspace,
+                    task_session_id,
+                    mark_launch_failed,
+                )
+                if not failed.get("ok"):
+                    failed["backgroundJobError"] = launch_error
+                    failed["backgroundJobId"] = job_id
+                    failed["authToken"] = auth_token
+                    return failed
+                failed.update(
+                    {
+                        "ok": False,
+                        "error": f"Background worker launch failed: {launch_error}",
+                        "errorCode": "JOB_LAUNCH_FAILED",
+                        "authToken": auth_token,
+                    }
+                )
+                return failed
             state = bound["state"]
             state["activeJobId"] = job_id
 
     payload = _task_response(workspace, state)
     payload["authToken"] = auth_token
     return payload
+
+
+def task_record_gate(
+    workspace: Path,
+    *,
+    gate_name: str,
+    task_authorization: dict[str, Any],
+    input_payload: dict[str, Any],
+    evidence: dict[str, Any],
+    target_snapshots: list[dict[str, Any]] | None = None,
+    ttl_seconds: int = 1800,
+) -> dict[str, Any]:
+    """Record one successful pre-write gate against its exact plan and evidence."""
+
+    gate = str(gate_name or "").strip()
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId") or authorization.get("task_session_id") or ""
+    ).strip()
+    if not gate or not task_session_id:
+        return {"ok": False, "error": "gate_name and taskAuthorization.taskSessionId are required"}
+
+    now = datetime.now(tz=timezone.utc)
+    expires = datetime.fromtimestamp(now.timestamp() + max(60, int(ttl_seconds)), tz=timezone.utc)
+    record_result: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal record_result
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            record_result = {
+                "ok": False,
+                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                "errorCode": "TASK_AUTH_MISMATCH",
+            }
+            return None
+        if str(state.get("status") or "") != "running":
+            record_result = {
+                "ok": False,
+                "error": "Task is not running",
+                "errorCode": "TASK_NOT_WRITABLE",
+            }
+            return None
+        required = [str(item) for item in state.get("requiredBeforeWrite") or []]
+        if gate not in required:
+            record_result = {
+                "ok": False,
+                "error": f"{gate} is not required by this plan",
+                "errorCode": "GATE_NOT_REQUIRED",
+            }
+            return None
+        gate_set_hash = str(state.get("requiredGateSetHash") or "")
+        record = {
+            "gate": gate,
+            "status": "completed",
+            "completedAt": now.isoformat(),
+            "expiresAt": expires.isoformat(),
+            "gateSetHash": gate_set_hash,
+            "inputHash": _canonical_hash(input_payload),
+            "evidenceHash": _canonical_hash(evidence),
+            "targetSnapshots": list(target_snapshots or []),
+        }
+        completed = dict(state.get("completedGates") or {})
+        completed[gate] = record
+        pending = [item for item in required if item not in completed]
+        state["completedGates"] = completed
+        state["pendingGates"] = pending
+        write_gate = dict(state.get("writeGate") or {})
+        write_gate["completedBeforeWrite"] = sorted(completed)
+        write_gate["pendingBeforeWrite"] = pending
+        state["writeGate"] = write_gate
+        state["updatedAt"] = _utc_now()
+        _append_log(workspace, task_session_id, f"Completed pre-write gate {gate}")
+        record_result = {
+            "ok": True,
+            "gate": gate,
+            "pendingGates": pending,
+            "record": record,
+            **task_phase_from_state(state),
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if record_result:
+        return record_result
+    return result
+
+
+def _task_authorization_mismatches(
+    state: dict[str, Any],
+    authorization: dict[str, Any],
+) -> list[str]:
+    expected_auth = {
+        "authToken": str(state.get("authToken") or ""),
+        "planId": str(state.get("planId") or ""),
+        "planRevision": str(state.get("planRevision") or ""),
+        "activeSliceId": str(state.get("activeSliceId") or ""),
+    }
+    supplied_auth = {
+        "authToken": str(authorization.get("authToken") or authorization.get("auth_token") or ""),
+        "planId": str(authorization.get("planId") or authorization.get("plan_id") or ""),
+        "planRevision": str(
+            authorization.get("planRevision") or authorization.get("plan_revision") or ""
+        ),
+        "activeSliceId": str(
+            authorization.get("activeSliceId") or authorization.get("active_slice_id") or ""
+        ),
+    }
+    return [
+        key
+        for key, expected in expected_auth.items()
+        if not supplied_auth[key] or supplied_auth[key] != expected
+    ]
+
+
+def task_set_runtime_session(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    runtime_session: dict[str, Any],
+) -> dict[str, Any]:
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId") or authorization.get("task_session_id") or ""
+    ).strip()
+    if not task_session_id:
+        return {"ok": False, "error": "taskAuthorization.taskSessionId is required"}
+    mutation_result: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal mutation_result
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            mutation_result = {
+                "ok": False,
+                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                "errorCode": "TASK_AUTH_MISMATCH",
+            }
+            return None
+        if str(state.get("status") or "") != "running":
+            mutation_result = {
+                "ok": False,
+                "error": "Task is not running",
+                "errorCode": "TASK_NOT_WRITABLE",
+            }
+            return None
+        state["runtimeDebugSession"] = dict(runtime_session)
+        state["updatedAt"] = _utc_now()
+        _append_log(
+            workspace,
+            task_session_id,
+            f"Runtime debug session {runtime_session.get('sessionId')} -> {runtime_session.get('status')}",
+        )
+        mutation_result = {
+            "ok": True,
+            "taskSessionId": task_session_id,
+            "runtimeDebugSession": dict(runtime_session),
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if mutation_result:
+        return mutation_result
+    return result
 
 
 def task_status(workspace: Path, task_session_id: str) -> dict[str, Any]:
@@ -296,7 +621,10 @@ def task_status(workspace: Path, task_session_id: str) -> dict[str, Any]:
     except RuntimeError as exc:
         if "task lock busy" not in str(exc):
             raise
-        state = _read_state(workspace, task_session_id)
+        try:
+            state = _read_state(workspace, task_session_id)
+        except TaskStateReadError as state_exc:
+            return _task_state_error(task_session_id, state_exc)
         if not state:
             return {"ok": False, "error": f"Unknown task: {task_session_id}"}
         return _task_response(workspace, state)
@@ -390,15 +718,79 @@ def task_cancel(workspace: Path, task_session_id: str) -> dict[str, Any]:
 
 
 def task_resume(workspace: Path, task_session_id: str) -> dict[str, Any]:
+    resume_error: dict[str, Any] = {}
+
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
-        if str(state.get("status") or "") in TERMINAL_TASK_STATUSES:
+        nonlocal resume_error
+        status = str(state.get("status") or "")
+        if status != "cancelled":
+            resume_error = {
+                "ok": False,
+                "error": (
+                    "Resume rejected: only a confirmed cancelled task can resume; "
+                    "failed, completed, and uncertain cancellations require a new task."
+                ),
+                "taskSessionId": task_session_id,
+            }
             return None
+        job = _active_job(workspace, state)
+        linked_job_id = str(state.get("activeJobId") or "").strip()
+        job_status = str((job or {}).get("status") or "")
+        if linked_job_id and not job:
+            resume_error = {
+                "ok": False,
+                "error": "Resume rejected: linked job status is unavailable.",
+                "taskSessionId": task_session_id,
+                "jobId": linked_job_id,
+            }
+            return None
+        if job_status and job_status not in {"completed", "cancelled"}:
+            resume_error = {
+                "ok": False,
+                "error": f"Resume rejected: linked job status is not resumable ({job_status}).",
+                "taskSessionId": task_session_id,
+                "jobId": linked_job_id,
+            }
+            return None
+
+        now = datetime.now(tz=timezone.utc)
+        gate_set_hash = str(state.get("requiredGateSetHash") or "")
+        required = [str(item) for item in state.get("requiredBeforeWrite") or []]
+        current_completed: dict[str, Any] = {}
+        for gate, record in dict(state.get("completedGates") or {}).items():
+            if (
+                gate not in required
+                or not isinstance(record, dict)
+                or record.get("status") != "completed"
+                or str(record.get("gateSetHash") or "") != gate_set_hash
+            ):
+                continue
+            try:
+                expiry = datetime.fromisoformat(
+                    str(record.get("expiresAt") or "").replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if expiry > now:
+                current_completed[gate] = record
+
+        pending = [gate for gate in required if gate not in current_completed]
+        state["completedGates"] = current_completed
+        state["pendingGates"] = pending
+        write_gate = dict(state.get("writeGate") or {})
+        write_gate["completedBeforeWrite"] = sorted(current_completed)
+        write_gate["pendingBeforeWrite"] = pending
+        state["writeGate"] = write_gate
+        state["activeJobId"] = ""
+        state.pop("terminalLogged", None)
         state["updatedAt"] = _utc_now()
+        state["status"] = "running"
         _append_log(workspace, task_session_id, "Task resumed")
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
-    if result.get("ok") is False and "Unknown task" not in str(result.get("error") or ""):
-        result["error"] = "Resume rejected: start a new task instead of resuming a terminal session."
-        result["taskSessionId"] = task_session_id
+    if resume_error:
+        return resume_error
     return result

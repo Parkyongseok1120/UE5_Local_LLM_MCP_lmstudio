@@ -76,6 +76,69 @@ def test_ci_eval_regression_still_runs_non_ubt_steps() -> None:
     assert "ran-non-ubt-step" in row["stdoutTail"]
 
 
+def test_release_readiness_does_not_count_skipped_live_dependencies_as_execution_proof() -> None:
+    readiness = run_eval_regression.summarize_execution_readiness(
+        [
+            {"label": "static", "pass": True, "proofLevel": "executed"},
+            {
+                "label": "ubt",
+                "pass": True,
+                "skipped": True,
+                "proofLevel": "not_executed",
+            },
+        ],
+        live_requested=False,
+    )
+
+    assert readiness["gatePassed"] is True
+    assert readiness["fullyValidated"] is False
+    assert readiness["executedPassCount"] == 1
+    assert readiness["skippedCount"] == 1
+    assert readiness["evidenceLevel"] == "static_partial_live_pending"
+    assert readiness["claimsAllowed"]["liveUbtLmStudioValidated"] is False
+
+
+def test_release_readiness_requires_requested_unskipped_live_run_for_full_claim() -> None:
+    readiness = run_eval_regression.summarize_execution_readiness(
+        [
+            {"label": "static", "pass": True, "proofLevel": "executed"},
+            {"label": "eval_pass_at_k_live", "pass": True, "proofLevel": "executed"},
+        ],
+        live_requested=True,
+    )
+
+    assert readiness["fullyValidated"] is True
+    assert readiness["evidenceLevel"] == "live_verified"
+    assert readiness["claimsAllowed"]["fullyReleaseValidated"] is True
+
+
+def test_release_readiness_fails_closed_when_every_step_is_skipped() -> None:
+    readiness = run_eval_regression.summarize_execution_readiness(
+        [
+            {
+                "label": "ubt",
+                "pass": True,
+                "skipped": True,
+                "proofLevel": "not_executed",
+            },
+            {
+                "label": "lmstudio",
+                "pass": False,
+                "skipped": True,
+                "proofLevel": "not_executed",
+            },
+        ],
+        live_requested=True,
+    )
+
+    assert readiness["gatePassed"] is False
+    assert readiness["failedCount"] == 0
+    assert readiness["executedCount"] == 0
+    assert readiness["evidenceLevel"] == "not_executed"
+    assert readiness["claimsAllowed"]["staticRegressionGatePassed"] is False
+    assert readiness["claimsAllowed"]["fullyReleaseValidated"] is False
+
+
 def test_node_install_command_available_via_cmd_on_windows() -> None:
     proc = subprocess.run(
         ["cmd", "/c", "npm.cmd", "--version"],

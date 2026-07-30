@@ -220,7 +220,43 @@ def _architecture_proposal_schema() -> dict[str, Any]:
             },
             "alternatives": {
                 "type": "array",
-                "items": {"type": "string", "minLength": 1},
+                "items": {
+                    "oneOf": [
+                        {"type": "string", "minLength": 1},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "minLength": 1},
+                                "rationale": {"type": "string"},
+                                "scores": {
+                                    "type": "object",
+                                    "properties": {
+                                        key: {
+                                            "type": "number",
+                                            "minimum": 1,
+                                            "maximum": 5,
+                                        }
+                                        for key in (
+                                            "complexity",
+                                            "maintainability",
+                                            "performance",
+                                            "risk",
+                                        )
+                                    },
+                                    "required": [
+                                        "complexity",
+                                        "maintainability",
+                                        "performance",
+                                        "risk",
+                                    ],
+                                    "additionalProperties": False,
+                                },
+                            },
+                            "required": ["name"],
+                            "additionalProperties": False,
+                        },
+                    ]
+                },
                 "minItems": 1,
             },
             "implementationFiles": {
@@ -239,9 +275,125 @@ def _architecture_proposal_schema() -> dict[str, Any]:
                     "required": ["from", "to"],
                 },
             },
+            "ownership": {
+                "type": "object",
+                "properties": {
+                    "stateOwner": {"type": "string", "minLength": 1},
+                    "dataOwner": {"type": "string", "minLength": 1},
+                    "lifecycleOwner": {"type": "string", "minLength": 1},
+                    "failurePolicy": {"type": "string", "minLength": 1},
+                    "recoveryPolicy": {"type": "string", "minLength": 1},
+                },
+                "additionalProperties": False,
+            },
+            "migrationPlan": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "validationMatrix": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "invariant": {"type": "string", "minLength": 1},
+                        "checks": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                            "minItems": 1,
+                        },
+                    },
+                    "required": ["invariant", "checks"],
+                    "additionalProperties": False,
+                },
+            },
+            "implementationSlices": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "sliceId": {"type": "string", "minLength": 1},
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                            "minItems": 1,
+                        },
+                        "dependsOn": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                        "invariants": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                            "minItems": 1,
+                        },
+                        "validation": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                            "minItems": 1,
+                        },
+                    },
+                    "required": ["sliceId", "files", "invariants", "validation"],
+                    "additionalProperties": False,
+                },
+            },
         },
         "required": ["decision", "invariants", "impactedSurfaces", "validationPlan", "alternatives"],
     }
+
+
+def _task_authorization_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "taskSessionId": {"type": "string"},
+            "authToken": {"type": "string"},
+            "planId": {"type": "string"},
+            "planRevision": {"type": "string"},
+            "activeSliceId": {"type": "string"},
+        },
+        "required": ["taskSessionId", "authToken", "planId", "planRevision", "activeSliceId"],
+        "additionalProperties": False,
+        "description": (
+            "Optional taskAuthorization returned by unreal_agent_plan. Supply it to bind a successful "
+            "required analysis gate to that exact plan before project writes."
+        ),
+    }
+
+
+def _record_prewrite_gate(
+    server: McpServer,
+    *,
+    gate_name: str,
+    arguments: dict[str, Any],
+    evidence: dict[str, Any],
+    gate_passed: bool,
+    target_snapshots: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    authorization = arguments.get("taskAuthorization") or arguments.get("task_authorization")
+    if not isinstance(authorization, dict):
+        return None
+    if not gate_passed:
+        return {
+            "ok": False,
+            "gate": gate_name,
+            "errorCode": "GATE_VALIDATION_FAILED",
+            "error": "Analysis completed, but its validation contract did not pass; the write gate remains closed.",
+        }
+    from task_api import task_record_gate
+
+    input_payload = {
+        key: value
+        for key, value in arguments.items()
+        if key not in {"taskAuthorization", "task_authorization"}
+    }
+    return task_record_gate(
+        server.workspace,
+        gate_name=gate_name,
+        task_authorization=authorization,
+        input_payload=input_payload,
+        evidence=evidence,
+        target_snapshots=target_snapshots,
+    )
 
 
 def _handle_unreal_code_sketch_claim_validate(
@@ -251,11 +403,6 @@ def _handle_unreal_code_sketch_claim_validate(
     if not sketch.strip():
         server.tool_result(message_id, "Missing required argument: sketch", is_error=True)
         return
-    payload = validate_sketch(
-        sketch,
-        server.index,
-        top_k=max(1, min(16, int(arguments.get("topK") or 5))),
-    )
     project_root = str(arguments.get("projectRoot") or "").strip()
     if not project_root:
         active = str(load_shared_config().get("activeProject") or "").strip()
@@ -291,6 +438,12 @@ def _handle_unreal_code_sketch_claim_validate(
                 graph = candidate
         except (OSError, ValueError):
             graph = None
+    payload = validate_sketch(
+        sketch,
+        server.index,
+        top_k=max(1, min(16, int(arguments.get("topK") or 5))),
+        graph=graph,
+    )
     payload["generationContract"] = build_generation_contract(
         str(arguments.get("request") or sketch),
         project_root=project_root or None,
@@ -333,6 +486,33 @@ def _handle_unreal_code_sketch_claim_validate(
                     if not validation.get("ok")
                     else "architecture implementation gate is closed"
                 )
+    contract = payload.get("generationContract") or {}
+    target_snapshots: list[dict[str, Any]] = []
+    for target in contract.get("targets") or []:
+        if not isinstance(target, dict):
+            continue
+        source_evidence = target.get("sourceEvidence") or {}
+        target_snapshots.append(
+            {
+                "path": str(target.get("path") or ""),
+                "absolutePath": str(target.get("absolutePath") or ""),
+                "exists": bool(target.get("exists")),
+                "fileHash": str(source_evidence.get("fileHash") or ""),
+            }
+        )
+    gate_completion = _record_prewrite_gate(
+        server,
+        gate_name="unreal_code_sketch_claim_validate",
+        arguments=arguments,
+        evidence=payload,
+        gate_passed=bool(
+            payload.get("ok")
+            and (contract.get("writeGate") or {}).get("writesAllowed") is True
+        ),
+        target_snapshots=target_snapshots,
+    )
+    if gate_completion is not None:
+        payload["gateCompletion"] = gate_completion
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
 
 
@@ -363,6 +543,15 @@ def _handle_unreal_architecture_reasoning(
             "graphPreparationMs": 0.0,
             "totalMs": round((time.perf_counter() - started) * 1000, 2),
         }
+        gate_completion = _record_prewrite_gate(
+            server,
+            gate_name="unreal_architecture_reasoning",
+            arguments=arguments,
+            evidence=payload,
+            gate_passed=False,
+        )
+        if gate_completion is not None:
+            payload["gateCompletion"] = gate_completion
         server.structured_tool_result(
             message_id,
             compact_architecture_payload(payload, detail_level),
@@ -384,10 +573,159 @@ def _handle_unreal_architecture_reasoning(
         "graphPreparationMs": round(graph_ms, 2),
         "totalMs": round((time.perf_counter() - started) * 1000, 2),
     }
+    proposal_validation = payload.get("proposalValidation")
+    proposal_gate = (
+        (proposal_validation or {}).get("implementationGate") or {}
+        if isinstance(proposal_validation, dict)
+        else {}
+    )
+    gate_passed = bool(
+        payload.get("ok")
+        and (payload.get("graphEvidence") or {}).get("complete") is not False
+        and (
+            proposal is None
+            or (
+                proposal_validation.get("ok") is True
+                and proposal_gate.get("writesAllowed") is True
+            )
+        )
+    )
+    gate_completion = _record_prewrite_gate(
+        server,
+        gate_name="unreal_architecture_reasoning",
+        arguments=arguments,
+        evidence=payload,
+        gate_passed=gate_passed,
+    )
+    if gate_completion is not None:
+        payload["gateCompletion"] = gate_completion
     server.structured_tool_result(
         message_id,
         compact_architecture_payload(payload, detail_level),
     )
+
+
+def _handle_unreal_runtime_debug_session(
+    server: McpServer,
+    message_id: Any,
+    arguments: dict[str, Any],
+) -> None:
+    from runtime_debug_session import (
+        prepare_runtime_session,
+        record_runtime_patch,
+        verify_runtime_session,
+    )
+    from task_api import task_record_gate, task_set_runtime_session, task_status
+
+    action = str(arguments.get("action") or "status").strip().lower()
+    authorization = arguments.get("taskAuthorization") or arguments.get("task_authorization")
+    if not isinstance(authorization, dict):
+        _invalid_tool_argument(
+            server,
+            message_id,
+            "unreal_runtime_debug_session",
+            "taskAuthorization returned by unreal_agent_plan is required",
+        )
+        return
+    task_session_id = str(
+        authorization.get("taskSessionId") or authorization.get("task_session_id") or ""
+    ).strip()
+    current = task_status(server.workspace, task_session_id)
+    if not current.get("ok"):
+        server.structured_tool_result(message_id, current)
+        return
+    existing = dict((current.get("state") or {}).get("runtimeDebugSession") or {})
+
+    if action == "status":
+        server.structured_tool_result(
+            message_id,
+            {
+                "ok": bool(existing),
+                "action": action,
+                "runtimeDebugSession": existing,
+                "pendingGates": (current.get("state") or {}).get("pendingGates") or [],
+            },
+        )
+        return
+    if action == "prepare":
+        prepared = prepare_runtime_session(arguments)
+        session = prepared["session"]
+        stored = task_set_runtime_session(
+            server.workspace,
+            task_authorization=authorization,
+            runtime_session=session,
+        )
+        payload = {
+            **prepared,
+            "action": action,
+            "persisted": bool(stored.get("ok")),
+        }
+        if prepared.get("ok") and stored.get("ok"):
+            gate_completion = task_record_gate(
+                server.workspace,
+                gate_name="unreal_runtime_debug_session",
+                task_authorization=authorization,
+                input_payload={
+                    key: value
+                    for key, value in arguments.items()
+                    if key not in {"taskAuthorization", "task_authorization"}
+                },
+                evidence=session,
+            )
+            payload["gateCompletion"] = gate_completion
+        else:
+            payload["gateCompletion"] = {
+                "ok": False,
+                "errorCode": "GATE_VALIDATION_FAILED",
+                "error": "Runtime causal baseline is incomplete; write gate remains closed.",
+            }
+        server.structured_tool_result(message_id, payload)
+        return
+    if not existing:
+        server.structured_tool_result(
+            message_id,
+            {
+                "ok": False,
+                "action": action,
+                "errorCode": "RUNTIME_SESSION_REQUIRED",
+                "error": "Prepare the runtime debug session before recording a patch or verification.",
+            },
+        )
+        return
+    if action == "record_patch":
+        result = record_runtime_patch(
+            existing,
+            changed_files=list(arguments.get("changedFiles") or []),
+            patch_summary=str(arguments.get("patchSummary") or ""),
+            build_proof=arguments.get("buildProof") if isinstance(arguments.get("buildProof"), dict) else {},
+        )
+    elif action == "verify":
+        result = verify_runtime_session(
+            existing,
+            reproduction_fingerprint=str(arguments.get("reproductionFingerprint") or ""),
+            observer=arguments.get("observer") if isinstance(arguments.get("observer"), dict) else {},
+            after_evidence=(
+                arguments.get("afterEvidence")
+                if isinstance(arguments.get("afterEvidence"), dict)
+                else {}
+            ),
+            outcome=str(arguments.get("outcome") or ""),
+        )
+    else:
+        _invalid_tool_argument(
+            server,
+            message_id,
+            "unreal_runtime_debug_session",
+            "action must be prepare, status, record_patch, or verify",
+        )
+        return
+    stored = task_set_runtime_session(
+        server.workspace,
+        task_authorization=authorization,
+        runtime_session=result["session"],
+    )
+    payload = {**result, "action": action, "persisted": bool(stored.get("ok"))}
+    server.structured_tool_result(message_id, payload)
 
 
 def _handle_unreal_node_plan_validate(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
@@ -525,6 +863,7 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                     **_architecture_proposal_schema(),
                     "description": "Optional architecture proposal with explicit design and validation obligations.",
                 },
+                "taskAuthorization": _task_authorization_schema(),
             },
             handler=_handle_unreal_architecture_reasoning,
         )
@@ -548,8 +887,39 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                     "description": "Optional architecture design proposal to validate before implementation.",
                 },
                 "architectureSymbols": {"type": "array", "items": {"type": "string"}, "description": "Optional symbols to focus architecture/data/state analysis on."},
+                "taskAuthorization": _task_authorization_schema(),
             },
             handler=_handle_unreal_code_sketch_claim_validate,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="unreal_runtime_debug_session",
+            schema_dict={
+                "action": {
+                    "type": "string",
+                    "enum": ["prepare", "status", "record_patch", "verify"],
+                    "default": "status",
+                },
+                "taskAuthorization": _task_authorization_schema(),
+                "symptom": {"type": "string"},
+                "reproductionSteps": {"type": "array", "items": {"type": "string"}},
+                "environment": {"type": "string"},
+                "observer": {"type": "object"},
+                "baselineEvidence": {"type": "object"},
+                "hypotheses": {"type": "array", "items": {"type": "object"}},
+                "selectedHypothesisId": {"type": "string"},
+                "changedFiles": {"type": "array", "items": {"type": "string"}},
+                "patchSummary": {"type": "string"},
+                "buildProof": {"type": "object"},
+                "reproductionFingerprint": {"type": "string"},
+                "afterEvidence": {"type": "object"},
+                "outcome": {
+                    "type": "string",
+                    "enum": ["resolved", "not_resolved", "regressed"],
+                },
+            },
+            handler=_handle_unreal_runtime_debug_session,
         )
     )
     registry.register(
@@ -630,6 +1000,8 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_architecture_reasoning",
+        "unreal_runtime_config_check",
+        "unreal_runtime_debug_session",
         "unreal_code_sketch_claim_validate",
         "unreal_review_claim_validate",
         "unreal_diagram_validate",
@@ -1371,6 +1743,7 @@ class McpServer:
                             **_architecture_proposal_schema(),
                             "description": "Optional architecture proposal to validate before implementation.",
                         },
+                        "taskAuthorization": _task_authorization_schema(),
                     },
                 ),
             },
@@ -1558,8 +1931,45 @@ class McpServer:
                             "description": "Optional architecture design proposal to validate before implementation.",
                         },
                         "architectureSymbols": {"type": "array", "items": {"type": "string"}},
+                        "taskAuthorization": _task_authorization_schema(),
                     },
                     ["sketch"],
+                ),
+            },
+            {
+                "name": "unreal_runtime_debug_session",
+                "title": "Track a causal Unreal runtime debug session",
+                "description": (
+                    "Prepare a symptom/reproduction/observer baseline and falsifiable hypotheses before a runtime patch, "
+                    "then record the patch and verify it with the same reproduction fingerprint and observer. "
+                    "A successful prepare action completes the runtime pre-write gate for the supplied taskAuthorization."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "action": {
+                            "type": "string",
+                            "enum": ["prepare", "status", "record_patch", "verify"],
+                            "default": "status",
+                        },
+                        "taskAuthorization": _task_authorization_schema(),
+                        "symptom": {"type": "string"},
+                        "reproductionSteps": {"type": "array", "items": {"type": "string"}},
+                        "environment": {"type": "string"},
+                        "observer": {"type": "object"},
+                        "baselineEvidence": {"type": "object"},
+                        "hypotheses": {"type": "array", "items": {"type": "object"}},
+                        "selectedHypothesisId": {"type": "string"},
+                        "changedFiles": {"type": "array", "items": {"type": "string"}},
+                        "patchSummary": {"type": "string"},
+                        "buildProof": {"type": "object"},
+                        "reproductionFingerprint": {"type": "string"},
+                        "afterEvidence": {"type": "object"},
+                        "outcome": {
+                            "type": "string",
+                            "enum": ["resolved", "not_resolved", "regressed"],
+                        },
+                    },
+                    ["action", "taskAuthorization"],
                 ),
             },
             {
@@ -1921,7 +2331,10 @@ class McpServer:
             {
                 "name": "unreal_task_resume",
                 "title": "Resume cancelled task",
-                "description": "Resume a previously cancelled task session.",
+                "description": (
+                    "Resume a confirmed cancelled task. Expired/stale pre-write evidence is discarded; "
+                    "failed, completed, or cancellation-uncertain tasks require a new plan."
+                ),
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},

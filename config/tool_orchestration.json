@@ -160,7 +160,7 @@
         "unreal_architecture_reasoning",
         "unreal_refactor_plan_validate",
         "read_file",
-        "replace_in_file",
+        "apply_edit_bundle",
         "static_validate_project",
         "build_unreal_project"
       ],
@@ -175,6 +175,28 @@
         "read_file"
       ],
       "writesAllowed": false
+    },
+    "runtime_edit": {
+      "sequence": [
+        "unreal_project_architecture",
+        "unreal_runtime_config_check",
+        "read_unreal_logs",
+        "unreal_rag_search",
+        "read_file",
+        "unreal_runtime_debug_session",
+        "unreal_code_sketch_claim_validate",
+        "replace_in_file",
+        "static_validate_project",
+        "build_unreal_project",
+        "unreal_runtime_debug_session"
+      ],
+      "gates": [
+        "unreal_runtime_debug_session",
+        "unreal_code_sketch_claim_validate",
+        "static_validate",
+        "ubt_build"
+      ],
+      "writesAllowed": true
     }
   }
 }

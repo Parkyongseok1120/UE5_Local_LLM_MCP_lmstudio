@@ -107,7 +107,7 @@ def test_rag_rejects_extended_refresh_in_essential_mode(tmp_path: Path) -> None:
         client.close()
 
 
-def test_agent_rejects_apply_edit_bundle_when_control_plane_off(tmp_path: Path) -> None:
+def test_agent_exposes_apply_edit_bundle_but_requires_task_authorization(tmp_path: Path) -> None:
     require_agent_mcp_deps()
     env = os.environ.copy()
     env.update(
@@ -126,7 +126,7 @@ def test_agent_rejects_apply_edit_bundle_when_control_plane_off(tmp_path: Path) 
         client.proc.stdin.flush()
         result = client.call_tool("apply_edit_bundle", {"files": []}, 2)
         assert result["result"].get("isError") is True
-        assert "TOOL_NOT_CALLABLE" in result["result"]["content"][0]["text"]
+        assert "TASK_SESSION_REQUIRED" in result["result"]["content"][0]["text"]
     finally:
         client.close()
 

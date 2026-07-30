@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { taskStateDir, resolveAgentStateRoot, ensureStateRootLayout } = require("./state-root");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
@@ -28,28 +29,38 @@ function taskDir(workspaceRoot, taskSessionId, stateRoot = resolveAgentStateRoot
   return taskStateDir(taskSessionId, stateRoot);
 }
 
-function readTaskState(_workspaceRoot, taskSessionId, stateRoot = null) {
+function readTaskStateResult(_workspaceRoot, taskSessionId, stateRoot = null) {
   stateRoot = stateRoot || resolveAgentStateRoot(_workspaceRoot);
   let dir;
   try {
     dir = taskDir(_workspaceRoot, taskSessionId, stateRoot);
-  } catch (error) {
-    return null;
+  } catch {
+    return { state: null, errorCode: "TASK_STATE_UNAVAILABLE" };
   }
   const statePath = path.join(dir, "state.json");
+  let selectedPath = statePath;
   if (!fs.existsSync(statePath)) {
     const legacyRoot = path.resolve(_workspaceRoot || process.cwd());
     const legacyPath = path.join(legacyRoot, ".agent", "tasks", taskSessionId, "state.json");
     if (fs.existsSync(legacyPath)) {
-      return JSON.parse(fs.readFileSync(legacyPath, "utf8"));
+      selectedPath = legacyPath;
+    } else {
+      return { state: null, errorCode: "TASK_STATE_MISSING" };
     }
-    return null;
   }
   try {
-    return JSON.parse(fs.readFileSync(statePath, "utf8"));
+    const state = JSON.parse(fs.readFileSync(selectedPath, "utf8"));
+    if (!state || typeof state !== "object" || Array.isArray(state)) {
+      return { state: null, errorCode: "TASK_STATE_CORRUPT" };
+    }
+    return { state, errorCode: "" };
   } catch {
-    return null;
+    return { state: null, errorCode: "TASK_STATE_CORRUPT" };
   }
+}
+
+function readTaskState(_workspaceRoot, taskSessionId, stateRoot = null) {
+  return readTaskStateResult(_workspaceRoot, taskSessionId, stateRoot).state;
 }
 
 function requiredFields(args = {}) {
@@ -63,6 +74,122 @@ function requiredFields(args = {}) {
     planRevision: String(args.planRevision || args.plan_revision || nested.planRevision || nested.plan_revision || "").trim(),
     activeSliceId: String(args.activeSliceId || args.active_slice_id || nested.activeSliceId || nested.active_slice_id || "").trim(),
   };
+}
+
+function requestedMutationPaths(args = {}, state = {}) {
+  const raw = [];
+  if (args.path) raw.push(args.path);
+  for (const item of Array.isArray(args.files) ? args.files : []) {
+    if (item && item.path) raw.push(item.path);
+  }
+  for (const item of Array.isArray(args.patches) ? args.patches : []) {
+    if (item && item.path) raw.push(item.path);
+  }
+  const projectFile = String(state.projectFile || "").trim();
+  const projectRoot = projectFile.toLowerCase().endsWith(".uproject")
+    ? path.dirname(projectFile)
+    : projectFile;
+  return [...new Set(raw.map((value) => {
+    const text = String(value || "").trim();
+    return path.resolve(path.isAbsolute(text) ? text : path.join(projectRoot || process.cwd(), text));
+  }))];
+}
+
+function sha1File(filePath) {
+  return crypto.createHash("sha1").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function validateCompletedGates(state, args = {}) {
+  const writeGate = state.writeGate && typeof state.writeGate === "object" ? state.writeGate : {};
+  const required = Array.isArray(state.requiredBeforeWrite)
+    ? state.requiredBeforeWrite.map(String)
+    : (Array.isArray(writeGate.requiredBeforeWrite) ? writeGate.requiredBeforeWrite.map(String) : []);
+  if (!required.length) return { ok: true };
+  const completed = state.completedGates && typeof state.completedGates === "object"
+    ? state.completedGates
+    : {};
+  const missing = required.filter((gate) => {
+    const record = completed[gate];
+    return !record || record.status !== "completed";
+  });
+  if (missing.length) {
+    return {
+      ok: false,
+      error: `Required pre-write gates are incomplete: ${missing.join(", ")}`,
+      errorCode: "REQUIRED_GATE_INCOMPLETE",
+      pendingGates: missing,
+    };
+  }
+  const expectedGateSetHash = String(state.requiredGateSetHash || "");
+  const now = Date.now();
+  for (const gate of required) {
+    const record = completed[gate];
+    if (!record || String(record.gateSetHash || "") !== expectedGateSetHash) {
+      return {
+        ok: false,
+        error: `Required pre-write gate is stale for the active plan: ${gate}`,
+        errorCode: "REQUIRED_GATE_STALE",
+      };
+    }
+    const expiresAt = Date.parse(String(record.expiresAt || ""));
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+      return {
+        ok: false,
+        error: `Required pre-write gate has expired: ${gate}`,
+        errorCode: "REQUIRED_GATE_EXPIRED",
+      };
+    }
+  }
+
+  const requestedPaths = requestedMutationPaths(args, state);
+  const codeGate = completed.unreal_code_sketch_claim_validate;
+  const snapshots = Array.isArray(codeGate?.targetSnapshots) ? codeGate.targetSnapshots : [];
+  if (requestedPaths.length && snapshots.length) {
+    const caseFold = (value) => process.platform === "win32" ? value.toLowerCase() : value;
+    const byPath = new Map(
+      snapshots
+        .filter((item) => item && item.absolutePath)
+        .map((item) => [caseFold(path.resolve(String(item.absolutePath))), item])
+    );
+    for (const requestedPath of requestedPaths) {
+      const snapshot = byPath.get(caseFold(requestedPath));
+      if (!snapshot) {
+        return {
+          ok: false,
+          error: `Mutation target was not covered by code-generation evidence: ${requestedPath}`,
+          errorCode: "GATE_TARGET_MISMATCH",
+        };
+      }
+      const existsNow = fs.existsSync(requestedPath);
+      if (Boolean(snapshot.exists) !== existsNow) {
+        return {
+          ok: false,
+          error: `Mutation target changed since code-generation validation: ${requestedPath}`,
+          errorCode: "GATE_TARGET_STALE",
+        };
+      }
+      if (existsNow && snapshot.fileHash) {
+        let currentHash;
+        try {
+          currentHash = sha1File(requestedPath);
+        } catch {
+          return {
+            ok: false,
+            error: `Mutation target could not be re-read: ${requestedPath}`,
+            errorCode: "GATE_TARGET_STALE",
+          };
+        }
+        if (currentHash !== String(snapshot.fileHash)) {
+          return {
+            ok: false,
+            error: `Mutation target content changed since code-generation validation: ${requestedPath}`,
+            errorCode: "GATE_TARGET_STALE",
+          };
+        }
+      }
+    }
+  }
+  return { ok: true };
 }
 
 function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
@@ -83,9 +210,26 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
   if (!sanitized.ok) {
     return { ok: false, error: sanitized.error };
   }
-  const state = readTaskState(workspaceRoot, sanitized.taskSessionId);
+  const stateResult = readTaskStateResult(workspaceRoot, sanitized.taskSessionId);
+  const state = stateResult.state;
   if (!state) {
+    if (stateResult.errorCode === "TASK_STATE_CORRUPT") {
+      return {
+        ok: false,
+        error: `Task state is unreadable or malformed: ${sanitized.taskSessionId}`,
+        errorCode: "TASK_STATE_CORRUPT",
+        taskSessionId: sanitized.taskSessionId,
+      };
+    }
     return { ok: false, error: `Unknown task session: ${sanitized.taskSessionId}` };
+  }
+  if (String(state.taskSessionId || "").trim() !== sanitized.taskSessionId) {
+    return {
+      ok: false,
+      error: `Task state identity mismatch: ${sanitized.taskSessionId}`,
+      errorCode: "TASK_STATE_ID_MISMATCH",
+      taskSessionId: sanitized.taskSessionId,
+    };
   }
   const mismatches = [];
   for (const [key, expected] of Object.entries(fields)) {
@@ -111,12 +255,29 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       errorCode: status === "cancelled" ? "TASK_CANCELLED" : "TASK_NOT_WRITABLE",
     };
   }
+  const activeJobId = String(state.activeJobId || "").trim();
+  if (activeJobId) {
+    return {
+      ok: false,
+      error: `Task has an active background job: ${activeJobId}`,
+      errorCode: "TASK_JOB_IN_PROGRESS",
+      taskSessionId: sanitized.taskSessionId,
+      activeJobId,
+    };
+  }
   const writeGate = state.writeGate;
   const writesAllowed = writeGate && typeof writeGate === "object"
     ? writeGate.writesAllowed
     : (writeGate !== undefined ? writeGate : state.writesAllowed);
   if (writesAllowed !== true && writesAllowed !== "true") {
     return { ok: false, error: "Task writeGate denies writes", errorCode: "WRITE_GATE_DENIED" };
+  }
+  const gateValidation = validateCompletedGates(state, args);
+  if (!gateValidation.ok) {
+    return {
+      ...gateValidation,
+      taskSessionId: sanitized.taskSessionId,
+    };
   }
   return {
     ok: true,
@@ -132,5 +293,7 @@ module.exports = {
   taskDir,
   readTaskState,
   validateMutationAuth,
+  validateCompletedGates,
+  requestedMutationPaths,
   requiredFields,
 };

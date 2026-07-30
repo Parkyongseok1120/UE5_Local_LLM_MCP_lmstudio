@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from architecture_reasoning import analyze_architecture  # noqa: E402
+from architecture_reasoning import analyze_architecture, validate_architecture_proposal  # noqa: E402
 from build_symbol_graph import build_symbol_graph  # noqa: E402
 
 
@@ -162,3 +162,328 @@ def test_architecture_analysis_fails_closed_for_unmatched_focus_symbol(tmp_path:
     assert result["focus"]["unmatchedSymbols"] == ["MissingWorker"]
     assert result["proposalValidation"]["ok"] is False
     assert result["proposalValidation"]["implementationGate"]["writesAllowed"] is False
+
+
+def test_architecture_analysis_reports_guarded_state_owners_and_lifecycle_boundaries(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "Worker.cpp").write_text(
+        """
+void UWorker::BeginPlay()
+{
+    if (bReady)
+    {
+        CurrentState = EWorkerState::Running;
+    }
+    SetTimer(Handle, this, &UWorker::Tick, 1.0f, true);
+}
+
+void UWorker::Reset()
+{
+    CurrentState = EWorkerState::Idle;
+}
+
+void UWorker::EndPlay()
+{
+    ClearTimer(Handle);
+}
+""",
+        encoding="utf-8",
+    )
+
+    result = analyze_architecture(tmp_path)
+
+    transitions = result["stateTransitions"]["transitions"]
+    guarded = next(item for item in transitions if item["toState"] == "EWorkerState::Running")
+    assert guarded["guardCandidate"]["condition"] == "bReady"
+    ownership = result["stateTransitions"]["stateOwnershipCandidates"]
+    assert any(
+        item["ownerCandidate"] == "UWorker"
+        and item["stateField"] == "CurrentState"
+        and item["multipleWriters"] is True
+        for item in ownership
+    )
+    lifecycle = result["lifecycle"]
+    assert {item["phase"] for item in lifecycle["callbacks"]} >= {
+        "runtime_start",
+        "runtime_stop",
+    }
+    assert {item["kind"] for item in lifecycle["asyncEventBoundaries"]} >= {
+        "timer_schedule",
+        "timer_cleanup",
+    }
+    assert lifecycle["pairingGaps"] == []
+
+
+def test_lifecycle_boundary_analysis_reads_qualified_destructor_cleanup(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "Source"
+    source.mkdir()
+    (source / "Worker.cpp").write_text(
+        """
+FWorker::FWorker()
+{
+}
+
+FWorker::~FWorker()
+{
+    ClearTimer();
+}
+""",
+        encoding="utf-8",
+    )
+
+    lifecycle = analyze_architecture(tmp_path)["lifecycle"]
+
+    cleanup = next(
+        item
+        for item in lifecycle["asyncEventBoundaries"]
+        if item["kind"] == "timer_cleanup"
+    )
+    assert cleanup["function"] == "FWorker::~FWorker"
+
+
+def test_staged_architecture_proposal_requires_traceable_design_contract(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    proposal = {
+        "decision": "stage shared API and worker migration",
+        "invariants": ["Game depends on Core, never reverse"],
+        "impactedSurfaces": [
+            "Source/Core/Public/Shared.h",
+            "Source/Game/Private/Worker.cpp",
+        ],
+        "validationPlan": ["compile", "worker regression"],
+        "alternatives": ["edit in place"],
+        "implementationFiles": [
+            "Source/Core/Public/Shared.h",
+            "Source/Game/Private/Worker.cpp",
+        ],
+    }
+
+    result = analyze_architecture(tmp_path, proposal=proposal)
+    validation = result["proposalValidation"]
+
+    assert validation["ok"] is False
+    assert validation["designContract"]["stagedImplementation"] is True
+    assert any("at least two alternatives" in item for item in validation["issues"])
+    assert any("ownership is missing" in item for item in validation["issues"])
+    assert any("implementationSlices" in item for item in validation["issues"])
+    assert validation["implementationGate"]["writesAllowed"] is False
+
+
+def test_staged_architecture_proposal_accepts_covered_acyclic_slices(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    invariant = "Game depends on Core, never reverse"
+    proposal = {
+        "decision": "stage shared API and worker migration",
+        "invariants": [invariant],
+        "impactedSurfaces": [
+            "Source/Core/Public/Shared.h",
+            "Source/Game/Private/Worker.cpp",
+        ],
+        "validationPlan": ["compile", "worker regression"],
+        "alternatives": [
+            {
+                "name": "extend Core API",
+                "rationale": "preserves dependency direction",
+                "scores": {
+                    "complexity": 2,
+                    "maintainability": 5,
+                    "performance": 4,
+                    "risk": 2,
+                },
+            },
+            "duplicate the API in Game and reject it",
+        ],
+        "implementationFiles": [
+            "Source/Core/Public/Shared.h",
+            "Source/Game/Private/Worker.cpp",
+        ],
+        "ownership": {
+            "stateOwner": "module:Game",
+            "dataOwner": "module:Core",
+            "lifecycleOwner": "module:Game",
+            "failurePolicy": "leave the old call path active",
+            "recoveryPolicy": "roll back the active slice",
+        },
+        "migrationPlan": ["add compatible Core API", "move Game callsite"],
+        "validationMatrix": [
+            {"invariant": invariant, "checks": ["dependency graph", "compile"]}
+        ],
+        "implementationSlices": [
+            {
+                "sliceId": "core-api",
+                "files": ["Source/Core/Public/Shared.h"],
+                "dependsOn": [],
+                "invariants": [invariant],
+                "validation": ["compile Core"],
+            },
+            {
+                "sliceId": "game-callsite",
+                "files": ["Source/Game/Private/Worker.cpp"],
+                "dependsOn": ["core-api"],
+                "invariants": [invariant],
+                "validation": ["worker regression"],
+            },
+        ],
+    }
+
+    result = analyze_architecture(tmp_path, proposal=proposal)
+    validation = result["proposalValidation"]
+
+    assert validation["ok"] is True
+    assert validation["designContract"]["implementationFilesCovered"] is True
+    assert validation["designContract"]["invariantCoverageCount"] == 1
+    assert validation["designContract"]["sliceDependencyCycle"] == []
+    assert validation["implementationGate"]["writesAllowed"] is True
+    assert validation["implementationGate"]["nextAction"] == "implement_next_slice"
+
+
+def test_staged_architecture_proposal_rejects_slice_dependency_cycle(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    invariant = "preserve worker behavior"
+    proposal = {
+        "decision": "split worker implementation",
+        "invariants": [invariant],
+        "impactedSurfaces": ["Source/Game/Private/Worker.cpp"],
+        "validationPlan": ["compile"],
+        "alternatives": ["split", "keep together"],
+        "implementationFiles": [
+            "Source/Core/Public/Shared.h",
+            "Source/Game/Private/Worker.cpp",
+        ],
+        "ownership": {
+            "stateOwner": "module:Game",
+            "dataOwner": "module:Game",
+            "lifecycleOwner": "module:Game",
+            "failurePolicy": "stop",
+            "recoveryPolicy": "rollback",
+        },
+        "migrationPlan": ["stage both files"],
+        "validationMatrix": [{"invariant": invariant, "checks": ["compile"]}],
+        "implementationSlices": [
+            {
+                "sliceId": "a",
+                "files": ["Source/Core/Public/Shared.h"],
+                "dependsOn": ["b"],
+                "invariants": [invariant],
+                "validation": ["compile"],
+            },
+            {
+                "sliceId": "b",
+                "files": ["Source/Game/Private/Worker.cpp"],
+                "dependsOn": ["a"],
+                "invariants": [invariant],
+                "validation": ["compile"],
+            },
+        ],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert validation["ok"] is False
+    assert any("slice dependency cycle" in item for item in validation["issues"])
+    assert validation["implementationGate"]["writesAllowed"] is False
+
+
+def test_architecture_proposal_rejects_absolute_and_traversing_implementation_paths() -> None:
+    analysis = {
+        "topology": {"owners": [], "sourceDependencyCycles": []},
+        "graphEvidence": {"complete": True, "sourceFileCount": 1},
+        "focus": {"unmatchedSymbols": []},
+    }
+    for bad_path in (
+        "../Outside.cpp",
+        "Source/Game/../Outside.cpp",
+        "C:/Outside.cpp",
+        "/tmp/Outside.cpp",
+    ):
+        proposal = {
+            "decision": "edit one implementation file",
+            "invariants": ["preserve behavior"],
+            "impactedSurfaces": [bad_path],
+            "validationPlan": ["compile"],
+            "alternatives": ["edit", "do nothing"],
+            "implementationFiles": [bad_path],
+            "implementationSlices": [
+                {
+                    "sliceId": "edit",
+                    "files": [bad_path],
+                    "dependsOn": [],
+                    "invariants": ["preserve behavior"],
+                    "validation": ["compile"],
+                }
+            ],
+        }
+
+        validation = validate_architecture_proposal(proposal, analysis)
+
+        assert validation["ok"] is False
+        assert validation["implementationGate"]["writesAllowed"] is False
+        assert any(
+            "project-relative" in issue or "parent traversal" in issue
+            for issue in validation["issues"]
+        )
+
+
+def test_architecture_proposal_rejects_duplicate_slice_file_owner_and_rogue_invariant() -> None:
+    invariant = "preserve behavior"
+    shared = "Source/Core/Public/Shared.h"
+    worker = "Source/Game/Private/Worker.cpp"
+    analysis = {
+        "topology": {
+            "owners": [{"files": [shared, worker]}],
+            "sourceDependencyCycles": [],
+        },
+        "graphEvidence": {"complete": True, "sourceFileCount": 2},
+        "focus": {"unmatchedSymbols": []},
+    }
+    proposal = {
+        "decision": "stage shared and worker changes",
+        "invariants": [invariant],
+        "impactedSurfaces": [shared, worker],
+        "validationPlan": ["compile"],
+        "alternatives": ["stage", "edit together"],
+        "implementationFiles": [shared, worker],
+        "ownership": {
+            "stateOwner": "module:Game",
+            "dataOwner": "module:Core",
+            "lifecycleOwner": "module:Game",
+            "failurePolicy": "stop",
+            "recoveryPolicy": "rollback",
+        },
+        "migrationPlan": ["stage both files"],
+        "validationMatrix": [{"invariant": invariant, "checks": ["compile"]}],
+        "implementationSlices": [
+            {
+                "sliceId": "core",
+                "files": [shared],
+                "dependsOn": [],
+                "invariants": [invariant],
+                "validation": ["compile"],
+            },
+            {
+                "sliceId": "game",
+                "files": [shared, worker],
+                "dependsOn": ["core"],
+                "invariants": ["undeclared invariant"],
+                "validation": ["compile"],
+            },
+        ],
+    }
+
+    validation = validate_architecture_proposal(proposal, analysis)
+
+    assert validation["ok"] is False
+    assert any("assigned to multiple slices" in issue for issue in validation["issues"])
+    assert any("not declared by proposal" in issue for issue in validation["issues"])
+    assert validation["implementationGate"]["writesAllowed"] is False

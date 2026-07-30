@@ -37,7 +37,37 @@ STATE_ASSIGNMENT_RE = re.compile(
 SET_STATE_RE = re.compile(r"\b(?:Set|TransitionTo)(?P<field>[A-Za-z_]*State)\s*\(\s*(?P<value>[^,)]+)")
 RETURN_RE = re.compile(r"\breturn\s+(?P<value>[^;\n]+)")
 CALL_RE = re.compile(r"\b(?P<name>[A-Za-z_$][\w$]*)\s*\(")
+IF_GUARD_RE = re.compile(
+    r"\bif\s*(?:\((?P<cpp>[^)]{1,240})\)|(?P<python>[^:\n]{1,240})\s*:)"
+)
 FLOW_KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "sizeof", "new", "def", "function"}
+LIFECYCLE_PHASES = {
+    "beginplay": "runtime_start",
+    "endplay": "runtime_stop",
+    "initialize": "initialize",
+    "deinitialize": "deinitialize",
+    "onregister": "register",
+    "onunregister": "unregister",
+    "startplay": "runtime_start",
+    "shutdown": "runtime_stop",
+    "startupmodule": "module_start",
+    "shutdownmodule": "module_stop",
+}
+BOUNDARY_CALL_KINDS = {
+    "asynctask": "async_dispatch",
+    "async": "async_dispatch",
+    "settimer": "timer_schedule",
+    "settimerfornexttick": "timer_schedule",
+    "cleartimer": "timer_cleanup",
+    "adddynamic": "delegate_binding",
+    "adduobject": "delegate_binding",
+    "bindufunction": "delegate_binding",
+    "bindlambda": "delegate_binding",
+    "removeall": "delegate_cleanup",
+    "unbind": "delegate_cleanup",
+    "broadcast": "event_dispatch",
+    "enqueue": "queue_boundary",
+}
 
 
 def _resolve_root(project_root: str | Path) -> Path | None:
@@ -259,6 +289,27 @@ def _iter_executable_lines(
         yield start + offset, line
 
 
+def _function_name(function: dict[str, Any]) -> str:
+    return str(function.get("qualified_name") or function.get("symbol_name") or "")
+
+
+def _function_owner(function: dict[str, Any]) -> str:
+    qualified = _function_name(function)
+    if "::" in qualified:
+        return qualified.split("::", 1)[0]
+    if "." in qualified:
+        return qualified.rsplit(".", 1)[0]
+    return str(function.get("file_path") or "")
+
+
+def _normalized_state_field(raw: str) -> str:
+    value = str(raw or "").strip()
+    for prefix in ("this->", "this.", "self."):
+        if value.startswith(prefix):
+            return value[len(prefix):]
+    return value
+
+
 def analyze_data_flow(graph: dict[str, Any], symbols: list[str] | None = None, *, limit: int = 80) -> dict[str, Any]:
     """Return source-text flow candidates for selected function bodies."""
     selected, selection_truncated = _function_rows(graph, list(symbols or []))
@@ -347,33 +398,175 @@ def analyze_state_transitions(graph: dict[str, Any], symbols: list[str] | None =
         lines, start = body
         path = Path(str(function.get("file_path") or ""))
         digest = str(function.get("file_hash") or "")
+        recent_guard: dict[str, Any] | None = None
         for line_no, line in _iter_executable_lines(function, lines, start):
+            guard_match = IF_GUARD_RE.search(line)
+            if guard_match:
+                condition = str(guard_match.group("cpp") or guard_match.group("python") or "").strip()
+                recent_guard = {
+                    "condition": condition,
+                    "evidence": _source_evidence(path, line_no, digest),
+                    "scopeConfidence": "nearby_source_candidate",
+                }
+            elif recent_guard and line_no - int(
+                (recent_guard.get("evidence") or {}).get("lineStart") or line_no
+            ) > 4:
+                recent_guard = None
             for match in STATE_ASSIGNMENT_RE.finditer(line):
                 if len(transitions) >= limit:
                     truncated = True
                     break
-                transitions.append(
-                    {
-                        "kind": "state_assignment_candidate",
-                        "function": function.get("qualified_name") or function.get("symbol_name"),
-                        "stateField": match.group("field"),
-                        "fromState": "unknown",
-                        "toState": match.group("value").strip()[:160],
-                        "evidence": _source_evidence(path, line_no, digest),
-                        "confidence": "source_text_candidate",
-                    }
-                )
+                item = {
+                    "kind": "state_assignment_candidate",
+                    "function": _function_name(function),
+                    "ownerCandidate": _function_owner(function),
+                    "stateField": match.group("field"),
+                    "fromState": "unknown",
+                    "toState": match.group("value").strip()[:160],
+                    "evidence": _source_evidence(path, line_no, digest),
+                    "confidence": "source_text_candidate",
+                }
+                if recent_guard:
+                    item["guardCandidate"] = recent_guard
+                transitions.append(item)
             for match in SET_STATE_RE.finditer(line):
                 if len(transitions) >= limit:
                     truncated = True
                     break
-                transitions.append(
+                item = {
+                    "kind": "state_setter_candidate",
+                    "function": _function_name(function),
+                    "ownerCandidate": _function_owner(function),
+                    "stateField": match.group("field"),
+                    "fromState": "unknown",
+                    "toState": match.group("value").strip()[:160],
+                    "evidence": _source_evidence(path, line_no, digest),
+                    "confidence": "source_text_candidate",
+                }
+                if recent_guard:
+                    item["guardCandidate"] = recent_guard
+                transitions.append(item)
+            if truncated:
+                break
+        if truncated:
+            break
+
+    ownership: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in transitions:
+        owner = str(item.get("ownerCandidate") or "")
+        field = _normalized_state_field(str(item.get("stateField") or ""))
+        key = (owner, field)
+        row = ownership.setdefault(
+            key,
+            {
+                "ownerCandidate": owner,
+                "stateField": field,
+                "writerFunctions": [],
+                "writerFiles": [],
+                "writeCount": 0,
+                "evidence": [],
+            },
+        )
+        row["writeCount"] += 1
+        function_name = str(item.get("function") or "")
+        evidence = dict(item.get("evidence") or {})
+        file_path = str(evidence.get("filePath") or "")
+        if function_name and function_name not in row["writerFunctions"]:
+            row["writerFunctions"].append(function_name)
+        if file_path and file_path not in row["writerFiles"]:
+            row["writerFiles"].append(file_path)
+        if evidence and len(row["evidence"]) < 8:
+            row["evidence"].append(evidence)
+    ownership_candidates = []
+    for row in ownership.values():
+        row["multipleWriters"] = len(row["writerFunctions"]) > 1
+        row["confidence"] = "source_text_candidate"
+        ownership_candidates.append(row)
+
+    return {
+        "ok": True,
+        "functionCount": len(selected),
+        "functionSelectionTruncated": selection_truncated,
+        "transitions": transitions,
+        "stateOwnershipCandidates": ownership_candidates,
+        "multipleWriterCandidateCount": sum(
+            1 for item in ownership_candidates if item.get("multipleWriters")
+        ),
+        "truncated": truncated,
+        "proofBoundary": (
+            "A state-looking assignment/setter is not a complete state transition proof. Current state, guard conditions, "
+            "guard scope, event ordering, replication, and runtime reachability remain unknown until independently verified."
+        ),
+        "requiredForStateClaim": ["initialization/read site", "transition guard/dispatch", "observer/effect", "runtime or focused test evidence when behavior matters"],
+    }
+
+
+def analyze_lifecycle_boundaries(
+    graph: dict[str, Any],
+    symbols: list[str] | None = None,
+    *,
+    limit: int = 60,
+) -> dict[str, Any]:
+    """Return lifecycle and async/event boundary candidates without claiming runtime reachability."""
+    selected, selection_truncated = _function_rows(graph, list(symbols or []))
+    lifecycle: list[dict[str, Any]] = []
+    boundaries: list[dict[str, Any]] = []
+    truncated = False
+    owner_phases: dict[str, set[str]] = defaultdict(set)
+
+    for function in selected:
+        function_name = _function_name(function)
+        short_name = function_name.rsplit("::", 1)[-1].rsplit(".", 1)[-1].lower()
+        owner = _function_owner(function)
+        path = Path(str(function.get("file_path") or ""))
+        digest = str(function.get("file_hash") or "")
+        phase = LIFECYCLE_PHASES.get(short_name)
+        if phase:
+            lifecycle.append(
+                {
+                    "kind": "lifecycle_callback_candidate",
+                    "phase": phase,
+                    "function": function_name,
+                    "ownerCandidate": owner,
+                    "evidence": _source_evidence(
+                        path,
+                        int(function.get("line_start") or 1),
+                        digest,
+                    ),
+                    "confidence": "source_symbol_candidate",
+                }
+            )
+            owner_phases[owner].add(phase)
+
+        body = _function_body(function)
+        if not body:
+            continue
+        lines, start = body
+        for line_no, line in _iter_executable_lines(function, lines, start):
+            for match in CALL_RE.finditer(line):
+                call_name = match.group("name")
+                call_lower = call_name.lower()
+                kind = BOUNDARY_CALL_KINDS.get(call_lower)
+                if not kind:
+                    if call_lower.startswith("server_"):
+                        kind = "network_server_boundary"
+                    elif call_lower.startswith("client_"):
+                        kind = "network_client_boundary"
+                    elif call_lower.startswith("multicast_"):
+                        kind = "network_multicast_boundary"
+                    elif call_lower.startswith("onrep_"):
+                        kind = "replication_observer"
+                if not kind:
+                    continue
+                if len(boundaries) >= limit:
+                    truncated = True
+                    break
+                boundaries.append(
                     {
-                        "kind": "state_setter_candidate",
-                        "function": function.get("qualified_name") or function.get("symbol_name"),
-                        "stateField": match.group("field"),
-                        "fromState": "unknown",
-                        "toState": match.group("value").strip()[:160],
+                        "kind": kind,
+                        "call": call_name,
+                        "function": function_name,
+                        "ownerCandidate": owner,
                         "evidence": _source_evidence(path, line_no, digest),
                         "confidence": "source_text_candidate",
                     }
@@ -382,62 +575,347 @@ def analyze_state_transitions(graph: dict[str, Any], symbols: list[str] | None =
                 break
         if truncated:
             break
+
+    pair_gaps: list[dict[str, Any]] = []
+    expected_pairs = (
+        ("runtime_start", "runtime_stop"),
+        ("initialize", "deinitialize"),
+        ("register", "unregister"),
+        ("module_start", "module_stop"),
+    )
+    for owner, phases in sorted(owner_phases.items()):
+        for setup, cleanup in expected_pairs:
+            if setup in phases and cleanup not in phases:
+                pair_gaps.append(
+                    {
+                        "ownerCandidate": owner,
+                        "observedPhase": setup,
+                        "missingCandidatePhase": cleanup,
+                        "severity": "review_required",
+                    }
+                )
+
     return {
         "ok": True,
         "functionCount": len(selected),
         "functionSelectionTruncated": selection_truncated,
-        "transitions": transitions,
+        "callbacks": lifecycle,
+        "asyncEventBoundaries": boundaries,
+        "pairingGaps": pair_gaps,
         "truncated": truncated,
         "proofBoundary": (
-            "A state-looking assignment/setter is not a complete state transition proof. Current state, guard conditions, "
-            "event ordering, replication, and runtime reachability remain unknown until independently verified."
+            "Lifecycle names and async/event calls are source candidates. Absence does not prove missing cleanup, "
+            "and presence does not prove ordering, thread affinity, ownership, or runtime execution."
         ),
-        "requiredForStateClaim": ["initialization/read site", "transition guard/dispatch", "observer/effect", "runtime or focused test evidence when behavior matters"],
+        "requiredForLifecycleClaim": [
+            "registration/initialization site",
+            "cleanup/termination site",
+            "ownership and thread/world context",
+            "runtime or focused test evidence when behavior matters",
+        ],
     }
 
 
+def _nonempty_string_list(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    result = [str(item).strip() for item in value if isinstance(item, str) and item.strip()]
+    return result if len(result) == len(value) else None
+
+
+def _normalize_project_relative_path(value: str) -> tuple[str, str]:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return "", "must be a non-empty project-relative path"
+    if "\x00" in raw:
+        return "", "must not contain a NUL character"
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        return "", "must be project-relative, not absolute"
+    parts = raw.split("/")
+    if any(part == ".." for part in parts):
+        return "", "must not contain parent traversal ('..')"
+    normalized = "/".join(part for part in parts if part not in {"", "."})
+    if not normalized:
+        return "", "must identify a file inside the project"
+    return normalized, ""
+
+
+def _slice_dependency_cycle(rows: list[dict[str, Any]]) -> list[str]:
+    adjacency = {
+        str(row.get("sliceId") or ""): [str(item) for item in row.get("dependsOn") or []]
+        for row in rows
+    }
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node: str, stack: list[str]) -> list[str]:
+        if node in visiting:
+            return [*stack[stack.index(node):]]
+        if node in visited:
+            return []
+        visiting.add(node)
+        for dependency in adjacency.get(node, []):
+            cycle = visit(dependency, [*stack, dependency])
+            if cycle:
+                return cycle
+        visiting.remove(node)
+        visited.add(node)
+        return []
+
+    for slice_id in adjacency:
+        cycle = visit(slice_id, [slice_id])
+        if cycle:
+            return cycle
+    return []
+
+
 def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
-    """Validate a design/implementation proposal against explicit architecture obligations."""
+    """Validate design traceability and staged implementation obligations."""
     plan = proposal if isinstance(proposal, dict) else {}
     issues: list[str] = []
     warnings: list[str] = []
     if not isinstance(proposal, dict):
         issues.append("architecture proposal must be an object")
+
     decision = plan.get("decision")
     if not isinstance(decision, str) or not decision.strip():
         issues.append("architecture proposal field decision must be a non-empty string")
-    for field in ("invariants", "impactedSurfaces", "validationPlan", "alternatives"):
-        value = plan.get(field)
-        if not isinstance(value, list) or not value:
-            issues.append(f"architecture proposal field {field} must be a non-empty array")
-        elif any(not isinstance(item, str) or not item.strip() for item in value):
-            issues.append(f"architecture proposal field {field} must contain non-empty strings")
-    impacted = plan.get("impactedSurfaces") if isinstance(plan.get("impactedSurfaces"), list) else []
+
+    string_fields: dict[str, list[str]] = {}
+    for field in ("invariants", "impactedSurfaces", "validationPlan"):
+        parsed = _nonempty_string_list(plan.get(field))
+        if not parsed:
+            issues.append(f"architecture proposal field {field} must be a non-empty string array")
+            parsed = []
+        string_fields[field] = parsed
+
+    alternatives_value = plan.get("alternatives")
+    alternatives = alternatives_value if isinstance(alternatives_value, list) else []
+    if not alternatives:
+        issues.append("architecture proposal field alternatives must be a non-empty array")
+    structured_alternatives = 0
+    for index, alternative in enumerate(alternatives):
+        if isinstance(alternative, str) and alternative.strip():
+            continue
+        if not isinstance(alternative, dict) or not str(alternative.get("name") or "").strip():
+            issues.append(f"alternatives[{index}] must be a non-empty string or an object with name")
+            continue
+        structured_alternatives += 1
+        if not str(alternative.get("rationale") or "").strip():
+            warnings.append(f"alternatives[{index}] should include rationale")
+        scores = alternative.get("scores")
+        if scores is not None:
+            if not isinstance(scores, dict):
+                issues.append(f"alternatives[{index}].scores must be an object")
+            else:
+                for metric in ("complexity", "maintainability", "performance", "risk"):
+                    value = scores.get(metric)
+                    if not isinstance(value, (int, float)) or isinstance(value, bool) or not 1 <= value <= 5:
+                        issues.append(
+                            f"alternatives[{index}].scores.{metric} must be a number from 1 to 5"
+                        )
+
+    impacted = string_fields["impactedSurfaces"]
     implementation_value = plan.get("implementationFiles")
-    if implementation_value is not None and (
-        not isinstance(implementation_value, list)
-        or any(not isinstance(item, str) or not item.strip() for item in implementation_value)
-    ):
+    implementation = _nonempty_string_list(implementation_value) if implementation_value is not None else []
+    if implementation_value is not None and implementation is None:
         issues.append("implementationFiles must be an array of non-empty strings when supplied")
-    implementation = implementation_value if isinstance(implementation_value, list) else []
+        implementation = []
+    normalized_implementation: list[str] = []
+    for index, file_path in enumerate(implementation or []):
+        normalized, path_issue = _normalize_project_relative_path(file_path)
+        if path_issue:
+            issues.append(f"implementationFiles[{index}] {path_issue}")
+            continue
+        normalized_implementation.append(normalized)
+    implementation = list(dict.fromkeys(normalized_implementation))
+
     known_paths = {
-        file_path
+        str(file_path).replace("\\", "/")
         for owner in (analysis.get("topology") or {}).get("owners", [])
         if isinstance(owner, dict)
         for file_path in (owner.get("files") or [])
     }
-    for path in [*impacted, *implementation]:
-        raw = str(path or "").replace("\\", "/")
+    for surface in [*impacted, *implementation]:
+        raw = str(surface or "").replace("\\", "/")
         if raw and known_paths and raw not in known_paths:
             warnings.append(f"proposal surface not found in analyzed source topology: {raw}")
-    boundary_changes = plan.get("boundaryChanges") or []
-    if boundary_changes and not isinstance(boundary_changes, list):
+
+    boundary_value = plan.get("boundaryChanges")
+    boundary_changes = boundary_value if isinstance(boundary_value, list) else []
+    if boundary_value is not None and not isinstance(boundary_value, list):
         issues.append("boundaryChanges must be an array when supplied")
-    for index, change in enumerate(boundary_changes if isinstance(boundary_changes, list) else []):
+    for index, change in enumerate(boundary_changes):
         if not isinstance(change, dict) or not str(change.get("from") or "") or not str(change.get("to") or ""):
             issues.append(f"boundaryChanges[{index}] needs from/to owners")
         elif not str(change.get("reason") or ""):
             warnings.append(f"boundaryChanges[{index}] should state its reason and ownership rule")
+
+    slices_value = plan.get("implementationSlices")
+    slices = slices_value if isinstance(slices_value, list) else []
+    if slices_value is not None and not isinstance(slices_value, list):
+        issues.append("implementationSlices must be an array when supplied")
+    normalized_slices: list[dict[str, Any]] = []
+    slice_ids: set[str] = set()
+    covered_files: set[str] = set()
+    file_slice_owner: dict[str, str] = {}
+    for index, row in enumerate(slices):
+        if not isinstance(row, dict):
+            issues.append(f"implementationSlices[{index}] must be an object")
+            continue
+        slice_id = str(row.get("sliceId") or "").strip()
+        files = _nonempty_string_list(row.get("files"))
+        invariants = _nonempty_string_list(row.get("invariants"))
+        validation = _nonempty_string_list(row.get("validation"))
+        depends_on = _nonempty_string_list(row.get("dependsOn") or [])
+        if not slice_id:
+            issues.append(f"implementationSlices[{index}].sliceId is required")
+        elif slice_id in slice_ids:
+            issues.append(f"implementationSlices has duplicate sliceId: {slice_id}")
+        else:
+            slice_ids.add(slice_id)
+        if not files:
+            issues.append(f"implementationSlices[{index}].files must be a non-empty string array")
+            files = []
+        normalized_files: list[str] = []
+        for file_index, file_path in enumerate(files):
+            normalized, path_issue = _normalize_project_relative_path(file_path)
+            if path_issue:
+                issues.append(
+                    f"implementationSlices[{index}].files[{file_index}] {path_issue}"
+                )
+                continue
+            normalized_files.append(normalized)
+            previous_owner = file_slice_owner.get(normalized)
+            if previous_owner and previous_owner != slice_id:
+                issues.append(
+                    f"implementation file assigned to multiple slices: {normalized} "
+                    f"({previous_owner}, {slice_id or '<missing>'})"
+                )
+            elif slice_id:
+                file_slice_owner[normalized] = slice_id
+        files = list(dict.fromkeys(normalized_files))
+        if not invariants:
+            issues.append(f"implementationSlices[{index}].invariants must be a non-empty string array")
+            invariants = []
+        if not validation:
+            issues.append(f"implementationSlices[{index}].validation must be a non-empty string array")
+            validation = []
+        if depends_on is None:
+            issues.append(f"implementationSlices[{index}].dependsOn must be a string array")
+            depends_on = []
+        undeclared_slice_invariants = [
+            invariant for invariant in invariants if invariant not in string_fields["invariants"]
+        ]
+        if undeclared_slice_invariants:
+            issues.append(
+                f"implementationSlices[{index}].invariants not declared by proposal: "
+                + ", ".join(undeclared_slice_invariants)
+            )
+        covered_files.update(files)
+        normalized_slices.append(
+            {
+                "sliceId": slice_id,
+                "files": files,
+                "invariants": invariants,
+                "validation": validation,
+                "dependsOn": depends_on,
+            }
+        )
+
+    for row in normalized_slices:
+        for dependency in row["dependsOn"]:
+            if dependency == row["sliceId"]:
+                issues.append(f"implementation slice {row['sliceId']} cannot depend on itself")
+            elif dependency not in slice_ids:
+                issues.append(
+                    f"implementation slice {row['sliceId']} has unknown dependency: {dependency}"
+                )
+    slice_cycle = _slice_dependency_cycle(normalized_slices) if normalized_slices else []
+    if slice_cycle:
+        issues.append("implementation slice dependency cycle: " + " -> ".join(slice_cycle))
+
+    uncovered_files = [path for path in implementation if path not in covered_files]
+    if slices and uncovered_files:
+        issues.append(
+            "implementationFiles not covered by implementationSlices: "
+            + ", ".join(uncovered_files)
+        )
+    undeclared_slice_files = sorted(covered_files - set(implementation))
+    if implementation and undeclared_slice_files:
+        issues.append(
+            "implementationSlices contain files not declared in implementationFiles: "
+            + ", ".join(undeclared_slice_files)
+        )
+
+    matrix_value = plan.get("validationMatrix")
+    matrix = matrix_value if isinstance(matrix_value, list) else []
+    if matrix_value is not None and not isinstance(matrix_value, list):
+        issues.append("validationMatrix must be an array when supplied")
+    covered_invariants: set[str] = set()
+    matrix_checks: list[str] = []
+    declared_invariants = string_fields["invariants"]
+    for index, row in enumerate(matrix):
+        if not isinstance(row, dict):
+            issues.append(f"validationMatrix[{index}] must be an object")
+            continue
+        invariant = str(row.get("invariant") or "").strip()
+        checks = _nonempty_string_list(row.get("checks"))
+        if invariant not in declared_invariants:
+            issues.append(
+                f"validationMatrix[{index}].invariant must exactly match a declared invariant"
+            )
+        else:
+            covered_invariants.add(invariant)
+        if not checks:
+            issues.append(f"validationMatrix[{index}].checks must be a non-empty string array")
+        else:
+            matrix_checks.extend(checks)
+    uncovered_invariants = [
+        invariant for invariant in declared_invariants if invariant not in covered_invariants
+    ]
+
+    staged_implementation = len(implementation) > 1 or bool(boundary_changes) or len(slices) > 1
+    ownership = plan.get("ownership")
+    required_ownership_fields = (
+        "stateOwner",
+        "dataOwner",
+        "lifecycleOwner",
+        "failurePolicy",
+        "recoveryPolicy",
+    )
+    missing_ownership = [
+        field
+        for field in required_ownership_fields
+        if not isinstance(ownership, dict) or not str(ownership.get(field) or "").strip()
+    ]
+    migration_plan = _nonempty_string_list(plan.get("migrationPlan"))
+
+    if staged_implementation:
+        if len(alternatives) < 2:
+            issues.append("staged architecture proposals require at least two alternatives")
+        if missing_ownership:
+            issues.append(
+                "staged architecture proposal ownership is missing: "
+                + ", ".join(missing_ownership)
+            )
+        if not migration_plan:
+            issues.append("staged architecture proposals require a non-empty migrationPlan")
+        if not slices:
+            issues.append("staged architecture proposals require implementationSlices")
+        if not matrix:
+            issues.append("staged architecture proposals require validationMatrix")
+        elif uncovered_invariants:
+            issues.append(
+                "declared invariants missing validation coverage: "
+                + ", ".join(uncovered_invariants)
+            )
+    elif declared_invariants and uncovered_invariants:
+        warnings.append(
+            "Add validationMatrix coverage for invariant(s): "
+            + ", ".join(uncovered_invariants)
+        )
+
     cycles = (analysis.get("topology") or {}).get("sourceDependencyCycles") or []
     graph_incomplete = not bool((analysis.get("graphEvidence") or {}).get("complete", True))
     if graph_incomplete:
@@ -451,19 +929,59 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             + ", ".join(str(item) for item in unmatched_focus)
         )
     if cycles:
-        warnings.append("Source dependency cycle(s) detected; do not add another cross-boundary dependency without resolving or explicitly accepting the cycle.")
+        warnings.append(
+            "Source dependency cycle(s) detected; do not add another cross-boundary dependency "
+            "without resolving or explicitly accepting the cycle."
+        )
+
+    required_validation = list(
+        dict.fromkeys(
+            [
+                "static validation",
+                "build/compile",
+                "targeted regression",
+                "architecture-claim review",
+                *matrix_checks,
+            ]
+        )
+    )
+    writes_allowed = not issues and not bool(cycles)
     return {
         "ok": not issues,
         "issues": issues,
         "warnings": warnings,
-        "implementationGate": {
-            "writesAllowed": not issues and not bool(cycles),
-            "requiresReadBeforeWrite": True,
-            "requiresStagedImplementation": len(implementation) > 1 or bool(boundary_changes),
-            "requiresArchitectureApproval": bool(boundary_changes) or bool(cycles),
-            "requiredValidation": ["static validation", "build/compile", "targeted regression", "architecture-claim review"],
+        "designContract": {
+            "stagedImplementation": staged_implementation,
+            "alternativeCount": len(alternatives),
+            "structuredAlternativeCount": structured_alternatives,
+            "implementationSliceCount": len(normalized_slices),
+            "implementationFilesCovered": not uncovered_files,
+            "uncoveredImplementationFiles": uncovered_files,
+            "undeclaredSliceFiles": undeclared_slice_files,
+            "invariantCount": len(declared_invariants),
+            "invariantCoverageCount": len(covered_invariants),
+            "uncoveredInvariants": uncovered_invariants,
+            "ownershipComplete": not missing_ownership,
+            "missingOwnershipFields": missing_ownership,
+            "migrationPlanPresent": bool(migration_plan),
+            "sliceDependencyCycle": slice_cycle,
         },
-        "proofBoundary": "A complete plan validates planning shape only. It does not prove the design is correct or that an implementation passes validation.",
+        "implementationGate": {
+            "writesAllowed": writes_allowed,
+            "requiresReadBeforeWrite": True,
+            "requiresStagedImplementation": staged_implementation,
+            "requiresArchitectureApproval": bool(boundary_changes) or bool(cycles),
+            "requiredValidation": required_validation,
+            "nextAction": (
+                "resolve_architecture_contract_issues"
+                if issues
+                else ("resolve_source_dependency_cycle" if cycles else "implement_next_slice")
+            ),
+        },
+        "proofBoundary": (
+            "A complete design contract proves planning shape and traceability only. It does not prove "
+            "the design is correct, the source candidates execute at runtime, or the implementation passes validation."
+        ),
     }
 
 
@@ -515,8 +1033,9 @@ def analyze_architecture(
         "topology": _topology(root, active_graph),
         "dataFlow": analyze_data_flow(active_graph, focus_symbols),
         "stateTransitions": analyze_state_transitions(active_graph, focus_symbols),
+        "lifecycle": analyze_lifecycle_boundaries(active_graph, focus_symbols),
         "proofBoundary": (
-            "Architecture topology uses direct source includes/imports. Data/state results are candidates. "
+            "Architecture topology uses direct source includes/imports. Data/state/lifecycle results are candidates. "
             "Use direct reads plus static/build/test/runtime evidence before making behavior or ownership conclusions."
         ),
     }

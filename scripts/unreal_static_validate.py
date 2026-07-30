@@ -1257,6 +1257,26 @@ def build_cs_text(root: Path) -> str:
     return "\n".join(parts)
 
 
+def build_cs_texts_by_module_root(root: Path) -> dict[Path, tuple[Path, str]]:
+    return {
+        path.parent.resolve(): (path.resolve(), read_text(path))
+        for path in find_build_cs_files(root)
+    }
+
+
+def owning_build_cs_text(
+    path: Path,
+    root: Path,
+    module_build_texts: dict[Path, tuple[Path, str]],
+    fallback: str = "",
+) -> tuple[Path | None, str]:
+    module_root = _source_module_root(path.resolve(), root.resolve())
+    if module_root is None:
+        return None, fallback
+    item = module_build_texts.get(module_root.resolve())
+    return item if item is not None else (None, "")
+
+
 def declared_build_modules(build_text_value: str) -> set[str]:
     return declared_modules_from_text(build_text_value)
 
@@ -1885,16 +1905,27 @@ def validate_include_owner_modules(
     root: Path,
     build_text_value: str,
     owner_map: dict[str, list[str]],
+    *,
+    scope_paths: list[Path] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
     if not owner_map:
         return findings
-    declared = declared_build_modules(build_text_value)
-    public_declared = public_build_modules(build_text_value)
+    module_build_texts = build_cs_texts_by_module_root(root)
     local_modules = local_module_names(root)
-    for path in iter_source_files(root):
+    source_paths = scope_paths if scope_paths is not None else iter_source_files(root)
+    for path in source_paths:
+        path = Path(path).resolve()
         if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
             continue
+        owner_build_file, owner_build_text = owning_build_cs_text(
+            path,
+            root,
+            module_build_texts,
+            fallback=build_text_value if not module_build_texts else "",
+        )
+        declared = declared_build_modules(owner_build_text)
+        public_declared = public_build_modules(owner_build_text)
         text = read_text(path)
         visibility = include_visibility(path)
         for line, include_path in include_lines(text):
@@ -1911,13 +1942,19 @@ def validate_include_owner_modules(
             missing = [module_name for module_name in candidate_modules if module_name not in declared]
             if missing:
                 dependency_kind = "PublicDependencyModuleNames" if visibility == "public" else "PrivateDependencyModuleNames"
+                owner_hint = (
+                    str(owner_build_file.relative_to(root.resolve()))
+                    if owner_build_file is not None
+                    else "the owning module Build.cs"
+                )
                 findings.append(
                     Finding(
                         "warning",
                         str(path.relative_to(root)),
                         line,
                         "MISSING_INCLUDE_OWNER_MODULE",
-                        f'Include "{include_path}" belongs to module(s) {", ".join(missing)}; add to {dependency_kind}.',
+                        f'Include "{include_path}" belongs to module(s) {", ".join(missing)}; '
+                        f"add to {dependency_kind} in {owner_hint}.",
                     )
                 )
                 continue
@@ -3500,6 +3537,7 @@ def validate_unreal_readiness(
         return validate_unreal_readiness_lightweight(root)
     findings: list[Finding] = []
     build_text_value = build_cs_text(root)
+    module_build_texts = build_cs_texts_by_module_root(root)
     if scope_paths is not None:
         from domain_validation_context import (
             DomainValidationContext,
@@ -3557,6 +3595,12 @@ def validate_unreal_readiness(
         cpp_scope = [path for path in scope if path.suffix.lower() in {".cpp", ".c", ".cc"}]
         header_scope = [path for path in scope if path.suffix.lower() in {".h", ".hpp"}]
         for path in scope:
+            _, per_file_build_text = owning_build_cs_text(
+                path,
+                root,
+                module_build_texts,
+                fallback=build_text_value if not module_build_texts else "",
+            )
             _run_per_file_validators(
                 findings,
                 path,
@@ -3567,7 +3611,7 @@ def validate_unreal_readiness(
                 delegate_arity_map=delegate_arity_map,
                 declared_delegate_types=declared_delegate_types,
                 include_index=include_index,
-                build_text_value=build_text_value,
+                build_text_value=per_file_build_text,
                 skip_include_path_checks=skip_include_path_checks,
                 write_mode=True,
                 include_owner_map=include_owner_map,
@@ -3580,6 +3624,14 @@ def validate_unreal_readiness(
                 build_text_value,
                 scope_paths=scope,
                 scope_texts=texts,
+            )
+        )
+        findings.extend(
+            validate_include_owner_modules(
+                root,
+                build_text_value,
+                include_owner_map,
+                scope_paths=scope,
             )
         )
         if cpp_scope:
@@ -3618,6 +3670,12 @@ def validate_unreal_readiness(
     for path in all_paths:
         text = domain_context.text_for(path)
         all_source_text.append(text)
+        _, per_file_build_text = owning_build_cs_text(
+            path,
+            root,
+            module_build_texts,
+            fallback=build_text_value if not module_build_texts else "",
+        )
         _run_per_file_validators(
             findings,
             path,
@@ -3628,7 +3686,7 @@ def validate_unreal_readiness(
             delegate_arity_map=delegate_arity_map,
             declared_delegate_types=declared_delegate_types,
             include_index=include_index,
-            build_text_value=build_text_value,
+            build_text_value=per_file_build_text,
             skip_include_path_checks=skip_include_path_checks,
             domain_context=domain_context,
         )

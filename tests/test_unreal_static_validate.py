@@ -28,6 +28,7 @@ from unreal_static_validate import (  # noqa: E402
     validate_blueprint_assignable_delegate_types,
     validate_project_uobject_type_visibility,
     validate_uproperty_category_without_exposure,
+    validate_include_owner_modules,
     load_include_owner_map,
 )
 from collect_unreal_symbols import infer_module_name  # noqa: E402
@@ -193,6 +194,59 @@ def test_stale_source_include_owner_sentinel_is_ignored(tmp_path: Path) -> None:
     )
 
     assert load_include_owner_map(graph) == {}
+
+
+def test_include_owner_module_validation_uses_the_consuming_modules_build_cs(tmp_path: Path) -> None:
+    project = tmp_path / "MultiModule"
+    consumer_header = project / "Source" / "Consumer" / "Public" / "SequenceUser.h"
+    _write(
+        project / "Source" / "Consumer" / "Consumer.Build.cs",
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core", "Engine" });\n',
+    )
+    _write(
+        project / "Source" / "Other" / "Other.Build.cs",
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core", "LevelSequence" });\n',
+    )
+    _write(consumer_header, '#include "LevelSequence.h"\n')
+
+    findings = validate_include_owner_modules(
+        project,
+        build_text_value=(
+            'PublicDependencyModuleNames.AddRange(new string[] '
+            '{ "Core", "Engine", "LevelSequence" });\n'
+        ),
+        owner_map={"LevelSequence.h": ["LevelSequence"]},
+    )
+
+    missing = [item for item in findings if item.code == "MISSING_INCLUDE_OWNER_MODULE"]
+    assert len(missing) == 1
+    assert "Consumer.Build.cs" in missing[0].message
+
+
+def test_scoped_include_owner_module_validation_keeps_owner_boundary(tmp_path: Path) -> None:
+    project = tmp_path / "ScopedMultiModule"
+    consumer_header = project / "Source" / "Consumer" / "Public" / "WidgetUser.h"
+    _write(
+        project / "Source" / "Consumer" / "Consumer.Build.cs",
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core" });\n',
+    )
+    _write(
+        project / "Source" / "Other" / "Other.Build.cs",
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core", "UMG" });\n',
+    )
+    _write(consumer_header, '#include "Blueprint/UserWidget.h"\n')
+
+    findings = validate_include_owner_modules(
+        project,
+        build_text_value="",
+        owner_map={"Blueprint/UserWidget.h": ["UMG"]},
+        scope_paths=[consumer_header],
+    )
+
+    assert any(
+        item.code == "MISSING_INCLUDE_OWNER_MODULE" and "Consumer.Build.cs" in item.message
+        for item in findings
+    )
 
 
 def test_uproperty_category_without_exposure_matches_uht_warning(tmp_path: Path) -> None:

@@ -1,8 +1,8 @@
 # Evaluation Risk Register
 
-This project should not claim that a local model is globally "Sonnet 4-grade" from the current internal eval results. The safer claim is narrower:
-
-> Qwen 27B itself is not proven to be Sonnet 4-grade. Inside this RAG/MCP/UBT validation loop, some UE C++ compile-fix and project-review tasks showed practical stability near upper Sonnet 3.7 to lower Sonnet 4 range.
+This project must not claim that a local model is globally "Sonnet 4-grade"
+from internal eval results. No cross-model equivalence claim is allowed without
+a same-fixture, same-budget, same-tool head-to-head run.
 
 The forward project target is now a Sonnet 4.5-oriented local Unreal workflow. That is a target for future validation, not a current claim.
 
@@ -34,7 +34,11 @@ Project-review scoring uses regex checks for `mustDetect`, forbidden patterns, a
 
 5. Internal KPI interpretation error
 
-`claim9_0` and `estimatedGradeOutOf10` are internal scorecard fields. They are not external benchmark percentages and do not mean "9.6/10 equals objectively 96% of Sonnet 4."
+The synthetic `claim9_0` and `estimatedGradeOutOf10` fields were removed.
+`report_tier_kpi.py` now emits separate capability fields and marks
+metrics-only or skipped input as `not_run`. A live label without suite
+identity, executed cases, and the field's required numeric measurements remains
+ineligible for a release claim.
 
 6. Test-case leakage
 

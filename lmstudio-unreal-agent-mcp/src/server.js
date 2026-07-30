@@ -2462,9 +2462,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "apply_edit_bundle") {
-      if (!CONTROL_PLANE_TOOLS) {
-        return fail("apply_edit_bundle blocked in stable install.", { errorCode: "TOOL_NOT_CALLABLE" });
-      }
       if (!ALLOW_WRITE) return fail("apply_edit_bundle blocked. Set ALLOW_WRITE=1 to enable.");
       const authFail = enforceTaskAuth(args, { requireSession: true });
       if (authFail && authFail.isError) return authFail;

@@ -1,17 +1,25 @@
 # Troubleshooting
 
-## claim 9.0 (Tier KPI)
+## Capability scorecard is not release-ready
 
 ```powershell
-.\rag.ps1 sonnet-tier-gate -Live
 .\rag.ps1 report-tier-kpi
 ```
 
-Requires LM Studio live + sonnet-tier-gate **15/15**. Pass@K live and project-review live must pass.
+The report keeps `compile_fix`, `architecture`, `semantic_refactor`,
+`runtime_debug`, `negative_control`, and `orchestration_ux` separate. A
+`metrics-only`, skipped, or static-only run remains `not_run` or
+`static_verified`; it cannot satisfy a live release claim. Run the missing live
+suite shown in `data/baseline/tier-kpi-latest.json`.
+
+If a row says `live_verified` but `Claim allowed` is `NO`, inspect its
+`identityIssues` and `evidenceIssues`. Live reports need an auditable timestamp,
+commit, model, suite/config, a positive executed-case count, and the required
+numeric measurements.
 
 If `bench-mcp` FTS flakes, rerun `.\rag.ps1 bench-mcp` alone (min-of-2 timing + one retry).
 
-## Unreal Editor (optional — not in claim 9.0 gate)
+## Unreal Editor (optional)
 
 **Tier A/B gates do not require Unreal Editor.**
 

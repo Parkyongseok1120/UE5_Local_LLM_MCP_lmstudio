@@ -56,6 +56,51 @@ def test_build_error_record_priority_prefers_real_error_over_toolchain_warning()
     assert records[0] is c2511
 
 
+def test_build_error_causality_keeps_first_diagnostic_ahead_of_later_cascade():
+    first = {
+        "id": "first",
+        "text": "Message:\nmissing ';' before '}'",
+        "metadata": {
+            "severity": "error",
+            "error_code": "C2143",
+            "error_file": "Foo.cpp",
+            "translation_unit": "Foo.cpp",
+            "diagnostic_order": 10,
+        },
+    }
+    cascade = {
+        "id": "cascade",
+        "text": "Message:\nidentifier not found",
+        "metadata": {
+            "severity": "error",
+            "error_code": "C2065",
+            "error_file": "Foo.cpp",
+            "translation_unit": "Foo.cpp",
+            "diagnostic_order": 11,
+        },
+    }
+    independent = {
+        "id": "independent",
+        "text": "Message:\nCannot open include file",
+        "metadata": {
+            "severity": "error",
+            "error_code": "C1083",
+            "error_file": "Bar.cpp",
+            "translation_unit": "Bar.cpp",
+            "diagnostic_order": 30,
+        },
+    }
+
+    annotated = wrapper.annotate_build_error_causality([cascade, independent, first])
+    records = wrapper.prioritize_build_error_records(annotated)
+
+    assert records[0] is first
+    assert first["metadata"]["causal_role"] == "primary"
+    assert cascade["metadata"]["causal_role"] == "cascade_candidate"
+    assert independent["metadata"]["causal_role"] == "independent_candidate"
+    assert records.index(independent) < records.index(cascade)
+
+
 def test_retry_payload_preserves_specific_route_when_new_parse_is_generic():
     records = [
         {

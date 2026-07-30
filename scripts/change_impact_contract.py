@@ -10,6 +10,7 @@ evidence and regression scope they should consume.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,12 @@ from symbol_graph import lookup_symbol, related_edges, source_evidence_for_symbo
 
 TEST_DIR_MARKERS = {"test", "tests", "spec", "specs", "__tests__"}
 TEST_NAME_RE = re.compile(r"(?:^|[_\-.])(test|tests|spec)(?:[_\-.]|$)", re.IGNORECASE)
+TEXT_SURFACE_SUFFIXES = {".ini", ".uproject", ".uplugin", ".json", ".yaml", ".yml", ".toml"}
+TEXT_SURFACE_SKIP_DIRS = {
+    ".git", "binaries", "intermediate", "saved", "deriveddatacache",
+    "node_modules", ".venv", "venv", "dist", "build", "thirdparty",
+}
+MAX_TEXT_SURFACE_BYTES = 2 * 1024 * 1024
 
 
 def _resolve_root(project_root: str | Path) -> Path | None:
@@ -110,6 +117,63 @@ def _test_files(root: Path, symbols: list[str], *, limit: int = 20) -> list[dict
     return matches
 
 
+def _text_surface_references(
+    root: Path,
+    symbols: list[str],
+    *,
+    limit: int,
+) -> tuple[list[dict[str, Any]], list[str], bool]:
+    """Find exact symbol references in config/descriptors without claiming binary asset coverage."""
+    patterns = {
+        symbol: re.compile(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])")
+        for symbol in symbols
+    }
+    matches: list[dict[str, Any]] = []
+    read_errors: list[str] = []
+    truncated = False
+    for current, directories, names in os.walk(root, followlinks=False):
+        directories[:] = sorted(
+            name for name in directories if name.casefold() not in TEXT_SURFACE_SKIP_DIRS
+        )
+        for name in sorted(names):
+            path = Path(current) / name
+            if path.suffix.casefold() not in TEXT_SURFACE_SUFFIXES:
+                continue
+            try:
+                if path.stat().st_size > MAX_TEXT_SURFACE_BYTES:
+                    continue
+                text = path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError as exc:
+                read_errors.append(f"{path}: {type(exc).__name__}: {exc}")
+                continue
+            hits: list[dict[str, Any]] = []
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                mentioned = [symbol for symbol, pattern in patterns.items() if pattern.search(line)]
+                if mentioned:
+                    hits.append(
+                        {
+                            "line": line_no,
+                            "symbols": mentioned,
+                            "snippet": line.strip()[:180],
+                        }
+                    )
+            if not hits:
+                continue
+            if len(matches) >= limit:
+                truncated = True
+                return matches, read_errors, truncated
+            kind = "config_reference" if path.suffix.casefold() == ".ini" else "descriptor_reference"
+            matches.append(
+                {
+                    "path": _relative(root, path),
+                    "kind": kind,
+                    "hits": hits[:8],
+                    "hitCount": len(hits),
+                }
+            )
+    return matches, read_errors, truncated
+
+
 def build_change_impact_contract(
     project_root: str | Path,
     symbols: list[str],
@@ -184,6 +248,7 @@ def build_change_impact_contract(
     unmatched: list[str] = []
     graph_incomplete = not bool((active_graph.get("analysis") or {}).get("complete", True))
     truncated = False
+    matched_symbol_rows: list[dict[str, Any]] = []
 
     def add(bucket: dict[str, dict[str, Any]], path: str, *, reason: str, evidence: dict[str, Any], confidence: str) -> None:
         nonlocal truncated
@@ -210,6 +275,7 @@ def build_change_impact_contract(
         if not matches:
             unmatched.append(query)
             continue
+        matched_symbol_rows.extend(matches)
         for row in matches:
             add(
                 direct,
@@ -251,6 +317,29 @@ def build_change_impact_contract(
                     confidence="direct",
                 )
 
+    text_surfaces, text_surface_errors, text_surfaces_truncated = _text_surface_references(
+        root,
+        queries,
+        limit=max_files,
+    )
+    truncated = truncated or text_surfaces_truncated
+    for surface in text_surfaces:
+        first_hit = (surface.get("hits") or [{}])[0]
+        add(
+            direct,
+            str(surface.get("path") or ""),
+            reason=f"{surface.get('kind')} serialized/config surface",
+            evidence={
+                "kind": "project_config",
+                "location": f"{surface.get('path')}:{first_hit.get('line') or 1}",
+                "observation": "Exact target symbol appears in a text config or descriptor.",
+            },
+            confidence="direct",
+        )
+
+    reflected_target = any(bool(row.get("is_reflected")) for row in matched_symbol_rows)
+    unreal_object_target = any(query[:1] in {"A", "U"} and len(query) > 2 for query in queries)
+    asset_inspection_required = reflected_target or unreal_object_target or bool(text_surfaces)
     test_candidates = _test_files(root, queries)
     regression_steps: list[dict[str, Any]] = [
         {"kind": "static_validation", "required": True, "reason": "Catch local source/contract regressions after each staged patch."},
@@ -274,6 +363,23 @@ def build_change_impact_contract(
                 "reason": "No source-discoverable targeted test was found; define a focused regression check before claiming behavior is preserved.",
             }
         )
+    if asset_inspection_required:
+        regression_steps.extend(
+            [
+                {
+                    "kind": "asset_registry_reference_scan",
+                    "required": True,
+                    "status": "runtime_or_editor_evidence_required",
+                    "reason": "Reflected/UObject-facing symbols may be referenced by binary assets that source scans cannot inspect.",
+                },
+                {
+                    "kind": "blueprint_compile_or_load_validation",
+                    "required": True,
+                    "status": "runtime_or_editor_evidence_required",
+                    "reason": "Validate affected Blueprint/assets after the source and redirect changes.",
+                },
+            ]
+        )
 
     direct_rows = sorted(direct.values(), key=lambda item: item["path"])
     candidate_rows = sorted(candidates.values(), key=lambda item: item["path"])
@@ -282,6 +388,8 @@ def build_change_impact_contract(
         issues.append(f"target symbol(s) not found in the project graph: {', '.join(unmatched)}")
     if graph_incomplete:
         issues.append("one or more project source files could not be read; impact evidence is incomplete")
+    if text_surface_errors:
+        issues.append("one or more config/descriptor files could not be read; serialized-reference evidence is incomplete")
     if truncated:
         issues.append("impact scope exceeded max_files or per-symbol relation limits; narrow the symbol/scope before writing")
     return {
@@ -293,6 +401,9 @@ def build_change_impact_contract(
         "issues": issues,
         "directImpacts": direct_rows,
         "candidateImpacts": candidate_rows,
+        "textSurfaceImpacts": text_surfaces,
+        "assetInspectionRequired": asset_inspection_required,
+        "assetCoverage": "editor_or_asset_registry_required" if asset_inspection_required else "not_triggered",
         "truncated": truncated,
         "graphIncomplete": graph_incomplete,
         "suppliedGraphAccepted": bool(graph is not None and graph_matches_root),
@@ -317,6 +428,7 @@ def build_change_impact_contract(
         },
         "proofBoundary": (
             "Direct impacts are source-text relationships. Candidate call impacts are heuristic. Neither proves data flow, "
-            "state transitions, runtime execution, or a root-cause conclusion by itself."
+            "state transitions, runtime execution, or a root-cause conclusion by itself. Binary .uasset/.umap references "
+            "require Unreal Editor or Asset Registry evidence."
         ),
     }

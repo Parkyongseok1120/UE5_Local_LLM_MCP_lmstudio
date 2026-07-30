@@ -243,11 +243,16 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
     topology = payload.get("topology") if isinstance(payload.get("topology"), dict) else {}
     data_flow = payload.get("dataFlow") if isinstance(payload.get("dataFlow"), dict) else {}
     state = payload.get("stateTransitions") if isinstance(payload.get("stateTransitions"), dict) else {}
+    lifecycle = payload.get("lifecycle") if isinstance(payload.get("lifecycle"), dict) else {}
     owners = list(topology.get("owners") or [])
     dependencies = list(topology.get("boundaryDependencies") or topology.get("dependencies") or [])
     cycles = list(topology.get("sourceDependencyCycles") or topology.get("cycles") or [])
     flows = list(data_flow.get("flows") or data_flow.get("candidates") or [])
     transitions = list(state.get("transitions") or [])
+    state_owners = list(state.get("stateOwnershipCandidates") or [])
+    lifecycle_callbacks = list(lifecycle.get("callbacks") or [])
+    async_boundaries = list(lifecycle.get("asyncEventBoundaries") or [])
+    lifecycle_gaps = list(lifecycle.get("pairingGaps") or [])
 
     compact: dict[str, Any] = {
         "ok": payload.get("ok"),
@@ -259,6 +264,9 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
                 len(dependencies) > dependency_limit,
                 len(flows) > flow_limit,
                 len(transitions) > transition_limit,
+                len(state_owners) > transition_limit,
+                len(lifecycle_callbacks) > transition_limit,
+                len(async_boundaries) > transition_limit,
             )
         ),
         "focus": payload.get("focus") or {},
@@ -269,6 +277,10 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
             "cycleCount": len(cycles),
             "dataFlowCandidateCount": len(flows),
             "stateTransitionCandidateCount": len(transitions),
+            "stateOwnershipCandidateCount": len(state_owners),
+            "lifecycleCallbackCandidateCount": len(lifecycle_callbacks),
+            "asyncEventBoundaryCandidateCount": len(async_boundaries),
+            "lifecyclePairingGapCount": len(lifecycle_gaps),
         },
         "topology": {
             "owners": _sample_nested_rows(owners, row_limit=owner_limit, nested_limit=nested_limit),
@@ -288,7 +300,12 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
         "stateTransitions": {
             key: value
             for key, value in state.items()
-            if key != "transitions"
+            if key not in {"transitions", "stateOwnershipCandidates"}
+        },
+        "lifecycle": {
+            key: value
+            for key, value in lifecycle.items()
+            if key not in {"callbacks", "asyncEventBoundaries", "pairingGaps"}
         },
         "proofBoundary": payload.get("proofBoundary"),
     }
@@ -302,7 +319,31 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
         row_limit=transition_limit,
         nested_limit=nested_limit,
     )
-    for key in ("proposalValidation", "implementationGate", "warnings", "nextActions", "performance"):
+    compact["stateTransitions"]["stateOwnershipCandidates"] = _sample_nested_rows(
+        state_owners,
+        row_limit=transition_limit,
+        nested_limit=nested_limit,
+    )
+    compact["lifecycle"]["callbacks"] = _sample_nested_rows(
+        lifecycle_callbacks,
+        row_limit=transition_limit,
+        nested_limit=nested_limit,
+    )
+    compact["lifecycle"]["asyncEventBoundaries"] = _sample_nested_rows(
+        async_boundaries,
+        row_limit=transition_limit,
+        nested_limit=nested_limit,
+    )
+    # Cleanup-pair gaps affect safety and are not sampled away.
+    compact["lifecycle"]["pairingGaps"] = lifecycle_gaps
+    for key in (
+        "proposalValidation",
+        "implementationGate",
+        "warnings",
+        "nextActions",
+        "performance",
+        "gateCompletion",
+    ):
         if key in payload:
             compact[key] = payload[key]
     if compact["truncated"]:

@@ -26,6 +26,8 @@ RAG_ESSENTIAL_TOOLS = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_architecture_reasoning",
+        "unreal_runtime_config_check",
+        "unreal_runtime_debug_session",
         "unreal_code_sketch_claim_validate",
         "unreal_review_claim_validate",
         "unreal_diagram_validate",

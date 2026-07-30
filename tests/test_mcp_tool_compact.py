@@ -214,7 +214,15 @@ def test_architecture_compaction_preserves_safety_gate_and_counts():
             "sourceDependencyCycles": [["A", "B", "A"]],
         },
         "dataFlow": {"flows": [{"symbol": str(index)} for index in range(20)]},
-        "stateTransitions": {"transitions": [{"symbol": str(index)} for index in range(20)]},
+        "stateTransitions": {
+            "transitions": [{"symbol": str(index)} for index in range(20)],
+            "stateOwnershipCandidates": [{"owner": str(index)} for index in range(20)],
+        },
+        "lifecycle": {
+            "callbacks": [{"function": str(index)} for index in range(20)],
+            "asyncEventBoundaries": [{"call": str(index)} for index in range(20)],
+            "pairingGaps": [{"owner": "Demo", "missingCandidatePhase": "runtime_stop"}],
+        },
         "proposalValidation": {
             "ok": False,
             "implementationGate": {"writesAllowed": False, "requiredValidation": ["build"]},
@@ -225,7 +233,12 @@ def test_architecture_compaction_preserves_safety_gate_and_counts():
     compact = compact_architecture_payload(payload, "compact")
 
     assert compact["summary"]["ownerCount"] == 12
+    assert compact["summary"]["stateOwnershipCandidateCount"] == 20
+    assert compact["summary"]["lifecycleCallbackCandidateCount"] == 20
     assert len(compact["topology"]["owners"]) == 8
+    assert len(compact["stateTransitions"]["stateOwnershipCandidates"]) == 12
+    assert len(compact["lifecycle"]["callbacks"]) == 12
+    assert compact["lifecycle"]["pairingGaps"][0]["owner"] == "Demo"
     assert compact["topology"]["sourceDependencyCycles"] == [["A", "B", "A"]]
     assert compact["proposalValidation"]["implementationGate"]["writesAllowed"] is False
     assert compact["truncated"] is True

@@ -13,6 +13,7 @@ from task_api import (  # noqa: E402
     task_approve,
     task_cancel,
     task_root,
+    task_resume,
     task_start,
     task_status,
 )
@@ -89,3 +90,64 @@ def test_task_status_maps_cancellation_uncertain_not_failed(tmp_path: Path, monk
     assert result["ok"] is True
     assert result["status"] == "cancellation_uncertain"
     assert result["state"]["status"] == "cancellation_uncertain"
+
+
+def test_task_resume_restores_confirmed_cancel_and_discards_expired_gates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    plan = {
+        "taskKind": "edit",
+        "writeGate": {"writesAllowed": True},
+        "orchestration": {
+            "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+        },
+    }
+    started = task_start(tmp_path, request="demo", plan_payload=plan)
+    task_id = str(started["taskSessionId"])
+    state_path = task_root(tmp_path, task_id) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["completedGates"] = {
+        "unreal_code_sketch_claim_validate": {
+            "status": "completed",
+            "gateSetHash": state["requiredGateSetHash"],
+            "expiresAt": "2000-01-01T00:00:00+00:00",
+        }
+    }
+    state["pendingGates"] = []
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    cancelled = task_cancel(tmp_path, task_id)
+    resumed = task_resume(tmp_path, task_id)
+
+    assert cancelled["status"] == "cancelled"
+    assert resumed["ok"] is True
+    assert resumed["status"] == "running"
+    assert resumed["state"]["completedGates"] == {}
+    assert resumed["state"]["pendingGates"] == [
+        "unreal_code_sketch_claim_validate"
+    ]
+    assert resumed["writeReadiness"]["ready"] is False
+    assert resumed["nextAction"] == "unreal_code_sketch_claim_validate"
+
+
+def test_task_resume_rejects_unconfirmed_or_completed_task(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(tmp_path, request="demo")
+    task_id = str(started["taskSessionId"])
+    state_path = task_root(tmp_path, task_id) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+
+    state["status"] = "cancellation_uncertain"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    uncertain = task_resume(tmp_path, task_id)
+    assert uncertain["ok"] is False
+
+    state["status"] = "completed"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed = task_resume(tmp_path, task_id)
+    assert completed["ok"] is False
