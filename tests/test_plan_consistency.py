@@ -64,7 +64,12 @@ def test_essential_mode_filters_hidden_refactor_tools(monkeypatch):
         ["unreal_rag_search", "unreal_refactor_manager_plan", "answer_with_evidence"],
         [{"tool": "unreal_refactor_manager_plan", "args": {}}],
         refactor_manager_embedded=True,
-        gates=["unreal_review_claim_validate", "unreal_review_claim_validate_negative_and_logic_missing", "unreal_editor_metadata_status"],
+        gates=[
+            "unreal_review_claim_validate",
+            "unreal_review_claim_validate_negative_and_logic_missing",
+            "unreal_semantic_refactor_guard",
+            "unreal_editor_metadata_status",
+        ],
     )
     assert "unreal_refactor_manager_plan" not in policy
     assert "answer_with_evidence" not in policy
@@ -72,6 +77,7 @@ def test_essential_mode_filters_hidden_refactor_tools(monkeypatch):
     assert notes
     assert "unreal_review_claim_validate" in gates
     assert "unreal_review_claim_validate_negative_and_logic_missing" in gates
+    assert "unreal_semantic_refactor_guard" in gates
     assert "unreal_editor_metadata_status" not in gates
 
 

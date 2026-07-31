@@ -6,7 +6,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from task_autonomy_supervisor import autonomy_blockers
 from task_continuity import lease_health, recovery_conflicts
+from phase_tool_router import compact_tool_route
 
 STATUS_TO_PHASE: dict[str, tuple[str, str, str, bool, str | None]] = {
     "running": ("planning", "Planning next steps", "다음 단계를 계획 중", True, "unreal_task_cancel"),
@@ -107,8 +109,19 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
     completed_gates = dict(state.get("completedGates") or {})
     runtime_session = dict(state.get("runtimeDebugSession") or {})
     continuity = dict(state.get("continuity") or {})
+    feature_intent = (
+        state.get("featureIntent")
+        if isinstance(state.get("featureIntent"), dict)
+        else {}
+    )
     lease = lease_health(continuity)
     checkpoint_conflicts = recovery_conflicts(continuity)
+    supervisor = (
+        state.get("autonomySupervisor")
+        if isinstance(state.get("autonomySupervisor"), dict)
+        else {}
+    )
+    supervisor_blockers = autonomy_blockers(supervisor)
     expected_gate_set_hash = str(state.get("requiredGateSetHash") or "")
     now = datetime.now(tz=timezone.utc)
     valid_completed: list[str] = []
@@ -123,6 +136,35 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             reason = "stale_plan"
         else:
             reason = _expiry_issue(record.get("expiresAt"), now)
+        if not reason and gate == "unreal_feature_intent_resolve":
+            checkpoint = dict(continuity.get("checkpoint") or {})
+            current_checkpoint_hash = str(
+                checkpoint.get("checkpointHash")
+                or continuity.get("planIdentityHash")
+                or ""
+            )
+            binding_matches = bool(
+                feature_intent
+                and feature_intent.get("status") == "resolved"
+                and str(record.get("selectedIntentId") or "")
+                == str(state.get("selectedIntentId") or "")
+                == str(feature_intent.get("selectedIntentId") or "")
+                and str(record.get("intentContractHash") or "")
+                == str(state.get("intentContractHash") or "")
+                == str(feature_intent.get("intentContractHash") or "")
+                and str(record.get("acceptanceOracleHash") or "")
+                == str(feature_intent.get("acceptanceOracleHash") or "")
+                and str(record.get("planRevision") or "")
+                == str(state.get("planRevision") or "")
+                == str(feature_intent.get("planRevision") or "")
+                and str(record.get("checkpointHash") or "")
+                == current_checkpoint_hash
+                == str(feature_intent.get("checkpointHash") or "")
+                and str(record.get("targetSnapshotHash") or "")
+                == str(feature_intent.get("targetSnapshotHash") or "")
+            )
+            if not binding_matches:
+                reason = "intent_binding_stale"
         if reason:
             gate_issues.append({"gate": gate, "reason": reason})
         else:
@@ -141,6 +183,7 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             and not job_in_progress
             and lease.get("active") is True
             and not checkpoint_conflicts
+            and not supervisor_blockers
         )
         blocked_reasons: list[str] = []
         if status != "running":
@@ -156,6 +199,10 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             blocked_reasons.append("task_lease_expired")
         if checkpoint_conflicts:
             blocked_reasons.append("checkpoint_conflict")
+        blocked_reasons.extend(
+            f"autonomy:{item.get('code') or 'blocked'}"
+            for item in supervisor_blockers
+        )
 
         if status in {"pending_approval", "awaiting_approval"}:
             next_action = "unreal_task_approve"
@@ -171,10 +218,18 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             next_action = "unreal_task_checkpoint:recover"
         elif lease.get("configured") and not lease.get("active"):
             next_action = "unreal_task_checkpoint:recover"
+        elif supervisor_blockers:
+            next_action = str(
+                supervisor.get("nextAction") or "replan_autonomous_strategy"
+            )
         else:
             next_action = pending_gates[0] if pending_gates else str(payload.get("resumeAction") or "")
 
-        continuity_ready = lease.get("active") is True and not checkpoint_conflicts
+        continuity_ready = (
+            lease.get("active") is True
+            and not checkpoint_conflicts
+            and not supervisor_blockers
+        )
         if (
             status == "running"
             and continuity_ready
@@ -215,11 +270,53 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             "gateIssues": gate_issues,
             "blockedReasons": blocked_reasons,
         }
+        route = compact_tool_route(state.get("toolRoute"))
+        if route:
+            payload["toolRoute"] = route
+        payload["selectedHypothesisId"] = str(
+            state.get("selectedHypothesisId") or ""
+        )
+        payload["selectedCandidateId"] = str(
+            state.get("selectedCandidateId") or ""
+        )
         payload["continuity"] = {
             "lease": lease,
             "checkpoint": dict(continuity.get("checkpoint") or {}),
             "recovery": dict(continuity.get("recovery") or {}),
         }
+        if supervisor:
+            payload["autonomySupervisor"] = {
+                "status": str(supervisor.get("status") or "active"),
+                "strategyEpoch": int(supervisor.get("strategyEpoch") or 1),
+                "retryBudgets": dict(supervisor.get("retryBudgets") or {}),
+                "retryState": dict(supervisor.get("retryState") or {}),
+                "progress": dict(supervisor.get("lastObservation") or {}),
+                "validation": dict(supervisor.get("validation") or {}),
+                "blockers": supervisor_blockers,
+                "nextAction": str(supervisor.get("nextAction") or ""),
+            }
+        if feature_intent:
+            payload["featureIntent"] = {
+                "required": bool(feature_intent.get("required")),
+                "status": str(feature_intent.get("status") or ""),
+                "ambiguityScore": float(
+                    feature_intent.get("ambiguityScore") or 0
+                ),
+                "recommendedAction": str(
+                    feature_intent.get("recommendedAction") or ""
+                ),
+                "candidateCount": int(feature_intent.get("candidateCount") or 0),
+                "candidates": list(feature_intent.get("candidates") or [])[:5],
+                "blockingQuestions": list(
+                    feature_intent.get("blockingQuestions") or []
+                )[:3],
+                "selectedIntentId": str(
+                    feature_intent.get("selectedIntentId") or ""
+                ),
+                "intentContractHash": str(
+                    feature_intent.get("intentContractHash") or ""
+                ),
+            }
         if next_action:
             payload["nextAction"] = next_action
         if runtime_status:

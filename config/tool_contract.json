@@ -10,10 +10,10 @@
     "background": 3600000
   },
   "sideEffectClasses": {
-    "read_only": ["read_file", "read_file_range", "search_files", "unreal_rag_search"],
+    "read_only": ["read_file", "read_file_range", "search_files", "unreal_rag_search", "unreal_semantic_refactor_guard"],
     "write": ["write_file", "replace_in_file", "apply_edit_bundle"],
     "build": ["build_unreal_project", "unreal_start_compile_loop"],
-    "control_plane": ["unreal_task_start", "unreal_task_cancel", "unreal_task_status", "unreal_task_checkpoint"]
+    "control_plane": ["unreal_task_start", "unreal_task_cancel", "unreal_task_status", "unreal_task_checkpoint", "unreal_feature_intent_resolve"]
   },
   "servers": {
     "rag": {

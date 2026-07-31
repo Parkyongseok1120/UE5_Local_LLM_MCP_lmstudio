@@ -21,8 +21,10 @@ RAG_MCP_TOOLS = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_architecture_reasoning",
+        "unreal_feature_intent_resolve",
         "unreal_runtime_debug_session",
         "unreal_code_sketch_claim_validate",
+        "unreal_semantic_refactor_guard",
         "unreal_review_claim_validate",
         "unreal_diagram_validate",
         "unreal_project_status",
@@ -128,6 +130,14 @@ def writes_allowed_for_task(task_kind: str) -> bool:
 
 def exposure_inventory() -> dict[str, Any]:
     from plan_consistency import AGENT_EXTENDED_REFACTOR, RAG_ESSENTIAL_TOOLS, RAG_EXTENDED_ONLY
+    from phase_tool_router import (
+        MAX_ACTIVE_TOOLS,
+        MAX_FILES_PER_SLICE,
+        MAX_HYPOTHESES,
+        MAX_PATCH_CANDIDATES,
+        MAX_SYMBOLS,
+        MIN_ACTIVE_TOOLS,
+    )
 
     return {
         "ragMcpTools": sorted(RAG_MCP_TOOLS),
@@ -136,4 +146,13 @@ def exposure_inventory() -> dict[str, Any]:
         "agentExtendedRefactor": sorted(AGENT_EXTENDED_REFACTOR),
         "terminalActions": sorted(TERMINAL_ACTIONS),
         "checkpoints": sorted(CHECKPOINTS),
+        "dynamicRoute": {
+            "serverOwned": True,
+            "minActiveTools": MIN_ACTIVE_TOOLS,
+            "maxActiveTools": MAX_ACTIVE_TOOLS,
+            "maxFilesPerSlice": MAX_FILES_PER_SLICE,
+            "maxSymbols": MAX_SYMBOLS,
+            "maxHypotheses": MAX_HYPOTHESES,
+            "maxPatchCandidates": MAX_PATCH_CANDIDATES,
+        },
     }

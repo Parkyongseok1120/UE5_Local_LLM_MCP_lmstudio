@@ -5,22 +5,44 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
+import subprocess
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from atomic_io import atomic_write_text
 from state_root import ensure_state_root_layout, resolve_agent_state_root, task_state_dir
 from task_continuity import (
+    MAX_CHECKPOINT_FILES,
     initialize_continuity,
     lease_health,
     mark_recovery,
     record_checkpoint,
     recovery_conflicts,
     renew_lease,
+)
+from task_autonomy_supervisor import (
+    advance_strategy_epoch,
+    autonomy_blockers,
+    initialize_autonomy_supervisor,
+    invalidate_supervisor_validation,
+    observe_autonomy,
+)
+from phase_tool_router import (
+    CONTROL_PLANE_TOOLS,
+    MAX_FILES_PER_SLICE,
+    MUTATION_TOOLS,
+    NON_BUDGETED_REPLAN_TOOLS,
+    compact_tool_route,
+    derive_tool_route,
+    effective_tool_route,
+    normalized_selection_snapshots,
+    selection_binding,
+    validate_runtime_selection,
 )
 from task_phase import task_phase_from_state
 
@@ -39,6 +61,19 @@ def _utc_now() -> str:
 def _canonical_hash(value: Any) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def task_authorization_for_state(state: dict[str, Any]) -> dict[str, str]:
+    route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
+    return {
+        "taskSessionId": str(state.get("taskSessionId") or ""),
+        "authToken": str(state.get("authToken") or ""),
+        "planId": str(state.get("planId") or ""),
+        "planRevision": str(state.get("planRevision") or ""),
+        "activeSliceId": str(state.get("activeSliceId") or ""),
+        "routeHash": str(route.get("routeHash") or ""),
+        "routePhase": str(route.get("phase") or ""),
+    }
 
 
 def required_gate_set_hash(
@@ -62,6 +97,123 @@ def required_gate_set_hash(
     )
 
 
+_SELECTION_DEPENDENT_GATES = frozenset(
+    {
+        "unreal_runtime_debug_session",
+        "unreal_code_sketch_claim_validate",
+        "unreal_semantic_refactor_guard",
+        "static_validate",
+        "ubt_build",
+    }
+)
+
+
+def _invalidate_selection_dependent_gates(state: dict[str, Any]) -> None:
+    completed = (
+        dict(state.get("completedGates") or {})
+        if isinstance(state.get("completedGates"), dict)
+        else {}
+    )
+    required = [str(item) for item in state.get("requiredBeforeWrite") or []]
+    removed = {
+        gate
+        for gate in completed
+        if gate in _SELECTION_DEPENDENT_GATES or "runtime" in gate.casefold()
+    }
+    if not removed:
+        return
+    state["completedGates"] = {
+        gate: record for gate, record in completed.items() if gate not in removed
+    }
+    pending = [
+        gate for gate in required if gate not in state["completedGates"]
+    ]
+    state["pendingGates"] = pending
+    write_gate = dict(state.get("writeGate") or {})
+    write_gate["completedBeforeWrite"] = sorted(state["completedGates"])
+    write_gate["pendingBeforeWrite"] = pending
+    state["writeGate"] = write_gate
+
+
+def _refresh_server_owned_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Refresh selection bindings and the route after every persisted transition."""
+
+    state.setdefault("selectedHypothesisId", "")
+    state.setdefault("selectedCandidateId", "")
+    state["selectedTargetSnapshots"] = normalized_selection_snapshots(
+        state.get("selectedTargetSnapshots")
+    )
+    required = [str(item) for item in state.get("requiredBeforeWrite") or []]
+    expected_gate_hash = required_gate_set_hash(
+        task_session_id=str(state.get("taskSessionId") or ""),
+        plan_id=str(state.get("planId") or ""),
+        plan_revision=str(state.get("planRevision") or ""),
+        active_slice_id=str(state.get("activeSliceId") or ""),
+        project_file=str(state.get("projectFile") or ""),
+        required_gates=required,
+    )
+    if (
+        state.get("requiredGateSetHash")
+        and str(state.get("requiredGateSetHash")) != expected_gate_hash
+    ):
+        state["completedGates"] = {}
+        state["pendingGates"] = required
+        write_gate = dict(state.get("writeGate") or {})
+        write_gate["completedBeforeWrite"] = []
+        write_gate["pendingBeforeWrite"] = required
+        state["writeGate"] = write_gate
+    state["requiredGateSetHash"] = expected_gate_hash
+
+    previous_binding = (
+        state.get("selectionBinding")
+        if isinstance(state.get("selectionBinding"), dict)
+        else {}
+    )
+    current_binding = selection_binding(state)
+    selection_exists = bool(
+        previous_binding.get("selectedHypothesisId")
+        or previous_binding.get("selectedCandidateId")
+        or previous_binding.get("selectedIntentId")
+        or previous_binding.get("intentContractHash")
+        or current_binding.get("selectedHypothesisId")
+        or current_binding.get("selectedCandidateId")
+        or current_binding.get("selectedIntentId")
+        or current_binding.get("intentContractHash")
+    )
+    if (
+        selection_exists
+        and previous_binding.get("bindingHash")
+        and previous_binding.get("bindingHash") != current_binding["bindingHash"]
+    ):
+        _invalidate_selection_dependent_gates(state)
+    state["selectionBinding"] = current_binding
+
+    previous_route = (
+        state.get("toolRoute")
+        if isinstance(state.get("toolRoute"), dict)
+        else {}
+    )
+    route = derive_tool_route(state)
+    state["toolRoute"] = route
+    usage = (
+        state.get("toolRouteUsage")
+        if isinstance(state.get("toolRouteUsage"), dict)
+        else {}
+    )
+    if str(usage.get("routeHash") or "") != str(route.get("routeHash") or ""):
+        state["toolRouteUsage"] = {
+            "routeHash": route["routeHash"],
+            "phase": route["phase"],
+            "roleSession": route["roleSession"],
+            "count": 0,
+            "calls": [],
+        }
+    elif previous_route and previous_route.get("routeHash") != route.get("routeHash"):
+        state["toolRouteUsage"]["count"] = 0
+        state["toolRouteUsage"]["calls"] = []
+    return state
+
+
 TASK_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 
@@ -78,6 +230,268 @@ def task_root(workspace: Path, task_session_id: str) -> Path:
     safe_id = _validate_task_session_id(task_session_id)
     state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
     return task_state_dir(safe_id, state_root)
+
+
+def _canonical_workspace_root(value: Path | str) -> str:
+    return os.path.normcase(str(Path(value).expanduser().resolve()))
+
+
+def _canonical_project_identity(
+    value: Path | str,
+    *,
+    workspace: Path | None = None,
+) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute() and workspace is not None:
+        candidate = workspace / candidate
+    return os.path.normcase(str(candidate.resolve()))
+
+
+def _task_owner_path(task_dir: Path) -> Path:
+    return task_dir / "workspace-root.txt"
+
+
+def _task_route_scope_path(task_dir: Path) -> Path:
+    return task_dir / "route-scope.json"
+
+
+def active_task_route_context(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> dict[str, Any]:
+    """Return active, none, blocked, or ambiguous/corrupt route ownership."""
+
+    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+    tasks_root = state_root / "tasks"
+    current_workspace = _canonical_workspace_root(workspace)
+    current_project = _canonical_project_identity(
+        active_project,
+        workspace=workspace,
+    )
+    running: list[dict[str, Any]] = []
+    try:
+        task_dirs = sorted(
+            (item for item in tasks_root.iterdir() if item.is_dir()),
+            key=lambda item: item.name,
+        )
+    except OSError as exc:
+        return {
+            "status": "ambiguous_or_corrupt",
+            "error": f"task state root is unreadable: {exc}",
+        }
+    for task_dir in task_dirs:
+        state_path = task_dir / "state.json"
+        if not state_path.is_file():
+            continue
+        owner_hint = ""
+        scope_hint: dict[str, str] = {}
+        owner_path = _task_owner_path(task_dir)
+        if owner_path.is_file():
+            try:
+                owner_hint = _canonical_workspace_root(
+                    owner_path.read_text(encoding="utf-8").strip()
+                )
+            except OSError:
+                owner_hint = ""
+        scope_path = _task_route_scope_path(task_dir)
+        if scope_path.is_file():
+            try:
+                raw_scope = json.loads(scope_path.read_text(encoding="utf-8"))
+                if isinstance(raw_scope, dict):
+                    scope_hint = {
+                        "workspaceRoot": _canonical_workspace_root(
+                            raw_scope.get("workspaceRoot") or owner_hint
+                        )
+                        if raw_scope.get("workspaceRoot") or owner_hint
+                        else "",
+                        "projectFile": _canonical_project_identity(
+                            raw_scope.get("projectFile") or "",
+                            workspace=workspace,
+                        ),
+                    }
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                scope_hint = {}
+        hinted_project = str(scope_hint.get("projectFile") or "")
+        hinted_workspace = str(scope_hint.get("workspaceRoot") or owner_hint)
+        hint_claims_current = bool(
+            (hinted_project and current_project and hinted_project == current_project)
+            or (
+                not hinted_project
+                and hinted_workspace
+                and hinted_workspace == current_workspace
+            )
+        )
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            if not hint_claims_current:
+                continue
+            return {
+                "status": "ambiguous_or_corrupt",
+                "error": f"task state is corrupt: {state_path}",
+            }
+        if not isinstance(state, dict):
+            if not hint_claims_current:
+                continue
+            return {
+                "status": "ambiguous_or_corrupt",
+                "error": f"task state is not an object: {state_path}",
+            }
+        route_scope = (
+            state.get("routeScope")
+            if isinstance(state.get("routeScope"), dict)
+            else {}
+        )
+        state_project = _canonical_project_identity(
+            route_scope.get("projectFile") or state.get("projectFile") or "",
+            workspace=workspace,
+        )
+        raw_state_owner = str(
+            route_scope.get("workspaceRoot")
+            or state.get("workspaceRoot")
+            or ""
+        ).strip()
+        state_owner = (
+            _canonical_workspace_root(raw_state_owner)
+            if raw_state_owner
+            else hinted_workspace
+        )
+        if hinted_project and state_project and hinted_project != state_project:
+            if current_project in {hinted_project, state_project}:
+                return {
+                    "status": "ambiguous_or_corrupt",
+                    "error": f"task project ownership mismatch: {state_path}",
+                }
+            continue
+        if (
+            not state_project
+            and hinted_workspace
+            and state_owner
+            and hinted_workspace != state_owner
+        ):
+            if current_workspace in {hinted_workspace, state_owner}:
+                return {
+                    "status": "ambiguous_or_corrupt",
+                    "error": f"task workspace ownership mismatch: {state_path}",
+                }
+            continue
+        owns_current = bool(
+            (state_project and current_project and state_project == current_project)
+            or (
+                not state_project
+                and state_owner
+                and state_owner == current_workspace
+            )
+        )
+        if not owns_current:
+            continue
+        effective_route = effective_tool_route(state.get("toolRoute"))
+        current_route = (
+            state.get("toolRoute")
+            if isinstance(state.get("toolRoute"), dict)
+            else {}
+        )
+        if (
+            effective_route
+            and effective_route.get("routeHash")
+            != current_route.get("routeHash")
+        ):
+            try:
+                with _task_lock(workspace, task_dir.name):
+                    latest = _read_state(workspace, task_dir.name)
+                    if latest:
+                        prior_hash = str(
+                            (latest.get("toolRoute") or {}).get("routeHash") or ""
+                        )
+                        latest = _refresh_server_owned_state(latest)
+                        if (
+                            str(
+                                (latest.get("toolRoute") or {}).get("routeHash")
+                                or ""
+                            )
+                            != prior_hash
+                        ):
+                            usage = dict(latest.get("toolRouteUsage") or {})
+                            usage["resetReason"] = "gate_ttl_expired"
+                            latest["toolRouteUsage"] = usage
+                            _write_state(workspace, task_dir.name, latest)
+                        state = latest
+            except (RuntimeError, TaskStateReadError):
+                # A concurrent checkpoint owns the latest state. Use the
+                # effective route for this list response without overwriting it.
+                state = dict(state)
+                state["toolRoute"] = effective_route
+        if (
+            str(state.get("status") or "") == "running"
+        ):
+            if not isinstance(state.get("toolRoute"), dict):
+                return {
+                    "status": "ambiguous_or_corrupt",
+                    "error": f"running task has no toolRoute: {state_path}",
+                }
+            continuity = (
+                state.get("continuity")
+                if isinstance(state.get("continuity"), dict)
+                else {}
+            )
+            lease = (
+                continuity.get("lease")
+                if isinstance(continuity.get("lease"), dict)
+                else {}
+            )
+            recovery = (
+                continuity.get("recovery")
+                if isinstance(continuity.get("recovery"), dict)
+                else {}
+            )
+            supervisor = (
+                state.get("autonomySupervisor")
+                if isinstance(state.get("autonomySupervisor"), dict)
+                else {}
+            )
+            if lease and lease_health(continuity).get("active") is not True:
+                return {"status": "blocked", "state": state}
+            if recovery.get("conflicts") or supervisor.get("blockers"):
+                return {"status": "blocked", "state": state}
+            running.append(state)
+            if len(running) > 1:
+                return {
+                    "status": "ambiguous_or_corrupt",
+                    "error": "multiple running tasks prevent deterministic route ownership",
+                }
+    if len(running) == 1:
+        return {"status": "active", "state": running[0]}
+    return {"status": "none"}
+
+
+def single_running_task_state(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> dict[str, Any] | None:
+    context = active_task_route_context(
+        workspace,
+        active_project=active_project,
+    )
+    return context.get("state") if context.get("status") == "active" else None
+
+
+def single_running_task_route(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> dict[str, Any] | None:
+    state = single_running_task_state(
+        workspace,
+        active_project=active_project,
+    )
+    if not state:
+        return None
+    return dict(state["toolRoute"])
 
 
 def _state_path(workspace: Path, task_session_id: str) -> Path:
@@ -109,6 +523,23 @@ def _read_state(workspace: Path, task_session_id: str) -> dict[str, Any] | None:
 def _write_state(workspace: Path, task_session_id: str, state: dict[str, Any]) -> None:
     root = task_root(workspace, task_session_id)
     root.mkdir(parents=True, exist_ok=True)
+    state["workspaceRoot"] = str(workspace.expanduser().resolve())
+    state["projectFile"] = _canonical_project_identity(
+        state.get("projectFile") or "",
+        workspace=workspace,
+    )
+    state["routeScope"] = {
+        "workspaceRoot": state["workspaceRoot"],
+        "projectFile": state["projectFile"],
+    }
+    atomic_write_text(
+        _task_owner_path(root),
+        state["workspaceRoot"],
+    )
+    atomic_write_text(
+        _task_route_scope_path(root),
+        json.dumps(state["routeScope"], ensure_ascii=False, sort_keys=True),
+    )
     atomic_write_text(
         _state_path(workspace, task_session_id),
         json.dumps(state, ensure_ascii=False, indent=2),
@@ -154,6 +585,7 @@ def _mutate_task_state(
         updated = mutator(state)
         if updated is None:
             return {"ok": False, "error": "Task mutation rejected", "taskSessionId": task_session_id}
+        updated = _refresh_server_owned_state(updated)
         _write_state(workspace, task_session_id, updated)
         return _task_response(workspace, updated)
 
@@ -187,11 +619,21 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
 def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
     job = _active_job(workspace, state)
     ux = task_phase_from_state(state, job)
+    route = compact_tool_route(state.get("toolRoute"))
     return {
         "ok": True,
         "taskSessionId": state.get("taskSessionId"),
         "status": state.get("status"),
         **ux,
+        "toolRoute": route,
+        "routeAuthorization": {
+            "routeHash": str(route.get("routeHash") or ""),
+            "routePhase": str(route.get("phase") or ""),
+        },
+        "selectedHypothesisId": str(state.get("selectedHypothesisId") or ""),
+        "selectedCandidateId": str(state.get("selectedCandidateId") or ""),
+        "selectedIntentId": str(state.get("selectedIntentId") or ""),
+        "intentContractHash": str(state.get("intentContractHash") or ""),
         "state": _public_state(state),
         "job": job,
     }
@@ -208,6 +650,305 @@ def _continuity_project_root(workspace: Path, state: dict[str, Any]) -> Path:
     return resolved.parent if resolved.suffix.lower() == ".uproject" else resolved
 
 
+_PLAN_PATH_KEYS = frozenset(
+    {
+        "directimpacts",
+        "directsurfaces",
+        "impactedsurfaces",
+        "implementationfiles",
+    }
+)
+
+
+def _path_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(_path_values(item))
+        return result
+    if isinstance(value, dict):
+        for key in ("path", "file", "filePath", "relativePath", "location"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return [candidate]
+    return []
+
+
+def _capture_plan_scope(plan_payload: dict[str, Any]) -> dict[str, Any]:
+    slice_values = (
+        plan_payload.get("executablePlanSlices")
+        or plan_payload.get("implementationSlices")
+        or plan_payload.get("planSlices")
+        or []
+    )
+    slices: list[dict[str, Any]] = []
+    for item in slice_values if isinstance(slice_values, list) else []:
+        if not isinstance(item, dict):
+            continue
+        slice_id = str(item.get("sliceId") or item.get("slice_id") or "").strip()
+        files = list(
+            dict.fromkeys(
+                str(path).strip()
+                for path in _path_values(item.get("files"))
+                if str(path).strip()
+            )
+        )
+        if slice_id:
+            slices.append({"sliceId": slice_id, "files": files})
+
+    impact_files: list[str] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                normalized = re.sub(r"[^a-z0-9]", "", str(key).casefold())
+                if normalized in _PLAN_PATH_KEYS:
+                    impact_files.extend(_path_values(child))
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(plan_payload)
+    unique_impact = list(
+        dict.fromkeys(str(item).strip() for item in impact_files if str(item).strip())
+    )
+    declared_count = len(unique_impact) + sum(len(item["files"]) for item in slices)
+    return {
+        "version": 1,
+        "slices": slices,
+        "impactContractFiles": unique_impact,
+        "declaredFileCount": declared_count,
+        "overflow": declared_count > MAX_CHECKPOINT_FILES,
+        "fileLimit": MAX_CHECKPOINT_FILES,
+    }
+
+
+def _is_logical_or_placeholder_path(raw_path: str) -> bool:
+    value = str(raw_path or "").strip().replace("\\", "/")
+    lowered = value.casefold()
+    if not value:
+        return True
+    if lowered == "/game" or lowered.startswith("/game/"):
+        return True
+    if lowered.startswith(("asset://", "unreal://", "engine://")):
+        return True
+    if any(marker in value for marker in ("<", ">", "*", "?", "[", "]")):
+        return True
+    if "://" in value and not lowered.startswith("project://"):
+        return True
+    return False
+
+
+def _resolve_checkpoint_relative_path(
+    root: Path,
+    raw_path: str,
+) -> tuple[str, str]:
+    value = str(raw_path or "").strip()
+    if _is_logical_or_placeholder_path(value):
+        return "", f"skipped logical or placeholder checkpoint path: {value}"
+    if value.casefold().startswith("project://"):
+        value = value[len("project://") :]
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve()
+        relative = resolved.relative_to(root)
+    except (OSError, ValueError):
+        return "", f"checkpoint path is outside project root: {raw_path}"
+    return relative.as_posix(), ""
+
+
+def _discover_git_changed_files(root: Path) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "available": False,
+        "repositoryRoot": "",
+        "files": [],
+        "warnings": [],
+        "issues": [],
+    }
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        result["warnings"].append(f"Git discovery unavailable: {exc}")
+        return result
+    if probe.returncode != 0:
+        result["warnings"].append(
+            "Git discovery unavailable: project root is not a Git work tree."
+        )
+        return result
+    try:
+        repository_root = Path(str(probe.stdout or "").strip()).resolve()
+    except OSError as exc:
+        result["issues"].append(f"Git repository root could not be resolved: {exc}")
+        return result
+    result["available"] = True
+    result["repositoryRoot"] = str(repository_root)
+    commands = (
+        ["git", "-C", str(repository_root), "diff", "--name-only", "-z", "--cached", "--"],
+        ["git", "-C", str(repository_root), "diff", "--name-only", "-z", "--"],
+        [
+            "git",
+            "-C",
+            str(repository_root),
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+        ],
+    )
+    discovered: list[str] = []
+    for command in commands:
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            result["issues"].append(f"Git changed-file discovery failed: {exc}")
+            continue
+        if completed.returncode != 0:
+            stderr = bytes(completed.stderr or b"").decode("utf-8", errors="replace")
+            result["issues"].append(
+                "Git changed-file discovery failed: "
+                + (stderr.strip() or f"exit {completed.returncode}")
+            )
+            continue
+        for raw in bytes(completed.stdout or b"").split(b"\0"):
+            if not raw:
+                continue
+            decoded = raw.decode("utf-8", errors="surrogateescape")
+            candidate = (repository_root / decoded).resolve()
+            try:
+                relative = candidate.relative_to(root)
+            except ValueError:
+                continue
+            discovered.append(relative.as_posix())
+            if len(set(discovered)) > MAX_CHECKPOINT_FILES:
+                result["issues"].append(
+                    "Git changed file set exceeds checkpoint limit "
+                    f"({len(set(discovered))} > {MAX_CHECKPOINT_FILES})"
+                )
+                break
+        if result["issues"]:
+            break
+    result["files"] = sorted(dict.fromkeys(discovered))
+    return result
+
+
+def _active_plan_files(state: dict[str, Any]) -> list[str]:
+    plan_scope = (
+        state.get("planScope")
+        if isinstance(state.get("planScope"), dict)
+        else {}
+    )
+    active_slice_id = str(state.get("activeSliceId") or "")
+    files: list[str] = []
+    for item in plan_scope.get("slices") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("sliceId") or "") == active_slice_id:
+            files.extend(_path_values(item.get("files")))
+    files.extend(_path_values(plan_scope.get("impactContractFiles")))
+    return list(dict.fromkeys(str(item) for item in files if str(item).strip()))
+
+
+def _checkpoint_path_union(
+    workspace: Path,
+    state: dict[str, Any],
+    caller_paths: list[str],
+) -> dict[str, Any]:
+    root = _continuity_project_root(workspace, state)
+    continuity = (
+        state.get("continuity")
+        if isinstance(state.get("continuity"), dict)
+        else {}
+    )
+    checkpoint = (
+        continuity.get("checkpoint")
+        if isinstance(continuity.get("checkpoint"), dict)
+        else {}
+    )
+    prior_paths = [
+        str(item)
+        for item in (checkpoint.get("modifiedFiles") or [])
+        if str(item).strip()
+    ]
+    git = _discover_git_changed_files(root)
+    sources = (
+        ("caller", list(caller_paths or [])),
+        ("prior_checkpoint", prior_paths),
+        ("git", list(git.get("files") or [])),
+        ("plan", _active_plan_files(state)),
+    )
+    relative_paths: list[str] = []
+    warnings = [str(item) for item in (git.get("warnings") or [])]
+    issues = [str(item) for item in (git.get("issues") or [])]
+    for source, paths in sources:
+        for raw_path in paths:
+            relative, issue = _resolve_checkpoint_relative_path(root, str(raw_path))
+            if issue:
+                if issue.startswith("skipped logical or placeholder"):
+                    warnings.append(issue)
+                elif source == "plan":
+                    warnings.append(f"skipped plan path: {issue}")
+                else:
+                    issues.append(issue)
+                continue
+            if relative and relative not in relative_paths:
+                relative_paths.append(relative)
+            if len(relative_paths) > MAX_CHECKPOINT_FILES:
+                issues.append(
+                    "checkpoint file set exceeds limit "
+                    f"({len(relative_paths)} > {MAX_CHECKPOINT_FILES})"
+                )
+                break
+        if issues:
+            break
+    return {
+        "paths": relative_paths,
+        "gitChangedFiles": list(git.get("files") or []),
+        "gitAvailable": bool(git.get("available")),
+        "warnings": list(dict.fromkeys(warnings)),
+        "issues": list(dict.fromkeys(issues)),
+    }
+
+
+def _validation_error_text(validation: dict[str, Any] | None) -> str:
+    payload = validation if isinstance(validation, dict) else {}
+    for key in ("error", "firstError", "errorCode", "failure", "message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    issues = payload.get("issues")
+    if isinstance(issues, list) and issues:
+        return str(issues[0] or "").strip()
+    return ""
+
+
+def _checkpoint_issue_code(issues: list[str]) -> str:
+    joined = " ".join(str(item) for item in issues).casefold()
+    if "outside project root" in joined:
+        return "CHECKPOINT_PATH_OUTSIDE_PROJECT"
+    if "exceeds" in joined and "limit" in joined:
+        return "CHECKPOINT_FILE_SET_OVERFLOW"
+    if "git" in joined:
+        return "CHECKPOINT_GIT_DISCOVERY_FAILED"
+    return "CHECKPOINT_DISCOVERY_FAILED"
+
+
 def _checkpoint_file_snapshots(
     workspace: Path,
     state: dict[str, Any],
@@ -219,16 +960,20 @@ def _checkpoint_file_snapshots(
     unique_paths = list(
         dict.fromkeys(str(item).strip() for item in paths if str(item).strip())
     )
+    if len(unique_paths) > MAX_CHECKPOINT_FILES:
+        return [], [
+            "checkpoint file set exceeds limit "
+            f"({len(unique_paths)} > {MAX_CHECKPOINT_FILES})"
+        ]
     for raw_path in unique_paths:
-        candidate = Path(raw_path).expanduser()
-        if not candidate.is_absolute():
-            candidate = root / candidate
-        resolved = candidate.resolve()
-        try:
-            relative = resolved.relative_to(root)
-        except ValueError:
-            issues.append(f"checkpoint path is outside project root: {raw_path}")
+        relative_value, path_issue = _resolve_checkpoint_relative_path(root, raw_path)
+        if path_issue:
+            if path_issue.startswith("skipped logical or placeholder"):
+                continue
+            issues.append(path_issue)
             continue
+        relative = Path(relative_value)
+        resolved = (root / relative).resolve()
         try:
             exists = resolved.is_file()
             file_hash = (
@@ -252,7 +997,8 @@ def _checkpoint_file_snapshots(
 def _checkpoint_conflicts(
     workspace: Path,
     state: dict[str, Any],
-) -> list[dict[str, Any]]:
+    caller_paths: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     continuity = (
         state.get("continuity")
         if isinstance(state.get("continuity"), dict)
@@ -274,7 +1020,11 @@ def _checkpoint_conflicts(
         [str(item.get("relativePath") or "") for item in expected],
     )
     if issues:
-        return [{"relativePath": "", "reason": issue} for issue in issues]
+        return (
+            [{"relativePath": "", "reason": issue} for issue in issues],
+            [],
+            issues,
+        )
     current_by_path = {str(item.get("relativePath") or ""): item for item in current}
     conflicts: list[dict[str, Any]] = []
     for item in expected:
@@ -298,7 +1048,60 @@ def _checkpoint_conflicts(
                     "actualHash": str(actual.get("fileHash") or ""),
                 }
             )
-    return conflicts
+    discovered = _checkpoint_path_union(
+        workspace,
+        state,
+        list(caller_paths or []),
+    )
+    prior_git = {
+        str(item)
+        for item in (checkpoint.get("gitChangedFiles") or [])
+        if str(item).strip()
+    }
+    current_git = set(discovered.get("gitChangedFiles") or [])
+    known_conflict_paths = {
+        str(item.get("relativePath") or "")
+        for item in conflicts
+        if isinstance(item, dict)
+    }
+    expected_paths = {
+        str(item.get("relativePath") or "")
+        for item in expected
+        if str(item.get("relativePath") or "")
+    }
+    for relative in sorted(current_git - prior_git):
+        if relative in known_conflict_paths:
+            continue
+        conflicts.append(
+            {
+                "relativePath": relative,
+                "reason": "new_git_change",
+                "expectedGitChanged": False,
+                "actualGitChanged": True,
+            }
+        )
+        known_conflict_paths.add(relative)
+    for relative in sorted(set(discovered.get("paths") or []) - expected_paths):
+        if relative in known_conflict_paths:
+            continue
+        conflicts.append(
+            {
+                "relativePath": relative,
+                "reason": "new_checkpoint_path",
+                "expectedTracked": False,
+                "actualTracked": True,
+            }
+        )
+    discovery_issues = [str(item) for item in (discovered.get("issues") or [])]
+    if discovery_issues:
+        conflicts.extend(
+            {"relativePath": "", "reason": issue} for issue in discovery_issues
+        )
+    return (
+        conflicts,
+        [str(item) for item in (discovered.get("warnings") or [])],
+        discovery_issues,
+    )
 
 
 def _continuity_write_issue(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -321,6 +1124,14 @@ def _continuity_write_issue(state: dict[str, Any]) -> dict[str, Any] | None:
             "error": "Task checkpoint conflicts with current files.",
             "errorCode": "TASK_CHECKPOINT_CONFLICT",
             "conflicts": conflicts,
+        }
+    supervisor_conflicts = autonomy_blockers(state.get("autonomySupervisor"))
+    if supervisor_conflicts:
+        return {
+            "ok": False,
+            "error": "Autonomous retry budget is exhausted; strategy replan is required.",
+            "errorCode": "TASK_AUTONOMY_BLOCKED",
+            "blockers": supervisor_conflicts,
         }
     return None
 
@@ -384,6 +1195,10 @@ def task_start(
     lease_seconds: int = 1800,
     on_progress: Callable[[dict[str, Any], str], None] | None = None,
 ) -> dict[str, Any]:
+    project_file = _canonical_project_identity(
+        project_file,
+        workspace=workspace,
+    )
     if plan_payload is None:
         from agent_orchestrator import build_agent_plan
 
@@ -395,7 +1210,32 @@ def task_start(
         write_gate["writesAllowed"] = False
     writes_allowed = write_gate.get("writesAllowed") is True
 
-    slices = list(plan_payload.get("executablePlanSlices") or plan_payload.get("planSlices") or [])
+    plan_scope = _capture_plan_scope(plan_payload)
+    if plan_scope.get("overflow"):
+        return {
+            "ok": False,
+            "error": (
+                "Plan-declared checkpoint file set exceeds limit "
+                f"({plan_scope.get('declaredFileCount')} > {MAX_CHECKPOINT_FILES})"
+            ),
+            "errorCode": "PLAN_SCOPE_OVERFLOW",
+        }
+    oversized_slices = [
+        str(item.get("sliceId") or "")
+        for item in (plan_scope.get("slices") or [])
+        if isinstance(item, dict)
+        and len(item.get("files") or []) > MAX_FILES_PER_SLICE
+    ]
+    if oversized_slices:
+        return {
+            "ok": False,
+            "error": (
+                "Plan slice exceeds the server maximum of "
+                f"{MAX_FILES_PER_SLICE} files: {', '.join(oversized_slices)}"
+            ),
+            "errorCode": "PLAN_SLICE_TOO_LARGE",
+        }
+    slices = list(plan_scope.get("slices") or [])
     active_slice_id = "task"
     for item in slices:
         if not isinstance(item, dict):
@@ -414,6 +1254,11 @@ def task_start(
             if str(item).strip()
         )
     )
+    if (
+        str(plan_payload.get("taskKind") or "").strip().lower() == "refactor"
+        and "unreal_semantic_refactor_guard" not in required_before_write
+    ):
+        required_before_write.append("unreal_semantic_refactor_guard")
     resolved_plan_id = plan_id or str(plan_payload.get("planId") or uuid.uuid4().hex[:12])
     resolved_plan_revision = str(plan_payload.get("planRevision") or "1")
     gate_set_hash = required_gate_set_hash(
@@ -428,6 +1273,11 @@ def task_start(
     write_gate["pendingBeforeWrite"] = list(required_before_write)
     state = {
         "taskSessionId": task_session_id,
+        "workspaceRoot": str(workspace.expanduser().resolve()),
+        "routeScope": {
+            "workspaceRoot": str(workspace.expanduser().resolve()),
+            "projectFile": project_file,
+        },
         "status": "running",
         "request": request,
         "mode": mode,
@@ -443,9 +1293,17 @@ def task_start(
         "requiredGateSetHash": gate_set_hash,
         "completedGates": {},
         "pendingGates": list(required_before_write),
-        "maxFilesPerEdit": int(write_gate.get("maxFilesPerEdit") or 2),
+        "maxFilesPerEdit": min(
+            MAX_FILES_PER_SLICE,
+            max(1, int(write_gate.get("maxFilesPerEdit") or 2)),
+        ),
         "taskKind": str(plan_payload.get("taskKind") or ""),
         "editStrategy": str(plan_payload.get("editStrategy") or ""),
+        "planScope": plan_scope,
+        "selectedHypothesisId": "",
+        "selectedCandidateId": "",
+        "selectedTargetSnapshots": [],
+        "featureTargetSnapshots": [],
         "createdAt": _utc_now(),
         "updatedAt": _utc_now(),
         "toolDiscoveryCandidates": [
@@ -462,6 +1320,50 @@ def task_start(
         active_slice_id=active_slice_id,
         lease_seconds=lease_seconds,
     )
+    feature_plan = (
+        plan_payload.get("featureIntent")
+        if isinstance(plan_payload.get("featureIntent"), dict)
+        else {}
+    )
+    feature_required = "unreal_feature_intent_resolve" in required_before_write
+    state["selectedIntentId"] = ""
+    state["intentContractHash"] = ""
+    state["featureIntent"] = {
+        "version": 1,
+        "required": feature_required,
+        "status": "pending" if feature_required else "not_required",
+        "ambiguityScore": float(
+            (feature_plan.get("ambiguity") or {}).get("ambiguityScore") or 0
+        ),
+        "recommendedAction": str(
+            feature_plan.get("recommendedAction")
+            or (feature_plan.get("ambiguity") or {}).get("recommendedAction")
+            or ""
+        ),
+        "candidateCount": int(feature_plan.get("candidateCount") or 0),
+        "candidates": list(feature_plan.get("candidates") or [])[:5],
+        "blockingQuestions": list(
+            feature_plan.get("blockingQuestions") or []
+        )[:3],
+        "selectedIntentId": "",
+        "intentContractHash": "",
+        "acceptanceOracleHash": "",
+        "planRevision": resolved_plan_revision,
+        "checkpointHash": "",
+        "targetSnapshotHash": "",
+    }
+    supervisor_config = (
+        plan_payload.get("autonomySupervisor")
+        if isinstance(plan_payload.get("autonomySupervisor"), dict)
+        else plan_payload.get("retryBudget")
+        if isinstance(plan_payload.get("retryBudget"), dict)
+        else {}
+    )
+    state["autonomySupervisor"] = initialize_autonomy_supervisor(
+        state,
+        retry_budgets=supervisor_config,
+    )
+    state = _refresh_server_owned_state(state)
     (task_root(workspace, task_session_id) / "logs").mkdir(parents=True, exist_ok=True)
     with _task_lock(workspace, task_session_id):
         _write_state(workspace, task_session_id, state)
@@ -497,6 +1399,13 @@ def task_start(
                         reason="background_progress",
                     )
                     current["updatedAt"] = _utc_now()
+                if re.search(r"\b(?:error|failed|failure)\b", message, re.IGNORECASE):
+                    current["autonomySupervisor"] = observe_autonomy(
+                        current.get("autonomySupervisor"),
+                        current,
+                        action="background_error",
+                        error=message,
+                    )
                 return current
 
             _mutate_task_state(workspace, task_session_id, heartbeat)
@@ -609,7 +1518,330 @@ def task_start(
 
     payload = _task_response(workspace, state)
     payload["authToken"] = auth_token
+    payload["taskAuthorization"] = task_authorization_for_state(
+        {**state, "authToken": auth_token}
+    )
     return payload
+
+
+def task_replan(
+    workspace: Path,
+    *,
+    task_session_id: str,
+    request: str,
+    mode: str,
+    project_file: str,
+    plan_payload: dict[str, Any],
+    lease_seconds: int = 1800,
+) -> dict[str, Any]:
+    """Atomically replace an active task plan without creating a second owner."""
+
+    project_identity = _canonical_project_identity(project_file, workspace=workspace)
+    outcome: dict[str, Any] = {}
+    new_auth_token = ""
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome, new_auth_token
+        if str(state.get("status") or "") != "running":
+            outcome = {
+                "ok": False,
+                "error": "Only a running task can be replanned.",
+                "errorCode": "TASK_NOT_WRITABLE",
+            }
+            return None
+        if lease_health(state.get("continuity")).get("active") is not True:
+            outcome = {
+                "ok": False,
+                "error": "Task lease is expired; recover or start a new task.",
+                "errorCode": "TASK_LEASE_EXPIRED",
+            }
+            return None
+        current_project = _canonical_project_identity(
+            state.get("projectFile") or "",
+            workspace=workspace,
+        )
+        if current_project and (
+            not project_identity or current_project != project_identity
+        ):
+            outcome = {
+                "ok": False,
+                "error": "Active project does not match the task route scope.",
+                "errorCode": "TASK_PROJECT_MISMATCH",
+            }
+            return None
+        if str(state.get("activeJobId") or "").strip():
+            outcome = {
+                "ok": False,
+                "error": "Cannot replan while a background job is active.",
+                "errorCode": "TASK_JOB_IN_PROGRESS",
+            }
+            return None
+        validation_state = dict(state)
+        validation_supervisor = (
+            dict(state.get("autonomySupervisor") or {})
+            if isinstance(state.get("autonomySupervisor"), dict)
+            else {}
+        )
+        validation_supervisor["blockers"] = []
+        validation_state["autonomySupervisor"] = validation_supervisor
+        state_issue = _explicit_route_state_issue(validation_state)
+        if state_issue:
+            outcome = state_issue
+            return None
+        replan_ledger = (
+            dict(state.get("replanLedger") or {})
+            if isinstance(state.get("replanLedger"), dict)
+            else {}
+        )
+        checkpoint_generation = int(state.get("checkpointGeneration") or 0)
+        checkpoint_hash = f"checkpoint_generation:{checkpoint_generation}"
+        if (
+            str(replan_ledger.get("checkpointHash") or "") == checkpoint_hash
+            and int(replan_ledger.get("count") or 0) >= 1
+        ):
+            outcome = {
+                "ok": False,
+                "error": (
+                    "Replan budget is exhausted for the current checkpoint; "
+                    "record an explicit checkpoint before replanning again."
+                ),
+                "errorCode": "REPLAN_BUDGET_EXHAUSTED",
+                "nextAction": "unreal_task_checkpoint",
+                "checkpointRecordRequired": True,
+            }
+            return None
+        prior_supervisor = (
+            dict(state.get("autonomySupervisor") or {})
+            if isinstance(state.get("autonomySupervisor"), dict)
+            else {}
+        )
+
+        plan_scope = _capture_plan_scope(plan_payload)
+        if plan_scope.get("overflow"):
+            outcome = {
+                "ok": False,
+                "error": "Plan-declared checkpoint file set exceeds limit.",
+                "errorCode": "PLAN_SCOPE_OVERFLOW",
+            }
+            return None
+        slices = list(plan_scope.get("slices") or [])
+        oversized = [
+            str(item.get("sliceId") or "")
+            for item in slices
+            if isinstance(item, dict)
+            and len(item.get("files") or []) > MAX_FILES_PER_SLICE
+        ]
+        if oversized:
+            outcome = {
+                "ok": False,
+                "error": (
+                    f"Plan slice exceeds {MAX_FILES_PER_SLICE} files: "
+                    + ", ".join(oversized)
+                ),
+                "errorCode": "PLAN_SLICE_TOO_LARGE",
+            }
+            return None
+        active_slice_id = next(
+            (
+                str(item.get("sliceId") or item.get("slice_id") or "").strip()
+                for item in slices
+                if isinstance(item, dict)
+                and str(
+                    item.get("sliceId") or item.get("slice_id") or ""
+                ).strip()
+            ),
+            "task",
+        )
+        prior_revision = str(state.get("planRevision") or "1")
+        try:
+            next_revision = str(int(prior_revision) + 1)
+        except ValueError:
+            next_revision = f"{prior_revision}.1"
+        write_gate = dict(plan_payload.get("writeGate") or {})
+        if mode in {"read_only", "plan_only"}:
+            write_gate["writesAllowed"] = False
+        required = list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in (
+                    (plan_payload.get("orchestration") or {}).get(
+                        "requiredBeforeWrite"
+                    )
+                    or []
+                )
+                if str(item).strip()
+            )
+        )
+        task_kind = str(plan_payload.get("taskKind") or "")
+        if (
+            task_kind.strip().lower() == "refactor"
+            and "unreal_semantic_refactor_guard" not in required
+        ):
+            required.append("unreal_semantic_refactor_guard")
+        plan_id = str(state.get("planId") or uuid.uuid4().hex[:12])
+        gate_set_hash = required_gate_set_hash(
+            task_session_id=task_session_id,
+            plan_id=plan_id,
+            plan_revision=next_revision,
+            active_slice_id=active_slice_id,
+            project_file=current_project or project_identity,
+            required_gates=required,
+        )
+        write_gate.update(
+            {
+                "requiredBeforeWrite": required,
+                "completedBeforeWrite": [],
+                "pendingBeforeWrite": list(required),
+            }
+        )
+        feature_plan = (
+            plan_payload.get("featureIntent")
+            if isinstance(plan_payload.get("featureIntent"), dict)
+            else {}
+        )
+        feature_required = "unreal_feature_intent_resolve" in required
+        new_auth_token = uuid.uuid4().hex
+        state.update(
+            {
+                "request": request,
+                "mode": mode,
+                "projectFile": current_project or project_identity,
+                "planRevision": next_revision,
+                "activeSliceId": active_slice_id,
+                "authToken": new_auth_token,
+                "writeGate": write_gate,
+                "writesAllowed": write_gate.get("writesAllowed") is True,
+                "requiredBeforeWrite": required,
+                "requiredGateSetHash": gate_set_hash,
+                "completedGates": {},
+                "pendingGates": list(required),
+                "maxFilesPerEdit": min(
+                    MAX_FILES_PER_SLICE,
+                    max(1, int(write_gate.get("maxFilesPerEdit") or 2)),
+                ),
+                "taskKind": task_kind,
+                "editStrategy": str(plan_payload.get("editStrategy") or ""),
+                "planScope": plan_scope,
+                "selectedHypothesisId": "",
+                "selectedCandidateId": "",
+                "selectedIntentId": "",
+                "intentContractHash": "",
+                "selectedTargetSnapshots": [],
+                "featureTargetSnapshots": [],
+                "runtimeDebugSession": {},
+                "featureApproval": {},
+                "replanLedger": {
+                    "checkpointHash": checkpoint_hash,
+                    "count": 1,
+                    "awaitingNewCheckpoint": True,
+                    "lastReplannedAt": _utc_now(),
+                    "previousPlanRevision": prior_revision,
+                    "planRevision": next_revision,
+                },
+                "featureIntent": {
+                    "version": 1,
+                    "required": feature_required,
+                    "status": "pending" if feature_required else "not_required",
+                    "ambiguityScore": float(
+                        (feature_plan.get("ambiguity") or {}).get(
+                            "ambiguityScore"
+                        )
+                        or 0
+                    ),
+                    "recommendedAction": str(
+                        feature_plan.get("recommendedAction")
+                        or (feature_plan.get("ambiguity") or {}).get(
+                            "recommendedAction"
+                        )
+                        or ""
+                    ),
+                    "candidateCount": int(
+                        feature_plan.get("candidateCount") or 0
+                    ),
+                    "candidates": list(feature_plan.get("candidates") or [])[:5],
+                    "blockingQuestions": list(
+                        feature_plan.get("blockingQuestions") or []
+                    )[:3],
+                    "selectedIntentId": "",
+                    "intentContractHash": "",
+                    "acceptanceOracleHash": "",
+                    "planRevision": next_revision,
+                    "checkpointHash": "",
+                    "targetSnapshotHash": "",
+                },
+                "continuity": initialize_continuity(
+                    task_session_id=task_session_id,
+                    plan_id=plan_id,
+                    plan_revision=next_revision,
+                    active_slice_id=active_slice_id,
+                    lease_seconds=lease_seconds,
+                ),
+                "updatedAt": _utc_now(),
+            }
+        )
+        # A replan is not a retry-budget reset. An autonomy-blocked task may
+        # advance strategy once, but its accumulated retry counters, ceilings,
+        # and prior history remain intact.
+        if autonomy_blockers(prior_supervisor):
+            prior_retry_state = dict(prior_supervisor.get("retryState") or {})
+            prior_retry_budgets = dict(prior_supervisor.get("retryBudgets") or {})
+            advanced = advance_strategy_epoch(
+                prior_supervisor,
+                state,
+                reason="bounded_atomic_replan",
+            )
+            advanced["retryState"] = prior_retry_state
+            advanced["retryBudgets"] = prior_retry_budgets
+            state["autonomySupervisor"] = advanced
+        else:
+            state["autonomySupervisor"] = prior_supervisor
+        state["toolRouteUsage"] = {
+            "routeHash": "",
+            "phase": "",
+            "roleSession": "",
+            "count": 0,
+            "calls": [],
+            "resetReason": "atomic_replan",
+        }
+        _append_log(
+            workspace,
+            task_session_id,
+            f"Task replanned: revision {prior_revision} -> {next_revision}",
+        )
+        outcome = {
+            "ok": True,
+            "taskSessionId": task_session_id,
+            "previousPlanRevision": prior_revision,
+            "planRevision": next_revision,
+            "replanned": True,
+        }
+        return state
+
+    try:
+        result = _mutate_task_state(workspace, task_session_id, mutate)
+    except RuntimeError as exc:
+        if "task lock busy" not in str(exc):
+            raise
+        return {
+            "ok": False,
+            "error": "Another task transition is in progress.",
+            "errorCode": "TASK_LOCK_BUSY",
+            "retryable": True,
+        }
+    if not outcome.get("ok"):
+        return outcome or result
+    current_state = result.get("state") or {}
+    outcome.update(
+        {
+            "state": current_state,
+            "toolRoute": result.get("toolRoute") or {},
+            "writeReadiness": result.get("writeReadiness") or {},
+            "taskAuthorization": task_authorization_for_state(
+                {**current_state, "authToken": new_auth_token}
+            ),
+        }
+    )
+    return outcome
 
 
 def task_checkpoint(
@@ -647,13 +1879,14 @@ def task_checkpoint(
             "errorCode": "INVALID_CHECKPOINT_ACTION",
         }
     if normalized_action == "status":
-        current = task_status(workspace, task_session_id)
-        if not current.get("ok"):
-            return current
-        mismatches = _task_authorization_mismatches(
-            current.get("state") or {},
-            authorization,
-        )
+        try:
+            with _task_lock(workspace, task_session_id):
+                state = _read_state(workspace, task_session_id)
+        except TaskStateReadError as exc:
+            return _task_state_error(task_session_id, exc)
+        if not state:
+            return {"ok": False, "error": f"Unknown task: {task_session_id}"}
+        mismatches = _task_authorization_mismatches(state, authorization)
         if mismatches:
             return {
                 "ok": False,
@@ -664,8 +1897,8 @@ def task_checkpoint(
             "ok": True,
             "action": normalized_action,
             "taskSessionId": task_session_id,
-            "continuity": (current.get("state") or {}).get("continuity") or {},
-            "writeReadiness": current.get("writeReadiness") or {},
+            "continuity": state.get("continuity") or {},
+            "writeReadiness": task_phase_from_state(state).get("writeReadiness") or {},
         }
 
     mutation_result: dict[str, Any] = {}
@@ -706,44 +1939,126 @@ def task_checkpoint(
                 lease_seconds=lease_seconds,
             )
         elif normalized_action == "record":
-            snapshots, issues = _checkpoint_file_snapshots(
+            discovered = _checkpoint_path_union(
                 workspace,
                 state,
                 list(modified_files or []),
+            )
+            if discovered["issues"]:
+                mutation_result = {
+                    "ok": False,
+                    "error": "; ".join(discovered["issues"]),
+                    "errorCode": _checkpoint_issue_code(discovered["issues"]),
+                    "discoveryWarnings": discovered["warnings"],
+                }
+                return None
+            snapshots, issues = _checkpoint_file_snapshots(
+                workspace,
+                state,
+                list(discovered["paths"]),
             )
             if issues:
                 mutation_result = {
                     "ok": False,
                     "error": "; ".join(issues),
-                    "errorCode": "CHECKPOINT_PATH_OUTSIDE_PROJECT",
+                    "errorCode": _checkpoint_issue_code(issues),
+                    "discoveryWarnings": discovered["warnings"],
                 }
                 return None
-            state["continuity"] = record_checkpoint(
-                continuity,
-                phase=phase or "working",
-                active_slice_id=str(state.get("activeSliceId") or ""),
-                completed_slices=list(completed_slices or []),
-                pending_slices=list(pending_slices or []),
-                modified_files=[
-                    str(item.get("relativePath") or "") for item in snapshots
-                ],
-                file_snapshots=snapshots,
-                required_next_action=required_next_action,
-                validation=validation,
-                note=note,
+            try:
+                prior_checkpoint = (
+                    continuity.get("checkpoint")
+                    if isinstance(continuity.get("checkpoint"), dict)
+                    else {}
+                )
+                state["continuity"] = record_checkpoint(
+                    continuity,
+                    phase=phase or "working",
+                    active_slice_id=str(state.get("activeSliceId") or ""),
+                    completed_slices=list(completed_slices or []),
+                    pending_slices=(
+                        list(pending_slices)
+                        if pending_slices is not None
+                        else list(prior_checkpoint.get("pendingSlices") or [])
+                    ),
+                    modified_files=[
+                        str(item.get("relativePath") or "") for item in snapshots
+                    ],
+                    file_snapshots=snapshots,
+                    git_changed_files=list(discovered["gitChangedFiles"]),
+                    discovery_warnings=list(discovered["warnings"]),
+                    required_next_action=required_next_action,
+                    validation=validation,
+                    note=note,
+                )
+                state["checkpointGeneration"] = (
+                    int(state.get("checkpointGeneration") or 0) + 1
+                )
+            except ValueError as exc:
+                mutation_result = {
+                    "ok": False,
+                    "error": str(exc),
+                    "errorCode": "CHECKPOINT_FILE_SET_OVERFLOW",
+                    "discoveryWarnings": discovered["warnings"],
+                }
+                return None
+            state["autonomySupervisor"] = observe_autonomy(
+                state.get("autonomySupervisor"),
+                state,
+                action=required_next_action or f"checkpoint:{phase or 'working'}",
+                error=_validation_error_text(validation),
             )
+            prior_usage = (
+                state.get("toolRouteUsage")
+                if isinstance(state.get("toolRouteUsage"), dict)
+                else {}
+            )
+            state["toolRouteUsage"] = {
+                "routeHash": str(prior_usage.get("routeHash") or ""),
+                "phase": str(prior_usage.get("phase") or ""),
+                "roleSession": str(prior_usage.get("roleSession") or ""),
+                "count": 0,
+                "calls": [],
+                "resetReason": "checkpoint_record",
+                "checkpointHash": str(
+                    (
+                        state.get("continuity", {}).get("checkpoint") or {}
+                    ).get("checkpointHash")
+                    or ""
+                ),
+            }
         else:
-            conflicts = _checkpoint_conflicts(workspace, state)
+            conflicts, discovery_warnings, discovery_issues = _checkpoint_conflicts(
+                workspace,
+                state,
+                list(modified_files or []),
+            )
+            continuity["lastDiscoveryWarnings"] = discovery_warnings
             if normalized_action == "recover" and conflicts:
                 state["continuity"] = mark_recovery(
                     continuity,
                     conflicts=conflicts,
+                )
+                state["autonomySupervisor"] = invalidate_supervisor_validation(
+                    state.get("autonomySupervisor"),
+                    reason="checkpoint_conflict",
+                )
+                state["autonomySupervisor"] = observe_autonomy(
+                    state.get("autonomySupervisor"),
+                    state,
+                    action="checkpoint:recover",
+                    error=(
+                        discovery_issues[0]
+                        if discovery_issues
+                        else str(conflicts[0].get("reason") or "checkpoint conflict")
+                    ),
                 )
                 mutation_result = {
                     "ok": False,
                     "error": "Checkpoint files changed; explicit rebase is required.",
                     "errorCode": "TASK_CHECKPOINT_CONFLICT",
                     "conflicts": conflicts,
+                    "discoveryWarnings": discovery_warnings,
                 }
             elif normalized_action == "rebase":
                 if not accept_current_files:
@@ -754,28 +2069,70 @@ def task_checkpoint(
                     }
                     return None
                 checkpoint = dict(continuity.get("checkpoint") or {})
-                tracked = [
-                    str(item.get("relativePath") or "")
-                    for item in (checkpoint.get("fileSnapshots") or [])
-                    if isinstance(item, dict)
-                ]
-                snapshots, issues = _checkpoint_file_snapshots(workspace, state, tracked)
+                discovered = _checkpoint_path_union(
+                    workspace,
+                    state,
+                    list(modified_files or []),
+                )
+                if discovered["issues"]:
+                    mutation_result = {
+                        "ok": False,
+                        "error": "; ".join(discovered["issues"]),
+                        "errorCode": _checkpoint_issue_code(discovered["issues"]),
+                        "discoveryWarnings": discovered["warnings"],
+                    }
+                    return None
+                snapshots, issues = _checkpoint_file_snapshots(
+                    workspace,
+                    state,
+                    list(discovered["paths"]),
+                )
                 if issues:
                     mutation_result = {
                         "ok": False,
                         "error": "; ".join(issues),
-                        "errorCode": "CHECKPOINT_PATH_OUTSIDE_PROJECT",
+                        "errorCode": _checkpoint_issue_code(issues),
+                        "discoveryWarnings": discovered["warnings"],
                     }
                     return None
-                checkpoint["fileSnapshots"] = snapshots
-                checkpoint["checkpointHash"] = _canonical_hash(
-                    {
-                        key: value
-                        for key, value in checkpoint.items()
-                        if key != "checkpointHash"
+                prior_completed = list(checkpoint.get("completedSlices") or [])
+                prior_pending = list(checkpoint.get("pendingSlices") or [])
+                try:
+                    continuity = record_checkpoint(
+                        continuity,
+                        phase=phase or str(checkpoint.get("phase") or "working"),
+                        active_slice_id=str(state.get("activeSliceId") or ""),
+                        completed_slices=(
+                            list(completed_slices)
+                            if completed_slices is not None
+                            else prior_completed
+                        ),
+                        pending_slices=(
+                            list(pending_slices)
+                            if pending_slices is not None
+                            else prior_pending
+                        ),
+                        modified_files=[
+                            str(item.get("relativePath") or "") for item in snapshots
+                        ],
+                        file_snapshots=snapshots,
+                        git_changed_files=list(discovered["gitChangedFiles"]),
+                        discovery_warnings=list(discovered["warnings"]),
+                        required_next_action=(
+                            required_next_action
+                            or str(checkpoint.get("requiredNextAction") or "")
+                        ),
+                        validation={},
+                        note=note or "Accepted current files during checkpoint rebase.",
+                    )
+                except ValueError as exc:
+                    mutation_result = {
+                        "ok": False,
+                        "error": str(exc),
+                        "errorCode": "CHECKPOINT_FILE_SET_OVERFLOW",
+                        "discoveryWarnings": discovered["warnings"],
                     }
-                )
-                continuity["checkpoint"] = checkpoint
+                    return None
                 state["continuity"] = mark_recovery(
                     continuity,
                     conflicts=conflicts,
@@ -784,12 +2141,41 @@ def task_checkpoint(
                 required = [str(item) for item in state.get("requiredBeforeWrite") or []]
                 state["completedGates"] = {}
                 state["pendingGates"] = required
+                if "unreal_feature_intent_resolve" in required:
+                    state["selectedIntentId"] = ""
+                    state["intentContractHash"] = ""
+                    state["featureTargetSnapshots"] = []
+                    if not str(state.get("selectedCandidateId") or "").strip():
+                        state["selectedTargetSnapshots"] = []
+                    feature_state = dict(state.get("featureIntent") or {})
+                    feature_state.update(
+                        {
+                            "status": "pending",
+                            "selectedIntentId": "",
+                            "intentContractHash": "",
+                            "acceptanceOracleHash": "",
+                            "checkpointHash": "",
+                            "targetSnapshotHash": "",
+                        }
+                    )
+                    state["featureIntent"] = feature_state
                 write_gate = dict(state.get("writeGate") or {})
                 write_gate["completedBeforeWrite"] = []
                 write_gate["pendingBeforeWrite"] = required
                 state["writeGate"] = write_gate
+                state["autonomySupervisor"] = advance_strategy_epoch(
+                    state.get("autonomySupervisor"),
+                    state,
+                    reason="checkpoint_rebase",
+                )
             else:
                 state["continuity"] = mark_recovery(continuity, conflicts=[])
+                state["autonomySupervisor"] = observe_autonomy(
+                    state.get("autonomySupervisor"),
+                    state,
+                    action="checkpoint:recover",
+                    count_retry=False,
+                )
 
         state["updatedAt"] = _utc_now()
         _append_log(workspace, task_session_id, f"Continuity action: {normalized_action}")
@@ -806,6 +2192,18 @@ def task_checkpoint(
     if mutation_result:
         if result.get("ok"):
             mutation_result["writeReadiness"] = result.get("writeReadiness") or {}
+            mutation_result["toolRoute"] = result.get("toolRoute") or {}
+            current_state = result.get("state") or {}
+            mutation_result["taskAuthorization"] = task_authorization_for_state(
+                {
+                    **current_state,
+                    "authToken": str(
+                        authorization.get("authToken")
+                        or authorization.get("auth_token")
+                        or ""
+                    ),
+                }
+            )
         return mutation_result
     return result
 
@@ -818,6 +2216,7 @@ def task_record_gate(
     input_payload: dict[str, Any],
     evidence: dict[str, Any],
     target_snapshots: list[dict[str, Any]] | None = None,
+    intent_binding: dict[str, Any] | None = None,
     ttl_seconds: int = 1800,
 ) -> dict[str, Any]:
     """Record one successful pre-write gate against its exact plan and evidence."""
@@ -864,6 +2263,66 @@ def task_record_gate(
             }
             return None
         gate_set_hash = str(state.get("requiredGateSetHash") or "")
+        feature_binding: dict[str, Any] = {}
+        if gate == "unreal_feature_intent_resolve":
+            from feature_intent_contract import target_snapshot_hash
+
+            supplied_binding = (
+                intent_binding if isinstance(intent_binding, dict) else {}
+            )
+            selected_intent_id = str(
+                supplied_binding.get("selectedIntentId") or ""
+            ).strip()
+            intent_contract_hash = str(
+                supplied_binding.get("intentContractHash") or ""
+            ).strip()
+            acceptance_oracle_hash = str(
+                supplied_binding.get("acceptanceOracleHash") or ""
+            ).strip()
+            supplied_target_hash = str(
+                supplied_binding.get("targetSnapshotHash") or ""
+            ).strip()
+            actual_target_hash = target_snapshot_hash(list(target_snapshots or []))
+            if not (
+                selected_intent_id
+                and intent_contract_hash
+                and acceptance_oracle_hash
+            ):
+                record_result = {
+                    "ok": False,
+                    "error": "Feature intent selection, contract hash, and acceptance oracle hash are required.",
+                    "errorCode": "FEATURE_INTENT_BINDING_INCOMPLETE",
+                }
+                return None
+            if not target_snapshots or supplied_target_hash != actual_target_hash:
+                record_result = {
+                    "ok": False,
+                    "error": "Feature intent target snapshots do not match the selected contract.",
+                    "errorCode": "FEATURE_INTENT_TARGET_MISMATCH",
+                }
+                return None
+            continuity = dict(state.get("continuity") or {})
+            checkpoint = dict(continuity.get("checkpoint") or {})
+            checkpoint_hash = str(
+                checkpoint.get("checkpointHash")
+                or continuity.get("planIdentityHash")
+                or ""
+            )
+            if not checkpoint_hash:
+                record_result = {
+                    "ok": False,
+                    "error": "Feature intent requires an active checkpoint/plan identity binding.",
+                    "errorCode": "FEATURE_INTENT_CHECKPOINT_MISSING",
+                }
+                return None
+            feature_binding = {
+                "selectedIntentId": selected_intent_id,
+                "intentContractHash": intent_contract_hash,
+                "acceptanceOracleHash": acceptance_oracle_hash,
+                "planRevision": str(state.get("planRevision") or ""),
+                "checkpointHash": checkpoint_hash,
+                "targetSnapshotHash": actual_target_hash,
+            }
         record = {
             "gate": gate,
             "status": "completed",
@@ -873,16 +2332,50 @@ def task_record_gate(
             "inputHash": _canonical_hash(input_payload),
             "evidenceHash": _canonical_hash(evidence),
             "targetSnapshots": list(target_snapshots or []),
+            **feature_binding,
         }
         completed = dict(state.get("completedGates") or {})
         completed[gate] = record
         pending = [item for item in required if item not in completed]
         state["completedGates"] = completed
         state["pendingGates"] = pending
+        if feature_binding:
+            previous_intent_id = str(state.get("selectedIntentId") or "")
+            state["selectedIntentId"] = feature_binding["selectedIntentId"]
+            state["intentContractHash"] = feature_binding["intentContractHash"]
+            state["featureTargetSnapshots"] = normalized_selection_snapshots(
+                target_snapshots
+            )
+            state["selectedTargetSnapshots"] = normalized_selection_snapshots(
+                target_snapshots
+            )
+            feature_state = dict(state.get("featureIntent") or {})
+            feature_state.update(
+                {
+                    **feature_binding,
+                    "status": "resolved",
+                    "compactSummary": dict(
+                        (intent_binding or {}).get("compactSummary") or {}
+                    ),
+                    "resolutionAction": str(
+                        (intent_binding or {}).get("resolutionAction") or ""
+                    ),
+                    "blockingQuestions": [],
+                }
+            )
+            state["featureIntent"] = feature_state
+            if not previous_intent_id:
+                state["selectionBinding"] = selection_binding(state)
         write_gate = dict(state.get("writeGate") or {})
         write_gate["completedBeforeWrite"] = sorted(completed)
         write_gate["pendingBeforeWrite"] = pending
         state["writeGate"] = write_gate
+        state["autonomySupervisor"] = observe_autonomy(
+            state.get("autonomySupervisor"),
+            state,
+            action=f"gate:{gate}",
+            count_retry=False,
+        )
         state["updatedAt"] = _utc_now()
         _append_log(workspace, task_session_id, f"Completed pre-write gate {gate}")
         record_result = {
@@ -896,6 +2389,19 @@ def task_record_gate(
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
     if record_result:
+        if result.get("ok"):
+            current_state = result.get("state") or {}
+            record_result["toolRoute"] = result.get("toolRoute") or {}
+            record_result["taskAuthorization"] = task_authorization_for_state(
+                {
+                    **current_state,
+                    "authToken": str(
+                        authorization.get("authToken")
+                        or authorization.get("auth_token")
+                        or ""
+                    ),
+                }
+            )
         return record_result
     return result
 
@@ -927,13 +2433,515 @@ def _task_authorization_mismatches(
     ]
 
 
+def _route_argument_issue(
+    route: dict[str, Any],
+    tool_name: str,
+    arguments: dict[str, Any],
+    state: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    max_symbols = int(route.get("maxSymbols") or 3)
+    for key in ("symbols", "architectureSymbols"):
+        values = arguments.get(key)
+        if isinstance(values, list) and len(values) > max_symbols:
+            return (
+                "TASK_ROUTE_SCOPE_EXCEEDED",
+                f"{key} exceeds the active route limit ({len(values)} > {max_symbols})",
+            )
+    max_files = int(route.get("maxFilesPerSlice") or 2)
+    for key in ("targetFiles", "changedFiles"):
+        values = arguments.get(key)
+        if isinstance(values, list) and len(values) > max_files:
+            return (
+                "TASK_ROUTE_SCOPE_EXCEEDED",
+                f"{key} exceeds the active slice limit ({len(values)} > {max_files})",
+            )
+    hypotheses = arguments.get("hypotheses")
+    if (
+        isinstance(hypotheses, list)
+        and len(hypotheses) > int(route.get("maxHypotheses") or 5)
+    ):
+        return (
+            "TASK_ROUTE_SCOPE_EXCEEDED",
+            "hypotheses exceeds the active route limit",
+        )
+    candidates = arguments.get("patchCandidates")
+    if (
+        isinstance(candidates, list)
+        and len(candidates) > int(route.get("maxPatchCandidates") or 4)
+    ):
+        return (
+            "TASK_ROUTE_SCOPE_EXCEEDED",
+            "patchCandidates exceeds the active route limit",
+        )
+    detail = str(arguments.get("detailLevel") or "").strip().casefold()
+    if (
+        tool_name
+        in {
+            "unreal_architecture_reasoning",
+            "unreal_project_architecture",
+            "unreal_project_graph_query",
+        }
+        and detail in {"large", "full", "expanded"}
+        and arguments.get("detailEscalation") is not True
+    ):
+        return (
+            "TASK_GRAPH_DETAIL_ESCALATION_REQUIRED",
+            "Expanded graph detail requires detailEscalation=true on this call",
+        )
+    if tool_name in MUTATION_TOOLS:
+        selected_slice = (
+            route.get("selectedSlice")
+            if isinstance(route.get("selectedSlice"), dict)
+            else {}
+        )
+        selected_files = {
+            str(item).strip().replace("\\", "/").removeprefix("./").casefold()
+            for item in selected_slice.get("files") or []
+            if str(item).strip()
+        }
+        raw_paths: list[str] = []
+        if str(arguments.get("path") or "").strip():
+            raw_paths.append(str(arguments["path"]))
+        for key in ("files", "patches"):
+            for item in arguments.get(key) or []:
+                if isinstance(item, dict) and str(item.get("path") or "").strip():
+                    raw_paths.append(str(item["path"]))
+        if not selected_files or not raw_paths:
+            return (
+                "TASK_SLICE_SCOPE_REQUIRED",
+                "Mutation requires a non-empty server-selected slice",
+            )
+        project_file = str((state or {}).get("projectFile") or "").strip()
+        project_root = (
+            Path(project_file).parent
+            if project_file.casefold().endswith(".uproject")
+            else Path(project_file)
+            if project_file
+            else None
+        )
+        normalized_requested: list[str] = []
+        for raw_path in raw_paths:
+            candidate = Path(raw_path)
+            if candidate.is_absolute() and project_root is not None:
+                try:
+                    raw_path = candidate.resolve().relative_to(
+                        project_root.resolve()
+                    ).as_posix()
+                except ValueError:
+                    return (
+                        "TASK_SLICE_TARGET_MISMATCH",
+                        f"Mutation target is outside selected slice: {candidate}",
+                    )
+            normalized_requested.append(
+                raw_path.strip()
+                .replace("\\", "/")
+                .removeprefix("./")
+                .removeprefix("project://")
+                .strip("/")
+                .casefold()
+            )
+        if len(normalized_requested) > max_files:
+            return (
+                "TASK_ROUTE_SCOPE_EXCEEDED",
+                "Mutation file count exceeds the active slice limit "
+                f"({len(normalized_requested)} > {max_files})",
+            )
+        outside = [
+            path for path in normalized_requested if path not in selected_files
+        ]
+        if outside:
+            return (
+                "TASK_SLICE_TARGET_MISMATCH",
+                f"Mutation target is outside selected slice: {outside[0]}",
+            )
+    return "", ""
+
+
+def _explicit_route_state_issue(state: dict[str, Any]) -> dict[str, Any] | None:
+    status = str(state.get("status") or "")
+    if status != "running":
+        return {
+            "ok": False,
+            "errorCode": (
+                "TASK_CANCELLED" if status == "cancelled" else "TASK_NOT_WRITABLE"
+            ),
+            "error": f"Task is not running: {status or 'unknown'}",
+        }
+    continuity = (
+        state.get("continuity")
+        if isinstance(state.get("continuity"), dict)
+        else {}
+    )
+    health = lease_health(continuity)
+    if health.get("active") is not True:
+        return {
+            "ok": False,
+            "errorCode": "TASK_LEASE_EXPIRED",
+            "error": "Task continuity lease is inactive or expired",
+            "lease": health,
+        }
+    conflicts = recovery_conflicts(continuity)
+    if conflicts:
+        return {
+            "ok": False,
+            "errorCode": "TASK_CHECKPOINT_CONFLICT",
+            "error": "Task checkpoint conflicts with current files",
+            "conflicts": conflicts,
+        }
+    blockers = autonomy_blockers(state.get("autonomySupervisor"))
+    if blockers:
+        return {
+            "ok": False,
+            "errorCode": "TASK_AUTONOMY_BLOCKED",
+            "error": "Task autonomy supervisor is blocked",
+            "blockers": blockers,
+        }
+    active_job_id = str(state.get("activeJobId") or "").strip()
+    if active_job_id:
+        return {
+            "ok": False,
+            "errorCode": "TASK_JOB_IN_PROGRESS",
+            "error": f"Task has an active background job: {active_job_id}",
+            "activeJobId": active_job_id,
+        }
+
+    runtime = (
+        state.get("runtimeDebugSession")
+        if isinstance(state.get("runtimeDebugSession"), dict)
+        else {}
+    )
+    comparison = (
+        runtime.get("patchCandidateComparison")
+        if isinstance(runtime.get("patchCandidateComparison"), dict)
+        else {}
+    )
+    patch_evidence = (
+        runtime.get("patchEvidence")
+        if isinstance(runtime.get("patchEvidence"), dict)
+        else {}
+    )
+    top_hypothesis = str(state.get("selectedHypothesisId") or "")
+    nested_hypothesis = str(runtime.get("selectedHypothesisId") or "")
+    top_candidate = str(state.get("selectedCandidateId") or "")
+    nested_candidate = str(comparison.get("selectedCandidateId") or "")
+    applied_candidate = str(
+        patch_evidence.get("selectedPatchCandidateId") or ""
+    )
+    if (
+        top_hypothesis != nested_hypothesis
+        or top_candidate != nested_candidate
+        or (applied_candidate and applied_candidate != top_candidate)
+    ):
+        return {
+            "ok": False,
+            "errorCode": "TASK_SELECTION_STATE_MISMATCH",
+            "error": "Top-level runtime selection disagrees with nested state",
+        }
+    stored_binding = (
+        state.get("selectionBinding")
+        if isinstance(state.get("selectionBinding"), dict)
+        else {}
+    )
+    if stored_binding.get("bindingHash"):
+        expected_binding = selection_binding(state)
+        if (
+            str(stored_binding.get("bindingHash") or "")
+            != str(expected_binding.get("bindingHash") or "")
+            or str(stored_binding.get("checkpointHash") or "")
+            != str(expected_binding.get("checkpointHash") or "")
+            or str(stored_binding.get("targetSnapshotsHash") or "")
+            != str(expected_binding.get("targetSnapshotsHash") or "")
+        ):
+            return {
+                "ok": False,
+                "errorCode": "TASK_SELECTION_BINDING_STALE",
+                "error": (
+                    "Runtime selection binding is stale for the plan, slice, "
+                    "checkpoint, or targets"
+                ),
+            }
+    return None
+
+
+def authorize_task_tool(
+    workspace: Path,
+    *,
+    tool_name: str,
+    task_authorization: dict[str, Any] | None,
+    arguments: dict[str, Any] | None = None,
+    consume_budget: bool = True,
+) -> dict[str, Any]:
+    """Authorize and atomically count one route-bound tool call.
+
+    Calls without taskAuthorization remain legacy-compatible. Route-enabled tasks
+    require the exact server-issued route hash and phase.
+    """
+
+    authorization = (
+        task_authorization if isinstance(task_authorization, dict) else {}
+    )
+    if not authorization:
+        return {"ok": True, "legacy": True}
+    task_session_id = str(
+        authorization.get("taskSessionId")
+        or authorization.get("task_session_id")
+        or ""
+    ).strip()
+    if not task_session_id:
+        return {
+            "ok": False,
+            "errorCode": "TASK_SESSION_REQUIRED",
+            "error": "taskAuthorization.taskSessionId is required",
+        }
+
+    with _task_lock(workspace, task_session_id):
+        try:
+            state = _read_state(workspace, task_session_id)
+        except TaskStateReadError as exc:
+            return _task_state_error(task_session_id, exc)
+        if not state:
+            return {
+                "ok": False,
+                "errorCode": "TASK_STATE_MISSING",
+                "error": f"Unknown task: {task_session_id}",
+            }
+        previous_route_hash = str(
+            (state.get("toolRoute") or {}).get("routeHash") or ""
+        )
+        refreshed = _refresh_server_owned_state(state)
+        if (
+            str((refreshed.get("toolRoute") or {}).get("routeHash") or "")
+            != previous_route_hash
+        ):
+            _write_state(workspace, task_session_id, refreshed)
+        state = refreshed
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            return {
+                "ok": False,
+                "errorCode": "TASK_AUTH_MISMATCH",
+                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+            }
+        route = (
+            state.get("toolRoute")
+            if isinstance(state.get("toolRoute"), dict)
+            else {}
+        )
+        if not route:
+            return {"ok": True, "legacy": True, "state": _public_state(state)}
+
+        supplied_hash = str(
+            authorization.get("routeHash")
+            or authorization.get("route_hash")
+            or ""
+        )
+        supplied_phase = str(
+            authorization.get("routePhase")
+            or authorization.get("route_phase")
+            or ""
+        )
+        if (
+            not supplied_hash
+            or not supplied_phase
+            or supplied_hash != str(route.get("routeHash") or "")
+            or supplied_phase != str(route.get("phase") or "")
+        ):
+            return {
+                "ok": False,
+                "errorCode": "TASK_ROUTE_STALE",
+                "error": "taskAuthorization routeHash/routePhase is missing or stale",
+                "toolRoute": compact_tool_route(route),
+            }
+        if tool_name not in CONTROL_PLANE_TOOLS and tool_name not in set(
+            route.get("activeTools") or []
+        ):
+            return {
+                "ok": False,
+                "errorCode": "TASK_TOOL_NOT_ACTIVE",
+                "error": (
+                    f"{tool_name} is not active in route phase "
+                    f"{route.get('phase')}"
+                ),
+                "toolRoute": compact_tool_route(route),
+            }
+        if tool_name not in CONTROL_PLANE_TOOLS:
+            state_issue = _explicit_route_state_issue(state)
+            if state_issue:
+                state_issue["toolRoute"] = compact_tool_route(route)
+                return state_issue
+        issue_code, issue = _route_argument_issue(
+            route,
+            tool_name,
+            arguments if isinstance(arguments, dict) else {},
+            state,
+        )
+        if issue:
+            return {
+                "ok": False,
+                "errorCode": issue_code,
+                "error": issue,
+                "toolRoute": compact_tool_route(route),
+            }
+
+        if consume_budget and tool_name not in CONTROL_PLANE_TOOLS:
+            usage = (
+                dict(state.get("toolRouteUsage") or {})
+                if isinstance(state.get("toolRouteUsage"), dict)
+                else {}
+            )
+            if str(usage.get("routeHash") or "") != str(route.get("routeHash") or ""):
+                usage = {
+                    "routeHash": route["routeHash"],
+                    "phase": route["phase"],
+                    "roleSession": route["roleSession"],
+                    "count": 0,
+                    "calls": [],
+                }
+            count = int(usage.get("count") or 0)
+            limit = int(route.get("maxToolCallsPerPhase") or 2)
+            if count >= limit:
+                return {
+                    "ok": False,
+                    "errorCode": "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+                    "error": (
+                        f"Phase tool-call budget exhausted ({count}/{limit}); "
+                        "checkpoint or transition the task before more tool calls"
+                    ),
+                    "toolRoute": compact_tool_route(route),
+                    "toolRouteUsage": usage,
+                    "nextActions": [
+                        "unreal_task_status",
+                        "unreal_task_checkpoint",
+                        "unreal_task_cancel",
+                    ],
+                }
+            calls = [
+                str(item)
+                for item in usage.get("calls") or []
+                if str(item).strip()
+            ]
+            calls.append(tool_name)
+            usage["count"] = count + 1
+            usage["calls"] = calls[-limit:]
+            state["toolRouteUsage"] = usage
+            state["updatedAt"] = _utc_now()
+            _write_state(workspace, task_session_id, state)
+        return {
+            "ok": True,
+            "taskSessionId": task_session_id,
+            "toolRoute": compact_tool_route(route),
+            "state": _public_state(state),
+        }
+
+
+def authorize_active_task_tool(
+    workspace: Path,
+    *,
+    tool_name: str,
+    arguments: dict[str, Any] | None = None,
+    active_project: str = "",
+) -> dict[str, Any]:
+    """Server-side bind a call when exactly one healthy task owns the workspace."""
+
+    context = active_task_route_context(
+        workspace,
+        active_project=active_project,
+    )
+    if context.get("status") == "none":
+        return {"ok": True, "legacy": True}
+    if context.get("status") == "ambiguous_or_corrupt":
+        return {
+            "ok": False,
+            "errorCode": "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+            "error": (
+                str(context.get("error") or "")
+                or "Task route ownership is blocked, ambiguous, or corrupt"
+            ),
+        }
+    state = context.get("state") or {}
+    if context.get("status") == "blocked":
+        if tool_name not in NON_BUDGETED_REPLAN_TOOLS:
+            return {
+                "ok": False,
+                "errorCode": "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+                "error": "Task route ownership is blocked.",
+            }
+        validation_state = dict(state)
+        supervisor = (
+            dict(state.get("autonomySupervisor") or {})
+            if isinstance(state.get("autonomySupervisor"), dict)
+            else {}
+        )
+        if not autonomy_blockers(supervisor):
+            return {
+                "ok": False,
+                "errorCode": "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+                "error": "Only an autonomy-supervisor blocker permits bounded replan.",
+            }
+        supervisor["blockers"] = []
+        validation_state["autonomySupervisor"] = supervisor
+        state_issue = _explicit_route_state_issue(validation_state)
+        if state_issue:
+            return state_issue
+        return {
+            "ok": True,
+            "taskSessionId": str(state.get("taskSessionId") or ""),
+            "toolRoute": state.get("toolRoute") or {},
+            "replanSurface": True,
+            "autonomyBlockedReplan": True,
+            "countsAgainstPhaseBudget": False,
+        }
+    if tool_name in NON_BUDGETED_REPLAN_TOOLS:
+        state_issue = _explicit_route_state_issue(state)
+        if state_issue:
+            return state_issue
+        return {
+            "ok": True,
+            "taskSessionId": str(state.get("taskSessionId") or ""),
+            "toolRoute": state.get("toolRoute") or {},
+            "replanSurface": True,
+            "countsAgainstPhaseBudget": False,
+        }
+    return authorize_task_tool(
+        workspace,
+        tool_name=tool_name,
+        task_authorization=task_authorization_for_state(state),
+        arguments=arguments,
+        consume_budget=True,
+    )
+
+
 def task_set_runtime_session(
     workspace: Path,
     *,
     task_authorization: dict[str, Any],
     runtime_session: dict[str, Any],
+    target_snapshots: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    normalized_session = (
+        dict(runtime_session) if isinstance(runtime_session, dict) else {}
+    )
+    selected_hypothesis, selected_candidate, selection_issues = (
+        validate_runtime_selection(normalized_session)
+    )
+    snapshots_were_provided = target_snapshots is not None
+    normalized_snapshots = normalized_selection_snapshots(target_snapshots)
+    if (
+        selected_candidate
+        and str(normalized_session.get("status") or "") == "ready_for_patch"
+        and not normalized_snapshots
+    ):
+        selection_issues.append(
+            "ready_for_patch requires selected candidate target snapshots"
+        )
+    if selection_issues:
+        return {
+            "ok": False,
+            "errorCode": "RUNTIME_SELECTION_INVALID",
+            "error": "; ".join(selection_issues),
+            "issues": selection_issues,
+        }
     task_session_id = str(
         authorization.get("taskSessionId") or authorization.get("task_session_id") or ""
     ).strip()
@@ -962,22 +2970,46 @@ def task_set_runtime_session(
         if continuity_issue:
             mutation_result = continuity_issue
             return None
-        state["runtimeDebugSession"] = dict(runtime_session)
+        state["runtimeDebugSession"] = normalized_session
+        state["selectedHypothesisId"] = selected_hypothesis
+        state["selectedCandidateId"] = selected_candidate
+        state["selectedTargetSnapshots"] = (
+            normalized_snapshots
+            if snapshots_were_provided
+            else normalized_selection_snapshots(
+                state.get("selectedTargetSnapshots")
+            )
+        )
         state["updatedAt"] = _utc_now()
         _append_log(
             workspace,
             task_session_id,
-            f"Runtime debug session {runtime_session.get('sessionId')} -> {runtime_session.get('status')}",
+            f"Runtime debug session {normalized_session.get('sessionId')} -> {normalized_session.get('status')}",
         )
         mutation_result = {
             "ok": True,
             "taskSessionId": task_session_id,
-            "runtimeDebugSession": dict(runtime_session),
+            "runtimeDebugSession": normalized_session,
+            "selectedHypothesisId": selected_hypothesis,
+            "selectedCandidateId": selected_candidate,
         }
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
     if mutation_result:
+        if result.get("ok"):
+            current_state = result.get("state") or {}
+            mutation_result["toolRoute"] = result.get("toolRoute") or {}
+            mutation_result["taskAuthorization"] = task_authorization_for_state(
+                {
+                    **current_state,
+                    "authToken": str(
+                        authorization.get("authToken")
+                        or authorization.get("auth_token")
+                        or ""
+                    ),
+                }
+            )
         return mutation_result
     return result
 
@@ -1174,3 +3206,240 @@ def task_resume(workspace: Path, task_session_id: str) -> dict[str, Any]:
     if resume_error:
         return resume_error
     return result
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def task_issue_feature_approval(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    intent_contract_hash: str,
+    ttl_seconds: int = 900,
+) -> dict[str, Any]:
+    """Issue a server-owned approval challenge bound to one task plan revision."""
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId") or authorization.get("task_session_id") or ""
+    ).strip()
+    contract_hash = str(intent_contract_hash or "").strip()
+    if not task_session_id or not contract_hash:
+        return {
+            "ok": False,
+            "error": "taskAuthorization and intentContractHash are required",
+            "errorCode": "FEATURE_APPROVAL_BINDING_REQUIRED",
+        }
+    issued: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal issued
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            issued = {
+                "ok": False,
+                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                "errorCode": "TASK_AUTH_MISMATCH",
+            }
+            return None
+        if str(state.get("status") or "") != "running":
+            issued = {
+                "ok": False,
+                "error": "Task is not running",
+                "errorCode": "TASK_NOT_WRITABLE",
+            }
+            return None
+        existing = (
+            dict(state.get("featureApproval") or {})
+            if isinstance(state.get("featureApproval"), dict)
+            else {}
+        )
+        existing_expiry = _parse_datetime(existing.get("expiresAt"))
+        if (
+            str(existing.get("status") or "") in {"pending", "approved"}
+            and str(existing.get("taskSessionId") or "") == task_session_id
+            and str(existing.get("planRevision") or "")
+            == str(state.get("planRevision") or "")
+            and str(existing.get("intentContractHash") or "") == contract_hash
+            and existing_expiry is not None
+            and existing_expiry > datetime.now(timezone.utc)
+        ):
+            issued = {
+                "ok": True,
+                "status": str(existing.get("status") or ""),
+                "taskSessionId": task_session_id,
+                "planRevision": str(existing.get("planRevision") or ""),
+                "intentContractHash": contract_hash,
+                "challengeId": str(existing.get("challengeId") or ""),
+                "expiresAt": str(existing.get("expiresAt") or ""),
+                "approvalChannel": "local_human_cli",
+            }
+            return state
+        now = datetime.now(timezone.utc)
+        record = {
+            "status": "pending",
+            "challengeId": f"feature_approval_{uuid.uuid4().hex}",
+            "taskSessionId": task_session_id,
+            "planRevision": str(state.get("planRevision") or ""),
+            "intentContractHash": contract_hash,
+            "issuedAt": now.isoformat(),
+            "expiresAt": (
+                now + timedelta(seconds=max(60, min(int(ttl_seconds), 3600)))
+            ).isoformat(),
+        }
+        state["featureApproval"] = record
+        state["updatedAt"] = _utc_now()
+        issued = {
+            "ok": True,
+            "status": "pending",
+            "taskSessionId": task_session_id,
+            "planRevision": record["planRevision"],
+            "intentContractHash": contract_hash,
+            "challengeId": record["challengeId"],
+            "expiresAt": record["expiresAt"],
+            "approvalChannel": "local_human_cli",
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return issued or result
+
+
+def task_approve_feature_intent(
+    workspace: Path,
+    task_session_id: str,
+    *,
+    intent_contract_hash: str,
+    note: str = "",
+    human_channel: str = "",
+) -> dict[str, Any]:
+    """Record explicit approval without trusting a model-supplied boolean."""
+
+    if human_channel != "local_cli":
+        return {
+            "ok": False,
+            "error": "Feature intent approval requires the local human CLI channel.",
+            "errorCode": "HUMAN_APPROVAL_CHANNEL_REQUIRED",
+        }
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        record = (
+            dict(state.get("featureApproval") or {})
+            if isinstance(state.get("featureApproval"), dict)
+            else {}
+        )
+        expiry = _parse_datetime(record.get("expiresAt"))
+        binding_ok = (
+            str(record.get("status") or "") == "pending"
+            and str(record.get("taskSessionId") or "") == task_session_id
+            and str(record.get("planRevision") or "")
+            == str(state.get("planRevision") or "")
+            and str(record.get("intentContractHash") or "")
+            == str(intent_contract_hash or "")
+            and expiry is not None
+            and expiry > datetime.now(timezone.utc)
+        )
+        if not binding_ok:
+            outcome = {
+                "ok": False,
+                "error": "Feature approval token is invalid, expired, or bound to another task revision.",
+                "errorCode": "FEATURE_APPROVAL_INVALID",
+            }
+            return None
+        record.update(
+            {
+                "status": "approved",
+                "approvedAt": _utc_now(),
+                "approvalNote": str(note or "")[:1000],
+            }
+        )
+        state["featureApproval"] = record
+        state["updatedAt"] = _utc_now()
+        outcome = {
+            "ok": True,
+            "status": "approved",
+            "taskSessionId": task_session_id,
+            "intentContractHash": str(intent_contract_hash or ""),
+            "expiresAt": record["expiresAt"],
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return outcome or result
+
+
+def task_consume_feature_approval(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    intent_contract_hash: str,
+) -> dict[str, Any]:
+    """Consume an approved challenge exactly once."""
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId") or authorization.get("task_session_id") or ""
+    ).strip()
+    if not task_session_id or not str(intent_contract_hash or "").strip():
+        return {
+            "ok": False,
+            "error": "taskAuthorization and intentContractHash are required",
+            "errorCode": "FEATURE_APPROVAL_BINDING_REQUIRED",
+        }
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        mismatches = _task_authorization_mismatches(state, authorization)
+        record = (
+            dict(state.get("featureApproval") or {})
+            if isinstance(state.get("featureApproval"), dict)
+            else {}
+        )
+        expiry = _parse_datetime(record.get("expiresAt"))
+        valid = (
+            not mismatches
+            and str(record.get("status") or "") == "approved"
+            and str(record.get("taskSessionId") or "") == task_session_id
+            and str(record.get("planRevision") or "")
+            == str(state.get("planRevision") or "")
+            and str(record.get("intentContractHash") or "")
+            == str(intent_contract_hash or "")
+            and expiry is not None
+            and expiry > datetime.now(timezone.utc)
+        )
+        if not valid:
+            outcome = {
+                "ok": False,
+                "error": "Approved feature-intent token is missing, invalid, expired, or already consumed.",
+                "errorCode": (
+                    "TASK_AUTH_MISMATCH"
+                    if mismatches
+                    else "FEATURE_APPROVAL_INVALID"
+                ),
+            }
+            return None
+        record["status"] = "consumed"
+        record["consumedAt"] = _utc_now()
+        state["featureApproval"] = record
+        state["updatedAt"] = _utc_now()
+        outcome = {
+            "ok": True,
+            "status": "consumed",
+            "taskSessionId": task_session_id,
+            "intentContractHash": str(intent_contract_hash or ""),
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return outcome or result

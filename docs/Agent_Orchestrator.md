@@ -37,6 +37,18 @@ LM Studio chat should call it first after `unreal_get_active_project`.
 
 The orchestration route controls reasoning/tool phases for the model currently loaded in LM Studio. It does not claim that multiple models are loaded or switch models by itself. Multi-file, subsystem, replication, and architecture work escalates to `architecture_first`; bounded edits use `guarded`.
 
+Refactor tasks always add `unreal_semantic_refactor_guard` to `requiredBeforeWrite`, including when a caller supplies a custom plan that omits it. The guard compares the current project with an isolated candidate and requires exact changed-file/diff identity, paired invariant observers, static/build proof, and runtime proof for runtime-sensitive invariants. Non-refactor task routing is unchanged.
+
+Ambiguous write requests also add `unreal_feature_intent_resolve` to `requiredBeforeWrite`. The planner exposes only compact candidate summaries. The resolver recomputes candidate scores, requires at least two complete candidates, rejects unresolved ties, and records `selectedIntentId`, `intentContractHash`, acceptance-oracle hash, plan revision, checkpoint binding, and exact target snapshots in the task-state SSOT. High ambiguity remains plan-only until explicit approval; low-ambiguity reversible changes with a bounded target do not pay this gate.
+
+For high ambiguity, MCP only creates a pending approval challenge. It cannot approve that challenge, and a `userApproved` argument has no authority. The user must run:
+
+```powershell
+python scripts/approve_feature_intent.py --workspace <root> --task-session-id <id> --intent-contract-hash <hash>
+```
+
+The approval is bound to that task, plan revision, contract hash, and expiry, and is consumed once by the next matching resolver call.
+
 ## Long-running continuity
 
 `unreal_task_start` creates a renewable task lease. With control-plane tools enabled, use `unreal_task_checkpoint`:
@@ -47,6 +59,12 @@ The orchestration route controls reasoning/tool phases for the model currently l
 - `rebase` requires `acceptCurrentFiles=true`, advances the lease epoch, refreshes snapshots, and invalidates prior pre-write gates.
 
 An expired lease or checkpoint conflict blocks writes in both the Python task phase and LM Studio's Node mutation authorization. Legacy tasks without continuity state remain readable and compatible.
+
+`record` also resets the phase tool-call budget, including when the phase is unchanged. Budgeted phase tools remain separate from the always-discoverable `status`, `checkpoint`, and `cancel` control surface. Gate evidence with a TTL transitions to its precomputed fallback route at expiry; both Python tool listing/authorization and the LM Studio route watcher observe the change without a server restart.
+
+Each phase exposes 5-10 budgeted work tools. The three recovery controls (`unreal_task_status`, `unreal_task_checkpoint`, and `unreal_task_cancel`) are a separate, non-budgeted surface. `unreal_agent_plan` is also a bounded replan surface: while one healthy task owns the active project, it updates that same `taskSessionId` atomically instead of creating another running task. Replan increments `planRevision`, rotates `authToken`, and invalidates prior gates, selections, checkpoint proof, and phase usage, so prior authorization becomes stale immediately.
+
+Only one replan is allowed per monotonically increasing `checkpointGeneration`. A second attempt returns `REPLAN_BUDGET_EXHAUSTED` with `checkpointRecordRequired=true`; an explicit `unreal_task_checkpoint` `record` action opens the next replan window. Autonomy-supervisor blockers may use this bounded path to advance one strategy epoch while preserving retry counters, budgets, and history. Lease expiry, checkpoint conflicts, and ambiguous ownership do not expose or authorize replan.
 
 ## Runtime causal workflow
 

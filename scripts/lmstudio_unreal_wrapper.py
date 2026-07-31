@@ -3863,10 +3863,33 @@ def run(args: argparse.Namespace) -> int:
             )
             if attempt >= 2 and last_build_records:
                 try:
-                    from failure_memory import append_failure_memory, maybe_auto_reindex_failure_memory
+                    from failure_memory import (
+                        append_failure_memory,
+                        maybe_auto_reindex_failure_memory,
+                        signature as failure_memory_signature,
+                        update_failure_memory_status,
+                    )
                     from load_sampling_preset import resolve_profile_name
+                    from project_identity import project_identity
+                    from workspace_paths import resolve_engine_version
 
                     meta = (last_build_records[0].get("metadata") or {}) if last_build_records else {}
+                    failure_engine_version = resolve_engine_version()
+                    identity_project_file = prepared.source_project_file or project_file
+                    failure_project_identity = project_identity(
+                        identity_project_file,
+                        engine_version=failure_engine_version,
+                    )
+                    failure_project_fingerprint = (
+                        str(failure_project_identity.get("projectId") or "")
+                        if failure_project_identity.get("ok") is True
+                        else ""
+                    )
+                    failure_record_id = failure_memory_signature(
+                        str(meta.get("error_subkind") or "COMPILE_GENERIC"),
+                        str(meta.get("error_code") or ""),
+                        str(meta.get("symbol_name") or ""),
+                    )
                     append_failure_memory(
                         Path(__file__).resolve().parent.parent / "data" / "failure_memory",
                         project_name,
@@ -3883,9 +3906,28 @@ def run(args: argparse.Namespace) -> int:
                         retry_count=attempt,
                         model=model,
                         sampling_profile=resolve_profile_name(),
-                        status="verified",
-                        verification_count=1,
+                        status="candidate",
+                        project_fingerprint=failure_project_fingerprint,
+                        engine_version=failure_engine_version,
                     )
+                    build_log_bytes = last_build.log_path.read_bytes()
+                    if build_log_bytes and failure_project_fingerprint and failure_engine_version:
+                        update_failure_memory_status(
+                            Path(__file__).resolve().parent.parent / "data" / "failure_memory",
+                            project_name,
+                            failure_record_id,
+                            status="verified",
+                            verification_evidence={
+                                "engineVersion": failure_engine_version,
+                                "projectFingerprint": failure_project_fingerprint,
+                                "buildProof": {
+                                    "ok": True,
+                                    "artifactHash": hashlib.sha256(build_log_bytes).hexdigest(),
+                                    "logPath": str(last_build.log_path),
+                                    "returnCode": last_build.returncode,
+                                },
+                            },
+                        )
                     maybe_auto_reindex_failure_memory(Path(__file__).resolve().parent.parent)
                 except Exception:
                     pass

@@ -1,0 +1,813 @@
+#!/usr/bin/env python
+"""Deterministic, server-owned phase tool routing for compact local models."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from copy import deepcopy
+from datetime import datetime, timezone
+from typing import Any
+
+ROUTE_VERSION = 1
+MIN_ACTIVE_TOOLS = 5
+MAX_ACTIVE_TOOLS = 10
+DEFAULT_MAX_FILES_PER_SLICE = 2
+MAX_FILES_PER_SLICE = 4
+MAX_SYMBOLS = 3
+MAX_PRIMARY_ERRORS = 1
+MAX_HYPOTHESES = 5
+MAX_PATCH_CANDIDATES = 4
+
+CONTROL_PLANE_TOOLS = frozenset(
+    {
+        "unreal_agent_plan",
+        "unreal_task_start",
+        "unreal_task_status",
+        "unreal_task_checkpoint",
+        "unreal_task_approve",
+        "unreal_task_cancel",
+        "unreal_task_resume",
+    }
+)
+ALWAYS_DISCOVERABLE_CONTROL_TOOLS = frozenset(
+    {
+        "unreal_task_status",
+        "unreal_task_checkpoint",
+        "unreal_task_cancel",
+    }
+)
+NON_BUDGETED_REPLAN_TOOLS = frozenset({"unreal_agent_plan"})
+MUTATION_TOOLS = frozenset(
+    {"write_file", "replace_in_file", "delete_file", "apply_edit_bundle"}
+)
+
+_GATE_TO_TOOL = {
+    "architecture_approval": "unreal_architecture_reasoning",
+    "direct_source_evidence": "read_file",
+    "static_validate": "static_validate_project",
+    "ubt_build": "build_unreal_project",
+}
+_RUNTIME_ANALYSIS_STATUSES = frozenset(
+    {
+        "blocked",
+        "ready_for_experiment",
+        "ready_for_patch_candidates",
+        "runtime_not_fixed",
+        "needs_new_hypothesis",
+    }
+)
+_RUNTIME_VERIFIER_STATUSES = frozenset(
+    {
+        "awaiting_same_observer_verification",
+        "resolved",
+        "regressed",
+    }
+)
+_FILE_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"((?:Source|Plugins|Config)[/\\][A-Za-z0-9_./\\-]+"
+    r"\.(?:h|hpp|cpp|c|cc|cxx|cs|ini|uplugin))",
+    re.IGNORECASE,
+)
+
+
+def canonical_hash(value: Any) -> str:
+    raw = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _clean_strings(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return list(
+        dict.fromkeys(str(item).strip() for item in values if str(item).strip())
+    )
+
+
+def _normalize_path(value: Any) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    if text.casefold().startswith("project://"):
+        text = text[len("project://") :]
+    return text.strip("/")
+
+
+def _usable_route_file(value: Any) -> str:
+    path = _normalize_path(value)
+    if not path or any(marker in path for marker in ("<", ">", "*", "?", "[", "]")):
+        return ""
+    if "://" in path:
+        return ""
+    return path
+
+
+def _request_files(request: Any) -> list[str]:
+    return list(
+        dict.fromkeys(
+            path
+            for match in _FILE_TOKEN_RE.finditer(str(request or ""))
+            if (path := _usable_route_file(match.group(1)))
+        )
+    )
+
+
+def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
+    plan_scope = (
+        state.get("planScope")
+        if isinstance(state.get("planScope"), dict)
+        else {}
+    )
+    active_slice_id = str(state.get("activeSliceId") or "task").strip() or "task"
+    declared: list[str] = []
+    if str(state.get("selectedCandidateId") or "").strip():
+        declared.extend(
+            str(item.get("path") or item.get("relativePath") or "")
+            for item in (state.get("selectedTargetSnapshots") or [])
+            if isinstance(item, dict)
+        )
+    elif (
+        str(state.get("selectedIntentId") or "").strip()
+        and str(state.get("intentContractHash") or "").strip()
+    ):
+        declared.extend(
+            str(item.get("path") or item.get("relativePath") or "")
+            for item in (state.get("featureTargetSnapshots") or [])
+            if isinstance(item, dict)
+        )
+    for item in plan_scope.get("slices") or []:
+        if declared:
+            break
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("sliceId") or "").strip() != active_slice_id:
+            continue
+        declared.extend(_clean_strings(item.get("files")))
+        break
+    if not declared:
+        declared.extend(_clean_strings(plan_scope.get("impactContractFiles")))
+    if not declared:
+        declared.extend(_request_files(state.get("request")))
+    normalized = list(
+        dict.fromkeys(
+            path
+            for item in declared
+            if (path := _usable_route_file(item))
+        )
+    )
+    return {
+        "sliceId": active_slice_id,
+        "files": normalized[:max_files],
+        "declaredFileCount": len(normalized),
+        "truncated": len(normalized) > max_files,
+        "scopeRequired": not bool(normalized),
+    }
+
+
+def _valid_completed_gates(state: dict[str, Any]) -> set[str]:
+    required_hash = str(state.get("requiredGateSetHash") or "")
+    completed = (
+        state.get("completedGates")
+        if isinstance(state.get("completedGates"), dict)
+        else {}
+    )
+    now = datetime.now(tz=timezone.utc)
+    valid: set[str] = set()
+    for gate, record in completed.items():
+        if not isinstance(record, dict) or record.get("status") != "completed":
+            continue
+        if required_hash and str(record.get("gateSetHash") or "") != required_hash:
+            continue
+        raw_expiry = str(record.get("expiresAt") or "").strip()
+        if raw_expiry:
+            try:
+                expiry = datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if expiry <= now:
+                continue
+        if str(gate) == "unreal_feature_intent_resolve":
+            feature_intent = (
+                state.get("featureIntent")
+                if isinstance(state.get("featureIntent"), dict)
+                else {}
+            )
+            continuity = (
+                state.get("continuity")
+                if isinstance(state.get("continuity"), dict)
+                else {}
+            )
+            checkpoint = (
+                continuity.get("checkpoint")
+                if isinstance(continuity.get("checkpoint"), dict)
+                else {}
+            )
+            current_checkpoint_hash = str(
+                checkpoint.get("checkpointHash")
+                or continuity.get("planIdentityHash")
+                or ""
+            )
+            from feature_intent_contract import target_snapshot_hash
+
+            computed_target_hash = target_snapshot_hash(
+                list(record.get("targetSnapshots") or [])
+            )
+            binding_matches = bool(
+                feature_intent
+                and feature_intent.get("status") == "resolved"
+                and str(record.get("selectedIntentId") or "")
+                == str(state.get("selectedIntentId") or "")
+                == str(feature_intent.get("selectedIntentId") or "")
+                and str(record.get("intentContractHash") or "")
+                == str(state.get("intentContractHash") or "")
+                == str(feature_intent.get("intentContractHash") or "")
+                and str(record.get("acceptanceOracleHash") or "")
+                == str(feature_intent.get("acceptanceOracleHash") or "")
+                and str(record.get("planRevision") or "")
+                == str(state.get("planRevision") or "")
+                == str(feature_intent.get("planRevision") or "")
+                and str(record.get("checkpointHash") or "")
+                == current_checkpoint_hash
+                == str(feature_intent.get("checkpointHash") or "")
+                and str(record.get("targetSnapshotHash") or "")
+                == computed_target_hash
+                == str(feature_intent.get("targetSnapshotHash") or "")
+            )
+            if not binding_matches:
+                continue
+        valid.add(str(gate))
+    return valid
+
+
+def pending_gates_for_state(state: dict[str, Any]) -> list[str]:
+    required = _clean_strings(state.get("requiredBeforeWrite"))
+    valid = _valid_completed_gates(state)
+    return [gate for gate in required if gate not in valid]
+
+
+def _checkpoint_phase(state: dict[str, Any]) -> str:
+    continuity = (
+        state.get("continuity")
+        if isinstance(state.get("continuity"), dict)
+        else {}
+    )
+    checkpoint = (
+        continuity.get("checkpoint")
+        if isinstance(continuity.get("checkpoint"), dict)
+        else {}
+    )
+    return str(checkpoint.get("phase") or "").strip().casefold()
+
+
+def _phase_and_role(
+    state: dict[str, Any],
+    *,
+    pending_gates: list[str],
+    selected_slice: dict[str, Any],
+) -> tuple[str, str]:
+    status = str(state.get("status") or "running").strip().casefold()
+    if status != "running":
+        return "verifier", "verifier"
+
+    runtime = (
+        state.get("runtimeDebugSession")
+        if isinstance(state.get("runtimeDebugSession"), dict)
+        else {}
+    )
+    runtime_status = str(runtime.get("status") or "").strip().casefold()
+    if runtime_status in _RUNTIME_ANALYSIS_STATUSES:
+        return "runtime_analysis", "runtime"
+    if runtime_status in _RUNTIME_VERIFIER_STATUSES:
+        return "verifier", "verifier"
+
+    completed = _valid_completed_gates(state)
+    if pending_gates:
+        return (
+            ("verifier", "verifier")
+            if completed
+            else ("planner", "planner")
+        )
+
+    checkpoint_phase = _checkpoint_phase(state)
+    if checkpoint_phase in {
+        "validation",
+        "verification",
+        "verifier",
+        "build",
+        "testing",
+        "test",
+    }:
+        return "verifier", "verifier"
+    if checkpoint_phase in {"runtime", "runtime_analysis", "experiment"}:
+        return "runtime_analysis", "runtime"
+    if checkpoint_phase in {"planning", "analysis", "planner"}:
+        return "planner", "planner"
+
+    writes_allowed = bool(
+        (state.get("writeGate") or {}).get("writesAllowed")
+        if isinstance(state.get("writeGate"), dict)
+        else state.get("writesAllowed")
+    )
+    if writes_allowed and not selected_slice["scopeRequired"]:
+        return "executor", "executor"
+    return "planner", "planner"
+
+
+def _task_tools(task_kind: str) -> list[str]:
+    return {
+        "compile_fix": ["read_unreal_logs"],
+        "reflection_fix": ["read_unreal_logs"],
+        "module_fix": ["read_unreal_logs"],
+        "refactor": [
+            "unreal_architecture_reasoning",
+            "unreal_semantic_refactor_guard",
+        ],
+        "runtime_debug": [
+            "unreal_runtime_config_check",
+            "unreal_runtime_debug_session",
+        ],
+        "runtime_edit": [
+            "unreal_runtime_config_check",
+            "unreal_runtime_debug_session",
+        ],
+        "codegen": ["unreal_code_sketch_claim_validate"],
+        "code_sketch": ["unreal_code_sketch_claim_validate"],
+        "project_review": ["unreal_review_claim_validate"],
+        "cpp_analysis": ["unreal_review_claim_validate"],
+        "inspect_only": ["unreal_review_claim_validate"],
+    }.get(task_kind, [])
+
+
+def _gate_tools(pending_gates: list[str]) -> list[str]:
+    return [
+        _GATE_TO_TOOL.get(gate, gate)
+        for gate in pending_gates
+        if _GATE_TO_TOOL.get(gate, gate)
+    ]
+
+
+def _unique_tools(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(item for item in values if item))
+
+
+def _active_tools(
+    *,
+    phase: str,
+    task_kind: str,
+    pending_gates: list[str],
+    selected_slice: dict[str, Any],
+    has_runtime_session: bool,
+) -> list[str]:
+    if phase == "runtime_analysis":
+        tools = [
+            "unreal_runtime_debug_session",
+            "unreal_runtime_config_check",
+            "read_unreal_logs",
+            "unreal_rag_search",
+            "unreal_symbol_lookup",
+            "search_files",
+            "read_file",
+            "read_file_range",
+        ]
+    elif phase == "executor":
+        tools = [
+            "read_file",
+            "read_file_range",
+            "unreal_rag_search",
+            "static_validate_project",
+            "build_unreal_project",
+        ]
+        if not selected_slice["scopeRequired"]:
+            if task_kind == "refactor":
+                tools.insert(3, "apply_edit_bundle")
+            elif task_kind in {"compile_fix", "reflection_fix", "module_fix", "runtime_edit"}:
+                tools.insert(3, "replace_in_file")
+            else:
+                tools[3:3] = ["write_file", "replace_in_file"]
+        if has_runtime_session or task_kind in {"runtime", "runtime_edit", "runtime_debug"}:
+            tools.insert(3, "unreal_runtime_debug_session")
+    elif phase == "verifier":
+        tools = [
+            "read_file",
+            "read_file_range",
+            "unreal_review_claim_validate",
+            "static_validate_project",
+            "build_unreal_project",
+            *_gate_tools(pending_gates),
+        ]
+        if has_runtime_session or task_kind in {"runtime", "runtime_edit", "runtime_debug"}:
+            tools.insert(2, "unreal_runtime_debug_session")
+    else:
+        tools = [
+            "unreal_agent_session",
+            "unreal_rag_search",
+            "unreal_symbol_lookup",
+            "search_files",
+            "read_file",
+            "read_file_range",
+            *_task_tools(task_kind),
+            *_gate_tools(pending_gates),
+        ]
+
+    unique = _unique_tools(tools)
+    safe_fill = [
+        "unreal_rag_search",
+        "unreal_symbol_lookup",
+        "search_files",
+        "read_file",
+        "read_file_range",
+        "unreal_review_claim_validate",
+    ]
+    for tool in safe_fill:
+        if len(unique) >= MIN_ACTIVE_TOOLS:
+            break
+        if tool not in unique:
+            unique.append(tool)
+    if phase in {"planner", "runtime_analysis", "verifier"}:
+        unique = [tool for tool in unique if tool not in MUTATION_TOOLS]
+    return unique[:MAX_ACTIVE_TOOLS]
+
+
+def _prompt_contract(role: str, task_session_id: str, phase: str) -> dict[str, Any]:
+    prompts = {
+        "planner": (
+            "Gather bounded evidence and define the next server-verifiable action. "
+            "Do not edit files, score candidates, or mark gates complete."
+        ),
+        "executor": (
+            "Edit only files in selectedSlice, then stop for validation. "
+            "Do not expand scope or choose a different candidate."
+        ),
+        "runtime": (
+            "Run one falsifiable runtime step against the selected hypothesis. "
+            "Submit evidence; the server owns ranking and gate decisions."
+        ),
+        "verifier": (
+            "Evaluate only the pending server gate or validation proof. "
+            "Do not mutate project files or self-approve evidence."
+        ),
+    }
+    return {
+        "id": f"{role}-v1",
+        "sessionKey": f"{task_session_id}:{phase}:{role}",
+        "systemPrompt": prompts[role],
+        "serverOwns": ["phase", "toolRoute", "scores", "gateDecisions"],
+    }
+
+
+def derive_tool_route(
+    state: dict[str, Any],
+    *,
+    _include_expiry_transition: bool = True,
+) -> dict[str, Any]:
+    max_files = max(
+        1,
+        min(
+            MAX_FILES_PER_SLICE,
+            int(state.get("maxFilesPerEdit") or DEFAULT_MAX_FILES_PER_SLICE),
+        ),
+    )
+    selected_slice = _selected_slice(state, max_files)
+    pending_gates = pending_gates_for_state(state)
+    phase, role = _phase_and_role(
+        state,
+        pending_gates=pending_gates,
+        selected_slice=selected_slice,
+    )
+    task_kind = str(state.get("taskKind") or "inspect_only").strip().casefold()
+    active_tools = _active_tools(
+        phase=phase,
+        task_kind=task_kind,
+        pending_gates=pending_gates,
+        selected_slice=selected_slice,
+        has_runtime_session=isinstance(state.get("runtimeDebugSession"), dict)
+        and bool(state.get("runtimeDebugSession")),
+    )
+    max_calls = {
+        "planner": 4,
+        "executor": 4,
+        "runtime_analysis": 5,
+        "verifier": 3,
+    }[phase]
+    route: dict[str, Any] = {
+        "version": ROUTE_VERSION,
+        "serverOwned": True,
+        "phase": phase,
+        "roleSession": role,
+        "activeTools": active_tools,
+        "maxToolCallsPerPhase": max_calls,
+        "maxFilesPerSlice": max_files,
+        "maxSymbols": MAX_SYMBOLS,
+        "maxPrimaryErrors": MAX_PRIMARY_ERRORS,
+        "maxHypotheses": MAX_HYPOTHESES,
+        "maxPatchCandidates": MAX_PATCH_CANDIDATES,
+        "selectedSlice": selected_slice,
+        "pendingGates": pending_gates,
+        "graphPolicy": {
+            "automaticFullGraph": False,
+            "maxSymbols": MAX_SYMBOLS,
+            "maxDirectFiles": max_files,
+            "defaultDetail": "compact",
+            "detailEscalation": "explicit_only",
+        },
+        "controlPlaneOnDemand": sorted(CONTROL_PLANE_TOOLS),
+        "controlSurface": {
+            "separateFromActiveTools": True,
+            "alwaysDiscoverable": sorted(ALWAYS_DISCOVERABLE_CONTROL_TOOLS),
+            "countsAgainstPhaseBudget": False,
+        },
+        "promptContract": _prompt_contract(
+            role,
+            str(state.get("taskSessionId") or "plan"),
+            phase,
+        ),
+    }
+    if _include_expiry_transition:
+        completed = (
+            state.get("completedGates")
+            if isinstance(state.get("completedGates"), dict)
+            else {}
+        )
+        expiries: list[tuple[datetime, str]] = []
+        now = datetime.now(tz=timezone.utc)
+        for gate, record in completed.items():
+            if not isinstance(record, dict) or record.get("status") != "completed":
+                continue
+            raw_expiry = str(record.get("expiresAt") or "").strip()
+            if not raw_expiry:
+                continue
+            try:
+                expiry = datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if expiry > now:
+                expiries.append((expiry, str(gate)))
+        if expiries:
+            next_expiry = min(expiry for expiry, _gate in expiries)
+            fallback_state = deepcopy(state)
+            fallback_completed = dict(fallback_state.get("completedGates") or {})
+            for expiry, gate in expiries:
+                if expiry <= next_expiry:
+                    fallback_completed.pop(gate, None)
+            fallback_state["completedGates"] = fallback_completed
+            fallback_route = derive_tool_route(
+                fallback_state,
+                _include_expiry_transition=True,
+            )
+            route["expiryTransition"] = {
+                "at": next_expiry.isoformat(),
+                "route": fallback_route,
+            }
+    route["routeHash"] = canonical_hash(route)
+    return route
+
+
+def effective_tool_route(
+    route: Any,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    value = dict(route) if isinstance(route, dict) else {}
+    current_time = now or datetime.now(tz=timezone.utc)
+    for _index in range(64):
+        transition = (
+            value.get("expiryTransition")
+            if isinstance(value.get("expiryTransition"), dict)
+            else {}
+        )
+        fallback = (
+            transition.get("route")
+            if isinstance(transition.get("route"), dict)
+            else {}
+        )
+        raw_at = str(transition.get("at") or "").strip()
+        if not raw_at or not fallback:
+            return value
+        try:
+            expires_at = datetime.fromisoformat(raw_at.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at > current_time:
+            return value
+        value = dict(fallback)
+    return value
+
+
+def compact_tool_route(route: Any) -> dict[str, Any]:
+    value = route if isinstance(route, dict) else {}
+    return {
+        key: value.get(key)
+        for key in (
+            "routeHash",
+            "phase",
+            "roleSession",
+            "activeTools",
+            "maxToolCallsPerPhase",
+            "maxFilesPerSlice",
+            "maxSymbols",
+            "maxPrimaryErrors",
+            "maxHypotheses",
+            "maxPatchCandidates",
+            "selectedSlice",
+            "pendingGates",
+            "graphPolicy",
+            "promptContract",
+            "controlSurface",
+        )
+        if key in value
+    }
+
+
+def compact_plan_tool_policy(
+    task_kind: str,
+    *,
+    required_gates: list[str] | None = None,
+    writes_allowed: bool = False,
+    base_policy: list[str] | None = None,
+) -> list[str]:
+    """Return a provisional compact planner route; task_start owns the real route."""
+
+    from plan_consistency import (
+        AGENT_ESSENTIAL_TOOLS,
+        AGENT_EXTENDED_REFACTOR,
+    )
+    from tool_policy import RAG_MCP_TOOLS
+
+    known_tools = (
+        set(RAG_MCP_TOOLS)
+        | set(AGENT_ESSENTIAL_TOOLS)
+        | set(AGENT_EXTENDED_REFACTOR)
+    )
+    ordered = _unique_tools(
+        [
+            str(tool)
+            for tool in (base_policy or [])
+            if str(tool) in known_tools and str(tool) not in CONTROL_PLANE_TOOLS
+        ]
+    )
+    mandatory = _unique_tools(
+        [
+            _GATE_TO_TOOL.get(str(gate), str(gate))
+            for gate in (required_gates or [])
+            if _GATE_TO_TOOL.get(str(gate), str(gate)) in known_tools
+        ]
+    )
+    for tool in mandatory:
+        if tool in ordered:
+            continue
+        mutation_index = next(
+            (
+                index
+                for index, item in enumerate(ordered)
+                if item in MUTATION_TOOLS
+                or item in {"static_validate_project", "build_unreal_project"}
+            ),
+            len(ordered),
+        )
+        ordered.insert(mutation_index, tool)
+
+    if len(ordered) > MAX_ACTIVE_TOOLS:
+        keep = set(mandatory)
+        remaining = MAX_ACTIVE_TOOLS - len(keep)
+        for tool in ordered:
+            if tool in keep:
+                continue
+            if remaining <= 0:
+                break
+            keep.add(tool)
+            remaining -= 1
+        ordered = [tool for tool in ordered if tool in keep]
+
+    safe_fill = [
+        "read_file_range",
+        "unreal_symbol_lookup",
+        "search_files",
+        "read_file",
+        "unreal_rag_search",
+    ]
+    for tool in safe_fill:
+        if len(ordered) >= MIN_ACTIVE_TOOLS:
+            break
+        if tool in known_tools and tool not in ordered:
+            ordered.append(tool)
+    return ordered[:MAX_ACTIVE_TOOLS]
+
+
+def normalized_selection_snapshots(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        path = _normalize_path(item.get("path") or item.get("relativePath"))
+        if not path:
+            continue
+        rows.append(
+            {
+                "path": path,
+                "exists": bool(item.get("exists")),
+                "fileHash": str(item.get("fileHash") or ""),
+            }
+        )
+    return sorted(rows, key=lambda item: item["path"].casefold())
+
+
+def validate_runtime_selection(
+    runtime_session: Any,
+) -> tuple[str, str, list[str]]:
+    session = runtime_session if isinstance(runtime_session, dict) else {}
+    issues: list[str] = []
+    hypotheses = [
+        item for item in session.get("hypotheses") or [] if isinstance(item, dict)
+    ]
+    if len(hypotheses) > MAX_HYPOTHESES:
+        issues.append(f"runtime hypotheses exceed {MAX_HYPOTHESES}")
+    selected_hypothesis = str(session.get("selectedHypothesisId") or "").strip()
+    hypothesis_ids = {
+        str(item.get("id") or "").strip()
+        for item in hypotheses
+        if str(item.get("id") or "").strip()
+    }
+    if selected_hypothesis and selected_hypothesis not in hypothesis_ids:
+        issues.append("selectedHypothesisId is not present in runtime hypotheses")
+
+    comparison = (
+        session.get("patchCandidateComparison")
+        if isinstance(session.get("patchCandidateComparison"), dict)
+        else {}
+    )
+    candidates = [
+        item for item in comparison.get("candidates") or [] if isinstance(item, dict)
+    ]
+    if len(candidates) > MAX_PATCH_CANDIDATES:
+        issues.append(f"runtime patch candidates exceed {MAX_PATCH_CANDIDATES}")
+    selected_candidate = str(comparison.get("selectedCandidateId") or "").strip()
+    candidate_ids = {
+        str(item.get("id") or "").strip()
+        for item in candidates
+        if str(item.get("id") or "").strip()
+    }
+    if selected_candidate and selected_candidate not in candidate_ids:
+        issues.append(
+            "selectedCandidateId is not present in patchCandidateComparison.candidates"
+        )
+    patch_evidence = (
+        session.get("patchEvidence")
+        if isinstance(session.get("patchEvidence"), dict)
+        else {}
+    )
+    applied_candidate = str(
+        patch_evidence.get("selectedPatchCandidateId") or ""
+    ).strip()
+    if applied_candidate and applied_candidate != selected_candidate:
+        issues.append(
+            "patchEvidence.selectedPatchCandidateId disagrees with selectedCandidateId"
+        )
+    return selected_hypothesis, selected_candidate, issues
+
+
+def selection_binding(state: dict[str, Any]) -> dict[str, Any]:
+    continuity = (
+        state.get("continuity")
+        if isinstance(state.get("continuity"), dict)
+        else {}
+    )
+    checkpoint = (
+        continuity.get("checkpoint")
+        if isinstance(continuity.get("checkpoint"), dict)
+        else {}
+    )
+    snapshots = normalized_selection_snapshots(
+        state.get("selectedTargetSnapshots")
+        or state.get("featureTargetSnapshots")
+    )
+    binding: dict[str, Any] = {
+        "planRevision": str(state.get("planRevision") or ""),
+        "activeSliceId": str(state.get("activeSliceId") or ""),
+        "checkpointHash": str(
+            checkpoint.get("checkpointHash")
+            or continuity.get("planIdentityHash")
+            or canonical_hash(checkpoint)
+        ),
+        "targetSnapshotsHash": canonical_hash(snapshots),
+        "selectedHypothesisId": str(state.get("selectedHypothesisId") or ""),
+        "selectedCandidateId": str(state.get("selectedCandidateId") or ""),
+        "selectedIntentId": str(state.get("selectedIntentId") or ""),
+        "intentContractHash": str(state.get("intentContractHash") or ""),
+    }
+    binding["bindingHash"] = canonical_hash(binding)
+    return binding

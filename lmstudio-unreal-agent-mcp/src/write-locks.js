@@ -41,20 +41,16 @@ function isProcessAlive(pid) {
   try {
     process.kill(pid, 0);
     return "alive";
-  } catch {
+  } catch (err) {
+    if (err && err.code === "EPERM") {
+      return "unknown";
+    }
     return "dead";
   }
 }
 
 function isStaleLock(lockPath) {
   if (!fs.existsSync(lockPath)) {
-    return true;
-  }
-  try {
-    if (Date.now() - fs.statSync(lockPath).mtimeMs > STALE_LOCK_AGE_MS) {
-      return true;
-    }
-  } catch {
     return true;
   }
   const owner = readLockOwner(lockPath);
@@ -70,6 +66,10 @@ function isStaleLock(lockPath) {
   if (alive === "dead") {
     return true;
   }
+  // Match the Python lock policy: a lock owned by a live process (or a
+  // process whose liveness cannot be inspected) is never stolen due to age.
+  // Heartbeat age is diagnostic only because long operations can legitimately
+  // outlive several heartbeat intervals.
   return false;
 }
 
@@ -176,6 +176,7 @@ async function withPathLock(absPath, label, fn, options = {}) {
 
 module.exports = {
   canonicalLockKey,
+  lockFilePath,
   tryAcquirePathLock,
   releasePathLock,
   isPathLocked,

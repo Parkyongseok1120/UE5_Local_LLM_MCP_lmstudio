@@ -18,6 +18,8 @@ Use when splitting responsibilities or moving implementation incrementally.
 4. `read_file_range` / `read_file` -> `replace_in_file` with `expectedOccurrences=1` — **max 3 files**. Use `write_file` only for brand-new files.
 5. `build_unreal_project`
 
+Before an R1-R4 project write, materialize the proposed patch in a distinct isolated candidate root and run `unreal_semantic_refactor_guard`. Use its deterministic transition hash, bind static/build proofs and paired before/after invariant observers to that exact change set, and provide runtime proof for every runtime-sensitive invariant. A changed reflected/public/module/config surface also needs complete migration/compatibility coverage.
+
 ## Hard limits
 
 - R0: no `#include`, `UCLASS`, `GENERATED_BODY`, or function bodies

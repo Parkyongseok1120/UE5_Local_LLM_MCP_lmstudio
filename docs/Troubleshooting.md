@@ -87,6 +87,10 @@ Inspect `unreal_task_checkpoint` with `action=status`.
 - `TASK_CHECKPOINT_CONFLICT`: another process changed a tracked file. Review the conflict list. Use `rebase` with `acceptCurrentFiles=true` only after accepting those changes; previous pre-write gates are invalidated.
 - `CHECKPOINT_PATH_OUTSIDE_PROJECT`: record project-relative files only. Checkpoints intentionally reject traversal and external paths.
 
+## Semantic refactor gate stays closed
+
+Run `unreal_semantic_refactor_guard` against a distinct isolated `afterRoot`, not the live project. The declared `changedFiles` must equal every `Source`/`Plugins`/`Config` difference, and `diffHash`, static/build proofs, observer snapshot hashes, and any runtime proof must all refer to that same transition. If a reflected/public/module/config surface changes, copy every reported breaking `surfaceId` into a complete migration/compatibility coverage entry with rationale, validation, and rollback.
+
 ## Runtime debug gate stays closed
 
 `prepare` no longer authorizes a patch by itself. Record a supporting same-reproduction experiment, materialize and validate two to four isolated patch candidates, then call `compare_patch_candidates`. A textual “looks fixed” result cannot satisfy a policy that requires trace data, minimum samples/duration, or zero crashes/timeouts.

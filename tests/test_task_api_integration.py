@@ -248,6 +248,41 @@ def test_required_prewrite_gate_is_persisted_and_completed_against_plan(tmp_path
     assert current["writeGate"]["pendingBeforeWrite"] == []
 
 
+def test_refactor_task_injects_semantic_guard_when_plan_omits_it(
+    tmp_path: Path,
+) -> None:
+    started = task_start(
+        tmp_path,
+        request="Meaning-preserving refactor",
+        plan_payload={
+            "taskKind": "Refactor",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+
+    state = started["state"]
+    assert state["requiredBeforeWrite"] == ["unreal_semantic_refactor_guard"]
+    assert state["pendingGates"] == ["unreal_semantic_refactor_guard"]
+    assert started["writeReadiness"]["ready"] is False
+
+
+def test_non_refactor_task_does_not_inject_semantic_guard(tmp_path: Path) -> None:
+    started = task_start(
+        tmp_path,
+        request="Small edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+
+    assert "unreal_semantic_refactor_guard" not in started["state"][
+        "requiredBeforeWrite"
+    ]
+
+
 def test_required_prewrite_gate_rejects_mismatched_authorization(tmp_path: Path) -> None:
     plan = {
         "taskKind": "edit",

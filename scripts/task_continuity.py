@@ -11,7 +11,9 @@ from typing import Any
 DEFAULT_LEASE_SECONDS = 1800
 MIN_LEASE_SECONDS = 60
 MAX_LEASE_SECONDS = 86400
-MAX_CHECKPOINT_HISTORY = 24
+MAX_CHECKPOINT_HISTORY = 256
+MAX_CHECKPOINT_FILES = 4096
+MAX_CHECKPOINT_SLICES = 1024
 
 
 def utc_now() -> datetime:
@@ -91,11 +93,16 @@ def initialize_continuity(
             "activeSliceId": active_slice_id,
             "modifiedFiles": [],
             "fileSnapshots": [],
+            "gitChangedFiles": [],
+            "discoveryWarnings": [],
             "requiredNextAction": "",
             "recordedAt": "",
+            "targetHash": "",
+            "checkpointStateHash": "",
             "checkpointHash": "",
         },
         "checkpointHistory": [],
+        "checkpointHistoryOverflowCount": 0,
         "recovery": {
             "status": "not_required",
             "conflicts": [],
@@ -186,6 +193,8 @@ def record_checkpoint(
     modified_files: list[str],
     file_snapshots: list[dict[str, Any]],
     required_next_action: str,
+    git_changed_files: list[str] | None = None,
+    discovery_warnings: list[str] | None = None,
     validation: dict[str, Any] | None = None,
     note: str = "",
     now: datetime | None = None,
@@ -197,20 +206,96 @@ def record_checkpoint(
         else {}
     )
     current = now or utc_now()
+    unique_completed = list(
+        dict.fromkeys(
+            [
+                *(
+                    str(item)
+                    for item in (prior.get("completedSlices") or [])
+                    if str(item).strip()
+                ),
+                *(str(item) for item in completed_slices if str(item).strip()),
+            ]
+        )
+    )
+    unique_pending = list(
+        dict.fromkeys(str(item) for item in pending_slices if str(item).strip())
+    )
+    unique_modified = list(
+        dict.fromkeys(str(item) for item in modified_files if str(item).strip())
+    )
+    unique_git_changed = list(
+        dict.fromkeys(
+            str(item) for item in (git_changed_files or []) if str(item).strip()
+        )
+    )
+    if len(unique_completed) > MAX_CHECKPOINT_SLICES:
+        raise ValueError(
+            "completed slice set exceeds checkpoint limit "
+            f"({len(unique_completed)} > {MAX_CHECKPOINT_SLICES})"
+        )
+    if len(unique_pending) > MAX_CHECKPOINT_SLICES:
+        raise ValueError(
+            "pending slice set exceeds checkpoint limit "
+            f"({len(unique_pending)} > {MAX_CHECKPOINT_SLICES})"
+        )
+    if len(unique_modified) > MAX_CHECKPOINT_FILES:
+        raise ValueError(
+            "modified file set exceeds checkpoint limit "
+            f"({len(unique_modified)} > {MAX_CHECKPOINT_FILES})"
+        )
+    if len(file_snapshots) != len(unique_modified):
+        raise ValueError(
+            "checkpoint snapshots must cover the complete modified file set "
+            f"({len(file_snapshots)} != {len(unique_modified)})"
+        )
+    if len(unique_git_changed) > MAX_CHECKPOINT_FILES:
+        raise ValueError(
+            "Git changed file set exceeds checkpoint limit "
+            f"({len(unique_git_changed)} > {MAX_CHECKPOINT_FILES})"
+        )
+    normalized_snapshots = [
+        dict(item) for item in file_snapshots if isinstance(item, dict)
+    ]
+    normalized_snapshots.sort(key=lambda item: str(item.get("relativePath") or ""))
     checkpoint = {
         "sequence": int(prior.get("sequence") or 0) + 1,
         "status": "recorded",
         "phase": str(phase or "working").strip(),
         "activeSliceId": str(active_slice_id or "").strip(),
-        "completedSlices": list(dict.fromkeys(completed_slices))[-64:],
-        "pendingSlices": list(dict.fromkeys(pending_slices))[-64:],
-        "modifiedFiles": list(dict.fromkeys(modified_files))[-128:],
-        "fileSnapshots": file_snapshots[-128:],
+        "completedSlices": unique_completed,
+        "pendingSlices": unique_pending,
+        "modifiedFiles": unique_modified,
+        "fileSnapshots": normalized_snapshots,
+        "gitChangedFiles": unique_git_changed,
+        "discoveryWarnings": list(
+            dict.fromkeys(
+                str(item)
+                for item in (discovery_warnings or [])
+                if str(item).strip()
+            )
+        ),
         "requiredNextAction": str(required_next_action or "").strip(),
         "validation": dict(validation or {}),
         "note": str(note or "")[:1000],
         "recordedAt": iso_utc(current),
     }
+    checkpoint["targetHash"] = canonical_hash(normalized_snapshots)
+    checkpoint["checkpointStateHash"] = canonical_hash(
+        {
+            key: value
+            for key, value in checkpoint.items()
+            if key
+            not in {
+                "checkpointHash",
+                "checkpointStateHash",
+                "note",
+                "recordedAt",
+                "sequence",
+                "validation",
+            }
+        }
+    )
     checkpoint["checkpointHash"] = canonical_hash(checkpoint)
     history = [
         dict(item)
@@ -219,8 +304,13 @@ def record_checkpoint(
     ]
     if prior.get("sequence"):
         history.append(prior)
+    overflow = max(0, len(history) - MAX_CHECKPOINT_HISTORY)
     updated["checkpoint"] = checkpoint
     updated["checkpointHistory"] = history[-MAX_CHECKPOINT_HISTORY:]
+    if overflow:
+        updated["checkpointHistoryOverflowCount"] = int(
+            updated.get("checkpointHistoryOverflowCount") or 0
+        ) + overflow
     updated["recovery"] = {
         "status": "checkpoint_current",
         "conflicts": [],

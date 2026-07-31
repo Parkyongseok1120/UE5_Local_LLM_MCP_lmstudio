@@ -294,7 +294,7 @@ const locks = require('./src/write-locks.js');
     assert payload["afterRelease"] is True
 
 
-def test_write_lock_reclaims_expired_lock_with_reused_pid(tmp_path: Path) -> None:
+def test_write_lock_never_reclaims_old_lock_owned_by_live_pid(tmp_path: Path) -> None:
     script = f"""
 process.env.AGENT_STATE_ROOT = {json.dumps(str(tmp_path / "state"))};
 const fs = require('fs');
@@ -311,7 +311,7 @@ locks.releasePathLock(target);
 console.log(JSON.stringify({{ first: first.ok, reclaimed: reclaimed.ok }}));
 """
     payload = _run_node(script)
-    assert payload == {"first": True, "reclaimed": True}
+    assert payload == {"first": True, "reclaimed": False}
 
 
 def test_resolve_validate_on_write_timeout_ms_default_and_env() -> None:

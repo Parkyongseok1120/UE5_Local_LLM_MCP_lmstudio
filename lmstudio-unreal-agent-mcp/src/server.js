@@ -67,7 +67,17 @@ const {
   requireValidationProofOrOverride,
   getDirtyState,
 } = require("./validation-dirty");
-const { validateMutationAuth } = require("./task-auth");
+const {
+  authorizeActiveRouteTool,
+  authorizeTaskRouteTool,
+  discoverActiveTaskContext,
+  SAFE_ROUTE_RECOVERY_TOOLS,
+  validateMutationAuth,
+} = require("./task-auth");
+const {
+  activeRouteFingerprint,
+  startActiveRouteWatcher,
+} = require("./route-watcher");
 const {
   applyBundleTransaction,
   finalizeTransaction,
@@ -212,6 +222,12 @@ const CONTROL_PLANE_TOOLS = ["1", "true", "yes", "on"].includes(
 const REQUIRE_TASK_AUTH_FOR_WRITES = !["0", "false", "no", "off"].includes(
   String(process.env.MCP_REQUIRE_PLAN_AUTH ?? "1").trim().toLowerCase()
 );
+const ROUTE_MUTATION_TOOLS = new Set([
+  "write_file",
+  "replace_in_file",
+  "delete_file",
+  "apply_edit_bundle",
+]);
 
 /** Tracks shared activeProject so history clears when rag or agent switches projects. */
 let lastSeenActiveProjectKey = null;
@@ -252,11 +268,12 @@ const server = new Server(
   },
   {
     capabilities: {
-      tools: {},
+      tools: { listChanged: true },
       logging: {}
     }
   }
 );
+let lastObservedRouteFingerprint = "";
 
 function launchProjectPicker(explorer = false) {
   if (process.platform !== "win32") {
@@ -385,7 +402,15 @@ function enforceTaskAuth(args, options = {}) {
   if (!taskSessionId) {
     return null;
   }
-  const auth = validateMutationAuth(WORKSPACE_ROOT, args || {}, { requireAll: true });
+  const auth = validateMutationAuth(
+    WORKSPACE_ROOT,
+    args || {},
+    {
+      requireAll: true,
+      toolName: String(options.toolName || ""),
+      activeProject: getActiveProject(CONFIG_PATH),
+    }
+  );
   if (!auth.ok) {
     const incomplete = auth.errorCode === "TASK_AUTH_INCOMPLETE";
     return fail(auth.error || "Task authorization failed.", {
@@ -588,7 +613,20 @@ function validationFailed(validation) {
 
 function filterAgentTools(tools) {
   const allowed = callableAgentToolNames(tools.map((tool) => tool.name));
-  return tools.filter((tool) => allowed.has(tool.name));
+  const exposed = tools.filter((tool) => allowed.has(tool.name));
+  const context = discoverActiveTaskContext(
+    WORKSPACE_ROOT,
+    getActiveProject(CONFIG_PATH) || ""
+  );
+  if (context.status === "none") return exposed;
+  if (context.status !== "active") {
+    return exposed.filter((tool) => SAFE_ROUTE_RECOVERY_TOOLS.has(tool.name));
+  }
+  const route = context.route;
+  const routed = new Set(Array.isArray(route.activeTools) ? route.activeTools.map(String) : []);
+  return exposed.filter(
+    (tool) => routed.has(tool.name) || SAFE_ROUTE_RECOVERY_TOOLS.has(tool.name)
+  );
 }
 function requiredArgumentCheck(tool, args) {
   const required = Array.isArray(tool?.inputSchema?.required) ? tool.inputSchema.required : [];
@@ -781,8 +819,18 @@ function taskAuthSchemaProperties() {
         planId: { type: "string" },
         planRevision: { type: "string" },
         activeSliceId: { type: "string" },
+        routeHash: { type: "string" },
+        routePhase: { type: "string" },
       },
-      required: ["taskSessionId", "authToken", "planId", "planRevision", "activeSliceId"],
+      required: [
+        "taskSessionId",
+        "authToken",
+        "planId",
+        "planRevision",
+        "activeSliceId",
+        "routeHash",
+        "routePhase",
+      ],
       additionalProperties: false,
     },
   };
@@ -1213,7 +1261,7 @@ async function buildWorkspaceInfo() {
 }
 
 function allAgentTools() {
-  return [
+  const tools = [
       {
         name: "get_workspace_info",
         description: "Show workspace root, safety flags, configured search roots, and recently discovered Unreal projects.",
@@ -1498,10 +1546,26 @@ function allAgentTools() {
         })
       }
   ];
+  const optionalTaskAuthorization = taskAuthSchemaProperties().taskAuthorization;
+  for (const tool of tools) {
+    const schema = tool.inputSchema;
+    if (!schema || typeof schema !== "object") continue;
+    const properties = schema.properties;
+    if (!properties || typeof properties !== "object") continue;
+    if (!properties.taskAuthorization) {
+      properties.taskAuthorization = optionalTaskAuthorization;
+    }
+  }
+  return tools;
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const tools = allAgentTools();
+  const context = discoverActiveTaskContext(
+    WORKSPACE_ROOT,
+    getActiveProject(CONFIG_PATH) || ""
+  );
+  lastObservedRouteFingerprint = activeRouteFingerprint(context);
   return {
     tools: filterAgentTools(tools)
   };
@@ -1513,6 +1577,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const priorSeq = beginToolCall();
   try {
     clearLoopHistoriesOnProjectChange(false);
+    const activeProjectForRoute = getActiveProject(CONFIG_PATH) || "";
+    const currentRouteContext = discoverActiveTaskContext(
+      WORKSPACE_ROOT,
+      activeProjectForRoute
+    );
+    const currentRouteFingerprint = activeRouteFingerprint(currentRouteContext);
+    if (currentRouteFingerprint !== lastObservedRouteFingerprint) {
+      lastObservedRouteFingerprint = currentRouteFingerprint;
+      try {
+        await server.sendToolListChanged();
+      } catch {
+        // Older clients may not accept list-changed notifications.
+      }
+    }
     const toolDefinitions = allAgentTools();
     const allowed = callableAgentToolNames(toolDefinitions.map((tool) => tool.name));
     if (!allowed.has(name)) {
@@ -1522,6 +1600,52 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         retryable: blocked.retryable,
         userMessage: blocked.userMessage,
         agentInstruction: blocked.agentInstruction,
+      });
+    }
+    const nestedTaskAuthorization = args.taskAuthorization
+      && typeof args.taskAuthorization === "object"
+      ? args.taskAuthorization
+      : args.task_authorization
+      && typeof args.task_authorization === "object"
+      ? args.task_authorization
+      : null;
+    const hasExplicitTaskAuthorization = Boolean(
+      nestedTaskAuthorization
+      || String(args.taskSessionId || args.task_session_id || "").trim()
+    );
+    let routePreflight = { ok: true };
+    if (SAFE_ROUTE_RECOVERY_TOOLS.has(name)) {
+      routePreflight = { ok: true, controlSurface: true };
+    } else if (hasExplicitTaskAuthorization) {
+      if (!ROUTE_MUTATION_TOOLS.has(name)) {
+        routePreflight = authorizeTaskRouteTool(
+          WORKSPACE_ROOT,
+          name,
+          args,
+          {
+            consumeBudget: true,
+            activeProject: activeProjectForRoute,
+          }
+        );
+      }
+    } else {
+      routePreflight = authorizeActiveRouteTool(
+        WORKSPACE_ROOT,
+        name,
+        args,
+        {
+          consumeBudget: !ROUTE_MUTATION_TOOLS.has(name),
+          activeProject: activeProjectForRoute,
+        }
+      );
+    }
+    if (!routePreflight.ok) {
+      return fail(routePreflight.error || "Task route authorization failed.", {
+        errorCode: routePreflight.errorCode || "TASK_ROUTE_AUTH_FAILED",
+        retryable: false,
+        stopCurrentWorkflow: true,
+        toolRoute: routePreflight.toolRoute,
+        toolRouteUsage: routePreflight.toolRouteUsage,
       });
     }
     const earlyRepeatBlock = checkToolRepeatBlocked(name, args, priorSeq);
@@ -2030,7 +2154,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "write_file") {
       if (!ALLOW_WRITE) return fail("write_file blocked. Set ALLOW_WRITE=1 to enable.");
-      const authFail = enforceTaskAuth(args, { requireSession: REQUIRE_TASK_AUTH_FOR_WRITES });
+      const authFail = enforceTaskAuth(args, {
+        requireSession: REQUIRE_TASK_AUTH_FOR_WRITES,
+        toolName: "write_file",
+      });
       if (authFail) return authFail;
       const writeResolution = await resolveWriteToolPath(args.path);
       const target = writeResolution.absolutePath;
@@ -2169,7 +2296,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "replace_in_file") {
       if (!ALLOW_WRITE) return fail("replace_in_file blocked. Set ALLOW_WRITE=1 to enable.");
-      const authFail = enforceTaskAuth(args, { requireSession: REQUIRE_TASK_AUTH_FOR_WRITES });
+      const authFail = enforceTaskAuth(args, {
+        requireSession: REQUIRE_TASK_AUTH_FOR_WRITES,
+        toolName: "replace_in_file",
+      });
       if (authFail) return authFail;
       const writeResolution = await resolveWriteToolPath(args.path);
       const target = writeResolution.absolutePath;
@@ -2373,7 +2503,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!ALLOW_SOURCE_DELETE) {
         return fail("delete_file blocked. Set ALLOW_SOURCE_DELETE=1 to enable source deletions.");
       }
-      const authFail = enforceTaskAuth(args, { requireSession: REQUIRE_TASK_AUTH_FOR_WRITES });
+      const authFail = enforceTaskAuth(args, {
+        requireSession: REQUIRE_TASK_AUTH_FOR_WRITES,
+        toolName: "delete_file",
+      });
       if (authFail && authFail.isError) return authFail;
       const resolution = await resolveReadToolPath(args.path);
       const target = resolution.absolutePath;
@@ -2463,9 +2596,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "apply_edit_bundle") {
       if (!ALLOW_WRITE) return fail("apply_edit_bundle blocked. Set ALLOW_WRITE=1 to enable.");
-      const authFail = enforceTaskAuth(args, { requireSession: true });
+      const authFail = enforceTaskAuth(args, {
+        requireSession: true,
+        toolName: "apply_edit_bundle",
+      });
       if (authFail && authFail.isError) return authFail;
-      const auth = authFail || validateMutationAuth(WORKSPACE_ROOT, args, { requireAll: true });
+      const auth = authFail || validateMutationAuth(
+        WORKSPACE_ROOT,
+        args,
+        {
+          requireAll: true,
+          toolName: "apply_edit_bundle",
+          consumeBudget: false,
+          activeProject: getActiveProject(CONFIG_PATH),
+        }
+      );
       await agentNotify("Applying edit bundle…");
       const bundle = {
         files: Array.isArray(args.files) ? args.files : [],
@@ -3055,6 +3200,16 @@ async function main() {
   }
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  startActiveRouteWatcher({
+    readContext: () => discoverActiveTaskContext(
+      WORKSPACE_ROOT,
+      getActiveProject(CONFIG_PATH) || ""
+    ),
+    notify: async (context, fingerprint) => {
+      lastObservedRouteFingerprint = fingerprint;
+      await server.sendToolListChanged();
+    },
+  });
 }
 
 main().catch((err) => {

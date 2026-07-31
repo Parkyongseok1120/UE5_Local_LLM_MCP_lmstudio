@@ -1,39 +1,49 @@
 # Failure Memory Policy
 
-Failure memory is **hint-only RAG**, never engine evidence.
+Failure memory is low-trust, project-scoped RAG guidance. It is never Unreal
+source, build, or runtime evidence and has a maximum rerank weight of `0.15`.
 
-## Schema (v2)
+## Fail-closed lifecycle
 
-Extended fields in `data/failure_memory/{Project}_failures.jsonl`:
+Every new observation is stored as `candidate`, even if a caller requests a
+trusted status. The only trust path is:
 
-- `error_signature`, `original_request`, `failed_output_summary`
-- `bad_chunk_ids`, `good_chunk_ids`, `missing_evidence`
-- `final_explanation`, `retry_count`, `model`, `sampling_profile`
-- `status`: `accepted` | `rejected`
+`candidate -> verified -> verified -> accepted`
 
-## Weight
+- `verified` requires a successful build or runtime proof with a non-empty,
+  unique `artifactHash`.
+- Proof `engineVersion` and `projectFingerprint` must exactly match the record.
+- `accepted` requires at least two distinct valid verification events. Callers
+  cannot lower that minimum or forge it through `verificationCount`.
+- `rejected` and `expired` are terminal. Accepted records may still be rejected
+  or expire.
+- Lifecycle changes append a new JSONL row; the latest valid row for an ID is
+  authoritative and retains `lifecycleHistory` and `verificationHistory`.
 
-Default RAG weight: **0.15** (`failure_memory_rag_weight()`).
+Records with malformed status, proof, scope, expiry, or metadata fail closed.
+Only non-expired `verified` and `accepted` rows can influence reranking.
 
-Query expansion: `failure_memory_rerank.expand_query_with_memory()` appends low-trust hints.
+## Record fields
 
-## Reject bad fixes
+`data/failure_memory/{Project}_failures.jsonl` includes:
 
-```powershell
-.\rag.ps1 reject-failure-memory -ProjectName MyGame -Question <record_id>
-```
+- Failure identity: `id`, `error_signature`, `error_subkind`, `error_code`,
+  `symbol_name`
+- Context: `original_request`, `failed_output_summary`, `missing_evidence`
+- Outcome: `fix_summary`, `final_explanation`, `changed_files`, `diff_excerpt`
+- Retrieval lineage: `rag_evidence_ids`, `bad_chunk_ids`, `good_chunk_ids`
+- Reproduction: `model`, `sampling_profile`, `retry_count`
+- Trust binding: `status`, `engineVersion`, `projectFingerprint`,
+  `verificationCount`, `verificationEvidence`, `verificationHistory`,
+  `expiresAt`
 
-Rejected records are excluded from ingest and rerank.
-
-## Collect + index
+## Operations
 
 ```powershell
 .\rag.ps1 collect-failure-memory
 .\rag.ps1 build-incremental
+.\rag.ps1 reject-failure-memory -ProjectName MyGame -Question <record_id>
 ```
 
-## Rules
-
-- Scoped by project name in metadata
-- Never outrank `unreal_source` / engine chunks
-- Rejected fixes must not pollute retrieval
+Rejected or expired records are excluded from collection and reranking.
+Failure-memory hints must never outrank `unreal_source` or engine evidence.

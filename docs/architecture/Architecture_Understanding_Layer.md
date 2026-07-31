@@ -25,7 +25,9 @@ It does not call LM Studio, Unreal Editor, UnrealBuildTool, or network services.
 - Builds graph-backed impact/regression contracts that distinguish direct source surfaces from candidate callers and declare a test-coverage gap when no focused test is found.
 - Analyzes source-boundary dependencies plus candidate assignments/returns/call boundaries and state-looking assignments/setters.
 - Validates an architecture proposal's decision, invariants, impacted surfaces, validation plan, and alternatives before allowing its implementation gate to pass.
-- Generates three bounded strategy candidates and compares two or more source-backed, scored alternatives before staged implementation.
+- Infers lifecycle, cardinality, authority/replication/prediction, persistence, scale, designer/Blueprint, and thread/runtime/editor requirements.
+- Searches ActorComponent, subsystem, owned UObject service, GAS, Mass, DataAsset/config, and module-boundary patterns and compositions, eliminates hard contradictions, and returns three to five scored candidates for consistent requirements. If none remain, it blocks selection and asks for the requirements to be corrected or partitioned.
+- Requires matching source-owner evidence before recommending an owner, preserves close-score ambiguity and explicit override rationale, and never marks generated candidates implementation-ready without build/runtime proof.
 - Requires an asset migration contract for `/Game/...` surfaces: fresh registry snapshot, referencer coverage, redirector policy, cook checks, and rollback.
 
 ## What It Does Not Do

@@ -28,7 +28,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — July 2026**
 >
-> **Current release: 1.3.0 Beta1.** The 1.3 line now includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates.
+> **Current release: 1.3.0 Beta1.** The 1.3 line now includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, meaning-preserving refactor snapshots and proof gates, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates.
 >
 > Beta1 has automated repository evidence, not a new live-model score. The latest saved model results below remain the v1.2.5 UE 5.8 baseline and must not be read as a measured Beta1 improvement. Physical Linux/macOS Unreal certification, Ollama support, and the separated runtime/semantic capability scorecards remain in progress.
 

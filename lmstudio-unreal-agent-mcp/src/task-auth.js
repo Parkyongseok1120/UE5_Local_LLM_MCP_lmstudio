@@ -4,6 +4,11 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { taskStateDir, resolveAgentStateRoot, ensureStateRootLayout } = require("./state-root");
+const { atomicWriteJson } = require("./atomic-io");
+const {
+  tryAcquireCrossProcessLock,
+  releaseCrossProcessLock,
+} = require("./write-locks");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -53,7 +58,7 @@ function readTaskStateResult(_workspaceRoot, taskSessionId, stateRoot = null) {
     if (!state || typeof state !== "object" || Array.isArray(state)) {
       return { state: null, errorCode: "TASK_STATE_CORRUPT" };
     }
-    return { state, errorCode: "" };
+    return { state, errorCode: "", statePath: selectedPath };
   } catch {
     return { state: null, errorCode: "TASK_STATE_CORRUPT" };
   }
@@ -67,13 +72,20 @@ function requiredFields(args = {}) {
   const nested = args.taskAuthorization && typeof args.taskAuthorization === "object"
     ? args.taskAuthorization
     : (args.task_authorization && typeof args.task_authorization === "object" ? args.task_authorization : {});
-  return {
+  const fields = {
     taskSessionId: String(args.taskSessionId || args.task_session_id || nested.taskSessionId || nested.task_session_id || "").trim(),
     authToken: String(args.authToken || args.auth_token || args.token || nested.authToken || nested.auth_token || nested.token || "").trim(),
     planId: String(args.planId || args.plan_id || nested.planId || nested.plan_id || "").trim(),
     planRevision: String(args.planRevision || args.plan_revision || nested.planRevision || nested.plan_revision || "").trim(),
     activeSliceId: String(args.activeSliceId || args.active_slice_id || nested.activeSliceId || nested.active_slice_id || "").trim(),
   };
+  const routeHash = String(args.routeHash || args.route_hash || nested.routeHash || nested.route_hash || "").trim();
+  const routePhase = String(args.routePhase || args.route_phase || nested.routePhase || nested.route_phase || "").trim();
+  if (routeHash || routePhase) {
+    fields.routeHash = routeHash;
+    fields.routePhase = routePhase;
+  }
+  return fields;
 }
 
 function requestedMutationPaths(args = {}, state = {}) {
@@ -97,6 +109,38 @@ function requestedMutationPaths(args = {}, state = {}) {
 
 function sha1File(filePath) {
   return crypto.createHash("sha1").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+}
+
+function featureIntentTargetHash(snapshots = []) {
+  const clean = (value, limit) => String(value || "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, limit);
+  const normalized = (Array.isArray(snapshots) ? snapshots : [])
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => ({
+      path: clean(item.path, 1200),
+      absolutePath: clean(item.absolutePath, 2000),
+      exists: Boolean(item.exists),
+      fileHash: clean(item.fileHash, 128),
+    }))
+    .sort((left, right) => {
+      const absolute = left.absolutePath < right.absolutePath
+        ? -1
+        : (left.absolutePath > right.absolutePath ? 1 : 0);
+      if (absolute !== 0) return absolute;
+      return left.path < right.path ? -1 : (left.path > right.path ? 1 : 0);
+    });
+  return crypto.createHash("sha256").update(stableStringify(normalized)).digest("hex");
 }
 
 function validateCompletedGates(state, args = {}) {
@@ -137,6 +181,62 @@ function validateCompletedGates(state, args = {}) {
         ok: false,
         error: `Required pre-write gate has expired: ${gate}`,
         errorCode: "REQUIRED_GATE_EXPIRED",
+      };
+    }
+  }
+
+  if (required.includes("unreal_feature_intent_resolve")) {
+    const record = completed.unreal_feature_intent_resolve;
+    const featureIntent = state.featureIntent
+      && typeof state.featureIntent === "object"
+      && !Array.isArray(state.featureIntent)
+      ? state.featureIntent
+      : null;
+    if (!featureIntent || featureIntent.status !== "resolved") {
+      return {
+        ok: false,
+        error: "Feature intent state is missing or unresolved.",
+        errorCode: "FEATURE_INTENT_STATE_MISSING",
+      };
+    }
+    const continuity = state.continuity
+      && typeof state.continuity === "object"
+      ? state.continuity
+      : {};
+    const checkpoint = continuity.checkpoint
+      && typeof continuity.checkpoint === "object"
+      ? continuity.checkpoint
+      : {};
+    const currentCheckpointHash = String(
+      checkpoint.checkpointHash || continuity.planIdentityHash || ""
+    );
+    const snapshots = Array.isArray(record.targetSnapshots)
+      ? record.targetSnapshots
+      : [];
+    const computedTargetHash = featureIntentTargetHash(snapshots);
+    const fieldsMatch = Boolean(
+      String(record.selectedIntentId || "")
+      && String(record.selectedIntentId || "") === String(state.selectedIntentId || "")
+      && String(record.selectedIntentId || "") === String(featureIntent.selectedIntentId || "")
+      && String(record.intentContractHash || "")
+      && String(record.intentContractHash || "") === String(state.intentContractHash || "")
+      && String(record.intentContractHash || "") === String(featureIntent.intentContractHash || "")
+      && String(record.acceptanceOracleHash || "")
+      && String(record.acceptanceOracleHash || "") === String(featureIntent.acceptanceOracleHash || "")
+      && String(record.planRevision || "") === String(state.planRevision || "")
+      && String(record.planRevision || "") === String(featureIntent.planRevision || "")
+      && String(record.checkpointHash || "")
+      && String(record.checkpointHash || "") === currentCheckpointHash
+      && String(record.checkpointHash || "") === String(featureIntent.checkpointHash || "")
+      && String(record.targetSnapshotHash || "")
+      && String(record.targetSnapshotHash || "") === computedTargetHash
+      && String(record.targetSnapshotHash || "") === String(featureIntent.targetSnapshotHash || "")
+    );
+    if (!fieldsMatch) {
+      return {
+        ok: false,
+        error: "Feature intent selection is stale or does not match the active plan/checkpoint/targets.",
+        errorCode: "FEATURE_INTENT_BINDING_STALE",
       };
     }
   }
@@ -195,6 +295,820 @@ function validateCompletedGates(state, args = {}) {
   return { ok: true };
 }
 
+const ROUTE_MUTATION_TOOLS = new Set([
+  "write_file",
+  "replace_in_file",
+  "delete_file",
+  "apply_edit_bundle",
+]);
+
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, stableValue(value[key])])
+    );
+  }
+  return value;
+}
+
+function canonicalHash(value) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(stableValue(value)), "utf8")
+    .digest("hex");
+}
+
+function normalizeRoutePath(value) {
+  let result = String(value || "").trim().replace(/\\/g, "/");
+  while (result.startsWith("./")) result = result.slice(2);
+  if (result.toLowerCase().startsWith("project://")) result = result.slice("project://".length);
+  return result.replace(/^\/+|\/+$/g, "");
+}
+
+function normalizedSelectionSnapshots(values) {
+  if (!Array.isArray(values)) return [];
+  return values
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      path: normalizeRoutePath(item.path || item.relativePath),
+      exists: Boolean(item.exists),
+      fileHash: String(item.fileHash || ""),
+    }))
+    .filter((item) => item.path)
+    .sort((left, right) => left.path.toLowerCase().localeCompare(right.path.toLowerCase()));
+}
+
+function selectionBindingForState(state) {
+  const continuity = state.continuity && typeof state.continuity === "object"
+    ? state.continuity
+    : {};
+  const checkpoint = continuity.checkpoint && typeof continuity.checkpoint === "object"
+    ? continuity.checkpoint
+    : {};
+  const binding = {
+    planRevision: String(state.planRevision || ""),
+    activeSliceId: String(state.activeSliceId || ""),
+    checkpointHash: String(
+      checkpoint.checkpointHash
+      || continuity.planIdentityHash
+      || canonicalHash(checkpoint)
+    ),
+    targetSnapshotsHash: canonicalHash(
+      normalizedSelectionSnapshots(
+        (Array.isArray(state.selectedTargetSnapshots) && state.selectedTargetSnapshots.length)
+          ? state.selectedTargetSnapshots
+          : state.featureTargetSnapshots
+      )
+    ),
+    selectedHypothesisId: String(state.selectedHypothesisId || ""),
+    selectedCandidateId: String(state.selectedCandidateId || ""),
+    selectedIntentId: String(state.selectedIntentId || ""),
+    intentContractHash: String(state.intentContractHash || ""),
+  };
+  binding.bindingHash = canonicalHash(binding);
+  return binding;
+}
+
+function validateSelectionState(state) {
+  const session = state.runtimeDebugSession && typeof state.runtimeDebugSession === "object"
+    ? state.runtimeDebugSession
+    : {};
+  const comparison = session.patchCandidateComparison
+    && typeof session.patchCandidateComparison === "object"
+    ? session.patchCandidateComparison
+    : {};
+  const patchEvidence = session.patchEvidence && typeof session.patchEvidence === "object"
+    ? session.patchEvidence
+    : {};
+  const topHypothesis = String(state.selectedHypothesisId || "");
+  const nestedHypothesis = String(session.selectedHypothesisId || "");
+  const topCandidate = String(state.selectedCandidateId || "");
+  const nestedCandidate = String(comparison.selectedCandidateId || "");
+  const appliedCandidate = String(patchEvidence.selectedPatchCandidateId || "");
+  if (topHypothesis !== nestedHypothesis) {
+    return {
+      ok: false,
+      errorCode: "TASK_SELECTION_STATE_MISMATCH",
+      error: "Top-level selectedHypothesisId disagrees with runtimeDebugSession.",
+    };
+  }
+  if (topCandidate !== nestedCandidate) {
+    return {
+      ok: false,
+      errorCode: "TASK_SELECTION_STATE_MISMATCH",
+      error: "Top-level selectedCandidateId disagrees with patchCandidateComparison.",
+    };
+  }
+  if (appliedCandidate && appliedCandidate !== topCandidate) {
+    return {
+      ok: false,
+      errorCode: "TASK_SELECTION_STATE_MISMATCH",
+      error: "Patch evidence disagrees with selectedCandidateId.",
+    };
+  }
+  const storedBinding = state.selectionBinding && typeof state.selectionBinding === "object"
+    ? state.selectionBinding
+    : {};
+  if (storedBinding.bindingHash) {
+    const expected = selectionBindingForState(state);
+    if (
+      String(storedBinding.bindingHash || "") !== expected.bindingHash
+      || String(storedBinding.checkpointHash || "") !== expected.checkpointHash
+      || String(storedBinding.targetSnapshotsHash || "") !== expected.targetSnapshotsHash
+    ) {
+      return {
+        ok: false,
+        errorCode: "TASK_SELECTION_BINDING_STALE",
+        error: "Runtime selection binding is stale for the plan, slice, checkpoint, or targets.",
+      };
+    }
+  }
+  return { ok: true };
+}
+
+function routePathMatches(requestedAbsolute, state, selectedFile) {
+  const projectFile = String(state.projectFile || "").trim();
+  const projectRoot = projectFile.toLowerCase().endsWith(".uproject")
+    ? path.dirname(projectFile)
+    : projectFile;
+  const requested = normalizeRoutePath(
+    projectRoot
+      ? path.relative(path.resolve(projectRoot), path.resolve(requestedAbsolute))
+      : requestedAbsolute
+  ).toLowerCase();
+  const selected = normalizeRoutePath(selectedFile).toLowerCase();
+  return Boolean(requested && selected && requested === selected);
+}
+
+function validateToolRoute(state, fields, args, toolName) {
+  const route = effectiveToolRouteForState(state);
+  if (
+    route
+    && String(route.routeHash || "")
+    !== String(state.toolRoute?.routeHash || "")
+  ) {
+    state.toolRoute = route;
+    state.toolRouteUsage = {
+      routeHash: String(route.routeHash || ""),
+      phase: String(route.phase || ""),
+      roleSession: String(route.roleSession || ""),
+      count: 0,
+      calls: [],
+      resetReason: "gate_ttl_expired",
+    };
+  }
+  const activeRoute = route && typeof route === "object"
+    ? state.toolRoute
+    : null;
+  if (!activeRoute) return { ok: true, legacy: true };
+  if (
+    !fields.routeHash
+    || !fields.routePhase
+    || fields.routeHash !== String(activeRoute.routeHash || "")
+    || fields.routePhase !== String(activeRoute.phase || "")
+  ) {
+    return {
+      ok: false,
+      errorCode: "TASK_ROUTE_STALE",
+      error: "taskAuthorization routeHash/routePhase is missing or stale.",
+      toolRoute: activeRoute,
+    };
+  }
+  const activeTools = new Set(Array.isArray(activeRoute.activeTools) ? activeRoute.activeTools.map(String) : []);
+  if (toolName && !activeTools.has(toolName)) {
+    return {
+      ok: false,
+      errorCode: "TASK_TOOL_NOT_ACTIVE",
+      error: `${toolName} is not active in route phase ${String(activeRoute.phase || "")}.`,
+      toolRoute: activeRoute,
+    };
+  }
+  if (toolName && ROUTE_MUTATION_TOOLS.has(toolName)) {
+    if (String(activeRoute.roleSession || "") !== "executor") {
+      return {
+        ok: false,
+        errorCode: "TASK_TOOL_NOT_ACTIVE",
+        error: `${toolName} requires the executor role session.`,
+        toolRoute: activeRoute,
+      };
+    }
+    const selectedSlice = activeRoute.selectedSlice && typeof activeRoute.selectedSlice === "object"
+      ? activeRoute.selectedSlice
+      : {};
+    const selectedFiles = Array.isArray(selectedSlice.files)
+      ? selectedSlice.files.map(String).filter(Boolean)
+      : [];
+    const requestedPaths = requestedMutationPaths(args, state);
+    const maxFiles = Math.max(1, Math.min(4, Number(activeRoute.maxFilesPerSlice || 2)));
+    if (!selectedFiles.length || !requestedPaths.length) {
+      return {
+        ok: false,
+        errorCode: "TASK_SLICE_SCOPE_REQUIRED",
+        error: "Mutation requires a non-empty server-selected slice.",
+      };
+    }
+    if (requestedPaths.length > maxFiles) {
+      return {
+        ok: false,
+        errorCode: "TASK_ROUTE_SCOPE_EXCEEDED",
+        error: `Mutation file count exceeds active slice limit (${requestedPaths.length} > ${maxFiles}).`,
+      };
+    }
+    const outsideSlice = requestedPaths.filter(
+      (requested) => !selectedFiles.some(
+        (selected) => routePathMatches(requested, state, selected)
+      )
+    );
+    if (outsideSlice.length) {
+      return {
+        ok: false,
+        errorCode: "TASK_SLICE_TARGET_MISMATCH",
+        error: `Mutation target is outside selected slice: ${outsideSlice[0]}`,
+      };
+    }
+  }
+  return { ok: true, route: activeRoute };
+}
+
+function consumeRouteCall(workspaceRoot, taskSessionId, fields, args, toolName) {
+  if (!toolName) return { ok: true };
+  const stateRoot = resolveAgentStateRoot(workspaceRoot);
+  const dir = taskDir(workspaceRoot, taskSessionId, stateRoot);
+  const statePath = path.join(dir, "state.json");
+  const acquired = tryAcquireCrossProcessLock(statePath, "task_route_call", stateRoot);
+  if (!acquired.ok) {
+    return {
+      ok: false,
+      errorCode: "TASK_STATE_LOCKED",
+      error: "Task route call ledger is busy.",
+    };
+  }
+  try {
+    const currentResult = readTaskStateResult(workspaceRoot, taskSessionId, stateRoot);
+    const current = currentResult.state;
+    if (!current) {
+      return {
+        ok: false,
+        errorCode: currentResult.errorCode || "TASK_STATE_MISSING",
+        error: "Task state disappeared before route call recording.",
+      };
+    }
+    const routeCheck = validateToolRoute(current, fields, args, toolName);
+    if (!routeCheck.ok) return routeCheck;
+    if (routeCheck.legacy) return { ok: true };
+    const route = routeCheck.route;
+    let usage = current.toolRouteUsage && typeof current.toolRouteUsage === "object"
+      ? { ...current.toolRouteUsage }
+      : {};
+    if (String(usage.routeHash || "") !== String(route.routeHash || "")) {
+      usage = {
+        routeHash: String(route.routeHash || ""),
+        phase: String(route.phase || ""),
+        roleSession: String(route.roleSession || ""),
+        count: 0,
+        calls: [],
+      };
+    }
+    const count = Number(usage.count || 0);
+    const limit = Math.max(2, Math.min(6, Number(route.maxToolCallsPerPhase || 2)));
+    if (count >= limit) {
+      return {
+        ok: false,
+        errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+        error: `Phase tool-call budget exhausted (${count}/${limit}).`,
+        toolRoute: route,
+        toolRouteUsage: usage,
+        nextActions: ["get_workspace_info", "get_active_project"],
+      };
+    }
+    const calls = Array.isArray(usage.calls) ? usage.calls.map(String) : [];
+    calls.push(toolName);
+    usage.count = count + 1;
+    usage.calls = calls.slice(-limit);
+    current.toolRouteUsage = usage;
+    current.updatedAt = new Date().toISOString();
+    atomicWriteJson(statePath, current);
+    return { ok: true, state: current };
+  } finally {
+    releaseCrossProcessLock(statePath);
+  }
+}
+
+const SAFE_ROUTE_RECOVERY_TOOLS = new Set([
+  "get_workspace_info",
+  "get_active_project",
+]);
+
+function canonicalWorkspaceRoot(value) {
+  const resolved = path.resolve(String(value || ""));
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function canonicalProjectIdentity(value, workspaceRoot = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const resolved = path.resolve(
+    path.isAbsolute(raw) ? raw : path.join(workspaceRoot || process.cwd(), raw)
+  );
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function validateTaskRouteScope(
+  state,
+  workspaceRoot,
+  activeProject = ""
+) {
+  const routeScope = state?.routeScope
+    && typeof state.routeScope === "object"
+    && !Array.isArray(state.routeScope)
+    ? state.routeScope
+    : {};
+  const stateProject = canonicalProjectIdentity(
+    routeScope.projectFile || state?.projectFile || "",
+    workspaceRoot
+  );
+  if (stateProject) {
+    const currentProject = canonicalProjectIdentity(activeProject, workspaceRoot);
+    if (!currentProject || currentProject !== stateProject) {
+      return {
+        ok: false,
+        errorCode: "TASK_PROJECT_MISMATCH",
+        error: "Task authorization belongs to a different active Unreal project.",
+        expectedProject: stateProject,
+        activeProject: currentProject,
+      };
+    }
+    return { ok: true };
+  }
+  const rawWorkspace = String(
+    routeScope.workspaceRoot || state?.workspaceRoot || ""
+  ).trim();
+  if (
+    rawWorkspace
+    && canonicalWorkspaceRoot(rawWorkspace)
+    !== canonicalWorkspaceRoot(workspaceRoot)
+  ) {
+    return {
+      ok: false,
+      errorCode: "TASK_ROUTE_SCOPE_MISMATCH",
+      error: "Task authorization belongs to a different workspace route scope.",
+    };
+  }
+  return { ok: true };
+}
+
+function effectiveToolRouteForState(state, nowMs = Date.now()) {
+  let route = state?.toolRoute && typeof state.toolRoute === "object"
+    ? state.toolRoute
+    : null;
+  if (!route) return null;
+  for (let index = 0; index < 64; index += 1) {
+    const transition = route.expiryTransition
+      && typeof route.expiryTransition === "object"
+      ? route.expiryTransition
+      : {};
+    const fallback = transition.route && typeof transition.route === "object"
+      ? transition.route
+      : null;
+    const expiresAt = Date.parse(String(transition.at || ""));
+    if (!fallback || !Number.isFinite(expiresAt) || expiresAt > nowMs) {
+      return route;
+    }
+    route = fallback;
+  }
+  return route;
+}
+
+function discoverActiveTaskContext(workspaceRoot, activeProject = "") {
+  const stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
+  const tasksRoot = path.join(stateRoot, "tasks");
+  const currentWorkspace = canonicalWorkspaceRoot(workspaceRoot);
+  const currentProject = canonicalProjectIdentity(activeProject, workspaceRoot);
+  let entries;
+  try {
+    entries = fs.readdirSync(tasksRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .sort((left, right) => left.name.localeCompare(right.name));
+  } catch {
+    return { status: "none" };
+  }
+  const running = [];
+  for (const entry of entries) {
+    const entryDir = path.join(tasksRoot, entry.name);
+    const ownerPath = path.join(entryDir, "workspace-root.txt");
+    const scopePath = path.join(entryDir, "route-scope.json");
+    let ownerHint = "";
+    let scopeHint = {};
+    if (fs.existsSync(ownerPath)) {
+      try {
+        ownerHint = canonicalWorkspaceRoot(
+          fs.readFileSync(ownerPath, "utf8").trim()
+        );
+      } catch {
+        ownerHint = "";
+      }
+    }
+    if (fs.existsSync(scopePath)) {
+      try {
+        const parsedScope = JSON.parse(fs.readFileSync(scopePath, "utf8"));
+        if (parsedScope && typeof parsedScope === "object" && !Array.isArray(parsedScope)) {
+          scopeHint = parsedScope;
+        }
+      } catch {
+        scopeHint = {};
+      }
+    }
+    const hintedProject = canonicalProjectIdentity(
+      scopeHint.projectFile || "",
+      workspaceRoot
+    );
+    const hintedWorkspace = String(scopeHint.workspaceRoot || ownerHint).trim()
+      ? canonicalWorkspaceRoot(scopeHint.workspaceRoot || ownerHint)
+      : "";
+    const hintClaimsCurrent = Boolean(
+      (hintedProject && currentProject && hintedProject === currentProject)
+      || (!hintedProject && hintedWorkspace === currentWorkspace)
+    );
+    const result = readTaskStateResult(workspaceRoot, entry.name, stateRoot);
+    if (result.errorCode === "TASK_STATE_CORRUPT") {
+      if (!hintClaimsCurrent) continue;
+      return {
+        status: "ambiguous_or_corrupt",
+        errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+        error: `Task state is corrupt: ${entry.name}.`,
+      };
+    }
+    const routeScope = result.state?.routeScope
+      && typeof result.state.routeScope === "object"
+      && !Array.isArray(result.state.routeScope)
+      ? result.state.routeScope
+      : {};
+    const stateProject = canonicalProjectIdentity(
+      routeScope.projectFile || result.state?.projectFile || "",
+      workspaceRoot
+    );
+    const rawStateOwner = String(
+      routeScope.workspaceRoot || result.state?.workspaceRoot || ""
+    ).trim();
+    const stateOwner = rawStateOwner
+      ? canonicalWorkspaceRoot(rawStateOwner)
+      : hintedWorkspace;
+    if (!stateProject && !stateOwner) {
+      // Legacy states cannot claim arbitrary workspaces through discovery.
+      // Explicit task authorization remains supported by direct state lookup.
+      continue;
+    }
+    if (hintedProject && stateProject && hintedProject !== stateProject) {
+      if (hintedProject === currentProject || stateProject === currentProject) {
+        return {
+          status: "ambiguous_or_corrupt",
+          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+          error: `Task project ownership mismatch: ${entry.name}.`,
+        };
+      }
+      continue;
+    }
+    if (
+      !stateProject
+      && hintedWorkspace
+      && stateOwner
+      && hintedWorkspace !== stateOwner
+    ) {
+      if (hintedWorkspace === currentWorkspace || stateOwner === currentWorkspace) {
+        return {
+          status: "ambiguous_or_corrupt",
+          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+          error: `Task workspace ownership mismatch: ${entry.name}.`,
+        };
+      }
+      continue;
+    }
+    const ownsCurrent = Boolean(
+      (stateProject && currentProject && stateProject === currentProject)
+      || (!stateProject && stateOwner === currentWorkspace)
+    );
+    if (!ownsCurrent) continue;
+    const effectiveRoute = effectiveToolRouteForState(result.state);
+    if (
+      effectiveRoute
+      && String(effectiveRoute.routeHash || "")
+      !== String(result.state.toolRoute?.routeHash || "")
+    ) {
+      result.state.toolRoute = effectiveRoute;
+      result.state.toolRouteUsage = {
+        routeHash: String(effectiveRoute.routeHash || ""),
+        phase: String(effectiveRoute.phase || ""),
+        roleSession: String(effectiveRoute.roleSession || ""),
+        count: 0,
+        calls: [],
+        resetReason: "gate_ttl_expired",
+      };
+      const statePath = result.statePath;
+      const acquired = statePath
+        ? tryAcquireCrossProcessLock(
+          statePath,
+          "task_route_expiry",
+          stateRoot
+        )
+        : { ok: false };
+      if (acquired.ok) {
+        try {
+          const currentResult = readTaskStateResult(
+            workspaceRoot,
+            entry.name,
+            stateRoot
+          );
+          const currentState = currentResult.state;
+          const currentEffective = effectiveToolRouteForState(currentState);
+          if (
+            currentState
+            && currentEffective
+            && String(currentEffective.routeHash || "")
+            !== String(currentState.toolRoute?.routeHash || "")
+          ) {
+            currentState.toolRoute = currentEffective;
+            currentState.toolRouteUsage = {
+              routeHash: String(currentEffective.routeHash || ""),
+              phase: String(currentEffective.phase || ""),
+              roleSession: String(currentEffective.roleSession || ""),
+              count: 0,
+              calls: [],
+              resetReason: "gate_ttl_expired",
+            };
+            atomicWriteJson(statePath, currentState);
+            result.state = currentState;
+          }
+        } finally {
+          releaseCrossProcessLock(statePath);
+        }
+      }
+    }
+    if (result.state && String(result.state.status || "") === "running") {
+      if (!result.state.toolRoute || typeof result.state.toolRoute !== "object") {
+        return {
+          status: "ambiguous_or_corrupt",
+          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+          error: `Running task has no valid tool route: ${entry.name}.`,
+        };
+      }
+      const continuity = result.state.continuity
+        && typeof result.state.continuity === "object"
+        ? result.state.continuity
+        : {};
+      const lease = continuity.lease && typeof continuity.lease === "object"
+        ? continuity.lease
+        : null;
+      const recovery = continuity.recovery && typeof continuity.recovery === "object"
+        ? continuity.recovery
+        : {};
+      const supervisor = result.state.autonomySupervisor
+        && typeof result.state.autonomySupervisor === "object"
+        ? result.state.autonomySupervisor
+        : {};
+      const leaseExpiry = lease ? Date.parse(String(lease.expiresAt || "")) : NaN;
+      if (
+        (lease && (
+          String(lease.status || "") !== "active"
+          || !Number.isFinite(leaseExpiry)
+          || leaseExpiry <= Date.now()
+        ))
+        || (Array.isArray(recovery.conflicts) && recovery.conflicts.length)
+        || (Array.isArray(supervisor.blockers) && supervisor.blockers.length)
+      ) {
+        return {
+          status: "blocked",
+          taskSessionId: String(result.state.taskSessionId || entry.name),
+          state: result.state,
+          route: result.state.toolRoute,
+          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+          error: `Running task is blocked by lease or recovery state: ${entry.name}.`,
+        };
+      }
+      running.push({
+        taskSessionId: String(result.state.taskSessionId || entry.name),
+        state: result.state,
+        route: result.state.toolRoute,
+      });
+      if (running.length > 1) {
+        return {
+          status: "ambiguous_or_corrupt",
+          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+          error: "More than one running task owns an active tool route.",
+        };
+      }
+    }
+  }
+  return running.length === 1
+    ? { status: "active", ...running[0] }
+    : { status: "none" };
+}
+
+function discoverSingleActiveTask(workspaceRoot, activeProject = "") {
+  const context = discoverActiveTaskContext(workspaceRoot, activeProject);
+  return context.status === "active" ? context : null;
+}
+
+function discoverSingleActiveToolRoute(workspaceRoot, activeProject = "") {
+  const active = discoverSingleActiveTask(workspaceRoot, activeProject);
+  return active ? active.route : null;
+}
+
+function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = {}) {
+  const active = discoverActiveTaskContext(
+    workspaceRoot,
+    String(options.activeProject || "")
+  );
+  if (active.status === "none") return { ok: true, legacy: true };
+  if (SAFE_ROUTE_RECOVERY_TOOLS.has(toolName)) {
+    return {
+      ok: true,
+      controlSurface: true,
+      recoveryOnly: active.status !== "active",
+      routeStatus: active.status,
+      toolRoute: active.route,
+    };
+  }
+  if (active.status !== "active") {
+    return {
+      ok: false,
+      errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+      error: active.error || "Task route is ambiguous, corrupt, or blocked.",
+      routeStatus: active.status,
+      toolRoute: active.route,
+    };
+  }
+  const route = active.route;
+  const activeTools = new Set(
+    Array.isArray(route.activeTools) ? route.activeTools.map(String) : []
+  );
+  if (!activeTools.has(toolName)) {
+    return {
+      ok: false,
+      errorCode: "TASK_TOOL_NOT_ACTIVE",
+      error: `${toolName} is not active in route phase ${String(route.phase || "")}.`,
+      toolRoute: route,
+    };
+  }
+  if (options.consumeBudget === false) {
+    return { ok: true, taskSessionId: active.taskSessionId, toolRoute: route };
+  }
+  return consumeRouteCall(
+    workspaceRoot,
+    active.taskSessionId,
+    {
+      routeHash: String(route.routeHash || ""),
+      routePhase: String(route.phase || ""),
+    },
+    args,
+    toolName
+  );
+}
+
+function authorizeTaskRouteTool(
+  workspaceRoot,
+  toolName,
+  args = {},
+  options = {}
+) {
+  const fields = requiredFields(args);
+  const required = [
+    "taskSessionId",
+    "authToken",
+    "planId",
+    "planRevision",
+    "activeSliceId",
+  ];
+  const missing = required.filter((key) => !String(fields[key] || ""));
+  if (missing.length) {
+    return {
+      ok: false,
+      errorCode: "TASK_AUTH_INCOMPLETE",
+      error: `Task authorization missing required fields: ${missing.join(", ")}`,
+    };
+  }
+  const sanitized = sanitizeTaskSessionId(fields.taskSessionId);
+  if (!sanitized.ok) return { ok: false, error: sanitized.error };
+  const stateResult = readTaskStateResult(workspaceRoot, sanitized.taskSessionId);
+  const state = stateResult.state;
+  if (!state) {
+    return {
+      ok: false,
+      errorCode: stateResult.errorCode || "TASK_STATE_MISSING",
+      error: `Task state is unavailable: ${sanitized.taskSessionId}`,
+    };
+  }
+  if (String(state.taskSessionId || "") !== sanitized.taskSessionId) {
+    return {
+      ok: false,
+      errorCode: "TASK_STATE_ID_MISMATCH",
+      error: `Task state identity mismatch: ${sanitized.taskSessionId}`,
+    };
+  }
+  if (Object.prototype.hasOwnProperty.call(options, "activeProject")) {
+    const scopeValidation = validateTaskRouteScope(
+      state,
+      workspaceRoot,
+      String(options.activeProject || "")
+    );
+    if (!scopeValidation.ok) return scopeValidation;
+  }
+  const mismatches = [];
+  for (const key of ["authToken", "planId", "planRevision", "activeSliceId"]) {
+    if (String(state[key] || "") !== String(fields[key] || "")) {
+      mismatches.push(key);
+    }
+  }
+  if (mismatches.length) {
+    return {
+      ok: false,
+      errorCode: "TASK_AUTH_MISMATCH",
+      error: `Task authorization mismatch: ${mismatches.join(", ")}`,
+    };
+  }
+  const routeValidation = validateToolRoute(state, fields, args, toolName);
+  if (!routeValidation.ok) return routeValidation;
+  if (String(state.status || "") !== "running") {
+    return {
+      ok: false,
+      errorCode: "TASK_NOT_WRITABLE",
+      error: "Task is not running.",
+    };
+  }
+  const continuity = state.continuity && typeof state.continuity === "object"
+    ? state.continuity
+    : {};
+  const lease = continuity.lease && typeof continuity.lease === "object"
+    ? continuity.lease
+    : null;
+  const leaseExpiry = lease ? Date.parse(String(lease.expiresAt || "")) : NaN;
+  if (
+    lease
+    && (
+      String(lease.status || "") !== "active"
+      || !Number.isFinite(leaseExpiry)
+      || leaseExpiry <= Date.now()
+    )
+  ) {
+    return {
+      ok: false,
+      errorCode: "TASK_LEASE_EXPIRED",
+      error: "Task continuity lease is inactive or expired.",
+    };
+  }
+  const recovery = continuity.recovery && typeof continuity.recovery === "object"
+    ? continuity.recovery
+    : {};
+  if (Array.isArray(recovery.conflicts) && recovery.conflicts.length) {
+    return {
+      ok: false,
+      errorCode: "TASK_CHECKPOINT_CONFLICT",
+      error: "Task checkpoint conflicts with current files.",
+    };
+  }
+  const supervisor = state.autonomySupervisor
+    && typeof state.autonomySupervisor === "object"
+    ? state.autonomySupervisor
+    : {};
+  if (Array.isArray(supervisor.blockers) && supervisor.blockers.length) {
+    return {
+      ok: false,
+      errorCode: "TASK_AUTONOMY_BLOCKED",
+      error: "Task autonomy supervisor is blocked.",
+    };
+  }
+  const activeJobId = String(state.activeJobId || "").trim();
+  if (activeJobId) {
+    return {
+      ok: false,
+      errorCode: "TASK_JOB_IN_PROGRESS",
+      error: `Task has an active background job: ${activeJobId}`,
+      activeJobId,
+    };
+  }
+  const selectionValidation = validateSelectionState(state);
+  if (!selectionValidation.ok) return selectionValidation;
+  if (
+    routeValidation.route
+    && toolName
+    && options.consumeBudget !== false
+  ) {
+    return consumeRouteCall(
+      workspaceRoot,
+      sanitized.taskSessionId,
+      fields,
+      args,
+      toolName
+    );
+  }
+  return {
+    ok: true,
+    taskSessionId: sanitized.taskSessionId,
+    state,
+    toolRoute: routeValidation.route,
+  };
+}
+
 function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
   const requireAll = options.requireAll !== false;
   const fields = requiredFields(args);
@@ -234,9 +1148,17 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       taskSessionId: sanitized.taskSessionId,
     };
   }
+  if (Object.prototype.hasOwnProperty.call(options, "activeProject")) {
+    const scopeValidation = validateTaskRouteScope(
+      state,
+      workspaceRoot,
+      String(options.activeProject || "")
+    );
+    if (!scopeValidation.ok) return scopeValidation;
+  }
   const mismatches = [];
   for (const [key, expected] of Object.entries(fields)) {
-    if (key === "taskSessionId" || !expected) continue;
+    if (["taskSessionId", "routeHash", "routePhase"].includes(key) || !expected) continue;
     const actual = String(state[key] || state[key.charAt(0).toLowerCase() + key.slice(1)] || "");
     if (actual !== expected) {
       mismatches.push(key);
@@ -247,6 +1169,14 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       ok: false,
       error: `Task authorization mismatch: ${mismatches.join(", ")}`,
       errorCode: "TASK_AUTH_MISMATCH",
+      taskSessionId: sanitized.taskSessionId,
+    };
+  }
+  const toolName = String(options.toolName || "");
+  const routeValidation = validateToolRoute(state, fields, args, toolName);
+  if (!routeValidation.ok) {
+    return {
+      ...routeValidation,
       taskSessionId: sanitized.taskSessionId,
     };
   }
@@ -297,6 +1227,28 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       };
     }
   }
+  const autonomySupervisor = state.autonomySupervisor
+    && typeof state.autonomySupervisor === "object"
+    ? state.autonomySupervisor
+    : null;
+  if (autonomySupervisor) {
+    const blockers = Array.isArray(autonomySupervisor.blockers)
+      ? autonomySupervisor.blockers
+      : [];
+    if (blockers.length > 0) {
+      const nextAction = String(
+        autonomySupervisor.nextAction || "replan_autonomous_strategy"
+      );
+      return {
+        ok: false,
+        error: "Autonomous retry budget is exhausted; strategy replan is required.",
+        errorCode: "TASK_AUTONOMY_BLOCKED",
+        taskSessionId: sanitized.taskSessionId,
+        blockers,
+        nextAction,
+      };
+    }
+  }
   const activeJobId = String(state.activeJobId || "").trim();
   if (activeJobId) {
     return {
@@ -321,6 +1273,32 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       taskSessionId: sanitized.taskSessionId,
     };
   }
+  const selectionValidation = validateSelectionState(state);
+  if (!selectionValidation.ok) {
+    return {
+      ...selectionValidation,
+      taskSessionId: sanitized.taskSessionId,
+    };
+  }
+  if (
+    routeValidation.route
+    && toolName
+    && options.consumeBudget !== false
+  ) {
+    const consumed = consumeRouteCall(
+      workspaceRoot,
+      sanitized.taskSessionId,
+      fields,
+      args,
+      toolName
+    );
+    if (!consumed.ok) {
+      return {
+        ...consumed,
+        taskSessionId: sanitized.taskSessionId,
+      };
+    }
+  }
   return {
     ok: true,
     taskSessionId: sanitized.taskSessionId,
@@ -337,5 +1315,16 @@ module.exports = {
   validateMutationAuth,
   validateCompletedGates,
   requestedMutationPaths,
+  featureIntentTargetHash,
   requiredFields,
+  validateToolRoute,
+  validateSelectionState,
+  selectionBindingForState,
+  discoverActiveTaskContext,
+  discoverSingleActiveToolRoute,
+  authorizeActiveRouteTool,
+  authorizeTaskRouteTool,
+  effectiveToolRouteForState,
+  validateTaskRouteScope,
+  SAFE_ROUTE_RECOVERY_TOOLS,
 };

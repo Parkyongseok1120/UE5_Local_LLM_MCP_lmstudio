@@ -180,6 +180,7 @@ class AgentPlan:
     executable_plan_slices: list[dict[str, Any]] = field(default_factory=list)
     fix_evidence: dict[str, Any] = field(default_factory=dict)
     ambiguity_gate: dict[str, Any] = field(default_factory=dict)
+    feature_intent: dict[str, Any] = field(default_factory=dict)
     source_evidence: dict[str, Any] = field(default_factory=dict)
     tool_discovery_candidates: list[dict[str, Any]] = field(default_factory=list)
     plan_graph_delta: dict[str, Any] = field(default_factory=dict)
@@ -213,6 +214,8 @@ class AgentPlan:
             payload["fixEvidence"] = self.fix_evidence
         if self.ambiguity_gate:
             payload["ambiguityGate"] = self.ambiguity_gate
+        if self.feature_intent:
+            payload["featureIntent"] = self.feature_intent
         if self.source_evidence:
             payload["sourceEvidence"] = self.source_evidence
         if self.error_route:
@@ -264,6 +267,8 @@ def build_orchestration_decision(
         required_before_write.append("unreal_architecture_reasoning")
     if write_task:
         required_before_write.append("unreal_code_sketch_claim_validate")
+    if task_kind == "refactor":
+        required_before_write.append("unreal_semantic_refactor_guard")
 
     validation_stages = ["direct_source_evidence"]
     if write_task:
@@ -1215,6 +1220,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         project_root=Path(str(project_context.get("projectDir") or "")) if project_context.get("projectDir") else None,
     ) or {}
     ambiguity_gate: dict[str, Any] = {}
+    feature_intent: dict[str, Any] = {}
     architecture_required = domain_profile.architecture_required or domain_kind == "architecture"
     if architecture_required:
         ambiguity_gate = architecture_ambiguity_gate(request)
@@ -1259,6 +1265,46 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
                 gate_extras["architectureApprovalValid"] = True
                 gate_extras["architectureDecisionId"] = decision.decision_id
 
+    if task_kind in {"edit", "refactor"}:
+        from feature_intent_contract import resolve_feature_intent
+
+        feature_resolution = resolve_feature_intent(
+            request,
+            write_intent=True,
+            candidate_count=3,
+        )
+        feature_intent = {
+            "version": 1,
+            "ambiguity": dict(feature_resolution.get("ambiguity") or {}),
+            "candidateCount": int(feature_resolution.get("candidateCount") or 0),
+            "eligibleCandidateCount": int(
+                feature_resolution.get("eligibleCandidateCount") or 0
+            ),
+            "candidates": list(feature_resolution.get("candidates") or []),
+            "blockingQuestions": list(
+                feature_resolution.get("blockingQuestions") or []
+            )[:3],
+            "requiresResolution": bool(
+                (feature_resolution.get("ambiguity") or {}).get(
+                    "requiresResolution"
+                )
+            ),
+            "recommendedAction": str(
+                (feature_resolution.get("ambiguity") or {}).get(
+                    "recommendedAction"
+                )
+                or ""
+            ),
+        }
+        if feature_intent["requiresResolution"]:
+            notes.append(
+                "Feature intent is ambiguous: choose one compact candidate and "
+                "bind its acceptance oracles to exact targets before writes."
+            )
+            if feature_intent["recommendedAction"] == "user_approval":
+                gate_extras["requiresFeatureIntentApproval"] = True
+                gate_extras["intentResolutionMode"] = "plan_only_until_approved"
+
     if domain_kind == "subsystem" and plan_slices:
         lifetime = select_subsystem_lifetime(request)
         notes.append(
@@ -1280,6 +1326,14 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         policy=policy,
         profile_name=resolve_profile_name(),
     )
+    if feature_intent.get("requiresResolution"):
+        required = list(orchestration.get("requiredBeforeWrite") or [])
+        if "unreal_feature_intent_resolve" not in required:
+            required.insert(0, "unreal_feature_intent_resolve")
+        orchestration["requiredBeforeWrite"] = required
+        (orchestration.get("roleContract") or {}).get("implementer", {})[
+            "startsAfter"
+        ] = list(required)
     if runtime_write:
         required = list(orchestration.get("requiredBeforeWrite") or [])
         for gate_name in ("unreal_runtime_debug_session", "unreal_code_sketch_claim_validate"):
@@ -1353,6 +1407,19 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     notes.extend(exposure_notes)
     if refactor_embedded and essential_tools_enabled():
         notes.append("Refactor manager results are embedded in refactorManager; do not call hidden refactor tools.")
+    from phase_tool_router import compact_plan_tool_policy
+
+    tool_policy = compact_plan_tool_policy(
+        task_kind,
+        required_gates=list(orchestration.get("requiredBeforeWrite") or []),
+        writes_allowed=bool(evidence.writes_allowed),
+        base_policy=tool_policy,
+    )
+    notes.append(
+        "Dynamic tool route: the server exposes 5-10 budgeted work tools plus "
+        "separate recovery controls and a bounded replan surface; phase, scores, "
+        "gate decisions, and replan limits are server-owned."
+    )
 
     source_required = task_kind in {"cpp_analysis", "refactor"} or (
         task_kind in {"edit", "code_sketch"} and _is_project_specific(request.lower())
@@ -1414,6 +1481,7 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         executable_plan_slices=executable_plan_slices,
         fix_evidence=fix_evidence,
         ambiguity_gate=ambiguity_gate,
+        feature_intent=feature_intent,
         source_evidence=source_evidence,
         tool_discovery_candidates=tool_discovery_candidates,
         plan_graph_delta=plan_graph_delta,

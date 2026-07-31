@@ -41,6 +41,11 @@ LOCAL_CONFIG_NAMES = {
     "workspace.json",
     "workspace.local.json",
 }
+REQUIRED_RUNTIME_FILES = (
+    "scripts/phase_tool_router.py",
+    "scripts/approve_feature_intent.py",
+    "lmstudio-unreal-agent-mcp/src/route-watcher.js",
+)
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -220,6 +225,15 @@ def build(source: Path, output: Path, zip_path: Path | None, *, include_index: b
             raise ValueError("zip path must not be inside the staging directory")
     if not (source / "install.py").is_file():
         raise FileNotFoundError(f"integrated installer not found under source: {source}")
+    missing_required = [
+        relative for relative in REQUIRED_RUNTIME_FILES
+        if not (source / relative).is_file()
+    ]
+    if missing_required:
+        raise FileNotFoundError(
+            "required integrated runtime files are missing: "
+            + ", ".join(missing_required)
+        )
 
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}-staging-", dir=output.parent))
@@ -229,6 +243,15 @@ def build(source: Path, output: Path, zip_path: Path | None, *, include_index: b
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
         _write_launchers(staging)
+        missing_staged = [
+            relative for relative in REQUIRED_RUNTIME_FILES
+            if not (staging / relative).is_file()
+        ]
+        if missing_staged:
+            raise FileNotFoundError(
+                "required runtime files were not packaged: "
+                + ", ".join(missing_staged)
+            )
         manifest = _manifest(staging, include_index=include_index)
         (staging / "package-manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

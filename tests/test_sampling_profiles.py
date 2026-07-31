@@ -103,8 +103,8 @@ def test_module_fix_mode_uses_compile_fix_patch_preset(monkeypatch):
     preset = sampling.load_sampling_preset(mode="module_fix")
 
     assert preset["thinking"] == "off"
-    assert preset["temperature"] == 0.08
-    assert preset["topP"] == 0.76
+    assert preset["temperature"] == 0.07
+    assert preset["topP"] == 0.82
 
 
 def test_gpt_oss_compile_fix_analyze_preset_is_low_temperature(monkeypatch):

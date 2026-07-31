@@ -10,8 +10,30 @@ WRITE_TOOLS = frozenset(
     {
         "write_file",
         "replace_in_file",
+        "delete_file",
+        "apply_edit_bundle",
         "build_unreal_project",
         "unreal_start_compile_loop",
+    }
+)
+
+AGENT_ESSENTIAL_TOOLS = frozenset(
+    {
+        "get_workspace_info",
+        "get_active_project",
+        "list_directory",
+        "read_file",
+        "read_file_range",
+        "read_symbol",
+        "search_files",
+        "write_file",
+        "replace_in_file",
+        "apply_edit_bundle",
+        "static_validate_project",
+        "build_unreal_project",
+        "read_unreal_logs",
+        "write_session_handoff",
+        "record_bootstrap_step",
     }
 )
 
@@ -26,9 +48,11 @@ RAG_ESSENTIAL_TOOLS = frozenset(
         "unreal_agent_session",
         "unreal_rag_capabilities",
         "unreal_architecture_reasoning",
+        "unreal_feature_intent_resolve",
         "unreal_runtime_config_check",
         "unreal_runtime_debug_session",
         "unreal_code_sketch_claim_validate",
+        "unreal_semantic_refactor_guard",
         "unreal_review_claim_validate",
         "unreal_diagram_validate",
         "unreal_project_status",
@@ -88,6 +112,46 @@ def exposed_rag_tools() -> frozenset[str]:
     if control_plane_tools_enabled():
         return base | RAG_STABLE_HIDDEN_TOOLS
     return base
+
+
+def validate_phase_tool_route(route: dict[str, Any]) -> list[str]:
+    from phase_tool_router import (
+        MAX_ACTIVE_TOOLS,
+        MIN_ACTIVE_TOOLS,
+        MUTATION_TOOLS,
+    )
+
+    issues: list[str] = []
+    tools = [
+        str(item)
+        for item in (route.get("activeTools") or [])
+        if str(item).strip()
+    ]
+    if not MIN_ACTIVE_TOOLS <= len(tools) <= MAX_ACTIVE_TOOLS:
+        issues.append(
+            f"activeTools must contain {MIN_ACTIVE_TOOLS}-{MAX_ACTIVE_TOOLS} tools"
+        )
+    callable_tools = set(RAG_ESSENTIAL_TOOLS) | set(AGENT_ESSENTIAL_TOOLS)
+    phantom = [tool for tool in tools if tool not in callable_tools]
+    if phantom:
+        issues.append(f"activeTools contains non-callable tools: {phantom}")
+    max_calls = int(route.get("maxToolCallsPerPhase") or 0)
+    if not 2 <= max_calls <= 6:
+        issues.append("maxToolCallsPerPhase must be between 2 and 6")
+    role = str(route.get("roleSession") or "")
+    if role in {"planner", "runtime", "verifier"} and MUTATION_TOOLS.intersection(
+        tools
+    ):
+        issues.append(f"{role} route must not expose mutation tools")
+    if role == "executor":
+        selected = (
+            route.get("selectedSlice")
+            if isinstance(route.get("selectedSlice"), dict)
+            else {}
+        )
+        if MUTATION_TOOLS.intersection(tools) and not selected.get("files"):
+            issues.append("executor mutation tools require selectedSlice.files")
+    return issues
 
 
 def apply_ambiguity_write_policy(

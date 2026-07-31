@@ -91,35 +91,35 @@
       "turnPresets": {
         "plan": {
           "thinking": "on",
-          "temperature": 0.6,
-          "topP": 0.95,
+          "temperature": 0.18,
+          "topP": 0.9,
           "maxTokens": 3072,
           "notes": "R0 / refactor_r0 / Turn1 plan — no code writes"
         },
         "critique": {
           "thinking": "on",
-          "temperature": 0.6,
-          "topP": 0.95,
+          "temperature": 0.15,
+          "topP": 0.9,
           "maxTokens": 6144,
           "notes": "Turn2 gap analysis — no code writes"
         },
         "execute": {
           "thinking": "off",
-          "temperature": 0.12,
-          "topP": 0.78,
+          "temperature": 0.1,
+          "topP": 0.85,
           "maxTokens": 4096,
           "notes": "Turn3 patch — max 2 files"
         },
         "compile_fix_analyze": {
           "thinking": "on",
-          "temperature": 0.6,
-          "topP": 0.95,
+          "temperature": 0.15,
+          "topP": 0.9,
           "maxTokens": 6144
         },
         "compile_fix_patch": {
           "thinking": "off",
-          "temperature": 0.08,
-          "topP": 0.76,
+          "temperature": 0.07,
+          "topP": 0.82,
           "maxTokens": 4096
         },
         "api_lookup": {

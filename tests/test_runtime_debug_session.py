@@ -88,13 +88,17 @@ def _ready_for_patch(session: dict, changed_files: list[str]) -> dict:
                     "isolatedRoot": "sandbox/b",
                     "staticPassed": True,
                     "staticProof": {"ok": True, "artifactHash": "static-b"},
-                    "buildPassed": False,
-                    "buildProof": {"ok": False},
+                    "buildPassed": True,
+                    "buildProof": {"ok": True, "artifactHash": "build-b"},
                     "runtimeCompatible": True,
                     "invariantResults": {"same observer": True},
                 },
             },
         ],
+        selected_patch_candidate_id="candidate-a",
+        patch_selection_rationale=(
+            "candidate-a keeps the supported fix inside the existing owner"
+        ),
     )
     assert result["ok"] is True
     return result["session"]

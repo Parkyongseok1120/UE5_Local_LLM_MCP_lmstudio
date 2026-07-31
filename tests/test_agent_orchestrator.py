@@ -106,6 +106,8 @@ def test_refactor_r0_no_edit(monkeypatch):
     assert plan.evidence.writes_allowed is False
     assert payload["refactorManager"]["managerMode"] == "refactor_manager"
     assert "unreal_refactor_manager_plan" in payload["evidencePlan"]["gates"]
+    assert "unreal_semantic_refactor_guard" in payload["evidencePlan"]["gates"]
+    assert "unreal_semantic_refactor_guard" in payload["orchestration"]["requiredBeforeWrite"]
     assert payload["suggestedToolCalls"][1]["tool"] == "unreal_refactor_manager_plan"
 
 

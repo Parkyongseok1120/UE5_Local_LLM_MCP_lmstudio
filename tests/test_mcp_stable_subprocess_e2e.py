@@ -297,7 +297,12 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             "tools/call",
             {
                 "name": "unreal_agent_plan",
-                "arguments": {"request": "Plan and then implement a stamina system"},
+                "arguments": {
+                    "request": (
+                        "Create a one-line compile-only header "
+                        "Source/DemoGame/Public/NewThing.h containing alpha exactly"
+                    )
+                },
             },
             3,
         )
@@ -308,13 +313,52 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         assert plan_payload["writeGate"]["writesAllowed"] is True
         task_auth = plan_payload["taskAuthorization"]
         assert all(task_auth.values()), task_auth
+        assert task_auth["taskSessionId"] == denied_auth["taskSessionId"]
+        assert task_auth["planRevision"] != denied_auth["planRevision"]
+        assert task_auth["authToken"] != denied_auth["authToken"]
+        task_states = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in (tmp_path / "state" / "unreal-agent" / "tasks").glob(
+                "*/state.json"
+            )
+        ]
+        assert sum(state.get("status") == "running" for state in task_states) == 1
+        listed = rag.request("tools/list", {}, 31)
+        listed_names = {
+            tool["name"] for tool in listed["result"]["tools"]
+        }
+        assert "unreal_code_sketch_claim_validate" in listed_names
+
+        stale_gate = rag.request(
+            "tools/call",
+            {
+                "name": "unreal_code_sketch_claim_validate",
+                "arguments": {
+                    "sketch": "alpha\n",
+                    "request": "stale authorization must fail",
+                    "projectRoot": str(project_dir),
+                    "targetFiles": ["Source/DemoGame/Public/NewThing.h"],
+                    "changeKind": "new_file",
+                    "taskAuthorization": denied_auth,
+                },
+            },
+            32,
+        )
+        stale_payload = stale_gate["result"].get(
+            "structuredContent"
+        ) or json.loads(stale_gate["result"]["content"][0]["text"])
+        assert stale_payload["ok"] is False
+        assert stale_payload["errorCode"] == "TASK_AUTH_MISMATCH"
         gated = rag.request(
             "tools/call",
             {
                 "name": "unreal_code_sketch_claim_validate",
                 "arguments": {
                     "sketch": "alpha\n",
-                    "request": "Create NewThing.h with the supplied content",
+                    "request": (
+                        "Create a one-line compile-only header "
+                        "Source/DemoGame/Public/NewThing.h containing alpha exactly"
+                    ),
                     "projectRoot": str(project_dir),
                     "targetFiles": ["Source/DemoGame/Public/NewThing.h"],
                     "changeKind": "new_file",
@@ -327,6 +371,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             gated["result"]["content"][0]["text"]
         )
         assert gated_payload["gateCompletion"]["ok"] is True, gated_payload
+        create_auth = gated_payload["gateCompletion"]["taskAuthorization"]
     finally:
         rag.close()
 
@@ -344,28 +389,41 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             2,
         )
         assert unauthorized["result"].get("isError") is True
-        assert "TASK_SESSION_REQUIRED" in unauthorized["result"]["content"][0]["text"]
+        assert "taskAuthorization is required" in unauthorized["result"]["content"][0]["text"]
         assert not (source_dir / "Blocked.h").exists()
         plan_denied = client.request(
             "tools/call",
-            {"name": "write_file", "arguments": {**denied_auth, "path": "Source/DemoGame/Public/BlockedPlan.h", "content": "blocked\n"}},
+            {
+                "name": "write_file",
+                "arguments": {
+                    "taskAuthorization": denied_auth,
+                    "path": "Source/DemoGame/Public/BlockedPlan.h",
+                    "content": "blocked\n",
+                },
+            },
             20,
         )
         assert plan_denied["result"].get("isError") is True
-        assert "WRITE_GATE_DENIED" in plan_denied["result"]["content"][0]["text"]
+        assert "TASK_AUTH_MISMATCH" in plan_denied["result"]["content"][0]["text"]
         assert not (source_dir / "BlockedPlan.h").exists()
 
 
         created = client.request(
             "tools/call",
-            {"name": "write_file", "arguments": {"taskAuthorization": task_auth, "path": "Source/DemoGame/Public/NewThing.h", "content": "alpha\n"}},
+            {"name": "write_file", "arguments": {"taskAuthorization": create_auth, "path": "Source/DemoGame/Public/NewThing.h", "content": "alpha\n"}},
             2,
         )
         assert created["result"].get("isError") is not True, created
 
         read = client.request(
             "tools/call",
-            {"name": "read_file", "arguments": {"path": "Source/DemoGame/Public/NewThing.h"}},
+            {
+                "name": "read_file",
+                "arguments": {
+                    "taskAuthorization": create_auth,
+                    "path": "Source/DemoGame/Public/NewThing.h",
+                },
+            },
             3,
         )
         assert "alpha" in read["result"]["content"][0]["text"]
@@ -381,11 +439,38 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                 },
                 1,
             )
+            checkpointed = rag_replace.request(
+                "tools/call",
+                {
+                    "name": "unreal_task_checkpoint",
+                    "arguments": {
+                        "action": "record",
+                        "taskAuthorization": create_auth,
+                        "phase": "implementation",
+                        "modifiedFiles": [
+                            "Source/DemoGame/Public/NewThing.h"
+                        ],
+                        "requiredNextAction": "replan replacement",
+                        "validation": {},
+                    },
+                },
+                21,
+            )
+            checkpoint_payload = checkpointed["result"].get(
+                "structuredContent"
+            ) or json.loads(checkpointed["result"]["content"][0]["text"])
+            assert checkpoint_payload["ok"] is True, checkpoint_payload
             replace_plan = rag_replace.request(
                 "tools/call",
                 {
                     "name": "unreal_agent_plan",
-                    "arguments": {"request": "Fix NewThing.h by replacing alpha with beta"},
+                    "arguments": {
+                        "request": (
+                            "Implement exact replacement in existing "
+                            "Source/DemoGame/Public/NewThing.h: replace alpha "
+                            "with beta; compile-only change"
+                        )
+                    },
                 },
                 2,
             )
@@ -399,7 +484,11 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                     "name": "unreal_code_sketch_claim_validate",
                     "arguments": {
                         "sketch": "beta\n",
-                            "request": "Fix NewThing.h by replacing alpha with beta",
+                        "request": (
+                            "Implement exact replacement in existing "
+                            "Source/DemoGame/Public/NewThing.h: replace alpha "
+                            "with beta; compile-only change"
+                        ),
                         "projectRoot": str(project_dir),
                         "targetFiles": ["Source/DemoGame/Public/NewThing.h"],
                         "changeKind": "single_file",
@@ -412,6 +501,9 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                 replace_gate["result"]["content"][0]["text"]
             )
             assert replace_gate_payload["gateCompletion"]["ok"] is True, replace_gate_payload
+            replace_create_auth = replace_gate_payload["gateCompletion"][
+                "taskAuthorization"
+            ]
         finally:
             rag_replace.close()
 
@@ -420,7 +512,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             {
                 "name": "replace_in_file",
                 "arguments": {
-                    **replace_auth,
+                    "taskAuthorization": replace_create_auth,
                     "path": "Source/DemoGame/Public/NewThing.h",
                     "oldText": "alpha",
                     "newText": "beta",
@@ -435,6 +527,102 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         assert mutation["mutationGeneration"] == 2
         assert set(mutation["paths"]) == {"Source/DemoGame/Public/NewThing.h"}
         assert mutation["paths"]["Source/DemoGame/Public/NewThing.h"] == hashlib.sha256(b"beta\n").hexdigest()
+    finally:
+        client.close()
+
+
+def test_agent_route_filter_bridges_rag_workspace_by_active_project(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    require_agent_mcp_deps()
+    workspace_dir = tmp_path / "control-workspace"
+    workspace_dir.mkdir()
+    project_dir = tmp_path / "DemoGame"
+    source_file = project_dir / "Source" / "DemoGame" / "Demo.cpp"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("// project identity route\n", encoding="utf-8")
+    uproject = project_dir / "DemoGame.uproject"
+    uproject.write_text(json.dumps({"FileVersion": 3}), encoding="utf-8")
+    state_root = tmp_path / "state" / "unreal-agent"
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(
+        json.dumps({"activeProject": str(uproject)}),
+        encoding="utf-8",
+    )
+    agent_config = tmp_path / "agent-mcp.json"
+    agent_config.write_text(
+        json.dumps({"projectSearchRoots": [str(tmp_path)]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared_config))
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from task_api import task_root, task_start
+
+    started = task_start(
+        ROOT,
+        request="Inspect Source/DemoGame/Demo.cpp",
+        mode="read_only",
+        project_file=str(uproject),
+        plan_payload={
+            "taskKind": "inspect_only",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(workspace_dir),
+            "SHARED_UNREAL_CONFIG": str(shared_config),
+            "AGENT_STATE_ROOT": str(state_root),
+            "AGENT_MCP_CONFIG": str(agent_config),
+            "ALLOW_WRITE": "0",
+        }
+    )
+    client = _StdioJsonRpc(
+        [_node_exe(), str(AGENT_SERVER)],
+        env=env,
+        cwd=ROOT / "lmstudio-unreal-agent-mcp",
+    )
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
+            },
+            1,
+        )
+        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        listed = client.request("tools/list", {}, 2)
+        names = {tool["name"] for tool in listed["result"]["tools"]}
+        expected = set(started["toolRoute"]["activeTools"]).intersection(
+            MANIFEST["agentEssential"]
+        ) | {"get_workspace_info", "get_active_project"}
+        assert names == expected
+        assert "read_file" in names
+
+        read = client.request(
+            "tools/call",
+            {
+                "name": "read_file",
+                "arguments": {
+                    "taskAuthorization": started["taskAuthorization"],
+                    "path": "Source/DemoGame/Demo.cpp",
+                },
+            },
+            3,
+        )
+        assert read["result"].get("isError") is not True, read
+        assert "project identity route" in read["result"]["content"][0]["text"]
+        state_path = task_root(ROOT, started["taskSessionId"]) / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["toolRouteUsage"]["count"] == 1
+        assert state["toolRouteUsage"]["calls"] == ["read_file"]
     finally:
         client.close()
 

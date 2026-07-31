@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -21,9 +23,11 @@ RAG_ESSENTIAL = {
     "unreal_agent_session",
     "unreal_rag_capabilities",
     "unreal_architecture_reasoning",
+    "unreal_feature_intent_resolve",
     "unreal_runtime_config_check",
     "unreal_runtime_debug_session",
     "unreal_code_sketch_claim_validate",
+    "unreal_semantic_refactor_guard",
     "unreal_review_claim_validate",
     "unreal_diagram_validate",
     "unreal_project_status",
@@ -100,6 +104,239 @@ def test_hidden_control_plane_tools_require_flag(monkeypatch, tmp_path) -> None:
     server = mod.McpServer(tmp_path / "missing.sqlite")
     names = {tool["name"] for tool in server.all_tool_definitions()}
     assert "unreal_task_start" in names
+
+
+def test_active_task_control_surface_is_listed_and_callable_without_flag(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.delenv("ALLOW_CONTROL_PLANE_TOOLS", raising=False)
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    from task_api import task_start
+
+    started = task_start(
+        tmp_path,
+        request="Inspect code",
+        mode="read_only",
+        plan_payload={
+            "taskKind": "inspect",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    controls = {
+        "unreal_task_status",
+        "unreal_task_checkpoint",
+        "unreal_task_cancel",
+    }
+    assert controls <= {
+        tool["name"] for tool in server.all_tool_definitions()
+    }
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        501,
+        {
+            "name": "unreal_task_status",
+            "arguments": {"taskSessionId": started["taskSessionId"]},
+        },
+    )
+    checkpoint_payload = sent[-1]["result"]["structuredContent"]
+    assert checkpoint_payload["ok"] is True, checkpoint_payload
+    server.handle_tool_call(
+        502,
+        {
+            "name": "unreal_task_checkpoint",
+            "arguments": {
+                "action": "status",
+                "taskAuthorization": started["taskAuthorization"],
+            },
+        },
+    )
+    checkpoint_payload = sent[-1]["result"]["structuredContent"]
+    assert checkpoint_payload["ok"] is True, checkpoint_payload
+    server.handle_tool_call(
+        503,
+        {
+            "name": "unreal_task_cancel",
+            "arguments": {"taskSessionId": started["taskSessionId"]},
+        },
+    )
+    assert sent[-1]["result"]["structuredContent"]["ok"] is True
+
+
+def test_autonomy_blocked_route_lists_and_dispatches_bounded_replan(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    from task_api import task_root, task_start
+
+    started = task_start(
+        tmp_path,
+        request="Inspect code",
+        mode="read_only",
+        plan_payload={
+            "taskKind": "inspect",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["autonomySupervisor"]["retryState"]["totalNoProgress"] = 5
+    state["autonomySupervisor"]["blockers"] = [
+        {"code": "retry_budget_exhausted", "message": "blocked"}
+    ]
+    state["autonomySupervisor"]["nextAction"] = "replan_autonomous_strategy"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    assert "unreal_agent_plan" in {
+        tool["name"] for tool in server.all_tool_definitions()
+    }
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        551,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {
+                "request": "Create a different read-only inspection strategy"
+            },
+        },
+    )
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
+    assert payload["taskAuthorization"]["planRevision"] == "2"
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted["autonomySupervisor"]["blockers"] == []
+    assert (
+        persisted["autonomySupervisor"]["retryState"]["totalNoProgress"]
+        == 5
+    )
+
+    server.handle_tool_call(
+        552,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {"request": "Attempt unbounded repeated replan"},
+        },
+    )
+    denied = sent[-1]["result"]["structuredContent"]
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "REPLAN_BUDGET_EXHAUSTED"
+    assert denied["checkpointRecordRequired"] is True
+
+
+def test_non_autonomy_blocked_routes_hide_and_reject_replan(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    from task_api import task_root, task_start
+
+    started = task_start(
+        tmp_path,
+        request="Inspect code",
+        mode="read_only",
+        plan_payload={
+            "taskKind": "inspect",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["continuity"]["lease"]["expiresAt"] = "2000-01-01T00:00:00+00:00"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert "unreal_agent_plan" not in {
+        tool["name"] for tool in server.all_tool_definitions()
+    }
+    server.handle_tool_call(
+        561,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {"request": "Must not bypass expired lease"},
+        },
+    )
+    assert (
+        sent[-1]["result"]["structuredContent"]["errorCode"]
+        == "TOOL_NOT_CALLABLE"
+    )
+
+    state["continuity"]["lease"]["expiresAt"] = "2999-01-01T00:00:00+00:00"
+    state["continuity"]["recovery"]["conflicts"] = [
+        {"relativePath": "Source/Demo/Foo.cpp", "reason": "content_changed"}
+    ]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert "unreal_agent_plan" not in {
+        tool["name"] for tool in server.all_tool_definitions()
+    }
+    server.handle_tool_call(
+        562,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {"request": "Must not bypass checkpoint conflict"},
+        },
+    )
+    assert (
+        sent[-1]["result"]["structuredContent"]["errorCode"]
+        == "TOOL_NOT_CALLABLE"
+    )
+
+    state["status"] = "completed"
+    state["continuity"]["recovery"]["conflicts"] = []
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    task_start(
+        tmp_path,
+        request="First active task",
+        mode="read_only",
+        plan_payload={
+            "taskKind": "inspect",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+    task_start(
+        tmp_path,
+        request="Second active task",
+        mode="read_only",
+        plan_payload={
+            "taskKind": "inspect",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+    assert "unreal_agent_plan" not in {
+        tool["name"] for tool in server.all_tool_definitions()
+    }
+    server.handle_tool_call(
+        563,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {"request": "Must not bypass ambiguous ownership"},
+        },
+    )
+    assert (
+        sent[-1]["result"]["structuredContent"]["errorCode"]
+        == "TOOL_NOT_CALLABLE"
+    )
 
 
 def test_extended_tools_enabled_exposes_refresh_and_compile_loop(monkeypatch, tmp_path):
@@ -241,6 +478,220 @@ def test_code_sketch_rejects_non_array_object_arguments(monkeypatch, tmp_path):
     assert payload["errorCode"] == "INVALID_TOOL_ARGUMENTS"
 
 
+def test_semantic_refactor_guard_completes_exact_refactor_gate(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    tool = next(
+        item
+        for item in server.all_tool_definitions()
+        if item["name"] == "unreal_semantic_refactor_guard"
+    )
+    assert {
+        "afterRoot",
+        "changedFiles",
+        "diffHash",
+        "invariants",
+        "staticProof",
+        "buildProof",
+        "runtimeProof",
+        "migrationCompatibilityContract",
+        "taskAuthorization",
+    } <= set(tool["inputSchema"]["properties"])
+
+    project = tmp_path / "Demo"
+    candidate = tmp_path / "DemoCandidate"
+    target = project / "Source" / "Demo" / "Worker.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("int32 Value() { return 1; }\n", encoding="utf-8")
+    uproject = project / "Demo.uproject"
+    uproject.write_text("{}", encoding="utf-8")
+    shutil.copytree(project, candidate)
+    (candidate / "Source" / "Demo" / "Worker.cpp").write_text(
+        "namespace { int32 Stable() { return 1; } }\n"
+        "int32 Value() { return Stable(); }\n",
+        encoding="utf-8",
+    )
+
+    from semantic_refactor_guard import compare_semantic_refactor
+    from task_api import task_start, task_status
+
+    changed_files = ["Source/Demo/Worker.cpp"]
+    probe = compare_semantic_refactor(
+        project,
+        candidate,
+        changed_files=changed_files,
+        diff_hash="",
+        invariants=[],
+        static_proof={},
+        build_proof={},
+    )
+    diff_hash = probe["diffHash"]
+    state_result = task_start(
+        tmp_path,
+        request="Refactor Worker implementation",
+        project_file=str(uproject),
+        plan_payload={
+            "taskKind": "refactor",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+    state = state_result["state"]
+    assert state["requiredBeforeWrite"] == ["unreal_semantic_refactor_guard"]
+    authorization = dict(state_result["taskAuthorization"])
+    common_proof = {
+        "ok": True,
+        "artifactHash": "proof",
+        "diffHash": diff_hash,
+        "changedFiles": changed_files,
+    }
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        220,
+        {
+            "name": "unreal_semantic_refactor_guard",
+            "arguments": {
+                "action": "compare",
+                "projectRoot": str(project),
+                "afterRoot": str(candidate),
+                "changedFiles": changed_files,
+                "diffHash": diff_hash,
+                "invariants": [
+                    {
+                        "id": "same-value",
+                        "description": "Value remains one.",
+                        "beforeObserver": {
+                            "observer": "Value",
+                            "artifactHash": "before",
+                            "snapshotHash": probe["beforeSnapshot"]["snapshotHash"],
+                            "value": 1,
+                        },
+                        "afterObserver": {
+                            "observer": "Value",
+                            "artifactHash": "after",
+                            "snapshotHash": probe["afterSnapshot"]["snapshotHash"],
+                            "value": 1,
+                        },
+                    }
+                ],
+                "staticProof": common_proof,
+                "buildProof": common_proof,
+                "taskAuthorization": authorization,
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True
+    assert payload["gateCompletion"]["ok"] is True
+    current = task_status(tmp_path, state_result["taskSessionId"])["state"]
+    gate = current["completedGates"]["unreal_semantic_refactor_guard"]
+    assert gate["targetSnapshots"][0]["path"] == changed_files[0]
+    assert current["pendingGates"] == [], {
+        "selectionBinding": current.get("selectionBinding"),
+        "completedGates": current.get("completedGates"),
+        "selectedTargetSnapshots": current.get("selectedTargetSnapshots"),
+    }
+
+
+def test_semantic_refactor_guard_rejects_live_target_snapshot_race(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+
+    project = tmp_path / "Demo"
+    candidate = tmp_path / "DemoCandidate"
+    target = project / "Source" / "Demo" / "Worker.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("int32 Value() { return 1; }\n", encoding="utf-8")
+    shutil.copytree(project, candidate)
+    (candidate / "Source" / "Demo" / "Worker.cpp").write_text(
+        "namespace { int32 Stable() { return 1; } }\n"
+        "int32 Value() { return Stable(); }\n",
+        encoding="utf-8",
+    )
+
+    changed_files = ["Source/Demo/Worker.cpp"]
+    probe = mod.compare_semantic_refactor(
+        project,
+        candidate,
+        changed_files=changed_files,
+        diff_hash="",
+        invariants=[],
+        static_proof={},
+        build_proof={},
+    )
+    diff_hash = probe["diffHash"]
+    original_compare = mod.compare_semantic_refactor
+
+    def compare_then_mutate(*args, **kwargs):
+        result = original_compare(*args, **kwargs)
+        target.write_text("int32 Value() { return 2; }\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(mod, "compare_semantic_refactor", compare_then_mutate)
+    common_proof = {
+        "ok": True,
+        "artifactHash": "proof",
+        "diffHash": diff_hash,
+        "changedFiles": changed_files,
+    }
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        221,
+        {
+            "name": "unreal_semantic_refactor_guard",
+            "arguments": {
+                "action": "compare",
+                "projectRoot": str(project),
+                "afterRoot": str(candidate),
+                "changedFiles": changed_files,
+                "diffHash": diff_hash,
+                "invariants": [
+                    {
+                        "id": "same-value",
+                        "description": "Value remains one.",
+                        "beforeObserver": {
+                            "observer": "Value",
+                            "artifactHash": "before",
+                            "snapshotHash": probe["beforeSnapshot"]["snapshotHash"],
+                            "value": 1,
+                        },
+                        "afterObserver": {
+                            "observer": "Value",
+                            "artifactHash": "after",
+                            "snapshotHash": probe["afterSnapshot"]["snapshotHash"],
+                            "value": 1,
+                        },
+                    }
+                ],
+                "staticProof": common_proof,
+                "buildProof": common_proof,
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["writeGate"]["writesAllowed"] is False
+    assert payload["writeGate"]["liveSnapshotBound"] is False
+    assert any(
+        "live target changed after semantic snapshot capture" in issue
+        for issue in payload["issues"]
+    )
+
+
 def test_architecture_reasoning_is_available_in_extended_profile(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_EXTENDED_TOOLS", "1")
     mod = _load_rag_mcp_module()
@@ -342,13 +793,7 @@ def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatc
         },
     )
     state = started["state"]
-    authorization = {
-        "taskSessionId": started["taskSessionId"],
-        "authToken": started["authToken"],
-        "planId": state["planId"],
-        "planRevision": state["planRevision"],
-        "activeSliceId": state["activeSliceId"],
-    }
+    authorization = dict(started["taskAuthorization"])
     sent: list[dict] = []
     server.send = sent.append
     server.handle_tool_call(
@@ -381,6 +826,7 @@ def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatc
     assert payload["persisted"] is True
     assert payload["gateCompletion"]["errorCode"] == "RUNTIME_EXPERIMENT_REQUIRED"
     session = payload["session"]
+    authorization = dict(payload["taskAuthorization"])
     server.handle_tool_call(
         26,
         {
@@ -404,6 +850,7 @@ def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatc
     experiment = sent[-1]["result"]["structuredContent"]
     assert experiment["ok"] is True
     assert experiment["session"]["status"] == "ready_for_patch_candidates"
+    authorization = dict(experiment["taskAuthorization"])
     server.handle_tool_call(
         27,
         {
@@ -434,21 +881,82 @@ def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatc
                             "isolatedRoot": "sandbox/b",
                             "staticPassed": True,
                             "staticProof": {"ok": True, "artifactHash": "static-b"},
-                            "buildPassed": False,
-                            "buildProof": {"ok": False},
+                            "buildPassed": True,
+                            "buildProof": {"ok": True, "artifactHash": "build-b"},
                             "runtimeCompatible": True,
                             "invariantResults": {"health owner preserved": True},
                         },
                     },
                 ],
+                "selectedPatchCandidateId": "candidate-a",
+                "patchSelectionRationale": (
+                    "candidate-a keeps damage forwarding in the existing owner"
+                ),
             },
         },
     )
     comparison = sent[-1]["result"]["structuredContent"]
     assert comparison["ok"] is True
     assert comparison["gateCompletion"]["ok"] is True
+    executor_route = comparison["gateCompletion"]["toolRoute"]
+    assert executor_route["roleSession"] == "executor"
+    assert "replace_in_file" in executor_route["activeTools"]
+    assert "unreal_runtime_debug_session" in executor_route["activeTools"]
+
+    runtime_authorization = dict(
+        comparison["gateCompletion"]["taskAuthorization"]
+    )
+    server.handle_tool_call(
+        28,
+        {
+            "name": "unreal_runtime_debug_session",
+            "arguments": {
+                "action": "record_patch",
+                "taskAuthorization": runtime_authorization,
+                "changedFiles": [
+                    "Source/Demo/Private/HealthComponent.cpp"
+                ],
+                "patchSummary": "Forward damage through the existing owner.",
+                "selectedPatchCandidateId": "candidate-a",
+                "appliedDiffHash": "diff-a",
+                "buildProof": {
+                    "ok": True,
+                    "artifactHash": "build-live-a",
+                },
+            },
+        },
+    )
+    patched = sent[-1]["result"]["structuredContent"]
+    assert patched["ok"] is True
+    assert patched["session"]["status"] == "awaiting_same_observer_verification"
+    assert patched["toolRoute"]["roleSession"] == "verifier"
+    assert "unreal_runtime_debug_session" in patched["toolRoute"]["activeTools"]
+
+    server.handle_tool_call(
+        29,
+        {
+            "name": "unreal_runtime_debug_session",
+            "arguments": {
+                "action": "verify",
+                "taskAuthorization": patched["taskAuthorization"],
+                "reproductionFingerprint": patched["session"][
+                    "reproductionFingerprint"
+                ],
+                "observer": patched["session"]["observer"],
+                "afterEvidence": {
+                    "kind": "log",
+                    "location": "Saved/Logs/Demo.log:220",
+                    "observation": "health decreases after damage",
+                },
+                "outcome": "resolved",
+            },
+        },
+    )
+    verified = sent[-1]["result"]["structuredContent"]
+    assert verified["ok"] is True
+    assert verified["session"]["status"] == "runtime_verified"
     current = task_status(tmp_path, started["taskSessionId"])["state"]
-    assert current["runtimeDebugSession"]["status"] == "ready_for_patch"
+    assert current["runtimeDebugSession"]["status"] == "runtime_verified"
     assert current["pendingGates"] == []
 
 

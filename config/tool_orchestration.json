@@ -160,9 +160,13 @@
         "unreal_architecture_reasoning",
         "unreal_refactor_plan_validate",
         "read_file",
+        "unreal_semantic_refactor_guard",
         "apply_edit_bundle",
         "static_validate_project",
         "build_unreal_project"
+      ],
+      "gates": [
+        "unreal_semantic_refactor_guard"
       ],
       "writesAllowed": true
     },

@@ -4,16 +4,29 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import PurePosixPath
 from typing import Any
 
 MIN_CANDIDATES = 2
 MAX_CANDIDATES = 4
+MIN_ELIGIBLE_CANDIDATES = 2
 WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
 
+def _non_empty_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _append_issue(issues: list[str], issue: str) -> None:
+    if issue not in issues:
+        issues.append(issue)
+
+
 def _normalize_changed_file(value: Any) -> tuple[str, str]:
-    raw = str(value or "").strip().replace("\\", "/")
+    if not isinstance(value, str):
+        return "", "changedFiles entries must be strings"
+    raw = value.strip().replace("\\", "/")
     path = PurePosixPath(raw)
     if (
         not raw
@@ -39,25 +52,35 @@ def compare_patch_candidates(
     if not MIN_CANDIDATES <= len(raw) <= MAX_CANDIDATES:
         issues.append("two to four patch candidates are required")
     candidates: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    seen_hashes: set[str] = set()
     for index, value in enumerate(raw[:MAX_CANDIDATES]):
         row = value if isinstance(value, dict) else {}
-        candidate_id = str(row.get("id") or f"candidate-{index + 1}").strip()
+        candidate_issues: list[str] = []
+        if not isinstance(value, dict):
+            candidate_issues.append("candidate must be an object")
+        supplied_candidate_id = _non_empty_text(row.get("id"))
+        candidate_id = supplied_candidate_id or f"candidate-{index + 1}"
+        if not supplied_candidate_id:
+            candidate_issues.append("candidate id is required")
         files: list[str] = []
         path_issues: list[str] = []
-        for item in row.get("changedFiles") or []:
+        changed_files = row.get("changedFiles")
+        if not isinstance(changed_files, list):
+            changed_files = []
+            candidate_issues.append("changedFiles must be an array")
+        for item in changed_files:
             normalized_path, path_issue = _normalize_changed_file(item)
             if path_issue:
                 path_issues.append(path_issue)
             elif normalized_path and normalized_path not in files:
                 files.append(normalized_path)
-        diff_hash = str(row.get("diffHash") or "").strip()
+        diff_hash = _non_empty_text(row.get("diffHash"))
         evidence = (
             row.get("sandboxEvidence")
             if isinstance(row.get("sandboxEvidence"), dict)
             else {}
         )
+        if not isinstance(row.get("sandboxEvidence"), dict):
+            candidate_issues.append("sandboxEvidence must be an object")
         invariant_results = (
             evidence.get("invariantResults")
             if isinstance(evidence.get("invariantResults"), dict)
@@ -73,36 +96,34 @@ def compare_patch_candidates(
             if isinstance(evidence.get("buildProof"), dict)
             else {}
         )
-        candidate_issues: list[str] = []
-        if candidate_id in seen_ids:
-            candidate_issues.append("candidate id must be unique")
-            issues.append("candidate ids must be unique")
         if not files:
             candidate_issues.append("changedFiles is required")
         candidate_issues.extend(path_issues)
         if not diff_hash:
             candidate_issues.append("diffHash is required")
-        elif diff_hash in seen_hashes:
-            candidate_issues.append("diffHash must represent a distinct patch")
-            issues.append("candidate diff hashes must be unique")
-        if not str(evidence.get("isolatedRoot") or "").strip():
+        isolated_root = _non_empty_text(evidence.get("isolatedRoot"))
+        if not isolated_root:
             candidate_issues.append("sandboxEvidence.isolatedRoot is required")
         static_passed = (
             evidence.get("staticPassed") is True
             and static_proof.get("ok") is True
             and bool(
-                static_proof.get("artifactHash")
-                or static_proof.get("reportPath")
+                _non_empty_text(static_proof.get("artifactHash"))
+                or _non_empty_text(static_proof.get("reportPath"))
             )
         )
         build_passed = (
             evidence.get("buildPassed") is True
             and build_proof.get("ok") is True
-            and bool(build_proof.get("artifactHash") or build_proof.get("logPath"))
+            and bool(
+                _non_empty_text(build_proof.get("artifactHash"))
+                or _non_empty_text(build_proof.get("logPath"))
+            )
         )
         runtime_compatible = evidence.get("runtimeCompatible") is True
         invariants_passed = bool(invariant_results) and all(
-            value is True for value in invariant_results.values()
+            isinstance(name, str) and bool(name.strip()) and result is True
+            for name, result in invariant_results.items()
         )
         if not static_passed:
             candidate_issues.append(
@@ -129,14 +150,55 @@ def compare_patch_candidates(
                 "changedFiles": files,
                 "diffHash": diff_hash,
                 "sandboxEvidence": dict(evidence),
-                "eligible": not candidate_issues,
+                "eligible": False,
                 "issues": candidate_issues,
                 "evidenceScore": score,
             }
         )
-        seen_ids.add(candidate_id)
-        if diff_hash:
-            seen_hashes.add(diff_hash)
+
+    collision_contracts = (
+        (
+            "id",
+            "candidate id must be unique",
+            "candidate ids must be unique",
+        ),
+        (
+            "diffHash",
+            "diffHash must represent a distinct patch",
+            "candidate diff hashes must be unique",
+        ),
+    )
+    for field, candidate_issue, comparison_issue in collision_contracts:
+        counts = Counter(
+            str(candidate.get(field) or "")
+            for candidate in candidates
+            if str(candidate.get(field) or "")
+        )
+        collisions = {value for value, count in counts.items() if count > 1}
+        if collisions:
+            _append_issue(issues, comparison_issue)
+            for candidate in candidates:
+                if str(candidate.get(field) or "") in collisions:
+                    _append_issue(candidate["issues"], candidate_issue)
+    root_counts = Counter(
+        _non_empty_text(candidate["sandboxEvidence"].get("isolatedRoot"))
+        for candidate in candidates
+        if _non_empty_text(candidate["sandboxEvidence"].get("isolatedRoot"))
+    )
+    root_collisions = {value for value, count in root_counts.items() if count > 1}
+    if root_collisions:
+        _append_issue(issues, "candidate isolated roots must be unique")
+        for candidate in candidates:
+            if (
+                _non_empty_text(candidate["sandboxEvidence"].get("isolatedRoot"))
+                in root_collisions
+            ):
+                _append_issue(
+                    candidate["issues"],
+                    "sandboxEvidence.isolatedRoot must identify a distinct sandbox",
+                )
+    for candidate in candidates:
+        candidate["eligible"] = not candidate["issues"]
 
     ranked = sorted(
         (candidate for candidate in candidates if candidate["eligible"]),
@@ -147,31 +209,57 @@ def compare_patch_candidates(
         ),
     )
     recommended = ranked[0]["id"] if ranked else ""
-    selected = str(selected_candidate_id or recommended).strip()
+    explicit_selection = _non_empty_text(selected_candidate_id)
+    selected = explicit_selection or recommended
     selected_row = next(
         (candidate for candidate in ranked if candidate["id"] == selected),
         None,
     )
-    if not ranked:
-        issues.append("at least one fully verified sandbox candidate is required")
+    competition_satisfied = len(ranked) >= MIN_ELIGIBLE_CANDIDATES
+    if not competition_satisfied:
+        issues.append(
+            "at least two fully verified sandbox candidates are required for competition"
+        )
     if selected_row is None:
         issues.append("selectedPatchCandidateId must name an eligible candidate")
-    if selected and recommended and selected != recommended and not selection_rationale.strip():
+    rationale = _non_empty_text(selection_rationale)
+    if selected and recommended and selected != recommended and not rationale:
         issues.append(
             "patchSelectionRationale is required when overriding the recommended candidate"
         )
+    top_score = int(ranked[0]["evidenceScore"]) if ranked else -1
+    tied_top_candidates = [
+        candidate["id"]
+        for candidate in ranked
+        if int(candidate["evidenceScore"]) == top_score
+    ]
+    ambiguous = len(tied_top_candidates) > 1
+    if ambiguous and not explicit_selection:
+        issues.append(
+            "selectedPatchCandidateId is required when top candidates are tied"
+        )
+    if ambiguous and not rationale:
+        issues.append(
+            "patchSelectionRationale is required when top candidates are tied"
+        )
     return {
         "ok": not issues,
+        "mode": "competition",
+        "competitionSatisfied": competition_satisfied,
+        "minimumEligibleCandidates": MIN_ELIGIBLE_CANDIDATES,
         "candidates": candidates,
         "eligibleCount": len(ranked),
         "ranking": [candidate["id"] for candidate in ranked],
         "recommendedCandidateId": recommended,
         "selectedCandidateId": selected,
         "selectedCandidate": selected_row or {},
-        "selectionRationale": str(selection_rationale or "").strip(),
+        "selectionRationale": rationale,
+        "ambiguous": ambiguous,
+        "tiedTopCandidateIds": tied_top_candidates,
         "issues": issues,
         "proofBoundary": (
-            "Candidate evidence must come from isolated roots. This comparison checks "
-            "the evidence contract; it does not itself create the sandbox or run Unreal."
+            "Competition requires at least two fully verified candidates from distinct "
+            "isolated roots. This comparison checks the evidence contract; it does not "
+            "itself create the sandboxes or run Unreal."
         ),
     }

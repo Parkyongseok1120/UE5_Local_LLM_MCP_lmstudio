@@ -367,14 +367,21 @@ def test_architecture_analysis_generates_bounded_candidate_portfolio(
     result = analyze_architecture(tmp_path, symbols=["Run"])
     portfolio = result["candidatePortfolio"]
 
-    assert portfolio["candidateCount"] == 3
+    assert portfolio["version"] == 2
+    assert 3 <= portfolio["candidateCount"] <= 5
     assert portfolio["implementationReady"] is False
-    assert portfolio["nextAction"] == "score_source_backed_alternatives_and_select"
-    assert {item["strategy"] for item in portfolio["candidates"]} == {
-        "extend_existing_owner",
-        "introduce_boundary_adapter",
-        "extract_dedicated_owner",
+    assert portfolio["nextAction"] in {
+        "collect_source_evidence_for_owner_choice",
+        "resolve_ambiguous_candidates_with_rationale",
+        "review_ranked_candidates_and_select",
     }
+    assert all(item["patternIds"] for item in portfolio["candidates"])
+    assert all(
+        set(item["scores"])
+        == {"fit", "testability", "migration", "complexity", "risk", "performance"}
+        for item in portfolio["candidates"]
+    )
+    assert all(item["ownerEvidence"]["required"] for item in portfolio["candidates"])
     assert all(item["proofLevel"] == "Proposed" for item in portfolio["candidates"])
 
 
