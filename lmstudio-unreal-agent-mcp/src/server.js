@@ -74,6 +74,9 @@ const {
   SAFE_ROUTE_RECOVERY_TOOLS,
   validateMutationAuth,
   consumeRouteCall,
+  reserveRouteCall,
+  commitRouteReservation,
+  rollbackRouteReservation,
   requiredFields,
   listActiveTasks,
   cancelActiveTask,
@@ -1750,9 +1753,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
     }
 
-    // Commit phase budget after auth + argument validation for most tools.
-    // Validation-heavy read tools defer until a successful result so semantic
-    // misses (unknown symbol, etc.) do not exhaust the 2–6 call phase budget.
+    // Validation-heavy read tools: reserve budget before I/O, commit on success,
+    // rollback on semantic/validation failure so concurrent calls still contend.
     const DEFER_BUDGET_UNTIL_SUCCESS = new Set([
       "read_symbol",
       "read_file",
@@ -1760,14 +1762,55 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       "search_files",
       "list_directory",
     ]);
-    let pendingNonMutationBudget = null;
+    let pendingBudgetReservation = null;
+    const budgetFields = requiredFields(args || {});
+    const runBudgetOp = (op) => {
+      if (hasExplicitTaskAuthorization) {
+        return op(
+          WORKSPACE_ROOT,
+          budgetFields.taskSessionId,
+          budgetFields,
+          args,
+          name
+        );
+      }
+      const active = discoverActiveTaskContext(
+        WORKSPACE_ROOT,
+        activeProjectForRoute
+      );
+      if (active.status !== "active") {
+        return { ok: true, legacy: true };
+      }
+      return op(
+        WORKSPACE_ROOT,
+        active.taskSessionId,
+        {
+          routeHash: String(active.route?.routeHash || ""),
+          routePhase: String(active.route?.phase || ""),
+        },
+        args,
+        name
+      );
+    };
     if (
       !ROUTE_MUTATION_TOOLS.has(name)
       && !SAFE_ROUTE_RECOVERY_TOOLS.has(name)
       && (hasExplicitTaskAuthorization || routePreflight.taskSessionId)
     ) {
-      const commitBudget = () => (
-        hasExplicitTaskAuthorization
+      if (DEFER_BUDGET_UNTIL_SUCCESS.has(name)) {
+        const reserved = runBudgetOp(reserveRouteCall);
+        if (!reserved.ok) {
+          return fail(reserved.error || "Task route authorization failed.", {
+            errorCode: reserved.errorCode || "TASK_ROUTE_AUTH_FAILED",
+            retryable: false,
+            stopCurrentWorkflow: true,
+            toolRoute: reserved.toolRoute,
+            toolRouteUsage: reserved.toolRouteUsage,
+          });
+        }
+        pendingBudgetReservation = true;
+      } else {
+        const budgetCommit = hasExplicitTaskAuthorization
           ? authorizeTaskRouteTool(
             WORKSPACE_ROOT,
             name,
@@ -1785,12 +1828,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               consumeBudget: true,
               activeProject: activeProjectForRoute,
             }
-          )
-      );
-      if (DEFER_BUDGET_UNTIL_SUCCESS.has(name)) {
-        pendingNonMutationBudget = commitBudget;
-      } else {
-        const budgetCommit = commitBudget();
+          );
         if (!budgetCommit.ok) {
           return fail(budgetCommit.error || "Task route authorization failed.", {
             errorCode: budgetCommit.errorCode || "TASK_ROUTE_AUTH_FAILED",
@@ -1802,22 +1840,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
     }
+    const rollbackDeferredBudget = () => {
+      if (!pendingBudgetReservation) return;
+      pendingBudgetReservation = false;
+      runBudgetOp(rollbackRouteReservation);
+    };
     const commitDeferredBudgetOrFail = () => {
-      if (!pendingNonMutationBudget) return null;
-      const budgetCommit = pendingNonMutationBudget();
-      pendingNonMutationBudget = null;
-      if (!budgetCommit.ok) {
-        return fail(budgetCommit.error || "Task route authorization failed.", {
-          errorCode: budgetCommit.errorCode || "TASK_ROUTE_AUTH_FAILED",
+      if (!pendingBudgetReservation) return null;
+      pendingBudgetReservation = false;
+      const committed = runBudgetOp(commitRouteReservation);
+      if (!committed.ok) {
+        // Commit failed after clearing the local flag; drop the server-side reservation.
+        runBudgetOp(rollbackRouteReservation);
+        return fail(committed.error || "Task route authorization failed.", {
+          errorCode: committed.errorCode || "TASK_ROUTE_AUTH_FAILED",
           retryable: false,
           stopCurrentWorkflow: true,
-          toolRoute: budgetCommit.toolRoute,
-          toolRouteUsage: budgetCommit.toolRouteUsage,
+          toolRoute: committed.toolRoute,
+          toolRouteUsage: committed.toolRouteUsage,
         });
       }
       return null;
     };
 
+    try {
 
     if (process.env.MCP_TEST_FORCE_TOOL_ERROR === name) {
       throw new Error(`test-forced internal error for ${name}`);
@@ -2176,6 +2222,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         out = `[line-endings: CRLF — replace_in_file normalizes automatically]\n` + out;
       }
       out += truncated.footer;
+      const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`
+        + (truncated.meta.truncated ? `[read-truncation: ${JSON.stringify(truncated.meta)}]\n` : "");
+      const output = metadataHeader + out;
+      const budgetFail = commitDeferredBudgetOrFail();
+      if (budgetFail) return budgetFail;
       rememberReadEvidence(
         target,
         s,
@@ -2184,15 +2235,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Always hash the full file so truncated reads still unlock replace_in_file.
         sha256Buffer(await fsp.readFile(target))
       );
-      const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`
-        + (truncated.meta.truncated ? `[read-truncation: ${JSON.stringify(truncated.meta)}]\n` : "");
-      const output = metadataHeader + out;
       recordReadSuccess("read_file", guard.normalizedArgs, {
         ...readContext,
         evidenceHash: sha256Text(out),
       }, output, { lineRange: { start: 1, end: truncated.endLine } });
-      const budgetFail = commitDeferredBudgetOrFail();
-      if (budgetFail) return budgetFail;
       return text(output);
     }
 
@@ -2236,6 +2282,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const lines = content.split(/\r?\n/);
       const slice = lines.slice(startLine - 1, endLine);
       const numbered = slice.map((line, idx) => `${startLine + idx}|${line}`).join("\n");
+      const output = `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`;
+      const budgetFail = commitDeferredBudgetOrFail();
+      if (budgetFail) return budgetFail;
       rememberReadEvidence(
         target,
         s,
@@ -2243,13 +2292,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `${startLine}-${Math.min(endLine, lines.length)}`,
         sha256Text(content)
       );
-      const output = `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`;
       recordReadSuccess("read_file_range", normalizedArgs, {
         ...readContext,
         evidenceHash: sha256Text(content),
       }, output);
-      const budgetFail = commitDeferredBudgetOrFail();
-      if (budgetFail) return budgetFail;
       return text(output);
     }
 
@@ -2315,6 +2361,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const startLine = Math.max(1, lineAt(match.index) - context);
       const endLine = Math.min(lines.length, lineAt(braceEnd) + context);
       const numbered = lines.slice(startLine - 1, endLine).map((line, idx) => `${startLine + idx}|${line}`).join("\n");
+      const output = `File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`;
+      const budgetFail = commitDeferredBudgetOrFail();
+      if (budgetFail) return budgetFail;
       rememberReadEvidence(
         target,
         stat,
@@ -2322,13 +2371,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `${startLine}-${endLine}`,
         sha256Text(content)
       );
-      const output = `File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`;
       recordReadSuccess("read_symbol", normalizedArgs, {
         ...readContext,
         evidenceHash: sha256Text(content),
       }, output);
-      const budgetFail = commitDeferredBudgetOrFail();
-      if (budgetFail) return budgetFail;
       return text(output);
     }
 
@@ -3112,12 +3158,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
       if (matchFileNames) payload.fileNameResults = fileNameResults;
       const output = JSON.stringify(payload, null, 2);
+      const budgetFail = commitDeferredBudgetOrFail();
+      if (budgetFail) return budgetFail;
       recordReadSuccess("search_files", normalizedArgs, {
         ...readContext,
         evidenceHash: sha256Text(output),
       }, output);
-      const budgetFail = commitDeferredBudgetOrFail();
-      if (budgetFail) return budgetFail;
       return text(output);
     }
 
@@ -3365,6 +3411,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     return fail(`unknown tool: ${name}`, { errorCode: "UNKNOWN_TOOL" });
+    } finally {
+      // Drop unused reservations on fail/early-return paths after reserve.
+      rollbackDeferredBudget();
+    }
   } catch (err) {
     const message = err && err.message ? String(err.message) : String(err);
     console.error(err && err.stack ? err.stack : err);

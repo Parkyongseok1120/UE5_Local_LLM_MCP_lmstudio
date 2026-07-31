@@ -1557,6 +1557,7 @@ def task_start(
             "request": request,
             "mode": mode,
             "project_file": project_file,
+            "taskSessionId": task_session_id,
         }
 
         def _progress(job: dict[str, Any], message: str) -> None:
@@ -1980,13 +1981,122 @@ def task_list_active(
     }
 
 
+def _extract_active_job_id_from_corrupt_state(state_path: Path) -> str:
+    try:
+        raw = state_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    match = re.search(r'"activeJobId"\s*:\s*"([^"]+)"', raw)
+    return str(match.group(1) if match else "").strip()
+
+
+def _jobs_linked_to_task(workspace: Path, task_session_id: str) -> list[dict[str, Any]]:
+    from job_store import list_job_records
+    from wrapper_job_manager import TERMINAL_STATUSES, read_job
+
+    linked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        records = list_job_records(workspace, limit=200)
+    except Exception:
+        records = []
+    for job in records:
+        if not isinstance(job, dict):
+            continue
+        job_id = str(job.get("jobId") or "").strip()
+        args = job.get("arguments") if isinstance(job.get("arguments"), dict) else {}
+        linked_task = str(
+            job.get("taskSessionId")
+            or args.get("taskSessionId")
+            or args.get("task_session_id")
+            or ""
+        ).strip()
+        if linked_task != task_session_id:
+            continue
+        if job_id:
+            seen.add(job_id)
+        linked.append(job)
+    # Also honor activeJobId scraped from corrupt state.json.
+    state_path = task_root(workspace, task_session_id) / "state.json"
+    active_job_id = _extract_active_job_id_from_corrupt_state(state_path)
+    if active_job_id and active_job_id not in seen:
+        job = read_job(workspace, active_job_id)
+        if job:
+            linked.append(job)
+    return [
+        job
+        for job in linked
+        if str(job.get("status") or "") not in TERMINAL_STATUSES
+    ]
+
+
+def _cancel_jobs_for_task(workspace: Path, task_session_id: str) -> dict[str, Any]:
+    from wrapper_job_manager import cancel_job
+
+    jobs = _jobs_linked_to_task(workspace, task_session_id)
+    if not jobs:
+        return {
+            "ok": True,
+            "cancelledJobs": [],
+            "cancellationState": "cancelled",
+            "orphanProcessSuspected": False,
+        }
+    cancelled = []
+    uncertain = False
+    orphan = False
+    for job in jobs:
+        job_id = str(job.get("jobId") or "").strip()
+        if not job_id:
+            continue
+        result = cancel_job(workspace, job_id)
+        cancelled.append(
+            {
+                "jobId": job_id,
+                "ok": bool(result.get("ok")),
+                "cancellationState": str(result.get("cancellationState") or ""),
+                "orphanProcessSuspected": bool(result.get("orphanProcessSuspected")),
+            }
+        )
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "errorCode": "TASK_JOB_CANCEL_FAILED",
+                "error": result.get("error") or f"Failed to cancel job {job_id}",
+                "cancelledJobs": cancelled,
+                "orphanProcessSuspected": bool(result.get("orphanProcessSuspected")),
+            }
+        state = str(result.get("cancellationState") or "")
+        if state == "cancellation_uncertain":
+            uncertain = True
+        if result.get("orphanProcessSuspected"):
+            orphan = True
+    if uncertain or orphan:
+        return {
+            "ok": False,
+            "errorCode": "TASK_CANCELLATION_UNCERTAIN",
+            "error": (
+                "Linked background job cancellation could not be confirmed; "
+                "task was not quarantined."
+            ),
+            "status": "cancellation_uncertain",
+            "orphanProcessSuspected": True,
+            "cancelledJobs": cancelled,
+        }
+    return {
+        "ok": True,
+        "cancelledJobs": cancelled,
+        "cancellationState": "cancelled",
+        "orphanProcessSuspected": False,
+    }
+
+
 def task_quarantine_corrupt(
     workspace: Path,
     *,
     active_project: str = "",
     task_session_id: str = "",
 ) -> dict[str, Any]:
-    """Archive corrupt task state so it no longer owns the active route."""
+    """Cancel linked workers, then archive corrupt task state out of the route."""
 
     listed = task_list_active(workspace, active_project=active_project)
     corrupt = [
@@ -2036,6 +2146,13 @@ def task_quarantine_corrupt(
         source = state_root / "tasks" / session_id
         if not source.is_dir():
             continue
+        job_cancel = _cancel_jobs_for_task(workspace, session_id)
+        if not job_cancel.get("ok"):
+            return {
+                **job_cancel,
+                "taskSessionId": session_id,
+                "routeReleased": False,
+            }
         stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         destination = quarantine_root / f"{session_id}-{stamp}"
         source.rename(destination)
@@ -2043,12 +2160,14 @@ def task_quarantine_corrupt(
             {
                 "taskSessionId": session_id,
                 "quarantinePath": str(destination),
+                "cancelledJobs": job_cancel.get("cancelledJobs") or [],
             }
         )
     return {
         "ok": True,
         "quarantined": quarantined,
         "count": len(quarantined),
+        "routeReleased": True,
         "nextAction": "unreal_task_list_active",
     }
 

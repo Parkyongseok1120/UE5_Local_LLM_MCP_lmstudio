@@ -497,12 +497,7 @@ function Get-ClineMcpSettingsPaths {
 }
 
 function Test-ClineMcpHasUnresolvedPlaceholders([string]$JsonText) {
-    return ($JsonText -match '\{PYTHON_EXE\}' -or
-        $JsonText -match '\{REPO_ROOT\}' -or
-        $JsonText -match '\{NODE_EXE\}' -or
-        $JsonText -match '\{AGENT_MCP_ROOT\}' -or
-        $JsonText -match '\{LMSTUDIO_HOME\}' -or
-        $JsonText -match '\{USER_DOCUMENTS\}')
+    return [bool]([regex]::Match($JsonText, '\{[A-Z][A-Z0-9_]*\}').Success)
 }
 
 function Build-ClineMcpConfig {
@@ -527,18 +522,25 @@ function Build-ClineMcpConfig {
     $allowBuild = if ($EnableAgentMode) { "1" } else { "0" }
     $validateOnWrite = if ($EnableAgentMode) { "1" } else { "0" }
 
-    $McpBridgeConnectionId = $null
-    $bridgePath = Join-Path $AgentStateRoot "mcp-bridge-connection.id"
+    $McpBridgePairId = $null
+    $bridgePath = Join-Path $AgentStateRoot "mcp-bridge-pair.id"
+    $legacyBridgePath = Join-Path $AgentStateRoot "mcp-bridge-connection.id"
     if (Test-Path -LiteralPath $bridgePath) {
-        $McpBridgeConnectionId = (Get-Content -LiteralPath $bridgePath -Raw -ErrorAction SilentlyContinue).Trim()
+        $McpBridgePairId = (Get-Content -LiteralPath $bridgePath -Raw -ErrorAction SilentlyContinue).Trim()
     }
-    if (-not $McpBridgeConnectionId) {
-        $McpBridgeConnectionId = [guid]::NewGuid().ToString("N")
+    elseif (Test-Path -LiteralPath $legacyBridgePath) {
+        $McpBridgePairId = (Get-Content -LiteralPath $legacyBridgePath -Raw -ErrorAction SilentlyContinue).Trim()
+    }
+    if (-not $McpBridgePairId -or $McpBridgePairId.Length -lt 8) {
+        $McpBridgePairId = [guid]::NewGuid().ToString("N")
         $bridgeDir = Split-Path -Parent $bridgePath
         if ($bridgeDir -and -not (Test-Path -LiteralPath $bridgeDir)) {
             New-Item -ItemType Directory -Force -Path $bridgeDir | Out-Null
         }
-        Set-Content -LiteralPath $bridgePath -Value $McpBridgeConnectionId -Encoding UTF8
+        Set-Content -LiteralPath $bridgePath -Value $McpBridgePairId -Encoding UTF8
+    }
+    elseif (-not (Test-Path -LiteralPath $bridgePath)) {
+        Set-Content -LiteralPath $bridgePath -Value $McpBridgePairId -Encoding UTF8
     }
 
     $workspaceRoot = $DocumentsRoot
@@ -559,7 +561,7 @@ function Build-ClineMcpConfig {
                 env     = [ordered]@{
                     SHARED_UNREAL_CONFIG   = $SharedConfigPath
                     AGENT_STATE_ROOT       = $AgentStateRoot
-                    MCP_CONNECTION_ID      = $McpBridgeConnectionId
+                    MCP_BRIDGE_PAIR_ID     = $McpBridgePairId
                     UNREAL58_ROOT          = $RagRoot
                     UNREAL58_PORTABLE_ROOT = $PortableRoot
                     PYTHONUTF8             = "1"
@@ -576,7 +578,8 @@ function Build-ClineMcpConfig {
                     AGENT_MCP_CONFIG            = $AgentConfigPath
                     SHARED_UNREAL_CONFIG        = $SharedConfigPath
                     AGENT_STATE_ROOT            = $AgentStateRoot
-                    MCP_CONNECTION_ID           = $McpBridgeConnectionId
+                    MCP_BRIDGE_PAIR_ID          = $McpBridgePairId
+                    PYTHON_EXE                  = $PythonExe
                     UNREAL58_ROOT               = $RagRoot
                     UNREAL58_PORTABLE_ROOT      = $PortableRoot
                     ALLOW_WRITE                 = $allowWrite

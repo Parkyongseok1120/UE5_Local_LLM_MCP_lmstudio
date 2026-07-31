@@ -12,6 +12,9 @@ const {
   discoverActiveTaskContext,
   featureIntentTargetHash,
   requiredFields,
+  reserveRouteCall,
+  commitRouteReservation,
+  rollbackRouteReservation,
   selectionBindingForState,
   validateMutationAuth,
 } = require("../src/task-auth");
@@ -1026,6 +1029,70 @@ test("expired active route is blocked rather than treated as legacy", () => {
       ).errorCode,
       "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
     );
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("route budget reservation blocks concurrent over-limit calls before commit", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    writeGate: { writesAllowed: true },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-budget",
+      phase: "executor",
+      activeTools: ["read_file"],
+      allowedPathScopes: ["Source"],
+      maxToolCallsPerPhase: 2,
+    },
+    toolRouteUsage: { routeHash: "route-budget", count: 0, reserved: 0, calls: [] },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = {
+    routeHash: "route-budget",
+    routePhase: "executor",
+  };
+  try {
+    assert.strictEqual(
+      reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "read_file").ok,
+      true
+    );
+    assert.strictEqual(
+      reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "read_file").ok,
+      true
+    );
+    const blocked = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file"
+    );
+    assert.strictEqual(blocked.ok, false);
+    assert.strictEqual(blocked.errorCode, "TASK_PHASE_TOOL_BUDGET_EXHAUSTED");
+    assert.strictEqual(
+      commitRouteReservation(workspace, authorization.taskSessionId, fields, {}, "read_file").ok,
+      true
+    );
+    assert.strictEqual(
+      rollbackRouteReservation(workspace, authorization.taskSessionId, fields, {}, "read_file").ok,
+      true
+    );
+    const state = JSON.parse(
+      fs.readFileSync(path.join(taskDir, "state.json"), "utf8")
+    );
+    assert.strictEqual(state.toolRouteUsage.count, 1);
+    assert.strictEqual(state.toolRouteUsage.reserved, 0);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;

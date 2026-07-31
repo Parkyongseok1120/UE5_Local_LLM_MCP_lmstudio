@@ -493,6 +493,9 @@ def create_job(workspace: Path, arguments: dict[str, Any]) -> dict[str, Any]:
         "updatedAt": _utc_now(),
         "runDir": str(run_dir.resolve()),
         "arguments": arguments,
+        "taskSessionId": str(
+            arguments.get("taskSessionId") or arguments.get("task_session_id") or ""
+        ).strip(),
         "progress": [],
         "returncode": None,
         "stdoutPath": str(stdout_path),

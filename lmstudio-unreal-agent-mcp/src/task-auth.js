@@ -617,7 +617,7 @@ function validateToolRoute(state, fields, args, toolName) {
   return { ok: true, route: activeRoute };
 }
 
-function consumeRouteCall(workspaceRoot, taskSessionId, fields, args, toolName) {
+function mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, mode = "consume") {
   if (!toolName) return { ok: true };
   const stateRoot = resolveAgentStateRoot(workspaceRoot);
   const dir = taskDir(workspaceRoot, taskSessionId, stateRoot);
@@ -653,32 +653,77 @@ function consumeRouteCall(workspaceRoot, taskSessionId, fields, args, toolName) 
         phase: String(route.phase || ""),
         roleSession: String(route.roleSession || ""),
         count: 0,
+        reserved: 0,
         calls: [],
       };
     }
     const count = Number(usage.count || 0);
+    let reserved = Math.max(0, Number(usage.reserved || 0));
     const limit = Math.max(2, Math.min(6, Number(route.maxToolCallsPerPhase || 2)));
-    if (count >= limit) {
+    if (mode === "rollback") {
+      usage.reserved = Math.max(0, reserved - 1);
+      current.toolRouteUsage = usage;
+      current.updatedAt = new Date().toISOString();
+      atomicWriteJson(statePath, current);
+      return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
+    }
+    if (mode === "commit") {
+      if (reserved > 0) reserved -= 1;
+      const calls = Array.isArray(usage.calls) ? usage.calls.map(String) : [];
+      calls.push(toolName);
+      usage.reserved = reserved;
+      usage.count = count + 1;
+      usage.calls = calls.slice(-limit);
+      current.toolRouteUsage = usage;
+      current.updatedAt = new Date().toISOString();
+      atomicWriteJson(statePath, current);
+      return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
+    }
+    if (count + reserved >= limit) {
       return {
         ok: false,
         errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
-        error: `Phase tool-call budget exhausted (${count}/${limit}).`,
+        error: `Phase tool-call budget exhausted (${count + reserved}/${limit}).`,
         toolRoute: route,
         toolRouteUsage: usage,
         nextActions: ["get_workspace_info", "get_active_project"],
       };
     }
+    if (mode === "reserve") {
+      usage.reserved = reserved + 1;
+      current.toolRouteUsage = usage;
+      current.updatedAt = new Date().toISOString();
+      atomicWriteJson(statePath, current);
+      return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
+    }
     const calls = Array.isArray(usage.calls) ? usage.calls.map(String) : [];
     calls.push(toolName);
     usage.count = count + 1;
     usage.calls = calls.slice(-limit);
+    usage.reserved = reserved;
     current.toolRouteUsage = usage;
     current.updatedAt = new Date().toISOString();
     atomicWriteJson(statePath, current);
-    return { ok: true, state: current };
+    return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
   } finally {
     releaseCrossProcessLock(statePath);
   }
+}
+
+function consumeRouteCall(workspaceRoot, taskSessionId, fields, args, toolName) {
+  return mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, "consume");
+}
+
+function reserveRouteCall(workspaceRoot, taskSessionId, fields, args, toolName) {
+  return mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, "reserve");
+}
+
+function commitRouteReservation(workspaceRoot, taskSessionId, fields, args, toolName) {
+  return mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, "commit");
+}
+
+function rollbackRouteReservation(workspaceRoot, taskSessionId, fields, args, toolName) {
+  return mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, "rollback");
 }
 
 const SAFE_ROUTE_RECOVERY_TOOLS = new Set([
@@ -1116,40 +1161,40 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "") {
   return tasks;
 }
 
-function cancelTaskViaPython(workspaceRoot, taskSessionId) {
+function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = []) {
   const scriptsDir = path.resolve(__dirname, "../../scripts");
   const python = String(process.env.PYTHON_EXE || process.env.PYTHON || "python").trim() || "python";
   const code = [
     "import json, sys",
     "from pathlib import Path",
     `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
-    "from task_api import task_cancel",
-    "payload = task_cancel(Path(sys.argv[1]), sys.argv[2])",
+    "from task_api import task_cancel, task_quarantine_corrupt",
+    callExpression,
     "print(json.dumps(payload, ensure_ascii=False))",
   ].join("; ");
   const result = spawnSync(
     python,
-    ["-c", code, String(workspaceRoot), String(taskSessionId)],
+    ["-c", code, String(workspaceRoot), ...extraArgs.map(String)],
     {
       encoding: "utf8",
       env: process.env,
       windowsHide: true,
+      timeout: 120000,
+      killSignal: "SIGKILL",
     }
   );
   if (result.error) {
     return {
       ok: false,
-      errorCode: "TASK_CANCEL_BRIDGE_FAILED",
-      error: `Failed to invoke Python task_cancel: ${result.error.message}`,
-      taskSessionId,
+      errorCode: "TASK_PYTHON_BRIDGE_FAILED",
+      error: `Failed to invoke Python task API: ${result.error.message}`,
     };
   }
   if (result.status !== 0) {
     return {
       ok: false,
-      errorCode: "TASK_CANCEL_BRIDGE_FAILED",
-      error: String(result.stderr || result.stdout || "Python task_cancel failed").slice(0, 800),
-      taskSessionId,
+      errorCode: "TASK_PYTHON_BRIDGE_FAILED",
+      error: String(result.stderr || result.stdout || "Python task API failed").slice(0, 800),
     };
   }
   try {
@@ -1157,64 +1202,27 @@ function cancelTaskViaPython(workspaceRoot, taskSessionId) {
   } catch (error) {
     return {
       ok: false,
-      errorCode: "TASK_CANCEL_BRIDGE_FAILED",
-      error: `Invalid Python task_cancel payload: ${error.message}`,
-      taskSessionId,
+      errorCode: "TASK_PYTHON_BRIDGE_FAILED",
+      error: `Invalid Python task API payload: ${error.message}`,
     };
   }
 }
 
+function cancelTaskViaPython(workspaceRoot, taskSessionId) {
+  return invokePythonTaskApi(
+    workspaceRoot,
+    "payload = task_cancel(Path(sys.argv[1]), sys.argv[2])",
+    [taskSessionId]
+  );
+}
+
 function quarantineCorruptTask(workspaceRoot, activeProject = "", taskSessionId = "") {
-  const tasks = listRunningTasksForProject(workspaceRoot, activeProject)
-    .filter((item) => item.status === "corrupt");
-  const explicit = String(taskSessionId || "").trim();
-  let targets = tasks;
-  if (explicit) {
-    targets = tasks.filter((item) => item.taskSessionId === explicit);
-    if (!targets.length) {
-      return {
-        ok: false,
-        errorCode: "TASK_NOT_CORRUPT",
-        error: `No corrupt task found for session: ${explicit}`,
-        tasks,
-      };
-    }
-  } else if (tasks.length > 1) {
-    return {
-      ok: false,
-      errorCode: "TASK_AMBIGUOUS_CORRUPT",
-      error: "Multiple corrupt tasks; pass taskSessionId explicitly.",
-      tasks,
-    };
-  } else if (!tasks.length) {
-    return {
-      ok: false,
-      errorCode: "TASK_NONE_CORRUPT",
-      error: "No corrupt tasks claim the active project/workspace.",
-      tasks: [],
-    };
-  }
-  const stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
-  const quarantineRoot = path.join(stateRoot, "quarantine", "tasks");
-  fs.mkdirSync(quarantineRoot, { recursive: true });
-  const quarantined = [];
-  for (const item of targets) {
-    const source = path.join(stateRoot, "tasks", item.taskSessionId);
-    if (!fs.existsSync(source)) continue;
-    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
-    const destination = path.join(quarantineRoot, `${item.taskSessionId}-${stamp}`);
-    fs.renameSync(source, destination);
-    quarantined.push({
-      taskSessionId: item.taskSessionId,
-      quarantinePath: destination,
-    });
-  }
-  return {
-    ok: true,
-    quarantined,
-    count: quarantined.length,
-    nextAction: "list_active_tasks",
-  };
+  // Delegate to Python so linked background jobs are cancelled before move.
+  return invokePythonTaskApi(
+    workspaceRoot,
+    "payload = task_quarantine_corrupt(Path(sys.argv[1]), active_project=sys.argv[2], task_session_id=sys.argv[3])",
+    [activeProject || "", taskSessionId || ""]
+  );
 }
 
 function cancelRunningTaskSession(workspaceRoot, taskSessionId, options = {}) {
@@ -1222,7 +1230,6 @@ function cancelRunningTaskSession(workspaceRoot, taskSessionId, options = {}) {
   if (!sanitized.ok) {
     return { ok: false, error: sanitized.error, errorCode: "TASK_SESSION_INVALID" };
   }
-  // Prefer the Python cancel path so linked background jobs are actually stopped.
   return cancelTaskViaPython(workspaceRoot, sanitized.taskSessionId);
 }
 
@@ -1735,6 +1742,9 @@ module.exports = {
   validateTaskRouteScope,
   SAFE_ROUTE_RECOVERY_TOOLS,
   consumeRouteCall,
+  reserveRouteCall,
+  commitRouteReservation,
+  rollbackRouteReservation,
   requiredFields,
   listActiveTasks,
   cancelActiveTask,

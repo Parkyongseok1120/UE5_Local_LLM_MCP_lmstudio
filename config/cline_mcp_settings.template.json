@@ -9,8 +9,9 @@
       ],
       "timeout": 420000,
       "env": {
-        "MCP_CONNECTION_ID": "{MCP_CONNECTION_ID}",
         "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
+        "AGENT_STATE_ROOT": "{AGENT_STATE_ROOT}",
+        "MCP_BRIDGE_PAIR_ID": "{MCP_BRIDGE_PAIR_ID}",
         "UNREAL58_ROOT": "{REPO_ROOT}",
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
@@ -27,7 +28,8 @@
         "AGENT_MCP_CONFIG": "{AGENT_MCP_ROOT}/config/agent-mcp.json",
         "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
         "AGENT_STATE_ROOT": "{AGENT_STATE_ROOT}",
-        "MCP_CONNECTION_ID": "{MCP_CONNECTION_ID}",
+        "MCP_BRIDGE_PAIR_ID": "{MCP_BRIDGE_PAIR_ID}",
+        "PYTHON_EXE": "{PYTHON_EXE}",
         "UNREAL58_ROOT": "{REPO_ROOT}",
         "MCP_ESSENTIAL_TOOLS": "1",
         "MCP_REQUIRE_PLAN_AUTH": "1"
