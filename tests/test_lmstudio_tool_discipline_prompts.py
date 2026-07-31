@@ -54,6 +54,32 @@ def test_qwen35_prompt_requires_filename_aware_component_discovery() -> None:
     assert "RAG misses are not proof of absence" in text
 
 
+def test_qwen36_prompt_requires_gate_completion_auth_refresh() -> None:
+    text = read_text("prompts/lmstudio_qwen36_27b_compact_system.md")
+
+    assert "gateCompletion.taskAuthorization" in text
+    assert "TASK_ROUTE_STALE" in text
+    assert "changeKind=new_file" in text
+
+
+def test_base_prompt_documents_seven_field_auth_refresh() -> None:
+    text = read_text("prompts/lmstudio_compact_mcp_base.md")
+
+    assert "routeHash" in text
+    assert "routePhase" in text
+    assert "gateCompletion.taskAuthorization" in text
+    assert "TASK_ROUTE_STALE" in text
+
+
+def test_qwen35_prompt_uses_seven_field_auth_refresh() -> None:
+    text = read_text("prompts/lmstudio_qwen35_9b_compact_system.md")
+
+    assert "seven" in text.lower()
+    assert "gateCompletion.taskAuthorization" in text
+    assert "TASK_ROUTE_STALE" in text
+    assert "five fields" not in text
+
+
 def test_lmstudio_setup_requires_base_plus_qwen35_delta() -> None:
     text = read_text("docs/LMStudio_Unreal_Agent_Setup.md")
 

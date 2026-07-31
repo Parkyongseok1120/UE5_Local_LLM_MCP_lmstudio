@@ -4086,8 +4086,20 @@ class McpServer:
                 payload["writeToolAuthorizationArgs"] = {"taskAuthorization": task_authorization}
                 payload["authorizationRetryPolicy"] = {
                     "reuseExistingAuthorization": True,
-                    "doNotReplanFor": ["TASK_AUTH_INCOMPLETE", "FILE_ALREADY_EXISTS", "MUTATION_REPEAT_BLOCKED"],
-                    "replanOnlyFor": ["TASK_SESSION_REQUIRED", "TASK_AUTH_MISMATCH", "TASK_NOT_WRITABLE"],
+                    "doNotReplanFor": [
+                        "TASK_AUTH_INCOMPLETE",
+                        "TASK_ROUTE_STALE",
+                        "FILE_ALREADY_EXISTS",
+                        "MUTATION_REPEAT_BLOCKED",
+                    ],
+                    "refreshAuthFromLatestToolResult": [
+                        "TASK_ROUTE_STALE",
+                    ],
+                    "replanOnlyFor": [
+                        "TASK_SESSION_REQUIRED",
+                        "TASK_AUTH_MISMATCH",
+                        "TASK_NOT_WRITABLE",
+                    ],
                 }
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name in {"clangd_goto_definition", "clangd_find_references"}:

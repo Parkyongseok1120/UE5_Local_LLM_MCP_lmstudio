@@ -441,6 +441,40 @@ function routePathMatches(requestedAbsolute, state, selectedFile) {
   return Boolean(requested && selected && requested === selected);
 }
 
+function taskAuthorizationForState(state) {
+  const route = state?.toolRoute && typeof state.toolRoute === "object"
+    ? state.toolRoute
+    : {};
+  return {
+    taskSessionId: String(state?.taskSessionId || ""),
+    authToken: String(state?.authToken || ""),
+    planId: String(state?.planId || ""),
+    planRevision: String(state?.planRevision || ""),
+    activeSliceId: String(state?.activeSliceId || ""),
+    routeHash: String(route.routeHash || ""),
+    routePhase: String(route.phase || ""),
+  };
+}
+
+function authRefreshFailure(result, state) {
+  if (
+    !state
+    || !result
+    || (result.errorCode !== "TASK_ROUTE_STALE"
+      && result.errorCode !== "TASK_AUTH_MISMATCH")
+  ) {
+    return result;
+  }
+  const nextAction = result.errorCode === "TASK_ROUTE_STALE"
+    ? "retry_same_tool_with_returned_taskAuthorization"
+    : "replan_or_resume_with_returned_taskAuthorization";
+  return {
+    ...result,
+    taskAuthorization: taskAuthorizationForState(state),
+    nextAction,
+  };
+}
+
 function validateToolRoute(state, fields, args, toolName) {
   const route = effectiveToolRouteForState(state);
   if (
@@ -1020,14 +1054,16 @@ function authorizeTaskRouteTool(
     }
   }
   if (mismatches.length) {
-    return {
+    return authRefreshFailure({
       ok: false,
       errorCode: "TASK_AUTH_MISMATCH",
       error: `Task authorization mismatch: ${mismatches.join(", ")}`,
-    };
+    }, state);
   }
   const routeValidation = validateToolRoute(state, fields, args, toolName);
-  if (!routeValidation.ok) return routeValidation;
+  if (!routeValidation.ok) {
+    return authRefreshFailure(routeValidation, state);
+  }
   if (String(state.status || "") !== "running") {
     return {
       ok: false,
@@ -1165,20 +1201,20 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
     }
   }
   if (mismatches.length) {
-    return {
+    return authRefreshFailure({
       ok: false,
       error: `Task authorization mismatch: ${mismatches.join(", ")}`,
       errorCode: "TASK_AUTH_MISMATCH",
       taskSessionId: sanitized.taskSessionId,
-    };
+    }, state);
   }
   const toolName = String(options.toolName || "");
   const routeValidation = validateToolRoute(state, fields, args, toolName);
   if (!routeValidation.ok) {
-    return {
+    return authRefreshFailure({
       ...routeValidation,
       taskSessionId: sanitized.taskSessionId,
-    };
+    }, state);
   }
   const status = String(state.status || "");
   if (status !== "running") {
@@ -1317,6 +1353,8 @@ module.exports = {
   requestedMutationPaths,
   featureIntentTargetHash,
   requiredFields,
+  taskAuthorizationForState,
+  authRefreshFailure,
   validateToolRoute,
   validateSelectionState,
   selectionBindingForState,

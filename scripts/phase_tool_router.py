@@ -127,10 +127,11 @@ def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
     )
     active_slice_id = str(state.get("activeSliceId") or "task").strip() or "task"
     declared: list[str] = []
-    if str(state.get("selectedCandidateId") or "").strip():
+    snapshot_items = state.get("selectedTargetSnapshots") or []
+    if isinstance(snapshot_items, list) and snapshot_items:
         declared.extend(
             str(item.get("path") or item.get("relativePath") or "")
-            for item in (state.get("selectedTargetSnapshots") or [])
+            for item in snapshot_items
             if isinstance(item, dict)
         )
     elif (

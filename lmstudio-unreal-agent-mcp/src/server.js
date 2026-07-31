@@ -412,16 +412,27 @@ function enforceTaskAuth(args, options = {}) {
     }
   );
   if (!auth.ok) {
+    const routeStale = auth.errorCode === "TASK_ROUTE_STALE";
+    const authMismatch = auth.errorCode === "TASK_AUTH_MISMATCH";
     const incomplete = auth.errorCode === "TASK_AUTH_INCOMPLETE";
     return fail(auth.error || "Task authorization failed.", {
       taskSessionId: auth.taskSessionId,
       errorCode: auth.errorCode || "TASK_AUTH_FAILED",
-      retryable: incomplete,
-      stopCurrentWorkflow: !incomplete,
-      authorizationRefreshRequired: !incomplete,
+      retryable: incomplete || routeStale,
+      stopCurrentWorkflow: !(incomplete || routeStale),
+      authorizationRefreshRequired: routeStale || authMismatch,
+      ...(auth.taskAuthorization ? { taskAuthorization: auth.taskAuthorization } : {}),
+      ...(auth.nextAction ? { nextAction: auth.nextAction } : {}),
       ...(incomplete ? {
         doNotCall: ["unreal_agent_plan"],
-        agentInstruction: "Do not create another plan. Retry this write once with the complete taskAuthorization object returned by the existing unreal_agent_plan result.",
+        agentInstruction: "Do not create another plan. Retry this write once with the complete taskAuthorization object returned by the latest gateCompletion or tool error.",
+      } : {}),
+      ...(routeStale ? {
+        doNotCall: ["unreal_agent_plan"],
+        agentInstruction: "Do not replan. Retry the same write tool once with taskAuthorization from this error response.",
+      } : {}),
+      ...(authMismatch ? {
+        agentInstruction: "Plan identity changed. Copy taskAuthorization from this error, then replan or re-run required gates before writing. Do not retry the write tool alone.",
       } : {}),
     });
   }
@@ -812,7 +823,7 @@ function taskAuthSchemaProperties() {
   return {
     taskAuthorization: {
       type: "object",
-      description: "Copy the complete unreal_agent_plan.taskAuthorization object unchanged. Do not call unreal_agent_plan again merely to refresh it.",
+      description: "Seven-field server-issued auth object. After unreal_code_sketch_claim_validate or unreal_task_checkpoint, copy gateCompletion.taskAuthorization (or taskAuthorization from a stale-auth error), not the original unreal_agent_plan object.",
       properties: {
         taskSessionId: { type: "string" },
         authToken: { type: "string" },
@@ -1415,7 +1426,7 @@ function allAgentTools() {
       },
       {
         name: "write_file",
-        description: "Create a brand-new UTF-8 file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1. Create-only: any file that already exists is blocked. Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
+        description: "Create a brand-new UTF-8 file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1 and gateCompletion.taskAuthorization with routePhase=executor. Pass concrete targetFiles and changeKind=new_file to unreal_code_sketch_claim_validate before write. Create-only: any file that already exists is blocked. Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
         inputSchema: makeJsonSchema({
           ...taskAuthSchemaProperties(),
           path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },

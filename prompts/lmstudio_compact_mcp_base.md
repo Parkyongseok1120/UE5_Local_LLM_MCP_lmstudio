@@ -65,6 +65,10 @@ When the user asks for logic / design / bug analysis of project C++ (not a compi
 
 ## Write safety and flow
 
+- **Task authorization (7 fields):** `taskSessionId`, `authToken`, `planId`, `planRevision`, `activeSliceId`, `routeHash`, `routePhase`. Copy the object unchanged as one nested object.
+- **Auth refresh:** after `unreal_code_sketch_claim_validate`, `unreal_task_checkpoint`, or any gate tool, use **`gateCompletion.taskAuthorization`** (or `taskAuthorization` from a stale-auth error), **not** the original `unreal_agent_plan` object.
+- **On `TASK_ROUTE_STALE`:** retry the same write tool once with returned `taskAuthorization`. Do **not** call `unreal_agent_plan` again.
+- **Brand-new files:** pass concrete `targetFiles` and `changeKind=new_file` to `unreal_code_sketch_claim_validate` before `write_file`.
 - **3-Tier write policy:** Tier A structural guards (`write_file` create-only, patch-only `.h/.cpp`) and Tier B compile-readiness **errors always block**. Tier C GC/runtime findings are **advisory only** — they never override Tier A/B.
 - **GC advisory ≠ write permission:** Tier C warnings do not allow `write_file` on existing paths or bypass `replace_in_file`.
 - Before introducing new UObject/Component/Subsystem API surfaces, run `unreal_code_sketch_claim_validate` (non-blocking self-check); fix `known_bad` before writing.

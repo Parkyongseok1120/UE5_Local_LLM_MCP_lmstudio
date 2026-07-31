@@ -20,9 +20,11 @@ from task_api import (  # noqa: E402
     authorize_active_task_tool,
     authorize_task_tool,
     task_checkpoint,
+    task_record_gate,
     task_replan,
     task_root,
     task_start,
+    task_status,
 )
 
 
@@ -285,6 +287,9 @@ def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
     )
     assert stale["ok"] is False
     assert stale["errorCode"] == "TASK_AUTH_MISMATCH"
+    assert stale["nextAction"] == "replan_or_resume_with_returned_taskAuthorization"
+    assert stale["taskAuthorization"]["authToken"] == replanned["taskAuthorization"]["authToken"]
+    assert stale["taskAuthorization"]["planRevision"] == replanned["planRevision"]
     assert active_task_route_context(tmp_path)["status"] == "active"
 
     denied = task_replan(
@@ -489,6 +494,9 @@ def test_stale_route_and_suffix_path_escape_fail_closed(
     )
     assert stale["ok"] is False
     assert stale["errorCode"] == "TASK_ROUTE_STALE"
+    assert stale["nextAction"] == "retry_same_tool_with_returned_taskAuthorization"
+    assert stale["taskAuthorization"]["routeHash"] == authorization["routeHash"]
+    assert stale["taskAuthorization"]["routePhase"] == authorization["routePhase"]
 
     exact = authorize_task_tool(
         tmp_path,
@@ -506,6 +514,127 @@ def test_stale_route_and_suffix_path_escape_fail_closed(
     )
     assert suffix_escape["ok"] is False
     assert suffix_escape["errorCode"] == "TASK_SLICE_TARGET_MISMATCH"
+
+
+def test_gate_target_snapshots_bind_greenfield_slice_for_executor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    new_path = "Source/O_Mock/GomokuTypes.h"
+    started = task_start(
+        tmp_path,
+        request="Create Gomoku rule engine",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [{"sliceId": "task", "files": []}],
+        },
+    )
+    authorization = dict(started["taskAuthorization"])
+    completed = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=authorization,
+        input_payload={"sketch": "demo", "changeKind": "new_file"},
+        evidence={"ok": True},
+        target_snapshots=[
+            {"path": new_path, "exists": False, "fileHash": ""},
+        ],
+    )
+    assert completed["ok"] is True
+    state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert state["selectedTargetSnapshots"][0]["path"] == new_path
+    route = derive_tool_route(state)
+    assert route["roleSession"] == "executor"
+    assert route["selectedSlice"]["files"] == [new_path]
+    assert route["selectedSlice"]["scopeRequired"] is False
+    write_auth = authorize_task_tool(
+        tmp_path,
+        tool_name="write_file",
+        task_authorization=completed["taskAuthorization"],
+        arguments={"path": new_path},
+    )
+    assert write_auth["ok"] is True
+
+
+def test_gate_mismatch_returns_refresh_auth_not_same_tool_retry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement Source/Demo/Foo.cpp",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
+    )
+    old_authorization = dict(started["taskAuthorization"])
+    replanned = task_replan(
+        tmp_path,
+        task_session_id=started["taskSessionId"],
+        request="Implement Source/Demo/Foo.cpp after replan",
+        mode="agent_edit",
+        project_file="",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
+    )
+    assert replanned["ok"] is True
+    denied = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=old_authorization,
+        input_payload={"sketch": "demo"},
+        evidence={"ok": True},
+        target_snapshots=[],
+    )
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "TASK_AUTH_MISMATCH"
+    assert denied["nextAction"] == "replan_or_resume_with_returned_taskAuthorization"
+    assert denied["taskAuthorization"]["authToken"] == replanned["taskAuthorization"]["authToken"]
+    assert denied["nextAction"] != "retry_same_tool_with_returned_taskAuthorization"
+
+
+def test_authorization_retry_policy_lists_match_runtime_contract() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "unreal_rag_mcp.py"
+    ).read_text(encoding="utf-8")
+    policy_start = source.index('"authorizationRetryPolicy"')
+    policy_block = source[policy_start : policy_start + 900]
+    assert '"TASK_ROUTE_STALE"' in policy_block
+    assert "refreshAuthFromLatestToolResult" in policy_block
+    refresh_start = policy_block.index("refreshAuthFromLatestToolResult")
+    refresh_block = policy_block[refresh_start : refresh_start + 200]
+    assert "TASK_ROUTE_STALE" in refresh_block
+    assert "TASK_AUTH_INCOMPLETE" not in refresh_block
+    replan_start = policy_block.index("replanOnlyFor")
+    replan_block = policy_block[replan_start : replan_start + 250]
+    assert "TASK_AUTH_MISMATCH" in replan_block
+    do_not_start = policy_block.index("doNotReplanFor")
+    do_not_block = policy_block[do_not_start : replan_start]
+    assert "TASK_ROUTE_STALE" in do_not_block
+    assert "TASK_AUTH_MISMATCH" not in do_not_block
 
 
 def test_python_explicit_auth_matches_node_runtime_state_guards(

@@ -76,6 +76,25 @@ def task_authorization_for_state(state: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _auth_refresh_failure(
+    result: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    error_code = str(result.get("errorCode") or "")
+    if error_code not in {"TASK_ROUTE_STALE", "TASK_AUTH_MISMATCH"}:
+        return result
+    next_action = (
+        "retry_same_tool_with_returned_taskAuthorization"
+        if error_code == "TASK_ROUTE_STALE"
+        else "replan_or_resume_with_returned_taskAuthorization"
+    )
+    return {
+        **result,
+        "taskAuthorization": task_authorization_for_state(state),
+        "nextAction": next_action,
+    }
+
+
 def required_gate_set_hash(
     *,
     task_session_id: str,
@@ -1888,11 +1907,14 @@ def task_checkpoint(
             return {"ok": False, "error": f"Unknown task: {task_session_id}"}
         mismatches = _task_authorization_mismatches(state, authorization)
         if mismatches:
-            return {
-                "ok": False,
-                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
-                "errorCode": "TASK_AUTH_MISMATCH",
-            }
+            return _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                },
+                state,
+            )
         return {
             "ok": True,
             "action": normalized_action,
@@ -1907,11 +1929,14 @@ def task_checkpoint(
         nonlocal mutation_result
         mismatches = _task_authorization_mismatches(state, authorization)
         if mismatches:
-            mutation_result = {
-                "ok": False,
-                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
-                "errorCode": "TASK_AUTH_MISMATCH",
-            }
+            mutation_result = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                },
+                state,
+            )
             return None
         if str(state.get("status") or "") != "running":
             mutation_result = {
@@ -2237,11 +2262,14 @@ def task_record_gate(
         nonlocal record_result
         mismatches = _task_authorization_mismatches(state, authorization)
         if mismatches:
-            record_result = {
-                "ok": False,
-                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
-                "errorCode": "TASK_AUTH_MISMATCH",
-            }
+            record_result = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                },
+                state,
+            )
             return None
         if str(state.get("status") or "") != "running":
             record_result = {
@@ -2366,6 +2394,10 @@ def task_record_gate(
             state["featureIntent"] = feature_state
             if not previous_intent_id:
                 state["selectionBinding"] = selection_binding(state)
+        elif target_snapshots:
+            state["selectedTargetSnapshots"] = normalized_selection_snapshots(
+                target_snapshots
+            )
         write_gate = dict(state.get("writeGate") or {})
         write_gate["completedBeforeWrite"] = sorted(completed)
         write_gate["pendingBeforeWrite"] = pending
@@ -2717,11 +2749,14 @@ def authorize_task_tool(
         state = refreshed
         mismatches = _task_authorization_mismatches(state, authorization)
         if mismatches:
-            return {
-                "ok": False,
-                "errorCode": "TASK_AUTH_MISMATCH",
-                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
-            }
+            return _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                },
+                state,
+            )
         route = (
             state.get("toolRoute")
             if isinstance(state.get("toolRoute"), dict)
@@ -2746,12 +2781,15 @@ def authorize_task_tool(
             or supplied_hash != str(route.get("routeHash") or "")
             or supplied_phase != str(route.get("phase") or "")
         ):
-            return {
-                "ok": False,
-                "errorCode": "TASK_ROUTE_STALE",
-                "error": "taskAuthorization routeHash/routePhase is missing or stale",
-                "toolRoute": compact_tool_route(route),
-            }
+            return _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_ROUTE_STALE",
+                    "error": "taskAuthorization routeHash/routePhase is missing or stale",
+                    "toolRoute": compact_tool_route(route),
+                },
+                state,
+            )
         if tool_name not in CONTROL_PLANE_TOOLS and tool_name not in set(
             route.get("activeTools") or []
         ):
@@ -2953,11 +2991,14 @@ def task_set_runtime_session(
         nonlocal mutation_result
         mismatches = _task_authorization_mismatches(state, authorization)
         if mismatches:
-            mutation_result = {
-                "ok": False,
-                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
-                "errorCode": "TASK_AUTH_MISMATCH",
-            }
+            mutation_result = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                },
+                state,
+            )
             return None
         if str(state.get("status") or "") != "running":
             mutation_result = {
@@ -3244,11 +3285,14 @@ def task_issue_feature_approval(
         nonlocal issued
         mismatches = _task_authorization_mismatches(state, authorization)
         if mismatches:
-            issued = {
-                "ok": False,
-                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
-                "errorCode": "TASK_AUTH_MISMATCH",
-            }
+            issued = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                },
+                state,
+            )
             return None
         if str(state.get("status") or "") != "running":
             issued = {

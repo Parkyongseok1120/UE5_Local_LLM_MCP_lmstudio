@@ -715,6 +715,31 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
       { requireAll: true, toolName: "replace_in_file" }
     );
     assert.strictEqual(stale.errorCode, "TASK_ROUTE_STALE");
+    assert.strictEqual(
+      stale.nextAction,
+      "retry_same_tool_with_returned_taskAuthorization"
+    );
+    assert.strictEqual(stale.taskAuthorization.routeHash, "route-1");
+    assert.strictEqual(stale.taskAuthorization.routePhase, "executor");
+
+    const mismatch = validateMutationAuth(
+      workspace,
+      {
+        taskAuthorization: { ...routeAuthorization, authToken: "wrong-token" },
+        path: "Source/Demo/Foo.cpp",
+      },
+      { requireAll: true, toolName: "replace_in_file" }
+    );
+    assert.strictEqual(mismatch.errorCode, "TASK_AUTH_MISMATCH");
+    assert.strictEqual(
+      mismatch.nextAction,
+      "replan_or_resume_with_returned_taskAuthorization"
+    );
+    assert.strictEqual(mismatch.taskAuthorization.authToken, authorization.authToken);
+    assert.notStrictEqual(
+      mismatch.nextAction,
+      "retry_same_tool_with_returned_taskAuthorization"
+    );
 
     const exact = validateMutationAuth(
       workspace,
