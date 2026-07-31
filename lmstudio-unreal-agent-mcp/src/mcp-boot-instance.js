@@ -35,47 +35,79 @@ function pidAlive(pid) {
 
 function parentPid(pid) {
   if (!Number.isFinite(pid) || pid <= 0) return 0;
-  if (process.platform !== "win32") {
-    try {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(/\s+/);
-      return Number(stat[3] || 0) || 0;
-    } catch {
-      return 0;
-    }
+  if (process.platform === "win32") {
+    const result = spawnSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($null -eq $p) { exit 1 }; Write-Output $p.ParentProcessId`,
+      ],
+      { encoding: "utf8", windowsHide: true, timeout: 5000 }
+    );
+    if (result.status !== 0) return 0;
+    return Number(String(result.stdout || "").trim() || 0) || 0;
   }
-  const result = spawnSync(
-    "powershell",
-    [
-      "-NoProfile",
-      "-Command",
-      `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($null -eq $p) { exit 1 }; Write-Output $p.ParentProcessId`,
-    ],
-    { encoding: "utf8", windowsHide: true, timeout: 5000 }
-  );
+  try {
+    if (fs.existsSync(`/proc/${pid}/stat`)) {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const close = stat.lastIndexOf(")");
+      const fields = (close >= 0 ? stat.slice(close + 1) : stat).trim().split(/\s+/);
+      return Number(fields[1] || 0) || 0;
+    }
+  } catch {
+    // fall through to ps
+  }
+  const result = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
   if (result.status !== 0) return 0;
   return Number(String(result.stdout || "").trim() || 0) || 0;
 }
 
 function processName(pid) {
   if (!Number.isFinite(pid) || pid <= 0) return "";
-  if (process.platform !== "win32") {
-    try {
-      return String(fs.readFileSync(`/proc/${pid}/comm`, "utf8") || "").trim();
-    } catch {
-      return "";
-    }
+  if (process.platform === "win32") {
+    const result = spawnSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($null -eq $p) { exit 1 }; Write-Output $p.Name`,
+      ],
+      { encoding: "utf8", windowsHide: true, timeout: 5000 }
+    );
+    if (result.status !== 0) return "";
+    return String(result.stdout || "").trim();
   }
-  const result = spawnSync(
-    "powershell",
-    [
-      "-NoProfile",
-      "-Command",
-      `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($null -eq $p) { exit 1 }; Write-Output $p.Name`,
-    ],
-    { encoding: "utf8", windowsHide: true, timeout: 5000 }
-  );
+  try {
+    if (fs.existsSync(`/proc/${pid}/comm`)) {
+      return String(fs.readFileSync(`/proc/${pid}/comm`, "utf8") || "").trim();
+    }
+  } catch {
+    // fall through to ps
+  }
+  const result = spawnSync("ps", ["-o", "comm=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
   if (result.status !== 0) return "";
   return String(result.stdout || "").trim();
+}
+
+function processStartTicks(pid) {
+  if (!Number.isFinite(pid) || pid <= 0 || process.platform === "win32") return null;
+  try {
+    if (!fs.existsSync(`/proc/${pid}/stat`)) return null;
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const close = stat.lastIndexOf(")");
+    const fields = (close >= 0 ? stat.slice(close + 1) : stat).trim().split(/\s+/);
+    const ticks = Number(fields[19] || 0);
+    return Number.isFinite(ticks) ? ticks : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveMcpHostPid() {
@@ -118,20 +150,8 @@ function processStartedAt(pid) {
     if (result.status !== 0) return "";
     return String(result.stdout || "").trim();
   }
-  try {
-    if (fs.existsSync(`/proc/${pid}/stat`)) {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-      const close = stat.lastIndexOf(")");
-      const fields = (close >= 0 ? stat.slice(close + 1) : stat).trim().split(/\s+/);
-      const startTicks = Number(fields[19] || 0);
-      const uptimeSec = Number(String(fs.readFileSync("/proc/uptime", "utf8")).split(/\s+/)[0] || 0);
-      const hz = 100;
-      const boot = Date.now() / 1000 - uptimeSec;
-      return new Date((boot + startTicks / hz) * 1000).toISOString();
-    }
-  } catch {
-    // fall through
-  }
+  const ticks = processStartTicks(pid);
+  if (ticks != null) return `ticks:${ticks}`;
   const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
     encoding: "utf8",
     timeout: 5000,
@@ -142,9 +162,14 @@ function processStartedAt(pid) {
 
 function hostIdentityMatches(payload, hostPid) {
   if (Number(payload.hostPid || 0) !== hostPid) return false;
-  const currentStarted = processStartedAt(hostPid);
-  const payloadStarted = String(payload.hostStartedAt || "").trim();
-  if (currentStarted && payloadStarted && currentStarted !== payloadStarted) return false;
+  const currentTicks = processStartTicks(hostPid);
+  if (currentTicks != null && payload.hostStartTicks != null) {
+    if (Number(payload.hostStartTicks) !== Number(currentTicks)) return false;
+  } else {
+    const currentStarted = processStartedAt(hostPid);
+    const payloadStarted = String(payload.hostStartedAt || "").trim();
+    if (currentStarted && payloadStarted && currentStarted !== payloadStarted) return false;
+  }
   const currentExe = processName(hostPid);
   const payloadExe = String(payload.hostExecutable || "").trim();
   if (currentExe && payloadExe && currentExe.toLowerCase() !== payloadExe.toLowerCase()) {
@@ -166,6 +191,7 @@ function resolveOrCreateBootInstanceId() {
   const hostPidExplicit = /^\d+$/.test(String(process.env.MCP_HOST_PID || "").trim());
   const filePath = path.join(root, "runtime", `boot-${hostPid}.json`);
   const currentStarted = processStartedAt(hostPid);
+  const currentTicks = processStartTicks(hostPid);
   const currentExe = processName(hostPid);
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
@@ -191,6 +217,9 @@ function resolveOrCreateBootInstanceId() {
             if (currentStarted && !String(payload.hostStartedAt || "").trim()) {
               payload.hostStartedAt = currentStarted;
             }
+            if (currentTicks != null && payload.hostStartTicks == null) {
+              payload.hostStartTicks = currentTicks;
+            }
             if (currentExe && !String(payload.hostExecutable || "").trim()) {
               payload.hostExecutable = currentExe;
             }
@@ -206,6 +235,7 @@ function resolveOrCreateBootInstanceId() {
         clientInstanceId: value,
         hostPid,
         hostStartedAt: currentStarted,
+        hostStartTicks: currentTicks,
         hostExecutable: currentExe,
         createdAt: new Date().toISOString(),
         renewedAt: new Date().toISOString(),

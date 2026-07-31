@@ -78,8 +78,24 @@ def _process_name(pid: int) -> str:
         return ""
 
 
+def _process_start_ticks(pid: int) -> int | None:
+    """Return Linux starttime ticks for pid, or None when unavailable."""
+
+    if pid <= 0 or sys.platform == "win32":
+        return None
+    try:
+        if Path(f"/proc/{pid}/stat").is_file():
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+            close = stat.rfind(")")
+            fields = stat[close + 1 :].split() if close >= 0 else stat.split()
+            return int(fields[19])
+    except Exception:
+        return None
+    return None
+
+
 def _process_started_at(pid: int) -> str:
-    """Return UTC ISO start time for pid, or empty string when unavailable."""
+    """Return a stable start identity string for pid."""
 
     if pid <= 0:
         return ""
@@ -102,18 +118,9 @@ def _process_started_at(pid: int) -> str:
             if isinstance(result, ProbeTimeout) or result.returncode != 0:
                 return ""
             return str((result.stdout or "").strip())
-        if Path(f"/proc/{pid}/stat").is_file():
-            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-            # comm may contain spaces/parens — split after last ')'
-            close = stat.rfind(")")
-            fields = stat[close + 1 :].split() if close >= 0 else stat.split()
-            # After ')': state is [0], ppid [1], ... starttime is index 19 in that slice
-            # (linux proc(5): starttime is field 22 overall; after state it's field 20 → index 19)
-            start_ticks = int(fields[19])
-            uptime_sec = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
-            hz = os.sysconf("SC_CLK_TCK")
-            boot = time.time() - uptime_sec
-            return datetime.fromtimestamp(boot + (start_ticks / hz), tz=timezone.utc).isoformat()
+        ticks = _process_start_ticks(pid)
+        if ticks is not None:
+            return f"ticks:{ticks}"
         from process_probe import ProbeTimeout, run_probe
 
         result = run_probe(["ps", "-o", "lstart=", "-p", str(pid)])
@@ -191,10 +198,19 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 def _host_identity_matches(payload: dict[str, Any], *, host_pid: int) -> bool:
     if int(payload.get("hostPid") or 0) != host_pid:
         return False
-    current_started = _process_started_at(host_pid)
-    payload_started = str(payload.get("hostStartedAt") or "").strip()
-    if current_started and payload_started and current_started != payload_started:
-        return False
+    current_ticks = _process_start_ticks(host_pid)
+    payload_ticks = payload.get("hostStartTicks")
+    if current_ticks is not None and payload_ticks is not None:
+        try:
+            if int(payload_ticks) != int(current_ticks):
+                return False
+        except (TypeError, ValueError):
+            return False
+    else:
+        current_started = _process_started_at(host_pid)
+        payload_started = str(payload.get("hostStartedAt") or "").strip()
+        if current_started and payload_started and current_started != payload_started:
+            return False
     current_exe = _process_name(host_pid)
     payload_exe = str(payload.get("hostExecutable") or "").strip()
     if current_exe and payload_exe and current_exe.lower() != payload_exe.lower():
@@ -214,6 +230,7 @@ def resolve_or_create_boot_instance_id(state_root: Path) -> str:
     runtime = Path(state_root) / "runtime"
     path = runtime / f"boot-{host_pid}.json"
     current_started = _process_started_at(host_pid)
+    current_ticks = _process_start_ticks(host_pid)
     current_exe = _process_name(host_pid)
 
     from write_locks import release_cross_process_lock, try_acquire_cross_process_lock
@@ -245,6 +262,8 @@ def resolve_or_create_boot_instance_id(state_root: Path) -> str:
                         payload["expiresAt"] = _utc_iso(_utc_now() + timedelta(hours=12))
                         if current_started and not str(payload.get("hostStartedAt") or "").strip():
                             payload["hostStartedAt"] = current_started
+                        if current_ticks is not None and payload.get("hostStartTicks") is None:
+                            payload["hostStartTicks"] = current_ticks
                         if current_exe and not str(payload.get("hostExecutable") or "").strip():
                             payload["hostExecutable"] = current_exe
                         _atomic_write_json(path, payload)
@@ -254,6 +273,7 @@ def resolve_or_create_boot_instance_id(state_root: Path) -> str:
                 "clientInstanceId": value,
                 "hostPid": host_pid,
                 "hostStartedAt": current_started,
+                "hostStartTicks": current_ticks,
                 "hostExecutable": current_exe,
                 "createdAt": _utc_iso(),
                 "renewedAt": _utc_iso(),

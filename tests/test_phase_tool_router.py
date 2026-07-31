@@ -168,10 +168,11 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     route = started["toolRoute"]
     active_tool = route["activeTools"][0]
 
+    auth = started["taskAuthorization"]
     inactive = authorize_active_task_tool(
         tmp_path,
         tool_name="delete_file",
-        arguments={"path": "Source/Demo/Foo.cpp"},
+        arguments={"path": "Source/Demo/Foo.cpp", "taskAuthorization": auth},
     )
     assert inactive["ok"] is False
     assert inactive["errorCode"] == "TASK_TOOL_NOT_ACTIVE"
@@ -179,7 +180,7 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     replan = authorize_active_task_tool(
         tmp_path,
         tool_name="unreal_agent_plan",
-        arguments={"request": "Replan"},
+        arguments={"request": "Replan", "taskAuthorization": auth},
     )
     assert replan["ok"] is True
     assert replan["replanSurface"] is True
@@ -189,13 +190,13 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
         allowed = authorize_active_task_tool(
             tmp_path,
             tool_name=active_tool,
-            arguments={},
+            arguments={"taskAuthorization": auth},
         )
         assert allowed["ok"] is True
     exhausted = authorize_active_task_tool(
         tmp_path,
         tool_name=active_tool,
-        arguments={},
+        arguments={"taskAuthorization": auth},
     )
     assert exhausted["ok"] is False
     assert exhausted["errorCode"] == "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
@@ -221,7 +222,7 @@ def test_checkpoint_record_resets_budget_without_phase_change(
     assert authorize_active_task_tool(
         tmp_path,
         tool_name=active_tool,
-        arguments={},
+        arguments={"taskAuthorization": started["taskAuthorization"]},
     )["ok"]
 
     recorded = task_checkpoint(
@@ -384,7 +385,10 @@ def test_autonomy_blocked_task_allows_one_bounded_replan(
     authorized = authorize_active_task_tool(
         tmp_path,
         tool_name="unreal_agent_plan",
-        arguments={"request": "Try a new bounded strategy"},
+        arguments={
+            "request": "Try a new bounded strategy",
+            "taskAuthorization": started["taskAuthorization"],
+        },
     )
     assert authorized["ok"] is True
     assert authorized["autonomyBlockedReplan"] is True
@@ -721,7 +725,12 @@ def test_route_discovery_distinguishes_none_blocked_corrupt_and_ambiguous(
     state_path.write_text(json.dumps(state), encoding="utf-8")
     assert active_task_route_context(tmp_path)["status"] == "blocked"
     blocked = authorize_active_task_tool(
-        tmp_path, tool_name="read_file", arguments={"path": "README.md"}
+        tmp_path,
+        tool_name="read_file",
+        arguments={
+            "path": "README.md",
+            "taskAuthorization": started["taskAuthorization"],
+        },
     )
     assert blocked["errorCode"] == "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
 
@@ -794,7 +803,22 @@ def test_foreign_connection_write_task_does_not_own_tool_route(
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["mcpConnectionId"] = "mcp-other-connection"
     state_path.write_text(json.dumps(state), encoding="utf-8")
-    assert active_task_route_context(tmp_path)["status"] == "none"
+    # tools/list may still surface the single project task's catalog, but
+    # CallTool authorize without ownerCapability must not execute the route.
+    assert active_task_route_context(tmp_path)["status"] == "active"
+    denied = authorize_active_task_tool(
+        tmp_path,
+        tool_name="read_file",
+        arguments={},
+    )
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
+    allowed = authorize_active_task_tool(
+        tmp_path,
+        tool_name="read_file",
+        arguments={"taskAuthorization": started["taskAuthorization"]},
+    )
+    assert allowed["ok"] is True
 
 
 def test_project_identity_bridges_rag_and_node_workspaces_without_cross_project_leak(

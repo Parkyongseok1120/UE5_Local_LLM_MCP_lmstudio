@@ -859,10 +859,18 @@ function taskAuthSchemaProperties() {
   return {
     taskAuthorization: {
       type: "object",
-      description: "Seven-field server-issued auth object. After unreal_code_sketch_claim_validate or unreal_task_checkpoint, copy gateCompletion.taskAuthorization (or taskAuthorization from a stale-auth error), not the original unreal_agent_plan object.",
+      description: "Server-issued auth object from unreal_task_start / checkpoint / stale-auth refresh. Include ownerCapability for multi-chat route ownership; never reuse another chat's capability.",
       properties: {
         taskSessionId: { type: "string" },
         authToken: { type: "string" },
+        ownerCapability: {
+          type: "string",
+          description: "Secret ownership token from task_start. Not a conversationId.",
+        },
+        conversationId: {
+          type: "string",
+          description: "Public chat scope label. Not sufficient for ownership by itself.",
+        },
         planId: { type: "string" },
         planRevision: { type: "string" },
         activeSliceId: { type: "string" },
@@ -880,6 +888,26 @@ function taskAuthSchemaProperties() {
       ],
       additionalProperties: false,
     },
+  };
+}
+
+function routeOwnershipFromArgs(args = {}) {
+  const auth = args.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : args.task_authorization && typeof args.task_authorization === "object"
+      ? args.task_authorization
+      : {};
+  return {
+    ownerCapability: String(
+      auth.ownerCapability || auth.owner_capability || ""
+    ).trim(),
+    conversationId: String(
+      auth.conversationId
+      || auth.conversation_id
+      || args.conversationId
+      || args.conversation_id
+      || ""
+    ).trim(),
   };
 }
 
@@ -1778,7 +1806,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       const active = discoverActiveTaskContext(
         WORKSPACE_ROOT,
-        activeProjectForRoute
+        activeProjectForRoute,
+        {
+          ...routeOwnershipFromArgs(args),
+          requireOwnerCapability: true,
+        }
       );
       if (active.status !== "active") {
         return { ok: true, legacy: true };

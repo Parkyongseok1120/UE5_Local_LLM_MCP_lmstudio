@@ -1903,6 +1903,35 @@ class McpServer:
             "additionalProperties": False,
         }
 
+    @staticmethod
+    def _task_ownership_args(arguments: dict[str, Any] | None) -> dict[str, str]:
+        args = arguments if isinstance(arguments, dict) else {}
+        auth = args.get("taskAuthorization") if isinstance(args.get("taskAuthorization"), dict) else {}
+        if not isinstance(auth, dict):
+            auth = (
+                args.get("task_authorization")
+                if isinstance(args.get("task_authorization"), dict)
+                else {}
+            )
+        if not isinstance(auth, dict):
+            auth = {}
+        return {
+            "conversation_id": str(
+                auth.get("conversationId")
+                or auth.get("conversation_id")
+                or args.get("conversationId")
+                or args.get("conversation_id")
+                or ""
+            ).strip(),
+            "owner_capability": str(
+                auth.get("ownerCapability")
+                or auth.get("owner_capability")
+                or args.get("ownerCapability")
+                or args.get("owner_capability")
+                or ""
+            ).strip(),
+        }
+
     def all_tool_definitions(self) -> list[dict[str, Any]]:
         from tool_exposure import callable_rag_tool_names
         from phase_tool_router import ALWAYS_DISCOVERABLE_CONTROL_TOOLS
@@ -3173,9 +3202,17 @@ class McpServer:
                         "conversationId": {
                             "type": "string",
                             "description": (
-                                "Stable chat/conversation id. Reuse the value returned by "
-                                "the first unreal_task_start in this chat. Required for "
-                                "multi-chat isolation on a shared MCP server."
+                                "Stable chat/conversation id (public scope label). "
+                                "Reuse the value returned by the first unreal_task_start "
+                                "in this chat. Ownership requires ownerCapability from "
+                                "taskAuthorization, not conversationId alone."
+                            ),
+                        },
+                        "taskAuthorization": {
+                            "type": "object",
+                            "description": (
+                                "Prefer passing the taskAuthorization object returned by "
+                                "unreal_task_start. It includes ownerCapability."
                             ),
                         },
                         "startBackgroundJob": {"type": "boolean", "default": False},
@@ -3208,12 +3245,19 @@ class McpServer:
                 "title": "List active tasks",
                 "description": (
                     "List running task sessions for the active project/workspace "
-                    "without requiring a known taskSessionId. Does not return authToken. "
-                    "Pass conversationId to see ownership relative to this chat."
+                    "without requiring a known taskSessionId. Does not return authToken "
+                    "or ownerCapability. Foreign conversationId values are redacted. "
+                    "Pass taskAuthorization.ownerCapability (or ownerCapability) to mark "
+                    "which tasks you own."
                 ),
                 "inputSchema": self._schema(
                     {
                         "conversationId": {"type": "string"},
+                        "ownerCapability": {
+                            "type": "string",
+                            "description": "Secret from taskAuthorization; never from task_list_active.",
+                        },
+                        "taskAuthorization": {"type": "object"},
                     },
                 ),
             },
@@ -3228,6 +3272,8 @@ class McpServer:
                     {
                         "taskSessionId": {"type": "string"},
                         "conversationId": {"type": "string"},
+                        "ownerCapability": {"type": "string"},
+                        "taskAuthorization": {"type": "object"},
                     },
                 ),
             },
@@ -3237,12 +3283,15 @@ class McpServer:
                 "description": (
                     "Cancel the single active running task for the project, "
                     "or a named taskSessionId when multiple are present. "
-                    "Healthy tasks owned by another connection require force=true."
+                    "Healthy tasks owned by another connection require force=true. "
+                    "Pass ownerCapability from taskAuthorization to prove ownership."
                 ),
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
                         "conversationId": {"type": "string"},
+                        "ownerCapability": {"type": "string"},
+                        "taskAuthorization": {"type": "object"},
                         "force": {"type": "boolean", "default": False},
                     },
                 ),
@@ -3265,13 +3314,16 @@ class McpServer:
                 "title": "Retry uncertain job cancellation",
                 "description": (
                     "Re-probe cancellation_uncertain / orphan jobs, retry process-tree kill, "
-                    "and confirm termination before quarantine."
+                    "and confirm termination before quarantine. "
+                    "Pass ownerCapability from taskAuthorization."
                 ),
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
                         "jobId": {"type": "string"},
                         "conversationId": {"type": "string"},
+                        "ownerCapability": {"type": "string"},
+                        "taskAuthorization": {"type": "object"},
                         "force": {"type": "boolean", "default": False},
                     },
                     required=["taskSessionId"],
@@ -3852,9 +3904,7 @@ class McpServer:
                 from task_api import task_recover_active, task_status
 
                 task_session_id = str(arguments.get("taskSessionId") or "").strip()
-                conversation_id = str(
-                    arguments.get("conversationId") or arguments.get("conversation_id") or ""
-                )
+                ownership = self._task_ownership_args(arguments)
                 if task_session_id:
                     payload = task_status(self.workspace, task_session_id)
                 else:
@@ -3862,52 +3912,47 @@ class McpServer:
                     payload = task_recover_active(
                         self.workspace,
                         active_project=str(config.get("activeProject") or ""),
-                        conversation_id=conversation_id,
+                        conversation_id=ownership["conversation_id"],
+                        owner_capability=ownership["owner_capability"],
                     )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_list_active":
                 from task_api import task_list_active
 
                 config = load_shared_config()
+                ownership = self._task_ownership_args(arguments)
                 payload = task_list_active(
                     self.workspace,
                     active_project=str(config.get("activeProject") or ""),
-                    conversation_id=str(
-                        arguments.get("conversationId")
-                        or arguments.get("conversation_id")
-                        or ""
-                    ),
+                    conversation_id=ownership["conversation_id"],
+                    owner_capability=ownership["owner_capability"],
                 )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_recover_active":
                 from task_api import task_recover_active
 
                 config = load_shared_config()
+                ownership = self._task_ownership_args(arguments)
                 payload = task_recover_active(
                     self.workspace,
                     active_project=str(config.get("activeProject") or ""),
                     task_session_id=str(arguments.get("taskSessionId") or ""),
-                    conversation_id=str(
-                        arguments.get("conversationId")
-                        or arguments.get("conversation_id")
-                        or ""
-                    ),
+                    conversation_id=ownership["conversation_id"],
+                    owner_capability=ownership["owner_capability"],
                 )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_cancel_active":
                 from task_api import task_cancel_active
 
                 config = load_shared_config()
+                ownership = self._task_ownership_args(arguments)
                 payload = task_cancel_active(
                     self.workspace,
                     active_project=str(config.get("activeProject") or ""),
                     task_session_id=str(arguments.get("taskSessionId") or ""),
                     force=arguments.get("force") is True,
-                    conversation_id=str(
-                        arguments.get("conversationId")
-                        or arguments.get("conversation_id")
-                        or ""
-                    ),
+                    conversation_id=ownership["conversation_id"],
+                    owner_capability=ownership["owner_capability"],
                 )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()
@@ -3928,17 +3973,15 @@ class McpServer:
                 from task_api import task_retry_job_cancel
 
                 config = load_shared_config()
+                ownership = self._task_ownership_args(arguments)
                 payload = task_retry_job_cancel(
                     self.workspace,
                     active_project=str(config.get("activeProject") or ""),
                     task_session_id=str(arguments.get("taskSessionId") or ""),
                     job_id=str(arguments.get("jobId") or ""),
                     force=arguments.get("force") is True,
-                    conversation_id=str(
-                        arguments.get("conversationId")
-                        or arguments.get("conversation_id")
-                        or ""
-                    ),
+                    conversation_id=ownership["conversation_id"],
+                    owner_capability=ownership["owner_capability"],
                 )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_checkpoint":

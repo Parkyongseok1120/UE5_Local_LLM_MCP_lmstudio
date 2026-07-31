@@ -1166,3 +1166,81 @@ test("stale legacy reserved counters are cleared on next budget mutate", () => {
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
+
+test("conversation-scoped tasks require ownerCapability for CallTool authorize", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-cap-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-cap-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const previous = process.env.AGENT_STATE_ROOT;
+  const previousBridge = process.env.MCP_BRIDGE_PAIR_ID;
+  const previousClient = process.env.MCP_CLIENT_INSTANCE_ID;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  process.env.MCP_BRIDGE_PAIR_ID = "bridge-cap-test";
+  process.env.MCP_CLIENT_INSTANCE_ID = "client-cap-test";
+  try {
+    const { getMcpConnectionId } = require("../src/mcp-connection");
+    const capA = "a".repeat(64);
+    const capB = "b".repeat(64);
+    const taskA = routeState(projectFile, {
+      taskSessionId: "task_aaaaaaa1",
+      conversationId: "conv-aaaa",
+      ownerCapability: capA,
+      mcpConnectionId: `${getMcpConnectionId()}:conv-aaaa`,
+    });
+    const taskB = routeState(projectFile, {
+      taskSessionId: "task_bbbbbbb2",
+      conversationId: "conv-bbbb",
+      ownerCapability: capB,
+      mcpConnectionId: `${getMcpConnectionId()}:conv-bbbb`,
+    });
+    const dirA = path.join(stateRoot, "tasks", taskA.taskSessionId);
+    const dirB = path.join(stateRoot, "tasks", taskB.taskSessionId);
+    fs.mkdirSync(dirA, { recursive: true });
+    fs.mkdirSync(dirB, { recursive: true });
+    fs.writeFileSync(path.join(dirA, "state.json"), JSON.stringify(taskA));
+    fs.writeFileSync(path.join(dirB, "state.json"), JSON.stringify(taskB));
+
+    assert.strictEqual(
+      discoverActiveTaskContext(workspace, projectFile).status,
+      "ambiguous_or_corrupt"
+    );
+
+    assert.strictEqual(
+      authorizeActiveRouteTool(
+        workspace,
+        "read_file",
+        { conversationId: "conv-aaaa" },
+        { activeProject: projectFile }
+      ).errorCode,
+      "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
+    );
+
+    const allowed = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      { taskAuthorization: { ownerCapability: capA } },
+      { activeProject: projectFile, consumeBudget: false }
+    );
+    assert.strictEqual(allowed.ok, true);
+    assert.strictEqual(allowed.taskSessionId, taskA.taskSessionId);
+
+    const foreign = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      { taskAuthorization: { ownerCapability: capB } },
+      { activeProject: projectFile, consumeBudget: false }
+    );
+    assert.strictEqual(foreign.ok, true);
+    assert.strictEqual(foreign.taskSessionId, taskB.taskSessionId);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    if (previousBridge === undefined) delete process.env.MCP_BRIDGE_PAIR_ID;
+    else process.env.MCP_BRIDGE_PAIR_ID = previousBridge;
+    if (previousClient === undefined) delete process.env.MCP_CLIENT_INSTANCE_ID;
+    else process.env.MCP_CLIENT_INSTANCE_ID = previousClient;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});

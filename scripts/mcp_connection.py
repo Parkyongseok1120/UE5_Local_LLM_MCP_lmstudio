@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 import re
+import secrets
 import time
 import uuid
 from pathlib import Path
@@ -54,6 +56,22 @@ def _valid_bridge_id(value: str) -> bool:
 
 def valid_conversation_id(value: str) -> bool:
     return bool(value and _CONVERSATION_ID_RE.match(value))
+
+
+def mint_owner_capability() -> str:
+    return secrets.token_hex(32)
+
+
+def owner_capability_matches(state: dict | None, owner_capability: str = "") -> bool:
+    if not isinstance(state, dict):
+        return False
+    expected = str(state.get("ownerCapability") or "").strip()
+    provided = str(owner_capability or "").strip()
+    if not expected or not provided:
+        return False
+    if len(expected) != len(provided):
+        return False
+    return hmac.compare_digest(expected, provided)
 
 
 def _atomic_write_text(path: Path, value: str) -> None:
@@ -214,18 +232,10 @@ def build_mcp_connection_id(*, conversation_id: str = "") -> str:
 
 
 def get_mcp_connection_id(*, conversation_id: str = "") -> str:
-    """Ownership id for task route filtering.
-
-    Preference:
-    1. explicit conversation_id / MCP_SESSION_ID / MCP_CONVERSATION_ID
-       → bridge:instance:conversation
-    2. MCP_CONNECTION_ID (explicit test override, only without conversation)
-    3. bridge:hostBootInstance
-    """
+    """Ownership id for task route filtering (display/scope, not a secret)."""
     global _OWNER_ID
     conv = get_mcp_conversation_id(explicit=conversation_id)
     if conv or conversation_id:
-        # Request-scoped: do not poison the process-global owner cache.
         return build_mcp_connection_id(conversation_id=conv or conversation_id)
     built = build_mcp_connection_id()
     if _OWNER_ID and _OWNER_ID != built:
@@ -238,18 +248,25 @@ def task_connection_matches(
     state: dict | None,
     *,
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> bool:
+    """Return True when the caller proved ownership of the task.
+
+    conversationId is a public scope label and is never sufficient on its own.
+    Conversation-scoped tasks require ownerCapability (or legacy exact connection
+    match only when the task has neither capability nor conversation id).
+    """
     if not isinstance(state, dict):
+        return False
+    if owner_capability_matches(state, owner_capability):
+        return True
+    task_capability = str(state.get("ownerCapability") or "").strip()
+    task_conv = str(state.get("conversationId") or "").strip()
+    if task_capability or task_conv:
+        # Public conversationId alone cannot prove ownership.
         return False
     task_connection = str(state.get("mcpConnectionId") or "").strip()
     if not task_connection:
-        return False
-    request_conv = get_mcp_conversation_id(explicit=conversation_id)
-    task_conv = str(state.get("conversationId") or "").strip()
-    if request_conv:
-        return task_connection == build_mcp_connection_id(conversation_id=request_conv)
-    # No conversation on this request: never match conversation-scoped tasks.
-    if task_conv:
         return False
     return task_connection == build_mcp_connection_id()
 
@@ -258,6 +275,7 @@ def task_owns_active_tool_route(
     state: dict | None,
     *,
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> bool:
     if not isinstance(state, dict):
         return False
@@ -266,30 +284,28 @@ def task_owns_active_tool_route(
     mode = str(state.get("mode") or "").strip().lower()
     if mode in {"plan_only", "detached"}:
         return False
-    if task_connection_matches(state, conversation_id=conversation_id):
-        return True
-    # Tools that omit conversationId still need a route in single-chat hosts.
-    # Conversation-scoped tasks under this boot instance are eligible; multiple
-    # matches become ambiguous_or_corrupt in active_task_route_context.
-    if conversation_id or get_mcp_conversation_id():
-        return False
-    task_connection = str(state.get("mcpConnectionId") or "").strip()
-    if not task_connection:
-        return False
-    boot = build_mcp_connection_id()
-    return task_connection == boot or task_connection.startswith(f"{boot}:")
+    return task_connection_matches(
+        state,
+        conversation_id=conversation_id,
+        owner_capability=owner_capability,
+    )
 
 
 def task_is_foreign_healthy(
     state: dict | None,
     *,
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> bool:
     if not isinstance(state, dict):
         return False
     if str(state.get("status") or "") != "running":
         return False
-    if task_connection_matches(state, conversation_id=conversation_id):
+    if task_connection_matches(
+        state,
+        conversation_id=conversation_id,
+        owner_capability=owner_capability,
+    ):
         return False
     if not str(state.get("mcpConnectionId") or "").strip():
         return False

@@ -178,36 +178,37 @@ function getMcpConnectionId(conversationId = "") {
   return ownerId;
 }
 
-function taskConnectionMatches(state, conversationId = "") {
+function ownerCapabilityMatches(state, ownerCapability = "") {
   if (!state || typeof state !== "object" || Array.isArray(state)) return false;
+  const expected = String(state.ownerCapability || "").trim();
+  const provided = String(ownerCapability || "").trim();
+  if (!expected || !provided || expected.length !== provided.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
+}
+
+function taskConnectionMatches(state, conversationId = "", ownerCapability = "") {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return false;
+  if (ownerCapabilityMatches(state, ownerCapability)) return true;
+  const taskCapability = String(state.ownerCapability || "").trim();
+  const taskConv = String(state.conversationId || "").trim();
+  if (taskCapability || taskConv) return false;
   const taskConnection = String(state.mcpConnectionId || "").trim();
   if (!taskConnection) return false;
-  const requestConv = getMcpConversationId(conversationId);
-  const taskConv = String(state.conversationId || "").trim();
-  if (requestConv) {
-    return taskConnection === buildMcpConnectionId(requestConv);
-  }
-  if (taskConv) return false;
   return taskConnection === buildMcpConnectionId();
 }
 
-function taskOwnsActiveToolRoute(state, conversationId = "") {
+function taskOwnsActiveToolRoute(state, conversationId = "", ownerCapability = "") {
   if (!state || typeof state !== "object" || Array.isArray(state)) return false;
   if (String(state.status || "") !== "running") return false;
   const mode = String(state.mode || "").trim().toLowerCase();
   if (mode === "plan_only" || mode === "detached") return false;
-  if (taskConnectionMatches(state, conversationId)) return true;
-  if (conversationId || getMcpConversationId()) return false;
-  const taskConnection = String(state.mcpConnectionId || "").trim();
-  if (!taskConnection) return false;
-  const boot = buildMcpConnectionId();
-  return taskConnection === boot || taskConnection.startsWith(`${boot}:`);
+  return taskConnectionMatches(state, conversationId, ownerCapability);
 }
 
-function taskIsForeignHealthy(state, conversationId = "") {
+function taskIsForeignHealthy(state, conversationId = "", ownerCapability = "") {
   if (!state || typeof state !== "object" || Array.isArray(state)) return false;
   if (String(state.status || "") !== "running") return false;
-  if (taskConnectionMatches(state, conversationId)) return false;
+  if (taskConnectionMatches(state, conversationId, ownerCapability)) return false;
   if (!String(state.mcpConnectionId || "").trim()) return false;
   const continuity = state.continuity && typeof state.continuity === "object" ? state.continuity : {};
   const lease = continuity.lease && typeof continuity.lease === "object" ? continuity.lease : null;
@@ -239,6 +240,7 @@ module.exports = {
   getMcpClientInstanceId,
   getMcpConversationId,
   getMcpClientSessionId,
+  ownerCapabilityMatches,
   taskOwnsActiveToolRoute,
   taskConnectionMatches,
   taskIsForeignHealthy,

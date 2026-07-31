@@ -46,6 +46,7 @@ from phase_tool_router import (
 )
 from mcp_connection import (
     get_mcp_connection_id,
+    mint_owner_capability,
     resolve_conversation_id,
     task_connection_matches,
     task_is_foreign_healthy,
@@ -95,6 +96,8 @@ def task_authorization_for_state(state: dict[str, Any]) -> dict[str, str]:
     return {
         "taskSessionId": str(state.get("taskSessionId") or ""),
         "authToken": str(state.get("authToken") or ""),
+        "ownerCapability": str(state.get("ownerCapability") or ""),
+        "conversationId": str(state.get("conversationId") or ""),
         "planId": str(state.get("planId") or ""),
         "planRevision": str(state.get("planRevision") or ""),
         "activeSliceId": str(state.get("activeSliceId") or ""),
@@ -370,8 +373,16 @@ def active_task_route_context(
     workspace: Path,
     *,
     active_project: str = "",
+    conversation_id: str = "",
+    owner_capability: str = "",
+    require_owner_capability: bool = False,
 ) -> dict[str, Any]:
-    """Return active, none, blocked, or ambiguous/corrupt route ownership."""
+    """Return active, none, blocked, or ambiguous/corrupt route ownership.
+
+    When require_owner_capability is True (CallTool authorize), conversation-scoped
+    tasks need ownerCapability. When False (tools/list), a single project-scoped
+    running task may be exposed for catalog filtering without the secret.
+    """
 
     state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
     tasks_root = state_root / "tasks"
@@ -381,6 +392,8 @@ def active_task_route_context(
         workspace=workspace,
     )
     running: list[dict[str, Any]] = []
+    unproven_candidates: list[dict[str, Any]] = []
+    scoped_claimants = 0
     try:
         task_dirs = sorted(
             (item for item in tasks_root.iterdir() if item.is_dir()),
@@ -541,7 +554,46 @@ def active_task_route_context(
                     "status": "ambiguous_or_corrupt",
                     "error": f"running task has no toolRoute: {state_path}",
                 }
-            if not task_owns_active_tool_route(state):
+            if not task_owns_active_tool_route(
+                state,
+                conversation_id=conversation_id,
+                owner_capability=owner_capability,
+            ):
+                if (
+                    str(state.get("conversationId") or "").strip()
+                    or str(state.get("ownerCapability") or "").strip()
+                ):
+                    scoped_claimants += 1
+                mode = str(state.get("mode") or "").strip().lower()
+                if (
+                    not require_owner_capability
+                    and mode not in {"plan_only", "detached"}
+                ):
+                    continuity = (
+                        state.get("continuity")
+                        if isinstance(state.get("continuity"), dict)
+                        else {}
+                    )
+                    lease = (
+                        continuity.get("lease")
+                        if isinstance(continuity.get("lease"), dict)
+                        else {}
+                    )
+                    recovery = (
+                        continuity.get("recovery")
+                        if isinstance(continuity.get("recovery"), dict)
+                        else {}
+                    )
+                    supervisor = (
+                        state.get("autonomySupervisor")
+                        if isinstance(state.get("autonomySupervisor"), dict)
+                        else {}
+                    )
+                    if lease and lease_health(continuity).get("active") is not True:
+                        return {"status": "blocked", "state": state}
+                    if recovery.get("conflicts") or supervisor.get("blockers"):
+                        return {"status": "blocked", "state": state}
+                    unproven_candidates.append(state)
                 continue
             continuity = (
                 state.get("continuity")
@@ -575,6 +627,23 @@ def active_task_route_context(
                 }
     if len(running) == 1:
         return {"status": "active", "state": running[0]}
+    if require_owner_capability:
+        if scoped_claimants:
+            return {
+                "status": "ambiguous_or_corrupt",
+                "error": (
+                    "Running conversation-scoped task(s) require "
+                    "taskAuthorization.ownerCapability for route ownership."
+                ),
+            }
+        return {"status": "none"}
+    if len(unproven_candidates) == 1:
+        return {"status": "active", "state": unproven_candidates[0]}
+    if len(unproven_candidates) > 1 or scoped_claimants > 1:
+        return {
+            "status": "ambiguous_or_corrupt",
+            "error": "multiple running tasks prevent deterministic route ownership",
+        }
     return {"status": "none"}
 
 
@@ -787,6 +856,7 @@ def _active_job(workspace: Path, state: dict[str, Any]) -> dict[str, Any] | None
 def _public_state(state: dict[str, Any]) -> dict[str, Any]:
     public = dict(state)
     public.pop("authToken", None)
+    public.pop("ownerCapability", None)
     return public
 
 
@@ -1375,6 +1445,7 @@ def task_start(
         workspace=workspace,
     )
     resolved_conversation_id = resolve_conversation_id(explicit=conversation_id)
+    owner_capability = mint_owner_capability()
     if plan_payload is None:
         from agent_orchestrator import build_agent_plan
 
@@ -1473,6 +1544,7 @@ def task_start(
         "activeJobId": "",
         "authToken": auth_token,
         "conversationId": resolved_conversation_id,
+        "ownerCapability": owner_capability,
         "mcpConnectionId": get_mcp_connection_id(conversation_id=resolved_conversation_id),
         "writeGate": write_gate,
         "writesAllowed": writes_allowed,
@@ -1820,6 +1892,7 @@ def _iter_discoverable_task_entries(
     *,
     active_project: str = "",
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> list[dict[str, Any]]:
     """Yield running or corrupt tasks that claim the current project/workspace."""
 
@@ -1933,13 +2006,19 @@ def _iter_discoverable_task_entries(
                 "conversationId": str(state.get("conversationId") or ""),
                 "routePhase": str(route.get("phase") or ""),
                 "ownsActiveToolRoute": task_owns_active_tool_route(
-                    state, conversation_id=conversation_id
+                    state,
+                    conversation_id=conversation_id,
+                    owner_capability=owner_capability,
                 ),
                 "foreignHealthy": task_is_foreign_healthy(
-                    state, conversation_id=conversation_id
+                    state,
+                    conversation_id=conversation_id,
+                    owner_capability=owner_capability,
                 ),
                 "connectionMatches": task_connection_matches(
-                    state, conversation_id=conversation_id
+                    state,
+                    conversation_id=conversation_id,
+                    owner_capability=owner_capability,
                 ),
                 "updatedAt": str(state.get("updatedAt") or ""),
                 "activeJobId": str(state.get("activeJobId") or ""),
@@ -1959,6 +2038,7 @@ def _iter_running_task_states(
     *,
     active_project: str = "",
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> list[dict[str, Any]]:
     return [
         dict(item["_state"])
@@ -1966,6 +2046,7 @@ def _iter_running_task_states(
             workspace,
             active_project=active_project,
             conversation_id=conversation_id,
+            owner_capability=owner_capability,
         )
         if item.get("status") == "running" and isinstance(item.get("_state"), dict)
     ]
@@ -1976,6 +2057,7 @@ def task_list_active(
     *,
     active_project: str = "",
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> dict[str, Any]:
     """List running and corrupt tasks for the current project/workspace."""
 
@@ -1984,8 +2066,15 @@ def task_list_active(
         workspace,
         active_project=active_project,
         conversation_id=conversation_id,
+        owner_capability=owner_capability,
     ):
         public = {key: value for key, value in item.items() if key != "_state"}
+        # Never leak foreign conversation/connection identifiers or capabilities.
+        if public.get("connectionMatches") is not True:
+            public.pop("conversationId", None)
+            public["mcpConnectionId"] = ""
+            public["request"] = ""
+        public.pop("ownerCapability", None)
         tasks.append(public)
     corrupt = [item for item in tasks if item.get("status") == "corrupt"]
     return {
@@ -2329,6 +2418,7 @@ def task_retry_job_cancel(
     job_id: str = "",
     force: bool = False,
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> dict[str, Any]:
     """Re-probe cancellation_uncertain jobs and retry kill/confirm."""
 
@@ -2364,8 +2454,19 @@ def task_retry_job_cancel(
             }
         task_state = {"taskSessionId": session}
 
-    if not task_connection_matches(task_state, conversation_id=conversation_id):
-        if task_is_foreign_healthy(task_state, conversation_id=conversation_id) and not force:
+    if not task_connection_matches(
+        task_state,
+        conversation_id=conversation_id,
+        owner_capability=owner_capability,
+    ):
+        if (
+            task_is_foreign_healthy(
+                task_state,
+                conversation_id=conversation_id,
+                owner_capability=owner_capability,
+            )
+            and not force
+        ):
             return {
                 "ok": False,
                 "errorCode": "TASK_FOREIGN_HEALTHY",
@@ -2375,11 +2476,17 @@ def task_retry_job_cancel(
                 ),
                 "routeReleased": False,
             }
-        if not force and str(task_state.get("mcpConnectionId") or "").strip():
+        if not force and (
+            str(task_state.get("ownerCapability") or "").strip()
+            or str(task_state.get("mcpConnectionId") or "").strip()
+        ):
             return {
                 "ok": False,
                 "errorCode": "TASK_CONNECTION_MISMATCH",
-                "error": "Task mcpConnectionId does not match this MCP connection.",
+                "error": (
+                    "Task ownership was not proven; pass ownerCapability from "
+                    "taskAuthorization, or force=true after user confirmation."
+                ),
                 "routeReleased": False,
             }
 
@@ -2399,25 +2506,80 @@ def task_retry_job_cancel(
                 "routeReleased": False,
             }
 
-    def _finish(ok: bool, *, result: dict[str, Any] | None = None, retried: list | None = None):
+    def _blocking_jobs_remain() -> tuple[bool, list[dict[str, Any]]]:
+        discovery = _discover_jobs_linked_to_task(workspace, session)
+        if not discovery.get("discoveryComplete"):
+            return True, []
+        blockers = [
+            job
+            for job in (discovery.get("jobs") or [])
+            if isinstance(job, dict)
+            and (
+                str(job.get("status") or "") == "cancellation_uncertain"
+                or bool(job.get("orphanProcessSuspected"))
+                or _job_blocks_quarantine(job)
+            )
+        ]
+        return bool(blockers), blockers
+
+    def _finish(
+        ok: bool,
+        *,
+        result: dict[str, Any] | None = None,
+        retried: list | None = None,
+    ) -> dict[str, Any]:
         if not ok:
             payload = {
                 "ok": False,
                 "taskSessionId": session,
                 "orphanProcessSuspected": True,
                 "nextAction": "unreal_task_retry_job_cancel",
+                "routeReleased": False,
             }
             if result is not None:
                 payload["result"] = result
             if retried is not None:
                 payload["retried"] = retried
             return payload
+        still_blocking, remaining = _blocking_jobs_remain()
+        if still_blocking:
+            return {
+                "ok": False,
+                "taskSessionId": session,
+                "result": result,
+                "retried": retried or [],
+                "remainingBlockingJobs": [
+                    str(job.get("jobId") or "") for job in remaining
+                ],
+                "orphanProcessSuspected": True,
+                "nextAction": "unreal_task_retry_job_cancel",
+                "routeReleased": False,
+            }
         synced = _mark_task_cancelled_after_jobs(workspace, session)
+        synced_ok = bool(synced.get("ok"))
+        synced_status = str((synced.get("state") or {}).get("status") or "")
+        if not synced_ok or synced_status != "cancelled":
+            # Task may already be cancelled; accept that as success.
+            if synced_status == "cancelled":
+                synced_ok = True
+            else:
+                return {
+                    "ok": False,
+                    "taskSessionId": session,
+                    "taskStatusSynced": False,
+                    "taskStatus": synced_status,
+                    "result": result,
+                    "retried": retried or [],
+                    "errorCode": "TASK_STATUS_SYNC_FAILED",
+                    "error": "Jobs are safe but task state could not be marked cancelled.",
+                    "nextAction": "unreal_task_retry_job_cancel",
+                    "routeReleased": False,
+                }
         return {
             "ok": True,
             "taskSessionId": session,
-            "taskStatusSynced": bool(synced.get("ok")),
-            "taskStatus": str((synced.get("state") or {}).get("status") or ""),
+            "taskStatusSynced": True,
+            "taskStatus": "cancelled",
             "result": result,
             "retried": retried or [],
             "orphanProcessSuspected": False,
@@ -2425,6 +2587,7 @@ def task_retry_job_cancel(
             "routeReleased": True,
         }
 
+    retried: list[dict[str, Any]] = []
     if explicit_job:
         job = read_job(workspace, explicit_job)
         if not job:
@@ -2448,12 +2611,13 @@ def task_retry_job_cancel(
                 "routeReleased": False,
             }
         result = cancel_job(workspace, explicit_job)
+        retried.append({"jobId": explicit_job, **result})
         success = (
             bool(result.get("ok"))
             and str(result.get("cancellationState") or "") == "cancelled"
             and not result.get("orphanProcessSuspected")
         )
-        finished = _finish(success, result=result)
+        finished = _finish(success, result=result, retried=retried)
         finished["jobId"] = explicit_job
         return finished
 
@@ -2476,9 +2640,7 @@ def task_retry_job_cancel(
         )
     ]
     if not targets:
-        # No uncertain jobs left — still sync task out of cancellation_uncertain.
         return _finish(True, retried=[])
-    retried = []
     still_uncertain = False
     for job in targets:
         jid = str(job.get("jobId") or "").strip()
@@ -2500,12 +2662,14 @@ def task_resolve_active_session_id(
     active_project: str = "",
     task_session_id: str = "",
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> dict[str, Any]:
     explicit = str(task_session_id or "").strip()
     listed = task_list_active(
         workspace,
         active_project=active_project,
         conversation_id=conversation_id,
+        owner_capability=owner_capability,
     )
     tasks = [
         item
@@ -2589,12 +2753,14 @@ def task_cancel_active(
     task_session_id: str = "",
     force: bool = False,
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> dict[str, Any]:
     resolved = task_resolve_active_session_id(
         workspace,
         active_project=active_project,
         task_session_id=task_session_id,
         conversation_id=conversation_id,
+        owner_capability=owner_capability,
     )
     if not resolved.get("ok"):
         return resolved
@@ -2626,6 +2792,7 @@ def task_recover_active(
     active_project: str = "",
     task_session_id: str = "",
     conversation_id: str = "",
+    owner_capability: str = "",
 ) -> dict[str, Any]:
     """Discover the active task and renew lease / recover checkpoint state."""
 
@@ -2634,6 +2801,7 @@ def task_recover_active(
         active_project=active_project,
         task_session_id=task_session_id,
         conversation_id=conversation_id,
+        owner_capability=owner_capability,
     )
     if not resolved.get("ok"):
         return resolved
@@ -2649,6 +2817,7 @@ def task_recover_active(
     if discovered and not task_connection_matches(
         discovered.get("_state") or discovered,
         conversation_id=conversation_id,
+        owner_capability=owner_capability,
     ):
         # discovered task summary may not include full state; load and check.
         state_path = task_root(workspace, session) / "state.json"
@@ -2657,7 +2826,9 @@ def task_recover_active(
         except (OSError, json.JSONDecodeError, TypeError):
             full_state = {}
         if isinstance(full_state, dict) and full_state and not task_connection_matches(
-            full_state, conversation_id=conversation_id
+            full_state,
+            conversation_id=conversation_id,
+            owner_capability=owner_capability,
         ):
             status["ok"] = True
             status["leaseRenewed"] = False
@@ -4109,12 +4280,36 @@ def authorize_active_task_tool(
     tool_name: str,
     arguments: dict[str, Any] | None = None,
     active_project: str = "",
+    conversation_id: str = "",
+    owner_capability: str = "",
 ) -> dict[str, Any]:
     """Server-side bind a call when exactly one healthy task owns the workspace."""
 
+    args = arguments if isinstance(arguments, dict) else {}
+    auth = args.get("taskAuthorization") if isinstance(args.get("taskAuthorization"), dict) else {}
+    if not isinstance(auth, dict):
+        auth = args.get("task_authorization") if isinstance(args.get("task_authorization"), dict) else {}
+    if not isinstance(auth, dict):
+        auth = {}
+    resolved_capability = str(
+        owner_capability
+        or auth.get("ownerCapability")
+        or auth.get("owner_capability")
+        or ""
+    ).strip()
+    resolved_conversation = str(
+        conversation_id
+        or auth.get("conversationId")
+        or auth.get("conversation_id")
+        or args.get("conversationId")
+        or ""
+    ).strip()
     context = active_task_route_context(
         workspace,
         active_project=active_project,
+        conversation_id=resolved_conversation,
+        owner_capability=resolved_capability,
+        require_owner_capability=True,
     )
     if context.get("status") == "none":
         return {"ok": True, "legacy": True}

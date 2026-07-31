@@ -9,7 +9,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from mcp_connection import task_connection_matches  # noqa: E402
 from task_api import (  # noqa: E402
+    authorize_active_task_tool,
     task_list_active,
     task_retry_job_cancel,
     task_root,
@@ -42,9 +44,13 @@ def test_conversation_ids_isolate_task_ownership(tmp_path: Path, monkeypatch) ->
     assert chat_a["state"]["conversationId"] == "conv-aaaa"
     assert chat_b["state"]["conversationId"] == "conv-bbbb"
     assert chat_a["state"]["mcpConnectionId"] != chat_b["state"]["mcpConnectionId"]
+    cap_a = chat_a["taskAuthorization"]["ownerCapability"]
+    cap_b = chat_b["taskAuthorization"]["ownerCapability"]
+    assert cap_a and cap_b and cap_a != cap_b
+    assert "ownerCapability" not in chat_a["state"]
 
-    listed_a = task_list_active(tmp_path, conversation_id="conv-aaaa")
-    listed_b = task_list_active(tmp_path, conversation_id="conv-bbbb")
+    listed_a = task_list_active(tmp_path, owner_capability=cap_a)
+    listed_b = task_list_active(tmp_path, owner_capability=cap_b)
     own_a = [t for t in listed_a["tasks"] if t.get("connectionMatches")]
     own_b = [t for t in listed_b["tasks"] if t.get("connectionMatches")]
     assert len(own_a) == 1
@@ -52,9 +58,59 @@ def test_conversation_ids_isolate_task_ownership(tmp_path: Path, monkeypatch) ->
     assert len(own_b) == 1
     assert own_b[0]["taskSessionId"] == chat_b["taskSessionId"]
 
-    # Without conversationId, conversation-scoped tasks do not match.
+    foreign_a = [t for t in listed_a["tasks"] if not t.get("connectionMatches")]
+    assert foreign_a
+    assert all("conversationId" not in t for t in foreign_a)
+    assert all(t.get("mcpConnectionId") == "" for t in foreign_a)
+    assert all("ownerCapability" not in t for t in listed_a["tasks"])
+
+    # conversationId alone never proves ownership.
+    listed_spoof = task_list_active(tmp_path, conversation_id="conv-aaaa")
+    assert all(
+        t.get("connectionMatches") is False
+        for t in listed_spoof["tasks"]
+        if t.get("status") == "running"
+    )
+    state_a = json.loads(
+        (task_root(tmp_path, chat_a["taskSessionId"]) / "state.json").read_text(encoding="utf-8")
+    )
+    assert task_connection_matches(state_a, conversation_id="conv-aaaa") is False
+    assert task_connection_matches(state_a, owner_capability=cap_a) is True
+
+    # Without capability, conversation-scoped tasks do not match.
     listed_none = task_list_active(tmp_path)
-    assert all(t.get("connectionMatches") is False for t in listed_none["tasks"] if t.get("status") == "running")
+    assert all(
+        t.get("connectionMatches") is False
+        for t in listed_none["tasks"]
+        if t.get("status") == "running"
+    )
+
+
+def test_node_route_requires_capability_for_scoped_tasks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Foo.cpp",
+        conversation_id="conv-route-01",
+        start_background_job=False,
+    )
+    active_tool = started["toolRoute"]["activeTools"][0]
+    denied = authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={},
+    )
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
+
+    allowed = authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={"taskAuthorization": started["taskAuthorization"]},
+    )
+    assert allowed["ok"] is True
 
 
 def test_retry_cancel_syncs_uncertain_task(tmp_path: Path, monkeypatch) -> None:
@@ -66,6 +122,7 @@ def test_retry_cancel_syncs_uncertain_task(tmp_path: Path, monkeypatch) -> None:
         start_background_job=False,
     )
     task_id = str(started["taskSessionId"])
+    capability = started["taskAuthorization"]["ownerCapability"]
     state_path = task_root(tmp_path, task_id) / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["status"] = "cancellation_uncertain"
@@ -75,7 +132,7 @@ def test_retry_cancel_syncs_uncertain_task(tmp_path: Path, monkeypatch) -> None:
     result = task_retry_job_cancel(
         tmp_path,
         task_session_id=task_id,
-        conversation_id="conv-sync-01",
+        owner_capability=capability,
     )
     assert result["ok"] is True
     assert result["nextAction"] == "unreal_agent_plan"

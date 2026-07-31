@@ -765,7 +765,7 @@ def _run_wrapper_worker(
                 returncode, orphan_after_kill = _wait_process_after_kill(process)
         else:
             returncode = process.wait()
-            # Normal exit: still confirm the process group is gone (detached children).
+        if not timed_out and not orphan_after_kill and process is not None:
             group_death = _confirm_process_group_dead(int(process.pid))
             if group_death != "dead":
                 orphan_after_kill = True

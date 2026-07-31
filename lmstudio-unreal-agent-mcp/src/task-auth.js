@@ -477,6 +477,8 @@ function taskAuthorizationForState(state) {
   return {
     taskSessionId: String(state?.taskSessionId || ""),
     authToken: String(state?.authToken || ""),
+    ownerCapability: String(state?.ownerCapability || ""),
+    conversationId: String(state?.conversationId || ""),
     planId: String(state?.planId || ""),
     planRevision: String(state?.planRevision || ""),
     activeSliceId: String(state?.activeSliceId || ""),
@@ -993,7 +995,16 @@ function effectiveToolRouteForState(state, nowMs = Date.now()) {
   return route;
 }
 
-function discoverActiveTaskContext(workspaceRoot, activeProject = "") {
+function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = {}) {
+  const ownerCapability = String(
+    options.ownerCapability || options.owner_capability || ""
+  ).trim();
+  const conversationId = String(
+    options.conversationId || options.conversation_id || ""
+  ).trim();
+  // CallTool authorization must prove ownership. ListTools/watchers may list a
+  // single project task's tools without the secret (execution still gated).
+  const requireOwnerCapability = options.requireOwnerCapability === true;
   const stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
   const tasksRoot = path.join(stateRoot, "tasks");
   const currentWorkspace = canonicalWorkspaceRoot(workspaceRoot);
@@ -1007,6 +1018,8 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "") {
     return { status: "none" };
   }
   const running = [];
+  const unprovenCandidates = [];
+  let scopedClaimants = 0;
   for (const entry of entries) {
     const entryDir = path.join(tasksRoot, entry.name);
     const ownerPath = path.join(entryDir, "workspace-root.txt");
@@ -1165,7 +1178,59 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "") {
           error: `Running task has no valid tool route: ${entry.name}.`,
         };
       }
-      if (!taskOwnsActiveToolRoute(result.state)) {
+      const mode = String(result.state.mode || "").trim().toLowerCase();
+      const routeEligible = mode !== "plan_only" && mode !== "detached";
+      if (!routeEligible) {
+        continue;
+      }
+      const candidate = {
+        taskSessionId: String(result.state.taskSessionId || entry.name),
+        state: result.state,
+        route: result.state.toolRoute,
+      };
+      if (!taskOwnsActiveToolRoute(result.state, conversationId, ownerCapability)) {
+        if (
+          String(result.state.conversationId || "").trim()
+          || String(result.state.ownerCapability || "").trim()
+        ) {
+          scopedClaimants += 1;
+        }
+        if (!requireOwnerCapability) {
+          const continuity = result.state.continuity
+            && typeof result.state.continuity === "object"
+            ? result.state.continuity
+            : {};
+          const lease = continuity.lease && typeof continuity.lease === "object"
+            ? continuity.lease
+            : null;
+          const recovery = continuity.recovery && typeof continuity.recovery === "object"
+            ? continuity.recovery
+            : {};
+          const supervisor = result.state.autonomySupervisor
+            && typeof result.state.autonomySupervisor === "object"
+            ? result.state.autonomySupervisor
+            : {};
+          const leaseExpiry = lease ? Date.parse(String(lease.expiresAt || "")) : NaN;
+          if (
+            (lease && (
+              String(lease.status || "") !== "active"
+              || !Number.isFinite(leaseExpiry)
+              || leaseExpiry <= Date.now()
+            ))
+            || (Array.isArray(recovery.conflicts) && recovery.conflicts.length)
+            || (Array.isArray(supervisor.blockers) && supervisor.blockers.length)
+          ) {
+            return {
+              status: "blocked",
+              taskSessionId: String(result.state.taskSessionId || entry.name),
+              state: result.state,
+              route: result.state.toolRoute,
+              errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+              error: `Running task is blocked by lease or recovery state: ${entry.name}.`,
+            };
+          }
+          unprovenCandidates.push(candidate);
+        }
         continue;
       }
       const continuity = result.state.continuity
@@ -1201,11 +1266,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "") {
           error: `Running task is blocked by lease or recovery state: ${entry.name}.`,
         };
       }
-      running.push({
-        taskSessionId: String(result.state.taskSessionId || entry.name),
-        state: result.state,
-        route: result.state.toolRoute,
-      });
+      running.push(candidate);
       if (running.length > 1) {
         return {
           status: "ambiguous_or_corrupt",
@@ -1215,9 +1276,30 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "") {
       }
     }
   }
-  return running.length === 1
-    ? { status: "active", ...running[0] }
-    : { status: "none" };
+  if (running.length === 1) {
+    return { status: "active", ...running[0] };
+  }
+  if (requireOwnerCapability) {
+    return scopedClaimants > 0
+      ? {
+        status: "ambiguous_or_corrupt",
+        errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+        error: "Running conversation-scoped task(s) require taskAuthorization.ownerCapability.",
+      }
+      : { status: "none" };
+  }
+  // ListTools / watcher: expose tools when exactly one project task is running.
+  if (unprovenCandidates.length === 1) {
+    return { status: "active", ...unprovenCandidates[0] };
+  }
+  if (unprovenCandidates.length > 1 || scopedClaimants > 1) {
+    return {
+      status: "ambiguous_or_corrupt",
+      errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+      error: "More than one running task owns an active tool route.",
+    };
+  }
+  return { status: "none" };
 }
 
 function listRunningTasksForProject(workspaceRoot, activeProject = "") {
@@ -1502,9 +1584,32 @@ function discoverSingleActiveToolRoute(workspaceRoot, activeProject = "") {
 }
 
 function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = {}) {
+  const auth = args.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : args.task_authorization && typeof args.task_authorization === "object"
+      ? args.task_authorization
+      : {};
+  const ownerCapability = String(
+    options.ownerCapability
+    || auth.ownerCapability
+    || auth.owner_capability
+    || ""
+  ).trim();
+  const conversationId = String(
+    options.conversationId
+    || auth.conversationId
+    || auth.conversation_id
+    || args.conversationId
+    || ""
+  ).trim();
   const active = discoverActiveTaskContext(
     workspaceRoot,
-    String(options.activeProject || "")
+    String(options.activeProject || ""),
+    {
+      ownerCapability,
+      conversationId,
+      requireOwnerCapability: true,
+    }
   );
   if (active.status === "none") return { ok: true, legacy: true };
   if (SAFE_ROUTE_RECOVERY_TOOLS.has(toolName)) {
