@@ -314,19 +314,51 @@ def _kill_process_tree(pid: int) -> bool:
         return result.returncode == 0
     import signal
 
+    term_ok = False
     try:
         os.killpg(pid, signal.SIGTERM)
-        return True
+        term_ok = True
     except ProcessLookupError:
         return True
     except OSError:
         try:
             os.kill(pid, signal.SIGTERM)
-            return True
+            term_ok = True
         except ProcessLookupError:
             return True
         except OSError:
             return False
+
+    # Escalate to SIGKILL if the process group is still present.
+    time.sleep(0.35)
+    still_alive = False
+    try:
+        os.killpg(pid, 0)
+        still_alive = True
+    except ProcessLookupError:
+        return True
+    except OSError:
+        try:
+            os.kill(pid, 0)
+            still_alive = True
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return term_ok
+
+    if still_alive:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return True
+            except OSError:
+                return False
+    return True
 
 
 def _confirm_process_dead(pid: int, *, retries: int = 5, delay_sec: float = 0.2) -> str:
@@ -381,13 +413,16 @@ def _mark_spawn_failure(
 ) -> None:
     if pid and pid > 0:
         _kill_process_tree(pid)
-        death = _confirm_process_dead(pid)
+        death = _confirm_process_group_dead(pid)
     else:
         death = "dead"
     latest = read_job(workspace, job_id) or current
     if death == "dead":
         transition_job_status(latest, "failed")
         latest["spawnPersistFailed"] = True
+        latest["processTerminationConfirmed"] = True
+        latest["processTerminationConfirmedAt"] = _utc_now()
+        latest["orphanProcessSuspected"] = False
     else:
         transition_job_status(latest, "cancellation_uncertain")
         latest["orphanProcessSuspected"] = True
@@ -398,13 +433,15 @@ def _mark_spawn_failure(
 def _wait_process_after_kill(process: subprocess.Popen[str]) -> tuple[int | None, bool]:
     """Return (returncode, orphan_suspected)."""
     if process.poll() is not None:
-        return process.returncode, False
+        group_death = _confirm_process_group_dead(process.pid)
+        return process.returncode, group_death != "dead"
     _kill_process_tree(process.pid)
     try:
-        return process.wait(timeout=30), False
+        code = process.wait(timeout=30)
     except subprocess.TimeoutExpired:
         return None, True
-
+    group_death = _confirm_process_group_dead(process.pid)
+    return code, group_death != "dead"
 
 def _is_cancelled(workspace: Path, job_id: str) -> bool:
     job = read_job(workspace, job_id)
@@ -448,6 +485,7 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     pid = fresh.get("pid")
     pgid = fresh.get("pgid") or pid
     orphan_suspected = False
+    identity_mismatch = False
     process_tree_killed = False
     next_status = "cancelled"
     termination_confirmed_at = ""
@@ -456,7 +494,17 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
         pgid_int = int(pgid) if pgid else pid_int
         alive = _process_alive(pid_int)
         if alive == "alive":
-            if _pid_matches_job(fresh) or status == "cancellation_uncertain":
+            if not _pid_matches_job(fresh):
+                orphan_suspected = True
+                identity_mismatch = True
+                next_status = "cancellation_uncertain"
+                append_progress(
+                    fresh,
+                    "PID is alive but process identity does not match job metadata; "
+                    "kill skipped.",
+                    level="error",
+                )
+            else:
                 process_tree_killed = _kill_process_tree(pid_int)
                 death = (
                     _confirm_process_group_dead(pgid_int)
@@ -464,13 +512,11 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
                     else "unknown"
                 )
                 if death != "dead":
+                    # Escalate once with tree kill already attempted; still uncertain.
                     orphan_suspected = True
                     next_status = "cancellation_uncertain"
                 else:
                     termination_confirmed_at = _utc_now()
-            else:
-                orphan_suspected = True
-                next_status = "cancellation_uncertain"
         elif alive == "unknown":
             orphan_suspected = True
             next_status = "cancellation_uncertain"
@@ -479,13 +525,19 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
             if group_death == "dead":
                 termination_confirmed_at = _utc_now()
             elif group_death == "alive":
-                process_tree_killed = _kill_process_tree(pid_int)
-                group_death = _confirm_process_group_dead(pgid_int)
-                if group_death != "dead":
-                    orphan_suspected = True
-                    next_status = "cancellation_uncertain"
+                # Leader gone but group still has members — only kill if identity matches.
+                if _pid_matches_job(fresh):
+                    process_tree_killed = _kill_process_tree(pid_int)
+                    group_death = _confirm_process_group_dead(pgid_int)
+                    if group_death != "dead":
+                        orphan_suspected = True
+                        next_status = "cancellation_uncertain"
+                    else:
+                        termination_confirmed_at = _utc_now()
                 else:
-                    termination_confirmed_at = _utc_now()
+                    orphan_suspected = True
+                    identity_mismatch = True
+                    next_status = "cancellation_uncertain"
             else:
                 orphan_suspected = True
                 next_status = "cancellation_uncertain"
@@ -519,6 +571,7 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
         "job": compact_job_status(read_job(workspace, job_id) or fresh),
         "processTreeKilled": process_tree_killed,
         "orphanProcessSuspected": orphan_suspected,
+        "identityMismatch": identity_mismatch,
         "cancellationState": str((read_job(workspace, job_id) or fresh).get("status") or ""),
         "processTerminationConfirmed": bool(termination_confirmed_at),
     }

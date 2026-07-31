@@ -1381,6 +1381,15 @@ def task_start(
     write_gate = dict(plan_payload.get("writeGate") or {})
     if mode in {"read_only", "plan_only"}:
         write_gate["writesAllowed"] = False
+    if mode == "plan_only" and start_background_job:
+        return {
+            "ok": False,
+            "errorCode": "INVALID_ARGUMENT",
+            "error": (
+                "plan_only cannot start a background job; "
+                "omit startBackgroundJob or use agent_edit mode."
+            ),
+        }
     writes_allowed = write_gate.get("writesAllowed") is True
 
     plan_scope = _capture_plan_scope(plan_payload)
@@ -2275,19 +2284,94 @@ def task_retry_job_cancel(
     active_project: str = "",
     task_session_id: str = "",
     job_id: str = "",
+    force: bool = False,
 ) -> dict[str, Any]:
     """Re-probe cancellation_uncertain jobs and retry kill/confirm."""
 
-    from wrapper_job_manager import cancel_job
+    from wrapper_job_manager import cancel_job, read_job
 
+    session = str(task_session_id or "").strip()
     explicit_job = str(job_id or "").strip()
+    if not session:
+        return {
+            "ok": False,
+            "errorCode": "TASK_SESSION_REQUIRED",
+            "error": "taskSessionId is required to retry job cancellation.",
+        }
+
+    state_path = task_root(workspace, session) / "state.json"
+    try:
+        task_state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        task_state = None
+    if not isinstance(task_state, dict):
+        # Corrupt tasks may still retry via linked jobs, but connection cannot be verified.
+        task_state = {"taskSessionId": session, "mcpConnectionId": get_mcp_connection_id()}
+
+    if not task_connection_matches(task_state):
+        if task_is_foreign_healthy(task_state) and not force:
+            return {
+                "ok": False,
+                "errorCode": "TASK_FOREIGN_HEALTHY",
+                "error": (
+                    "Task belongs to another MCP connection; "
+                    "pass force=true only after explicit user confirmation."
+                ),
+                "routeReleased": False,
+            }
+        if not force and str(task_state.get("mcpConnectionId") or "").strip():
+            return {
+                "ok": False,
+                "errorCode": "TASK_CONNECTION_MISMATCH",
+                "error": "Task mcpConnectionId does not match this MCP connection.",
+                "routeReleased": False,
+            }
+
+    if active_project:
+        expected = _canonical_project_identity(active_project, workspace=workspace)
+        actual = _canonical_project_identity(
+            (task_state.get("routeScope") or {}).get("projectFile")
+            if isinstance(task_state.get("routeScope"), dict)
+            else task_state.get("projectFile") or "",
+            workspace=workspace,
+        )
+        if expected and actual and expected != actual and not force:
+            return {
+                "ok": False,
+                "errorCode": "TASK_PROJECT_MISMATCH",
+                "error": "Task project scope does not match the active project.",
+                "routeReleased": False,
+            }
+
     if explicit_job:
+        job = read_job(workspace, explicit_job)
+        if not job:
+            return {
+                "ok": False,
+                "errorCode": "JOB_NOT_FOUND",
+                "error": f"Unknown job: {explicit_job}",
+            }
+        args = job.get("arguments") if isinstance(job.get("arguments"), dict) else {}
+        linked = str(
+            job.get("taskSessionId")
+            or args.get("taskSessionId")
+            or args.get("task_session_id")
+            or ""
+        ).strip()
+        if linked != session:
+            return {
+                "ok": False,
+                "errorCode": "JOB_TASK_MISMATCH",
+                "error": "jobId is not linked to the provided taskSessionId.",
+                "routeReleased": False,
+            }
         result = cancel_job(workspace, explicit_job)
         return {
             "ok": bool(result.get("ok"))
             and str(result.get("cancellationState") or "") == "cancelled"
             and not result.get("orphanProcessSuspected"),
             "jobId": explicit_job,
+            "taskSessionId": session,
             "result": result,
             "nextAction": (
                 "unreal_task_quarantine_corrupt"
@@ -2296,13 +2380,6 @@ def task_retry_job_cancel(
             ),
         }
 
-    session = str(task_session_id or "").strip()
-    if not session:
-        return {
-            "ok": False,
-            "errorCode": "TASK_SESSION_REQUIRED",
-            "error": "taskSessionId or jobId is required to retry job cancellation.",
-        }
     discovery = _discover_jobs_linked_to_task(workspace, session)
     if not discovery.get("discoveryComplete"):
         return {
@@ -2325,6 +2402,7 @@ def task_retry_job_cancel(
         return {
             "ok": True,
             "retried": [],
+            "taskSessionId": session,
             "message": "No cancellation_uncertain jobs found for task.",
         }
     retried = []
@@ -2343,6 +2421,7 @@ def task_retry_job_cancel(
     return {
         "ok": not still_uncertain,
         "retried": retried,
+        "taskSessionId": session,
         "orphanProcessSuspected": still_uncertain,
         "nextAction": (
             "unreal_task_quarantine_corrupt"
@@ -2465,7 +2544,7 @@ def task_recover_active(
     active_project: str = "",
     task_session_id: str = "",
 ) -> dict[str, Any]:
-    """Return status for the single/selected active task without requiring prior ID knowledge."""
+    """Discover the active task and renew lease / recover checkpoint state."""
 
     resolved = task_resolve_active_session_id(
         workspace,
@@ -2474,10 +2553,75 @@ def task_recover_active(
     )
     if not resolved.get("ok"):
         return resolved
-    status = task_status(workspace, str(resolved.get("taskSessionId") or ""))
-    if isinstance(status, dict):
-        status["recoveredFrom"] = "active_task_discovery"
-        status["discoveredTask"] = resolved.get("task")
+    session = str(resolved.get("taskSessionId") or "").strip()
+    status = task_status(workspace, session)
+    if not isinstance(status, dict):
+        return status
+    status["recoveredFrom"] = "active_task_discovery"
+    status["discoveredTask"] = resolved.get("task")
+
+    # Prefer connection-matching tasks for mutating recover.
+    discovered = resolved.get("task") if isinstance(resolved.get("task"), dict) else {}
+    if discovered and not task_connection_matches(discovered.get("_state") or discovered):
+        # discovered task summary may not include full state; load and check.
+        state_path = task_root(workspace, session) / "state.json"
+        try:
+            full_state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            full_state = {}
+        if isinstance(full_state, dict) and full_state and not task_connection_matches(full_state):
+            status["ok"] = True
+            status["leaseRenewed"] = False
+            status["checkpointRecovered"] = False
+            status["note"] = (
+                "Active task belongs to another MCP connection; "
+                "status returned without mutating recover."
+            )
+            return status
+
+    auth = {
+        "taskSessionId": session,
+        "authToken": str((status.get("taskAuthorization") or {}).get("authToken") or ""),
+        "planId": str(status.get("planId") or ""),
+        "planRevision": str(status.get("planRevision") or ""),
+        "activeSliceId": str(status.get("activeSliceId") or ""),
+    }
+    # Refresh authorization fields from state when token missing from status.
+    if not auth["authToken"]:
+        try:
+            full_state = json.loads(
+                (task_root(workspace, session) / "state.json").read_text(encoding="utf-8")
+            )
+            auth["authToken"] = str(full_state.get("authToken") or "")
+            auth["planId"] = str(full_state.get("planId") or auth["planId"])
+            auth["planRevision"] = str(full_state.get("planRevision") or auth["planRevision"])
+            auth["activeSliceId"] = str(
+                full_state.get("activeSliceId") or auth["activeSliceId"]
+            )
+        except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+            pass
+
+    heartbeat = task_checkpoint(
+        workspace,
+        task_authorization=auth,
+        action="heartbeat",
+    )
+    recover = task_checkpoint(
+        workspace,
+        task_authorization=auth,
+        action="recover",
+    )
+    status["leaseRenewed"] = bool(heartbeat.get("ok"))
+    status["checkpointRecovered"] = bool(recover.get("ok"))
+    status["heartbeat"] = heartbeat
+    status["recover"] = recover
+    if heartbeat.get("ok") or recover.get("ok"):
+        status = task_status(workspace, session)
+        if isinstance(status, dict):
+            status["recoveredFrom"] = "active_task_recovery"
+            status["discoveredTask"] = resolved.get("task")
+            status["leaseRenewed"] = bool(heartbeat.get("ok"))
+            status["checkpointRecovered"] = bool(recover.get("ok"))
     return status
 
 

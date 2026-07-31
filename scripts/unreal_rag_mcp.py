@@ -3255,7 +3255,9 @@ class McpServer:
                     {
                         "taskSessionId": {"type": "string"},
                         "jobId": {"type": "string"},
+                        "force": {"type": "boolean", "default": False},
                     },
+                    required=["taskSessionId"],
                 ),
             },
             {
@@ -3890,6 +3892,7 @@ class McpServer:
                     active_project=str(config.get("activeProject") or ""),
                     task_session_id=str(arguments.get("taskSessionId") or ""),
                     job_id=str(arguments.get("jobId") or ""),
+                    force=arguments.get("force") is True,
                 )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_checkpoint":

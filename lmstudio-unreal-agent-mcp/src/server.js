@@ -3100,6 +3100,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       let filesSeen = 0;
       let filesSkippedBySize = 0;
       let lastReservationHeartbeat = Date.now();
+      let reservationHeartbeatFailure = null;
 
       function resultLimitReached() {
         return results.length >= maxResults
@@ -3107,8 +3108,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       async function walk(p) {
+        if (reservationHeartbeatFailure) return;
         if (Date.now() - lastReservationHeartbeat > 30_000) {
-          heartbeatDeferredBudget();
+          const hb = runBudgetOp(
+            heartbeatRouteReservation,
+            String(pendingBudgetReservation?.id || "")
+          );
+          if (hb && hb.ok === false) {
+            reservationHeartbeatFailure = fail(
+              hb.error || "Reservation heartbeat failed during search_files.",
+              {
+                errorCode: hb.errorCode || "TASK_RESERVATION_HEARTBEAT_FAILED",
+                retryable: false,
+                stopCurrentWorkflow: true,
+              }
+            );
+            try {
+              runBudgetOp(
+                rollbackRouteReservation,
+                String(pendingBudgetReservation?.id || "")
+              );
+            } catch {
+              // Best-effort rollback after heartbeat failure.
+            }
+            return;
+          }
           lastReservationHeartbeat = Date.now();
         }
         if (resultLimitReached() || filesSeen >= SEARCH_MAX_FILES) return;
@@ -3121,6 +3145,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (ignoreDirs.has(dirName)) return;
           const entries = await fsp.readdir(p, { withFileTypes: true });
           for (const e of entries) {
+            if (reservationHeartbeatFailure) break;
             await walk(path.join(p, e.name));
             if (resultLimitReached() || filesSeen >= SEARCH_MAX_FILES) break;
           }
@@ -3168,6 +3193,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       await walk(base);
+      if (reservationHeartbeatFailure) return reservationHeartbeatFailure;
       const payload = {
         path: pathMetadata(resolution),
         results,

@@ -151,3 +151,15 @@ def test_task_resume_rejects_unconfirmed_or_completed_task(
     state_path.write_text(json.dumps(state), encoding="utf-8")
     completed = task_resume(tmp_path, task_id)
     assert completed["ok"] is False
+
+
+def test_plan_only_rejects_start_background_job(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    result = task_start(
+        tmp_path,
+        request="plan only",
+        mode="plan_only",
+        start_background_job=True,
+    )
+    assert result["ok"] is False
+    assert result["errorCode"] == "INVALID_ARGUMENT"

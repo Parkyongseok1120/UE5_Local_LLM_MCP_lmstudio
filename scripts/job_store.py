@@ -16,23 +16,24 @@ from state_root import ensure_state_root_layout, jobs_sqlite_path
 class JobStoreError(RuntimeError):
     """Raised when the SQLite job store is unavailable in fail-closed mode."""
 
+
 _DB_LOCK = threading.Lock()
-_SCHEMA = """
+_SCHEMA_READY_PATHS: set[str] = set()
+# Legacy-compatible base table (no task_session_id index in CREATE).
+_SCHEMA_BASE = """
 CREATE TABLE IF NOT EXISTS jobs (
   job_id TEXT PRIMARY KEY,
   status TEXT NOT NULL,
   revision INTEGER NOT NULL DEFAULT 0,
   progress_sequence INTEGER NOT NULL DEFAULT 0,
   payload_json TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  task_session_id TEXT NOT NULL DEFAULT ''
+  updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
-CREATE INDEX IF NOT EXISTS idx_jobs_task_session ON jobs(task_session_id, status);
 """
+_SCHEMA_VERSION = 2
 
 JOB_ID_RE = __import__("re").compile(r"^[A-Fa-f0-9]{12,32}$")
-# cancellation_uncertain is recoverable — not a hard terminal for cancel/recheck.
 TERMINAL_STATUSES = frozenset({
     "completed", "failed", "timed_out", "cancelled",
 })
@@ -85,8 +86,20 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(_SCHEMA)
+def _task_session_from_payload(payload: dict[str, Any]) -> str:
+    args = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+    return str(
+        payload.get("taskSessionId")
+        or args.get("taskSessionId")
+        or args.get("task_session_id")
+        or ""
+    ).strip()
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Upgrade legacy DBs safely: base table → add column → indexes → backfill."""
+
+    conn.executescript(_SCHEMA_BASE)
     columns = {
         str(row["name"])
         for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
@@ -109,28 +122,26 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             continue
         if not isinstance(payload, dict):
             continue
-        args = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
-        task_id = str(
-            payload.get("taskSessionId")
-            or args.get("taskSessionId")
-            or args.get("task_session_id")
-            or ""
-        ).strip()
+        task_id = _task_session_from_payload(payload)
         if task_id:
             conn.execute(
                 "UPDATE jobs SET task_session_id = ? WHERE job_id = ?",
                 (task_id, row["job_id"]),
             )
+    conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
-def _task_session_from_payload(payload: dict[str, Any]) -> str:
-    args = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
-    return str(
-        payload.get("taskSessionId")
-        or args.get("taskSessionId")
-        or args.get("task_session_id")
-        or ""
-    ).strip()
+def _ensure_schema(conn: sqlite3.Connection, *, db_key: str = "") -> None:
+    if db_key and db_key in _SCHEMA_READY_PATHS:
+        try:
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        except Exception:
+            version = 0
+        if version >= _SCHEMA_VERSION:
+            return
+    _migrate_schema(conn)
+    if db_key:
+        _SCHEMA_READY_PATHS.add(db_key)
 
 
 def validate_job_id(job_id: str) -> str:
@@ -155,8 +166,10 @@ def read_job_record(job_id: str, workspace: Path | None = None) -> dict[str, Any
         with _DB_LOCK:
             conn = _connect(db_path)
             try:
-                _ensure_schema(conn)
-                row = conn.execute("SELECT payload_json FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+                _ensure_schema(conn, db_key=str(db_path))
+                row = conn.execute(
+                    "SELECT payload_json FROM jobs WHERE job_id = ?", (job_id,)
+                ).fetchone()
                 if not row:
                     return None
                 return json.loads(row["payload_json"])
@@ -179,7 +192,7 @@ def write_job_record(
         with _DB_LOCK:
             conn = _connect(db_path)
             try:
-                _ensure_schema(conn)
+                _ensure_schema(conn, db_key=str(db_path))
                 conn.execute("BEGIN IMMEDIATE")
                 row = conn.execute(
                     "SELECT revision, payload_json FROM jobs WHERE job_id = ?",
@@ -318,7 +331,7 @@ def list_job_records(workspace: Path | None = None, *, limit: int = 20) -> list[
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
-            _ensure_schema(conn)
+            _ensure_schema(conn, db_key=str(db_path))
             rows = conn.execute(
                 "SELECT payload_json FROM jobs ORDER BY updated_at DESC LIMIT ?",
                 (max(1, int(limit)),),
@@ -349,7 +362,7 @@ def find_jobs_by_task_session_id(
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
-            _ensure_schema(conn)
+            _ensure_schema(conn, db_key=str(db_path))
             if include_terminal:
                 rows = conn.execute(
                     """
@@ -384,20 +397,27 @@ def find_jobs_by_task_session_id(
 
 
 def prune_terminal_jobs(workspace: Path | None = None, *, ttl_hours: int = 24) -> int:
+    """Prune confirmed terminal jobs only. Never auto-delete cancellation_uncertain."""
+
     cutoff = datetime.now(tz=timezone.utc).timestamp() - (max(1, int(ttl_hours)) * 3600)
     cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
     db_path = _db_path(workspace)
-    statuses = tuple(sorted(TERMINAL_STATUSES | RECOVERABLE_UNCERTAIN_STATUSES))
+    statuses = tuple(sorted(TERMINAL_STATUSES))
     placeholders = ",".join("?" for _ in statuses)
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
-            _ensure_schema(conn)
+            _ensure_schema(conn, db_key=str(db_path))
             cur = conn.execute(
                 f"""
                 DELETE FROM jobs
                 WHERE status IN ({placeholders})
                   AND updated_at < ?
+                  AND (
+                    status != 'cancelled'
+                    OR json_extract(payload_json, '$.processTerminationConfirmed') = 1
+                    OR json_extract(payload_json, '$.orphanProcessSuspected') IS NOT 1
+                  )
                 """,
                 (*statuses, cutoff_iso),
             )

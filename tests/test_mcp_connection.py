@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import json
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +19,7 @@ def _reload_mcp(monkeypatch: pytest.MonkeyPatch, **env: str | None):
         "MCP_BRIDGE_PAIR_ID",
         "MCP_CLIENT_INSTANCE_ID",
         "MCP_CLIENT_INSTANCE_LEASE_SEC",
+        "MCP_HOST_PID",
         "AGENT_STATE_ROOT",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -28,8 +28,10 @@ def _reload_mcp(monkeypatch: pytest.MonkeyPatch, **env: str | None):
             monkeypatch.delenv(key, raising=False)
         else:
             monkeypatch.setenv(key, value)
+    import mcp_boot_instance
     import mcp_connection
 
+    importlib.reload(mcp_boot_instance)
     return importlib.reload(mcp_connection)
 
 
@@ -75,61 +77,75 @@ def test_session_id_scopes_owner_with_bridge_and_instance(
     assert owner == "install-wide-bridge-id-aaaa:client-run-aaaaaaa:chat-session-xyz"
 
 
-def test_default_owner_uses_ephemeral_lease_not_permanent_plain_file(
+def test_default_owner_uses_host_boot_instance(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     bridge = tmp_path / "mcp-bridge-pair.id"
     bridge.write_text("install-wide-bridge-id-bbbb", encoding="utf-8")
     plain = tmp_path / "mcp-client-instance.id"
-    plain.write_text("permanent-should-be-rotated", encoding="utf-8")
+    plain.write_text("permanent-should-be-ignored", encoding="utf-8")
     mcp = _reload_mcp(
         monkeypatch,
         AGENT_STATE_ROOT=str(tmp_path),
         MCP_BRIDGE_PAIR_ID="install-wide-bridge-id-bbbb",
-        MCP_CLIENT_INSTANCE_LEASE_SEC="2",
+        MCP_HOST_PID="424242",
+        MCP_CLIENT_INSTANCE_LEASE_SEC="not-a-number",
     )
+    assert mcp._parse_lease_sec() == 120
     owner = mcp.get_mcp_connection_id()
     instance = mcp.get_mcp_client_instance_id()
     assert owner == f"install-wide-bridge-id-bbbb:{instance}"
-    assert "permanent-should-be-rotated" not in owner
-    lease_path = tmp_path / "mcp-client-instance.lease.json"
-    assert lease_path.is_file()
-    lease = json.loads(lease_path.read_text(encoding="utf-8"))
-    assert lease["clientInstanceId"] == instance
-    assert "expiresAt" in lease
-    assert "generation" in lease
-    # Plain permanent file is removed/migrated away from ownership.
-    assert not plain.exists() or plain.read_text(encoding="utf-8").strip() != instance
+    assert instance.startswith("mcp-boot-424242-")
+    boot_path = tmp_path / "runtime" / "boot-424242.json"
+    assert boot_path.is_file()
+    boot = json.loads(boot_path.read_text(encoding="utf-8"))
+    assert boot["clientInstanceId"] == instance
+    assert boot["hostPid"] == 424242
+    assert plain.read_text(encoding="utf-8").strip() == "permanent-should-be-ignored"
 
 
-def test_expired_lease_without_holders_rotates(
+def test_distinct_host_pids_get_distinct_boot_instances(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     bridge = tmp_path / "mcp-bridge-pair.id"
-    bridge.write_text("install-wide-bridge-id-cccc", encoding="utf-8")
-    lease_path = tmp_path / "mcp-client-instance.lease.json"
-    lease_path.write_text(
-        json.dumps(
-            {
-                "clientInstanceId": "mcp-client-oldgeneration000",
-                "ownerPid": 1,
-                "holderPids": [1],
-                "createdAt": "2020-01-01T00:00:00+00:00",
-                "expiresAt": "2020-01-01T00:00:01+00:00",
-                "generation": 3,
-            }
-        ),
-        encoding="utf-8",
-    )
-    mcp = _reload_mcp(
+    bridge.write_text("install-wide-bridge-id-dddd", encoding="utf-8")
+    first = _reload_mcp(
         monkeypatch,
         AGENT_STATE_ROOT=str(tmp_path),
-        MCP_BRIDGE_PAIR_ID="install-wide-bridge-id-cccc",
+        MCP_BRIDGE_PAIR_ID="install-wide-bridge-id-dddd",
+        MCP_HOST_PID="111111",
     )
-    instance = mcp.get_mcp_client_instance_id()
-    assert instance != "mcp-client-oldgeneration000"
-    lease = json.loads(lease_path.read_text(encoding="utf-8"))
-    assert lease["generation"] >= 4
+    id_a = first.get_mcp_client_instance_id()
+    second = _reload_mcp(
+        monkeypatch,
+        AGENT_STATE_ROOT=str(tmp_path),
+        MCP_BRIDGE_PAIR_ID="install-wide-bridge-id-dddd",
+        MCP_HOST_PID="222222",
+    )
+    id_b = second.get_mcp_client_instance_id()
+    assert id_a != id_b
+    assert id_a.startswith("mcp-boot-111111-")
+    assert id_b.startswith("mcp-boot-222222-")
+
+
+def test_same_host_pid_reuses_boot_instance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    first = _reload_mcp(
+        monkeypatch,
+        AGENT_STATE_ROOT=str(tmp_path),
+        MCP_BRIDGE_PAIR_ID="install-wide-bridge-id-eeee",
+        MCP_HOST_PID="333333",
+    )
+    id_a = first.get_mcp_client_instance_id()
+    second = _reload_mcp(
+        monkeypatch,
+        AGENT_STATE_ROOT=str(tmp_path),
+        MCP_BRIDGE_PAIR_ID="install-wide-bridge-id-eeee",
+        MCP_HOST_PID="333333",
+    )
+    id_b = second.get_mcp_client_instance_id()
+    assert id_a == id_b
 
 
 def test_empty_bridge_file_is_atomically_repaired(
@@ -137,7 +153,7 @@ def test_empty_bridge_file_is_atomically_repaired(
 ) -> None:
     bridge = tmp_path / "mcp-bridge-pair.id"
     bridge.write_text("   \n", encoding="utf-8")
-    mcp = _reload_mcp(monkeypatch, AGENT_STATE_ROOT=str(tmp_path))
+    mcp = _reload_mcp(monkeypatch, AGENT_STATE_ROOT=str(tmp_path), MCP_HOST_PID="555555")
     pair = mcp.get_mcp_bridge_pair_id()
     assert mcp._valid_bridge_id(pair)
     assert bridge.read_text(encoding="utf-8").strip() == pair

@@ -110,7 +110,45 @@ def test_cancel_job_skips_kill_when_pid_identity_mismatch(monkeypatch, isolated_
     assert persisted.get("orphanProcessSuspected") is True
 
 
-def test_cancel_job_cancelled_when_pid_dead_and_identity_mismatch(monkeypatch, isolated_state: Path) -> None:
+def test_cancel_uncertain_never_kills_without_identity_match(
+    monkeypatch, isolated_state: Path
+) -> None:
+    from process_identity import command_fingerprint
+
+    job_id = uuid.uuid4().hex[:12]
+    command = ["python", "-c", "pass"]
+    job = {
+        "jobId": job_id,
+        "status": "cancellation_uncertain",
+        "revision": 2,
+        "progressSequence": 0,
+        "pid": 4242,
+        "pgid": 4242,
+        "command": command,
+        "commandFingerprint": command_fingerprint(command),
+        "pidStartedAt": "2026-01-01T00:00:00+00:00",
+        "orphanProcessSuspected": True,
+        "progress": [],
+    }
+    write_job_record(job, workspace=isolated_state)
+    kill_calls: list[int] = []
+    monkeypatch.setattr("wrapper_job_manager._pid_matches_job", lambda _job: False)
+    monkeypatch.setattr("wrapper_job_manager._process_alive", lambda _pid: "alive")
+    monkeypatch.setattr(
+        "wrapper_job_manager._kill_process_tree",
+        lambda pid: kill_calls.append(pid) or True,
+    )
+    result = cancel_job(isolated_state, job_id)
+    assert kill_calls == []
+    assert result["cancellationState"] == "cancellation_uncertain"
+    assert result["orphanProcessSuspected"] is True
+    assert result.get("identityMismatch") is True
+    assert result.get("processTreeKilled") is False
+
+
+def test_cancel_job_cancelled_when_pid_dead_and_identity_mismatch(
+    monkeypatch, isolated_state: Path
+) -> None:
     job_id = uuid.uuid4().hex[:12]
     job = {
         "jobId": job_id,
@@ -159,6 +197,7 @@ def test_spawn_persist_failure_kills_tree_and_marks_failed(monkeypatch, isolated
     job_id = str(job["jobId"])
     kill_calls: list[int] = []
     monkeypatch.setattr("wrapper_job_manager._kill_process_tree", lambda pid: kill_calls.append(pid) or True)
+    monkeypatch.setattr("wrapper_job_manager._confirm_process_group_dead", lambda _pid: "dead")
     monkeypatch.setattr("wrapper_job_manager._confirm_process_dead", lambda _pid: "dead")
     monkeypatch.setattr("wrapper_job_manager.subprocess.Popen", _FakePopen)
 
