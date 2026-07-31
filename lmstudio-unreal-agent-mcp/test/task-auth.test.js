@@ -1231,6 +1231,16 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
       "TASK_ROUTE_OWNERSHIP_REQUIRED"
     );
 
+    const wrongCap = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      { ownerCapability: "0".repeat(64) },
+      { activeProject: projectFile, consumeBudget: false }
+    );
+    assert.strictEqual(wrongCap.ok, false);
+    assert.strictEqual(wrongCap.errorCode, "TASK_ROUTE_CAPABILITY_MISMATCH");
+    assert.ok(String(wrongCap.nextAction || "").includes("ownerCapability"));
+
     const allowed = authorizeActiveRouteTool(
       workspace,
       "read_file",

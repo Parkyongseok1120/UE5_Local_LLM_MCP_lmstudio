@@ -590,6 +590,10 @@ def active_task_route_context(
                     "errorCode": "TASK_ROUTE_MISSING",
                     "error": f"running task has no toolRoute: {state_path}",
                 }
+            mode = str(state.get("mode") or "").strip().lower()
+            if mode in {"plan_only", "detached"}:
+                # Match Node: these modes never own an active tool route.
+                continue
             if not task_owns_active_tool_route(
                 state,
                 conversation_id=conversation_id,
@@ -603,11 +607,7 @@ def active_task_route_context(
                 elif str(owner_capability or "").strip():
                     # Capability claimed but this legacy task did not match.
                     unmatched_legacy_claimants += 1
-                mode = str(state.get("mode") or "").strip().lower()
-                if (
-                    not require_owner_capability
-                    and mode not in {"plan_only", "detached"}
-                ):
+                if not require_owner_capability:
                     continuity = (
                         state.get("continuity")
                         if isinstance(state.get("continuity"), dict)
@@ -685,6 +685,18 @@ def active_task_route_context(
             "healthyRoutes": list(running) + list(unproven_candidates),
         }
     if require_owner_capability:
+        if str(owner_capability or "").strip() and (
+            scoped_claimants > 0 or unmatched_legacy_claimants > 0
+        ):
+            return {
+                "status": "ambiguous_or_corrupt",
+                "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
+                "error": (
+                    "ownerCapability was provided but did not match any running task; "
+                    "use the matching capability or omit it for legacy connection ownership."
+                ),
+                "healthyRoutes": list(unproven_candidates),
+            }
         if scoped_claimants:
             return {
                 "status": "ambiguous_or_corrupt",
@@ -694,15 +706,6 @@ def active_task_route_context(
                     "taskAuthorization.ownerCapability for route ownership."
                 ),
                 "healthyRoutes": list(unproven_candidates),
-            }
-        if str(owner_capability or "").strip() and unmatched_legacy_claimants > 0:
-            return {
-                "status": "ambiguous_or_corrupt",
-                "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
-                "error": (
-                    "ownerCapability was provided but did not match any running task; "
-                    "legacy connection ownership is disabled when capability is present."
-                ),
             }
         return {"status": "none"}
     if len(unproven_candidates) == 1:
@@ -736,6 +739,7 @@ def collect_project_active_tool_union(
     task_count = 0
     states = healthy_routes
     if states is None:
+        # Propagate TaskStateRootUnavailableError; do not treat as empty.
         states = _iter_running_task_states(workspace, active_project=active_project)
     for state in states:
         if not isinstance(state, dict):
@@ -2198,15 +2202,12 @@ def _iter_running_task_states(
     conversation_id: str = "",
     owner_capability: str = "",
 ) -> list[dict[str, Any]]:
-    try:
-        entries = _iter_discoverable_task_entries(
-            workspace,
-            active_project=active_project,
-            conversation_id=conversation_id,
-            owner_capability=owner_capability,
-        )
-    except TaskStateRootUnavailableError:
-        return []
+    entries = _iter_discoverable_task_entries(
+        workspace,
+        active_project=active_project,
+        conversation_id=conversation_id,
+        owner_capability=owner_capability,
+    )
     return [
         dict(item["_state"])
         for item in entries

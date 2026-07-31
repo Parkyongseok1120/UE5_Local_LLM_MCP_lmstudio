@@ -1299,22 +1299,23 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
     };
   }
   if (requireOwnerCapability) {
+    if (ownerCapability && (scopedClaimants > 0 || unmatchedLegacyClaimants > 0)) {
+      return {
+        status: "ambiguous_or_corrupt",
+        errorCode: "TASK_ROUTE_CAPABILITY_MISMATCH",
+        error: (
+          "ownerCapability was provided but did not match any running task; "
+          + "use the matching capability or omit it for legacy connection ownership."
+        ),
+        healthyRoutes: unprovenCandidates,
+      };
+    }
     if (scopedClaimants > 0) {
       return {
         status: "ambiguous_or_corrupt",
         errorCode: "TASK_ROUTE_OWNERSHIP_REQUIRED",
         error: "Running conversation-scoped task(s) require taskAuthorization.ownerCapability.",
         healthyRoutes: unprovenCandidates,
-      };
-    }
-    if (ownerCapability && unmatchedLegacyClaimants > 0) {
-      return {
-        status: "ambiguous_or_corrupt",
-        errorCode: "TASK_ROUTE_CAPABILITY_MISMATCH",
-        error: (
-          "ownerCapability was provided but did not match any running task; "
-          + "legacy connection ownership is disabled when capability is present."
-        ),
       };
     }
     return { status: "none" };
@@ -1625,14 +1626,20 @@ function listToolsRouteContext(workspaceRoot, activeProject = "") {
   };
 }
 
-function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = []) {
+function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], options = {}) {
   const scriptsDir = path.resolve(__dirname, "../../scripts");
   const python = String(process.env.PYTHON_EXE || process.env.PYTHON || "python").trim() || "python";
+  const stdinPayload = options.stdinPayload && typeof options.stdinPayload === "object"
+    ? options.stdinPayload
+    : null;
   const code = [
     "import json, sys",
     "from pathlib import Path",
     `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
     "from task_api import task_cancel, task_cancel_active, task_quarantine_corrupt",
+    stdinPayload
+      ? "_stdin = json.load(sys.stdin)"
+      : "_stdin = {}",
     callExpression,
     "print(json.dumps(payload, ensure_ascii=False))",
   ].join("; ");
@@ -1645,6 +1652,7 @@ function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = []) {
       windowsHide: true,
       timeout: 120000,
       killSignal: "SIGKILL",
+      input: stdinPayload ? JSON.stringify(stdinPayload) : undefined,
     }
   );
   if (result.error) {
@@ -1677,10 +1685,22 @@ function cancelTaskViaPython(workspaceRoot, taskSessionId, options = {}) {
   const force = options.force === true ? "1" : "0";
   const conversationId = String(options.conversationId || "");
   const ownerCapability = String(options.ownerCapability || "");
+  // Keep ownerCapability off argv (process list / crash telemetry); pass via stdin JSON.
   return invokePythonTaskApi(
     workspaceRoot,
-    "payload = task_cancel_active(Path(sys.argv[1]), active_project=sys.argv[2], task_session_id=sys.argv[3], force=sys.argv[4]=='1', conversation_id=sys.argv[5], owner_capability=sys.argv[6])",
-    [activeProject, taskSessionId, force, conversationId, ownerCapability]
+    (
+      "payload = task_cancel_active(Path(sys.argv[1]), active_project=sys.argv[2], "
+      + "task_session_id=sys.argv[3], force=sys.argv[4]=='1', "
+      + "conversation_id=str((_stdin or {}).get('conversationId') or ''), "
+      + "owner_capability=str((_stdin or {}).get('ownerCapability') or ''))"
+    ),
+    [activeProject, taskSessionId, force],
+    {
+      stdinPayload: {
+        conversationId,
+        ownerCapability,
+      },
+    }
   );
 }
 

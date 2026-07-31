@@ -105,6 +105,15 @@ def test_node_route_requires_capability_for_scoped_tasks(
     assert denied["ok"] is False
     assert denied["errorCode"] == "TASK_ROUTE_OWNERSHIP_REQUIRED"
 
+    wrong = authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={"ownerCapability": "0" * 64},
+    )
+    assert wrong["ok"] is False
+    assert wrong["errorCode"] == "TASK_ROUTE_CAPABILITY_MISMATCH"
+    assert "ownerCapability" in str(wrong.get("nextAction") or "")
+
     allowed = authorize_active_task_tool(
         tmp_path,
         tool_name=active_tool,
@@ -302,6 +311,58 @@ def test_legacy_only_arbitrary_capability_fails_closed(tmp_path: Path, monkeypat
     )
     assert context["status"] == "ambiguous_or_corrupt"
     assert context["errorCode"] == "TASK_ROUTE_CAPABILITY_MISMATCH"
+
+
+def test_plan_only_running_task_ignored_for_capability_claimants(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from mcp_connection import build_mcp_connection_id
+    from task_api import active_task_route_context, authorize_active_task_tool
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("MCP_BRIDGE_PAIR_ID", "bridge-plan-only-claim")
+    monkeypatch.setenv("MCP_CLIENT_INSTANCE_ID", "client-plan-only-claim")
+    task_id = "task_planonly01"
+    task_dir = tmp_path / "state" / "tasks" / task_id
+    task_dir.mkdir(parents=True)
+    state = {
+        "taskSessionId": task_id,
+        "status": "running",
+        "mode": "plan_only",
+        "workspaceRoot": str(tmp_path.resolve()),
+        "routeScope": {
+            "workspaceRoot": str(tmp_path.resolve()),
+            "projectFile": "",
+        },
+        "conversationId": "conv-plan",
+        "ownerCapability": "d" * 64,
+        "mcpConnectionId": f"{build_mcp_connection_id()}:conv-plan",
+        "toolRoute": {
+            "status": "active",
+            "routeHash": "route-plan",
+            "phase": "planner",
+            "activeTools": ["unreal_agent_plan"],
+            "maxToolCallsPerPhase": 2,
+        },
+    }
+    (task_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    (task_dir / "workspace-root.txt").write_text(
+        str(tmp_path.resolve()), encoding="utf-8"
+    )
+    # plan_only must not become a scoped claimant under CallTool authorize.
+    context = active_task_route_context(
+        tmp_path,
+        owner_capability="e" * 64,
+        require_owner_capability=True,
+    )
+    assert context["status"] == "none"
+    authorized = authorize_active_task_tool(
+        tmp_path,
+        tool_name="read_file",
+        arguments={"ownerCapability": "e" * 64},
+    )
+    assert authorized.get("legacy") is True
+    assert authorized["ok"] is True
 
 
 def test_state_root_unavailable_list_and_authorize(tmp_path: Path, monkeypatch) -> None:
