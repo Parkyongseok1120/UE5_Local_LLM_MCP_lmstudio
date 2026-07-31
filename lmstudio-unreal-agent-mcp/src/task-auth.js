@@ -1005,8 +1005,18 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
   // CallTool authorization must prove ownership. ListTools/watchers may list a
   // single project task's tools without the secret (execution still gated).
   const requireOwnerCapability = options.requireOwnerCapability === true;
-  const stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
-  const tasksRoot = path.join(stateRoot, "tasks");
+  let stateRoot;
+  let tasksRoot;
+  try {
+    stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
+    tasksRoot = path.join(stateRoot, "tasks");
+  } catch (error) {
+    return {
+      status: "blocked",
+      errorCode: "TASK_STATE_ROOT_UNAVAILABLE",
+      error: `Task state root is unavailable: ${error && error.message ? error.message : error}`,
+    };
+  }
   const currentWorkspace = canonicalWorkspaceRoot(workspaceRoot);
   const currentProject = canonicalProjectIdentity(activeProject, workspaceRoot);
   let entries;
@@ -1014,8 +1024,12 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
     entries = fs.readdirSync(tasksRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .sort((left, right) => left.name.localeCompare(right.name));
-  } catch {
-    return { status: "none" };
+  } catch (error) {
+    return {
+      status: "blocked",
+      errorCode: "TASK_STATE_ROOT_UNAVAILABLE",
+      error: `Task state root is unreadable: ${error && error.message ? error.message : error}`,
+    };
   }
   const running = [];
   const unprovenCandidates = [];
@@ -1269,15 +1283,15 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
       running.push(candidate);
     }
   }
-  if (running.length === 1) {
+  if (running.length === 1 && unprovenCandidates.length === 0) {
     return { status: "active", ...running[0] };
   }
-  if (running.length > 1) {
+  if (running.length > 1 || (running.length >= 1 && unprovenCandidates.length >= 1)) {
     return {
       status: "ambiguous_or_corrupt",
       errorCode: "MULTIPLE_HEALTHY_ROUTE_TASKS",
       error: "More than one running task owns an active tool route.",
-      healthyRoutes: running,
+      healthyRoutes: [...running, ...unprovenCandidates],
     };
   }
   if (requireOwnerCapability) {
@@ -1799,16 +1813,30 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
       controlSurface: true,
       recoveryOnly: active.status !== "active",
       routeStatus: active.status,
+      errorCode: active.errorCode || undefined,
       toolRoute: active.route,
     };
   }
   if (active.status !== "active") {
+    const errorCode = String(active.errorCode || "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT");
+    const nextAction = errorCode === "TASK_STATE_CORRUPT"
+      ? "quarantine_corrupt_task"
+      : errorCode === "TASK_ROUTE_OWNERSHIP_REQUIRED"
+        ? "retry_with_taskAuthorization_ownerCapability"
+        : errorCode === "TASK_ROUTE_BLOCKED"
+          ? "unreal_task_checkpoint_or_recover"
+          : errorCode === "TASK_SCOPE_MISMATCH" || errorCode === "TASK_OWNER_HINT_MISMATCH"
+            ? "verify_active_project"
+            : errorCode === "TASK_STATE_ROOT_UNAVAILABLE"
+              ? "check_agent_state_root"
+              : "list_active_tasks";
     return {
       ok: false,
-      errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+      errorCode,
       error: active.error || "Task route is ambiguous, corrupt, or blocked.",
       routeStatus: active.status,
       toolRoute: active.route,
+      nextAction,
     };
   }
   const route = active.route;

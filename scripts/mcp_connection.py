@@ -255,11 +255,15 @@ def task_connection_matches(
     conversationId is a public scope label and is never sufficient on its own.
     Conversation-scoped tasks require ownerCapability (or legacy exact connection
     match only when the task has neither capability nor conversation id).
+    When ownerCapability is provided, legacy connection fallback is disabled.
     """
     if not isinstance(state, dict):
         return False
     if owner_capability_matches(state, owner_capability):
         return True
+    if str(owner_capability or "").strip():
+        # Explicit capability claim never falls back to legacy connection matching.
+        return False
     task_capability = str(state.get("ownerCapability") or "").strip()
     task_conv = str(state.get("conversationId") or "").strip()
     if task_capability or task_conv:

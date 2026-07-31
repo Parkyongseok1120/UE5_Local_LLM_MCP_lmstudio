@@ -401,7 +401,8 @@ def active_task_route_context(
         )
     except OSError as exc:
         return {
-            "status": "ambiguous_or_corrupt",
+            "status": "blocked",
+            "errorCode": "TASK_STATE_ROOT_UNAVAILABLE",
             "error": f"task state root is unreadable: {exc}",
         }
     for task_dir in task_dirs:
@@ -641,14 +642,14 @@ def active_task_route_context(
                     "state": state,
                 }
             running.append(state)
-    if len(running) == 1:
+    if len(running) == 1 and not unproven_candidates:
         return {"status": "active", "state": running[0]}
-    if len(running) > 1:
+    if len(running) > 1 or (running and unproven_candidates):
         return {
             "status": "ambiguous_or_corrupt",
             "errorCode": "MULTIPLE_HEALTHY_ROUTE_TASKS",
             "error": "multiple running tasks prevent deterministic route ownership",
-            "healthyRoutes": running,
+            "healthyRoutes": list(running) + list(unproven_candidates),
         }
     if require_owner_capability:
         if scoped_claimants:
@@ -4421,6 +4422,8 @@ def authorize_active_task_tool(
         owner_capability
         or auth.get("ownerCapability")
         or auth.get("owner_capability")
+        or args.get("ownerCapability")
+        or args.get("owner_capability")
         or ""
     ).strip()
     resolved_conversation = str(
@@ -4428,6 +4431,7 @@ def authorize_active_task_tool(
         or auth.get("conversationId")
         or auth.get("conversation_id")
         or args.get("conversationId")
+        or args.get("conversation_id")
         or ""
     ).strip()
     context = active_task_route_context(
@@ -4440,21 +4444,40 @@ def authorize_active_task_tool(
     if context.get("status") == "none":
         return {"ok": True, "legacy": True}
     if context.get("status") == "ambiguous_or_corrupt":
+        error_code = str(context.get("errorCode") or "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT")
         return {
             "ok": False,
-            "errorCode": "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+            "errorCode": error_code,
             "error": (
                 str(context.get("error") or "")
                 or "Task route ownership is blocked, ambiguous, or corrupt"
             ),
+            "nextAction": (
+                "unreal_task_quarantine_corrupt"
+                if error_code == "TASK_STATE_CORRUPT"
+                else (
+                    "retry_with_taskAuthorization_ownerCapability"
+                    if error_code == "TASK_ROUTE_OWNERSHIP_REQUIRED"
+                    else "unreal_task_list_active"
+                )
+            ),
         }
     state = context.get("state") or {}
     if context.get("status") == "blocked":
+        blocked_code = str(context.get("errorCode") or "TASK_ROUTE_BLOCKED")
+        if blocked_code == "TASK_STATE_ROOT_UNAVAILABLE":
+            return {
+                "ok": False,
+                "errorCode": blocked_code,
+                "error": str(context.get("error") or "Task state root is unavailable."),
+                "nextAction": "check_agent_state_root",
+            }
         if tool_name not in NON_BUDGETED_REPLAN_TOOLS:
             return {
                 "ok": False,
-                "errorCode": "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+                "errorCode": blocked_code,
                 "error": "Task route ownership is blocked.",
+                "nextAction": "unreal_task_checkpoint_or_recover",
             }
         validation_state = dict(state)
         supervisor = (
@@ -4465,8 +4488,9 @@ def authorize_active_task_tool(
         if not autonomy_blockers(supervisor):
             return {
                 "ok": False,
-                "errorCode": "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+                "errorCode": blocked_code,
                 "error": "Only an autonomy-supervisor blocker permits bounded replan.",
+                "nextAction": "unreal_task_checkpoint_or_recover",
             }
         supervisor["blockers"] = []
         validation_state["autonomySupervisor"] = supervisor

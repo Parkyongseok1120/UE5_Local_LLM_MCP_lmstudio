@@ -189,6 +189,8 @@ function ownerCapabilityMatches(state, ownerCapability = "") {
 function taskConnectionMatches(state, conversationId = "", ownerCapability = "") {
   if (!state || typeof state !== "object" || Array.isArray(state)) return false;
   if (ownerCapabilityMatches(state, ownerCapability)) return true;
+  // An explicit capability claim never falls back to legacy connection matching.
+  if (String(ownerCapability || "").trim()) return false;
   const taskCapability = String(state.ownerCapability || "").trim();
   const taskConv = String(state.conversationId || "").trim();
   if (taskCapability || taskConv) return false;

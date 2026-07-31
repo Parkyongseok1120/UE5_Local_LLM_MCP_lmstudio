@@ -103,7 +103,7 @@ def test_node_route_requires_capability_for_scoped_tasks(
         arguments={},
     )
     assert denied["ok"] is False
-    assert denied["errorCode"] == "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
+    assert denied["errorCode"] == "TASK_ROUTE_OWNERSHIP_REQUIRED"
 
     allowed = authorize_active_task_tool(
         tmp_path,
@@ -175,6 +175,66 @@ def test_task_authorization_schema_accepts_owner_capability() -> None:
     assert "ownerCapability" in schema["properties"]
     assert "conversationId" in schema["properties"]
     assert schema.get("additionalProperties") is False
+
+
+def test_capability_disables_legacy_connection_fallback(tmp_path: Path, monkeypatch) -> None:
+    from mcp_connection import build_mcp_connection_id, task_connection_matches
+    from task_api import active_task_route_context, authorize_active_task_tool
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("MCP_BRIDGE_PAIR_ID", "bridge-legacy-cap")
+    monkeypatch.setenv("MCP_CLIENT_INSTANCE_ID", "client-legacy-cap")
+    scoped = task_start(
+        tmp_path,
+        request="scoped",
+        conversation_id="conv-scoped-1",
+        start_background_job=False,
+    )
+    assert scoped["ok"] is True
+    cap = scoped["taskAuthorization"]["ownerCapability"]
+    scoped_state = json.loads(
+        (task_root(tmp_path, scoped["taskSessionId"]) / "state.json").read_text(encoding="utf-8")
+    )
+
+    legacy_id = "task_legacyfall01"
+    legacy_dir = tmp_path / "state" / "tasks" / legacy_id
+    legacy_dir.mkdir(parents=True)
+    legacy_state = {
+        "taskSessionId": legacy_id,
+        "status": "running",
+        "mode": "agent_edit",
+        "workspaceRoot": str(tmp_path.resolve()),
+        "routeScope": {
+            "workspaceRoot": str(tmp_path.resolve()),
+            "projectFile": "",
+        },
+        "mcpConnectionId": build_mcp_connection_id(),
+        "toolRoute": dict(scoped["toolRoute"]),
+        "writesAllowed": True,
+        "writeGate": {"writesAllowed": True},
+    }
+    (legacy_dir / "state.json").write_text(json.dumps(legacy_state), encoding="utf-8")
+    (legacy_dir / "workspace-root.txt").write_text(
+        str(tmp_path.resolve()), encoding="utf-8"
+    )
+
+    assert task_connection_matches(legacy_state) is True
+    assert task_connection_matches(legacy_state, owner_capability=cap) is False
+    assert task_connection_matches(scoped_state, owner_capability=cap) is True
+
+    # Without capability, both healthy routes are visible → multi.
+    listed = active_task_route_context(tmp_path)
+    assert listed["status"] == "ambiguous_or_corrupt"
+    assert listed["errorCode"] == "MULTIPLE_HEALTHY_ROUTE_TASKS"
+
+    # With capability, only the scoped task matches → authorize succeeds.
+    allowed = authorize_active_task_tool(
+        tmp_path,
+        tool_name="read_file",
+        arguments={"ownerCapability": cap},
+    )
+    assert allowed["ok"] is True
+    assert allowed["taskSessionId"] == scoped["taskSessionId"]
 
 
 def test_foreign_recover_returns_redacted_summary(tmp_path: Path, monkeypatch) -> None:

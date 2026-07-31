@@ -732,7 +732,7 @@ def test_route_discovery_distinguishes_none_blocked_corrupt_and_ambiguous(
             "taskAuthorization": started["taskAuthorization"],
         },
     )
-    assert blocked["errorCode"] == "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
+    assert blocked["errorCode"] == "TASK_ROUTE_BLOCKED"
 
     state["status"] = "completed"
     state_path.write_text(json.dumps(state), encoding="utf-8")
@@ -812,7 +812,7 @@ def test_foreign_connection_write_task_does_not_own_tool_route(
         arguments={},
     )
     assert denied["ok"] is False
-    assert denied["errorCode"] == "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
+    assert denied["errorCode"] == "TASK_ROUTE_OWNERSHIP_REQUIRED"
     allowed = authorize_active_task_tool(
         tmp_path,
         tool_name="read_file",

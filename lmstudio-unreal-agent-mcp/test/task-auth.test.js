@@ -907,7 +907,7 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
         {},
         routeOptions
       ).errorCode,
-      "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
+      "TASK_STATE_CORRUPT"
     );
     assert.strictEqual(
       authorizeActiveRouteTool(
@@ -1027,7 +1027,7 @@ test("expired active route is blocked rather than treated as legacy", () => {
         {},
         { activeProject: projectFile }
       ).errorCode,
-      "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
+      "TASK_ROUTE_BLOCKED"
     );
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
@@ -1228,7 +1228,7 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
         { conversationId: "conv-aaaa" },
         { activeProject: projectFile }
       ).errorCode,
-      "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT"
+      "TASK_ROUTE_OWNERSHIP_REQUIRED"
     );
 
     const allowed = authorizeActiveRouteTool(
@@ -1293,6 +1293,86 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
     const blockedCatalog = listToolsRouteContext(workspace, projectFile);
     assert.strictEqual(blockedCatalog.errorCode, "TASK_STATE_CORRUPT");
     assert.notStrictEqual(blockedCatalog.catalogMode, "route_union");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    if (previousBridge === undefined) delete process.env.MCP_BRIDGE_PAIR_ID;
+    else process.env.MCP_BRIDGE_PAIR_ID = previousBridge;
+    if (previousClient === undefined) delete process.env.MCP_CLIENT_INSTANCE_ID;
+    else process.env.MCP_CLIENT_INSTANCE_ID = previousClient;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("state root unreadable fails closed instead of legacy open", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-root-workspace-"));
+  const badRoot = path.join(os.tmpdir(), `task-root-file-${Date.now()}`);
+  fs.writeFileSync(badRoot, "not-a-directory");
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = badRoot;
+  try {
+    const context = discoverActiveTaskContext(workspace);
+    assert.strictEqual(context.status, "blocked");
+    assert.strictEqual(context.errorCode, "TASK_STATE_ROOT_UNAVAILABLE");
+    const denied = authorizeActiveRouteTool(workspace, "read_file", {}, { consumeBudget: false });
+    assert.strictEqual(denied.ok, false);
+    assert.strictEqual(denied.errorCode, "TASK_STATE_ROOT_UNAVAILABLE");
+    assert.notStrictEqual(denied.legacy, true);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(badRoot, { force: true });
+  }
+});
+
+test("explicit ownerCapability disables legacy connection ownership", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-legacy-cap-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-legacy-cap-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const previous = process.env.AGENT_STATE_ROOT;
+  const previousBridge = process.env.MCP_BRIDGE_PAIR_ID;
+  const previousClient = process.env.MCP_CLIENT_INSTANCE_ID;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  process.env.MCP_BRIDGE_PAIR_ID = "bridge-legacy-cap-node";
+  process.env.MCP_CLIENT_INSTANCE_ID = "client-legacy-cap-node";
+  try {
+    const { getMcpConnectionId, taskConnectionMatches } = require("../src/mcp-connection");
+    const cap = "c".repeat(64);
+    const scoped = routeState(projectFile, {
+      taskSessionId: "task_scopedcap1",
+      conversationId: "conv-scoped",
+      ownerCapability: cap,
+      mcpConnectionId: `${getMcpConnectionId()}:conv-scoped`,
+    });
+    const legacy = routeState(projectFile, {
+      taskSessionId: "task_legacycap1",
+      mcpConnectionId: getMcpConnectionId(),
+    });
+    delete legacy.conversationId;
+    delete legacy.ownerCapability;
+    for (const state of [scoped, legacy]) {
+      const dir = path.join(stateRoot, "tasks", state.taskSessionId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(state));
+    }
+    assert.strictEqual(taskConnectionMatches(legacy), true);
+    assert.strictEqual(taskConnectionMatches(legacy, "", cap), false);
+    assert.strictEqual(taskConnectionMatches(scoped, "", cap), true);
+
+    const listed = discoverActiveTaskContext(workspace, projectFile);
+    assert.strictEqual(listed.errorCode, "MULTIPLE_HEALTHY_ROUTE_TASKS");
+
+    const allowed = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      { ownerCapability: cap },
+      { activeProject: projectFile, consumeBudget: false }
+    );
+    assert.strictEqual(allowed.ok, true);
+    assert.strictEqual(allowed.taskSessionId, scoped.taskSessionId);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
