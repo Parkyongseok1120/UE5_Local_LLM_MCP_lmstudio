@@ -291,6 +291,27 @@ def _default_platform() -> str:
     return "Linux"
 
 
+def _process_is_alive(pid: int) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 @dataclass
 class InstallLock:
     state_home: Path
@@ -301,19 +322,40 @@ class InstallLock:
     def __post_init__(self) -> None:
         self.path = self.state_home / "install.lock"
 
+    def _clear_stale_lock(self) -> bool:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            payload = {}
+        pid = payload.get("pid") if isinstance(payload, dict) else None
+        if isinstance(pid, int) and _process_is_alive(pid):
+            return False
+        try:
+            self.path.unlink(missing_ok=True)
+            return True
+        except OSError:
+            return False
+
     def acquire(self) -> None:
         if self.dry_run:
             return
         self.state_home.mkdir(parents=True, exist_ok=True)
-        try:
-            descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError as exc:
-            raise RuntimeError(
-                f"another installer is active (or a stale lock remains): {self.path}"
-            ) from exc
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({"pid": os.getpid(), "createdAt": time.time()}, handle)
-        self.acquired = True
+        for _ in range(2):
+            try:
+                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError as exc:
+                if self._clear_stale_lock():
+                    continue
+                raise RuntimeError(
+                    f"another installer is active (or a stale lock remains): {self.path}"
+                ) from exc
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump({"pid": os.getpid(), "createdAt": time.time()}, handle)
+            self.acquired = True
+            return
+        raise RuntimeError(
+            f"another installer is active (or a stale lock remains): {self.path}"
+        )
 
     def release(self) -> None:
         if self.acquired:

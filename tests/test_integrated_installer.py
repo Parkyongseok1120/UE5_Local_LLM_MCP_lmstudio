@@ -357,12 +357,22 @@ def test_dry_run_is_zero_mutation(tmp_path: Path) -> None:
 def test_existing_install_lock_fails_before_managed_targets_are_written(tmp_path: Path) -> None:
     lock = tmp_path / "state" / "install.lock"
     lock.parent.mkdir(parents=True)
-    lock.write_text("{}", encoding="utf-8")
+    lock.write_text(json.dumps({"pid": os.getpid(), "createdAt": 1.0}), encoding="utf-8")
     result = _run(tmp_path, "--profile", "safe")
     assert result.returncode == 1
     assert "another installer is active" in result.stdout
     assert not (tmp_path / "codex").exists()
     assert not (tmp_path / "lmstudio").exists()
+
+
+def test_stale_install_lock_is_cleared_automatically(tmp_path: Path) -> None:
+    lock = tmp_path / "state" / "install.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text(json.dumps({"pid": 2_147_483_647, "createdAt": 1.0}), encoding="utf-8")
+    result = _run(tmp_path, "--profile", "safe")
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout)["ok"] is True
+    assert not lock.exists()
 
 
 def test_safe_profile_rejects_agent_mode(tmp_path: Path) -> None:
