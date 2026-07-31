@@ -310,11 +310,21 @@ def _kill_process_tree(pid: int) -> bool:
         if isinstance(result, ProbeTimeout):
             return False
         return result.returncode == 0
+    import signal
+
     try:
-        os.kill(pid, 15)
+        os.killpg(pid, signal.SIGTERM)
+        return True
+    except ProcessLookupError:
         return True
     except OSError:
-        return False
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
 
 
 def _confirm_process_dead(pid: int, *, retries: int = 5, delay_sec: float = 0.2) -> str:
@@ -405,26 +415,35 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     orphan_suspected = False
     process_tree_killed = False
     next_status = "cancelled"
+    termination_confirmed_at = ""
     if pid:
         pid_int = int(pid)
         alive = _process_alive(pid_int)
         if alive == "alive":
             if _pid_matches_job(fresh):
                 process_tree_killed = _kill_process_tree(pid_int)
-                orphan_suspected = not process_tree_killed
-                if not process_tree_killed:
+                death = _confirm_process_dead(pid_int) if process_tree_killed else "unknown"
+                if death != "dead":
+                    orphan_suspected = True
                     next_status = "cancellation_uncertain"
+                else:
+                    termination_confirmed_at = _utc_now()
             else:
                 orphan_suspected = True
                 next_status = "cancellation_uncertain"
         elif alive == "unknown":
             orphan_suspected = True
             next_status = "cancellation_uncertain"
+        elif alive == "dead":
+            termination_confirmed_at = _utc_now()
     if not transition_job_status(fresh, next_status):
         fresh["status"] = next_status
     append_progress(fresh, "Job cancelled by request.")
     if orphan_suspected:
         fresh["orphanProcessSuspected"] = True
+    if termination_confirmed_at:
+        fresh["processTerminationConfirmedAt"] = termination_confirmed_at
+        fresh["processTerminationConfirmed"] = True
     if not save_job(workspace, fresh):
         return {"ok": False, "error": "Failed to persist cancelled job state", "jobId": job_id}
     return {
@@ -433,6 +452,7 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
         "processTreeKilled": process_tree_killed,
         "orphanProcessSuspected": orphan_suspected,
         "cancellationState": str((read_job(workspace, job_id) or fresh).get("status") or ""),
+        "processTerminationConfirmed": bool(termination_confirmed_at),
     }
 
 
@@ -555,13 +575,17 @@ def _run_wrapper_worker(
     with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
         "w", encoding="utf-8"
     ) as stderr_file:
-        process = subprocess.Popen(
-            command,
-            cwd=str(workspace),
-            stdout=stdout_file,
-            stderr=stderr_file,
-            text=True,
-        )
+        popen_kwargs: dict[str, Any] = {
+            "cwd": str(workspace),
+            "stdout": stdout_file,
+            "stderr": stderr_file,
+            "text": True,
+        }
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            popen_kwargs["start_new_session"] = True
+        process = subprocess.Popen(command, **popen_kwargs)
 
         def mark_running(draft: dict[str, Any]) -> None:
             append_progress(draft, "Wrapper subprocess started.")
@@ -756,13 +780,17 @@ def _run_rag_refresh_worker(
         )
         return
 
-    process = subprocess.Popen(
-        command,
-        cwd=str(workspace),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    rag_popen_kwargs: dict[str, Any] = {
+        "cwd": str(workspace),
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+    }
+    if sys.platform == "win32":
+        rag_popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        rag_popen_kwargs["start_new_session"] = True
+    process = subprocess.Popen(command, **rag_popen_kwargs)
 
     def mark_running(draft: dict[str, Any]) -> None:
         append_progress(draft, "RAG refresh subprocess started.")

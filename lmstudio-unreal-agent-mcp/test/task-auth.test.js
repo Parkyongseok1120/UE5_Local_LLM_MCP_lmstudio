@@ -1054,7 +1054,7 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
       allowedPathScopes: ["Source"],
       maxToolCallsPerPhase: 2,
     },
-    toolRouteUsage: { routeHash: "route-budget", count: 0, reserved: 0, calls: [] },
+    toolRouteUsage: { routeHash: "route-budget", count: 0, reserved: 0, reservations: [], calls: [] },
   }));
   const previous = process.env.AGENT_STATE_ROOT;
   process.env.AGENT_STATE_ROOT = stateRoot;
@@ -1063,14 +1063,12 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
     routePhase: "executor",
   };
   try {
-    assert.strictEqual(
-      reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "read_file").ok,
-      true
-    );
-    assert.strictEqual(
-      reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "read_file").ok,
-      true
-    );
+    const first = reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "read_file");
+    const second = reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "read_file");
+    assert.strictEqual(first.ok, true);
+    assert.strictEqual(second.ok, true);
+    assert.ok(first.reservationId);
+    assert.ok(second.reservationId);
     const blocked = reserveRouteCall(
       workspace,
       authorization.taskSessionId,
@@ -1081,18 +1079,86 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
     assert.strictEqual(blocked.ok, false);
     assert.strictEqual(blocked.errorCode, "TASK_PHASE_TOOL_BUDGET_EXHAUSTED");
     assert.strictEqual(
-      commitRouteReservation(workspace, authorization.taskSessionId, fields, {}, "read_file").ok,
+      commitRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        "read_file",
+        first.reservationId
+      ).ok,
       true
     );
     assert.strictEqual(
-      rollbackRouteReservation(workspace, authorization.taskSessionId, fields, {}, "read_file").ok,
+      rollbackRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        "read_file",
+        second.reservationId
+      ).ok,
       true
+    );
+    assert.strictEqual(
+      commitRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        "read_file",
+        "missing-reservation"
+      ).errorCode,
+      "TASK_RESERVATION_NOT_FOUND"
     );
     const state = JSON.parse(
       fs.readFileSync(path.join(taskDir, "state.json"), "utf8")
     );
     assert.strictEqual(state.toolRouteUsage.count, 1);
     assert.strictEqual(state.toolRouteUsage.reserved, 0);
+    assert.deepStrictEqual(state.toolRouteUsage.reservations, []);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("stale legacy reserved counters are cleared on next budget mutate", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-stale-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-stale-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    writeGate: { writesAllowed: true },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-stale",
+      phase: "executor",
+      activeTools: ["read_file"],
+      allowedPathScopes: ["Source"],
+      maxToolCallsPerPhase: 2,
+    },
+    // Crash-left counter without reservation IDs.
+    toolRouteUsage: { routeHash: "route-stale", count: 0, reserved: 2, calls: [] },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const reserved = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      { routeHash: "route-stale", routePhase: "executor" },
+      {},
+      "read_file"
+    );
+    assert.strictEqual(reserved.ok, true);
+    const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    assert.strictEqual(state.toolRouteUsage.reserved, 1);
+    assert.strictEqual(state.toolRouteUsage.reservations.length, 1);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;

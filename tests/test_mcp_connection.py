@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import os
 import sys
 from pathlib import Path
 
@@ -16,6 +15,7 @@ def _reload_mcp(monkeypatch: pytest.MonkeyPatch, **env: str | None):
         "MCP_SESSION_ID",
         "MCP_CONNECTION_ID",
         "MCP_BRIDGE_PAIR_ID",
+        "MCP_CLIENT_INSTANCE_ID",
         "AGENT_STATE_ROOT",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -99,7 +99,7 @@ def test_session_id_preferred_over_connection_and_bridge(
     assert owner != "install-wide-bridge-id-aaaa"
 
 
-def test_bridge_pair_alone_is_not_task_owner(
+def test_default_owner_is_bridge_plus_shared_client_instance(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     bridge = tmp_path / "mcp-bridge-pair.id"
@@ -110,9 +110,16 @@ def test_bridge_pair_alone_is_not_task_owner(
         MCP_BRIDGE_PAIR_ID="install-wide-bridge-id-bbbb",
     )
     owner = mcp.get_mcp_connection_id()
-    assert owner.startswith("mcp-local-")
-    assert "install-wide-bridge-id-bbbb" not in owner
-    assert mcp.get_mcp_bridge_pair_id() == "install-wide-bridge-id-bbbb"
+    instance = mcp.get_mcp_client_instance_id()
+    assert owner == f"install-wide-bridge-id-bbbb:{instance}"
+    assert owner != "install-wide-bridge-id-bbbb"
+    # Simulated second MCP process reload shares the same client instance file.
+    mcp2 = _reload_mcp(
+        monkeypatch,
+        AGENT_STATE_ROOT=str(tmp_path),
+        MCP_BRIDGE_PAIR_ID="install-wide-bridge-id-bbbb",
+    )
+    assert mcp2.get_mcp_connection_id() == owner
 
 
 def test_empty_bridge_file_is_atomically_repaired(

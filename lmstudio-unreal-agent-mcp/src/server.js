@@ -1764,14 +1764,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     ]);
     let pendingBudgetReservation = null;
     const budgetFields = requiredFields(args || {});
-    const runBudgetOp = (op) => {
+    const runBudgetOp = (op, reservationId = "") => {
       if (hasExplicitTaskAuthorization) {
         return op(
           WORKSPACE_ROOT,
           budgetFields.taskSessionId,
           budgetFields,
           args,
-          name
+          name,
+          reservationId
         );
       }
       const active = discoverActiveTaskContext(
@@ -1789,7 +1790,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           routePhase: String(active.route?.phase || ""),
         },
         args,
-        name
+        name,
+        reservationId
       );
     };
     if (
@@ -1808,7 +1810,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             toolRouteUsage: reserved.toolRouteUsage,
           });
         }
-        pendingBudgetReservation = true;
+        if (reserved.reservationId) {
+          pendingBudgetReservation = { id: String(reserved.reservationId) };
+        }
       } else {
         const budgetCommit = hasExplicitTaskAuthorization
           ? authorizeTaskRouteTool(
@@ -1842,16 +1846,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     const rollbackDeferredBudget = () => {
       if (!pendingBudgetReservation) return;
-      pendingBudgetReservation = false;
-      runBudgetOp(rollbackRouteReservation);
+      const reservationId = String(pendingBudgetReservation.id || "");
+      pendingBudgetReservation = null;
+      if (reservationId) {
+        runBudgetOp(rollbackRouteReservation, reservationId);
+      }
     };
     const commitDeferredBudgetOrFail = () => {
       if (!pendingBudgetReservation) return null;
-      pendingBudgetReservation = false;
-      const committed = runBudgetOp(commitRouteReservation);
+      const reservationId = String(pendingBudgetReservation.id || "");
+      pendingBudgetReservation = null;
+      const committed = runBudgetOp(commitRouteReservation, reservationId);
       if (!committed.ok) {
-        // Commit failed after clearing the local flag; drop the server-side reservation.
-        runBudgetOp(rollbackRouteReservation);
+        if (reservationId) {
+          runBudgetOp(rollbackRouteReservation, reservationId);
+        }
         return fail(committed.error || "Task route authorization failed.", {
           errorCode: committed.errorCode || "TASK_ROUTE_AUTH_FAILED",
           retryable: false,
@@ -2225,6 +2234,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const metadataHeader = `[path-metadata: ${JSON.stringify(pathMetadata(resolution))}]\n`
         + (truncated.meta.truncated ? `[read-truncation: ${JSON.stringify(truncated.meta)}]\n` : "");
       const output = metadataHeader + out;
+      // Finish all I/O (including full-file evidence hash) before committing budget.
+      const contentHash = sha256Buffer(await fsp.readFile(target));
       const budgetFail = commitDeferredBudgetOrFail();
       if (budgetFail) return budgetFail;
       rememberReadEvidence(
@@ -2232,8 +2243,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         s,
         resolution,
         `1-${truncated.endLine}`,
-        // Always hash the full file so truncated reads still unlock replace_in_file.
-        sha256Buffer(await fsp.readFile(target))
+        contentHash
       );
       recordReadSuccess("read_file", guard.normalizedArgs, {
         ...readContext,

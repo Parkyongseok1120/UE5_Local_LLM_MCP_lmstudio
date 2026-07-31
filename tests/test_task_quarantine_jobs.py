@@ -84,3 +84,71 @@ def test_quarantine_refuses_when_job_cancel_uncertain(tmp_path: Path, monkeypatc
     assert payload.get("orphanProcessSuspected") is True
     assert task_dir.is_dir()
     assert (task_dir / "state.json").read_text(encoding="utf-8") == "{"
+
+
+def test_quarantine_refuses_existing_uncertain_terminal_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    task_id = "corrupt03_task_cccc"
+    task_dir = state_root / "tasks" / task_id
+    task_dir.mkdir(parents=True)
+    (task_dir / "workspace-root.txt").write_text(str(workspace.resolve()), encoding="utf-8")
+    (task_dir / "state.json").write_text("{", encoding="utf-8")
+
+    job = create_job(
+        workspace,
+        {
+            "request": "edit files",
+            "mode": "agent_edit",
+            "taskSessionId": task_id,
+        },
+    )
+    from job_store import transition_job_record
+
+    job_id = str(job["jobId"])
+    assert transition_job_record(
+        job_id, "cancel_requested", lambda draft: None, workspace=workspace
+    )
+    assert transition_job_record(
+        job_id,
+        "cancellation_uncertain",
+        lambda draft: draft.update(
+            {"orphanProcessSuspected": True, "pid": 424242}
+        ),
+        workspace=workspace,
+    )
+    assert read_job(workspace, job_id)["status"] == "cancellation_uncertain"
+
+    payload = task_quarantine_corrupt(workspace)
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "TASK_CANCELLATION_UNCERTAIN"
+    assert payload.get("routeReleased") is False
+    assert task_dir.is_dir()
+
+
+def test_quarantine_refuses_when_job_discovery_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    task_id = "corrupt04_task_dddd"
+    task_dir = state_root / "tasks" / task_id
+    task_dir.mkdir(parents=True)
+    (task_dir / "workspace-root.txt").write_text(str(workspace.resolve()), encoding="utf-8")
+    (task_dir / "state.json").write_text("{", encoding="utf-8")
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("jobs.sqlite unavailable")
+
+    monkeypatch.setattr("job_store.list_job_records", boom)
+    payload = task_quarantine_corrupt(workspace)
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "TASK_JOB_DISCOVERY_UNCERTAIN"
+    assert payload.get("routeReleased") is False
+    assert task_dir.is_dir()

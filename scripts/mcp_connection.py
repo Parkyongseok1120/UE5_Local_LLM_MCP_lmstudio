@@ -1,15 +1,17 @@
 #!/usr/bin/env python
-"""MCP bridge pair + client-session ownership for dual Python/Node servers."""
+"""MCP bridge pair + client-instance ownership for dual Python/Node servers."""
 
 from __future__ import annotations
 
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 
 _OWNER_ID: str | None = None
 _BRIDGE_PAIR_ID: str | None = None
+_CLIENT_INSTANCE_ID: str | None = None
 _LOCAL_SESSION_ID: str | None = None
 
 _BRIDGE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
@@ -41,6 +43,13 @@ def _legacy_bridge_connection_path() -> Path | None:
     return root / "mcp-bridge-connection.id"
 
 
+def _client_instance_path() -> Path | None:
+    root = _resolve_state_root()
+    if root is None:
+        return None
+    return root / "mcp-client-instance.id"
+
+
 def _valid_bridge_id(value: str) -> bool:
     return bool(value and _BRIDGE_ID_RE.match(value))
 
@@ -50,6 +59,45 @@ def _atomic_write_text(path: Path, value: str) -> None:
     temp = path.with_suffix(path.suffix + f".tmp-{uuid.uuid4().hex[:8]}")
     temp.write_text(value, encoding="utf-8")
     temp.replace(path)
+
+
+def _locked_shared_id(
+    path: Path,
+    *,
+    label: str,
+    prefix: str,
+    legacy: Path | None = None,
+) -> str | None:
+    """Create or repair a shared ID file under a cross-process lock, then re-read."""
+
+    from write_locks import release_cross_process_lock, try_acquire_cross_process_lock
+
+    root = _resolve_state_root()
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        acquired = try_acquire_cross_process_lock(path, label=label, state_root=root)
+        if not acquired.get("ok"):
+            time.sleep(0.05)
+            continue
+        try:
+            if path.is_file():
+                existing = path.read_text(encoding="utf-8").strip()
+                if _valid_bridge_id(existing):
+                    return existing
+            elif legacy is not None and legacy.is_file():
+                existing = legacy.read_text(encoding="utf-8").strip()
+                if _valid_bridge_id(existing):
+                    _atomic_write_text(path, existing)
+                    return path.read_text(encoding="utf-8").strip()
+            value = f"{prefix}{uuid.uuid4().hex}"
+            _atomic_write_text(path, value)
+            final = path.read_text(encoding="utf-8").strip()
+            return final if _valid_bridge_id(final) else value
+        except OSError:
+            return None
+        finally:
+            release_cross_process_lock(path, state_root=root)
+    return None
 
 
 def get_mcp_bridge_pair_id() -> str:
@@ -65,43 +113,56 @@ def get_mcp_bridge_pair_id() -> str:
     path = _bridge_connection_path()
     legacy = _legacy_bridge_connection_path()
     if path is not None:
-        try:
-            if path.is_file():
-                existing = path.read_text(encoding="utf-8").strip()
-                if _valid_bridge_id(existing):
-                    _BRIDGE_PAIR_ID = existing
-                    return _BRIDGE_PAIR_ID
-            elif legacy is not None and legacy.is_file():
-                existing = legacy.read_text(encoding="utf-8").strip()
-                if _valid_bridge_id(existing):
-                    _atomic_write_text(path, existing)
-                    _BRIDGE_PAIR_ID = existing
-                    return _BRIDGE_PAIR_ID
-            value = f"mcp-bridge-{uuid.uuid4().hex}"
-            # Repair empty/invalid files with atomic replace.
-            if path.is_file() or (legacy is not None and legacy.is_file()):
-                _atomic_write_text(path, value)
-                _BRIDGE_PAIR_ID = value
-                return _BRIDGE_PAIR_ID
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if path.is_file():
             try:
-                fd = os.open(str(path), flags, 0o644)
-            except FileExistsError:
                 existing = path.read_text(encoding="utf-8").strip()
                 if _valid_bridge_id(existing):
                     _BRIDGE_PAIR_ID = existing
                     return _BRIDGE_PAIR_ID
-                _atomic_write_text(path, value)
-                _BRIDGE_PAIR_ID = value
-                return _BRIDGE_PAIR_ID
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(value)
-            _BRIDGE_PAIR_ID = value
+            except OSError:
+                pass
+        repaired = _locked_shared_id(
+            path,
+            label="mcp_bridge_pair",
+            prefix="mcp-bridge-",
+            legacy=legacy,
+        )
+        if repaired:
+            _BRIDGE_PAIR_ID = repaired
             return _BRIDGE_PAIR_ID
-        except OSError:
-            pass
     _BRIDGE_PAIR_ID = f"mcp-bridge-local-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     return _BRIDGE_PAIR_ID
+
+
+def get_mcp_client_instance_id() -> str:
+    """Ephemeral client-run id shared by both MCP servers under one host start."""
+    global _CLIENT_INSTANCE_ID
+    if _CLIENT_INSTANCE_ID:
+        return _CLIENT_INSTANCE_ID
+    env_value = str(os.environ.get("MCP_CLIENT_INSTANCE_ID") or "").strip()
+    if _valid_bridge_id(env_value):
+        _CLIENT_INSTANCE_ID = env_value
+        return _CLIENT_INSTANCE_ID
+    path = _client_instance_path()
+    if path is not None:
+        if path.is_file():
+            try:
+                existing = path.read_text(encoding="utf-8").strip()
+                if _valid_bridge_id(existing):
+                    _CLIENT_INSTANCE_ID = existing
+                    return _CLIENT_INSTANCE_ID
+            except OSError:
+                pass
+        repaired = _locked_shared_id(
+            path,
+            label="mcp_client_instance",
+            prefix="mcp-client-",
+        )
+        if repaired:
+            _CLIENT_INSTANCE_ID = repaired
+            return _CLIENT_INSTANCE_ID
+    _CLIENT_INSTANCE_ID = f"mcp-client-local-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    return _CLIENT_INSTANCE_ID
 
 
 def get_mcp_client_session_id() -> str:
@@ -122,7 +183,7 @@ def get_mcp_connection_id() -> str:
     Preference:
     1. MCP_SESSION_ID → bridgePairId:clientSessionId (chat-scoped ownership)
     2. MCP_CONNECTION_ID (explicit test/advanced override only)
-    3. process-local owner (Python/Node diverge; safe multi-chat default)
+    3. bridgePairId:clientInstanceId (shared dual-MCP default; not bridge alone)
     """
     global _OWNER_ID
     if _OWNER_ID:
@@ -136,8 +197,8 @@ def get_mcp_connection_id() -> str:
         # Tests and advanced single-session setups may still pin this.
         _OWNER_ID = explicit
         return _OWNER_ID
-    # Do NOT fall back to the install-wide bridge file for ownership.
-    _OWNER_ID = f"mcp-local-{os.getpid()}-{uuid.uuid4().hex[:12]}"
+    # Shared client instance keeps Python/Node aligned without install-wide-only owner.
+    _OWNER_ID = f"{get_mcp_bridge_pair_id()}:{get_mcp_client_instance_id()}"
     return _OWNER_ID
 
 

@@ -1990,16 +1990,38 @@ def _extract_active_job_id_from_corrupt_state(state_path: Path) -> str:
     return str(match.group(1) if match else "").strip()
 
 
-def _jobs_linked_to_task(workspace: Path, task_session_id: str) -> list[dict[str, Any]]:
+_SAFE_QUARANTINE_TERMINAL = frozenset({"completed", "failed", "timed_out", "cancelled"})
+
+
+def _job_blocks_quarantine(job: dict[str, Any]) -> bool:
+    """True when a linked job must block quarantine (uncertain/orphan/unconfirmed)."""
+
+    status = str(job.get("status") or "").strip()
+    if bool(job.get("orphanProcessSuspected")):
+        return True
+    if status == "cancellation_uncertain":
+        return True
+    if status in _SAFE_QUARANTINE_TERMINAL:
+        return False
+    return True
+
+
+def _discover_jobs_linked_to_task(
+    workspace: Path, task_session_id: str
+) -> dict[str, Any]:
     from job_store import list_job_records
-    from wrapper_job_manager import TERMINAL_STATUSES, read_job
+    from wrapper_job_manager import read_job
 
     linked: list[dict[str, Any]] = []
     seen: set[str] = set()
     try:
         records = list_job_records(workspace, limit=200)
-    except Exception:
-        records = []
+    except Exception as exc:
+        return {
+            "discoveryComplete": False,
+            "jobs": [],
+            "errors": [str(exc) or "jobs store unavailable"],
+        }
     for job in records:
         if not isinstance(job, dict):
             continue
@@ -2020,20 +2042,77 @@ def _jobs_linked_to_task(workspace: Path, task_session_id: str) -> list[dict[str
     state_path = task_root(workspace, task_session_id) / "state.json"
     active_job_id = _extract_active_job_id_from_corrupt_state(state_path)
     if active_job_id and active_job_id not in seen:
-        job = read_job(workspace, active_job_id)
+        try:
+            job = read_job(workspace, active_job_id)
+        except Exception as exc:
+            return {
+                "discoveryComplete": False,
+                "jobs": linked,
+                "errors": [f"activeJobId read failed: {exc}"],
+            }
         if job:
             linked.append(job)
+    return {
+        "discoveryComplete": True,
+        "jobs": linked,
+        "errors": [],
+    }
+
+
+def _jobs_linked_to_task(workspace: Path, task_session_id: str) -> list[dict[str, Any]]:
+    """Return non-safe-terminal jobs that still need cancel attention."""
+
+    discovery = _discover_jobs_linked_to_task(workspace, task_session_id)
+    if not discovery.get("discoveryComplete"):
+        return []
     return [
         job
-        for job in linked
-        if str(job.get("status") or "") not in TERMINAL_STATUSES
+        for job in (discovery.get("jobs") or [])
+        if isinstance(job, dict) and _job_blocks_quarantine(job)
     ]
 
 
 def _cancel_jobs_for_task(workspace: Path, task_session_id: str) -> dict[str, Any]:
     from wrapper_job_manager import cancel_job
 
-    jobs = _jobs_linked_to_task(workspace, task_session_id)
+    discovery = _discover_jobs_linked_to_task(workspace, task_session_id)
+    if not discovery.get("discoveryComplete"):
+        return {
+            "ok": False,
+            "errorCode": "TASK_JOB_DISCOVERY_UNCERTAIN",
+            "error": (
+                "Could not enumerate linked background jobs; "
+                "task was not quarantined."
+            ),
+            "status": "cancellation_uncertain",
+            "orphanProcessSuspected": True,
+            "routeReleased": False,
+            "discoveryErrors": discovery.get("errors") or [],
+            "cancelledJobs": [],
+        }
+
+    linked = [job for job in (discovery.get("jobs") or []) if isinstance(job, dict)]
+    # Already-uncertain / orphan jobs must never be treated as "nothing to cancel".
+    for job in linked:
+        if (
+            str(job.get("status") or "") == "cancellation_uncertain"
+            or bool(job.get("orphanProcessSuspected"))
+        ):
+            return {
+                "ok": False,
+                "errorCode": "TASK_CANCELLATION_UNCERTAIN",
+                "error": (
+                    "Linked background job is already cancellation_uncertain or "
+                    "orphanProcessSuspected; task was not quarantined."
+                ),
+                "status": "cancellation_uncertain",
+                "orphanProcessSuspected": True,
+                "routeReleased": False,
+                "cancelledJobs": [],
+                "blockingJobId": str(job.get("jobId") or ""),
+            }
+
+    jobs = [job for job in linked if _job_blocks_quarantine(job)]
     if not jobs:
         return {
             "ok": True,
@@ -2064,6 +2143,7 @@ def _cancel_jobs_for_task(workspace: Path, task_session_id: str) -> dict[str, An
                 "error": result.get("error") or f"Failed to cancel job {job_id}",
                 "cancelledJobs": cancelled,
                 "orphanProcessSuspected": bool(result.get("orphanProcessSuspected")),
+                "routeReleased": False,
             }
         state = str(result.get("cancellationState") or "")
         if state == "cancellation_uncertain":
@@ -2081,6 +2161,7 @@ def _cancel_jobs_for_task(workspace: Path, task_session_id: str) -> dict[str, An
             "status": "cancellation_uncertain",
             "orphanProcessSuspected": True,
             "cancelledJobs": cancelled,
+            "routeReleased": False,
         }
     return {
         "ok": True,

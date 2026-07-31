@@ -617,7 +617,30 @@ function validateToolRoute(state, fields, args, toolName) {
   return { ok: true, route: activeRoute };
 }
 
-function mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, mode = "consume") {
+const ROUTE_RESERVATION_TTL_MS = 120_000;
+
+function purgeExpiredReservations(usage, nowMs = Date.now()) {
+  const list = Array.isArray(usage.reservations)
+    ? usage.reservations.filter((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const expiresAt = Date.parse(String(entry.expiresAt || ""));
+      return Number.isFinite(expiresAt) && expiresAt > nowMs;
+    })
+    : [];
+  usage.reservations = list;
+  usage.reserved = list.length;
+  return list;
+}
+
+function mutateRouteBudget(
+  workspaceRoot,
+  taskSessionId,
+  fields,
+  args,
+  toolName,
+  mode = "consume",
+  reservationId = ""
+) {
   if (!toolName) return { ok: true };
   const stateRoot = resolveAgentStateRoot(workspaceRoot);
   const dir = taskDir(workspaceRoot, taskSessionId, stateRoot);
@@ -654,24 +677,64 @@ function mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName,
         roleSession: String(route.roleSession || ""),
         count: 0,
         reserved: 0,
+        reservations: [],
         calls: [],
       };
     }
+    // Drop legacy counter-only reservations after crash; they have no TTL/ID.
+    if (!Array.isArray(usage.reservations) && Number(usage.reserved || 0) > 0) {
+      usage.reservations = [];
+      usage.reserved = 0;
+    }
+    const reservations = purgeExpiredReservations(usage);
     const count = Number(usage.count || 0);
-    let reserved = Math.max(0, Number(usage.reserved || 0));
+    const reserved = reservations.length;
     const limit = Math.max(2, Math.min(6, Number(route.maxToolCallsPerPhase || 2)));
     if (mode === "rollback") {
-      usage.reserved = Math.max(0, reserved - 1);
+      const targetId = String(reservationId || "").trim();
+      if (!targetId) {
+        return {
+          ok: false,
+          errorCode: "TASK_RESERVATION_NOT_FOUND",
+          error: "Reservation id is required to rollback a route budget slot.",
+        };
+      }
+      const next = reservations.filter((entry) => String(entry.reservationId || "") !== targetId);
+      if (next.length === reservations.length) {
+        return {
+          ok: false,
+          errorCode: "TASK_RESERVATION_NOT_FOUND",
+          error: `Unknown reservation id: ${targetId}`,
+        };
+      }
+      usage.reservations = next;
+      usage.reserved = next.length;
       current.toolRouteUsage = usage;
       current.updatedAt = new Date().toISOString();
       atomicWriteJson(statePath, current);
       return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
     }
     if (mode === "commit") {
-      if (reserved > 0) reserved -= 1;
+      const targetId = String(reservationId || "").trim();
+      if (!targetId) {
+        return {
+          ok: false,
+          errorCode: "TASK_RESERVATION_NOT_FOUND",
+          error: "Reservation id is required to commit a route budget slot.",
+        };
+      }
+      const next = reservations.filter((entry) => String(entry.reservationId || "") !== targetId);
+      if (next.length === reservations.length) {
+        return {
+          ok: false,
+          errorCode: "TASK_RESERVATION_NOT_FOUND",
+          error: `Unknown reservation id: ${targetId}`,
+        };
+      }
       const calls = Array.isArray(usage.calls) ? usage.calls.map(String) : [];
       calls.push(toolName);
-      usage.reserved = reserved;
+      usage.reservations = next;
+      usage.reserved = next.length;
       usage.count = count + 1;
       usage.calls = calls.slice(-limit);
       current.toolRouteUsage = usage;
@@ -690,17 +753,36 @@ function mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName,
       };
     }
     if (mode === "reserve") {
-      usage.reserved = reserved + 1;
+      const id = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + ROUTE_RESERVATION_TTL_MS).toISOString();
+      const entry = {
+        reservationId: id,
+        tool: String(toolName),
+        routeHash: String(route.routeHash || ""),
+        createdAt,
+        expiresAt,
+      };
+      const next = [...reservations, entry];
+      usage.reservations = next;
+      usage.reserved = next.length;
       current.toolRouteUsage = usage;
       current.updatedAt = new Date().toISOString();
       atomicWriteJson(statePath, current);
-      return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
+      return {
+        ok: true,
+        state: current,
+        toolRoute: route,
+        toolRouteUsage: usage,
+        reservationId: id,
+      };
     }
     const calls = Array.isArray(usage.calls) ? usage.calls.map(String) : [];
     calls.push(toolName);
     usage.count = count + 1;
     usage.calls = calls.slice(-limit);
     usage.reserved = reserved;
+    usage.reservations = reservations;
     current.toolRouteUsage = usage;
     current.updatedAt = new Date().toISOString();
     atomicWriteJson(statePath, current);
@@ -718,12 +800,28 @@ function reserveRouteCall(workspaceRoot, taskSessionId, fields, args, toolName) 
   return mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, "reserve");
 }
 
-function commitRouteReservation(workspaceRoot, taskSessionId, fields, args, toolName) {
-  return mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, "commit");
+function commitRouteReservation(workspaceRoot, taskSessionId, fields, args, toolName, reservationId = "") {
+  return mutateRouteBudget(
+    workspaceRoot,
+    taskSessionId,
+    fields,
+    args,
+    toolName,
+    "commit",
+    reservationId
+  );
 }
 
-function rollbackRouteReservation(workspaceRoot, taskSessionId, fields, args, toolName) {
-  return mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, "rollback");
+function rollbackRouteReservation(workspaceRoot, taskSessionId, fields, args, toolName, reservationId = "") {
+  return mutateRouteBudget(
+    workspaceRoot,
+    taskSessionId,
+    fields,
+    args,
+    toolName,
+    "rollback",
+    reservationId
+  );
 }
 
 const SAFE_ROUTE_RECOVERY_TOOLS = new Set([
