@@ -1610,6 +1610,9 @@ STABLE_HIDDEN_TOOL_NAMES = frozenset(
     {
         "unreal_task_start",
         "unreal_task_status",
+        "unreal_task_list_active",
+        "unreal_task_recover_active",
+        "unreal_task_cancel_active",
         "unreal_task_checkpoint",
         "unreal_task_cancel",
         "unreal_task_resume",
@@ -1963,6 +1966,21 @@ class McpServer:
                 for name in sorted(recovery)
                 if name in by_name
             ]
+        # plan_only / foreign-connection running tasks do not shrink the catalog,
+        # but still expose cancel/status/checkpoint so stale sessions are recoverable.
+        from task_api import any_running_task_for_project
+
+        if any_running_task_for_project(
+            self.workspace,
+            active_project=active_project,
+        ):
+            exposed_names = {tool["name"] for tool in exposed}
+            extras = [
+                tool
+                for tool in control_surface
+                if tool["name"] not in exposed_names
+            ]
+            return exposed + extras
         return exposed
 
     @staticmethod
@@ -3164,12 +3182,50 @@ class McpServer:
             {
                 "name": "unreal_task_status",
                 "title": "Task session status",
-                "description": "Poll task phase, active job, and cancellable flag for a task started with unreal_task_start.",
+                "description": (
+                    "Poll task phase, active job, and cancellable flag. "
+                    "Omit taskSessionId to auto-select the single active task for the project."
+                ),
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
                     },
-                    ["taskSessionId"],
+                ),
+            },
+            {
+                "name": "unreal_task_list_active",
+                "title": "List active tasks",
+                "description": (
+                    "List running task sessions for the active project/workspace "
+                    "without requiring a known taskSessionId. Does not return authToken."
+                ),
+                "inputSchema": self._schema({}),
+            },
+            {
+                "name": "unreal_task_recover_active",
+                "title": "Recover active task status",
+                "description": (
+                    "Resolve and return status for the single active running task, "
+                    "or a named taskSessionId when multiple are present."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "taskSessionId": {"type": "string"},
+                    },
+                ),
+            },
+            {
+                "name": "unreal_task_cancel_active",
+                "title": "Cancel active task",
+                "description": (
+                    "Cancel the single active running task for the project, "
+                    "or a named taskSessionId when multiple are present. "
+                    "Use when a prior chat left a stuck running session."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "taskSessionId": {"type": "string"},
+                    },
                 ),
             },
             {
@@ -3219,12 +3275,14 @@ class McpServer:
             {
                 "name": "unreal_task_cancel",
                 "title": "Cancel task and active jobs",
-                "description": "Cancel the task session and any linked background compile/RAG jobs.",
+                "description": (
+                    "Cancel the task session and any linked background compile/RAG jobs. "
+                    "Omit taskSessionId to cancel the single active task."
+                ),
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
                     },
-                    ["taskSessionId"],
                 ),
             },
             {
@@ -3737,9 +3795,48 @@ class McpServer:
                     self.notify_tools_list_changed()
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_status":
-                from task_api import task_status
+                from task_api import task_recover_active, task_status
 
-                payload = task_status(self.workspace, str(arguments.get("taskSessionId") or ""))
+                task_session_id = str(arguments.get("taskSessionId") or "").strip()
+                if task_session_id:
+                    payload = task_status(self.workspace, task_session_id)
+                else:
+                    config = load_shared_config()
+                    payload = task_recover_active(
+                        self.workspace,
+                        active_project=str(config.get("activeProject") or ""),
+                    )
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_list_active":
+                from task_api import task_list_active
+
+                config = load_shared_config()
+                payload = task_list_active(
+                    self.workspace,
+                    active_project=str(config.get("activeProject") or ""),
+                )
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_recover_active":
+                from task_api import task_recover_active
+
+                config = load_shared_config()
+                payload = task_recover_active(
+                    self.workspace,
+                    active_project=str(config.get("activeProject") or ""),
+                    task_session_id=str(arguments.get("taskSessionId") or ""),
+                )
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_cancel_active":
+                from task_api import task_cancel_active
+
+                config = load_shared_config()
+                payload = task_cancel_active(
+                    self.workspace,
+                    active_project=str(config.get("activeProject") or ""),
+                    task_session_id=str(arguments.get("taskSessionId") or ""),
+                )
+                if payload.get("ok"):
+                    self.notify_tools_list_changed()
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_checkpoint":
                 from task_api import task_checkpoint
@@ -3796,9 +3893,17 @@ class McpServer:
                     self.notify_tools_list_changed()
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_cancel":
-                from task_api import task_cancel
+                from task_api import task_cancel, task_cancel_active
 
-                payload = task_cancel(self.workspace, str(arguments.get("taskSessionId") or ""))
+                task_session_id = str(arguments.get("taskSessionId") or "").strip()
+                if task_session_id:
+                    payload = task_cancel(self.workspace, task_session_id)
+                else:
+                    config = load_shared_config()
+                    payload = task_cancel_active(
+                        self.workspace,
+                        active_project=str(config.get("activeProject") or ""),
+                    )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()
                 self.structured_tool_result(message_id, payload)

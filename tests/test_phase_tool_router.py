@@ -161,16 +161,16 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     started = task_start(
         tmp_path,
-        request="Inspect code",
-        mode="read_only",
-        plan_payload=_plan(writes=False),
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
     )
     route = started["toolRoute"]
     active_tool = route["activeTools"][0]
 
     inactive = authorize_active_task_tool(
         tmp_path,
-        tool_name="replace_in_file",
+        tool_name="delete_file",
         arguments={"path": "Source/Demo/Foo.cpp"},
     )
     assert inactive["ok"] is False
@@ -288,8 +288,9 @@ def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
     assert stale["ok"] is False
     assert stale["errorCode"] == "TASK_AUTH_MISMATCH"
     assert stale["nextAction"] == "replan_or_resume_with_returned_taskAuthorization"
-    assert stale["taskAuthorization"]["authToken"] == replanned["taskAuthorization"]["authToken"]
+    assert "authToken" not in stale["taskAuthorization"]
     assert stale["taskAuthorization"]["planRevision"] == replanned["planRevision"]
+    assert "authToken" in (stale.get("mismatchedFields") or [])
     assert active_task_route_context(tmp_path)["status"] == "active"
 
     denied = task_replan(
@@ -358,9 +359,9 @@ def test_autonomy_blocked_task_allows_one_bounded_replan(
     monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     started = task_start(
         tmp_path,
-        request="Initial inspection",
-        mode="read_only",
-        plan_payload=_plan(writes=False),
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
     )
     state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -390,9 +391,9 @@ def test_autonomy_blocked_task_allows_one_bounded_replan(
         tmp_path,
         task_session_id=started["taskSessionId"],
         request="Try a new bounded strategy",
-        mode="read_only",
+        mode="agent_edit",
         project_file="",
-        plan_payload=_plan(writes=False),
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
     )
     assert replanned["ok"] is True
     updated = replanned["state"]["autonomySupervisor"]
@@ -610,7 +611,8 @@ def test_gate_mismatch_returns_refresh_auth_not_same_tool_retry(
     assert denied["ok"] is False
     assert denied["errorCode"] == "TASK_AUTH_MISMATCH"
     assert denied["nextAction"] == "replan_or_resume_with_returned_taskAuthorization"
-    assert denied["taskAuthorization"]["authToken"] == replanned["taskAuthorization"]["authToken"]
+    assert "authToken" not in denied["taskAuthorization"]
+    assert denied["taskAuthorization"]["planRevision"] == replanned["planRevision"]
     assert denied["nextAction"] != "retry_same_tool_with_returned_taskAuthorization"
 
 
@@ -708,9 +710,9 @@ def test_route_discovery_distinguishes_none_blocked_corrupt_and_ambiguous(
 
     started = task_start(
         tmp_path,
-        request="Inspect code",
-        mode="read_only",
-        plan_payload=_plan(writes=False),
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
     )
     state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -738,21 +740,59 @@ def test_route_discovery_distinguishes_none_blocked_corrupt_and_ambiguous(
     (corrupt_dir / "state.json").unlink()
     first = task_start(
         tmp_path,
-        request="First",
-        mode="read_only",
-        plan_payload=_plan(writes=False),
+        request="First Source/Demo/A.cpp",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=["Source/Demo/A.cpp"]),
     )
     second = task_start(
         tmp_path,
-        request="Second",
-        mode="read_only",
-        plan_payload=_plan(writes=False),
+        request="Second Source/Demo/B.cpp",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=["Source/Demo/B.cpp"]),
     )
     assert first["ok"] and second["ok"]
     assert (
         active_task_route_context(tmp_path)["status"]
         == "ambiguous_or_corrupt"
     )
+
+
+def test_plan_only_running_task_does_not_own_tool_route(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Plan analysis only",
+        mode="plan_only",
+        plan_payload=_plan(writes=False),
+    )
+    assert started["ok"] is True
+    assert started["state"]["writesAllowed"] is False
+    assert started["state"]["mcpConnectionId"]
+    assert started["state"]["status"] == "completed"
+    assert started.get("planOnlyCompleted") is True
+    assert active_task_route_context(tmp_path)["status"] == "none"
+
+
+def test_foreign_connection_write_task_does_not_own_tool_route(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
+    )
+    assert active_task_route_context(tmp_path)["status"] == "active"
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["mcpConnectionId"] = "mcp-other-connection"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert active_task_route_context(tmp_path)["status"] == "none"
 
 
 def test_project_identity_bridges_rag_and_node_workspaces_without_cross_project_leak(
@@ -779,10 +819,10 @@ def test_project_identity_bridges_rag_and_node_workspaces_without_cross_project_
     monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared_config))
     started = task_start(
         workspace_a,
-        request="Inspect workspace A",
-        mode="read_only",
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
         project_file=str(project_file),
-        plan_payload=_plan(writes=False),
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
     )
     assert started["ok"] is True
     assert active_task_route_context(workspace_a)["status"] == "none"
@@ -816,6 +856,9 @@ def test_project_identity_bridges_rag_and_node_workspaces_without_cross_project_
     names = {tool["name"] for tool in server.all_tool_definitions()}
     controls = {
         "unreal_task_status",
+        "unreal_task_list_active",
+        "unreal_task_recover_active",
+        "unreal_task_cancel_active",
         "unreal_task_checkpoint",
         "unreal_task_cancel",
     }

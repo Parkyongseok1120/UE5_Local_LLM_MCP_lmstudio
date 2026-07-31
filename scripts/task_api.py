@@ -44,10 +44,26 @@ from phase_tool_router import (
     selection_binding,
     validate_runtime_selection,
 )
+from mcp_connection import get_mcp_connection_id, task_owns_active_tool_route
 from task_phase import task_phase_from_state
 
 TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled", "failed", "cancellation_uncertain"})
 APPROVABLE_TASK_STATUSES = frozenset({"pending_approval", "awaiting_approval"})
+SCOPE_AUTHORITATIVE_GATES = frozenset(
+    {
+        "unreal_code_sketch_claim_validate",
+        "unreal_feature_intent_resolve",
+    }
+)
+SCOPE_SUPPORTING_GATES = frozenset(
+    {
+        "unreal_semantic_refactor_guard",
+        "unreal_runtime_debug_session",
+        "static_validate",
+        "ubt_build",
+        "unreal_architecture_reasoning",
+    }
+)
 
 
 class TaskStateReadError(RuntimeError):
@@ -79,19 +95,33 @@ def task_authorization_for_state(state: dict[str, Any]) -> dict[str, str]:
 def _auth_refresh_failure(
     result: dict[str, Any],
     state: dict[str, Any],
+    *,
+    mismatched_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     error_code = str(result.get("errorCode") or "")
     if error_code not in {"TASK_ROUTE_STALE", "TASK_AUTH_MISMATCH"}:
         return result
-    next_action = (
-        "retry_same_tool_with_returned_taskAuthorization"
-        if error_code == "TASK_ROUTE_STALE"
-        else "replan_or_resume_with_returned_taskAuthorization"
-    )
+    if error_code == "TASK_AUTH_MISMATCH":
+        # Never return a live authToken after identity checks failed.
+        safe_auth = {
+            "taskSessionId": str(state.get("taskSessionId") or ""),
+            "planId": str(state.get("planId") or ""),
+            "planRevision": str(state.get("planRevision") or ""),
+            "activeSliceId": str(state.get("activeSliceId") or ""),
+        }
+        payload = {
+            **result,
+            "taskAuthorization": safe_auth,
+            "nextAction": "replan_or_resume_with_returned_taskAuthorization",
+        }
+        if mismatched_fields:
+            payload["mismatchedFields"] = list(mismatched_fields)
+        return payload
+    # TASK_ROUTE_STALE: identity already matched; refresh route fields only.
     return {
         **result,
         "taskAuthorization": task_authorization_for_state(state),
-        "nextAction": next_action,
+        "nextAction": "retry_same_tool_with_returned_taskAuthorization",
     }
 
 
@@ -127,17 +157,23 @@ _SELECTION_DEPENDENT_GATES = frozenset(
 )
 
 
-def _invalidate_selection_dependent_gates(state: dict[str, Any]) -> None:
+def _invalidate_selection_dependent_gates(
+    state: dict[str, Any],
+    *,
+    keep_gates: set[str] | None = None,
+) -> None:
     completed = (
         dict(state.get("completedGates") or {})
         if isinstance(state.get("completedGates"), dict)
         else {}
     )
     required = [str(item) for item in state.get("requiredBeforeWrite") or []]
+    keep = keep_gates or set()
     removed = {
         gate
         for gate in completed
-        if gate in _SELECTION_DEPENDENT_GATES or "runtime" in gate.casefold()
+        if gate not in keep
+        and (gate in _SELECTION_DEPENDENT_GATES or "runtime" in gate.casefold())
     }
     if not removed:
         return
@@ -452,6 +488,8 @@ def active_task_route_context(
                     "status": "ambiguous_or_corrupt",
                     "error": f"running task has no toolRoute: {state_path}",
                 }
+            if not task_owns_active_tool_route(state):
+                continue
             continuity = (
                 state.get("continuity")
                 if isinstance(state.get("continuity"), dict)
@@ -485,6 +523,70 @@ def active_task_route_context(
     if len(running) == 1:
         return {"status": "active", "state": running[0]}
     return {"status": "none"}
+
+
+def any_running_task_for_project(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> bool:
+    """True when any running task claims this project/workspace (including plan_only)."""
+
+    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+    tasks_root = state_root / "tasks"
+    current_workspace = _canonical_workspace_root(workspace)
+    current_project = _canonical_project_identity(
+        active_project,
+        workspace=workspace,
+    )
+    try:
+        task_dirs = [
+            item for item in tasks_root.iterdir() if item.is_dir()
+        ]
+    except OSError:
+        return False
+    for task_dir in task_dirs:
+        state_path = task_dir / "state.json"
+        if not state_path.is_file():
+            continue
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(state, dict):
+            continue
+        if str(state.get("status") or "") != "running":
+            continue
+        route_scope = (
+            state.get("routeScope")
+            if isinstance(state.get("routeScope"), dict)
+            else {}
+        )
+        state_project = _canonical_project_identity(
+            route_scope.get("projectFile") or state.get("projectFile") or "",
+            workspace=workspace,
+        )
+        raw_state_owner = str(
+            route_scope.get("workspaceRoot")
+            or state.get("workspaceRoot")
+            or ""
+        ).strip()
+        state_owner = (
+            _canonical_workspace_root(raw_state_owner)
+            if raw_state_owner
+            else ""
+        )
+        owns_current = bool(
+            (state_project and current_project and state_project == current_project)
+            or (
+                not state_project
+                and state_owner
+                and state_owner == current_workspace
+            )
+        )
+        if owns_current:
+            return True
+    return False
 
 
 def single_running_task_state(
@@ -1306,6 +1408,7 @@ def task_start(
         "activeSliceId": active_slice_id,
         "activeJobId": "",
         "authToken": auth_token,
+        "mcpConnectionId": get_mcp_connection_id(),
         "writeGate": write_gate,
         "writesAllowed": writes_allowed,
         "requiredBeforeWrite": required_before_write,
@@ -1540,7 +1643,248 @@ def task_start(
     payload["taskAuthorization"] = task_authorization_for_state(
         {**state, "authToken": auth_token}
     )
+    if mode == "plan_only":
+        # Plan-only sessions must not leave a persistent running owner that
+        # pollutes shared route discovery across chats/MCP connections.
+        completed = task_complete_plan_session(
+            workspace,
+            task_session_id,
+            note="plan_only auto-completed",
+        )
+        if completed.get("ok"):
+            completed_state = completed.get("state") or state
+            payload["state"] = completed_state
+            payload["status"] = str(completed_state.get("status") or "completed")
+            payload["planOnlyCompleted"] = True
     return payload
+
+
+def task_complete_plan_session(
+    workspace: Path,
+    task_session_id: str,
+    *,
+    note: str = "",
+) -> dict[str, Any]:
+    """Mark a non-writing task session completed without requiring cancel auth."""
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        status = str(state.get("status") or "")
+        if status in TERMINAL_TASK_STATUSES:
+            return state
+        writes_allowed = state.get("writesAllowed")
+        write_gate = (
+            state.get("writeGate")
+            if isinstance(state.get("writeGate"), dict)
+            else {}
+        )
+        if writes_allowed is True or write_gate.get("writesAllowed") is True:
+            return None
+        state["status"] = "completed"
+        if note:
+            state["completionNote"] = note
+        continuity = dict(state.get("continuity") or {})
+        lease = dict(continuity.get("lease") or {})
+        if lease:
+            lease["status"] = "released"
+            continuity["lease"] = lease
+            state["continuity"] = continuity
+        state["updatedAt"] = _utc_now()
+        _append_log(workspace, task_session_id, f"Plan session completed: {note[:200]}")
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if result.get("ok") is False and "Unknown task" not in str(result.get("error") or ""):
+        if result.get("error") is None:
+            result = {
+                "ok": False,
+                "error": "Only non-writing tasks can be auto-completed as plan sessions.",
+                "errorCode": "TASK_NOT_PLAN_ONLY",
+                "taskSessionId": task_session_id,
+            }
+    return result
+
+
+def _iter_running_task_states(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> list[dict[str, Any]]:
+    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+    tasks_root = state_root / "tasks"
+    current_workspace = _canonical_workspace_root(workspace)
+    current_project = _canonical_project_identity(
+        active_project,
+        workspace=workspace,
+    )
+    running: list[dict[str, Any]] = []
+    try:
+        task_dirs = [item for item in tasks_root.iterdir() if item.is_dir()]
+    except OSError:
+        return []
+    for task_dir in task_dirs:
+        state_path = task_dir / "state.json"
+        if not state_path.is_file():
+            continue
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(state, dict):
+            continue
+        if str(state.get("status") or "") != "running":
+            continue
+        route_scope = (
+            state.get("routeScope")
+            if isinstance(state.get("routeScope"), dict)
+            else {}
+        )
+        state_project = _canonical_project_identity(
+            route_scope.get("projectFile") or state.get("projectFile") or "",
+            workspace=workspace,
+        )
+        state_workspace = _canonical_workspace_root(
+            route_scope.get("workspaceRoot") or state.get("workspaceRoot") or ""
+        )
+        owns_current = bool(
+            (state_project and current_project and state_project == current_project)
+            or (
+                not state_project
+                and state_workspace
+                and state_workspace == current_workspace
+            )
+        )
+        if not owns_current:
+            continue
+        running.append(state)
+    return running
+
+
+def task_list_active(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> dict[str, Any]:
+    """List running tasks for the current project/workspace (no secrets)."""
+
+    tasks = []
+    for state in _iter_running_task_states(
+        workspace,
+        active_project=active_project,
+    ):
+        route = (
+            state.get("toolRoute")
+            if isinstance(state.get("toolRoute"), dict)
+            else {}
+        )
+        tasks.append(
+            {
+                "taskSessionId": str(state.get("taskSessionId") or ""),
+                "status": str(state.get("status") or ""),
+                "mode": str(state.get("mode") or ""),
+                "request": str(state.get("request") or "")[:240],
+                "planId": str(state.get("planId") or ""),
+                "planRevision": str(state.get("planRevision") or ""),
+                "writesAllowed": state.get("writesAllowed") is True,
+                "mcpConnectionId": str(state.get("mcpConnectionId") or ""),
+                "routePhase": str(route.get("phase") or ""),
+                "ownsActiveToolRoute": task_owns_active_tool_route(state),
+                "updatedAt": str(state.get("updatedAt") or ""),
+            }
+        )
+    return {
+        "ok": True,
+        "count": len(tasks),
+        "tasks": tasks,
+        "nextAction": (
+            "unreal_task_cancel_active"
+            if tasks
+            else "unreal_agent_plan"
+        ),
+    }
+
+
+def task_resolve_active_session_id(
+    workspace: Path,
+    *,
+    active_project: str = "",
+    task_session_id: str = "",
+) -> dict[str, Any]:
+    explicit = str(task_session_id or "").strip()
+    listed = task_list_active(workspace, active_project=active_project)
+    tasks = list(listed.get("tasks") or [])
+    if explicit:
+        match = next(
+            (item for item in tasks if item.get("taskSessionId") == explicit),
+            None,
+        )
+        if match:
+            return {"ok": True, "taskSessionId": explicit, "task": match}
+        return {
+            "ok": False,
+            "errorCode": "TASK_NOT_ACTIVE",
+            "error": f"Task is not an active running session: {explicit}",
+            "tasks": tasks,
+        }
+    if len(tasks) == 1:
+        return {
+            "ok": True,
+            "taskSessionId": str(tasks[0].get("taskSessionId") or ""),
+            "task": tasks[0],
+        }
+    if not tasks:
+        return {
+            "ok": False,
+            "errorCode": "TASK_NONE_ACTIVE",
+            "error": "No running tasks for the active project/workspace.",
+            "tasks": [],
+        }
+    return {
+        "ok": False,
+        "errorCode": "TASK_AMBIGUOUS_ACTIVE",
+        "error": "Multiple running tasks; pass taskSessionId explicitly.",
+        "tasks": tasks,
+    }
+
+
+def task_cancel_active(
+    workspace: Path,
+    *,
+    active_project: str = "",
+    task_session_id: str = "",
+) -> dict[str, Any]:
+    resolved = task_resolve_active_session_id(
+        workspace,
+        active_project=active_project,
+        task_session_id=task_session_id,
+    )
+    if not resolved.get("ok"):
+        return resolved
+    return task_cancel(workspace, str(resolved.get("taskSessionId") or ""))
+
+
+def task_recover_active(
+    workspace: Path,
+    *,
+    active_project: str = "",
+    task_session_id: str = "",
+) -> dict[str, Any]:
+    """Return status for the single/selected active task without requiring prior ID knowledge."""
+
+    resolved = task_resolve_active_session_id(
+        workspace,
+        active_project=active_project,
+        task_session_id=task_session_id,
+    )
+    if not resolved.get("ok"):
+        return resolved
+    status = task_status(workspace, str(resolved.get("taskSessionId") or ""))
+    if isinstance(status, dict):
+        status["recoveredFrom"] = "active_task_discovery"
+        status["discoveredTask"] = resolved.get("task")
+    return status
+
+
+# Active-task discovery helpers live above task_replan.
 
 
 def task_replan(
@@ -1728,6 +2072,7 @@ def task_replan(
                 "planRevision": next_revision,
                 "activeSliceId": active_slice_id,
                 "authToken": new_auth_token,
+                "mcpConnectionId": get_mcp_connection_id(),
                 "writeGate": write_gate,
                 "writesAllowed": write_gate.get("writesAllowed") is True,
                 "requiredBeforeWrite": required,
@@ -1914,6 +2259,7 @@ def task_checkpoint(
                     "errorCode": "TASK_AUTH_MISMATCH",
                 },
                 state,
+                mismatched_fields=mismatches,
             )
         return {
             "ok": True,
@@ -1936,6 +2282,7 @@ def task_checkpoint(
                     "errorCode": "TASK_AUTH_MISMATCH",
                 },
                 state,
+                mismatched_fields=mismatches,
             )
             return None
         if str(state.get("status") or "") != "running":
@@ -2269,6 +2616,7 @@ def task_record_gate(
                     "errorCode": "TASK_AUTH_MISMATCH",
                 },
                 state,
+                mismatched_fields=mismatches,
             )
             return None
         if str(state.get("status") or "") != "running":
@@ -2377,6 +2725,13 @@ def task_record_gate(
             state["selectedTargetSnapshots"] = normalized_selection_snapshots(
                 target_snapshots
             )
+            gate_targets = (
+                dict(state.get("gateTargetSnapshots") or {})
+                if isinstance(state.get("gateTargetSnapshots"), dict)
+                else {}
+            )
+            gate_targets[gate] = normalized_selection_snapshots(target_snapshots)
+            state["gateTargetSnapshots"] = gate_targets
             feature_state = dict(state.get("featureIntent") or {})
             feature_state.update(
                 {
@@ -2395,9 +2750,25 @@ def task_record_gate(
             if not previous_intent_id:
                 state["selectionBinding"] = selection_binding(state)
         elif target_snapshots:
-            state["selectedTargetSnapshots"] = normalized_selection_snapshots(
-                target_snapshots
+            gate_targets = (
+                dict(state.get("gateTargetSnapshots") or {})
+                if isinstance(state.get("gateTargetSnapshots"), dict)
+                else {}
             )
+            normalized = normalized_selection_snapshots(target_snapshots)
+            gate_targets[gate] = normalized
+            state["gateTargetSnapshots"] = gate_targets
+            if gate in SCOPE_AUTHORITATIVE_GATES:
+                previous = normalized_selection_snapshots(
+                    state.get("selectedTargetSnapshots")
+                )
+                state["selectedTargetSnapshots"] = normalized
+                if previous != normalized:
+                    _invalidate_selection_dependent_gates(
+                        state,
+                        keep_gates={gate},
+                    )
+                    state["selectionBinding"] = selection_binding(state)
         write_gate = dict(state.get("writeGate") or {})
         write_gate["completedBeforeWrite"] = sorted(completed)
         write_gate["pendingBeforeWrite"] = pending
@@ -2756,6 +3127,7 @@ def authorize_task_tool(
                     "error": f"Task authorization mismatch: {', '.join(mismatches)}",
                 },
                 state,
+                mismatched_fields=mismatches,
             )
         route = (
             state.get("toolRoute")
@@ -2998,6 +3370,7 @@ def task_set_runtime_session(
                     "errorCode": "TASK_AUTH_MISMATCH",
                 },
                 state,
+                mismatched_fields=mismatches,
             )
             return None
         if str(state.get("status") or "") != "running":
@@ -3292,6 +3665,7 @@ def task_issue_feature_approval(
                     "errorCode": "TASK_AUTH_MISMATCH",
                 },
                 state,
+                mismatched_fields=mismatches,
             )
             return None
         if str(state.get("status") or "") != "running":

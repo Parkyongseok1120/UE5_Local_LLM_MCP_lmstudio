@@ -557,18 +557,22 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
     )
     monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
     monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared_config))
+    monkeypatch.setenv("MCP_CONNECTION_ID", "pytest-bridge-connection")
     sys.path.insert(0, str(ROOT / "scripts"))
     from task_api import task_root, task_start
 
     started = task_start(
         ROOT,
         request="Inspect Source/DemoGame/Demo.cpp",
-        mode="read_only",
+        mode="agent_edit",
         project_file=str(uproject),
         plan_payload={
-            "taskKind": "inspect_only",
-            "writeGate": {"writesAllowed": False},
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
             "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/DemoGame/Demo.cpp"]}
+            ],
         },
     )
     env = os.environ.copy()
@@ -579,6 +583,7 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
             "SHARED_UNREAL_CONFIG": str(shared_config),
             "AGENT_STATE_ROOT": str(state_root),
             "AGENT_MCP_CONFIG": str(agent_config),
+            "MCP_CONNECTION_ID": "pytest-bridge-connection",
             "ALLOW_WRITE": "0",
         }
     )

@@ -73,6 +73,10 @@ const {
   discoverActiveTaskContext,
   SAFE_ROUTE_RECOVERY_TOOLS,
   validateMutationAuth,
+  consumeRouteCall,
+  requiredFields,
+  listActiveTasks,
+  cancelActiveTask,
 } = require("./task-auth");
 const {
   activeRouteFingerprint,
@@ -409,6 +413,8 @@ function enforceTaskAuth(args, options = {}) {
       requireAll: true,
       toolName: String(options.toolName || ""),
       activeProject: getActiveProject(CONFIG_PATH),
+      // Budget is committed only after path/approval validation, right before execute.
+      consumeBudget: options.consumeBudget === true,
     }
   );
   if (!auth.ok) {
@@ -437,6 +443,31 @@ function enforceTaskAuth(args, options = {}) {
     });
   }
   // Success must return null so write_file/replace_in_file proceed (not return the auth object).
+  return null;
+}
+
+function commitMutationRouteBudget(args, toolName) {
+  const fields = requiredFields(args || {});
+  if (!fields.taskSessionId) {
+    return null;
+  }
+  const consumed = consumeRouteCall(
+    WORKSPACE_ROOT,
+    fields.taskSessionId,
+    fields,
+    args || {},
+    toolName
+  );
+  if (!consumed.ok) {
+    return fail(consumed.error || "Task phase tool budget exhausted.", {
+      taskSessionId: fields.taskSessionId,
+      errorCode: consumed.errorCode || "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+      retryable: false,
+      stopCurrentWorkflow: true,
+      toolRoute: consumed.toolRoute,
+      toolRouteUsage: consumed.toolRouteUsage,
+    });
+  }
   return null;
 }
 
@@ -1291,6 +1322,18 @@ function allAgentTools() {
         inputSchema: makeJsonSchema({})
       },
       {
+        name: "list_active_tasks",
+        description: "List running task sessions for the active project/workspace without requiring a known taskSessionId. Does not return authToken. Recovery-safe when the tool list is reduced.",
+        inputSchema: makeJsonSchema({})
+      },
+      {
+        name: "cancel_active_task",
+        description: "Cancel the single active running task, or a named taskSessionId when multiple are present. Use when a prior chat left a stuck running session that shrinks the tool list.",
+        inputSchema: makeJsonSchema({
+          taskSessionId: { type: "string", description: "Optional explicit taskSessionId when multiple running tasks exist." }
+        })
+      },
+      {
         name: "set_active_project",
         description: "Choose the active Unreal project by .uproject path or hint. Pass clear=true to unset.",
         inputSchema: makeJsonSchema({
@@ -1634,7 +1677,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           name,
           args,
           {
-            consumeBudget: true,
+            consumeBudget: false,
             activeProject: activeProjectForRoute,
           }
         );
@@ -1645,7 +1688,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         name,
         args,
         {
-          consumeBudget: !ROUTE_MUTATION_TOOLS.has(name),
+          consumeBudget: false,
           activeProject: activeProjectForRoute,
         }
       );
@@ -1698,6 +1741,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
     }
 
+    // Commit phase budget only after auth + argument validation succeed.
+    // Mutation tools commit later, after path/approval checks.
+    if (
+      !ROUTE_MUTATION_TOOLS.has(name)
+      && !SAFE_ROUTE_RECOVERY_TOOLS.has(name)
+      && (hasExplicitTaskAuthorization || routePreflight.taskSessionId)
+    ) {
+      const budgetCommit = hasExplicitTaskAuthorization
+        ? authorizeTaskRouteTool(
+          WORKSPACE_ROOT,
+          name,
+          args,
+          {
+            consumeBudget: true,
+            activeProject: activeProjectForRoute,
+          }
+        )
+        : authorizeActiveRouteTool(
+          WORKSPACE_ROOT,
+          name,
+          args,
+          {
+            consumeBudget: true,
+            activeProject: activeProjectForRoute,
+          }
+        );
+      if (!budgetCommit.ok) {
+        return fail(budgetCommit.error || "Task route authorization failed.", {
+          errorCode: budgetCommit.errorCode || "TASK_ROUTE_AUTH_FAILED",
+          retryable: false,
+          stopCurrentWorkflow: true,
+          toolRoute: budgetCommit.toolRoute,
+          toolRouteUsage: budgetCommit.toolRouteUsage,
+        });
+      }
+    }
+
 
     if (process.env.MCP_TEST_FORCE_TOOL_ERROR === name) {
       throw new Error(`test-forced internal error for ${name}`);
@@ -1742,6 +1822,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectContext,
         sourceEvidence: sourceEvidenceSummary(activeProject)
       }, null, 2));
+    }
+
+    if (name === "list_active_tasks") {
+      return text(JSON.stringify(
+        listActiveTasks(WORKSPACE_ROOT, getActiveProject(CONFIG_PATH) || ""),
+        null,
+        2
+      ));
+    }
+
+    if (name === "cancel_active_task") {
+      const payload = cancelActiveTask(
+        WORKSPACE_ROOT,
+        getActiveProject(CONFIG_PATH) || "",
+        String(args.taskSessionId || "")
+      );
+      if (payload.ok) {
+        try {
+          await server.sendToolListChanged();
+        } catch {
+          // Older clients may not accept list-changed notifications.
+        }
+      }
+      return text(JSON.stringify(payload, null, 2));
     }
 
     if (name === "set_active_project") {
@@ -2213,6 +2317,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           });
         }
         const contentToWrite = mutationPayload;
+        const budgetFail = commitMutationRouteBudget(args, "write_file");
+        if (budgetFail) return budgetFail;
         const targetExists = await exists(target);
         const priorContent = targetExists && ALLOW_EXISTING_SOURCE_WRITE
           ? await fsp.readFile(target, "utf8")
@@ -2407,6 +2513,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Apply replacement on normalized content, then restore original line endings if needed
         const priorContent = content;
+        const budgetFail = commitMutationRouteBudget(args, "replace_in_file");
+        if (budgetFail) return budgetFail;
         const evidenceEntry = readEvidence.get(path.resolve(target));
         const casResult = await replaceWithCAS({
           targetPath: target,
@@ -2558,6 +2666,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             return fail("expectedContent mismatch; delete aborted.");
           }
         }
+        const budgetFail = commitMutationRouteBudget(args, "delete_file");
+        if (budgetFail) return budgetFail;
         await fsp.unlink(target);
         invalidateFileCache(target);
         const activeProjectForMutation = activeProject;
@@ -2611,8 +2721,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         requireSession: true,
         toolName: "apply_edit_bundle",
       });
-      if (authFail && authFail.isError) return authFail;
-      const auth = authFail || validateMutationAuth(
+      if (authFail) return authFail;
+      const auth = validateMutationAuth(
         WORKSPACE_ROOT,
         args,
         {
@@ -2622,6 +2732,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           activeProject: getActiveProject(CONFIG_PATH),
         }
       );
+      if (!auth.ok) {
+        return fail(auth.error || "Task authorization failed.", {
+          errorCode: auth.errorCode || "TASK_AUTH_FAILED",
+          ...(auth.taskAuthorization ? { taskAuthorization: auth.taskAuthorization } : {}),
+          ...(auth.nextAction ? { nextAction: auth.nextAction } : {}),
+        });
+      }
       await agentNotify("Applying edit bundle…");
       const bundle = {
         files: Array.isArray(args.files) ? args.files : [],
@@ -2646,6 +2763,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { ok: false, error: String(error.message || error) };
         }
       }
+
+      const budgetFail = commitMutationRouteBudget(args, "apply_edit_bundle");
+      if (budgetFail) return budgetFail;
 
       const tx = await applyBundleTransaction(bundle, resolveBundlePath, {
         maxFilesPerEdit: auth.maxFilesPerEdit || DEFAULT_MAX_FILES_PER_EDIT,

@@ -36,6 +36,8 @@
   "agentEssential": [
     "get_workspace_info",
     "get_active_project",
+    "list_active_tasks",
+    "cancel_active_task",
     "list_directory",
     "read_file",
     "read_file_range",

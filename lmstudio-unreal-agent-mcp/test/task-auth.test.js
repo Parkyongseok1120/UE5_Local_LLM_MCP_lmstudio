@@ -454,14 +454,16 @@ test("code-generation gate binds writes to validated target hash", () => {
   }
 });
 
-test("runtime candidate gate binds writes to selected target hash", () => {
+test("runtime candidate gate is supporting and does not intersect write targets", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-workspace-"));
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-state-"));
   const project = path.join(workspace, "Demo");
   const target = path.join(project, "Source", "Demo", "Thing.cpp");
+  const other = path.join(project, "Source", "Demo", "Other.cpp");
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(path.join(project, "Demo.uproject"), "{}");
   fs.writeFileSync(target, "before");
+  fs.writeFileSync(other, "other");
   const fileHash = require("crypto").createHash("sha1").update("before").digest("hex");
   const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
   fs.mkdirSync(taskDir, { recursive: true });
@@ -490,12 +492,13 @@ test("runtime candidate gate binds writes to selected target hash", () => {
       { requireAll: true }
     );
     assert.strictEqual(valid.ok, true);
+    // Supporting gates must not require intersection with every mutation path.
     const unrelated = validateMutationAuth(
       workspace,
       { taskAuthorization: authorization, path: "Source/Demo/Other.cpp" },
       { requireAll: true }
     );
-    assert.strictEqual(unrelated.errorCode, "GATE_TARGET_MISMATCH");
+    assert.strictEqual(unrelated.ok, true);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
@@ -644,6 +647,7 @@ test("feature intent target hash matches the Python canonical contract", () => {
 });
 
 function routeState(projectFile, overrides = {}) {
+  const { getMcpConnectionId } = require("../src/mcp-connection");
   const routeAuthorization = {
     ...authorization,
     routeHash: "route-1",
@@ -654,6 +658,8 @@ function routeState(projectFile, overrides = {}) {
     status: "running",
     workspaceRoot: path.dirname(projectFile),
     projectFile,
+    mcpConnectionId: getMcpConnectionId(),
+    writesAllowed: true,
     writeGate: { writesAllowed: true },
     selectedHypothesisId: "",
     selectedCandidateId: "",
@@ -735,7 +741,12 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
       mismatch.nextAction,
       "replan_or_resume_with_returned_taskAuthorization"
     );
-    assert.strictEqual(mismatch.taskAuthorization.authToken, authorization.authToken);
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(mismatch.taskAuthorization, "authToken"),
+      false
+    );
+    assert.strictEqual(mismatch.taskAuthorization.planRevision, "1");
+    assert.deepStrictEqual(mismatch.mismatchedFields, ["authToken"]);
     assert.notStrictEqual(
       mismatch.nextAction,
       "retry_same_tool_with_returned_taskAuthorization"

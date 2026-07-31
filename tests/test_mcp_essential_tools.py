@@ -64,8 +64,10 @@ def _load_rag_mcp_module():
 def test_default_profile_is_fail_closed(monkeypatch, tmp_path):
     monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
     monkeypatch.delenv("MCP_EXTENDED_TOOLS", raising=False)
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
     names = {tool["name"] for tool in server.all_tool_definitions()}
     assert names == RAG_ESSENTIAL
     assert "clangd_goto_definition" not in names
@@ -74,8 +76,10 @@ def test_default_profile_is_fail_closed(monkeypatch, tmp_path):
 def test_essential_tools_enabled_filters_rag_tools(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     monkeypatch.delenv("MCP_EXTENDED_TOOLS", raising=False)
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
     names = {tool["name"] for tool in server.all_tool_definitions()}
     assert names == set(mod.ESSENTIAL_TOOL_NAMES)
     assert names == RAG_ESSENTIAL
@@ -181,12 +185,15 @@ def test_autonomy_blocked_route_lists_and_dispatches_bounded_replan(
 
     started = task_start(
         tmp_path,
-        request="Inspect code",
-        mode="read_only",
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
         plan_payload={
-            "taskKind": "inspect",
-            "writeGate": {"writesAllowed": False},
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
             "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
         },
     )
     state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
@@ -248,12 +255,15 @@ def test_non_autonomy_blocked_routes_hide_and_reject_replan(
 
     started = task_start(
         tmp_path,
-        request="Inspect code",
-        mode="read_only",
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
         plan_payload={
-            "taskKind": "inspect",
-            "writeGate": {"writesAllowed": False},
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
             "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
         },
     )
     state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
@@ -305,22 +315,28 @@ def test_non_autonomy_blocked_routes_hide_and_reject_replan(
     state_path.write_text(json.dumps(state), encoding="utf-8")
     task_start(
         tmp_path,
-        request="First active task",
-        mode="read_only",
+        request="First Source/Demo/A.cpp",
+        mode="agent_edit",
         plan_payload={
-            "taskKind": "inspect",
-            "writeGate": {"writesAllowed": False},
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
             "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/A.cpp"]}
+            ],
         },
     )
     task_start(
         tmp_path,
-        request="Second active task",
-        mode="read_only",
+        request="Second Source/Demo/B.cpp",
+        mode="agent_edit",
         plan_payload={
-            "taskKind": "inspect",
-            "writeGate": {"writesAllowed": False},
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
             "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/B.cpp"]}
+            ],
         },
     )
     assert "unreal_agent_plan" not in {

@@ -9,6 +9,10 @@ const {
   tryAcquireCrossProcessLock,
   releaseCrossProcessLock,
 } = require("./write-locks");
+const {
+  getMcpConnectionId,
+  taskOwnsActiveToolRoute,
+} = require("./mcp-connection");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -143,6 +147,11 @@ function featureIntentTargetHash(snapshots = []) {
   return crypto.createHash("sha256").update(stableStringify(normalized)).digest("hex");
 }
 
+const SCOPE_AUTHORITATIVE_GATES = new Set([
+  "unreal_code_sketch_claim_validate",
+  "unreal_feature_intent_resolve",
+]);
+
 function validateCompletedGates(state, args = {}) {
   const writeGate = state.writeGate && typeof state.writeGate === "object" ? state.writeGate : {};
   const required = Array.isArray(state.requiredBeforeWrite)
@@ -242,7 +251,11 @@ function validateCompletedGates(state, args = {}) {
   }
 
   const requestedPaths = requestedMutationPaths(args, state);
+  // Only scope-authoritative gates constrain mutation targets.
+  // Supporting gates may cover different files for evidence and must not
+  // intersect with write paths (that previously blocked multi-gate workflows).
   const snapshotGates = required
+    .filter((gate) => SCOPE_AUTHORITATIVE_GATES.has(gate))
     .map((gate) => ({ gate, snapshots: completed[gate]?.targetSnapshots }))
     .filter((item) => Array.isArray(item.snapshots) && item.snapshots.length);
   if (requestedPaths.length && snapshotGates.length) {
@@ -456,7 +469,7 @@ function taskAuthorizationForState(state) {
   };
 }
 
-function authRefreshFailure(result, state) {
+function authRefreshFailure(result, state, mismatchedFields = null) {
   if (
     !state
     || !result
@@ -465,13 +478,26 @@ function authRefreshFailure(result, state) {
   ) {
     return result;
   }
-  const nextAction = result.errorCode === "TASK_ROUTE_STALE"
-    ? "retry_same_tool_with_returned_taskAuthorization"
-    : "replan_or_resume_with_returned_taskAuthorization";
+  if (result.errorCode === "TASK_AUTH_MISMATCH") {
+    const payload = {
+      ...result,
+      taskAuthorization: {
+        taskSessionId: String(state.taskSessionId || ""),
+        planId: String(state.planId || ""),
+        planRevision: String(state.planRevision || ""),
+        activeSliceId: String(state.activeSliceId || ""),
+      },
+      nextAction: "replan_or_resume_with_returned_taskAuthorization",
+    };
+    if (Array.isArray(mismatchedFields) && mismatchedFields.length) {
+      payload.mismatchedFields = mismatchedFields.map(String);
+    }
+    return payload;
+  }
   return {
     ...result,
     taskAuthorization: taskAuthorizationForState(state),
-    nextAction,
+    nextAction: "retry_same_tool_with_returned_taskAuthorization",
   };
 }
 
@@ -632,6 +658,8 @@ function consumeRouteCall(workspaceRoot, taskSessionId, fields, args, toolName) 
 const SAFE_ROUTE_RECOVERY_TOOLS = new Set([
   "get_workspace_info",
   "get_active_project",
+  "list_active_tasks",
+  "cancel_active_task",
 ]);
 
 function canonicalWorkspaceRoot(value) {
@@ -886,6 +914,9 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "") {
           error: `Running task has no valid tool route: ${entry.name}.`,
         };
       }
+      if (!taskOwnsActiveToolRoute(result.state)) {
+        continue;
+      }
       const continuity = result.state.continuity
         && typeof result.state.continuity === "object"
         ? result.state.continuity
@@ -936,6 +967,169 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "") {
   return running.length === 1
     ? { status: "active", ...running[0] }
     : { status: "none" };
+}
+
+function listRunningTasksForProject(workspaceRoot, activeProject = "") {
+  const stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
+  const tasksRoot = path.join(stateRoot, "tasks");
+  let entries = [];
+  try {
+    entries = fs.readdirSync(tasksRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory());
+  } catch {
+    return [];
+  }
+  const currentWorkspace = canonicalWorkspaceRoot(workspaceRoot);
+  const currentProject = canonicalProjectIdentity(activeProject, workspaceRoot);
+  const tasks = [];
+  for (const entry of entries) {
+    const result = readTaskStateResult(workspaceRoot, entry.name, stateRoot);
+    const state = result.state;
+    if (!state || String(state.status || "") !== "running") continue;
+    const routeScope = state.routeScope
+      && typeof state.routeScope === "object"
+      && !Array.isArray(state.routeScope)
+      ? state.routeScope
+      : {};
+    const stateProject = canonicalProjectIdentity(
+      routeScope.projectFile || state.projectFile || "",
+      workspaceRoot
+    );
+    const stateOwner = canonicalWorkspaceRoot(
+      routeScope.workspaceRoot || state.workspaceRoot || ""
+    );
+    const ownsCurrent = Boolean(
+      (stateProject && currentProject && stateProject === currentProject)
+      || (!stateProject && stateOwner && stateOwner === currentWorkspace)
+    );
+    if (!ownsCurrent) continue;
+    const route = state.toolRoute && typeof state.toolRoute === "object"
+      ? state.toolRoute
+      : {};
+    tasks.push({
+      taskSessionId: String(state.taskSessionId || entry.name),
+      status: String(state.status || ""),
+      mode: String(state.mode || ""),
+      request: String(state.request || "").slice(0, 240),
+      planId: String(state.planId || ""),
+      planRevision: String(state.planRevision || ""),
+      writesAllowed: state.writesAllowed === true
+        || (state.writeGate && state.writeGate.writesAllowed === true),
+      mcpConnectionId: String(state.mcpConnectionId || ""),
+      routePhase: String(route.phase || ""),
+      ownsActiveToolRoute: taskOwnsActiveToolRoute(state),
+      updatedAt: String(state.updatedAt || ""),
+    });
+  }
+  return tasks;
+}
+
+function cancelRunningTaskSession(workspaceRoot, taskSessionId) {
+  const sanitized = sanitizeTaskSessionId(taskSessionId);
+  if (!sanitized.ok) {
+    return { ok: false, error: sanitized.error, errorCode: "TASK_SESSION_INVALID" };
+  }
+  const statePath = path.join(
+    ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot)),
+    "tasks",
+    sanitized.taskSessionId,
+    "state.json"
+  );
+  const acquired = tryAcquireCrossProcessLock(
+    statePath,
+    "cancel_active_task",
+    resolveAgentStateRoot(workspaceRoot)
+  );
+  if (!acquired.ok) {
+    return {
+      ok: false,
+      error: "task lock busy",
+      errorCode: "TASK_LOCK_BUSY",
+      taskSessionId: sanitized.taskSessionId,
+    };
+  }
+  try {
+    const stateResult = readTaskStateResult(workspaceRoot, sanitized.taskSessionId);
+    const state = stateResult.state;
+    if (!state) {
+      return {
+        ok: false,
+        error: `Unknown task: ${sanitized.taskSessionId}`,
+        errorCode: "TASK_STATE_MISSING",
+      };
+    }
+    if (String(state.status || "") !== "running") {
+      return {
+        ok: false,
+        error: "Cancel rejected: task is already terminal.",
+        errorCode: "TASK_ALREADY_TERMINAL",
+        taskSessionId: sanitized.taskSessionId,
+        status: String(state.status || ""),
+      };
+    }
+    state.status = "cancelled";
+    const continuity = state.continuity && typeof state.continuity === "object"
+      ? { ...state.continuity }
+      : {};
+    const lease = continuity.lease && typeof continuity.lease === "object"
+      ? { ...continuity.lease, status: "released" }
+      : { status: "released" };
+    continuity.lease = lease;
+    state.continuity = continuity;
+    state.updatedAt = new Date().toISOString();
+    atomicWriteJson(statePath, state);
+    return {
+      ok: true,
+      taskSessionId: sanitized.taskSessionId,
+      status: "cancelled",
+    };
+  } finally {
+    releaseCrossProcessLock(statePath);
+  }
+}
+
+function listActiveTasks(workspaceRoot, activeProject = "") {
+  const tasks = listRunningTasksForProject(workspaceRoot, activeProject);
+  return {
+    ok: true,
+    count: tasks.length,
+    tasks,
+    nextAction: tasks.length ? "cancel_active_task" : "get_active_project",
+  };
+}
+
+function cancelActiveTask(workspaceRoot, activeProject = "", taskSessionId = "") {
+  const tasks = listRunningTasksForProject(workspaceRoot, activeProject);
+  const explicit = String(taskSessionId || "").trim();
+  if (explicit) {
+    const match = tasks.find((item) => item.taskSessionId === explicit);
+    if (!match) {
+      return {
+        ok: false,
+        errorCode: "TASK_NOT_ACTIVE",
+        error: `Task is not an active running session: ${explicit}`,
+        tasks,
+      };
+    }
+    return cancelRunningTaskSession(workspaceRoot, explicit);
+  }
+  if (tasks.length === 1) {
+    return cancelRunningTaskSession(workspaceRoot, tasks[0].taskSessionId);
+  }
+  if (!tasks.length) {
+    return {
+      ok: false,
+      errorCode: "TASK_NONE_ACTIVE",
+      error: "No running tasks for the active project/workspace.",
+      tasks: [],
+    };
+  }
+  return {
+    ok: false,
+    errorCode: "TASK_AMBIGUOUS_ACTIVE",
+    error: "Multiple running tasks; pass taskSessionId explicitly.",
+    tasks,
+  };
 }
 
 function discoverSingleActiveTask(workspaceRoot, activeProject = "") {
@@ -1058,7 +1252,7 @@ function authorizeTaskRouteTool(
       ok: false,
       errorCode: "TASK_AUTH_MISMATCH",
       error: `Task authorization mismatch: ${mismatches.join(", ")}`,
-    }, state);
+    }, state, mismatches);
   }
   const routeValidation = validateToolRoute(state, fields, args, toolName);
   if (!routeValidation.ok) {
@@ -1206,7 +1400,7 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       error: `Task authorization mismatch: ${mismatches.join(", ")}`,
       errorCode: "TASK_AUTH_MISMATCH",
       taskSessionId: sanitized.taskSessionId,
-    }, state);
+    }, state, mismatches);
   }
   const toolName = String(options.toolName || "");
   const routeValidation = validateToolRoute(state, fields, args, toolName);
@@ -1355,6 +1549,8 @@ module.exports = {
   requiredFields,
   taskAuthorizationForState,
   authRefreshFailure,
+  getMcpConnectionId,
+  taskOwnsActiveToolRoute,
   validateToolRoute,
   validateSelectionState,
   selectionBindingForState,
@@ -1365,4 +1561,8 @@ module.exports = {
   effectiveToolRouteForState,
   validateTaskRouteScope,
   SAFE_ROUTE_RECOVERY_TOOLS,
+  consumeRouteCall,
+  requiredFields,
+  listActiveTasks,
+  cancelActiveTask,
 };
