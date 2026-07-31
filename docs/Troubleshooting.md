@@ -78,3 +78,15 @@ Compare deltas in `Reports/eval/deltas/`. See [Eval_Regression_Workflow.md](Eval
 ## Agent wrote files unexpectedly
 
 Rerun `python install.py --profile standard --yes` to restore SAFE read-only defaults.
+
+## Long task cannot write after an interruption
+
+Inspect `unreal_task_checkpoint` with `action=status`.
+
+- `TASK_LEASE_EXPIRED`: use authorized `recover`; an expired lease cannot be revived by heartbeat without checking checkpoint files.
+- `TASK_CHECKPOINT_CONFLICT`: another process changed a tracked file. Review the conflict list. Use `rebase` with `acceptCurrentFiles=true` only after accepting those changes; previous pre-write gates are invalidated.
+- `CHECKPOINT_PATH_OUTSIDE_PROJECT`: record project-relative files only. Checkpoints intentionally reject traversal and external paths.
+
+## Runtime debug gate stays closed
+
+`prepare` no longer authorizes a patch by itself. Record a supporting same-reproduction experiment, materialize and validate two to four isolated patch candidates, then call `compare_patch_candidates`. A textual “looks fixed” result cannot satisfy a policy that requires trace data, minimum samples/duration, or zero crashes/timeouts.

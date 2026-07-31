@@ -26,6 +26,9 @@ v1.3.0 starts from the following delivered baseline; these are not remaining v1.
 - One integrated installer with explicit SAFE/AGENT authority selection and independent RAG depth.
 - Host-aware Windows/Linux/macOS installation and Unreal paths, with physical Linux/macOS certification still pending.
 - Stronger release verification, atomic reports/index builds, live-test quality gates, and Windows encoding regression coverage.
+- P1-P3 reasoning rails: architecture candidate portfolios and scored selection; long-task leases/checkpoints/conflict recovery; ranked runtime hypotheses and experiments; isolated patch candidate comparison; metric/trace/soak oracles; asset migration contracts; verified/expired failure-memory lifecycle.
+
+These rails are repository-tested workflow capability. Physical Unreal PIE/Automation/Insights runs and fresh paired live-model scorecards remain separate release evidence.
 
 ## Release Targets
 
@@ -177,6 +180,9 @@ v1.3.0은 아래의 완료된 기준선에서 시작합니다. 이 항목들은 
 - 명시적 SAFE/AGENT 권한 선택과 독립 RAG depth를 제공하는 단일 통합 설치기.
 - Host-aware Windows/Linux/macOS 설치·Unreal 경로. 실제 Linux/macOS 인증은 아직 남아 있음.
 - 강화된 release verification, atomic report/index build, live-test quality gate, Windows encoding 회귀 검증.
+- P1~P3 추론 rail: architecture 후보 portfolio·점수 기반 선택, 장기 작업 lease/checkpoint/충돌 복구, runtime 가설 순위·반증 실험, 격리 patch 후보 비교, metric/trace/soak oracle, asset migration contract, 검증·만료 상태를 갖는 failure memory.
+
+이 항목은 저장소 테스트로 검증한 workflow capability입니다. 실제 Unreal PIE/Automation/Insights 실행과 새로운 paired live-model scorecard는 별도 release 근거로 남아 있습니다.
 
 ## Release Targets
 

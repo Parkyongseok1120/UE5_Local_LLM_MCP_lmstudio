@@ -3883,6 +3883,8 @@ def run(args: argparse.Namespace) -> int:
                         retry_count=attempt,
                         model=model,
                         sampling_profile=resolve_profile_name(),
+                        status="verified",
+                        verification_count=1,
                     )
                     maybe_auto_reindex_failure_memory(Path(__file__).resolve().parent.parent)
                 except Exception:

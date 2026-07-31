@@ -318,16 +318,23 @@ def test_architecture_reasoning_rejects_non_object_proposal(monkeypatch, tmp_pat
     assert payload["proposalValidation"]["implementationGate"]["writesAllowed"] is False
 
 
-def test_runtime_debug_prepare_persists_session_and_completes_gate(monkeypatch, tmp_path):
+def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")
     server.workspace = tmp_path
     from task_api import task_start, task_status
 
+    project = tmp_path / "Demo"
+    target = project / "Source" / "Demo" / "Private" / "HealthComponent.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("// before\n", encoding="utf-8")
+    uproject = project / "Demo.uproject"
+    uproject.write_text("{}", encoding="utf-8")
     started = task_start(
         tmp_path,
         request="Fix runtime damage bug",
+        project_file=str(uproject),
         plan_payload={
             "taskKind": "edit",
             "writeGate": {"writesAllowed": True},
@@ -372,7 +379,74 @@ def test_runtime_debug_prepare_persists_session_and_completes_gate(monkeypatch, 
     payload = sent[-1]["result"]["structuredContent"]
     assert payload["ok"] is True
     assert payload["persisted"] is True
-    assert payload["gateCompletion"]["ok"] is True
+    assert payload["gateCompletion"]["errorCode"] == "RUNTIME_EXPERIMENT_REQUIRED"
+    session = payload["session"]
+    server.handle_tool_call(
+        26,
+        {
+            "name": "unreal_runtime_debug_session",
+            "arguments": {
+                "action": "record_experiment",
+                "taskAuthorization": authorization,
+                "hypothesisId": session["selectedHypothesisId"],
+                "reproductionFingerprint": session["reproductionFingerprint"],
+                "observer": session["observer"],
+                "experimentEvidence": {
+                    "kind": "trace",
+                    "location": "Saved/Profiling/damage.utrace",
+                    "observation": "damage event never reaches HealthComponent",
+                    "traceSummary": {"receiveDamageCalls": 0},
+                },
+                "experimentOutcome": "supported",
+            },
+        },
+    )
+    experiment = sent[-1]["result"]["structuredContent"]
+    assert experiment["ok"] is True
+    assert experiment["session"]["status"] == "ready_for_patch_candidates"
+    server.handle_tool_call(
+        27,
+        {
+            "name": "unreal_runtime_debug_session",
+            "arguments": {
+                "action": "compare_patch_candidates",
+                "taskAuthorization": authorization,
+                "patchCandidates": [
+                    {
+                        "id": "candidate-a",
+                        "changedFiles": ["Source/Demo/Private/HealthComponent.cpp"],
+                        "diffHash": "diff-a",
+                        "sandboxEvidence": {
+                            "isolatedRoot": "sandbox/a",
+                            "staticPassed": True,
+                            "staticProof": {"ok": True, "artifactHash": "static-a"},
+                            "buildPassed": True,
+                            "buildProof": {"ok": True, "artifactHash": "build-a"},
+                            "runtimeCompatible": True,
+                            "invariantResults": {"health owner preserved": True},
+                        },
+                    },
+                    {
+                        "id": "candidate-b",
+                        "changedFiles": ["Source/Demo/Private/HealthComponent.cpp"],
+                        "diffHash": "diff-b",
+                        "sandboxEvidence": {
+                            "isolatedRoot": "sandbox/b",
+                            "staticPassed": True,
+                            "staticProof": {"ok": True, "artifactHash": "static-b"},
+                            "buildPassed": False,
+                            "buildProof": {"ok": False},
+                            "runtimeCompatible": True,
+                            "invariantResults": {"health owner preserved": True},
+                        },
+                    },
+                ],
+            },
+        },
+    )
+    comparison = sent[-1]["result"]["structuredContent"]
+    assert comparison["ok"] is True
+    assert comparison["gateCompletion"]["ok"] is True
     current = task_status(tmp_path, started["taskSessionId"])["state"]
     assert current["runtimeDebugSession"]["status"] == "ready_for_patch"
     assert current["pendingGates"] == []

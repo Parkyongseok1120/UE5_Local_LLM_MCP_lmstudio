@@ -14,6 +14,14 @@ from typing import Any, Callable, Iterator
 
 from atomic_io import atomic_write_text
 from state_root import ensure_state_root_layout, resolve_agent_state_root, task_state_dir
+from task_continuity import (
+    initialize_continuity,
+    lease_health,
+    mark_recovery,
+    record_checkpoint,
+    recovery_conflicts,
+    renew_lease,
+)
 from task_phase import task_phase_from_state
 
 TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled", "failed", "cancellation_uncertain"})
@@ -189,6 +197,134 @@ def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _continuity_project_root(workspace: Path, state: dict[str, Any]) -> Path:
+    raw_project = str(state.get("projectFile") or "").strip()
+    if not raw_project:
+        return workspace.resolve()
+    project = Path(raw_project).expanduser()
+    if not project.is_absolute():
+        project = workspace / project
+    resolved = project.resolve()
+    return resolved.parent if resolved.suffix.lower() == ".uproject" else resolved
+
+
+def _checkpoint_file_snapshots(
+    workspace: Path,
+    state: dict[str, Any],
+    paths: list[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    root = _continuity_project_root(workspace, state)
+    snapshots: list[dict[str, Any]] = []
+    issues: list[str] = []
+    unique_paths = list(
+        dict.fromkeys(str(item).strip() for item in paths if str(item).strip())
+    )
+    for raw_path in unique_paths:
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        resolved = candidate.resolve()
+        try:
+            relative = resolved.relative_to(root)
+        except ValueError:
+            issues.append(f"checkpoint path is outside project root: {raw_path}")
+            continue
+        try:
+            exists = resolved.is_file()
+            file_hash = (
+                hashlib.sha256(resolved.read_bytes()).hexdigest()
+                if exists
+                else ""
+            )
+        except OSError as exc:
+            issues.append(f"checkpoint path could not be read: {raw_path} ({exc})")
+            continue
+        snapshots.append(
+            {
+                "relativePath": relative.as_posix(),
+                "exists": exists,
+                "fileHash": file_hash,
+            }
+        )
+    return snapshots, issues
+
+
+def _checkpoint_conflicts(
+    workspace: Path,
+    state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    continuity = (
+        state.get("continuity")
+        if isinstance(state.get("continuity"), dict)
+        else {}
+    )
+    checkpoint = (
+        continuity.get("checkpoint")
+        if isinstance(continuity.get("checkpoint"), dict)
+        else {}
+    )
+    expected = [
+        dict(item)
+        for item in (checkpoint.get("fileSnapshots") or [])
+        if isinstance(item, dict)
+    ]
+    current, issues = _checkpoint_file_snapshots(
+        workspace,
+        state,
+        [str(item.get("relativePath") or "") for item in expected],
+    )
+    if issues:
+        return [{"relativePath": "", "reason": issue} for issue in issues]
+    current_by_path = {str(item.get("relativePath") or ""): item for item in current}
+    conflicts: list[dict[str, Any]] = []
+    for item in expected:
+        relative = str(item.get("relativePath") or "")
+        actual = current_by_path.get(relative, {})
+        if bool(actual.get("exists")) != bool(item.get("exists")):
+            conflicts.append(
+                {
+                    "relativePath": relative,
+                    "reason": "existence_changed",
+                    "expectedExists": bool(item.get("exists")),
+                    "actualExists": bool(actual.get("exists")),
+                }
+            )
+        elif str(actual.get("fileHash") or "") != str(item.get("fileHash") or ""):
+            conflicts.append(
+                {
+                    "relativePath": relative,
+                    "reason": "content_changed",
+                    "expectedHash": str(item.get("fileHash") or ""),
+                    "actualHash": str(actual.get("fileHash") or ""),
+                }
+            )
+    return conflicts
+
+
+def _continuity_write_issue(state: dict[str, Any]) -> dict[str, Any] | None:
+    continuity = (
+        state.get("continuity")
+        if isinstance(state.get("continuity"), dict)
+        else {}
+    )
+    health = lease_health(continuity)
+    if health.get("configured") and health.get("active") is not True:
+        return {
+            "ok": False,
+            "error": "Task lease is inactive or expired; checkpoint recovery is required.",
+            "errorCode": "TASK_RECOVERY_REQUIRED",
+        }
+    conflicts = recovery_conflicts(continuity)
+    if conflicts:
+        return {
+            "ok": False,
+            "error": "Task checkpoint conflicts with current files.",
+            "errorCode": "TASK_CHECKPOINT_CONFLICT",
+            "conflicts": conflicts,
+        }
+    return None
+
+
 def _task_status_from_job_terminal(terminal: str) -> str:
     if terminal == "completed":
         return "completed"
@@ -213,6 +349,11 @@ def _reflect_job_terminal_state(
     if state.get("terminalLogged"):
         return state
     state["status"] = _task_status_from_job_terminal(terminal)
+    continuity = dict(state.get("continuity") or {})
+    lease = dict(continuity.get("lease") or {})
+    lease["status"] = "released"
+    continuity["lease"] = lease
+    state["continuity"] = continuity
     if terminal == "cancellation_uncertain" and job.get("orphanProcessSuspected"):
         state["orphanProcessSuspected"] = True
     state["updatedAt"] = _utc_now()
@@ -240,6 +381,7 @@ def task_start(
     plan_id: str = "",
     plan_payload: dict[str, Any] | None = None,
     start_background_job: bool = False,
+    lease_seconds: int = 1800,
     on_progress: Callable[[dict[str, Any], str], None] | None = None,
 ) -> dict[str, Any]:
     if plan_payload is None:
@@ -313,6 +455,13 @@ def task_start(
             "build_unreal_project",
         ],
     }
+    state["continuity"] = initialize_continuity(
+        task_session_id=task_session_id,
+        plan_id=resolved_plan_id,
+        plan_revision=resolved_plan_revision,
+        active_slice_id=active_slice_id,
+        lease_seconds=lease_seconds,
+    )
     (task_root(workspace, task_session_id) / "logs").mkdir(parents=True, exist_ok=True)
     with _task_lock(workspace, task_session_id):
         _write_state(workspace, task_session_id, state)
@@ -336,6 +485,21 @@ def task_start(
 
         def _progress(job: dict[str, Any], message: str) -> None:
             _append_log(workspace, task_session_id, message)
+
+            def heartbeat(current: dict[str, Any]) -> dict[str, Any]:
+                continuity = dict(current.get("continuity") or {})
+                if (
+                    str(current.get("status") or "") == "running"
+                    and lease_health(continuity).get("active") is True
+                ):
+                    current["continuity"] = renew_lease(
+                        continuity,
+                        reason="background_progress",
+                    )
+                    current["updatedAt"] = _utc_now()
+                return current
+
+            _mutate_task_state(workspace, task_session_id, heartbeat)
             if on_progress:
                 on_progress(job, message)
 
@@ -448,6 +612,204 @@ def task_start(
     return payload
 
 
+def task_checkpoint(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    action: str,
+    lease_seconds: int | None = None,
+    phase: str = "",
+    completed_slices: list[str] | None = None,
+    pending_slices: list[str] | None = None,
+    modified_files: list[str] | None = None,
+    required_next_action: str = "",
+    validation: dict[str, Any] | None = None,
+    note: str = "",
+    accept_current_files: bool = False,
+) -> dict[str, Any]:
+    """Heartbeat, checkpoint, and safely recover a long-running task."""
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId") or authorization.get("task_session_id") or ""
+    ).strip()
+    normalized_action = str(action or "status").strip().lower()
+    if not task_session_id:
+        return {
+            "ok": False,
+            "error": "taskAuthorization.taskSessionId is required",
+            "errorCode": "TASK_SESSION_REQUIRED",
+        }
+    if normalized_action not in {"status", "heartbeat", "record", "recover", "rebase"}:
+        return {
+            "ok": False,
+            "error": "action must be status, heartbeat, record, recover, or rebase",
+            "errorCode": "INVALID_CHECKPOINT_ACTION",
+        }
+    if normalized_action == "status":
+        current = task_status(workspace, task_session_id)
+        if not current.get("ok"):
+            return current
+        mismatches = _task_authorization_mismatches(
+            current.get("state") or {},
+            authorization,
+        )
+        if mismatches:
+            return {
+                "ok": False,
+                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                "errorCode": "TASK_AUTH_MISMATCH",
+            }
+        return {
+            "ok": True,
+            "action": normalized_action,
+            "taskSessionId": task_session_id,
+            "continuity": (current.get("state") or {}).get("continuity") or {},
+            "writeReadiness": current.get("writeReadiness") or {},
+        }
+
+    mutation_result: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal mutation_result
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            mutation_result = {
+                "ok": False,
+                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                "errorCode": "TASK_AUTH_MISMATCH",
+            }
+            return None
+        if str(state.get("status") or "") != "running":
+            mutation_result = {
+                "ok": False,
+                "error": "Task is not running",
+                "errorCode": "TASK_NOT_WRITABLE",
+            }
+            return None
+
+        continuity = dict(state.get("continuity") or {})
+        if (
+            normalized_action in {"heartbeat", "record"}
+            and lease_health(continuity).get("active") is not True
+        ):
+            mutation_result = {
+                "ok": False,
+                "error": "Expired or inactive leases require checkpoint recovery.",
+                "errorCode": "TASK_RECOVERY_REQUIRED",
+            }
+            return None
+        if normalized_action == "heartbeat":
+            state["continuity"] = renew_lease(
+                continuity,
+                reason="explicit_heartbeat",
+                lease_seconds=lease_seconds,
+            )
+        elif normalized_action == "record":
+            snapshots, issues = _checkpoint_file_snapshots(
+                workspace,
+                state,
+                list(modified_files or []),
+            )
+            if issues:
+                mutation_result = {
+                    "ok": False,
+                    "error": "; ".join(issues),
+                    "errorCode": "CHECKPOINT_PATH_OUTSIDE_PROJECT",
+                }
+                return None
+            state["continuity"] = record_checkpoint(
+                continuity,
+                phase=phase or "working",
+                active_slice_id=str(state.get("activeSliceId") or ""),
+                completed_slices=list(completed_slices or []),
+                pending_slices=list(pending_slices or []),
+                modified_files=[
+                    str(item.get("relativePath") or "") for item in snapshots
+                ],
+                file_snapshots=snapshots,
+                required_next_action=required_next_action,
+                validation=validation,
+                note=note,
+            )
+        else:
+            conflicts = _checkpoint_conflicts(workspace, state)
+            if normalized_action == "recover" and conflicts:
+                state["continuity"] = mark_recovery(
+                    continuity,
+                    conflicts=conflicts,
+                )
+                mutation_result = {
+                    "ok": False,
+                    "error": "Checkpoint files changed; explicit rebase is required.",
+                    "errorCode": "TASK_CHECKPOINT_CONFLICT",
+                    "conflicts": conflicts,
+                }
+            elif normalized_action == "rebase":
+                if not accept_current_files:
+                    mutation_result = {
+                        "ok": False,
+                        "error": "rebase requires acceptCurrentFiles=true",
+                        "errorCode": "CHECKPOINT_REBASE_CONFIRMATION_REQUIRED",
+                    }
+                    return None
+                checkpoint = dict(continuity.get("checkpoint") or {})
+                tracked = [
+                    str(item.get("relativePath") or "")
+                    for item in (checkpoint.get("fileSnapshots") or [])
+                    if isinstance(item, dict)
+                ]
+                snapshots, issues = _checkpoint_file_snapshots(workspace, state, tracked)
+                if issues:
+                    mutation_result = {
+                        "ok": False,
+                        "error": "; ".join(issues),
+                        "errorCode": "CHECKPOINT_PATH_OUTSIDE_PROJECT",
+                    }
+                    return None
+                checkpoint["fileSnapshots"] = snapshots
+                checkpoint["checkpointHash"] = _canonical_hash(
+                    {
+                        key: value
+                        for key, value in checkpoint.items()
+                        if key != "checkpointHash"
+                    }
+                )
+                continuity["checkpoint"] = checkpoint
+                state["continuity"] = mark_recovery(
+                    continuity,
+                    conflicts=conflicts,
+                    accepted_current_files=True,
+                )
+                required = [str(item) for item in state.get("requiredBeforeWrite") or []]
+                state["completedGates"] = {}
+                state["pendingGates"] = required
+                write_gate = dict(state.get("writeGate") or {})
+                write_gate["completedBeforeWrite"] = []
+                write_gate["pendingBeforeWrite"] = required
+                state["writeGate"] = write_gate
+            else:
+                state["continuity"] = mark_recovery(continuity, conflicts=[])
+
+        state["updatedAt"] = _utc_now()
+        _append_log(workspace, task_session_id, f"Continuity action: {normalized_action}")
+        if not mutation_result:
+            mutation_result = {
+                "ok": True,
+                "action": normalized_action,
+                "taskSessionId": task_session_id,
+                "continuity": state.get("continuity") or {},
+            }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if mutation_result:
+        if result.get("ok"):
+            mutation_result["writeReadiness"] = result.get("writeReadiness") or {}
+        return mutation_result
+    return result
+
+
 def task_record_gate(
     workspace: Path,
     *,
@@ -488,6 +850,10 @@ def task_record_gate(
                 "error": "Task is not running",
                 "errorCode": "TASK_NOT_WRITABLE",
             }
+            return None
+        continuity_issue = _continuity_write_issue(state)
+        if continuity_issue:
+            record_result = continuity_issue
             return None
         required = [str(item) for item in state.get("requiredBeforeWrite") or []]
         if gate not in required:
@@ -591,6 +957,10 @@ def task_set_runtime_session(
                 "error": "Task is not running",
                 "errorCode": "TASK_NOT_WRITABLE",
             }
+            return None
+        continuity_issue = _continuity_write_issue(state)
+        if continuity_issue:
+            mutation_result = continuity_issue
             return None
         state["runtimeDebugSession"] = dict(runtime_session)
         state["updatedAt"] = _utc_now()
@@ -698,6 +1068,11 @@ def task_cancel(workspace: Path, task_session_id: str) -> dict[str, Any]:
         else:
             state["status"] = "cancelled"
             cancel_meta = {"cancellationState": "cancelled", "orphanProcessSuspected": False}
+        continuity = dict(state.get("continuity") or {})
+        lease = dict(continuity.get("lease") or {})
+        lease["status"] = "released"
+        continuity["lease"] = lease
+        state["continuity"] = continuity
         state["updatedAt"] = _utc_now()
         _append_log(workspace, task_session_id, f"Task {state['status']}")
         return state
@@ -784,6 +1159,11 @@ def task_resume(workspace: Path, task_session_id: str) -> dict[str, Any]:
         write_gate["pendingBeforeWrite"] = pending
         state["writeGate"] = write_gate
         state["activeJobId"] = ""
+        state["continuity"] = renew_lease(
+            dict(state.get("continuity") or {}),
+            reason="task_resume",
+            advance_epoch=True,
+        )
         state.pop("terminalLogged", None)
         state["updatedAt"] = _utc_now()
         state["status"] = "running"

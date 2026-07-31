@@ -867,7 +867,8 @@ def build_stop_conditions(task_kind: TaskKind, *, runtime_write: bool = False) -
     if runtime_write:
         conditions.extend(
             [
-                "After the patch, record it in unreal_runtime_debug_session with build evidence.",
+                "Before the patch, record a supporting same-reproduction experiment and compare two to four isolated patch candidates.",
+                "Apply only the selected candidate, then record it in unreal_runtime_debug_session with build evidence.",
                 "Do not claim the runtime bug fixed until the same reproductionFingerprint and observer produce RuntimeVerified evidence.",
             ]
         )
@@ -1321,8 +1322,9 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
     if runtime_write:
         checkpoints.extend(
             [
-                "Prepare unreal_runtime_debug_session with a fixed symptom, reproduction fingerprint, observer, and falsifiable hypotheses before writes.",
-                "Record the patch/build proof, then verify with the same reproduction fingerprint and observer.",
+                "Prepare unreal_runtime_debug_session with a fixed symptom, reproduction fingerprint, observer, ranked falsifiable hypotheses, and runtime policy.",
+                "Record a supporting experiment, compare two to four isolated patch candidates, and apply only the selected candidate.",
+                "Record the selected patch/build proof, then verify with the same reproduction fingerprint, observer, and metric/trace/soak oracle.",
             ]
         )
     if error_route:

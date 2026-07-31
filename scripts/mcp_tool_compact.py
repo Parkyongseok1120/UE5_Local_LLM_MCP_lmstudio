@@ -337,6 +337,7 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
     # Cleanup-pair gaps affect safety and are not sampled away.
     compact["lifecycle"]["pairingGaps"] = lifecycle_gaps
     for key in (
+        "candidatePortfolio",
         "proposalValidation",
         "implementationGate",
         "warnings",

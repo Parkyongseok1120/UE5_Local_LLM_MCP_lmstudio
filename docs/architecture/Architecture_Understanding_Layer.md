@@ -25,6 +25,8 @@ It does not call LM Studio, Unreal Editor, UnrealBuildTool, or network services.
 - Builds graph-backed impact/regression contracts that distinguish direct source surfaces from candidate callers and declare a test-coverage gap when no focused test is found.
 - Analyzes source-boundary dependencies plus candidate assignments/returns/call boundaries and state-looking assignments/setters.
 - Validates an architecture proposal's decision, invariants, impacted surfaces, validation plan, and alternatives before allowing its implementation gate to pass.
+- Generates three bounded strategy candidates and compares two or more source-backed, scored alternatives before staged implementation.
+- Requires an asset migration contract for `/Game/...` surfaces: fresh registry snapshot, referencer coverage, redirector policy, cook checks, and rollback.
 
 ## What It Does Not Do
 
@@ -69,7 +71,7 @@ For a source-backed code proposal, call `unreal_code_sketch_claim_validate` with
 }
 ```
 
-The proposal validator checks planning completeness, not design correctness. Wrong field types, unreadable/incomplete source, unmatched focus symbols, and detected source dependency cycles close the implementation gate. It still requires staged implementation, static validation, build/compile, and targeted regression evidence.
+The proposal validator checks planning completeness, not design correctness. Wrong field types, unreadable/incomplete source, unmatched focus symbols, ambiguous or unsupported alternative selection, missing asset migration evidence, and detected source dependency cycles close the implementation gate. It still requires staged implementation, static validation, build/compile, targeted regression, asset, and runtime evidence appropriate to the change.
 
 ## Validate Claims
 

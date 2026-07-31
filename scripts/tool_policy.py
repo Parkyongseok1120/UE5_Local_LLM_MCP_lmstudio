@@ -53,6 +53,7 @@ RAG_MCP_TOOLS = frozenset(
         "unreal_open_project_picker",
         "unreal_task_start",
         "unreal_task_status",
+        "unreal_task_checkpoint",
         "unreal_task_approve",
         "unreal_task_cancel",
         "unreal_task_resume",

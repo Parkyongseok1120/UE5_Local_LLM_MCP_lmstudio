@@ -4,17 +4,23 @@
 from __future__ import annotations
 
 import json
-import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from failure_memory import failure_memory_rag_weight
 
 
-def load_failure_records(memory_dir: Path, project: str = "") -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def load_failure_records(
+    memory_dir: Path,
+    project: str = "",
+    *,
+    engine_version: str = "",
+    project_fingerprint: str = "",
+) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
     if not memory_dir.is_dir():
-        return rows
+        return []
     for path in sorted(memory_dir.glob("*_failures.jsonl")):
         if project and project not in path.stem:
             continue
@@ -26,9 +32,31 @@ def load_failure_records(memory_dir: Path, project: str = "") -> list[dict[str, 
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if row.get("status") == "rejected":
+            record_id = str(row.get("id") or "")
+            if record_id:
+                latest[f"{path.stem}:{record_id}"] = row
+    now = datetime.now(tz=timezone.utc)
+    rows: list[dict[str, Any]] = []
+    for row in latest.values():
+        if str(row.get("status") or "").lower() not in {"verified", "accepted"}:
+            continue
+        expires_at = str(row.get("expiresAt") or "").strip()
+        if expires_at:
+            try:
+                expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            except ValueError:
                 continue
-            rows.append(row)
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if expiry <= now:
+                continue
+        row_engine = str(row.get("engineVersion") or "").strip()
+        if engine_version and row_engine and row_engine != engine_version:
+            continue
+        row_project = str(row.get("projectFingerprint") or "").strip()
+        if project_fingerprint and row_project and row_project != project_fingerprint:
+            continue
+        rows.append(row)
     return rows
 
 
@@ -67,19 +95,11 @@ def chunk_boost_for_memory(chunk_id: str, chunk_meta: dict[str, Any], memory_dir
 
 
 def reject_failure_record(memory_dir: Path, project_name: str, record_id: str) -> bool:
-    path = memory_dir / f"{project_name}_failures.jsonl"
-    if not path.is_file():
-        return False
-    updated = False
-    lines_out: list[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if row.get("id") == record_id:
-            row["status"] = "rejected"
-            updated = True
-        lines_out.append(json.dumps(row, ensure_ascii=False))
-    if updated:
-        path.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
-    return updated
+    from failure_memory import update_failure_memory_status
+
+    return update_failure_memory_status(
+        memory_dir,
+        project_name,
+        record_id,
+        status="rejected",
+    )

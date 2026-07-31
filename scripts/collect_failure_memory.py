@@ -7,25 +7,11 @@ import argparse
 import json
 from pathlib import Path
 
+from failure_memory_rerank import load_failure_records
+
 
 def collect(memory_dir: Path, out_path: Path) -> int:
-    seen: set[str] = set()
-    rows: list[dict] = []
-    if memory_dir.is_dir():
-        for path in sorted(memory_dir.glob("*_failures.jsonl")):
-            for line in path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                doc = json.loads(line)
-                if str(doc.get("status") or "accepted") == "rejected":
-                    continue
-                doc_id = str(doc.get("id") or "")
-                if doc_id and doc_id in seen:
-                    continue
-                if doc_id:
-                    seen.add(doc_id)
-                rows.append(doc)
+    rows = load_failure_records(memory_dir)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as handle:

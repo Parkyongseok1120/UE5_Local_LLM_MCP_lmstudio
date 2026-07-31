@@ -37,6 +37,29 @@ LM Studio chat should call it first after `unreal_get_active_project`.
 
 The orchestration route controls reasoning/tool phases for the model currently loaded in LM Studio. It does not claim that multiple models are loaded or switch models by itself. Multi-file, subsystem, replication, and architecture work escalates to `architecture_first`; bounded edits use `guarded`.
 
+## Long-running continuity
+
+`unreal_task_start` creates a renewable task lease. With control-plane tools enabled, use `unreal_task_checkpoint`:
+
+- `heartbeat` renews ownership of the current plan/slice.
+- `record` stores completed/pending slices, the next action, validation notes, and SHA-256 snapshots of project-contained modified files.
+- `recover` compares current files with the last checkpoint.
+- `rebase` requires `acceptCurrentFiles=true`, advances the lease epoch, refreshes snapshots, and invalidates prior pre-write gates.
+
+An expired lease or checkpoint conflict blocks writes in both the Python task phase and LM Studio's Node mutation authorization. Legacy tasks without continuity state remain readable and compatible.
+
+## Runtime causal workflow
+
+`unreal_runtime_debug_session` is fail-closed:
+
+1. `prepare` ranks falsifiable hypotheses and selects the highest evidence/benefit candidate.
+2. `record_experiment` must use the same reproduction fingerprint and observer. A falsified hypothesis selects the next ranked hypothesis.
+3. `compare_patch_candidates` requires two to four distinct candidates and isolated static/build/invariant evidence.
+4. `record_patch` must match the selected candidate and changed-file set.
+5. `verify` evaluates the same observer plus configured sample, duration, error, crash, timeout, and trace requirements.
+
+`scripts/runtime_experiment_runner.py` builds argv-safe Unreal Automation/trace/soak plans. `scripts/patch_candidate_sandbox.py` applies unified diffs only to project copies outside the project root. Neither script upgrades a result to `RuntimeVerified` unless its required executions and artifacts are present.
+
 ## Wrapper
 
 Enabled by default via `UNREAL_AGENT_ORCHESTRATE=1`. Disable with `--no-orchestrate` or env `UNREAL_AGENT_ORCHESTRATE=0`.

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,15 +36,28 @@ def append_failure_memory(
     retry_count: int = 0,
     model: str = "",
     sampling_profile: str = "",
-    status: str = "accepted",
+    status: str = "candidate",
+    project_fingerprint: str = "",
+    engine_version: str = "",
+    verification_count: int = 0,
+    expires_days: int | None = None,
 ) -> Path:
     memory_dir.mkdir(parents=True, exist_ok=True)
     out = memory_dir / f"{project_name}_failures.jsonl"
     error_signature = f"{error_subkind}|{error_code}|{symbol_name}"
+    now = datetime.now(timezone.utc)
+    normalized_status = str(status or "candidate").strip().lower()
+    if normalized_status not in {"candidate", "verified", "accepted", "expired", "rejected"}:
+        normalized_status = "candidate"
+    retention_days = (
+        int(expires_days)
+        if expires_days is not None
+        else (90 if normalized_status in {"verified", "accepted"} else 14)
+    )
     record = {
         "id": signature(error_subkind, error_code, symbol_name),
         "source": "unreal_failure_memory",
-        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "generatedAt": now.isoformat(),
         "error_subkind": error_subkind,
         "error_code": error_code,
         "symbol_name": symbol_name,
@@ -63,7 +76,14 @@ def append_failure_memory(
         "retry_count": retry_count,
         "model": model,
         "sampling_profile": sampling_profile,
-        "status": status,
+        "status": normalized_status,
+        "verificationCount": max(0, int(verification_count)),
+        "lastVerifiedAt": (
+            now.isoformat() if normalized_status in {"verified", "accepted"} else ""
+        ),
+        "expiresAt": (now + timedelta(days=max(1, retention_days))).isoformat(),
+        "projectFingerprint": str(project_fingerprint or "").strip(),
+        "engineVersion": str(engine_version or "").strip(),
         "title": f"Failure memory: {error_subkind} {error_code}",
         "text": f"Prior fix for {error_subkind}: {fix_summary}\nFiles: {', '.join(changed_files)}",
         "metadata": {
@@ -71,12 +91,62 @@ def append_failure_memory(
             "error_code": error_code,
             "symbol_name": symbol_name,
             "project": project_name,
-            "status": status,
+            "status": normalized_status,
+            "projectFingerprint": str(project_fingerprint or "").strip(),
+            "engineVersion": str(engine_version or "").strip(),
         },
     }
     with out.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     return out
+
+
+def update_failure_memory_status(
+    memory_dir: Path,
+    project_name: str,
+    record_id: str,
+    *,
+    status: str,
+    verification_evidence: dict[str, Any] | None = None,
+    expires_days: int | None = None,
+) -> bool:
+    """Append an auditable lifecycle update for the latest matching record."""
+    path = memory_dir / f"{project_name}_failures.jsonl"
+    if not path.is_file():
+        return False
+    latest: dict[str, Any] | None = None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if str(row.get("id") or "") == str(record_id or ""):
+            latest = row
+    if latest is None:
+        return False
+    now = datetime.now(timezone.utc)
+    normalized = str(status or "").strip().lower()
+    if normalized not in {"candidate", "verified", "accepted", "expired", "rejected"}:
+        return False
+    updated = dict(latest)
+    updated["status"] = normalized
+    updated["generatedAt"] = now.isoformat()
+    updated["verificationEvidence"] = dict(verification_evidence or {})
+    if normalized in {"verified", "accepted"}:
+        updated["verificationCount"] = int(updated.get("verificationCount") or 0) + 1
+        updated["lastVerifiedAt"] = now.isoformat()
+    retention_days = expires_days if expires_days is not None else (
+        90 if normalized in {"verified", "accepted"} else 14
+    )
+    updated["expiresAt"] = (
+        now + timedelta(days=max(1, int(retention_days)))
+    ).isoformat()
+    metadata = dict(updated.get("metadata") or {})
+    metadata["status"] = normalized
+    updated["metadata"] = metadata
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(updated, ensure_ascii=False) + "\n")
+    return True
 
 
 def failure_memory_rag_weight() -> float:

@@ -6,6 +6,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from task_continuity import lease_health, recovery_conflicts
+
 STATUS_TO_PHASE: dict[str, tuple[str, str, str, bool, str | None]] = {
     "running": ("planning", "Planning next steps", "다음 단계를 계획 중", True, "unreal_task_cancel"),
     "pending_approval": (
@@ -104,6 +106,9 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
     )
     completed_gates = dict(state.get("completedGates") or {})
     runtime_session = dict(state.get("runtimeDebugSession") or {})
+    continuity = dict(state.get("continuity") or {})
+    lease = lease_health(continuity)
+    checkpoint_conflicts = recovery_conflicts(continuity)
     expected_gate_set_hash = str(state.get("requiredGateSetHash") or "")
     now = datetime.now(tz=timezone.utc)
     valid_completed: list[str] = []
@@ -134,6 +139,8 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             and bool(state.get("writesAllowed"))
             and not pending_gates
             and not job_in_progress
+            and lease.get("active") is True
+            and not checkpoint_conflicts
         )
         blocked_reasons: list[str] = []
         if status != "running":
@@ -145,6 +152,10 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
         )
         if job_in_progress:
             blocked_reasons.append(f"job_in_progress:{active_job_status}")
+        if lease.get("configured") and not lease.get("active"):
+            blocked_reasons.append("task_lease_expired")
+        if checkpoint_conflicts:
+            blocked_reasons.append("checkpoint_conflict")
 
         if status in {"pending_approval", "awaiting_approval"}:
             next_action = "unreal_task_approve"
@@ -156,14 +167,43 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             next_action = ""
         elif job_in_progress:
             next_action = "unreal_task_status"
+        elif checkpoint_conflicts:
+            next_action = "unreal_task_checkpoint:recover"
+        elif lease.get("configured") and not lease.get("active"):
+            next_action = "unreal_task_checkpoint:recover"
         else:
             next_action = pending_gates[0] if pending_gates else str(payload.get("resumeAction") or "")
 
-        if status == "running" and not pending_gates and runtime_status == "ready_for_patch":
+        continuity_ready = lease.get("active") is True and not checkpoint_conflicts
+        if (
+            status == "running"
+            and continuity_ready
+            and runtime_status == "ready_for_experiment"
+        ):
+            next_action = "run_experiment_then_unreal_runtime_debug_session:record_experiment"
+        elif (
+            status == "running"
+            and continuity_ready
+            and runtime_status == "ready_for_patch_candidates"
+        ):
+            next_action = "sandbox_candidates_then_unreal_runtime_debug_session:compare_patch_candidates"
+        elif (
+            status == "running"
+            and continuity_ready
+            and not pending_gates
+            and runtime_status == "ready_for_patch"
+        ):
             next_action = "apply_patch_then_unreal_runtime_debug_session:record_patch"
-        elif status == "running" and runtime_status == "awaiting_same_observer_verification":
+        elif (
+            status == "running"
+            and continuity_ready
+            and runtime_status == "awaiting_same_observer_verification"
+        ):
             next_action = "unreal_runtime_debug_session:verify"
-        elif status == "running" and runtime_status in {"runtime_not_fixed", "verification_rejected"}:
+        elif status == "running" and continuity_ready and runtime_status in {
+            "runtime_not_fixed",
+            "needs_new_hypothesis",
+        }:
             next_action = "replan_with_new_runtime_evidence"
 
         payload["writeReadiness"] = {
@@ -174,6 +214,11 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             "pendingGates": pending_gates,
             "gateIssues": gate_issues,
             "blockedReasons": blocked_reasons,
+        }
+        payload["continuity"] = {
+            "lease": lease,
+            "checkpoint": dict(continuity.get("checkpoint") or {}),
+            "recovery": dict(continuity.get("recovery") or {}),
         }
         if next_action:
             payload["nextAction"] = next_action

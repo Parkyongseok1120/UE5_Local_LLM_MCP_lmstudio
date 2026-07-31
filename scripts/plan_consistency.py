@@ -39,6 +39,7 @@ RAG_STABLE_HIDDEN_TOOLS = frozenset(
     {
         "unreal_task_start",
         "unreal_task_status",
+        "unreal_task_checkpoint",
         "unreal_task_cancel",
         "unreal_task_resume",
         "unreal_task_approve",

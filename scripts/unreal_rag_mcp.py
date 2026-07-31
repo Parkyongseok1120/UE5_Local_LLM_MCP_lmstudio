@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -259,6 +260,17 @@ def _architecture_proposal_schema() -> dict[str, Any]:
                 },
                 "minItems": 1,
             },
+            "selectedAlternative": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Selected scored alternative name for staged work.",
+            },
+            "selectionRationale": {
+                "type": "string",
+                "description": (
+                    "Required when overriding the recommended alternative or when scores are ambiguous."
+                ),
+            },
             "implementationFiles": {
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
@@ -289,6 +301,41 @@ def _architecture_proposal_schema() -> dict[str, Any]:
             "migrationPlan": {
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
+            },
+            "assetMigration": {
+                "type": "object",
+                "properties": {
+                    "assetRegistrySnapshotHash": {"type": "string", "minLength": 1},
+                    "redirectorPolicy": {
+                        "type": "string",
+                        "enum": ["fixup_then_delete", "retain_compatibility"],
+                    },
+                    "moves": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "from": {"type": "string", "minLength": 1},
+                                "to": {"type": "string", "minLength": 1},
+                                "referencers": {
+                                    "type": "array",
+                                    "items": {"type": "string", "minLength": 1},
+                                },
+                                "referenceScanComplete": {"type": "boolean"},
+                            },
+                            "required": ["from", "to"],
+                        },
+                        "minItems": 1,
+                    },
+                    "cookValidation": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "rollbackPlan": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                },
             },
             "validationMatrix": {
                 "type": "array",
@@ -605,6 +652,62 @@ def _handle_unreal_architecture_reasoning(
     )
 
 
+def _runtime_candidate_target_snapshots(
+    current_task: dict[str, Any],
+    runtime_session: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    state = current_task.get("state") if isinstance(current_task.get("state"), dict) else {}
+    project_file = str(state.get("projectFile") or "").strip()
+    if not project_file:
+        return [], ["runtime patch comparison requires task projectFile"]
+    project_path = Path(project_file).expanduser().resolve()
+    project_root = (
+        project_path.parent
+        if project_path.suffix.lower() == ".uproject"
+        else project_path
+    )
+    comparison = (
+        runtime_session.get("patchCandidateComparison")
+        if isinstance(runtime_session.get("patchCandidateComparison"), dict)
+        else {}
+    )
+    selected = (
+        comparison.get("selectedCandidate")
+        if isinstance(comparison.get("selectedCandidate"), dict)
+        else {}
+    )
+    snapshots: list[dict[str, Any]] = []
+    issues: list[str] = []
+    for relative_path in selected.get("changedFiles") or []:
+        candidate = (project_root / str(relative_path)).resolve()
+        try:
+            normalized = candidate.relative_to(project_root).as_posix()
+        except ValueError:
+            issues.append(f"runtime candidate path escaped project root: {relative_path}")
+            continue
+        try:
+            exists = candidate.is_file()
+            digest = (
+                hashlib.sha1(candidate.read_bytes()).hexdigest()
+                if exists
+                else ""
+            )
+        except OSError as exc:
+            issues.append(f"runtime candidate target could not be read: {relative_path} ({exc})")
+            continue
+        snapshots.append(
+            {
+                "path": normalized,
+                "absolutePath": str(candidate),
+                "exists": exists,
+                "fileHash": digest,
+            }
+        )
+    if not snapshots:
+        issues.append("selected runtime patch candidate has no snapshot targets")
+    return snapshots, issues
+
+
 def _handle_unreal_runtime_debug_session(
     server: McpServer,
     message_id: Any,
@@ -612,6 +715,8 @@ def _handle_unreal_runtime_debug_session(
 ) -> None:
     from runtime_debug_session import (
         prepare_runtime_session,
+        record_patch_candidate_comparison,
+        record_runtime_experiment,
         record_runtime_patch,
         verify_runtime_session,
     )
@@ -660,25 +765,14 @@ def _handle_unreal_runtime_debug_session(
             "action": action,
             "persisted": bool(stored.get("ok")),
         }
-        if prepared.get("ok") and stored.get("ok"):
-            gate_completion = task_record_gate(
-                server.workspace,
-                gate_name="unreal_runtime_debug_session",
-                task_authorization=authorization,
-                input_payload={
-                    key: value
-                    for key, value in arguments.items()
-                    if key not in {"taskAuthorization", "task_authorization"}
-                },
-                evidence=session,
-            )
-            payload["gateCompletion"] = gate_completion
-        else:
-            payload["gateCompletion"] = {
-                "ok": False,
-                "errorCode": "GATE_VALIDATION_FAILED",
-                "error": "Runtime causal baseline is incomplete; write gate remains closed.",
-            }
+        payload["gateCompletion"] = {
+            "ok": False,
+            "errorCode": "RUNTIME_EXPERIMENT_REQUIRED",
+            "error": (
+                "Run and record a supporting experiment for the selected hypothesis; "
+                "the write gate remains closed."
+            ),
+        }
         server.structured_tool_result(message_id, payload)
         return
     if not existing:
@@ -692,11 +786,47 @@ def _handle_unreal_runtime_debug_session(
             },
         )
         return
-    if action == "record_patch":
+    if action == "record_experiment":
+        result = record_runtime_experiment(
+            existing,
+            hypothesis_id=str(arguments.get("hypothesisId") or ""),
+            reproduction_fingerprint=str(arguments.get("reproductionFingerprint") or ""),
+            observer=(
+                arguments.get("observer")
+                if isinstance(arguments.get("observer"), dict)
+                else {}
+            ),
+            experiment_evidence=(
+                arguments.get("experimentEvidence")
+                if isinstance(arguments.get("experimentEvidence"), dict)
+                else {}
+            ),
+            outcome=str(arguments.get("experimentOutcome") or ""),
+        )
+    elif action == "compare_patch_candidates":
+        result = record_patch_candidate_comparison(
+            existing,
+            patch_candidates=[
+                dict(item)
+                for item in (arguments.get("patchCandidates") or [])
+                if isinstance(item, dict)
+            ],
+            selected_patch_candidate_id=str(
+                arguments.get("selectedPatchCandidateId") or ""
+            ),
+            patch_selection_rationale=str(
+                arguments.get("patchSelectionRationale") or ""
+            ),
+        )
+    elif action == "record_patch":
         result = record_runtime_patch(
             existing,
             changed_files=list(arguments.get("changedFiles") or []),
             patch_summary=str(arguments.get("patchSummary") or ""),
+            selected_patch_candidate_id=str(
+                arguments.get("selectedPatchCandidateId") or ""
+            ),
+            applied_diff_hash=str(arguments.get("appliedDiffHash") or ""),
             build_proof=arguments.get("buildProof") if isinstance(arguments.get("buildProof"), dict) else {},
         )
     elif action == "verify":
@@ -716,15 +846,52 @@ def _handle_unreal_runtime_debug_session(
             server,
             message_id,
             "unreal_runtime_debug_session",
-            "action must be prepare, status, record_patch, or verify",
+            "action must be prepare, status, record_experiment, compare_patch_candidates, record_patch, or verify",
         )
         return
+    target_snapshots: list[dict[str, Any]] = []
+    if (
+        action == "compare_patch_candidates"
+        and result.get("ok")
+        and str(result["session"].get("status") or "") == "ready_for_patch"
+    ):
+        target_snapshots, snapshot_issues = _runtime_candidate_target_snapshots(
+            current,
+            result["session"],
+        )
+        if snapshot_issues:
+            result["ok"] = False
+            result["comparison"]["issues"].extend(snapshot_issues)
+            result["session"]["issues"] = list(result["comparison"]["issues"])
+            result["session"]["status"] = "ready_for_patch_candidates"
+            result["session"]["writeGate"] = {
+                "writesAllowed": False,
+                "reason": "runtime candidate target snapshots are incomplete",
+            }
     stored = task_set_runtime_session(
         server.workspace,
         task_authorization=authorization,
         runtime_session=result["session"],
     )
     payload = {**result, "action": action, "persisted": bool(stored.get("ok"))}
+    if (
+        action == "compare_patch_candidates"
+        and result.get("ok")
+        and stored.get("ok")
+        and str(result["session"].get("status") or "") == "ready_for_patch"
+    ):
+        payload["gateCompletion"] = task_record_gate(
+            server.workspace,
+            gate_name="unreal_runtime_debug_session",
+            task_authorization=authorization,
+            input_payload={
+                key: value
+                for key, value in arguments.items()
+                if key not in {"taskAuthorization", "task_authorization"}
+            },
+            evidence=result["session"],
+            target_snapshots=target_snapshots,
+        )
     server.structured_tool_result(message_id, payload)
 
 
@@ -898,7 +1065,7 @@ def build_mcp_tool_registry() -> McpToolRegistry:
             schema_dict={
                 "action": {
                     "type": "string",
-                    "enum": ["prepare", "status", "record_patch", "verify"],
+                    "enum": ["prepare", "status", "record_experiment", "compare_patch_candidates", "record_patch", "verify"],
                     "default": "status",
                 },
                 "taskAuthorization": _task_authorization_schema(),
@@ -909,6 +1076,17 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                 "baselineEvidence": {"type": "object"},
                 "hypotheses": {"type": "array", "items": {"type": "object"}},
                 "selectedHypothesisId": {"type": "string"},
+                "runtimePolicy": {"type": "object"},
+                "hypothesisId": {"type": "string"},
+                "experimentEvidence": {"type": "object"},
+                "experimentOutcome": {
+                    "type": "string",
+                    "enum": ["supported", "falsified", "inconclusive"],
+                },
+                "patchCandidates": {"type": "array", "items": {"type": "object"}},
+                "selectedPatchCandidateId": {"type": "string"},
+                "patchSelectionRationale": {"type": "string"},
+                "appliedDiffHash": {"type": "string"},
                 "changedFiles": {"type": "array", "items": {"type": "string"}},
                 "patchSummary": {"type": "string"},
                 "buildProof": {"type": "object"},
@@ -1013,6 +1191,7 @@ STABLE_HIDDEN_TOOL_NAMES = frozenset(
     {
         "unreal_task_start",
         "unreal_task_status",
+        "unreal_task_checkpoint",
         "unreal_task_cancel",
         "unreal_task_resume",
         "unreal_task_approve",
@@ -1940,15 +2119,15 @@ class McpServer:
                 "name": "unreal_runtime_debug_session",
                 "title": "Track a causal Unreal runtime debug session",
                 "description": (
-                    "Prepare a symptom/reproduction/observer baseline and falsifiable hypotheses before a runtime patch, "
-                    "then record the patch and verify it with the same reproduction fingerprint and observer. "
-                    "A successful prepare action completes the runtime pre-write gate for the supplied taskAuthorization."
+                    "Rank falsifiable hypotheses, record a same-reproduction experiment, then allow a runtime patch "
+                    "only after supporting evidence. Verification uses the same observer plus metric/trace/soak policy. "
+                    "A supporting record_experiment action completes the runtime pre-write gate."
                 ),
                 "inputSchema": self._schema(
                     {
                         "action": {
                             "type": "string",
-                            "enum": ["prepare", "status", "record_patch", "verify"],
+                            "enum": ["prepare", "status", "record_experiment", "compare_patch_candidates", "record_patch", "verify"],
                             "default": "status",
                         },
                         "taskAuthorization": _task_authorization_schema(),
@@ -1959,6 +2138,17 @@ class McpServer:
                         "baselineEvidence": {"type": "object"},
                         "hypotheses": {"type": "array", "items": {"type": "object"}},
                         "selectedHypothesisId": {"type": "string"},
+                        "runtimePolicy": {"type": "object"},
+                        "hypothesisId": {"type": "string"},
+                        "experimentEvidence": {"type": "object"},
+                        "experimentOutcome": {
+                            "type": "string",
+                            "enum": ["supported", "falsified", "inconclusive"],
+                        },
+                        "patchCandidates": {"type": "array", "items": {"type": "object"}},
+                        "selectedPatchCandidateId": {"type": "string"},
+                        "patchSelectionRationale": {"type": "string"},
+                        "appliedDiffHash": {"type": "string"},
                         "changedFiles": {"type": "array", "items": {"type": "string"}},
                         "patchSummary": {"type": "string"},
                         "buildProof": {"type": "object"},
@@ -2290,6 +2480,12 @@ class McpServer:
                         "projectFile": {"type": "string", "description": "Optional .uproject path override."},
                         "planId": {"type": "string"},
                         "startBackgroundJob": {"type": "boolean", "default": False},
+                        "leaseSeconds": {
+                            "type": "integer",
+                            "minimum": 60,
+                            "maximum": 86400,
+                            "default": 1800,
+                        },
                     },
                     ["request"],
                 ),
@@ -2303,6 +2499,38 @@ class McpServer:
                         "taskSessionId": {"type": "string"},
                     },
                     ["taskSessionId"],
+                ),
+            },
+            {
+                "name": "unreal_task_checkpoint",
+                "title": "Checkpoint or recover a long-running task",
+                "description": (
+                    "Renew the task lease, persist a file-hash checkpoint, or recover after interruption. "
+                    "File conflicts close the write gate until an explicit rebase accepts current files."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "action": {
+                            "type": "string",
+                            "enum": ["status", "heartbeat", "record", "recover", "rebase"],
+                            "default": "status",
+                        },
+                        "taskAuthorization": _task_authorization_schema(),
+                        "leaseSeconds": {
+                            "type": "integer",
+                            "minimum": 60,
+                            "maximum": 86400,
+                        },
+                        "phase": {"type": "string"},
+                        "completedSlices": {"type": "array", "items": {"type": "string"}},
+                        "pendingSlices": {"type": "array", "items": {"type": "string"}},
+                        "modifiedFiles": {"type": "array", "items": {"type": "string"}},
+                        "requiredNextAction": {"type": "string"},
+                        "validation": {"type": "object"},
+                        "note": {"type": "string"},
+                        "acceptCurrentFiles": {"type": "boolean", "default": False},
+                    },
+                    ["action", "taskAuthorization"],
                 ),
             },
             {
@@ -2720,6 +2948,7 @@ class McpServer:
                     project_file=str(arguments.get("projectFile") or arguments.get("project_file") or ""),
                     plan_id=str(arguments.get("planId") or arguments.get("plan_id") or ""),
                     start_background_job=arguments.get("startBackgroundJob") is True,
+                    lease_seconds=arguments.get("leaseSeconds") or 1800,
                     on_progress=lambda job, msg: self.notify(f"[task {job.get('jobId')}] {msg}"),
                 )
                 self.structured_tool_result(message_id, payload)
@@ -2727,6 +2956,28 @@ class McpServer:
                 from task_api import task_status
 
                 payload = task_status(self.workspace, str(arguments.get("taskSessionId") or ""))
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_checkpoint":
+                from task_api import task_checkpoint
+
+                payload = task_checkpoint(
+                    self.workspace,
+                    task_authorization=arguments.get("taskAuthorization") or {},
+                    action=str(arguments.get("action") or "status"),
+                    lease_seconds=arguments.get("leaseSeconds"),
+                    phase=str(arguments.get("phase") or ""),
+                    completed_slices=list(arguments.get("completedSlices") or []),
+                    pending_slices=list(arguments.get("pendingSlices") or []),
+                    modified_files=list(arguments.get("modifiedFiles") or []),
+                    required_next_action=str(arguments.get("requiredNextAction") or ""),
+                    validation=(
+                        arguments.get("validation")
+                        if isinstance(arguments.get("validation"), dict)
+                        else {}
+                    ),
+                    note=str(arguments.get("note") or ""),
+                    accept_current_files=arguments.get("acceptCurrentFiles") is True,
+                )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_approve":
                 from task_api import task_approve

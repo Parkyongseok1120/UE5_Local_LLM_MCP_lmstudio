@@ -28,7 +28,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 > **프로젝트 현황 — 2026년 7월**
 >
-> **현재 릴리스는 1.3.0 Beta1입니다.** 1.3 라인에는 특정 프로젝트에 종속되지 않는 evidence-first 분석 skill, LM Studio MCP 통합, 프로젝트 전역 symbol/dependency/call/data-flow 분석, fail-closed architecture/change-impact/code-generation contract, risk-tier orchestration, 단일 cross-platform installer, 강화된 release/live-test gate가 포함됩니다.
+> **현재 릴리스는 1.3.0 Beta1입니다.** 1.3 라인에는 특정 프로젝트에 종속되지 않는 evidence-first 분석 skill, LM Studio MCP 통합, 프로젝트 전역 symbol/dependency/call/data-flow 분석, fail-closed architecture/change-impact/code-generation contract, 장기 작업 checkpoint 복구, 순위 기반 runtime experiment와 patch 후보 비교, risk-tier orchestration, 단일 cross-platform installer, 강화된 release/live-test gate가 포함됩니다.
 >
 > Beta1에는 저장소 자동 검증 근거가 있지만 새로운 live-model 점수는 아직 없습니다. 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline이며 Beta1의 측정 성능 향상으로 해석하면 안 됩니다. 실제 Linux/macOS Unreal 인증, Ollama 지원, 분리된 runtime/semantic capability scorecard는 계속 진행 중입니다.
 

@@ -300,8 +300,18 @@ def test_staged_architecture_proposal_accepts_covered_acyclic_slices(
                     "risk": 2,
                 },
             },
-            "duplicate the API in Game and reject it",
+            {
+                "name": "duplicate the API in Game",
+                "rationale": "kept only as a rejected comparison candidate",
+                "scores": {
+                    "complexity": 1,
+                    "maintainability": 1,
+                    "performance": 4,
+                    "risk": 5,
+                },
+            },
         ],
+        "selectedAlternative": "extend Core API",
         "implementationFiles": [
             "Source/Core/Public/Shared.h",
             "Source/Game/Private/Worker.cpp",
@@ -344,6 +354,100 @@ def test_staged_architecture_proposal_accepts_covered_acyclic_slices(
     assert validation["designContract"]["sliceDependencyCycle"] == []
     assert validation["implementationGate"]["writesAllowed"] is True
     assert validation["implementationGate"]["nextAction"] == "implement_next_slice"
+    comparison = validation["designContract"]["alternativeComparison"]
+    assert comparison["recommendedAlternative"] == "extend Core API"
+    assert comparison["selectionValid"] is True
+
+
+def test_architecture_analysis_generates_bounded_candidate_portfolio(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+
+    result = analyze_architecture(tmp_path, symbols=["Run"])
+    portfolio = result["candidatePortfolio"]
+
+    assert portfolio["candidateCount"] == 3
+    assert portfolio["implementationReady"] is False
+    assert portfolio["nextAction"] == "score_source_backed_alternatives_and_select"
+    assert {item["strategy"] for item in portfolio["candidates"]} == {
+        "extend_existing_owner",
+        "introduce_boundary_adapter",
+        "extract_dedicated_owner",
+    }
+    assert all(item["proofLevel"] == "Proposed" for item in portfolio["candidates"])
+
+
+def test_staged_architecture_proposal_rejects_unscored_or_ambiguous_selection(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    invariant = "preserve worker behavior"
+    shared = "Source/Core/Public/Shared.h"
+    worker = "Source/Game/Private/Worker.cpp"
+    proposal = {
+        "decision": "stage worker migration",
+        "invariants": [invariant],
+        "impactedSurfaces": [shared, worker],
+        "validationPlan": ["compile"],
+        "alternatives": [
+            {
+                "name": "a",
+                "scores": {
+                    "complexity": 3,
+                    "maintainability": 4,
+                    "performance": 4,
+                    "risk": 3,
+                },
+            },
+            {
+                "name": "b",
+                "scores": {
+                    "complexity": 3,
+                    "maintainability": 4,
+                    "performance": 4,
+                    "risk": 3,
+                },
+            },
+        ],
+        "selectedAlternative": "a",
+        "implementationFiles": [shared, worker],
+        "ownership": {
+            "stateOwner": "module:Game",
+            "dataOwner": "module:Core",
+            "lifecycleOwner": "module:Game",
+            "failurePolicy": "stop",
+            "recoveryPolicy": "rollback",
+        },
+        "migrationPlan": ["stage both files"],
+        "validationMatrix": [{"invariant": invariant, "checks": ["compile"]}],
+        "implementationSlices": [
+            {
+                "sliceId": "core",
+                "files": [shared],
+                "dependsOn": [],
+                "invariants": [invariant],
+                "validation": ["compile"],
+            },
+            {
+                "sliceId": "game",
+                "files": [worker],
+                "dependsOn": ["core"],
+                "invariants": [invariant],
+                "validation": ["compile"],
+            },
+        ],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)[
+        "proposalValidation"
+    ]
+
+    assert validation["ok"] is False
+    comparison = validation["designContract"]["alternativeComparison"]
+    assert comparison["ambiguous"] is True
+    assert comparison["selectionValid"] is False
+    assert any("scores are ambiguous" in issue for issue in validation["issues"])
 
 
 def test_staged_architecture_proposal_rejects_slice_dependency_cycle(
@@ -487,3 +591,23 @@ def test_architecture_proposal_rejects_duplicate_slice_file_owner_and_rogue_inva
     assert any("assigned to multiple slices" in issue for issue in validation["issues"])
     assert any("not declared by proposal" in issue for issue in validation["issues"])
     assert validation["implementationGate"]["writesAllowed"] is False
+
+
+def test_game_asset_surface_requires_migration_contract(tmp_path: Path) -> None:
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "Demo.cpp").write_text("void Demo() {}\n", encoding="utf-8")
+    analysis = analyze_architecture(
+        tmp_path,
+        proposal={
+            "decision": "Rename the lobby widget",
+            "invariants": ["Lobby still loads"],
+            "impactedSurfaces": ["/Game/UI/WBP_Lobby"],
+            "validationPlan": ["cook", "load Lobby"],
+            "alternatives": ["keep current name"],
+        },
+    )
+
+    validation = analysis["proposalValidation"]
+    assert validation["ok"] is False
+    assert any("assetMigration is required" in issue for issue in validation["issues"])

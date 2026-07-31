@@ -17,6 +17,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from architecture_portfolio import (
+    compare_architecture_alternatives,
+    generate_architecture_portfolio,
+)
+from asset_migration_contract import validate_asset_migration
 from build_symbol_graph import (
     _find_body_end,
     _mask_comments_and_strings,
@@ -890,6 +895,26 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         if not isinstance(ownership, dict) or not str(ownership.get(field) or "").strip()
     ]
     migration_plan = _nonempty_string_list(plan.get("migrationPlan"))
+    asset_surfaces = [surface for surface in impacted if surface.startswith("/Game/")]
+    asset_migration_value = plan.get("assetMigration")
+    asset_migration = (
+        validate_asset_migration(asset_migration_value)
+        if asset_migration_value is not None or asset_surfaces
+        else None
+    )
+    if asset_surfaces and asset_migration_value is None:
+        issues.append(
+            "assetMigration is required when impactedSurfaces contains /Game assets"
+        )
+    if asset_migration and not asset_migration["ok"]:
+        issues.extend(
+            f"asset migration: {issue}" for issue in asset_migration["issues"]
+        )
+    alternative_comparison = compare_architecture_alternatives(
+        alternatives,
+        selected_alternative=str(plan.get("selectedAlternative") or ""),
+        selection_rationale=str(plan.get("selectionRationale") or ""),
+    )
 
     if staged_implementation:
         if len(alternatives) < 2:
@@ -909,6 +934,11 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             issues.append(
                 "declared invariants missing validation coverage: "
                 + ", ".join(uncovered_invariants)
+            )
+        if not alternative_comparison["selectionValid"]:
+            issues.extend(
+                "architecture alternative selection: " + issue
+                for issue in alternative_comparison["selectionIssues"]
             )
     elif declared_invariants and uncovered_invariants:
         warnings.append(
@@ -965,6 +995,8 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             "missingOwnershipFields": missing_ownership,
             "migrationPlanPresent": bool(migration_plan),
             "sliceDependencyCycle": slice_cycle,
+            "alternativeComparison": alternative_comparison,
+            "assetMigration": asset_migration,
         },
         "implementationGate": {
             "writesAllowed": writes_allowed,
@@ -1039,6 +1071,12 @@ def analyze_architecture(
             "Use direct reads plus static/build/test/runtime evidence before making behavior or ownership conclusions."
         ),
     }
+    proposal_payload = proposal if isinstance(proposal, dict) else {}
+    analysis["candidatePortfolio"] = generate_architecture_portfolio(
+        analysis,
+        objective=str(proposal_payload.get("decision") or ""),
+        constraints=list(proposal_payload.get("invariants") or []),
+    )
     if proposal is not None:
         analysis["proposalValidation"] = validate_architecture_proposal(proposal, analysis)
     return analysis

@@ -142,49 +142,52 @@ function validateCompletedGates(state, args = {}) {
   }
 
   const requestedPaths = requestedMutationPaths(args, state);
-  const codeGate = completed.unreal_code_sketch_claim_validate;
-  const snapshots = Array.isArray(codeGate?.targetSnapshots) ? codeGate.targetSnapshots : [];
-  if (requestedPaths.length && snapshots.length) {
+  const snapshotGates = required
+    .map((gate) => ({ gate, snapshots: completed[gate]?.targetSnapshots }))
+    .filter((item) => Array.isArray(item.snapshots) && item.snapshots.length);
+  if (requestedPaths.length && snapshotGates.length) {
     const caseFold = (value) => process.platform === "win32" ? value.toLowerCase() : value;
-    const byPath = new Map(
-      snapshots
-        .filter((item) => item && item.absolutePath)
-        .map((item) => [caseFold(path.resolve(String(item.absolutePath))), item])
-    );
-    for (const requestedPath of requestedPaths) {
-      const snapshot = byPath.get(caseFold(requestedPath));
-      if (!snapshot) {
-        return {
-          ok: false,
-          error: `Mutation target was not covered by code-generation evidence: ${requestedPath}`,
-          errorCode: "GATE_TARGET_MISMATCH",
-        };
-      }
-      const existsNow = fs.existsSync(requestedPath);
-      if (Boolean(snapshot.exists) !== existsNow) {
-        return {
-          ok: false,
-          error: `Mutation target changed since code-generation validation: ${requestedPath}`,
-          errorCode: "GATE_TARGET_STALE",
-        };
-      }
-      if (existsNow && snapshot.fileHash) {
-        let currentHash;
-        try {
-          currentHash = sha1File(requestedPath);
-        } catch {
+    for (const snapshotGate of snapshotGates) {
+      const byPath = new Map(
+        snapshotGate.snapshots
+          .filter((item) => item && item.absolutePath)
+          .map((item) => [caseFold(path.resolve(String(item.absolutePath))), item])
+      );
+      for (const requestedPath of requestedPaths) {
+        const snapshot = byPath.get(caseFold(requestedPath));
+        if (!snapshot) {
           return {
             ok: false,
-            error: `Mutation target could not be re-read: ${requestedPath}`,
+            error: `Mutation target was not covered by ${snapshotGate.gate} evidence: ${requestedPath}`,
+            errorCode: "GATE_TARGET_MISMATCH",
+          };
+        }
+        const existsNow = fs.existsSync(requestedPath);
+        if (Boolean(snapshot.exists) !== existsNow) {
+          return {
+            ok: false,
+            error: `Mutation target changed since ${snapshotGate.gate} validation: ${requestedPath}`,
             errorCode: "GATE_TARGET_STALE",
           };
         }
-        if (currentHash !== String(snapshot.fileHash)) {
-          return {
-            ok: false,
-            error: `Mutation target content changed since code-generation validation: ${requestedPath}`,
-            errorCode: "GATE_TARGET_STALE",
-          };
+        if (existsNow && snapshot.fileHash) {
+          let currentHash;
+          try {
+            currentHash = sha1File(requestedPath);
+          } catch {
+            return {
+              ok: false,
+              error: `Mutation target could not be re-read: ${requestedPath}`,
+              errorCode: "GATE_TARGET_STALE",
+            };
+          }
+          if (currentHash !== String(snapshot.fileHash)) {
+            return {
+              ok: false,
+              error: `Mutation target content changed since ${snapshotGate.gate} validation: ${requestedPath}`,
+              errorCode: "GATE_TARGET_STALE",
+            };
+          }
         }
       }
     }
@@ -254,6 +257,45 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       error: `Task session is not writable in status '${status || "unknown"}'`,
       errorCode: status === "cancelled" ? "TASK_CANCELLED" : "TASK_NOT_WRITABLE",
     };
+  }
+  const continuity = state.continuity && typeof state.continuity === "object"
+    ? state.continuity
+    : null;
+  if (continuity) {
+    const lease = continuity.lease && typeof continuity.lease === "object"
+      ? continuity.lease
+      : null;
+    if (lease) {
+      const expiresAt = Date.parse(String(lease.expiresAt || ""));
+      if (
+        String(lease.status || "") !== "active"
+        || !Number.isFinite(expiresAt)
+        || expiresAt <= Date.now()
+      ) {
+        return {
+          ok: false,
+          error: "Task continuity lease is inactive or expired; heartbeat/recovery is required.",
+          errorCode: "TASK_LEASE_EXPIRED",
+          taskSessionId: sanitized.taskSessionId,
+        };
+      }
+    }
+    const recovery = continuity.recovery && typeof continuity.recovery === "object"
+      ? continuity.recovery
+      : {};
+    const conflicts = Array.isArray(recovery.conflicts) ? recovery.conflicts : [];
+    if (
+      String(recovery.status || "") === "blocked_by_checkpoint_conflict"
+      || conflicts.length > 0
+    ) {
+      return {
+        ok: false,
+        error: "Task checkpoint conflicts with current files; recover or explicitly rebase first.",
+        errorCode: "TASK_CHECKPOINT_CONFLICT",
+        taskSessionId: sanitized.taskSessionId,
+        conflicts,
+      };
+    }
   }
   const activeJobId = String(state.activeJobId || "").trim();
   if (activeJobId) {

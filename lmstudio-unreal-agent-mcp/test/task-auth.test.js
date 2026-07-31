@@ -42,6 +42,89 @@ test("nested taskAuthorization validates against task state", () => {
   }
 });
 
+test("expired continuity lease blocks mutation while legacy tasks remain compatible", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  const state = {
+    ...authorization,
+    status: "running",
+    writeGate: { writesAllowed: true },
+    continuity: {
+      lease: {
+        status: "active",
+        expiresAt: new Date(Date.now() - 1000).toISOString(),
+      },
+      recovery: { status: "not_required", conflicts: [] },
+    },
+  };
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify(state));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const expired = validateMutationAuth(
+      workspace,
+      { taskAuthorization: authorization },
+      { requireAll: true }
+    );
+    assert.strictEqual(expired.errorCode, "TASK_LEASE_EXPIRED");
+
+    delete state.continuity;
+    fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify(state));
+    assert.strictEqual(
+      validateMutationAuth(
+        workspace,
+        { taskAuthorization: authorization },
+        { requireAll: true }
+      ).ok,
+      true
+    );
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("checkpoint conflict blocks mutation", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    writeGate: { writesAllowed: true },
+    continuity: {
+      lease: {
+        status: "active",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      recovery: {
+        status: "blocked_by_checkpoint_conflict",
+        conflicts: [{ relativePath: "Source/Demo/Thing.cpp" }],
+      },
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const result = validateMutationAuth(
+      workspace,
+      { taskAuthorization: authorization },
+      { requireAll: true }
+    );
+    assert.strictEqual(result.errorCode, "TASK_CHECKPOINT_CONFLICT");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("required pre-write gates fail closed until completed", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-workspace-"));
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-state-"));
@@ -250,6 +333,56 @@ test("code-generation gate binds writes to validated target hash", () => {
       { requireAll: true }
     );
     assert.strictEqual(stale.errorCode, "GATE_TARGET_STALE");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("runtime candidate gate binds writes to selected target hash", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-state-"));
+  const project = path.join(workspace, "Demo");
+  const target = path.join(project, "Source", "Demo", "Thing.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(path.join(project, "Demo.uproject"), "{}");
+  fs.writeFileSync(target, "before");
+  const fileHash = require("crypto").createHash("sha1").update("before").digest("hex");
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    projectFile: path.join(project, "Demo.uproject"),
+    writeGate: { writesAllowed: true },
+    requiredBeforeWrite: ["unreal_runtime_debug_session"],
+    requiredGateSetHash: "gate-set",
+    completedGates: {
+      unreal_runtime_debug_session: {
+        status: "completed",
+        gateSetHash: "gate-set",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        targetSnapshots: [{ absolutePath: target, exists: true, fileHash }],
+      },
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const valid = validateMutationAuth(
+      workspace,
+      { taskAuthorization: authorization, path: "Source/Demo/Thing.cpp" },
+      { requireAll: true }
+    );
+    assert.strictEqual(valid.ok, true);
+    const unrelated = validateMutationAuth(
+      workspace,
+      { taskAuthorization: authorization, path: "Source/Demo/Other.cpp" },
+      { requireAll: true }
+    );
+    assert.strictEqual(unrelated.errorCode, "GATE_TARGET_MISMATCH");
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
