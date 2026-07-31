@@ -66,8 +66,60 @@ def _process_name(pid: int) -> str:
             if isinstance(result, ProbeTimeout) or result.returncode != 0:
                 return ""
             return str((result.stdout or "").strip())
-        path = Path(f"/proc/{pid}/comm")
-        return path.read_text(encoding="utf-8").strip()
+        if Path(f"/proc/{pid}/comm").is_file():
+            return Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
+        from process_probe import ProbeTimeout, run_probe
+
+        result = run_probe(["ps", "-o", "comm=", "-p", str(pid)])
+        if isinstance(result, ProbeTimeout) or result.returncode != 0:
+            return ""
+        return str((result.stdout or "").strip())
+    except Exception:
+        return ""
+
+
+def _process_started_at(pid: int) -> str:
+    """Return UTC ISO start time for pid, or empty string when unavailable."""
+
+    if pid <= 0:
+        return ""
+    try:
+        if sys.platform == "win32":
+            from process_probe import ProbeTimeout, run_probe
+
+            result = run_probe(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    (
+                        f"$p = Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\"; "
+                        "if ($null -eq $p) { exit 1 }; "
+                        "Write-Output ($p.CreationDate.ToUniversalTime().ToString('o'))"
+                    ),
+                ],
+            )
+            if isinstance(result, ProbeTimeout) or result.returncode != 0:
+                return ""
+            return str((result.stdout or "").strip())
+        if Path(f"/proc/{pid}/stat").is_file():
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+            # comm may contain spaces/parens — split after last ')'
+            close = stat.rfind(")")
+            fields = stat[close + 1 :].split() if close >= 0 else stat.split()
+            # After ')': state is [0], ppid [1], ... starttime is index 19 in that slice
+            # (linux proc(5): starttime is field 22 overall; after state it's field 20 → index 19)
+            start_ticks = int(fields[19])
+            uptime_sec = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+            hz = os.sysconf("SC_CLK_TCK")
+            boot = time.time() - uptime_sec
+            return datetime.fromtimestamp(boot + (start_ticks / hz), tz=timezone.utc).isoformat()
+        from process_probe import ProbeTimeout, run_probe
+
+        result = run_probe(["ps", "-o", "lstart=", "-p", str(pid)])
+        if isinstance(result, ProbeTimeout) or result.returncode != 0:
+            return ""
+        return str((result.stdout or "").strip())
     except Exception:
         return ""
 
@@ -93,8 +145,17 @@ def _parent_pid(pid: int) -> int:
             if isinstance(result, ProbeTimeout) or result.returncode != 0:
                 return 0
             return int(str((result.stdout or "").strip() or "0"))
-        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
-        return int(stat[3])
+        if Path(f"/proc/{pid}/stat").is_file():
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+            close = stat.rfind(")")
+            fields = stat[close + 1 :].split() if close >= 0 else stat.split()
+            return int(fields[1])
+        from process_probe import ProbeTimeout, run_probe
+
+        result = run_probe(["ps", "-o", "ppid=", "-p", str(pid)])
+        if isinstance(result, ProbeTimeout) or result.returncode != 0:
+            return 0
+        return int(str((result.stdout or "").strip() or "0"))
     except Exception:
         return 0
 
@@ -127,8 +188,22 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     temp.replace(path)
 
 
+def _host_identity_matches(payload: dict[str, Any], *, host_pid: int) -> bool:
+    if int(payload.get("hostPid") or 0) != host_pid:
+        return False
+    current_started = _process_started_at(host_pid)
+    payload_started = str(payload.get("hostStartedAt") or "").strip()
+    if current_started and payload_started and current_started != payload_started:
+        return False
+    current_exe = _process_name(host_pid)
+    payload_exe = str(payload.get("hostExecutable") or "").strip()
+    if current_exe and payload_exe and current_exe.lower() != payload_exe.lower():
+        return False
+    return True
+
+
 def resolve_or_create_boot_instance_id(state_root: Path) -> str:
-    """Return a client instance id unique to the current host process tree."""
+    """Return a client instance id unique to the current host process identity."""
 
     explicit = str(os.environ.get("MCP_CLIENT_INSTANCE_ID") or "").strip()
     if _valid_id(explicit):
@@ -138,6 +213,8 @@ def resolve_or_create_boot_instance_id(state_root: Path) -> str:
     host_pid_explicit = str(os.environ.get("MCP_HOST_PID") or "").strip().isdigit()
     runtime = Path(state_root) / "runtime"
     path = runtime / f"boot-{host_pid}.json"
+    current_started = _process_started_at(host_pid)
+    current_exe = _process_name(host_pid)
 
     from write_locks import release_cross_process_lock, try_acquire_cross_process_lock
 
@@ -155,33 +232,29 @@ def resolve_or_create_boot_instance_id(state_root: Path) -> str:
                     payload = None
                 if isinstance(payload, dict):
                     existing = str(payload.get("clientInstanceId") or "").strip()
-                    payload_host = int(payload.get("hostPid") or 0)
-                    expires_raw = str(payload.get("expiresAt") or "").strip()
-                    expired = False
-                    if expires_raw:
-                        try:
-                            expires_at = datetime.fromisoformat(expires_raw)
-                            expired = expires_at <= _utc_now()
-                        except ValueError:
-                            expired = True
                     alive = _pid_alive(host_pid)
-                    # Explicit MCP_HOST_PID is a launcher-scoped key: reuse until expiry.
-                    # Inferred host PIDs require the host process to still be alive.
+                    # Keep ID for the same host identity; do not rotate solely on TTL.
+                    # TTL is only a hint for cleanup of abandoned files.
                     reusable = (
                         _valid_id(existing)
-                        and payload_host == host_pid
-                        and not expired
+                        and _host_identity_matches(payload, host_pid=host_pid)
                         and (host_pid_explicit or alive == "alive")
                     )
                     if reusable:
                         payload["renewedAt"] = _utc_iso()
                         payload["expiresAt"] = _utc_iso(_utc_now() + timedelta(hours=12))
+                        if current_started and not str(payload.get("hostStartedAt") or "").strip():
+                            payload["hostStartedAt"] = current_started
+                        if current_exe and not str(payload.get("hostExecutable") or "").strip():
+                            payload["hostExecutable"] = current_exe
                         _atomic_write_json(path, payload)
                         return existing
             value = f"mcp-boot-{host_pid}-{uuid.uuid4().hex[:16]}"
             payload = {
                 "clientInstanceId": value,
                 "hostPid": host_pid,
+                "hostStartedAt": current_started,
+                "hostExecutable": current_exe,
                 "createdAt": _utc_iso(),
                 "renewedAt": _utc_iso(),
                 "expiresAt": _utc_iso(_utc_now() + timedelta(hours=12)),

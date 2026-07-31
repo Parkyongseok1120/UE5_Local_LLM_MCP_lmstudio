@@ -148,9 +148,26 @@ def test_same_host_pid_reuses_boot_instance(
     assert id_a == id_b
 
 
-def test_empty_bridge_file_is_atomically_repaired(
+def test_boot_file_survives_expiry_when_host_identity_matches(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    import mcp_boot_instance as boot
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path))
+    monkeypatch.setenv("MCP_HOST_PID", "777777")
+    monkeypatch.delenv("MCP_CLIENT_INSTANCE_ID", raising=False)
+    monkeypatch.setattr(boot, "_process_started_at", lambda _pid: "2026-01-01T00:00:00+00:00")
+    monkeypatch.setattr(boot, "_process_name", lambda _pid: "LM Studio.exe")
+    monkeypatch.setattr(boot, "_pid_alive", lambda _pid: "alive")
+
+    first = boot.resolve_or_create_boot_instance_id(tmp_path)
+    path = tmp_path / "runtime" / "boot-777777.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["expiresAt"] = "2020-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    second = boot.resolve_or_create_boot_instance_id(tmp_path)
+    assert first == second
+
     bridge = tmp_path / "mcp-bridge-pair.id"
     bridge.write_text("   \n", encoding="utf-8")
     mcp = _reload_mcp(monkeypatch, AGENT_STATE_ROOT=str(tmp_path), MCP_HOST_PID="555555")

@@ -46,6 +46,7 @@ from phase_tool_router import (
 )
 from mcp_connection import (
     get_mcp_connection_id,
+    resolve_conversation_id,
     task_connection_matches,
     task_is_foreign_healthy,
     task_owns_active_tool_route,
@@ -1366,12 +1367,14 @@ def task_start(
     plan_payload: dict[str, Any] | None = None,
     start_background_job: bool = False,
     lease_seconds: int = 1800,
+    conversation_id: str = "",
     on_progress: Callable[[dict[str, Any], str], None] | None = None,
 ) -> dict[str, Any]:
     project_file = _canonical_project_identity(
         project_file,
         workspace=workspace,
     )
+    resolved_conversation_id = resolve_conversation_id(explicit=conversation_id)
     if plan_payload is None:
         from agent_orchestrator import build_agent_plan
 
@@ -1469,7 +1472,8 @@ def task_start(
         "activeSliceId": active_slice_id,
         "activeJobId": "",
         "authToken": auth_token,
-        "mcpConnectionId": get_mcp_connection_id(),
+        "conversationId": resolved_conversation_id,
+        "mcpConnectionId": get_mcp_connection_id(conversation_id=resolved_conversation_id),
         "writeGate": write_gate,
         "writesAllowed": writes_allowed,
         "requiredBeforeWrite": required_before_write,
@@ -1815,6 +1819,7 @@ def _iter_discoverable_task_entries(
     workspace: Path,
     *,
     active_project: str = "",
+    conversation_id: str = "",
 ) -> list[dict[str, Any]]:
     """Yield running or corrupt tasks that claim the current project/workspace."""
 
@@ -1925,10 +1930,17 @@ def _iter_discoverable_task_entries(
                 "planRevision": str(state.get("planRevision") or ""),
                 "writesAllowed": state.get("writesAllowed") is True,
                 "mcpConnectionId": str(state.get("mcpConnectionId") or ""),
+                "conversationId": str(state.get("conversationId") or ""),
                 "routePhase": str(route.get("phase") or ""),
-                "ownsActiveToolRoute": task_owns_active_tool_route(state),
-                "foreignHealthy": task_is_foreign_healthy(state),
-                "connectionMatches": task_connection_matches(state),
+                "ownsActiveToolRoute": task_owns_active_tool_route(
+                    state, conversation_id=conversation_id
+                ),
+                "foreignHealthy": task_is_foreign_healthy(
+                    state, conversation_id=conversation_id
+                ),
+                "connectionMatches": task_connection_matches(
+                    state, conversation_id=conversation_id
+                ),
                 "updatedAt": str(state.get("updatedAt") or ""),
                 "activeJobId": str(state.get("activeJobId") or ""),
                 "recoverable": True,
@@ -1946,12 +1958,14 @@ def _iter_running_task_states(
     workspace: Path,
     *,
     active_project: str = "",
+    conversation_id: str = "",
 ) -> list[dict[str, Any]]:
     return [
         dict(item["_state"])
         for item in _iter_discoverable_task_entries(
             workspace,
             active_project=active_project,
+            conversation_id=conversation_id,
         )
         if item.get("status") == "running" and isinstance(item.get("_state"), dict)
     ]
@@ -1961,6 +1975,7 @@ def task_list_active(
     workspace: Path,
     *,
     active_project: str = "",
+    conversation_id: str = "",
 ) -> dict[str, Any]:
     """List running and corrupt tasks for the current project/workspace."""
 
@@ -1968,6 +1983,7 @@ def task_list_active(
     for item in _iter_discoverable_task_entries(
         workspace,
         active_project=active_project,
+        conversation_id=conversation_id,
     ):
         public = {key: value for key, value in item.items() if key != "_state"}
         tasks.append(public)
@@ -2278,6 +2294,33 @@ def task_quarantine_corrupt(
     }
 
 
+def _mark_task_cancelled_after_jobs(
+    workspace: Path,
+    task_session_id: str,
+) -> dict[str, Any]:
+    """Move a cancellation_uncertain task to cancelled once linked jobs are safe."""
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        status = str(state.get("status") or "")
+        if status != "cancellation_uncertain":
+            return state
+        state["status"] = "cancelled"
+        state["orphanProcessSuspected"] = False
+        state["cancellationResolvedAt"] = _utc_now()
+        state["activeJobId"] = ""
+        state["terminalLogged"] = True
+        continuity = dict(state.get("continuity") or {})
+        lease = dict(continuity.get("lease") or {})
+        if lease:
+            lease["status"] = "released"
+            continuity["lease"] = lease
+            state["continuity"] = continuity
+        state["updatedAt"] = _utc_now()
+        return state
+
+    return _mutate_task_state(workspace, task_session_id, mutate)
+
+
 def task_retry_job_cancel(
     workspace: Path,
     *,
@@ -2285,6 +2328,7 @@ def task_retry_job_cancel(
     task_session_id: str = "",
     job_id: str = "",
     force: bool = False,
+    conversation_id: str = "",
 ) -> dict[str, Any]:
     """Re-probe cancellation_uncertain jobs and retry kill/confirm."""
 
@@ -2300,16 +2344,28 @@ def task_retry_job_cancel(
         }
 
     state_path = task_root(workspace, session) / "state.json"
+    task_state: dict[str, Any] | None
     try:
-        task_state = json.loads(state_path.read_text(encoding="utf-8"))
+        loaded = json.loads(state_path.read_text(encoding="utf-8"))
+        task_state = loaded if isinstance(loaded, dict) else None
     except (OSError, json.JSONDecodeError, TypeError):
         task_state = None
-    if not isinstance(task_state, dict):
-        # Corrupt tasks may still retry via linked jobs, but connection cannot be verified.
-        task_state = {"taskSessionId": session, "mcpConnectionId": get_mcp_connection_id()}
+    if task_state is None:
+        if not force:
+            return {
+                "ok": False,
+                "errorCode": "TASK_OWNER_UNVERIFIABLE",
+                "error": (
+                    "Task state is corrupt or unreadable; owner cannot be verified. "
+                    "Pass force=true only after explicit user confirmation."
+                ),
+                "routeReleased": False,
+                "nextAction": "unreal_task_quarantine_corrupt",
+            }
+        task_state = {"taskSessionId": session}
 
-    if not task_connection_matches(task_state):
-        if task_is_foreign_healthy(task_state) and not force:
+    if not task_connection_matches(task_state, conversation_id=conversation_id):
+        if task_is_foreign_healthy(task_state, conversation_id=conversation_id) and not force:
             return {
                 "ok": False,
                 "errorCode": "TASK_FOREIGN_HEALTHY",
@@ -2343,6 +2399,32 @@ def task_retry_job_cancel(
                 "routeReleased": False,
             }
 
+    def _finish(ok: bool, *, result: dict[str, Any] | None = None, retried: list | None = None):
+        if not ok:
+            payload = {
+                "ok": False,
+                "taskSessionId": session,
+                "orphanProcessSuspected": True,
+                "nextAction": "unreal_task_retry_job_cancel",
+            }
+            if result is not None:
+                payload["result"] = result
+            if retried is not None:
+                payload["retried"] = retried
+            return payload
+        synced = _mark_task_cancelled_after_jobs(workspace, session)
+        return {
+            "ok": True,
+            "taskSessionId": session,
+            "taskStatusSynced": bool(synced.get("ok")),
+            "taskStatus": str((synced.get("state") or {}).get("status") or ""),
+            "result": result,
+            "retried": retried or [],
+            "orphanProcessSuspected": False,
+            "nextAction": "unreal_agent_plan",
+            "routeReleased": True,
+        }
+
     if explicit_job:
         job = read_job(workspace, explicit_job)
         if not job:
@@ -2366,19 +2448,14 @@ def task_retry_job_cancel(
                 "routeReleased": False,
             }
         result = cancel_job(workspace, explicit_job)
-        return {
-            "ok": bool(result.get("ok"))
+        success = (
+            bool(result.get("ok"))
             and str(result.get("cancellationState") or "") == "cancelled"
-            and not result.get("orphanProcessSuspected"),
-            "jobId": explicit_job,
-            "taskSessionId": session,
-            "result": result,
-            "nextAction": (
-                "unreal_task_quarantine_corrupt"
-                if str(result.get("cancellationState") or "") == "cancelled"
-                else "unreal_task_retry_job_cancel"
-            ),
-        }
+            and not result.get("orphanProcessSuspected")
+        )
+        finished = _finish(success, result=result)
+        finished["jobId"] = explicit_job
+        return finished
 
     discovery = _discover_jobs_linked_to_task(workspace, session)
     if not discovery.get("discoveryComplete"):
@@ -2399,12 +2476,8 @@ def task_retry_job_cancel(
         )
     ]
     if not targets:
-        return {
-            "ok": True,
-            "retried": [],
-            "taskSessionId": session,
-            "message": "No cancellation_uncertain jobs found for task.",
-        }
+        # No uncertain jobs left — still sync task out of cancellation_uncertain.
+        return _finish(True, retried=[])
     retried = []
     still_uncertain = False
     for job in targets:
@@ -2418,17 +2491,7 @@ def task_retry_job_cancel(
             or result.get("orphanProcessSuspected")
         ):
             still_uncertain = True
-    return {
-        "ok": not still_uncertain,
-        "retried": retried,
-        "taskSessionId": session,
-        "orphanProcessSuspected": still_uncertain,
-        "nextAction": (
-            "unreal_task_quarantine_corrupt"
-            if not still_uncertain
-            else "unreal_task_retry_job_cancel"
-        ),
-    }
+    return _finish(not still_uncertain, retried=retried)
 
 
 def task_resolve_active_session_id(
@@ -2436,14 +2499,20 @@ def task_resolve_active_session_id(
     *,
     active_project: str = "",
     task_session_id: str = "",
+    conversation_id: str = "",
 ) -> dict[str, Any]:
     explicit = str(task_session_id or "").strip()
-    listed = task_list_active(workspace, active_project=active_project)
+    listed = task_list_active(
+        workspace,
+        active_project=active_project,
+        conversation_id=conversation_id,
+    )
     tasks = [
         item
         for item in (listed.get("tasks") or [])
         if item.get("status") == "running"
     ]
+    own_tasks = [item for item in tasks if item.get("connectionMatches") is True]
     if explicit:
         match = next(
             (item for item in tasks if item.get("taskSessionId") == explicit),
@@ -2473,32 +2542,43 @@ def task_resolve_active_session_id(
             "error": f"Task is not an active running session: {explicit}",
             "tasks": listed.get("tasks") or [],
         }
-    if len(tasks) == 1:
+    if len(own_tasks) == 1:
         return {
             "ok": True,
-            "taskSessionId": str(tasks[0].get("taskSessionId") or ""),
-            "task": tasks[0],
+            "taskSessionId": str(own_tasks[0].get("taskSessionId") or ""),
+            "task": own_tasks[0],
         }
-    if not tasks:
-        if listed.get("corruptCount"):
-            return {
-                "ok": False,
-                "errorCode": "TASK_STATE_CORRUPT",
-                "error": "Corrupt task state is blocking recovery; quarantine it first.",
-                "tasks": listed.get("tasks") or [],
-                "nextAction": "unreal_task_quarantine_corrupt",
-            }
+    if len(own_tasks) > 1:
         return {
             "ok": False,
-            "errorCode": "TASK_NONE_ACTIVE",
-            "error": "No running tasks for the active project/workspace.",
-            "tasks": [],
+            "errorCode": "TASK_AMBIGUOUS_ACTIVE",
+            "error": "Multiple running tasks owned by this conversation; pass taskSessionId explicitly.",
+            "tasks": own_tasks,
+        }
+    if listed.get("corruptCount"):
+        return {
+            "ok": False,
+            "errorCode": "TASK_STATE_CORRUPT",
+            "error": "Corrupt task state is blocking recovery; quarantine it first.",
+            "tasks": listed.get("tasks") or [],
+            "nextAction": "unreal_task_quarantine_corrupt",
+        }
+    foreign = [item for item in tasks if item.get("foreignHealthy") is True]
+    if foreign:
+        return {
+            "ok": False,
+            "errorCode": "TASK_FOREIGN_HEALTHY",
+            "error": (
+                "Running task(s) belong to another conversation/connection. "
+                "Pass conversationId from unreal_task_start, or force cancel with user confirmation."
+            ),
+            "tasks": foreign,
         }
     return {
         "ok": False,
-        "errorCode": "TASK_AMBIGUOUS_ACTIVE",
-        "error": "Multiple running tasks; pass taskSessionId explicitly.",
-        "tasks": tasks,
+        "errorCode": "TASK_NONE_ACTIVE",
+        "error": "No running tasks for the active project/workspace.",
+        "tasks": [],
     }
 
 
@@ -2508,11 +2588,13 @@ def task_cancel_active(
     active_project: str = "",
     task_session_id: str = "",
     force: bool = False,
+    conversation_id: str = "",
 ) -> dict[str, Any]:
     resolved = task_resolve_active_session_id(
         workspace,
         active_project=active_project,
         task_session_id=task_session_id,
+        conversation_id=conversation_id,
     )
     if not resolved.get("ok"):
         return resolved
@@ -2543,6 +2625,7 @@ def task_recover_active(
     *,
     active_project: str = "",
     task_session_id: str = "",
+    conversation_id: str = "",
 ) -> dict[str, Any]:
     """Discover the active task and renew lease / recover checkpoint state."""
 
@@ -2550,6 +2633,7 @@ def task_recover_active(
         workspace,
         active_project=active_project,
         task_session_id=task_session_id,
+        conversation_id=conversation_id,
     )
     if not resolved.get("ok"):
         return resolved
@@ -2562,14 +2646,19 @@ def task_recover_active(
 
     # Prefer connection-matching tasks for mutating recover.
     discovered = resolved.get("task") if isinstance(resolved.get("task"), dict) else {}
-    if discovered and not task_connection_matches(discovered.get("_state") or discovered):
+    if discovered and not task_connection_matches(
+        discovered.get("_state") or discovered,
+        conversation_id=conversation_id,
+    ):
         # discovered task summary may not include full state; load and check.
         state_path = task_root(workspace, session) / "state.json"
         try:
             full_state = json.loads(state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, TypeError):
             full_state = {}
-        if isinstance(full_state, dict) and full_state and not task_connection_matches(full_state):
+        if isinstance(full_state, dict) and full_state and not task_connection_matches(
+            full_state, conversation_id=conversation_id
+        ):
             status["ok"] = True
             status["leaseRenewed"] = False
             status["checkpointRecovered"] = False

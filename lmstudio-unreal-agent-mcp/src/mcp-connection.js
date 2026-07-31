@@ -138,12 +138,24 @@ function getMcpClientInstanceId() {
   return clientInstanceId;
 }
 
-function getMcpConversationId() {
+function getMcpConversationId(explicit = "") {
+  const value = String(explicit || "").trim();
+  if (/^[A-Za-z0-9_.:-]{4,128}$/.test(value)) return value;
   for (const key of ["MCP_SESSION_ID", "MCP_CONVERSATION_ID"]) {
-    const value = String(process.env[key] || "").trim();
-    if (value) return value;
+    const envValue = String(process.env[key] || "").trim();
+    if (/^[A-Za-z0-9_.:-]{4,128}$/.test(envValue)) return envValue;
   }
   return "";
+}
+
+function buildMcpConnectionId(conversationId = "") {
+  const conv = getMcpConversationId(conversationId);
+  const bridge = getMcpBridgePairId();
+  const instance = getMcpClientInstanceId();
+  if (conv) return `${bridge}:${instance}:${conv}`;
+  const explicit = String(process.env.MCP_CONNECTION_ID || "").trim();
+  if (explicit && !conversationId) return explicit;
+  return `${bridge}:${instance}`;
 }
 
 function getMcpClientSessionId() {
@@ -154,41 +166,48 @@ function getMcpClientSessionId() {
   return localSessionId;
 }
 
-function getMcpConnectionId() {
-  if (ownerId) return ownerId;
-  const conversation = getMcpConversationId();
-  if (conversation) {
-    ownerId = `${getMcpBridgePairId()}:${getMcpClientInstanceId()}:${conversation}`;
-    return ownerId;
+function getMcpConnectionId(conversationId = "") {
+  const conv = getMcpConversationId(conversationId);
+  if (conv || conversationId) {
+    return buildMcpConnectionId(conv || conversationId);
   }
-  const explicit = String(process.env.MCP_CONNECTION_ID || "").trim();
-  if (explicit) {
-    ownerId = explicit;
-    return ownerId;
-  }
-  ownerId = `${getMcpBridgePairId()}:${getMcpClientInstanceId()}`;
+  const built = buildMcpConnectionId();
+  // Invalidate stale process cache when bridge/boot identity changes (tests, restart).
+  if (ownerId && ownerId !== built) ownerId = "";
+  ownerId = built;
   return ownerId;
 }
 
-function taskConnectionMatches(state) {
+function taskConnectionMatches(state, conversationId = "") {
   if (!state || typeof state !== "object" || Array.isArray(state)) return false;
   const taskConnection = String(state.mcpConnectionId || "").trim();
   if (!taskConnection) return false;
-  return taskConnection === getMcpConnectionId();
+  const requestConv = getMcpConversationId(conversationId);
+  const taskConv = String(state.conversationId || "").trim();
+  if (requestConv) {
+    return taskConnection === buildMcpConnectionId(requestConv);
+  }
+  if (taskConv) return false;
+  return taskConnection === buildMcpConnectionId();
 }
 
-function taskOwnsActiveToolRoute(state) {
+function taskOwnsActiveToolRoute(state, conversationId = "") {
   if (!state || typeof state !== "object" || Array.isArray(state)) return false;
   if (String(state.status || "") !== "running") return false;
   const mode = String(state.mode || "").trim().toLowerCase();
   if (mode === "plan_only" || mode === "detached") return false;
-  return taskConnectionMatches(state);
+  if (taskConnectionMatches(state, conversationId)) return true;
+  if (conversationId || getMcpConversationId()) return false;
+  const taskConnection = String(state.mcpConnectionId || "").trim();
+  if (!taskConnection) return false;
+  const boot = buildMcpConnectionId();
+  return taskConnection === boot || taskConnection.startsWith(`${boot}:`);
 }
 
-function taskIsForeignHealthy(state) {
+function taskIsForeignHealthy(state, conversationId = "") {
   if (!state || typeof state !== "object" || Array.isArray(state)) return false;
   if (String(state.status || "") !== "running") return false;
-  if (taskConnectionMatches(state)) return false;
+  if (taskConnectionMatches(state, conversationId)) return false;
   if (!String(state.mcpConnectionId || "").trim()) return false;
   const continuity = state.continuity && typeof state.continuity === "object" ? state.continuity : {};
   const lease = continuity.lease && typeof continuity.lease === "object" ? continuity.lease : null;
@@ -215,6 +234,7 @@ function taskIsForeignHealthy(state) {
 
 module.exports = {
   getMcpConnectionId,
+  buildMcpConnectionId,
   getMcpBridgePairId,
   getMcpClientInstanceId,
   getMcpConversationId,

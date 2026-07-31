@@ -970,10 +970,10 @@ test("project identity bridges server workspaces without claiming unrelated cont
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-route-state-"));
   const projectFile = path.join(otherWorkspace, "Other.uproject");
   fs.writeFileSync(projectFile, "{}");
-  writeRouteState(stateRoot, routeState(projectFile));
   const previous = process.env.AGENT_STATE_ROOT;
   process.env.AGENT_STATE_ROOT = stateRoot;
   try {
+    writeRouteState(stateRoot, routeState(projectFile));
     assert.strictEqual(
       discoverActiveTaskContext(otherWorkspace, projectFile).status,
       "active"
@@ -1001,21 +1001,21 @@ test("expired active route is blocked rather than treated as legacy", () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-route-state-"));
   const projectFile = path.join(workspace, "Demo.uproject");
   fs.writeFileSync(projectFile, "{}");
-  writeRouteState(
-    stateRoot,
-    routeState(projectFile, {
-      continuity: {
-        lease: {
-          status: "active",
-          expiresAt: new Date(Date.now() - 1000).toISOString(),
-        },
-        recovery: { conflicts: [] },
-      },
-    })
-  );
   const previous = process.env.AGENT_STATE_ROOT;
   process.env.AGENT_STATE_ROOT = stateRoot;
   try {
+    writeRouteState(
+      stateRoot,
+      routeState(projectFile, {
+        continuity: {
+          lease: {
+            status: "active",
+            expiresAt: new Date(Date.now() - 1000).toISOString(),
+          },
+          recovery: { conflicts: [] },
+        },
+      })
+    );
     assert.strictEqual(
       discoverActiveTaskContext(workspace, projectFile).status,
       "blocked"

@@ -97,38 +97,73 @@ def _task_session_from_payload(payload: dict[str, Any]) -> str:
 
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
-    """Upgrade legacy DBs safely: base table → add column → indexes → backfill."""
+    """Upgrade legacy DBs safely under an exclusive write lock."""
 
-    conn.executescript(_SCHEMA_BASE)
-    columns = {
-        str(row["name"])
-        for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
-    }
-    if "task_session_id" not in columns:
+    # Avoid executescript(): it auto-COMMITs and would drop BEGIN EXCLUSIVE.
+    conn.execute("BEGIN EXCLUSIVE")
+    try:
         conn.execute(
-            "ALTER TABLE jobs ADD COLUMN task_session_id TEXT NOT NULL DEFAULT ''"
-        )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_task_session ON jobs(task_session_id, status)"
-    )
-    rows = conn.execute(
-        "SELECT job_id, payload_json FROM jobs "
-        "WHERE task_session_id = '' OR task_session_id IS NULL"
-    ).fetchall()
-    for row in rows:
-        try:
-            payload = json.loads(row["payload_json"])
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-        task_id = _task_session_from_payload(payload)
-        if task_id:
-            conn.execute(
-                "UPDATE jobs SET task_session_id = ? WHERE job_id = ?",
-                (task_id, row["job_id"]),
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+              job_id TEXT PRIMARY KEY,
+              status TEXT NOT NULL,
+              revision INTEGER NOT NULL DEFAULT 0,
+              progress_sequence INTEGER NOT NULL DEFAULT 0,
+              payload_json TEXT NOT NULL,
+              updated_at TEXT NOT NULL
             )
-    conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)"
+        )
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "task_session_id" not in columns:
+            try:
+                conn.execute(
+                    "ALTER TABLE jobs ADD COLUMN task_session_id TEXT NOT NULL DEFAULT ''"
+                )
+            except sqlite3.OperationalError as exc:
+                # Concurrent migrator may have added the column first.
+                if "duplicate column" not in str(exc).lower():
+                    raise
+                columns = {
+                    str(row["name"])
+                    for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+                }
+                if "task_session_id" not in columns:
+                    raise
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_task_session ON jobs(task_session_id, status)"
+        )
+        rows = conn.execute(
+            "SELECT job_id, payload_json FROM jobs "
+            "WHERE task_session_id = '' OR task_session_id IS NULL"
+        ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            task_id = _task_session_from_payload(payload)
+            if task_id:
+                conn.execute(
+                    "UPDATE jobs SET task_session_id = ? WHERE job_id = ?",
+                    (task_id, row["job_id"]),
+                )
+        conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
 
 
 def _ensure_schema(conn: sqlite3.Connection, *, db_key: str = "") -> None:
@@ -416,7 +451,12 @@ def prune_terminal_jobs(workspace: Path | None = None, *, ttl_hours: int = 24) -
                   AND (
                     status != 'cancelled'
                     OR json_extract(payload_json, '$.processTerminationConfirmed') = 1
-                    OR json_extract(payload_json, '$.orphanProcessSuspected') IS NOT 1
+                    OR (
+                      json_extract(payload_json, '$.subprocessSpawned') IS NOT 1
+                      AND json_extract(payload_json, '$.pid') IS NULL
+                      AND json_extract(payload_json, '$.pgid') IS NULL
+                      AND json_extract(payload_json, '$.pidStartedAt') IS NULL
+                    )
                   )
                 """,
                 (*statuses, cutoff_iso),

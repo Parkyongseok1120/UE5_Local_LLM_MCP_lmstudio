@@ -103,6 +103,56 @@ function atomicWriteJson(filePath, payload) {
   fs.renameSync(temp, filePath);
 }
 
+function processStartedAt(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return "";
+  if (process.platform === "win32") {
+    const result = spawnSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($null -eq $p) { exit 1 }; Write-Output ($p.CreationDate.ToUniversalTime().ToString('o'))`,
+      ],
+      { encoding: "utf8", windowsHide: true, timeout: 5000 }
+    );
+    if (result.status !== 0) return "";
+    return String(result.stdout || "").trim();
+  }
+  try {
+    if (fs.existsSync(`/proc/${pid}/stat`)) {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const close = stat.lastIndexOf(")");
+      const fields = (close >= 0 ? stat.slice(close + 1) : stat).trim().split(/\s+/);
+      const startTicks = Number(fields[19] || 0);
+      const uptimeSec = Number(String(fs.readFileSync("/proc/uptime", "utf8")).split(/\s+/)[0] || 0);
+      const hz = 100;
+      const boot = Date.now() / 1000 - uptimeSec;
+      return new Date((boot + startTicks / hz) * 1000).toISOString();
+    }
+  } catch {
+    // fall through
+  }
+  const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  if (result.status !== 0) return "";
+  return String(result.stdout || "").trim();
+}
+
+function hostIdentityMatches(payload, hostPid) {
+  if (Number(payload.hostPid || 0) !== hostPid) return false;
+  const currentStarted = processStartedAt(hostPid);
+  const payloadStarted = String(payload.hostStartedAt || "").trim();
+  if (currentStarted && payloadStarted && currentStarted !== payloadStarted) return false;
+  const currentExe = processName(hostPid);
+  const payloadExe = String(payload.hostExecutable || "").trim();
+  if (currentExe && payloadExe && currentExe.toLowerCase() !== payloadExe.toLowerCase()) {
+    return false;
+  }
+  return true;
+}
+
 function resolveOrCreateBootInstanceId() {
   const explicit = String(process.env.MCP_CLIENT_INSTANCE_ID || "").trim();
   if (validId(explicit)) return explicit;
@@ -115,6 +165,8 @@ function resolveOrCreateBootInstanceId() {
   const hostPid = resolveMcpHostPid();
   const hostPidExplicit = /^\d+$/.test(String(process.env.MCP_HOST_PID || "").trim());
   const filePath = path.join(root, "runtime", `boot-${hostPid}.json`);
+  const currentStarted = processStartedAt(hostPid);
+  const currentExe = processName(hostPid);
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const acquired = tryAcquireCrossProcessLock(filePath, "mcp_boot_instance", root);
@@ -127,20 +179,21 @@ function resolveOrCreateBootInstanceId() {
         try {
           const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
           const existing = String(payload.clientInstanceId || "").trim();
-          const payloadHost = Number(payload.hostPid || 0);
-          const expiresAt = Date.parse(String(payload.expiresAt || ""));
-          const expired = Number.isFinite(expiresAt) ? expiresAt <= Date.now() : true;
           const alive = pidAlive(hostPid);
-          // Explicit MCP_HOST_PID is a launcher-scoped key: reuse until expiry.
           const reusable = (
             validId(existing)
-            && payloadHost === hostPid
-            && !expired
+            && hostIdentityMatches(payload, hostPid)
             && (hostPidExplicit || alive === "alive")
           );
           if (reusable) {
             payload.renewedAt = new Date().toISOString();
             payload.expiresAt = new Date(Date.now() + 12 * 3600 * 1000).toISOString();
+            if (currentStarted && !String(payload.hostStartedAt || "").trim()) {
+              payload.hostStartedAt = currentStarted;
+            }
+            if (currentExe && !String(payload.hostExecutable || "").trim()) {
+              payload.hostExecutable = currentExe;
+            }
             atomicWriteJson(filePath, payload);
             return existing;
           }
@@ -152,6 +205,8 @@ function resolveOrCreateBootInstanceId() {
       const payload = {
         clientInstanceId: value,
         hostPid,
+        hostStartedAt: currentStarted,
+        hostExecutable: currentExe,
         createdAt: new Date().toISOString(),
         renewedAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),

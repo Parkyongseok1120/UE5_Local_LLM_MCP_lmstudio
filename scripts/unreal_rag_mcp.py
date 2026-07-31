@@ -3170,6 +3170,14 @@ class McpServer:
                         },
                         "projectFile": {"type": "string", "description": "Optional .uproject path override."},
                         "planId": {"type": "string"},
+                        "conversationId": {
+                            "type": "string",
+                            "description": (
+                                "Stable chat/conversation id. Reuse the value returned by "
+                                "the first unreal_task_start in this chat. Required for "
+                                "multi-chat isolation on a shared MCP server."
+                            ),
+                        },
                         "startBackgroundJob": {"type": "boolean", "default": False},
                         "leaseSeconds": {
                             "type": "integer",
@@ -3191,6 +3199,7 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
+                        "conversationId": {"type": "string"},
                     },
                 ),
             },
@@ -3199,9 +3208,14 @@ class McpServer:
                 "title": "List active tasks",
                 "description": (
                     "List running task sessions for the active project/workspace "
-                    "without requiring a known taskSessionId. Does not return authToken."
+                    "without requiring a known taskSessionId. Does not return authToken. "
+                    "Pass conversationId to see ownership relative to this chat."
                 ),
-                "inputSchema": self._schema({}),
+                "inputSchema": self._schema(
+                    {
+                        "conversationId": {"type": "string"},
+                    },
+                ),
             },
             {
                 "name": "unreal_task_recover_active",
@@ -3213,6 +3227,7 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
+                        "conversationId": {"type": "string"},
                     },
                 ),
             },
@@ -3227,6 +3242,7 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
+                        "conversationId": {"type": "string"},
                         "force": {"type": "boolean", "default": False},
                     },
                 ),
@@ -3255,6 +3271,7 @@ class McpServer:
                     {
                         "taskSessionId": {"type": "string"},
                         "jobId": {"type": "string"},
+                        "conversationId": {"type": "string"},
                         "force": {"type": "boolean", "default": False},
                     },
                     required=["taskSessionId"],
@@ -3819,6 +3836,11 @@ class McpServer:
                     mode=str(arguments.get("mode") or "agent_edit"),
                     project_file=resolved_project_file,
                     plan_id=str(arguments.get("planId") or arguments.get("plan_id") or ""),
+                    conversation_id=str(
+                        arguments.get("conversationId")
+                        or arguments.get("conversation_id")
+                        or ""
+                    ),
                     start_background_job=arguments.get("startBackgroundJob") is True,
                     lease_seconds=arguments.get("leaseSeconds") or 1800,
                     on_progress=lambda job, msg: self.notify(f"[task {job.get('jobId')}] {msg}"),
@@ -3830,6 +3852,9 @@ class McpServer:
                 from task_api import task_recover_active, task_status
 
                 task_session_id = str(arguments.get("taskSessionId") or "").strip()
+                conversation_id = str(
+                    arguments.get("conversationId") or arguments.get("conversation_id") or ""
+                )
                 if task_session_id:
                     payload = task_status(self.workspace, task_session_id)
                 else:
@@ -3837,6 +3862,7 @@ class McpServer:
                     payload = task_recover_active(
                         self.workspace,
                         active_project=str(config.get("activeProject") or ""),
+                        conversation_id=conversation_id,
                     )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_list_active":
@@ -3846,6 +3872,11 @@ class McpServer:
                 payload = task_list_active(
                     self.workspace,
                     active_project=str(config.get("activeProject") or ""),
+                    conversation_id=str(
+                        arguments.get("conversationId")
+                        or arguments.get("conversation_id")
+                        or ""
+                    ),
                 )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_recover_active":
@@ -3856,6 +3887,11 @@ class McpServer:
                     self.workspace,
                     active_project=str(config.get("activeProject") or ""),
                     task_session_id=str(arguments.get("taskSessionId") or ""),
+                    conversation_id=str(
+                        arguments.get("conversationId")
+                        or arguments.get("conversation_id")
+                        or ""
+                    ),
                 )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_cancel_active":
@@ -3867,6 +3903,11 @@ class McpServer:
                     active_project=str(config.get("activeProject") or ""),
                     task_session_id=str(arguments.get("taskSessionId") or ""),
                     force=arguments.get("force") is True,
+                    conversation_id=str(
+                        arguments.get("conversationId")
+                        or arguments.get("conversation_id")
+                        or ""
+                    ),
                 )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()
@@ -3893,6 +3934,11 @@ class McpServer:
                     task_session_id=str(arguments.get("taskSessionId") or ""),
                     job_id=str(arguments.get("jobId") or ""),
                     force=arguments.get("force") is True,
+                    conversation_id=str(
+                        arguments.get("conversationId")
+                        or arguments.get("conversation_id")
+                        or ""
+                    ),
                 )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_checkpoint":

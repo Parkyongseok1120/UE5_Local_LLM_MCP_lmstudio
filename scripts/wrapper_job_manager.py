@@ -765,6 +765,10 @@ def _run_wrapper_worker(
                 returncode, orphan_after_kill = _wait_process_after_kill(process)
         else:
             returncode = process.wait()
+            # Normal exit: still confirm the process group is gone (detached children).
+            group_death = _confirm_process_group_dead(int(process.pid))
+            if group_death != "dead":
+                orphan_after_kill = True
         stop_polling.set()
         poller.join(timeout=2)
 
@@ -776,12 +780,19 @@ def _run_wrapper_worker(
     if orphan_after_kill:
         transition_job_status(current, "cancellation_uncertain")
         current["orphanProcessSuspected"] = True
-        append_progress(current, "Wrapper kill timeout; process termination unconfirmed.", level="error")
+        append_progress(
+            current,
+            "Wrapper exit observed but process-group termination unconfirmed.",
+            level="error",
+        )
     elif timed_out:
         transition_job_status(current, "timed_out")
         append_progress(current, f"Wrapper timed out after {timeout_sec}s.", level="error")
     else:
         transition_job_status(current, "completed" if returncode == 0 else "failed")
+        current["processTerminationConfirmed"] = True
+        current["processTerminationConfirmedAt"] = _utc_now()
+        current["orphanProcessSuspected"] = False
     current["stdoutTail"] = _tail_file(stdout_path)
     current["stderrTail"] = _tail_file(stderr_path)
     append_progress(
@@ -954,6 +965,17 @@ def _run_rag_refresh_worker(
     if _is_cancelled(workspace, job_id):
         return
     current = read_job(workspace, job_id) or job
+    group_death = _confirm_process_group_dead(int(process.pid))
+    if group_death != "dead":
+        transition_job_status(current, "cancellation_uncertain")
+        current["orphanProcessSuspected"] = True
+        append_progress(
+            current,
+            "RAG refresh exit observed but process-group termination unconfirmed.",
+            level="error",
+        )
+        save_job(workspace, current)
+        return
     payload: dict[str, Any] | None = None
     try:
         payload = json.loads(stdout.strip() or "{}")
@@ -962,9 +984,13 @@ def _run_rag_refresh_worker(
     current["result"] = payload
     if process.returncode == 0 and payload.get("ok", True):
         transition_job_status(current, "completed")
+        current["processTerminationConfirmed"] = True
+        current["processTerminationConfirmedAt"] = _utc_now()
         append_progress(current, "RAG refresh finished.")
     else:
         transition_job_status(current, "failed")
+        current["processTerminationConfirmed"] = True
+        current["processTerminationConfirmedAt"] = _utc_now()
         append_progress(current, stderr or "RAG refresh failed.", level="error")
     save_job(workspace, current)
     if on_progress:

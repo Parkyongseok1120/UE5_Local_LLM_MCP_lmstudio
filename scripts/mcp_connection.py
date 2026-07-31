@@ -15,6 +15,7 @@ _CLIENT_INSTANCE_ID: str | None = None
 _LOCAL_SESSION_ID: str | None = None
 
 _BRIDGE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
+_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{4,128}$")
 
 
 def _parse_lease_sec() -> int:
@@ -49,6 +50,10 @@ def _legacy_bridge_connection_path() -> Path | None:
 
 def _valid_bridge_id(value: str) -> bool:
     return bool(value and _BRIDGE_ID_RE.match(value))
+
+
+def valid_conversation_id(value: str) -> bool:
+    return bool(value and _CONVERSATION_ID_RE.match(value))
 
 
 def _atomic_write_text(path: Path, value: str) -> None:
@@ -159,12 +164,28 @@ def get_mcp_client_instance_id() -> str:
     return _CLIENT_INSTANCE_ID
 
 
-def get_mcp_conversation_id() -> str:
+def get_mcp_conversation_id(*, explicit: str = "") -> str:
+    value = str(explicit or "").strip()
+    if valid_conversation_id(value):
+        return value
     for key in ("MCP_SESSION_ID", "MCP_CONVERSATION_ID"):
-        value = str(os.environ.get(key) or "").strip()
-        if value:
-            return value
+        env_value = str(os.environ.get(key) or "").strip()
+        if valid_conversation_id(env_value):
+            return env_value
     return ""
+
+
+def mint_conversation_id() -> str:
+    return f"conv-{uuid.uuid4().hex[:16]}"
+
+
+def resolve_conversation_id(*, explicit: str = "") -> str:
+    """Return an explicit/env conversation id, or mint a new chat-scoped id."""
+
+    existing = get_mcp_conversation_id(explicit=explicit)
+    if existing:
+        return existing
+    return mint_conversation_id()
 
 
 def get_mcp_client_session_id() -> str:
@@ -178,41 +199,66 @@ def get_mcp_client_session_id() -> str:
     return _LOCAL_SESSION_ID
 
 
-def get_mcp_connection_id() -> str:
+def build_mcp_connection_id(*, conversation_id: str = "") -> str:
+    """Build ownership id. Conversation-scoped when a conversation id is present."""
+
+    conv = get_mcp_conversation_id(explicit=conversation_id)
+    bridge = get_mcp_bridge_pair_id()
+    instance = get_mcp_client_instance_id()
+    if conv:
+        return f"{bridge}:{instance}:{conv}"
+    explicit = str(os.environ.get("MCP_CONNECTION_ID") or "").strip()
+    if explicit and not conversation_id:
+        return explicit
+    return f"{bridge}:{instance}"
+
+
+def get_mcp_connection_id(*, conversation_id: str = "") -> str:
     """Ownership id for task route filtering.
 
     Preference:
-    1. MCP_SESSION_ID / MCP_CONVERSATION_ID → bridge:instance:conversation
-    2. MCP_CONNECTION_ID (explicit test override)
-    3. bridge:hostBootInstance (pairs Python/Node for one host run only)
+    1. explicit conversation_id / MCP_SESSION_ID / MCP_CONVERSATION_ID
+       → bridge:instance:conversation
+    2. MCP_CONNECTION_ID (explicit test override, only without conversation)
+    3. bridge:hostBootInstance
     """
     global _OWNER_ID
-    if _OWNER_ID:
-        return _OWNER_ID
-    conversation = get_mcp_conversation_id()
-    if conversation:
-        _OWNER_ID = (
-            f"{get_mcp_bridge_pair_id()}:{get_mcp_client_instance_id()}:{conversation}"
-        )
-        return _OWNER_ID
-    explicit = str(os.environ.get("MCP_CONNECTION_ID") or "").strip()
-    if explicit:
-        _OWNER_ID = explicit
-        return _OWNER_ID
-    _OWNER_ID = f"{get_mcp_bridge_pair_id()}:{get_mcp_client_instance_id()}"
+    conv = get_mcp_conversation_id(explicit=conversation_id)
+    if conv or conversation_id:
+        # Request-scoped: do not poison the process-global owner cache.
+        return build_mcp_connection_id(conversation_id=conv or conversation_id)
+    built = build_mcp_connection_id()
+    if _OWNER_ID and _OWNER_ID != built:
+        _OWNER_ID = None
+    _OWNER_ID = built
     return _OWNER_ID
 
 
-def task_connection_matches(state: dict | None) -> bool:
+def task_connection_matches(
+    state: dict | None,
+    *,
+    conversation_id: str = "",
+) -> bool:
     if not isinstance(state, dict):
         return False
     task_connection = str(state.get("mcpConnectionId") or "").strip()
     if not task_connection:
         return False
-    return task_connection == get_mcp_connection_id()
+    request_conv = get_mcp_conversation_id(explicit=conversation_id)
+    task_conv = str(state.get("conversationId") or "").strip()
+    if request_conv:
+        return task_connection == build_mcp_connection_id(conversation_id=request_conv)
+    # No conversation on this request: never match conversation-scoped tasks.
+    if task_conv:
+        return False
+    return task_connection == build_mcp_connection_id()
 
 
-def task_owns_active_tool_route(state: dict | None) -> bool:
+def task_owns_active_tool_route(
+    state: dict | None,
+    *,
+    conversation_id: str = "",
+) -> bool:
     if not isinstance(state, dict):
         return False
     if str(state.get("status") or "") != "running":
@@ -220,15 +266,30 @@ def task_owns_active_tool_route(state: dict | None) -> bool:
     mode = str(state.get("mode") or "").strip().lower()
     if mode in {"plan_only", "detached"}:
         return False
-    return task_connection_matches(state)
+    if task_connection_matches(state, conversation_id=conversation_id):
+        return True
+    # Tools that omit conversationId still need a route in single-chat hosts.
+    # Conversation-scoped tasks under this boot instance are eligible; multiple
+    # matches become ambiguous_or_corrupt in active_task_route_context.
+    if conversation_id or get_mcp_conversation_id():
+        return False
+    task_connection = str(state.get("mcpConnectionId") or "").strip()
+    if not task_connection:
+        return False
+    boot = build_mcp_connection_id()
+    return task_connection == boot or task_connection.startswith(f"{boot}:")
 
 
-def task_is_foreign_healthy(state: dict | None) -> bool:
+def task_is_foreign_healthy(
+    state: dict | None,
+    *,
+    conversation_id: str = "",
+) -> bool:
     if not isinstance(state, dict):
         return False
     if str(state.get("status") or "") != "running":
         return False
-    if task_connection_matches(state):
+    if task_connection_matches(state, conversation_id=conversation_id):
         return False
     if not str(state.get("mcpConnectionId") or "").strip():
         return False
