@@ -287,10 +287,11 @@ def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
     )
     assert stale["ok"] is False
     assert stale["errorCode"] == "TASK_AUTH_MISMATCH"
-    assert stale["nextAction"] == "replan_or_resume_with_returned_taskAuthorization"
+    assert stale["nextAction"] == "request_fresh_authorization_or_replan"
     assert "authToken" not in stale["taskAuthorization"]
     assert stale["taskAuthorization"]["planRevision"] == replanned["planRevision"]
     assert "authToken" in (stale.get("mismatchedFields") or [])
+    assert stale["authorizationContext"]["planRevision"] == replanned["planRevision"]
     assert active_task_route_context(tmp_path)["status"] == "active"
 
     denied = task_replan(
@@ -610,7 +611,7 @@ def test_gate_mismatch_returns_refresh_auth_not_same_tool_retry(
     )
     assert denied["ok"] is False
     assert denied["errorCode"] == "TASK_AUTH_MISMATCH"
-    assert denied["nextAction"] == "replan_or_resume_with_returned_taskAuthorization"
+    assert denied["nextAction"] == "request_fresh_authorization_or_replan"
     assert "authToken" not in denied["taskAuthorization"]
     assert denied["taskAuthorization"]["planRevision"] == replanned["planRevision"]
     assert denied["nextAction"] != "retry_same_tool_with_returned_taskAuthorization"
@@ -769,10 +770,11 @@ def test_plan_only_running_task_does_not_own_tool_route(
         plan_payload=_plan(writes=False),
     )
     assert started["ok"] is True
-    assert started["state"]["writesAllowed"] is False
-    assert started["state"]["mcpConnectionId"]
     assert started["state"]["status"] == "completed"
     assert started.get("planOnlyCompleted") is True
+    assert "taskAuthorization" not in started
+    assert "authToken" not in started
+    assert started.get("nextAction") == "start_agent_edit_task_to_apply_changes"
     assert active_task_route_context(tmp_path)["status"] == "none"
 
 
@@ -859,6 +861,7 @@ def test_project_identity_bridges_rag_and_node_workspaces_without_cross_project_
         "unreal_task_list_active",
         "unreal_task_recover_active",
         "unreal_task_cancel_active",
+        "unreal_task_quarantine_corrupt",
         "unreal_task_checkpoint",
         "unreal_task_cancel",
     }

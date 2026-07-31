@@ -44,7 +44,12 @@ from phase_tool_router import (
     selection_binding,
     validate_runtime_selection,
 )
-from mcp_connection import get_mcp_connection_id, task_owns_active_tool_route
+from mcp_connection import (
+    get_mcp_connection_id,
+    task_connection_matches,
+    task_is_foreign_healthy,
+    task_owns_active_tool_route,
+)
 from task_phase import task_phase_from_state
 
 TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled", "failed", "cancellation_uncertain"})
@@ -54,6 +59,11 @@ SCOPE_AUTHORITATIVE_GATES = frozenset(
         "unreal_code_sketch_claim_validate",
         "unreal_feature_intent_resolve",
     }
+)
+# Only one gate may own write scope at a time; prefer feature intent when present.
+SCOPE_AUTHORITY_PRIORITY = (
+    "unreal_feature_intent_resolve",
+    "unreal_code_sketch_claim_validate",
 )
 SCOPE_SUPPORTING_GATES = frozenset(
     {
@@ -103,16 +113,25 @@ def _auth_refresh_failure(
         return result
     if error_code == "TASK_AUTH_MISMATCH":
         # Never return a live authToken after identity checks failed.
-        safe_auth = {
+        context = {
             "taskSessionId": str(state.get("taskSessionId") or ""),
             "planId": str(state.get("planId") or ""),
             "planRevision": str(state.get("planRevision") or ""),
             "activeSliceId": str(state.get("activeSliceId") or ""),
         }
+        if mismatched_fields:
+            context["mismatchedFields"] = list(mismatched_fields)
         payload = {
             **result,
-            "taskAuthorization": safe_auth,
-            "nextAction": "replan_or_resume_with_returned_taskAuthorization",
+            "authorizationContext": context,
+            # Compatibility alias: incomplete on purpose (no authToken).
+            "taskAuthorization": {
+                "taskSessionId": context["taskSessionId"],
+                "planId": context["planId"],
+                "planRevision": context["planRevision"],
+                "activeSliceId": context["activeSliceId"],
+            },
+            "nextAction": "request_fresh_authorization_or_replan",
         }
         if mismatched_fields:
             payload["mismatchedFields"] = list(mismatched_fields)
@@ -123,6 +142,38 @@ def _auth_refresh_failure(
         "taskAuthorization": task_authorization_for_state(state),
         "nextAction": "retry_same_tool_with_returned_taskAuthorization",
     }
+
+
+def resolve_scope_authority_gate(required_gates: list[str] | None) -> str:
+    required = {str(item) for item in (required_gates or [])}
+    for gate in SCOPE_AUTHORITY_PRIORITY:
+        if gate in required:
+            return gate
+    return ""
+
+
+def _strip_plan_only_authorization(payload: dict[str, Any]) -> dict[str, Any]:
+    payload.pop("authToken", None)
+    payload.pop("taskAuthorization", None)
+    payload["taskAuthorizationRequiredForWrites"] = False
+    payload["nextAction"] = "start_agent_edit_task_to_apply_changes"
+    tool_route = dict(payload.get("toolRoute") or {})
+    if tool_route:
+        tool_route["activeTools"] = [
+            name
+            for name in (tool_route.get("activeTools") or [])
+            if str(name) in {
+                "unreal_task_status",
+                "unreal_task_list_active",
+                "unreal_task_recover_active",
+                "unreal_task_cancel_active",
+                "unreal_agent_plan",
+                "unreal_project_status",
+            }
+        ]
+        payload["toolRoute"] = tool_route
+        payload["toolPolicy"] = list(tool_route.get("activeTools") or [])
+    return payload
 
 
 def required_gate_set_hash(
@@ -150,6 +201,7 @@ _SELECTION_DEPENDENT_GATES = frozenset(
     {
         "unreal_runtime_debug_session",
         "unreal_code_sketch_claim_validate",
+        "unreal_feature_intent_resolve",
         "unreal_semantic_refactor_guard",
         "static_validate",
         "ubt_build",
@@ -1646,6 +1698,7 @@ def task_start(
     if mode == "plan_only":
         # Plan-only sessions must not leave a persistent running owner that
         # pollutes shared route discovery across chats/MCP connections.
+        # read_only remains a persistent investigation session until cancel.
         completed = task_complete_plan_session(
             workspace,
             task_session_id,
@@ -1656,6 +1709,7 @@ def task_start(
             payload["state"] = completed_state
             payload["status"] = str(completed_state.get("status") or "completed")
             payload["planOnlyCompleted"] = True
+            payload = _strip_plan_only_authorization(payload)
     return payload
 
 
@@ -1704,35 +1758,22 @@ def task_complete_plan_session(
     return result
 
 
-def _iter_running_task_states(
-    workspace: Path,
+def _task_claims_current_scope(
     *,
-    active_project: str = "",
-) -> list[dict[str, Any]]:
-    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
-    tasks_root = state_root / "tasks"
+    workspace: Path,
+    active_project: str,
+    state: dict[str, Any] | None = None,
+    hinted_workspace: str = "",
+    hinted_project: str = "",
+) -> bool:
     current_workspace = _canonical_workspace_root(workspace)
     current_project = _canonical_project_identity(
         active_project,
         workspace=workspace,
     )
-    running: list[dict[str, Any]] = []
-    try:
-        task_dirs = [item for item in tasks_root.iterdir() if item.is_dir()]
-    except OSError:
-        return []
-    for task_dir in task_dirs:
-        state_path = task_dir / "state.json"
-        if not state_path.is_file():
-            continue
-        try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(state, dict):
-            continue
-        if str(state.get("status") or "") != "running":
-            continue
+    state_project = ""
+    state_workspace = hinted_workspace
+    if isinstance(state, dict):
         route_scope = (
             state.get("routeScope")
             if isinstance(state.get("routeScope"), dict)
@@ -1743,42 +1784,130 @@ def _iter_running_task_states(
             workspace=workspace,
         )
         state_workspace = _canonical_workspace_root(
-            route_scope.get("workspaceRoot") or state.get("workspaceRoot") or ""
+            route_scope.get("workspaceRoot")
+            or state.get("workspaceRoot")
+            or hinted_workspace
+            or ""
         )
-        owns_current = bool(
-            (state_project and current_project and state_project == current_project)
-            or (
-                not state_project
-                and state_workspace
-                and state_workspace == current_workspace
-            )
+    project = state_project or hinted_project
+    owner_workspace = state_workspace or hinted_workspace
+    return bool(
+        (project and current_project and project == current_project)
+        or (
+            not project
+            and owner_workspace
+            and owner_workspace == current_workspace
         )
-        if not owns_current:
-            continue
-        running.append(state)
-    return running
+    )
 
 
-def task_list_active(
+def _iter_discoverable_task_entries(
     workspace: Path,
     *,
     active_project: str = "",
-) -> dict[str, Any]:
-    """List running tasks for the current project/workspace (no secrets)."""
+) -> list[dict[str, Any]]:
+    """Yield running or corrupt tasks that claim the current project/workspace."""
 
-    tasks = []
-    for state in _iter_running_task_states(
-        workspace,
-        active_project=active_project,
-    ):
+    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+    tasks_root = state_root / "tasks"
+    entries: list[dict[str, Any]] = []
+    try:
+        task_dirs = [item for item in tasks_root.iterdir() if item.is_dir()]
+    except OSError:
+        return []
+    for task_dir in task_dirs:
+        task_session_id = task_dir.name
+        state_path = task_dir / "state.json"
+        if not state_path.is_file():
+            continue
+        owner_hint = ""
+        owner_path = _task_owner_path(task_dir)
+        if owner_path.is_file():
+            try:
+                owner_hint = _canonical_workspace_root(
+                    owner_path.read_text(encoding="utf-8").strip()
+                )
+            except OSError:
+                owner_hint = ""
+        hinted_project = ""
+        scope_path = _task_route_scope_path(task_dir)
+        if scope_path.is_file():
+            try:
+                raw_scope = json.loads(scope_path.read_text(encoding="utf-8"))
+                if isinstance(raw_scope, dict):
+                    owner_hint = _canonical_workspace_root(
+                        raw_scope.get("workspaceRoot") or owner_hint
+                    ) or owner_hint
+                    hinted_project = _canonical_project_identity(
+                        raw_scope.get("projectFile") or "",
+                        workspace=workspace,
+                    )
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                pass
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            if _task_claims_current_scope(
+                workspace=workspace,
+                active_project=active_project,
+                hinted_workspace=owner_hint,
+                hinted_project=hinted_project,
+            ):
+                entries.append(
+                    {
+                        "taskSessionId": task_session_id,
+                        "status": "corrupt",
+                        "recoverable": False,
+                        "availableActions": [
+                            "unreal_task_quarantine_corrupt",
+                        ],
+                        "error": f"task state is corrupt: {state_path}",
+                        "ownsActiveToolRoute": False,
+                        "mcpConnectionId": "",
+                        "updatedAt": "",
+                    }
+                )
+            continue
+        if not isinstance(state, dict):
+            if _task_claims_current_scope(
+                workspace=workspace,
+                active_project=active_project,
+                hinted_workspace=owner_hint,
+                hinted_project=hinted_project,
+            ):
+                entries.append(
+                    {
+                        "taskSessionId": task_session_id,
+                        "status": "corrupt",
+                        "recoverable": False,
+                        "availableActions": [
+                            "unreal_task_quarantine_corrupt",
+                        ],
+                        "error": f"task state is not an object: {state_path}",
+                        "ownsActiveToolRoute": False,
+                        "mcpConnectionId": "",
+                        "updatedAt": "",
+                    }
+                )
+            continue
+        if not _task_claims_current_scope(
+            workspace=workspace,
+            active_project=active_project,
+            state=state,
+            hinted_workspace=owner_hint,
+            hinted_project=hinted_project,
+        ):
+            continue
+        if str(state.get("status") or "") != "running":
+            continue
         route = (
             state.get("toolRoute")
             if isinstance(state.get("toolRoute"), dict)
             else {}
         )
-        tasks.append(
+        entries.append(
             {
-                "taskSessionId": str(state.get("taskSessionId") or ""),
+                "taskSessionId": str(state.get("taskSessionId") or task_session_id),
                 "status": str(state.get("status") or ""),
                 "mode": str(state.get("mode") or ""),
                 "request": str(state.get("request") or "")[:240],
@@ -1788,18 +1917,139 @@ def task_list_active(
                 "mcpConnectionId": str(state.get("mcpConnectionId") or ""),
                 "routePhase": str(route.get("phase") or ""),
                 "ownsActiveToolRoute": task_owns_active_tool_route(state),
+                "foreignHealthy": task_is_foreign_healthy(state),
+                "connectionMatches": task_connection_matches(state),
                 "updatedAt": str(state.get("updatedAt") or ""),
+                "activeJobId": str(state.get("activeJobId") or ""),
+                "recoverable": True,
+                "availableActions": [
+                    "unreal_task_cancel_active",
+                    "unreal_task_status",
+                ],
+                "_state": state,
+            }
+        )
+    return entries
+
+
+def _iter_running_task_states(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> list[dict[str, Any]]:
+    return [
+        dict(item["_state"])
+        for item in _iter_discoverable_task_entries(
+            workspace,
+            active_project=active_project,
+        )
+        if item.get("status") == "running" and isinstance(item.get("_state"), dict)
+    ]
+
+
+def task_list_active(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> dict[str, Any]:
+    """List running and corrupt tasks for the current project/workspace."""
+
+    tasks = []
+    for item in _iter_discoverable_task_entries(
+        workspace,
+        active_project=active_project,
+    ):
+        public = {key: value for key, value in item.items() if key != "_state"}
+        tasks.append(public)
+    corrupt = [item for item in tasks if item.get("status") == "corrupt"]
+    return {
+        "ok": True,
+        "count": len(tasks),
+        "runningCount": sum(1 for item in tasks if item.get("status") == "running"),
+        "corruptCount": len(corrupt),
+        "tasks": tasks,
+        "nextAction": (
+            "unreal_task_quarantine_corrupt"
+            if corrupt
+            else (
+                "unreal_task_cancel_active"
+                if tasks
+                else "unreal_agent_plan"
+            )
+        ),
+    }
+
+
+def task_quarantine_corrupt(
+    workspace: Path,
+    *,
+    active_project: str = "",
+    task_session_id: str = "",
+) -> dict[str, Any]:
+    """Archive corrupt task state so it no longer owns the active route."""
+
+    listed = task_list_active(workspace, active_project=active_project)
+    corrupt = [
+        item
+        for item in (listed.get("tasks") or [])
+        if item.get("status") == "corrupt"
+    ]
+    explicit = str(task_session_id or "").strip()
+    if explicit:
+        match = next(
+            (item for item in corrupt if item.get("taskSessionId") == explicit),
+            None,
+        )
+        if not match:
+            return {
+                "ok": False,
+                "errorCode": "TASK_NOT_CORRUPT",
+                "error": f"No corrupt task found for session: {explicit}",
+                "tasks": corrupt,
+            }
+        targets = [match]
+    elif len(corrupt) == 1:
+        targets = corrupt
+    elif not corrupt:
+        return {
+            "ok": False,
+            "errorCode": "TASK_NONE_CORRUPT",
+            "error": "No corrupt tasks claim the active project/workspace.",
+            "tasks": [],
+        }
+    else:
+        return {
+            "ok": False,
+            "errorCode": "TASK_AMBIGUOUS_CORRUPT",
+            "error": "Multiple corrupt tasks; pass taskSessionId explicitly.",
+            "tasks": corrupt,
+        }
+
+    quarantined = []
+    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+    quarantine_root = state_root / "quarantine" / "tasks"
+    quarantine_root.mkdir(parents=True, exist_ok=True)
+    for item in targets:
+        session_id = str(item.get("taskSessionId") or "").strip()
+        if not session_id:
+            continue
+        source = state_root / "tasks" / session_id
+        if not source.is_dir():
+            continue
+        stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        destination = quarantine_root / f"{session_id}-{stamp}"
+        source.rename(destination)
+        quarantined.append(
+            {
+                "taskSessionId": session_id,
+                "quarantinePath": str(destination),
             }
         )
     return {
         "ok": True,
-        "count": len(tasks),
-        "tasks": tasks,
-        "nextAction": (
-            "unreal_task_cancel_active"
-            if tasks
-            else "unreal_agent_plan"
-        ),
+        "quarantined": quarantined,
+        "count": len(quarantined),
+        "nextAction": "unreal_task_list_active",
     }
 
 
@@ -1811,7 +2061,11 @@ def task_resolve_active_session_id(
 ) -> dict[str, Any]:
     explicit = str(task_session_id or "").strip()
     listed = task_list_active(workspace, active_project=active_project)
-    tasks = list(listed.get("tasks") or [])
+    tasks = [
+        item
+        for item in (listed.get("tasks") or [])
+        if item.get("status") == "running"
+    ]
     if explicit:
         match = next(
             (item for item in tasks if item.get("taskSessionId") == explicit),
@@ -1819,11 +2073,27 @@ def task_resolve_active_session_id(
         )
         if match:
             return {"ok": True, "taskSessionId": explicit, "task": match}
+        corrupt_match = next(
+            (
+                item
+                for item in (listed.get("tasks") or [])
+                if item.get("taskSessionId") == explicit and item.get("status") == "corrupt"
+            ),
+            None,
+        )
+        if corrupt_match:
+            return {
+                "ok": False,
+                "errorCode": "TASK_STATE_CORRUPT",
+                "error": "Task state is corrupt; call unreal_task_quarantine_corrupt.",
+                "task": corrupt_match,
+                "nextAction": "unreal_task_quarantine_corrupt",
+            }
         return {
             "ok": False,
             "errorCode": "TASK_NOT_ACTIVE",
             "error": f"Task is not an active running session: {explicit}",
-            "tasks": tasks,
+            "tasks": listed.get("tasks") or [],
         }
     if len(tasks) == 1:
         return {
@@ -1832,6 +2102,14 @@ def task_resolve_active_session_id(
             "task": tasks[0],
         }
     if not tasks:
+        if listed.get("corruptCount"):
+            return {
+                "ok": False,
+                "errorCode": "TASK_STATE_CORRUPT",
+                "error": "Corrupt task state is blocking recovery; quarantine it first.",
+                "tasks": listed.get("tasks") or [],
+                "nextAction": "unreal_task_quarantine_corrupt",
+            }
         return {
             "ok": False,
             "errorCode": "TASK_NONE_ACTIVE",
@@ -1851,6 +2129,7 @@ def task_cancel_active(
     *,
     active_project: str = "",
     task_session_id: str = "",
+    force: bool = False,
 ) -> dict[str, Any]:
     resolved = task_resolve_active_session_id(
         workspace,
@@ -1859,6 +2138,25 @@ def task_cancel_active(
     )
     if not resolved.get("ok"):
         return resolved
+    task = resolved.get("task") or {}
+    if (
+        not force
+        and task.get("foreignHealthy") is True
+        and task.get("connectionMatches") is not True
+    ):
+        return {
+            "ok": False,
+            "errorCode": "TASK_OWNED_BY_ANOTHER_CONNECTION",
+            "error": (
+                "Active task belongs to another healthy MCP connection. "
+                "Pass force=true only after explicit user confirmation."
+            ),
+            "task": {
+                key: value
+                for key, value in task.items()
+                if key != "_state"
+            },
+        }
     return task_cancel(workspace, str(resolved.get("taskSessionId") or ""))
 
 
@@ -2205,6 +2503,18 @@ def task_replan(
             ),
         }
     )
+    if mode == "plan_only":
+        completed = task_complete_plan_session(
+            workspace,
+            task_session_id,
+            note="replan plan_only auto-completed",
+        )
+        if completed.get("ok"):
+            completed_state = completed.get("state") or current_state
+            outcome["state"] = completed_state
+            outcome["status"] = str(completed_state.get("status") or "completed")
+            outcome["planOnlyCompleted"] = True
+            outcome = _strip_plan_only_authorization(outcome)
     return outcome
 
 
@@ -2715,6 +3025,52 @@ def task_record_gate(
         pending = [item for item in required if item not in completed]
         state["completedGates"] = completed
         state["pendingGates"] = pending
+        authority_gate = resolve_scope_authority_gate(required)
+        gate_targets = (
+            dict(state.get("gateTargetSnapshots") or {})
+            if isinstance(state.get("gateTargetSnapshots"), dict)
+            else {}
+        )
+        if target_snapshots is not None:
+            normalized = normalized_selection_snapshots(target_snapshots)
+            gate_targets[gate] = normalized
+            state["gateTargetSnapshots"] = gate_targets
+            if gate == authority_gate and normalized:
+                previous = normalized_selection_snapshots(
+                    state.get("selectedTargetSnapshots")
+                )
+                state["selectedTargetSnapshots"] = normalized
+                state["scopeAuthority"] = {
+                    "gate": gate,
+                    "targetSnapshotsHash": _canonical_hash(normalized),
+                }
+                if previous != normalized:
+                    _invalidate_selection_dependent_gates(
+                        state,
+                        keep_gates={gate},
+                    )
+                    # Re-attach the gate we just completed after invalidation.
+                    state["completedGates"][gate] = record
+                    state["pendingGates"] = [
+                        item for item in required if item not in state["completedGates"]
+                    ]
+                    pending = state["pendingGates"]
+                    state["selectionBinding"] = selection_binding(state)
+            elif gate in SCOPE_AUTHORITATIVE_GATES and authority_gate and gate != authority_gate:
+                owner_snapshots = normalized_selection_snapshots(
+                    state.get("selectedTargetSnapshots")
+                )
+                if owner_snapshots and normalized and owner_snapshots != normalized:
+                    record_result = {
+                        "ok": False,
+                        "errorCode": "SCOPE_AUTHORITY_MISMATCH",
+                        "error": (
+                            f"{gate} target snapshots must match the active scope "
+                            f"owner ({authority_gate}); it cannot replace write scope."
+                        ),
+                        "scopeAuthority": dict(state.get("scopeAuthority") or {}),
+                    }
+                    return None
         if feature_binding:
             previous_intent_id = str(state.get("selectedIntentId") or "")
             state["selectedIntentId"] = feature_binding["selectedIntentId"]
@@ -2722,16 +3078,6 @@ def task_record_gate(
             state["featureTargetSnapshots"] = normalized_selection_snapshots(
                 target_snapshots
             )
-            state["selectedTargetSnapshots"] = normalized_selection_snapshots(
-                target_snapshots
-            )
-            gate_targets = (
-                dict(state.get("gateTargetSnapshots") or {})
-                if isinstance(state.get("gateTargetSnapshots"), dict)
-                else {}
-            )
-            gate_targets[gate] = normalized_selection_snapshots(target_snapshots)
-            state["gateTargetSnapshots"] = gate_targets
             feature_state = dict(state.get("featureIntent") or {})
             feature_state.update(
                 {
@@ -2749,28 +3095,8 @@ def task_record_gate(
             state["featureIntent"] = feature_state
             if not previous_intent_id:
                 state["selectionBinding"] = selection_binding(state)
-        elif target_snapshots:
-            gate_targets = (
-                dict(state.get("gateTargetSnapshots") or {})
-                if isinstance(state.get("gateTargetSnapshots"), dict)
-                else {}
-            )
-            normalized = normalized_selection_snapshots(target_snapshots)
-            gate_targets[gate] = normalized
-            state["gateTargetSnapshots"] = gate_targets
-            if gate in SCOPE_AUTHORITATIVE_GATES:
-                previous = normalized_selection_snapshots(
-                    state.get("selectedTargetSnapshots")
-                )
-                state["selectedTargetSnapshots"] = normalized
-                if previous != normalized:
-                    _invalidate_selection_dependent_gates(
-                        state,
-                        keep_gates={gate},
-                    )
-                    state["selectionBinding"] = selection_binding(state)
         write_gate = dict(state.get("writeGate") or {})
-        write_gate["completedBeforeWrite"] = sorted(completed)
+        write_gate["completedBeforeWrite"] = sorted(state["completedGates"])
         write_gate["pendingBeforeWrite"] = pending
         state["writeGate"] = write_gate
         state["autonomySupervisor"] = observe_autonomy(
@@ -2786,6 +3112,7 @@ def task_record_gate(
             "gate": gate,
             "pendingGates": pending,
             "record": record,
+            "scopeAuthority": dict(state.get("scopeAuthority") or {}),
             **task_phase_from_state(state),
         }
         return state

@@ -12,7 +12,10 @@ const {
 const {
   getMcpConnectionId,
   taskOwnsActiveToolRoute,
+  taskConnectionMatches,
+  taskIsForeignHealthy,
 } = require("./mcp-connection");
+const { spawnSync } = require("child_process");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -151,6 +154,18 @@ const SCOPE_AUTHORITATIVE_GATES = new Set([
   "unreal_code_sketch_claim_validate",
   "unreal_feature_intent_resolve",
 ]);
+const SCOPE_AUTHORITY_PRIORITY = [
+  "unreal_feature_intent_resolve",
+  "unreal_code_sketch_claim_validate",
+];
+
+function resolveScopeAuthorityGate(requiredGates = []) {
+  const required = new Set((requiredGates || []).map(String));
+  for (const gate of SCOPE_AUTHORITY_PRIORITY) {
+    if (required.has(gate)) return gate;
+  }
+  return "";
+}
 
 function validateCompletedGates(state, args = {}) {
   const writeGate = state.writeGate && typeof state.writeGate === "object" ? state.writeGate : {};
@@ -251,13 +266,14 @@ function validateCompletedGates(state, args = {}) {
   }
 
   const requestedPaths = requestedMutationPaths(args, state);
-  // Only scope-authoritative gates constrain mutation targets.
-  // Supporting gates may cover different files for evidence and must not
-  // intersect with write paths (that previously blocked multi-gate workflows).
-  const snapshotGates = required
-    .filter((gate) => SCOPE_AUTHORITATIVE_GATES.has(gate))
-    .map((gate) => ({ gate, snapshots: completed[gate]?.targetSnapshots }))
-    .filter((item) => Array.isArray(item.snapshots) && item.snapshots.length);
+  // Only the single scope-authority gate constrains mutation targets.
+  const authorityGate = resolveScopeAuthorityGate(required);
+  const snapshotGates = authorityGate
+    ? [{
+      gate: authorityGate,
+      snapshots: completed[authorityGate]?.targetSnapshots,
+    }].filter((item) => Array.isArray(item.snapshots) && item.snapshots.length)
+    : [];
   if (requestedPaths.length && snapshotGates.length) {
     const caseFold = (value) => process.platform === "win32" ? value.toLowerCase() : value;
     for (const snapshotGate of snapshotGates) {
@@ -479,15 +495,25 @@ function authRefreshFailure(result, state, mismatchedFields = null) {
     return result;
   }
   if (result.errorCode === "TASK_AUTH_MISMATCH") {
+    const context = {
+      taskSessionId: String(state.taskSessionId || ""),
+      planId: String(state.planId || ""),
+      planRevision: String(state.planRevision || ""),
+      activeSliceId: String(state.activeSliceId || ""),
+    };
+    if (Array.isArray(mismatchedFields) && mismatchedFields.length) {
+      context.mismatchedFields = mismatchedFields.map(String);
+    }
     const payload = {
       ...result,
+      authorizationContext: context,
       taskAuthorization: {
-        taskSessionId: String(state.taskSessionId || ""),
-        planId: String(state.planId || ""),
-        planRevision: String(state.planRevision || ""),
-        activeSliceId: String(state.activeSliceId || ""),
+        taskSessionId: context.taskSessionId,
+        planId: context.planId,
+        planRevision: context.planRevision,
+        activeSliceId: context.activeSliceId,
       },
-      nextAction: "replan_or_resume_with_returned_taskAuthorization",
+      nextAction: "request_fresh_authorization_or_replan",
     };
     if (Array.isArray(mismatchedFields) && mismatchedFields.length) {
       payload.mismatchedFields = mismatchedFields.map(String);
@@ -660,6 +686,7 @@ const SAFE_ROUTE_RECOVERY_TOOLS = new Set([
   "get_active_project",
   "list_active_tasks",
   "cancel_active_task",
+  "quarantine_corrupt_task",
 ]);
 
 function canonicalWorkspaceRoot(value) {
@@ -983,9 +1010,68 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "") {
   const currentProject = canonicalProjectIdentity(activeProject, workspaceRoot);
   const tasks = [];
   for (const entry of entries) {
-    const result = readTaskStateResult(workspaceRoot, entry.name, stateRoot);
-    const state = result.state;
-    if (!state || String(state.status || "") !== "running") continue;
+    const entryDir = path.join(tasksRoot, entry.name);
+    const statePath = path.join(entryDir, "state.json");
+    if (!fs.existsSync(statePath)) continue;
+    let ownerHint = "";
+    let hintedProject = "";
+    try {
+      const ownerPath = path.join(entryDir, "workspace-root.txt");
+      if (fs.existsSync(ownerPath)) {
+        ownerHint = canonicalWorkspaceRoot(fs.readFileSync(ownerPath, "utf8").trim());
+      }
+      const scopePath = path.join(entryDir, "route-scope.json");
+      if (fs.existsSync(scopePath)) {
+        const rawScope = JSON.parse(fs.readFileSync(scopePath, "utf8"));
+        if (rawScope && typeof rawScope === "object") {
+          ownerHint = canonicalWorkspaceRoot(rawScope.workspaceRoot || ownerHint) || ownerHint;
+          hintedProject = canonicalProjectIdentity(rawScope.projectFile || "", workspaceRoot);
+        }
+      }
+    } catch {
+      // fall through with whatever hints we have
+    }
+    let state = null;
+    try {
+      state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    } catch {
+      const claims = Boolean(
+        (hintedProject && currentProject && hintedProject === currentProject)
+        || (!hintedProject && ownerHint && ownerHint === currentWorkspace)
+      );
+      if (claims) {
+        tasks.push({
+          taskSessionId: entry.name,
+          status: "corrupt",
+          recoverable: false,
+          availableActions: ["quarantine_corrupt_task"],
+          error: `task state is corrupt: ${statePath}`,
+          ownsActiveToolRoute: false,
+          mcpConnectionId: "",
+          updatedAt: "",
+        });
+      }
+      continue;
+    }
+    if (!state || typeof state !== "object" || Array.isArray(state)) {
+      const claims = Boolean(
+        (hintedProject && currentProject && hintedProject === currentProject)
+        || (!hintedProject && ownerHint && ownerHint === currentWorkspace)
+      );
+      if (claims) {
+        tasks.push({
+          taskSessionId: entry.name,
+          status: "corrupt",
+          recoverable: false,
+          availableActions: ["quarantine_corrupt_task"],
+          error: `task state is not an object: ${statePath}`,
+          ownsActiveToolRoute: false,
+          mcpConnectionId: "",
+          updatedAt: "",
+        });
+      }
+      continue;
+    }
     const routeScope = state.routeScope
       && typeof state.routeScope === "object"
       && !Array.isArray(state.routeScope)
@@ -996,13 +1082,14 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "") {
       workspaceRoot
     );
     const stateOwner = canonicalWorkspaceRoot(
-      routeScope.workspaceRoot || state.workspaceRoot || ""
+      routeScope.workspaceRoot || state.workspaceRoot || ownerHint || ""
     );
     const ownsCurrent = Boolean(
       (stateProject && currentProject && stateProject === currentProject)
       || (!stateProject && stateOwner && stateOwner === currentWorkspace)
     );
     if (!ownsCurrent) continue;
+    if (String(state.status || "") !== "running") continue;
     const route = state.toolRoute && typeof state.toolRoute === "object"
       ? state.toolRoute
       : {};
@@ -1018,92 +1105,161 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "") {
       mcpConnectionId: String(state.mcpConnectionId || ""),
       routePhase: String(route.phase || ""),
       ownsActiveToolRoute: taskOwnsActiveToolRoute(state),
+      foreignHealthy: taskIsForeignHealthy(state),
+      connectionMatches: taskConnectionMatches(state),
       updatedAt: String(state.updatedAt || ""),
+      activeJobId: String(state.activeJobId || ""),
+      recoverable: true,
+      availableActions: ["cancel_active_task"],
     });
   }
   return tasks;
 }
 
-function cancelRunningTaskSession(workspaceRoot, taskSessionId) {
+function cancelTaskViaPython(workspaceRoot, taskSessionId) {
+  const scriptsDir = path.resolve(__dirname, "../../scripts");
+  const python = String(process.env.PYTHON_EXE || process.env.PYTHON || "python").trim() || "python";
+  const code = [
+    "import json, sys",
+    "from pathlib import Path",
+    `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
+    "from task_api import task_cancel",
+    "payload = task_cancel(Path(sys.argv[1]), sys.argv[2])",
+    "print(json.dumps(payload, ensure_ascii=False))",
+  ].join("; ");
+  const result = spawnSync(
+    python,
+    ["-c", code, String(workspaceRoot), String(taskSessionId)],
+    {
+      encoding: "utf8",
+      env: process.env,
+      windowsHide: true,
+    }
+  );
+  if (result.error) {
+    return {
+      ok: false,
+      errorCode: "TASK_CANCEL_BRIDGE_FAILED",
+      error: `Failed to invoke Python task_cancel: ${result.error.message}`,
+      taskSessionId,
+    };
+  }
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      errorCode: "TASK_CANCEL_BRIDGE_FAILED",
+      error: String(result.stderr || result.stdout || "Python task_cancel failed").slice(0, 800),
+      taskSessionId,
+    };
+  }
+  try {
+    return JSON.parse(String(result.stdout || "").trim());
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: "TASK_CANCEL_BRIDGE_FAILED",
+      error: `Invalid Python task_cancel payload: ${error.message}`,
+      taskSessionId,
+    };
+  }
+}
+
+function quarantineCorruptTask(workspaceRoot, activeProject = "", taskSessionId = "") {
+  const tasks = listRunningTasksForProject(workspaceRoot, activeProject)
+    .filter((item) => item.status === "corrupt");
+  const explicit = String(taskSessionId || "").trim();
+  let targets = tasks;
+  if (explicit) {
+    targets = tasks.filter((item) => item.taskSessionId === explicit);
+    if (!targets.length) {
+      return {
+        ok: false,
+        errorCode: "TASK_NOT_CORRUPT",
+        error: `No corrupt task found for session: ${explicit}`,
+        tasks,
+      };
+    }
+  } else if (tasks.length > 1) {
+    return {
+      ok: false,
+      errorCode: "TASK_AMBIGUOUS_CORRUPT",
+      error: "Multiple corrupt tasks; pass taskSessionId explicitly.",
+      tasks,
+    };
+  } else if (!tasks.length) {
+    return {
+      ok: false,
+      errorCode: "TASK_NONE_CORRUPT",
+      error: "No corrupt tasks claim the active project/workspace.",
+      tasks: [],
+    };
+  }
+  const stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
+  const quarantineRoot = path.join(stateRoot, "quarantine", "tasks");
+  fs.mkdirSync(quarantineRoot, { recursive: true });
+  const quarantined = [];
+  for (const item of targets) {
+    const source = path.join(stateRoot, "tasks", item.taskSessionId);
+    if (!fs.existsSync(source)) continue;
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+    const destination = path.join(quarantineRoot, `${item.taskSessionId}-${stamp}`);
+    fs.renameSync(source, destination);
+    quarantined.push({
+      taskSessionId: item.taskSessionId,
+      quarantinePath: destination,
+    });
+  }
+  return {
+    ok: true,
+    quarantined,
+    count: quarantined.length,
+    nextAction: "list_active_tasks",
+  };
+}
+
+function cancelRunningTaskSession(workspaceRoot, taskSessionId, options = {}) {
   const sanitized = sanitizeTaskSessionId(taskSessionId);
   if (!sanitized.ok) {
     return { ok: false, error: sanitized.error, errorCode: "TASK_SESSION_INVALID" };
   }
-  const statePath = path.join(
-    ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot)),
-    "tasks",
-    sanitized.taskSessionId,
-    "state.json"
-  );
-  const acquired = tryAcquireCrossProcessLock(
-    statePath,
-    "cancel_active_task",
-    resolveAgentStateRoot(workspaceRoot)
-  );
-  if (!acquired.ok) {
-    return {
-      ok: false,
-      error: "task lock busy",
-      errorCode: "TASK_LOCK_BUSY",
-      taskSessionId: sanitized.taskSessionId,
-    };
-  }
-  try {
-    const stateResult = readTaskStateResult(workspaceRoot, sanitized.taskSessionId);
-    const state = stateResult.state;
-    if (!state) {
-      return {
-        ok: false,
-        error: `Unknown task: ${sanitized.taskSessionId}`,
-        errorCode: "TASK_STATE_MISSING",
-      };
-    }
-    if (String(state.status || "") !== "running") {
-      return {
-        ok: false,
-        error: "Cancel rejected: task is already terminal.",
-        errorCode: "TASK_ALREADY_TERMINAL",
-        taskSessionId: sanitized.taskSessionId,
-        status: String(state.status || ""),
-      };
-    }
-    state.status = "cancelled";
-    const continuity = state.continuity && typeof state.continuity === "object"
-      ? { ...state.continuity }
-      : {};
-    const lease = continuity.lease && typeof continuity.lease === "object"
-      ? { ...continuity.lease, status: "released" }
-      : { status: "released" };
-    continuity.lease = lease;
-    state.continuity = continuity;
-    state.updatedAt = new Date().toISOString();
-    atomicWriteJson(statePath, state);
-    return {
-      ok: true,
-      taskSessionId: sanitized.taskSessionId,
-      status: "cancelled",
-    };
-  } finally {
-    releaseCrossProcessLock(statePath);
-  }
+  // Prefer the Python cancel path so linked background jobs are actually stopped.
+  return cancelTaskViaPython(workspaceRoot, sanitized.taskSessionId);
 }
 
 function listActiveTasks(workspaceRoot, activeProject = "") {
   const tasks = listRunningTasksForProject(workspaceRoot, activeProject);
+  const corrupt = tasks.filter((item) => item.status === "corrupt");
   return {
     ok: true,
     count: tasks.length,
+    runningCount: tasks.filter((item) => item.status === "running").length,
+    corruptCount: corrupt.length,
     tasks,
-    nextAction: tasks.length ? "cancel_active_task" : "get_active_project",
+    nextAction: corrupt.length
+      ? "quarantine_corrupt_task"
+      : (tasks.length ? "cancel_active_task" : "get_active_project"),
   };
 }
 
-function cancelActiveTask(workspaceRoot, activeProject = "", taskSessionId = "") {
-  const tasks = listRunningTasksForProject(workspaceRoot, activeProject);
+function cancelActiveTask(workspaceRoot, activeProject = "", taskSessionId = "", force = false) {
+  const tasks = listRunningTasksForProject(workspaceRoot, activeProject)
+    .filter((item) => item.status === "running");
   const explicit = String(taskSessionId || "").trim();
+  let target = null;
   if (explicit) {
-    const match = tasks.find((item) => item.taskSessionId === explicit);
-    if (!match) {
+    target = tasks.find((item) => item.taskSessionId === explicit) || null;
+    if (!target) {
+      const corrupt = listRunningTasksForProject(workspaceRoot, activeProject)
+        .find((item) => item.taskSessionId === explicit && item.status === "corrupt");
+      if (corrupt) {
+        return {
+          ok: false,
+          errorCode: "TASK_STATE_CORRUPT",
+          error: "Task state is corrupt; call quarantine_corrupt_task.",
+          task: corrupt,
+          nextAction: "quarantine_corrupt_task",
+        };
+      }
       return {
         ok: false,
         errorCode: "TASK_NOT_ACTIVE",
@@ -1111,25 +1267,42 @@ function cancelActiveTask(workspaceRoot, activeProject = "", taskSessionId = "")
         tasks,
       };
     }
-    return cancelRunningTaskSession(workspaceRoot, explicit);
-  }
-  if (tasks.length === 1) {
-    return cancelRunningTaskSession(workspaceRoot, tasks[0].taskSessionId);
-  }
-  if (!tasks.length) {
+  } else if (tasks.length === 1) {
+    target = tasks[0];
+  } else if (!tasks.length) {
+    const listed = listActiveTasks(workspaceRoot, activeProject);
+    if (listed.corruptCount) {
+      return {
+        ok: false,
+        errorCode: "TASK_STATE_CORRUPT",
+        error: "Corrupt task state is blocking recovery; quarantine it first.",
+        tasks: listed.tasks,
+        nextAction: "quarantine_corrupt_task",
+      };
+    }
     return {
       ok: false,
       errorCode: "TASK_NONE_ACTIVE",
       error: "No running tasks for the active project/workspace.",
       tasks: [],
     };
+  } else {
+    return {
+      ok: false,
+      errorCode: "TASK_AMBIGUOUS_ACTIVE",
+      error: "Multiple running tasks; pass taskSessionId explicitly.",
+      tasks,
+    };
   }
-  return {
-    ok: false,
-    errorCode: "TASK_AMBIGUOUS_ACTIVE",
-    error: "Multiple running tasks; pass taskSessionId explicitly.",
-    tasks,
-  };
+  if (!force && target.foreignHealthy === true && target.connectionMatches !== true) {
+    return {
+      ok: false,
+      errorCode: "TASK_OWNED_BY_ANOTHER_CONNECTION",
+      error: "Active task belongs to another healthy MCP connection. Pass force=true only after explicit user confirmation.",
+      task: target,
+    };
+  }
+  return cancelRunningTaskSession(workspaceRoot, target.taskSessionId);
 }
 
 function discoverSingleActiveTask(workspaceRoot, activeProject = "") {
@@ -1565,4 +1738,5 @@ module.exports = {
   requiredFields,
   listActiveTasks,
   cancelActiveTask,
+  quarantineCorruptTask,
 };

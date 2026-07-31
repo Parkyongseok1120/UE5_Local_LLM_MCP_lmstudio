@@ -28,6 +28,7 @@ CONTROL_PLANE_TOOLS = frozenset(
         "unreal_task_list_active",
         "unreal_task_recover_active",
         "unreal_task_cancel_active",
+        "unreal_task_quarantine_corrupt",
         "unreal_task_checkpoint",
         "unreal_task_approve",
         "unreal_task_cancel",
@@ -40,6 +41,7 @@ ALWAYS_DISCOVERABLE_CONTROL_TOOLS = frozenset(
         "unreal_task_list_active",
         "unreal_task_recover_active",
         "unreal_task_cancel_active",
+        "unreal_task_quarantine_corrupt",
         "unreal_task_checkpoint",
         "unreal_task_cancel",
     }

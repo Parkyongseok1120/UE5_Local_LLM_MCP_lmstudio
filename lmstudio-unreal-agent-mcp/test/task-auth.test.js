@@ -739,7 +739,7 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
     assert.strictEqual(mismatch.errorCode, "TASK_AUTH_MISMATCH");
     assert.strictEqual(
       mismatch.nextAction,
-      "replan_or_resume_with_returned_taskAuthorization"
+      "request_fresh_authorization_or_replan"
     );
     assert.strictEqual(
       Object.prototype.hasOwnProperty.call(mismatch.taskAuthorization, "authToken"),
@@ -747,6 +747,10 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
     );
     assert.strictEqual(mismatch.taskAuthorization.planRevision, "1");
     assert.deepStrictEqual(mismatch.mismatchedFields, ["authToken"]);
+    assert.strictEqual(
+      mismatch.authorizationContext.planRevision,
+      "1"
+    );
     assert.notStrictEqual(
       mismatch.nextAction,
       "retry_same_tool_with_returned_taskAuthorization"

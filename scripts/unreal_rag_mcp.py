@@ -1613,6 +1613,7 @@ STABLE_HIDDEN_TOOL_NAMES = frozenset(
         "unreal_task_list_active",
         "unreal_task_recover_active",
         "unreal_task_cancel_active",
+        "unreal_task_quarantine_corrupt",
         "unreal_task_checkpoint",
         "unreal_task_cancel",
         "unreal_task_resume",
@@ -3220,7 +3221,21 @@ class McpServer:
                 "description": (
                     "Cancel the single active running task for the project, "
                     "or a named taskSessionId when multiple are present. "
-                    "Use when a prior chat left a stuck running session."
+                    "Healthy tasks owned by another connection require force=true."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "taskSessionId": {"type": "string"},
+                        "force": {"type": "boolean", "default": False},
+                    },
+                ),
+            },
+            {
+                "name": "unreal_task_quarantine_corrupt",
+                "title": "Quarantine corrupt task",
+                "description": (
+                    "Archive corrupt task state that blocks tools/list recovery "
+                    "but cannot be cancelled normally."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -3831,6 +3846,19 @@ class McpServer:
 
                 config = load_shared_config()
                 payload = task_cancel_active(
+                    self.workspace,
+                    active_project=str(config.get("activeProject") or ""),
+                    task_session_id=str(arguments.get("taskSessionId") or ""),
+                    force=arguments.get("force") is True,
+                )
+                if payload.get("ok"):
+                    self.notify_tools_list_changed()
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_quarantine_corrupt":
+                from task_api import task_quarantine_corrupt
+
+                config = load_shared_config()
+                payload = task_quarantine_corrupt(
                     self.workspace,
                     active_project=str(config.get("activeProject") or ""),
                     task_session_id=str(arguments.get("taskSessionId") or ""),

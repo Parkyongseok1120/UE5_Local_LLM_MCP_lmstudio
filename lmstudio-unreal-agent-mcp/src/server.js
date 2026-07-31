@@ -77,6 +77,7 @@ const {
   requiredFields,
   listActiveTasks,
   cancelActiveTask,
+  quarantineCorruptTask,
 } = require("./task-auth");
 const {
   activeRouteFingerprint,
@@ -1328,9 +1329,17 @@ function allAgentTools() {
       },
       {
         name: "cancel_active_task",
-        description: "Cancel the single active running task, or a named taskSessionId when multiple are present. Use when a prior chat left a stuck running session that shrinks the tool list.",
+        description: "Cancel the single active running task, or a named taskSessionId when multiple are present. Foreign healthy tasks require force=true. Uses the Python cancel path so linked background jobs are stopped.",
         inputSchema: makeJsonSchema({
-          taskSessionId: { type: "string", description: "Optional explicit taskSessionId when multiple running tasks exist." }
+          taskSessionId: { type: "string", description: "Optional explicit taskSessionId when multiple running tasks exist." },
+          force: { type: "boolean", description: "Force-cancel a healthy task owned by another MCP connection after user confirmation." }
+        })
+      },
+      {
+        name: "quarantine_corrupt_task",
+        description: "Archive corrupt task state that shrinks the tool list but cannot be cancelled normally. Moves the task directory under quarantine/ so route ownership is released.",
+        inputSchema: makeJsonSchema({
+          taskSessionId: { type: "string", description: "Optional explicit corrupt taskSessionId when multiple corrupt tasks exist." }
         })
       },
       {
@@ -1741,32 +1750,62 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
     }
 
-    // Commit phase budget only after auth + argument validation succeed.
-    // Mutation tools commit later, after path/approval checks.
+    // Commit phase budget after auth + argument validation for most tools.
+    // Validation-heavy read tools defer until a successful result so semantic
+    // misses (unknown symbol, etc.) do not exhaust the 2–6 call phase budget.
+    const DEFER_BUDGET_UNTIL_SUCCESS = new Set([
+      "read_symbol",
+      "read_file",
+      "read_file_range",
+      "search_files",
+      "list_directory",
+    ]);
+    let pendingNonMutationBudget = null;
     if (
       !ROUTE_MUTATION_TOOLS.has(name)
       && !SAFE_ROUTE_RECOVERY_TOOLS.has(name)
       && (hasExplicitTaskAuthorization || routePreflight.taskSessionId)
     ) {
-      const budgetCommit = hasExplicitTaskAuthorization
-        ? authorizeTaskRouteTool(
-          WORKSPACE_ROOT,
-          name,
-          args,
-          {
-            consumeBudget: true,
-            activeProject: activeProjectForRoute,
-          }
-        )
-        : authorizeActiveRouteTool(
-          WORKSPACE_ROOT,
-          name,
-          args,
-          {
-            consumeBudget: true,
-            activeProject: activeProjectForRoute,
-          }
-        );
+      const commitBudget = () => (
+        hasExplicitTaskAuthorization
+          ? authorizeTaskRouteTool(
+            WORKSPACE_ROOT,
+            name,
+            args,
+            {
+              consumeBudget: true,
+              activeProject: activeProjectForRoute,
+            }
+          )
+          : authorizeActiveRouteTool(
+            WORKSPACE_ROOT,
+            name,
+            args,
+            {
+              consumeBudget: true,
+              activeProject: activeProjectForRoute,
+            }
+          )
+      );
+      if (DEFER_BUDGET_UNTIL_SUCCESS.has(name)) {
+        pendingNonMutationBudget = commitBudget;
+      } else {
+        const budgetCommit = commitBudget();
+        if (!budgetCommit.ok) {
+          return fail(budgetCommit.error || "Task route authorization failed.", {
+            errorCode: budgetCommit.errorCode || "TASK_ROUTE_AUTH_FAILED",
+            retryable: false,
+            stopCurrentWorkflow: true,
+            toolRoute: budgetCommit.toolRoute,
+            toolRouteUsage: budgetCommit.toolRouteUsage,
+          });
+        }
+      }
+    }
+    const commitDeferredBudgetOrFail = () => {
+      if (!pendingNonMutationBudget) return null;
+      const budgetCommit = pendingNonMutationBudget();
+      pendingNonMutationBudget = null;
       if (!budgetCommit.ok) {
         return fail(budgetCommit.error || "Task route authorization failed.", {
           errorCode: budgetCommit.errorCode || "TASK_ROUTE_AUTH_FAILED",
@@ -1776,7 +1815,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           toolRouteUsage: budgetCommit.toolRouteUsage,
         });
       }
-    }
+      return null;
+    };
 
 
     if (process.env.MCP_TEST_FORCE_TOOL_ERROR === name) {
@@ -1834,6 +1874,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "cancel_active_task") {
       const payload = cancelActiveTask(
+        WORKSPACE_ROOT,
+        getActiveProject(CONFIG_PATH) || "",
+        String(args.taskSessionId || ""),
+        args.force === true
+      );
+      if (payload.ok) {
+        try {
+          await server.sendToolListChanged();
+        } catch {
+          // Older clients may not accept list-changed notifications.
+        }
+      }
+      return text(JSON.stringify(payload, null, 2));
+    }
+
+    if (name === "quarantine_corrupt_task") {
+      const payload = quarantineCorruptTask(
         WORKSPACE_ROOT,
         getActiveProject(CONFIG_PATH) || "",
         String(args.taskSessionId || "")
@@ -1942,6 +1999,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           modified: st ? st.mtime.toISOString() : null
         });
       }
+      const budgetFail = commitDeferredBudgetOrFail();
+      if (budgetFail) return budgetFail;
       return text(JSON.stringify({ path: pathMetadata(resolution), entries: rows }, null, 2));
     }
 
@@ -2132,6 +2191,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ...readContext,
         evidenceHash: sha256Text(out),
       }, output, { lineRange: { start: 1, end: truncated.endLine } });
+      const budgetFail = commitDeferredBudgetOrFail();
+      if (budgetFail) return budgetFail;
       return text(output);
     }
 
@@ -2187,6 +2248,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ...readContext,
         evidenceHash: sha256Text(content),
       }, output);
+      const budgetFail = commitDeferredBudgetOrFail();
+      if (budgetFail) return budgetFail;
       return text(output);
     }
 
@@ -2264,6 +2327,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ...readContext,
         evidenceHash: sha256Text(content),
       }, output);
+      const budgetFail = commitDeferredBudgetOrFail();
+      if (budgetFail) return budgetFail;
       return text(output);
     }
 
@@ -3051,6 +3116,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ...readContext,
         evidenceHash: sha256Text(output),
       }, output);
+      const budgetFail = commitDeferredBudgetOrFail();
+      if (budgetFail) return budgetFail;
       return text(output);
     }
 

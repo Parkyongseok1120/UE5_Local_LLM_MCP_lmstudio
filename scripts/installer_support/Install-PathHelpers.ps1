@@ -527,6 +527,20 @@ function Build-ClineMcpConfig {
     $allowBuild = if ($EnableAgentMode) { "1" } else { "0" }
     $validateOnWrite = if ($EnableAgentMode) { "1" } else { "0" }
 
+    $McpBridgeConnectionId = $null
+    $bridgePath = Join-Path $AgentStateRoot "mcp-bridge-connection.id"
+    if (Test-Path -LiteralPath $bridgePath) {
+        $McpBridgeConnectionId = (Get-Content -LiteralPath $bridgePath -Raw -ErrorAction SilentlyContinue).Trim()
+    }
+    if (-not $McpBridgeConnectionId) {
+        $McpBridgeConnectionId = [guid]::NewGuid().ToString("N")
+        $bridgeDir = Split-Path -Parent $bridgePath
+        if ($bridgeDir -and -not (Test-Path -LiteralPath $bridgeDir)) {
+            New-Item -ItemType Directory -Force -Path $bridgeDir | Out-Null
+        }
+        Set-Content -LiteralPath $bridgePath -Value $McpBridgeConnectionId -Encoding UTF8
+    }
+
     $workspaceRoot = $DocumentsRoot
     if ($SharedConfigPath -and (Test-Path -LiteralPath $SharedConfigPath)) {
         $shared = Read-JsonObject $SharedConfigPath
@@ -545,6 +559,7 @@ function Build-ClineMcpConfig {
                 env     = [ordered]@{
                     SHARED_UNREAL_CONFIG   = $SharedConfigPath
                     AGENT_STATE_ROOT       = $AgentStateRoot
+                    MCP_CONNECTION_ID      = $McpBridgeConnectionId
                     UNREAL58_ROOT          = $RagRoot
                     UNREAL58_PORTABLE_ROOT = $PortableRoot
                     PYTHONUTF8             = "1"
@@ -561,6 +576,7 @@ function Build-ClineMcpConfig {
                     AGENT_MCP_CONFIG            = $AgentConfigPath
                     SHARED_UNREAL_CONFIG        = $SharedConfigPath
                     AGENT_STATE_ROOT            = $AgentStateRoot
+                    MCP_CONNECTION_ID           = $McpBridgeConnectionId
                     UNREAL58_ROOT               = $RagRoot
                     UNREAL58_PORTABLE_ROOT      = $PortableRoot
                     ALLOW_WRITE                 = $allowWrite
