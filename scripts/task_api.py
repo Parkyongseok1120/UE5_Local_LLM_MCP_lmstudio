@@ -647,6 +647,78 @@ def active_task_route_context(
     return {"status": "none"}
 
 
+def collect_project_active_tool_union(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> dict[str, Any]:
+    """Union of activeTools across all project-scoped running route tasks."""
+
+    tools: set[str] = set()
+    route_parts: list[str] = []
+    task_count = 0
+    for state in _iter_running_task_states(workspace, active_project=active_project):
+        mode = str(state.get("mode") or "").strip().lower()
+        if mode in {"plan_only", "detached"}:
+            continue
+        route = (
+            state.get("toolRoute")
+            if isinstance(state.get("toolRoute"), dict)
+            else {}
+        )
+        if not route:
+            continue
+        task_count += 1
+        for name in route.get("activeTools") or []:
+            text = str(name or "").strip()
+            if text:
+                tools.add(text)
+        route_parts.append(
+            f"{state.get('taskSessionId')}:{route.get('routeHash') or ''}:{route.get('phase') or ''}"
+        )
+    sorted_tools = sorted(tools)
+    return {
+        "tools": sorted_tools,
+        "fingerprint": f"{task_count}:{('|').join(route_parts)}:{(','.join(sorted_tools))}",
+        "taskCount": task_count,
+    }
+
+
+def list_tools_route_context(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> dict[str, Any]:
+    """tools/list catalog context: single route, or union when multi-chat ambiguous."""
+
+    context = active_task_route_context(
+        workspace,
+        active_project=active_project,
+        require_owner_capability=False,
+    )
+    if context.get("status") != "ambiguous_or_corrupt":
+        return context
+    union = collect_project_active_tool_union(
+        workspace,
+        active_project=active_project,
+    )
+    if not union.get("tools"):
+        return context
+    state = {
+        "taskSessionId": "multi",
+        "toolRoute": {
+            "routeHash": union["fingerprint"],
+            "phase": "union",
+            "activeTools": list(union["tools"]),
+        },
+    }
+    return {
+        **context,
+        "catalogMode": "route_union",
+        "state": state,
+    }
+
+
 def any_running_task_for_project(
     workspace: Path,
     *,
@@ -2806,38 +2878,55 @@ def task_recover_active(
     if not resolved.get("ok"):
         return resolved
     session = str(resolved.get("taskSessionId") or "").strip()
+    state_path = task_root(workspace, session) / "state.json"
+    try:
+        full_state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        full_state = {}
+    if not isinstance(full_state, dict):
+        full_state = {}
+
+    if full_state and not task_connection_matches(
+        full_state,
+        conversation_id=conversation_id,
+        owner_capability=owner_capability,
+    ):
+        discovered = resolved.get("task") if isinstance(resolved.get("task"), dict) else {}
+        redacted = {
+            key: value
+            for key, value in discovered.items()
+            if key
+            not in {
+                "request",
+                "conversationId",
+                "mcpConnectionId",
+                "ownerCapability",
+                "_state",
+            }
+        }
+        redacted["mcpConnectionId"] = ""
+        redacted.pop("conversationId", None)
+        redacted.pop("request", None)
+        return {
+            "ok": True,
+            "taskSessionId": session,
+            "status": str(full_state.get("status") or discovered.get("status") or ""),
+            "foreign": True,
+            "leaseRenewed": False,
+            "checkpointRecovered": False,
+            "recoveredFrom": "active_task_discovery",
+            "discoveredTask": redacted,
+            "note": (
+                "Active task belongs to another MCP connection; "
+                "redacted summary returned without full status or mutating recover."
+            ),
+        }
+
     status = task_status(workspace, session)
     if not isinstance(status, dict):
         return status
     status["recoveredFrom"] = "active_task_discovery"
     status["discoveredTask"] = resolved.get("task")
-
-    # Prefer connection-matching tasks for mutating recover.
-    discovered = resolved.get("task") if isinstance(resolved.get("task"), dict) else {}
-    if discovered and not task_connection_matches(
-        discovered.get("_state") or discovered,
-        conversation_id=conversation_id,
-        owner_capability=owner_capability,
-    ):
-        # discovered task summary may not include full state; load and check.
-        state_path = task_root(workspace, session) / "state.json"
-        try:
-            full_state = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, TypeError):
-            full_state = {}
-        if isinstance(full_state, dict) and full_state and not task_connection_matches(
-            full_state,
-            conversation_id=conversation_id,
-            owner_capability=owner_capability,
-        ):
-            status["ok"] = True
-            status["leaseRenewed"] = False
-            status["checkpointRecovered"] = False
-            status["note"] = (
-                "Active task belongs to another MCP connection; "
-                "status returned without mutating recover."
-            )
-            return status
 
     auth = {
         "taskSessionId": session,
@@ -2848,18 +2937,12 @@ def task_recover_active(
     }
     # Refresh authorization fields from state when token missing from status.
     if not auth["authToken"]:
-        try:
-            full_state = json.loads(
-                (task_root(workspace, session) / "state.json").read_text(encoding="utf-8")
-            )
-            auth["authToken"] = str(full_state.get("authToken") or "")
-            auth["planId"] = str(full_state.get("planId") or auth["planId"])
-            auth["planRevision"] = str(full_state.get("planRevision") or auth["planRevision"])
-            auth["activeSliceId"] = str(
-                full_state.get("activeSliceId") or auth["activeSliceId"]
-            )
-        except (OSError, json.JSONDecodeError, TypeError, AttributeError):
-            pass
+        auth["authToken"] = str(full_state.get("authToken") or "")
+        auth["planId"] = str(full_state.get("planId") or auth["planId"])
+        auth["planRevision"] = str(full_state.get("planRevision") or auth["planRevision"])
+        auth["activeSliceId"] = str(
+            full_state.get("activeSliceId") or auth["activeSliceId"]
+        )
 
     heartbeat = task_checkpoint(
         workspace,
@@ -3073,7 +3156,9 @@ def task_replan(
                 "planRevision": next_revision,
                 "activeSliceId": active_slice_id,
                 "authToken": new_auth_token,
-                "mcpConnectionId": get_mcp_connection_id(),
+                "mcpConnectionId": get_mcp_connection_id(
+                    conversation_id=str(state.get("conversationId") or "")
+                ),
                 "writeGate": write_gate,
                 "writesAllowed": write_gate.get("writesAllowed") is True,
                 "requiredBeforeWrite": required,

@@ -403,6 +403,14 @@ def _task_authorization_schema() -> dict[str, Any]:
         "properties": {
             "taskSessionId": {"type": "string"},
             "authToken": {"type": "string"},
+            "ownerCapability": {
+                "type": "string",
+                "description": "Secret ownership token from unreal_task_start. Not a conversationId.",
+            },
+            "conversationId": {
+                "type": "string",
+                "description": "Public chat scope label. Not sufficient for ownership alone.",
+            },
             "planId": {"type": "string"},
             "planRevision": {"type": "string"},
             "activeSliceId": {"type": "string"},
@@ -420,8 +428,8 @@ def _task_authorization_schema() -> dict[str, Any]:
         ],
         "additionalProperties": False,
         "description": (
-            "Optional taskAuthorization returned by unreal_agent_plan. Supply it to bind a successful "
-            "required analysis gate to that exact plan before project writes."
+            "Server-issued taskAuthorization from unreal_task_start / checkpoint / stale-auth "
+            "refresh. Include ownerCapability for multi-chat route ownership."
         ),
     }
 
@@ -1935,7 +1943,7 @@ class McpServer:
     def all_tool_definitions(self) -> list[dict[str, Any]]:
         from tool_exposure import callable_rag_tool_names
         from phase_tool_router import ALWAYS_DISCOVERABLE_CONTROL_TOOLS
-        from task_api import active_task_route_context
+        from task_api import list_tools_route_context
 
         tools = self._route_aware_tool_definitions(
             self._all_tool_definitions_unfiltered()
@@ -1946,7 +1954,7 @@ class McpServer:
         active_project = str(
             load_shared_config().get("activeProject") or ""
         ).strip()
-        context = active_task_route_context(
+        context = list_tools_route_context(
             self.workspace,
             active_project=active_project,
         )
@@ -1956,7 +1964,10 @@ class McpServer:
             for name in sorted(ALWAYS_DISCOVERABLE_CONTROL_TOOLS)
             if name in by_name
         ]
-        if context.get("status") == "active":
+        if context.get("status") == "active" or (
+            context.get("status") == "ambiguous_or_corrupt"
+            and context.get("catalogMode") == "route_union"
+        ):
             route = (context.get("state") or {}).get("toolRoute") or {}
             routed = set(route.get("activeTools") or [])
             routed_tools = [tool for tool in exposed if tool["name"] in routed]

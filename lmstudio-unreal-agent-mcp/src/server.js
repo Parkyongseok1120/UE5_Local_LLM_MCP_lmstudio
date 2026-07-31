@@ -71,6 +71,7 @@ const {
   authorizeActiveRouteTool,
   authorizeTaskRouteTool,
   discoverActiveTaskContext,
+  listToolsRouteContext,
   SAFE_ROUTE_RECOVERY_TOOLS,
   validateMutationAuth,
   consumeRouteCall,
@@ -661,19 +662,24 @@ function validationFailed(validation) {
 function filterAgentTools(tools) {
   const allowed = callableAgentToolNames(tools.map((tool) => tool.name));
   const exposed = tools.filter((tool) => allowed.has(tool.name));
-  const context = discoverActiveTaskContext(
+  const context = listToolsRouteContext(
     WORKSPACE_ROOT,
     getActiveProject(CONFIG_PATH) || ""
   );
   if (context.status === "none") return exposed;
-  if (context.status !== "active") {
-    return exposed.filter((tool) => SAFE_ROUTE_RECOVERY_TOOLS.has(tool.name));
+  const route = context.route && typeof context.route === "object" ? context.route : {};
+  const routed = Array.isArray(route.activeTools) ? route.activeTools.map(String) : [];
+  // Multi-chat: expose the union of running routes; CallTool still proves ownership.
+  if (
+    context.status === "active"
+    || (context.status === "ambiguous_or_corrupt" && routed.length)
+  ) {
+    const allowedNames = new Set(routed);
+    return exposed.filter(
+      (tool) => allowedNames.has(tool.name) || SAFE_ROUTE_RECOVERY_TOOLS.has(tool.name)
+    );
   }
-  const route = context.route;
-  const routed = new Set(Array.isArray(route.activeTools) ? route.activeTools.map(String) : []);
-  return exposed.filter(
-    (tool) => routed.has(tool.name) || SAFE_ROUTE_RECOVERY_TOOLS.has(tool.name)
-  );
+  return exposed.filter((tool) => SAFE_ROUTE_RECOVERY_TOOLS.has(tool.name));
 }
 function requiredArgumentCheck(tool, args) {
   const required = Array.isArray(tool?.inputSchema?.required) ? tool.inputSchema.required : [];
@@ -906,6 +912,13 @@ function routeOwnershipFromArgs(args = {}) {
       || auth.conversation_id
       || args.conversationId
       || args.conversation_id
+      || ""
+    ).trim(),
+    taskSessionId: String(
+      auth.taskSessionId
+      || auth.task_session_id
+      || args.taskSessionId
+      || args.task_session_id
       || ""
     ).trim(),
   };
@@ -1356,15 +1369,40 @@ function allAgentTools() {
       },
       {
         name: "list_active_tasks",
-        description: "List running task sessions for the active project/workspace without requiring a known taskSessionId. Does not return authToken. Recovery-safe when the tool list is reduced.",
-        inputSchema: makeJsonSchema({})
+        description: "List running task sessions for the active project/workspace without requiring a known taskSessionId. Does not return authToken or ownerCapability. Foreign conversation metadata is redacted unless taskAuthorization.ownerCapability matches.",
+        inputSchema: makeJsonSchema({
+          taskAuthorization: {
+            type: "object",
+            description: "Optional. Pass ownerCapability to mark which tasks you own.",
+            properties: {
+              ownerCapability: { type: "string" },
+              conversationId: { type: "string" },
+              taskSessionId: { type: "string" },
+            },
+            additionalProperties: true,
+          },
+          ownerCapability: { type: "string" },
+          conversationId: { type: "string" },
+        })
       },
       {
         name: "cancel_active_task",
-        description: "Cancel the single active running task, or a named taskSessionId when multiple are present. Foreign healthy tasks require force=true. Uses the Python cancel path so linked background jobs are stopped.",
+        description: "Cancel the single active running task, or a named taskSessionId when multiple are present. Pass taskAuthorization.ownerCapability to cancel your own task without force. Foreign healthy tasks require force=true.",
         inputSchema: makeJsonSchema({
           taskSessionId: { type: "string", description: "Optional explicit taskSessionId when multiple running tasks exist." },
-          force: { type: "boolean", description: "Force-cancel a healthy task owned by another MCP connection after user confirmation." }
+          force: { type: "boolean", description: "Force-cancel a healthy task owned by another MCP connection after user confirmation." },
+          taskAuthorization: {
+            type: "object",
+            description: "Ownership proof from unreal_task_start. Include ownerCapability.",
+            properties: {
+              ownerCapability: { type: "string" },
+              conversationId: { type: "string" },
+              taskSessionId: { type: "string" },
+            },
+            additionalProperties: true,
+          },
+          ownerCapability: { type: "string" },
+          conversationId: { type: "string" },
         })
       },
       {
@@ -1656,7 +1694,7 @@ function allAgentTools() {
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const tools = allAgentTools();
-  const context = discoverActiveTaskContext(
+  const context = listToolsRouteContext(
     WORKSPACE_ROOT,
     getActiveProject(CONFIG_PATH) || ""
   );
@@ -1673,7 +1711,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     clearLoopHistoriesOnProjectChange(false);
     const activeProjectForRoute = getActiveProject(CONFIG_PATH) || "";
-    const currentRouteContext = discoverActiveTaskContext(
+    const currentRouteContext = listToolsRouteContext(
       WORKSPACE_ROOT,
       activeProjectForRoute
     );
@@ -1958,18 +1996,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "list_active_tasks") {
       return text(JSON.stringify(
-        listActiveTasks(WORKSPACE_ROOT, getActiveProject(CONFIG_PATH) || ""),
+        listActiveTasks(
+          WORKSPACE_ROOT,
+          getActiveProject(CONFIG_PATH) || "",
+          routeOwnershipFromArgs(args)
+        ),
         null,
         2
       ));
     }
 
     if (name === "cancel_active_task") {
+      const ownership = routeOwnershipFromArgs(args);
       const payload = cancelActiveTask(
         WORKSPACE_ROOT,
         getActiveProject(CONFIG_PATH) || "",
-        String(args.taskSessionId || ""),
-        args.force === true
+        String(args.taskSessionId || ownership.taskSessionId || ""),
+        args.force === true,
+        ownership
       );
       if (payload.ok) {
         try {
@@ -3527,7 +3571,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   startActiveRouteWatcher({
-    readContext: () => discoverActiveTaskContext(
+    readContext: () => listToolsRouteContext(
       WORKSPACE_ROOT,
       getActiveProject(CONFIG_PATH) || ""
     ),

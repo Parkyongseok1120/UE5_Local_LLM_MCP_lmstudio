@@ -113,6 +113,70 @@ def test_node_route_requires_capability_for_scoped_tasks(
     assert allowed["ok"] is True
 
 
+def test_multi_chat_tools_list_exposes_route_union(tmp_path: Path, monkeypatch) -> None:
+    from task_api import list_tools_route_context
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("MCP_BRIDGE_PAIR_ID", "bridge-union-test")
+    monkeypatch.setenv("MCP_CLIENT_INSTANCE_ID", "client-union-test")
+    chat_a = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Foo.cpp",
+        conversation_id="conv-union-a",
+        start_background_job=False,
+    )
+    chat_b = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Bar.cpp",
+        conversation_id="conv-union-b",
+        start_background_job=False,
+    )
+    assert chat_a["ok"] and chat_b["ok"]
+    context = list_tools_route_context(tmp_path)
+    assert context["status"] == "ambiguous_or_corrupt"
+    assert context.get("catalogMode") == "route_union"
+    tools = set((context.get("state") or {}).get("toolRoute", {}).get("activeTools") or [])
+    assert tools
+    assert tools >= set(chat_a["toolRoute"]["activeTools"]) | set(
+        chat_b["toolRoute"]["activeTools"]
+    )
+
+
+def test_task_authorization_schema_accepts_owner_capability() -> None:
+    import unreal_rag_mcp as rag
+
+    schema = rag._task_authorization_schema()
+    assert "ownerCapability" in schema["properties"]
+    assert "conversationId" in schema["properties"]
+    assert schema.get("additionalProperties") is False
+
+
+def test_foreign_recover_returns_redacted_summary(tmp_path: Path, monkeypatch) -> None:
+    from task_api import task_recover_active
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="secret request text",
+        conversation_id="conv-recover-a",
+        start_background_job=False,
+    )
+    foreign = task_recover_active(
+        tmp_path,
+        task_session_id=started["taskSessionId"],
+        conversation_id="conv-other",
+        owner_capability="0" * 64,
+    )
+    assert foreign.get("foreign") is True
+    assert foreign.get("leaseRenewed") is False
+    assert "state" not in foreign
+    discovered = foreign.get("discoveredTask") or {}
+    assert "conversationId" not in discovered
+    assert discovered.get("mcpConnectionId", "") == ""
+    assert discovered.get("request", "") == ""
+    assert "secret request" not in json.dumps(foreign)
+
+
 def test_retry_cancel_syncs_uncertain_task(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     started = task_start(

@@ -1180,6 +1180,11 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
   process.env.MCP_CLIENT_INSTANCE_ID = "client-cap-test";
   try {
     const { getMcpConnectionId } = require("../src/mcp-connection");
+    const {
+      listToolsRouteContext,
+      listActiveTasks,
+      cancelActiveTask,
+    } = require("../src/task-auth");
     const capA = "a".repeat(64);
     const capB = "b".repeat(64);
     const taskA = routeState(projectFile, {
@@ -1187,12 +1192,14 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
       conversationId: "conv-aaaa",
       ownerCapability: capA,
       mcpConnectionId: `${getMcpConnectionId()}:conv-aaaa`,
+      request: "secret-a-request",
     });
     const taskB = routeState(projectFile, {
       taskSessionId: "task_bbbbbbb2",
       conversationId: "conv-bbbb",
       ownerCapability: capB,
       mcpConnectionId: `${getMcpConnectionId()}:conv-bbbb`,
+      request: "secret-b-request",
     });
     const dirA = path.join(stateRoot, "tasks", taskA.taskSessionId);
     const dirB = path.join(stateRoot, "tasks", taskB.taskSessionId);
@@ -1205,6 +1212,11 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
       discoverActiveTaskContext(workspace, projectFile).status,
       "ambiguous_or_corrupt"
     );
+    const catalog = listToolsRouteContext(workspace, projectFile);
+    assert.strictEqual(catalog.status, "ambiguous_or_corrupt");
+    assert.strictEqual(catalog.catalogMode, "route_union");
+    assert.ok(Array.isArray(catalog.route.activeTools));
+    assert.ok(catalog.route.activeTools.includes("read_file"));
 
     assert.strictEqual(
       authorizeActiveRouteTool(
@@ -1233,6 +1245,25 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
     );
     assert.strictEqual(foreign.ok, true);
     assert.strictEqual(foreign.taskSessionId, taskB.taskSessionId);
+
+    const listedA = listActiveTasks(workspace, projectFile, { ownerCapability: capA });
+    const own = listedA.tasks.find((item) => item.taskSessionId === taskA.taskSessionId);
+    const other = listedA.tasks.find((item) => item.taskSessionId === taskB.taskSessionId);
+    assert.strictEqual(own.connectionMatches, true);
+    assert.strictEqual(own.request, "secret-a-request");
+    assert.strictEqual(other.connectionMatches, false);
+    assert.strictEqual(other.request, "");
+    assert.strictEqual(other.mcpConnectionId, "");
+    assert.strictEqual(other.conversationId, undefined);
+
+    const deniedCancel = cancelActiveTask(
+      workspace,
+      projectFile,
+      taskA.taskSessionId,
+      false,
+      {}
+    );
+    assert.strictEqual(deniedCancel.errorCode, "TASK_OWNED_BY_ANOTHER_CONNECTION");
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
