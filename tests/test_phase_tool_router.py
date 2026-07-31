@@ -862,6 +862,7 @@ def test_project_identity_bridges_rag_and_node_workspaces_without_cross_project_
         "unreal_task_recover_active",
         "unreal_task_cancel_active",
         "unreal_task_quarantine_corrupt",
+        "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
         "unreal_task_cancel",
     }

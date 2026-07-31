@@ -1614,6 +1614,7 @@ STABLE_HIDDEN_TOOL_NAMES = frozenset(
         "unreal_task_recover_active",
         "unreal_task_cancel_active",
         "unreal_task_quarantine_corrupt",
+        "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
         "unreal_task_cancel",
         "unreal_task_resume",
@@ -3244,6 +3245,20 @@ class McpServer:
                 ),
             },
             {
+                "name": "unreal_task_retry_job_cancel",
+                "title": "Retry uncertain job cancellation",
+                "description": (
+                    "Re-probe cancellation_uncertain / orphan jobs, retry process-tree kill, "
+                    "and confirm termination before quarantine."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "taskSessionId": {"type": "string"},
+                        "jobId": {"type": "string"},
+                    },
+                ),
+            },
+            {
                 "name": "unreal_task_checkpoint",
                 "title": "Checkpoint or recover a long-running task",
                 "description": (
@@ -3865,6 +3880,17 @@ class McpServer:
                 )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_retry_job_cancel":
+                from task_api import task_retry_job_cancel
+
+                config = load_shared_config()
+                payload = task_retry_job_cancel(
+                    self.workspace,
+                    active_project=str(config.get("activeProject") or ""),
+                    task_session_id=str(arguments.get("taskSessionId") or ""),
+                    job_id=str(arguments.get("jobId") or ""),
+                )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_checkpoint":
                 from task_api import task_checkpoint

@@ -15,13 +15,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-TERMINAL_STATUSES = frozenset({"completed", "failed", "timed_out", "cancelled", "cancellation_uncertain"})
+TERMINAL_STATUSES = frozenset({"completed", "failed", "timed_out", "cancelled"})
+RECOVERABLE_UNCERTAIN_STATUSES = frozenset({"cancellation_uncertain"})
 VALID_TRANSITIONS: dict[str, frozenset[str]] = {
     "created": frozenset({"queued", "cancelled", "cancel_requested"}),
     "starting": frozenset({"queued", "running", "cancelled", "cancel_requested", "failed", "cancellation_uncertain"}),
     "queued": frozenset({"starting", "running", "cancelled", "cancel_requested", "failed"}),
     "running": frozenset({"completed", "failed", "timed_out", "cancelled", "cancel_requested", "cancellation_uncertain"}),
     "cancel_requested": frozenset({"cancelled", "cancellation_uncertain"}),
+    "cancellation_uncertain": frozenset({"cancelled", "cancellation_uncertain", "cancel_requested"}),
 }
 
 _JOB_LOCKS: dict[str, threading.Lock] = {}
@@ -343,6 +345,32 @@ def _confirm_process_dead(pid: int, *, retries: int = 5, delay_sec: float = 0.2)
     return "unknown"
 
 
+def _confirm_process_group_dead(pgid: int, *, retries: int = 5, delay_sec: float = 0.2) -> str:
+    """Confirm an entire POSIX process group is gone (not just the leader PID)."""
+
+    if pgid <= 0:
+        return "dead"
+    if sys.platform == "win32":
+        return _confirm_process_dead(pgid, retries=retries, delay_sec=delay_sec)
+    for attempt in range(max(1, retries)):
+        try:
+            os.killpg(pgid, 0)
+            alive = "alive"
+        except ProcessLookupError:
+            alive = "dead"
+        except PermissionError:
+            alive = "unknown"
+        except OSError:
+            alive = "unknown"
+        if alive == "dead":
+            return "dead"
+        if alive == "unknown":
+            return "unknown"
+        if attempt + 1 < retries:
+            time.sleep(delay_sec)
+    return "unknown"
+
+
 def _mark_spawn_failure(
     workspace: Path,
     job_id: str,
@@ -395,34 +423,46 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
     job = read_job(workspace, job_id)
     if not job:
         return {"ok": False, "error": f"Unknown job: {job_id}"}
-    if str(job.get("status") or "") in TERMINAL_STATUSES:
-        terminal = str(job.get("status") or "")
+    status = str(job.get("status") or "")
+    if status in TERMINAL_STATUSES:
         return {
             "ok": True,
             "job": compact_job_status(job),
             "processTreeKilled": False,
-            "cancellationState": terminal,
+            "cancellationState": status,
             "orphanProcessSuspected": bool(job.get("orphanProcessSuspected")),
+            "processTerminationConfirmed": bool(
+                job.get("processTerminationConfirmed")
+                or job.get("processTerminationConfirmedAt")
+            ),
         }
-    if not transition_job_status(job, "cancel_requested"):
-        job["status"] = "cancel_requested"
-    append_progress(job, "Cancel requested.")
-    if not save_job(workspace, job):
-        return {"ok": False, "error": "Failed to persist cancel_requested", "jobId": job_id}
+    # cancellation_uncertain is recoverable: re-probe and retry kill.
+    if status != "cancellation_uncertain":
+        if not transition_job_status(job, "cancel_requested"):
+            job["status"] = "cancel_requested"
+        append_progress(job, "Cancel requested.")
+        if not save_job(workspace, job):
+            return {"ok": False, "error": "Failed to persist cancel_requested", "jobId": job_id}
 
     fresh = read_job(workspace, job_id) or job
     pid = fresh.get("pid")
+    pgid = fresh.get("pgid") or pid
     orphan_suspected = False
     process_tree_killed = False
     next_status = "cancelled"
     termination_confirmed_at = ""
     if pid:
         pid_int = int(pid)
+        pgid_int = int(pgid) if pgid else pid_int
         alive = _process_alive(pid_int)
         if alive == "alive":
-            if _pid_matches_job(fresh):
+            if _pid_matches_job(fresh) or status == "cancellation_uncertain":
                 process_tree_killed = _kill_process_tree(pid_int)
-                death = _confirm_process_dead(pid_int) if process_tree_killed else "unknown"
+                death = (
+                    _confirm_process_group_dead(pgid_int)
+                    if process_tree_killed
+                    else "unknown"
+                )
                 if death != "dead":
                     orphan_suspected = True
                     next_status = "cancellation_uncertain"
@@ -435,12 +475,40 @@ def cancel_job(workspace: Path, job_id: str) -> dict[str, Any]:
             orphan_suspected = True
             next_status = "cancellation_uncertain"
         elif alive == "dead":
+            group_death = _confirm_process_group_dead(pgid_int)
+            if group_death == "dead":
+                termination_confirmed_at = _utc_now()
+            elif group_death == "alive":
+                process_tree_killed = _kill_process_tree(pid_int)
+                group_death = _confirm_process_group_dead(pgid_int)
+                if group_death != "dead":
+                    orphan_suspected = True
+                    next_status = "cancellation_uncertain"
+                else:
+                    termination_confirmed_at = _utc_now()
+            else:
+                orphan_suspected = True
+                next_status = "cancellation_uncertain"
+    else:
+        # No PID yet: only safe if subprocess was never marked spawned.
+        if (
+            fresh.get("subprocessSpawned") is True
+            or str(fresh.get("status") or "") in {"starting", "running"}
+            or fresh.get("pidStartedAt")
+        ):
+            orphan_suspected = True
+            next_status = "cancellation_uncertain"
+        else:
             termination_confirmed_at = _utc_now()
+
     if not transition_job_status(fresh, next_status):
+        # Allow uncertain → cancelled even if in-memory transition helper is strict.
         fresh["status"] = next_status
     append_progress(fresh, "Job cancelled by request.")
     if orphan_suspected:
         fresh["orphanProcessSuspected"] = True
+    else:
+        fresh["orphanProcessSuspected"] = False
     if termination_confirmed_at:
         fresh["processTerminationConfirmedAt"] = termination_confirmed_at
         fresh["processTerminationConfirmed"] = True
@@ -590,6 +658,8 @@ def _run_wrapper_worker(
         def mark_running(draft: dict[str, Any]) -> None:
             append_progress(draft, "Wrapper subprocess started.")
             draft["pid"] = process.pid
+            draft["pgid"] = process.pid
+            draft["subprocessSpawned"] = True
             draft["pidStartedAt"] = _utc_now()
             draft["commandFingerprint"] = cmd_fp
             draft["command"] = command
@@ -795,6 +865,8 @@ def _run_rag_refresh_worker(
     def mark_running(draft: dict[str, Any]) -> None:
         append_progress(draft, "RAG refresh subprocess started.")
         draft["pid"] = process.pid
+        draft["pgid"] = process.pid
+        draft["subprocessSpawned"] = True
         draft["pidStartedAt"] = _utc_now()
         draft["commandFingerprint"] = cmd_fp
         draft["command"] = command

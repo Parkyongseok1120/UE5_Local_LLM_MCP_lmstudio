@@ -77,6 +77,7 @@ const {
   reserveRouteCall,
   commitRouteReservation,
   rollbackRouteReservation,
+  heartbeatRouteReservation,
   requiredFields,
   listActiveTasks,
   cancelActiveTask,
@@ -1852,6 +1853,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         runBudgetOp(rollbackRouteReservation, reservationId);
       }
     };
+    const heartbeatDeferredBudget = () => {
+      if (!pendingBudgetReservation || !pendingBudgetReservation.id) return;
+      runBudgetOp(heartbeatRouteReservation, String(pendingBudgetReservation.id));
+    };
     const commitDeferredBudgetOrFail = () => {
       if (!pendingBudgetReservation) return null;
       const reservationId = String(pendingBudgetReservation.id || "");
@@ -3094,6 +3099,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const fileNameResults = [];
       let filesSeen = 0;
       let filesSkippedBySize = 0;
+      let lastReservationHeartbeat = Date.now();
 
       function resultLimitReached() {
         return results.length >= maxResults
@@ -3101,6 +3107,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       async function walk(p) {
+        if (Date.now() - lastReservationHeartbeat > 30_000) {
+          heartbeatDeferredBudget();
+          lastReservationHeartbeat = Date.now();
+        }
         if (resultLimitReached() || filesSeen >= SEARCH_MAX_FILES) return;
         await assertReadChildContained(p, resolution);
         const st = await statSafe(p);

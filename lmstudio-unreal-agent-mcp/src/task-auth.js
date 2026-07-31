@@ -617,14 +617,37 @@ function validateToolRoute(state, fields, args, toolName) {
   return { ok: true, route: activeRoute };
 }
 
-const ROUTE_RESERVATION_TTL_MS = 120_000;
+const ROUTE_RESERVATION_TTL_BY_TOOL_MS = Object.freeze({
+  read_file: 120_000,
+  read_file_range: 120_000,
+  read_symbol: 120_000,
+  list_directory: 300_000,
+  search_files: 600_000,
+});
+const ROUTE_RESERVATION_TTL_DEFAULT_MS = 180_000;
+
+function reservationTtlMs(toolName) {
+  const key = String(toolName || "");
+  return ROUTE_RESERVATION_TTL_BY_TOOL_MS[key] || ROUTE_RESERVATION_TTL_DEFAULT_MS;
+}
 
 function purgeExpiredReservations(usage, nowMs = Date.now()) {
   const list = Array.isArray(usage.reservations)
     ? usage.reservations.filter((entry) => {
       if (!entry || typeof entry !== "object") return false;
       const expiresAt = Date.parse(String(entry.expiresAt || ""));
-      return Number.isFinite(expiresAt) && expiresAt > nowMs;
+      if (Number.isFinite(expiresAt) && expiresAt > nowMs) return true;
+      // Same-process grace: keep briefly if heartbeat is fresher than hard expiry.
+      const ownerPid = Number(entry.ownerPid || 0);
+      const heartbeatAt = Date.parse(String(entry.lastHeartbeatAt || entry.createdAt || ""));
+      if (
+        ownerPid === process.pid
+        && Number.isFinite(heartbeatAt)
+        && nowMs - heartbeatAt < reservationTtlMs(entry.tool)
+      ) {
+        return true;
+      }
+      return false;
     })
     : [];
   usage.reservations = list;
@@ -742,6 +765,49 @@ function mutateRouteBudget(
       atomicWriteJson(statePath, current);
       return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
     }
+    if (mode === "heartbeat") {
+      const targetId = String(reservationId || "").trim();
+      if (!targetId) {
+        return {
+          ok: false,
+          errorCode: "TASK_RESERVATION_NOT_FOUND",
+          error: "Reservation id is required to heartbeat a route budget slot.",
+        };
+      }
+      const idx = reservations.findIndex(
+        (entry) => String(entry.reservationId || "") === targetId
+      );
+      if (idx < 0) {
+        return {
+          ok: false,
+          errorCode: "TASK_RESERVATION_NOT_FOUND",
+          error: `Unknown reservation id: ${targetId}`,
+        };
+      }
+      const now = Date.now();
+      const ttl = reservationTtlMs(reservations[idx].tool || toolName);
+      const next = reservations.map((entry, entryIdx) => {
+        if (entryIdx !== idx) return entry;
+        return {
+          ...entry,
+          lastHeartbeatAt: new Date(now).toISOString(),
+          expiresAt: new Date(now + ttl).toISOString(),
+          ownerPid: process.pid,
+        };
+      });
+      usage.reservations = next;
+      usage.reserved = next.length;
+      current.toolRouteUsage = usage;
+      current.updatedAt = new Date().toISOString();
+      atomicWriteJson(statePath, current);
+      return {
+        ok: true,
+        state: current,
+        toolRoute: route,
+        toolRouteUsage: usage,
+        reservationId: targetId,
+      };
+    }
     if (count + reserved >= limit) {
       return {
         ok: false,
@@ -755,12 +821,15 @@ function mutateRouteBudget(
     if (mode === "reserve") {
       const id = crypto.randomUUID();
       const createdAt = new Date().toISOString();
-      const expiresAt = new Date(Date.now() + ROUTE_RESERVATION_TTL_MS).toISOString();
+      const ttl = reservationTtlMs(toolName);
+      const expiresAt = new Date(Date.now() + ttl).toISOString();
       const entry = {
         reservationId: id,
         tool: String(toolName),
         routeHash: String(route.routeHash || ""),
+        ownerPid: process.pid,
         createdAt,
+        lastHeartbeatAt: createdAt,
         expiresAt,
       };
       const next = [...reservations, entry];
@@ -820,6 +889,18 @@ function rollbackRouteReservation(workspaceRoot, taskSessionId, fields, args, to
     args,
     toolName,
     "rollback",
+    reservationId
+  );
+}
+
+function heartbeatRouteReservation(workspaceRoot, taskSessionId, fields, args, toolName, reservationId = "") {
+  return mutateRouteBudget(
+    workspaceRoot,
+    taskSessionId,
+    fields,
+    args,
+    toolName,
+    "heartbeat",
     reservationId
   );
 }
@@ -1843,6 +1924,7 @@ module.exports = {
   reserveRouteCall,
   commitRouteReservation,
   rollbackRouteReservation,
+  heartbeatRouteReservation,
   requiredFields,
   listActiveTasks,
   cancelActiveTask,

@@ -24,23 +24,28 @@ CREATE TABLE IF NOT EXISTS jobs (
   revision INTEGER NOT NULL DEFAULT 0,
   progress_sequence INTEGER NOT NULL DEFAULT 0,
   payload_json TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  task_session_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_task_session ON jobs(task_session_id, status);
 """
 
 JOB_ID_RE = __import__("re").compile(r"^[A-Fa-f0-9]{12,32}$")
+# cancellation_uncertain is recoverable — not a hard terminal for cancel/recheck.
 TERMINAL_STATUSES = frozenset({
-    "completed", "failed", "timed_out", "cancelled", "cancellation_uncertain",
+    "completed", "failed", "timed_out", "cancelled",
 })
+RECOVERABLE_UNCERTAIN_STATUSES = frozenset({"cancellation_uncertain"})
 VALID_TRANSITIONS: dict[str, frozenset[str]] = {
     "created": frozenset({"queued", "cancelled", "cancel_requested"}),
     "starting": frozenset({"queued", "running", "cancelled", "cancel_requested", "failed", "cancellation_uncertain"}),
     "queued": frozenset({"starting", "running", "cancelled", "cancel_requested", "failed"}),
     "running": frozenset({"completed", "failed", "timed_out", "cancelled", "cancel_requested", "cancellation_uncertain"}),
     "cancel_requested": frozenset({"cancelled", "cancellation_uncertain"}),
+    "cancellation_uncertain": frozenset({"cancelled", "cancellation_uncertain", "cancel_requested"}),
 }
-NON_REGRESSIVE_FROM = frozenset({"cancel_requested", "cancelled", "cancellation_uncertain"})
+NON_REGRESSIVE_FROM = frozenset({"cancel_requested", "cancelled"})
 BLOCKED_AFTER_CANCEL = frozenset({"running", "completed", "failed", "queued", "starting", "created"})
 
 
@@ -82,6 +87,50 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+    }
+    if "task_session_id" not in columns:
+        conn.execute(
+            "ALTER TABLE jobs ADD COLUMN task_session_id TEXT NOT NULL DEFAULT ''"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_task_session ON jobs(task_session_id, status)"
+    )
+    rows = conn.execute(
+        "SELECT job_id, payload_json FROM jobs "
+        "WHERE task_session_id = '' OR task_session_id IS NULL"
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        args = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+        task_id = str(
+            payload.get("taskSessionId")
+            or args.get("taskSessionId")
+            or args.get("task_session_id")
+            or ""
+        ).strip()
+        if task_id:
+            conn.execute(
+                "UPDATE jobs SET task_session_id = ? WHERE job_id = ?",
+                (task_id, row["job_id"]),
+            )
+
+
+def _task_session_from_payload(payload: dict[str, Any]) -> str:
+    args = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+    return str(
+        payload.get("taskSessionId")
+        or args.get("taskSessionId")
+        or args.get("task_session_id")
+        or ""
+    ).strip()
 
 
 def validate_job_id(job_id: str) -> str:
@@ -159,16 +208,23 @@ def write_job_record(
                     merged = dict(payload)
                     merged["revision"] = max(1, int(merged.get("revision") or 0) or 1)
                 merged["updatedAt"] = _utc_now()
+                task_session_id = _task_session_from_payload(merged)
+                if task_session_id and not str(merged.get("taskSessionId") or "").strip():
+                    merged["taskSessionId"] = task_session_id
                 conn.execute(
                     """
-                    INSERT INTO jobs(job_id, status, revision, progress_sequence, payload_json, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO jobs(
+                      job_id, status, revision, progress_sequence,
+                      payload_json, updated_at, task_session_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(job_id) DO UPDATE SET
                       status = excluded.status,
                       revision = excluded.revision,
                       progress_sequence = excluded.progress_sequence,
                       payload_json = excluded.payload_json,
-                      updated_at = excluded.updated_at
+                      updated_at = excluded.updated_at,
+                      task_session_id = excluded.task_session_id
                     """,
                     (
                         job_id,
@@ -177,6 +233,7 @@ def write_job_record(
                         int(merged.get("progressSequence") or 0),
                         json.dumps(merged, ensure_ascii=False),
                         merged["updatedAt"],
+                        task_session_id,
                     ),
                 )
                 conn.execute("COMMIT")
@@ -277,21 +334,72 @@ def list_job_records(workspace: Path | None = None, *, limit: int = 20) -> list[
             conn.close()
 
 
-def prune_terminal_jobs(workspace: Path | None = None, *, ttl_hours: int = 24) -> int:
-    cutoff = datetime.now(tz=timezone.utc).timestamp() - (max(1, int(ttl_hours)) * 3600)
-    cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+def find_jobs_by_task_session_id(
+    task_session_id: str,
+    workspace: Path | None = None,
+    *,
+    include_terminal: bool = True,
+) -> list[dict[str, Any]]:
+    """Return all jobs linked to a task session via indexed task_session_id."""
+
+    session = str(task_session_id or "").strip()
+    if not session:
+        return []
     db_path = _db_path(workspace)
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
             _ensure_schema(conn)
+            if include_terminal:
+                rows = conn.execute(
+                    """
+                    SELECT payload_json FROM jobs
+                    WHERE task_session_id = ?
+                    ORDER BY updated_at DESC
+                    """,
+                    (session,),
+                ).fetchall()
+            else:
+                placeholders = ",".join("?" for _ in TERMINAL_STATUSES)
+                rows = conn.execute(
+                    f"""
+                    SELECT payload_json FROM jobs
+                    WHERE task_session_id = ?
+                      AND status NOT IN ({placeholders})
+                    ORDER BY updated_at DESC
+                    """,
+                    (session, *sorted(TERMINAL_STATUSES)),
+                ).fetchall()
+            jobs: list[dict[str, Any]] = []
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload_json"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, dict):
+                    jobs.append(payload)
+            return jobs
+        finally:
+            conn.close()
+
+
+def prune_terminal_jobs(workspace: Path | None = None, *, ttl_hours: int = 24) -> int:
+    cutoff = datetime.now(tz=timezone.utc).timestamp() - (max(1, int(ttl_hours)) * 3600)
+    cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+    db_path = _db_path(workspace)
+    statuses = tuple(sorted(TERMINAL_STATUSES | RECOVERABLE_UNCERTAIN_STATUSES))
+    placeholders = ",".join("?" for _ in statuses)
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            _ensure_schema(conn)
             cur = conn.execute(
-                """
+                f"""
                 DELETE FROM jobs
-                WHERE status IN (?, ?, ?, ?, ?)
+                WHERE status IN ({placeholders})
                   AND updated_at < ?
                 """,
-                (*TERMINAL_STATUSES, cutoff_iso),
+                (*statuses, cutoff_iso),
             )
             conn.commit()
             return int(cur.rowcount or 0)
