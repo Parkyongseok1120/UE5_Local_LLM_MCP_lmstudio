@@ -808,7 +808,6 @@ def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatc
             "orchestration": {"requiredBeforeWrite": ["unreal_runtime_debug_session"]},
         },
     )
-    state = started["state"]
     authorization = dict(started["taskAuthorization"])
     sent: list[dict] = []
     server.send = sent.append

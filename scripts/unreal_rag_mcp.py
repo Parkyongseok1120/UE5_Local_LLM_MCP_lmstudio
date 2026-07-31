@@ -1977,11 +1977,12 @@ class McpServer:
                 for tool in control_surface
                 if tool["name"] not in routed_names
             ]
-            # Preserve the stable-profile replan entrypoint while a prior
-            # read-only plan is active. It is not charged to the phase budget.
+            # Preserve the stable-profile replan entrypoint for a single active
+            # route. Multi-chat route_union must not advertise unbounded replan.
             replan = (
                 [by_name["unreal_agent_plan"]]
-                if "unreal_agent_plan" in by_name
+                if context.get("status") == "active"
+                and "unreal_agent_plan" in by_name
                 and "unreal_agent_plan" in allowed
                 and "unreal_agent_plan" not in routed_names
                 else []

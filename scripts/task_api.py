@@ -4498,12 +4498,17 @@ def authorize_active_task_tool(
         or args.get("conversation_id")
         or ""
     ).strip()
+    # Replan is a catalog recovery surface (tools/list may expose it without a
+    # capability). Discover with require_owner_capability=False so omitted or
+    # mismatched secrets still resolve a single project route; pass capability
+    # when present so multi-chat can select the owning task.
+    require_owner = tool_name not in NON_BUDGETED_REPLAN_TOOLS
     context = active_task_route_context(
         workspace,
         active_project=active_project,
         conversation_id=resolved_conversation,
         owner_capability=resolved_capability,
-        require_owner_capability=True,
+        require_owner_capability=require_owner,
     )
     if context.get("status") == "none":
         return {"ok": True, "legacy": True}

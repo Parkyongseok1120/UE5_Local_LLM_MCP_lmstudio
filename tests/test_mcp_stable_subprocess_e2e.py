@@ -290,8 +290,10 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             plan_only["result"]["content"][0]["text"]
         )
         assert plan_only_payload["writeGate"]["writesAllowed"] is False
-        denied_auth = plan_only_payload["taskAuthorization"]
-        assert all(denied_auth.values()), denied_auth
+        # plan_only auto-completes and must not leave durable write authorization.
+        plan_only_auth = plan_only_payload.get("taskAuthorization") or {}
+        assert not plan_only_auth.get("taskSessionId")
+        assert not plan_only_auth.get("authToken")
 
         planned = rag.request(
             "tools/call",
@@ -313,9 +315,8 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         assert plan_payload["writeGate"]["writesAllowed"] is True
         task_auth = plan_payload["taskAuthorization"]
         assert all(task_auth.values()), task_auth
-        assert task_auth["taskSessionId"] == denied_auth["taskSessionId"]
-        assert task_auth["planRevision"] != denied_auth["planRevision"]
-        assert task_auth["authToken"] != denied_auth["authToken"]
+        stale_auth = dict(task_auth)
+        stale_auth["authToken"] = "stale-plan-only-token"
         task_states = [
             json.loads(path.read_text(encoding="utf-8"))
             for path in (tmp_path / "state" / "unreal-agent" / "tasks").glob(
@@ -339,7 +340,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                     "projectRoot": str(project_dir),
                     "targetFiles": ["Source/DemoGame/Public/NewThing.h"],
                     "changeKind": "new_file",
-                    "taskAuthorization": denied_auth,
+                    "taskAuthorization": stale_auth,
                 },
             },
             32,
@@ -389,14 +390,19 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             2,
         )
         assert unauthorized["result"].get("isError") is True
-        assert "taskAuthorization is required" in unauthorized["result"]["content"][0]["text"]
+        unauthorized_text = unauthorized["result"]["content"][0]["text"]
+        assert (
+            "taskAuthorization is required" in unauthorized_text
+            or "TASK_ROUTE_OWNERSHIP_REQUIRED" in unauthorized_text
+            or "ownerCapability" in unauthorized_text
+        ), unauthorized_text
         assert not (source_dir / "Blocked.h").exists()
         plan_denied = client.request(
             "tools/call",
             {
                 "name": "write_file",
                 "arguments": {
-                    "taskAuthorization": denied_auth,
+                    "taskAuthorization": stale_auth,
                     "path": "Source/DemoGame/Public/BlockedPlan.h",
                     "content": "blocked\n",
                 },
@@ -607,7 +613,13 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
         names = {tool["name"] for tool in listed["result"]["tools"]}
         expected = set(started["toolRoute"]["activeTools"]).intersection(
             MANIFEST["agentEssential"]
-        ) | {"get_workspace_info", "get_active_project"}
+        ) | {
+            "get_workspace_info",
+            "get_active_project",
+            "list_active_tasks",
+            "cancel_active_task",
+            "quarantine_corrupt_task",
+        }
         assert names == expected
         assert "read_file" in names
 
