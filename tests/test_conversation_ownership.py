@@ -237,6 +237,92 @@ def test_capability_disables_legacy_connection_fallback(tmp_path: Path, monkeypa
     assert allowed["taskSessionId"] == scoped["taskSessionId"]
 
 
+def test_legacy_only_arbitrary_capability_fails_closed(tmp_path: Path, monkeypatch) -> None:
+    from mcp_connection import build_mcp_connection_id, task_connection_matches
+    from task_api import (
+        active_task_route_context,
+        authorize_active_task_tool,
+    )
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("MCP_BRIDGE_PAIR_ID", "bridge-legacy-only")
+    monkeypatch.setenv("MCP_CLIENT_INSTANCE_ID", "client-legacy-only")
+
+    started = task_start(
+        tmp_path,
+        request="legacy only",
+        start_background_job=False,
+    )
+    assert started["ok"] is True
+    legacy_id = str(started["taskSessionId"])
+    state_path = task_root(tmp_path, legacy_id) / "state.json"
+    legacy_state = json.loads(state_path.read_text(encoding="utf-8"))
+    # Convert the started task into a connection-owned legacy task.
+    legacy_state.pop("conversationId", None)
+    legacy_state.pop("ownerCapability", None)
+    legacy_state["mcpConnectionId"] = build_mcp_connection_id()
+    state_path.write_text(json.dumps(legacy_state), encoding="utf-8")
+
+    assert task_connection_matches(legacy_state) is True
+    assert task_connection_matches(legacy_state, owner_capability="a" * 64) is False
+
+    owned = active_task_route_context(
+        tmp_path,
+        require_owner_capability=True,
+    )
+    assert owned["status"] == "active"
+    assert owned["state"]["taskSessionId"] == legacy_id
+
+    # Capability was stripped from state; drop it from auth too for legacy path.
+    auth = dict(started["taskAuthorization"])
+    auth.pop("ownerCapability", None)
+    auth.pop("conversationId", None)
+    without_cap = authorize_active_task_tool(
+        tmp_path,
+        tool_name="read_file",
+        arguments={"taskAuthorization": auth},
+    )
+    assert without_cap["ok"] is True
+    assert without_cap["taskSessionId"] == legacy_id
+
+    denied = authorize_active_task_tool(
+        tmp_path,
+        tool_name="read_file",
+        arguments={"ownerCapability": "b" * 64},
+    )
+    assert denied["ok"] is False
+    assert denied.get("legacy") is not True
+    assert denied["errorCode"] == "TASK_ROUTE_CAPABILITY_MISMATCH"
+    assert "ownerCapability" in str(denied.get("nextAction") or "")
+
+    context = active_task_route_context(
+        tmp_path,
+        owner_capability="c" * 64,
+        require_owner_capability=True,
+    )
+    assert context["status"] == "ambiguous_or_corrupt"
+    assert context["errorCode"] == "TASK_ROUTE_CAPABILITY_MISMATCH"
+
+
+def test_state_root_unavailable_list_and_authorize(tmp_path: Path, monkeypatch) -> None:
+    from task_api import authorize_active_task_tool, task_list_active
+
+    bad_root = tmp_path / "not-a-dir"
+    bad_root.write_text("file", encoding="utf-8")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(bad_root))
+
+    listed = task_list_active(tmp_path)
+    assert listed["ok"] is False
+    assert listed["errorCode"] == "TASK_STATE_ROOT_UNAVAILABLE"
+    assert listed["nextAction"] == "check_agent_state_root"
+
+    denied = authorize_active_task_tool(tmp_path, tool_name="read_file", arguments={})
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "TASK_STATE_ROOT_UNAVAILABLE"
+    assert denied.get("legacy") is not True
+    assert denied["nextAction"] == "check_agent_state_root"
+
+
 def test_foreign_recover_returns_redacted_summary(tmp_path: Path, monkeypatch) -> None:
     from task_api import task_recover_active
 

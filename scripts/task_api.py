@@ -82,6 +82,35 @@ class TaskStateReadError(RuntimeError):
     """Raised when a persisted task record exists but cannot be trusted."""
 
 
+class TaskStateRootUnavailableError(RuntimeError):
+    """Raised when AGENT_STATE_ROOT cannot be created or scanned."""
+
+    error_code = "TASK_STATE_ROOT_UNAVAILABLE"
+
+
+def route_recovery_next_action(error_code: str = "") -> str:
+    """Shared recovery hint table for Node/Python authorize responses."""
+
+    code = str(error_code or "")
+    if code == "TASK_STATE_CORRUPT":
+        return "quarantine_corrupt_task"
+    if code == "TASK_ROUTE_OWNERSHIP_REQUIRED":
+        return "retry_with_taskAuthorization_ownerCapability"
+    if code == "TASK_ROUTE_CAPABILITY_MISMATCH":
+        return "retry_without_invalid_ownerCapability_or_use_matching_capability"
+    if code == "TASK_ROUTE_BLOCKED":
+        return "unreal_task_checkpoint_or_recover"
+    if code in {"TASK_SCOPE_MISMATCH", "TASK_OWNER_HINT_MISMATCH"}:
+        return "verify_active_project"
+    if code == "TASK_STATE_ROOT_UNAVAILABLE":
+        return "check_agent_state_root"
+    if code == "TASK_ROUTE_MISSING":
+        return "unreal_task_list_active"
+    if code == "MULTIPLE_HEALTHY_ROUTE_TASKS":
+        return "pass_ownerCapability_to_select_task"
+    return "list_active_tasks"
+
+
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -384,17 +413,9 @@ def active_task_route_context(
     running task may be exposed for catalog filtering without the secret.
     """
 
-    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
-    tasks_root = state_root / "tasks"
-    current_workspace = _canonical_workspace_root(workspace)
-    current_project = _canonical_project_identity(
-        active_project,
-        workspace=workspace,
-    )
-    running: list[dict[str, Any]] = []
-    unproven_candidates: list[dict[str, Any]] = []
-    scoped_claimants = 0
     try:
+        state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+        tasks_root = state_root / "tasks"
         task_dirs = sorted(
             (item for item in tasks_root.iterdir() if item.is_dir()),
             key=lambda item: item.name,
@@ -403,8 +424,17 @@ def active_task_route_context(
         return {
             "status": "blocked",
             "errorCode": "TASK_STATE_ROOT_UNAVAILABLE",
-            "error": f"task state root is unreadable: {exc}",
+            "error": f"task state root is unavailable: {exc}",
         }
+    current_workspace = _canonical_workspace_root(workspace)
+    current_project = _canonical_project_identity(
+        active_project,
+        workspace=workspace,
+    )
+    running: list[dict[str, Any]] = []
+    unproven_candidates: list[dict[str, Any]] = []
+    scoped_claimants = 0
+    unmatched_legacy_claimants = 0
     for task_dir in task_dirs:
         state_path = task_dir / "state.json"
         if not state_path.is_file():
@@ -570,6 +600,9 @@ def active_task_route_context(
                     or str(state.get("ownerCapability") or "").strip()
                 ):
                     scoped_claimants += 1
+                elif str(owner_capability or "").strip():
+                    # Capability claimed but this legacy task did not match.
+                    unmatched_legacy_claimants += 1
                 mode = str(state.get("mode") or "").strip().lower()
                 if (
                     not require_owner_capability
@@ -661,6 +694,15 @@ def active_task_route_context(
                     "taskAuthorization.ownerCapability for route ownership."
                 ),
                 "healthyRoutes": list(unproven_candidates),
+            }
+        if str(owner_capability or "").strip() and unmatched_legacy_claimants > 0:
+            return {
+                "status": "ambiguous_or_corrupt",
+                "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
+                "error": (
+                    "ownerCapability was provided but did not match any running task; "
+                    "legacy connection ownership is disabled when capability is present."
+                ),
             }
         return {"status": "none"}
     if len(unproven_candidates) == 1:
@@ -2010,13 +2052,15 @@ def _iter_discoverable_task_entries(
 ) -> list[dict[str, Any]]:
     """Yield running or corrupt tasks that claim the current project/workspace."""
 
-    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
-    tasks_root = state_root / "tasks"
-    entries: list[dict[str, Any]] = []
     try:
+        state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+        tasks_root = state_root / "tasks"
         task_dirs = [item for item in tasks_root.iterdir() if item.is_dir()]
-    except OSError:
-        return []
+    except OSError as exc:
+        raise TaskStateRootUnavailableError(
+            f"task state root is unavailable: {exc}"
+        ) from exc
+    entries: list[dict[str, Any]] = []
     for task_dir in task_dirs:
         task_session_id = task_dir.name
         state_path = task_dir / "state.json"
@@ -2154,14 +2198,18 @@ def _iter_running_task_states(
     conversation_id: str = "",
     owner_capability: str = "",
 ) -> list[dict[str, Any]]:
-    return [
-        dict(item["_state"])
-        for item in _iter_discoverable_task_entries(
+    try:
+        entries = _iter_discoverable_task_entries(
             workspace,
             active_project=active_project,
             conversation_id=conversation_id,
             owner_capability=owner_capability,
         )
+    except TaskStateRootUnavailableError:
+        return []
+    return [
+        dict(item["_state"])
+        for item in entries
         if item.get("status") == "running" and isinstance(item.get("_state"), dict)
     ]
 
@@ -2175,13 +2223,26 @@ def task_list_active(
 ) -> dict[str, Any]:
     """List running and corrupt tasks for the current project/workspace."""
 
+    try:
+        discovered = _iter_discoverable_task_entries(
+            workspace,
+            active_project=active_project,
+            conversation_id=conversation_id,
+            owner_capability=owner_capability,
+        )
+    except TaskStateRootUnavailableError as exc:
+        return {
+            "ok": False,
+            "errorCode": "TASK_STATE_ROOT_UNAVAILABLE",
+            "error": str(exc),
+            "count": 0,
+            "runningCount": 0,
+            "corruptCount": 0,
+            "tasks": [],
+            "nextAction": route_recovery_next_action("TASK_STATE_ROOT_UNAVAILABLE"),
+        }
     tasks = []
-    for item in _iter_discoverable_task_entries(
-        workspace,
-        active_project=active_project,
-        conversation_id=conversation_id,
-        owner_capability=owner_capability,
-    ):
+    for item in discovered:
         public = {key: value for key, value in item.items() if key != "_state"}
         # Never leak foreign conversation/connection identifiers or capabilities.
         if public.get("connectionMatches") is not True:
@@ -2785,6 +2846,8 @@ def task_resolve_active_session_id(
         conversation_id=conversation_id,
         owner_capability=owner_capability,
     )
+    if listed.get("ok") is False:
+        return listed
     tasks = [
         item
         for item in (listed.get("tasks") or [])
@@ -4452,15 +4515,7 @@ def authorize_active_task_tool(
                 str(context.get("error") or "")
                 or "Task route ownership is blocked, ambiguous, or corrupt"
             ),
-            "nextAction": (
-                "unreal_task_quarantine_corrupt"
-                if error_code == "TASK_STATE_CORRUPT"
-                else (
-                    "retry_with_taskAuthorization_ownerCapability"
-                    if error_code == "TASK_ROUTE_OWNERSHIP_REQUIRED"
-                    else "unreal_task_list_active"
-                )
-            ),
+            "nextAction": route_recovery_next_action(error_code),
         }
     state = context.get("state") or {}
     if context.get("status") == "blocked":
@@ -4470,14 +4525,14 @@ def authorize_active_task_tool(
                 "ok": False,
                 "errorCode": blocked_code,
                 "error": str(context.get("error") or "Task state root is unavailable."),
-                "nextAction": "check_agent_state_root",
+                "nextAction": route_recovery_next_action(blocked_code),
             }
         if tool_name not in NON_BUDGETED_REPLAN_TOOLS:
             return {
                 "ok": False,
                 "errorCode": blocked_code,
                 "error": "Task route ownership is blocked.",
-                "nextAction": "unreal_task_checkpoint_or_recover",
+                "nextAction": route_recovery_next_action(blocked_code),
             }
         validation_state = dict(state)
         supervisor = (
@@ -4490,7 +4545,7 @@ def authorize_active_task_tool(
                 "ok": False,
                 "errorCode": blocked_code,
                 "error": "Only an autonomy-supervisor blocker permits bounded replan.",
-                "nextAction": "unreal_task_checkpoint_or_recover",
+                "nextAction": route_recovery_next_action(blocked_code),
             }
         supervisor["blockers"] = []
         validation_state["autonomySupervisor"] = supervisor

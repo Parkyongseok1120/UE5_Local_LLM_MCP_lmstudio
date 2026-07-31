@@ -1034,6 +1034,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
   const running = [];
   const unprovenCandidates = [];
   let scopedClaimants = 0;
+  let unmatchedLegacyClaimants = 0;
   for (const entry of entries) {
     const entryDir = path.join(tasksRoot, entry.name);
     const ownerPath = path.join(entryDir, "workspace-root.txt");
@@ -1208,6 +1209,9 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
           || String(result.state.ownerCapability || "").trim()
         ) {
           scopedClaimants += 1;
+        } else if (ownerCapability) {
+          // Capability was claimed but this legacy task did not match.
+          unmatchedLegacyClaimants += 1;
         }
         if (!requireOwnerCapability) {
           const continuity = result.state.continuity
@@ -1295,14 +1299,25 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
     };
   }
   if (requireOwnerCapability) {
-    return scopedClaimants > 0
-      ? {
+    if (scopedClaimants > 0) {
+      return {
         status: "ambiguous_or_corrupt",
         errorCode: "TASK_ROUTE_OWNERSHIP_REQUIRED",
         error: "Running conversation-scoped task(s) require taskAuthorization.ownerCapability.",
         healthyRoutes: unprovenCandidates,
-      }
-      : { status: "none" };
+      };
+    }
+    if (ownerCapability && unmatchedLegacyClaimants > 0) {
+      return {
+        status: "ambiguous_or_corrupt",
+        errorCode: "TASK_ROUTE_CAPABILITY_MISMATCH",
+        error: (
+          "ownerCapability was provided but did not match any running task; "
+          + "legacy connection ownership is disabled when capability is present."
+        ),
+      };
+    }
+    return { status: "none" };
   }
   // ListTools / watcher: expose tools when exactly one project task is running.
   if (unprovenCandidates.length === 1) {
@@ -1319,6 +1334,30 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
   return { status: "none" };
 }
 
+function routeRecoveryNextAction(errorCode = "") {
+  switch (String(errorCode || "")) {
+    case "TASK_STATE_CORRUPT":
+      return "quarantine_corrupt_task";
+    case "TASK_ROUTE_OWNERSHIP_REQUIRED":
+      return "retry_with_taskAuthorization_ownerCapability";
+    case "TASK_ROUTE_CAPABILITY_MISMATCH":
+      return "retry_without_invalid_ownerCapability_or_use_matching_capability";
+    case "TASK_ROUTE_BLOCKED":
+      return "unreal_task_checkpoint_or_recover";
+    case "TASK_SCOPE_MISMATCH":
+    case "TASK_OWNER_HINT_MISMATCH":
+      return "verify_active_project";
+    case "TASK_STATE_ROOT_UNAVAILABLE":
+      return "check_agent_state_root";
+    case "TASK_ROUTE_MISSING":
+      return "unreal_task_list_active";
+    case "MULTIPLE_HEALTHY_ROUTE_TASKS":
+      return "pass_ownerCapability_to_select_task";
+    default:
+      return "list_active_tasks";
+  }
+}
+
 function listRunningTasksForProject(workspaceRoot, activeProject = "", options = {}) {
   const ownerCapability = String(
     options.ownerCapability || options.owner_capability || ""
@@ -1326,14 +1365,20 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
   const conversationId = String(
     options.conversationId || options.conversation_id || ""
   ).trim();
-  const stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
-  const tasksRoot = path.join(stateRoot, "tasks");
+  let stateRoot;
+  let tasksRoot;
   let entries = [];
   try {
+    stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
+    tasksRoot = path.join(stateRoot, "tasks");
     entries = fs.readdirSync(tasksRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory());
-  } catch {
-    return [];
+  } catch (error) {
+    const err = new Error(
+      `Task state root is unavailable: ${error && error.message ? error.message : error}`
+    );
+    err.errorCode = "TASK_STATE_ROOT_UNAVAILABLE";
+    throw err;
   }
   const currentWorkspace = canonicalWorkspaceRoot(workspaceRoot);
   const currentProject = canonicalProjectIdentity(activeProject, workspaceRoot);
@@ -1657,21 +1702,62 @@ function cancelRunningTaskSession(workspaceRoot, taskSessionId, options = {}) {
 }
 
 function listActiveTasks(workspaceRoot, activeProject = "", options = {}) {
-  const tasks = listRunningTasksForProject(workspaceRoot, activeProject, options);
-  const corrupt = tasks.filter((item) => item.status === "corrupt");
-  return {
-    ok: true,
-    count: tasks.length,
-    runningCount: tasks.filter((item) => item.status === "running").length,
-    corruptCount: corrupt.length,
-    tasks,
-    nextAction: corrupt.length
-      ? "quarantine_corrupt_task"
-      : (tasks.length ? "cancel_active_task" : "get_active_project"),
-  };
+  try {
+    const tasks = listRunningTasksForProject(workspaceRoot, activeProject, options);
+    const corrupt = tasks.filter((item) => item.status === "corrupt");
+    return {
+      ok: true,
+      count: tasks.length,
+      runningCount: tasks.filter((item) => item.status === "running").length,
+      corruptCount: corrupt.length,
+      tasks,
+      nextAction: corrupt.length
+        ? "quarantine_corrupt_task"
+        : (tasks.length ? "cancel_active_task" : "get_active_project"),
+    };
+  } catch (error) {
+    if (error && error.errorCode === "TASK_STATE_ROOT_UNAVAILABLE") {
+      return {
+        ok: false,
+        errorCode: "TASK_STATE_ROOT_UNAVAILABLE",
+        error: String(error.message || error),
+        tasks: [],
+        nextAction: routeRecoveryNextAction("TASK_STATE_ROOT_UNAVAILABLE"),
+      };
+    }
+    throw error;
+  }
 }
 
 function cancelActiveTask(
+  workspaceRoot,
+  activeProject = "",
+  taskSessionId = "",
+  force = false,
+  options = {}
+) {
+  try {
+    return cancelActiveTaskInner(
+      workspaceRoot,
+      activeProject,
+      taskSessionId,
+      force,
+      options
+    );
+  } catch (error) {
+    if (error && error.errorCode === "TASK_STATE_ROOT_UNAVAILABLE") {
+      return {
+        ok: false,
+        errorCode: "TASK_STATE_ROOT_UNAVAILABLE",
+        error: String(error.message || error),
+        nextAction: routeRecoveryNextAction("TASK_STATE_ROOT_UNAVAILABLE"),
+      };
+    }
+    throw error;
+  }
+}
+
+function cancelActiveTaskInner(
   workspaceRoot,
   activeProject = "",
   taskSessionId = "",
@@ -1819,24 +1905,13 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
   }
   if (active.status !== "active") {
     const errorCode = String(active.errorCode || "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT");
-    const nextAction = errorCode === "TASK_STATE_CORRUPT"
-      ? "quarantine_corrupt_task"
-      : errorCode === "TASK_ROUTE_OWNERSHIP_REQUIRED"
-        ? "retry_with_taskAuthorization_ownerCapability"
-        : errorCode === "TASK_ROUTE_BLOCKED"
-          ? "unreal_task_checkpoint_or_recover"
-          : errorCode === "TASK_SCOPE_MISMATCH" || errorCode === "TASK_OWNER_HINT_MISMATCH"
-            ? "verify_active_project"
-            : errorCode === "TASK_STATE_ROOT_UNAVAILABLE"
-              ? "check_agent_state_root"
-              : "list_active_tasks";
     return {
       ok: false,
       errorCode,
       error: active.error || "Task route is ambiguous, corrupt, or blocked.",
       routeStatus: active.status,
       toolRoute: active.route,
-      nextAction,
+      nextAction: routeRecoveryNextAction(errorCode),
     };
   }
   const route = active.route;

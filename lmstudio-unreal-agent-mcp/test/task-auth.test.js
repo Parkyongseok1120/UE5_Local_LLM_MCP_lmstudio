@@ -1384,3 +1384,75 @@ test("explicit ownerCapability disables legacy connection ownership", () => {
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
+
+test("legacy-only task + arbitrary ownerCapability fails closed", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-legacy-only-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-legacy-only-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const previous = process.env.AGENT_STATE_ROOT;
+  const previousBridge = process.env.MCP_BRIDGE_PAIR_ID;
+  const previousClient = process.env.MCP_CLIENT_INSTANCE_ID;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  process.env.MCP_BRIDGE_PAIR_ID = "bridge-legacy-only-node";
+  process.env.MCP_CLIENT_INSTANCE_ID = "client-legacy-only-node";
+  try {
+    const { getMcpConnectionId, taskConnectionMatches } = require("../src/mcp-connection");
+    const { listActiveTasks } = require("../src/task-auth");
+    const legacy = routeState(projectFile, {
+      taskSessionId: "task_legacyonly1",
+      mcpConnectionId: getMcpConnectionId(),
+    });
+    delete legacy.conversationId;
+    delete legacy.ownerCapability;
+    const dir = path.join(stateRoot, "tasks", legacy.taskSessionId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(legacy));
+
+    assert.strictEqual(taskConnectionMatches(legacy), true);
+    assert.strictEqual(taskConnectionMatches(legacy, "", "a".repeat(64)), false);
+
+    const withoutCap = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      {},
+      { activeProject: projectFile, consumeBudget: false }
+    );
+    assert.strictEqual(withoutCap.ok, true);
+    assert.strictEqual(withoutCap.taskSessionId, legacy.taskSessionId);
+
+    const denied = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      { ownerCapability: "b".repeat(64) },
+      { activeProject: projectFile, consumeBudget: false }
+    );
+    assert.strictEqual(denied.ok, false);
+    assert.notStrictEqual(denied.legacy, true);
+    assert.strictEqual(denied.errorCode, "TASK_ROUTE_CAPABILITY_MISMATCH");
+    assert.ok(String(denied.nextAction || "").includes("ownerCapability"));
+
+    const badRoot = path.join(os.tmpdir(), `task-list-root-file-${Date.now()}`);
+    fs.writeFileSync(badRoot, "not-a-directory");
+    const previousRoot = process.env.AGENT_STATE_ROOT;
+    process.env.AGENT_STATE_ROOT = badRoot;
+    try {
+      const listed = listActiveTasks(workspace, projectFile);
+      assert.strictEqual(listed.ok, false);
+      assert.strictEqual(listed.errorCode, "TASK_STATE_ROOT_UNAVAILABLE");
+      assert.strictEqual(listed.nextAction, "check_agent_state_root");
+    } finally {
+      process.env.AGENT_STATE_ROOT = previousRoot;
+      fs.rmSync(badRoot, { force: true });
+    }
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    if (previousBridge === undefined) delete process.env.MCP_BRIDGE_PAIR_ID;
+    else process.env.MCP_BRIDGE_PAIR_ID = previousBridge;
+    if (previousClient === undefined) delete process.env.MCP_CLIENT_INSTANCE_ID;
+    else process.env.MCP_CLIENT_INSTANCE_ID = previousClient;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
