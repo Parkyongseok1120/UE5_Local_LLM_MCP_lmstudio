@@ -659,20 +659,20 @@ function validationFailed(validation) {
   return Boolean(validation && validation.ok === false);
 }
 
-function filterAgentTools(tools) {
+function filterAgentTools(tools, context = null) {
   const allowed = callableAgentToolNames(tools.map((tool) => tool.name));
   const exposed = tools.filter((tool) => allowed.has(tool.name));
-  const context = listToolsRouteContext(
+  const resolved = context || listToolsRouteContext(
     WORKSPACE_ROOT,
     getActiveProject(CONFIG_PATH) || ""
   );
-  if (context.status === "none") return exposed;
-  const route = context.route && typeof context.route === "object" ? context.route : {};
+  if (resolved.status === "none") return exposed;
+  const route = resolved.route && typeof resolved.route === "object" ? resolved.route : {};
   const routed = Array.isArray(route.activeTools) ? route.activeTools.map(String) : [];
-  // Multi-chat: expose the union of running routes; CallTool still proves ownership.
+  // Multi-chat: expose the union of healthy routes only; CallTool still proves ownership.
   if (
-    context.status === "active"
-    || (context.status === "ambiguous_or_corrupt" && routed.length)
+    resolved.status === "active"
+    || (resolved.catalogMode === "route_union" && routed.length)
   ) {
     const allowedNames = new Set(routed);
     return exposed.filter(
@@ -905,7 +905,11 @@ function routeOwnershipFromArgs(args = {}) {
       : {};
   return {
     ownerCapability: String(
-      auth.ownerCapability || auth.owner_capability || ""
+      auth.ownerCapability
+      || auth.owner_capability
+      || args.ownerCapability
+      || args.owner_capability
+      || ""
     ).trim(),
     conversationId: String(
       auth.conversationId
@@ -1700,7 +1704,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   );
   lastObservedRouteFingerprint = activeRouteFingerprint(context);
   return {
-    tools: filterAgentTools(tools)
+    tools: filterAgentTools(tools, context)
   };
 });
 

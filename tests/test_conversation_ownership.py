@@ -134,12 +134,38 @@ def test_multi_chat_tools_list_exposes_route_union(tmp_path: Path, monkeypatch) 
     assert chat_a["ok"] and chat_b["ok"]
     context = list_tools_route_context(tmp_path)
     assert context["status"] == "ambiguous_or_corrupt"
+    assert context["errorCode"] == "MULTIPLE_HEALTHY_ROUTE_TASKS"
     assert context.get("catalogMode") == "route_union"
     tools = set((context.get("state") or {}).get("toolRoute", {}).get("activeTools") or [])
     assert tools
     assert tools >= set(chat_a["toolRoute"]["activeTools"]) | set(
         chat_b["toolRoute"]["activeTools"]
     )
+
+
+def test_corrupt_task_blocks_route_union_catalog(tmp_path: Path, monkeypatch) -> None:
+    from task_api import list_tools_route_context, task_root
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Foo.cpp",
+        conversation_id="conv-healthy",
+        start_background_job=False,
+    )
+    assert started["ok"] is True
+    corrupt_dir = tmp_path / "state" / "tasks" / "corrupt_task_block"
+    corrupt_dir.mkdir(parents=True)
+    (corrupt_dir / "workspace-root.txt").write_text(
+        str(tmp_path.resolve()), encoding="utf-8"
+    )
+    (corrupt_dir / "state.json").write_text("{", encoding="utf-8")
+    context = list_tools_route_context(tmp_path)
+    assert context["status"] == "ambiguous_or_corrupt"
+    assert context["errorCode"] == "TASK_STATE_CORRUPT"
+    assert context.get("catalogMode") != "route_union"
+    # Healthy task still exists on disk.
+    assert (task_root(tmp_path, started["taskSessionId"]) / "state.json").is_file()
 
 
 def test_task_authorization_schema_accepts_owner_capability() -> None:

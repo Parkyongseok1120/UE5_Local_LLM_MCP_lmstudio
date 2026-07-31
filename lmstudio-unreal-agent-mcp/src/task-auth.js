@@ -1061,7 +1061,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
       if (!hintClaimsCurrent) continue;
       return {
         status: "ambiguous_or_corrupt",
-        errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+        errorCode: "TASK_STATE_CORRUPT",
         error: `Task state is corrupt: ${entry.name}.`,
       };
     }
@@ -1089,7 +1089,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
       if (hintedProject === currentProject || stateProject === currentProject) {
         return {
           status: "ambiguous_or_corrupt",
-          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+          errorCode: "TASK_SCOPE_MISMATCH",
           error: `Task project ownership mismatch: ${entry.name}.`,
         };
       }
@@ -1104,7 +1104,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
       if (hintedWorkspace === currentWorkspace || stateOwner === currentWorkspace) {
         return {
           status: "ambiguous_or_corrupt",
-          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+          errorCode: "TASK_OWNER_HINT_MISMATCH",
           error: `Task workspace ownership mismatch: ${entry.name}.`,
         };
       }
@@ -1174,7 +1174,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
       if (!result.state.toolRoute || typeof result.state.toolRoute !== "object") {
         return {
           status: "ambiguous_or_corrupt",
-          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+          errorCode: "TASK_ROUTE_MISSING",
           error: `Running task has no valid tool route: ${entry.name}.`,
         };
       }
@@ -1225,7 +1225,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
               taskSessionId: String(result.state.taskSessionId || entry.name),
               state: result.state,
               route: result.state.toolRoute,
-              errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+              errorCode: "TASK_ROUTE_BLOCKED",
               error: `Running task is blocked by lease or recovery state: ${entry.name}.`,
             };
           }
@@ -1262,29 +1262,31 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
           taskSessionId: String(result.state.taskSessionId || entry.name),
           state: result.state,
           route: result.state.toolRoute,
-          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+          errorCode: "TASK_ROUTE_BLOCKED",
           error: `Running task is blocked by lease or recovery state: ${entry.name}.`,
         };
       }
       running.push(candidate);
-      if (running.length > 1) {
-        return {
-          status: "ambiguous_or_corrupt",
-          errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
-          error: "More than one running task owns an active tool route.",
-        };
-      }
     }
   }
   if (running.length === 1) {
     return { status: "active", ...running[0] };
   }
+  if (running.length > 1) {
+    return {
+      status: "ambiguous_or_corrupt",
+      errorCode: "MULTIPLE_HEALTHY_ROUTE_TASKS",
+      error: "More than one running task owns an active tool route.",
+      healthyRoutes: running,
+    };
+  }
   if (requireOwnerCapability) {
     return scopedClaimants > 0
       ? {
         status: "ambiguous_or_corrupt",
-        errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+        errorCode: "TASK_ROUTE_OWNERSHIP_REQUIRED",
         error: "Running conversation-scoped task(s) require taskAuthorization.ownerCapability.",
+        healthyRoutes: unprovenCandidates,
       }
       : { status: "none" };
   }
@@ -1295,8 +1297,9 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
   if (unprovenCandidates.length > 1 || scopedClaimants > 1) {
     return {
       status: "ambiguous_or_corrupt",
-      errorCode: "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT",
+      errorCode: "MULTIPLE_HEALTHY_ROUTE_TASKS",
       error: "More than one running task owns an active tool route.",
+      healthyRoutes: unprovenCandidates,
     };
   }
   return { status: "none" };
@@ -1449,7 +1452,43 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
   return tasks;
 }
 
-function collectProjectActiveToolUnion(workspaceRoot, activeProject = "") {
+const CATALOG_UNION_ERROR_CODES = new Set([
+  "MULTIPLE_HEALTHY_ROUTE_TASKS",
+  "TASK_ROUTE_OWNERSHIP_REQUIRED",
+]);
+
+function unionFromHealthyRoutes(healthyRoutes = []) {
+  const tools = new Set();
+  const routeParts = [];
+  let taskCount = 0;
+  for (const item of healthyRoutes) {
+    const state = item && item.state ? item.state : item;
+    if (!state || typeof state !== "object") continue;
+    const route = item.route
+      || effectiveToolRouteForState(state)
+      || state.toolRoute
+      || {};
+    if (!route || typeof route !== "object") continue;
+    taskCount += 1;
+    for (const name of Array.isArray(route.activeTools) ? route.activeTools : []) {
+      if (name) tools.add(String(name));
+    }
+    routeParts.push(
+      `${String(state.taskSessionId || item.taskSessionId || "")}:${String(route.routeHash || "")}:${String(route.phase || "")}`
+    );
+  }
+  const sortedTools = [...tools].sort();
+  return {
+    tools: sortedTools,
+    fingerprint: `${taskCount}:${routeParts.join("|")}:${sortedTools.join(",")}`,
+    taskCount,
+  };
+}
+
+function collectProjectActiveToolUnion(workspaceRoot, activeProject = "", options = {}) {
+  if (Array.isArray(options.healthyRoutes) && options.healthyRoutes.length) {
+    return unionFromHealthyRoutes(options.healthyRoutes);
+  }
   const stateRoot = ensureStateRootLayout(resolveAgentStateRoot(workspaceRoot));
   const tasksRoot = path.join(stateRoot, "tasks");
   let entries = [];
@@ -1462,9 +1501,7 @@ function collectProjectActiveToolUnion(workspaceRoot, activeProject = "") {
   }
   const currentWorkspace = canonicalWorkspaceRoot(workspaceRoot);
   const currentProject = canonicalProjectIdentity(activeProject, workspaceRoot);
-  const tools = new Set();
-  const routeParts = [];
-  let taskCount = 0;
+  const healthyRoutes = [];
   for (const entry of entries) {
     const result = readTaskStateResult(workspaceRoot, entry.name, stateRoot);
     if (!result.state || typeof result.state !== "object") continue;
@@ -1493,20 +1530,13 @@ function collectProjectActiveToolUnion(workspaceRoot, activeProject = "") {
     if (!ownsCurrent) continue;
     const route = effectiveToolRouteForState(state) || state.toolRoute || {};
     if (!route || typeof route !== "object") continue;
-    taskCount += 1;
-    for (const name of Array.isArray(route.activeTools) ? route.activeTools : []) {
-      if (name) tools.add(String(name));
-    }
-    routeParts.push(
-      `${String(state.taskSessionId || entry.name)}:${String(route.routeHash || "")}:${String(route.phase || "")}`
-    );
+    healthyRoutes.push({
+      taskSessionId: String(state.taskSessionId || entry.name),
+      state,
+      route,
+    });
   }
-  const sortedTools = [...tools].sort();
-  return {
-    tools: sortedTools,
-    fingerprint: `${taskCount}:${routeParts.join("|")}:${sortedTools.join(",")}`,
-    taskCount,
-  };
+  return unionFromHealthyRoutes(healthyRoutes);
 }
 
 function listToolsRouteContext(workspaceRoot, activeProject = "") {
@@ -1514,7 +1544,13 @@ function listToolsRouteContext(workspaceRoot, activeProject = "") {
   if (context.status !== "ambiguous_or_corrupt") {
     return context;
   }
-  const union = collectProjectActiveToolUnion(workspaceRoot, activeProject);
+  // Corrupt / scope mismatch must stay recovery-only (no union).
+  if (!CATALOG_UNION_ERROR_CODES.has(String(context.errorCode || ""))) {
+    return context;
+  }
+  const union = collectProjectActiveToolUnion(workspaceRoot, activeProject, {
+    healthyRoutes: context.healthyRoutes,
+  });
   if (!union.tools.length) {
     return context;
   }
@@ -1735,6 +1771,8 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
     options.ownerCapability
     || auth.ownerCapability
     || auth.owner_capability
+    || args.ownerCapability
+    || args.owner_capability
     || ""
   ).trim();
   const conversationId = String(
@@ -1742,6 +1780,7 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
     || auth.conversationId
     || auth.conversation_id
     || args.conversationId
+    || args.conversation_id
     || ""
   ).trim();
   const active = discoverActiveTaskContext(

@@ -1212,8 +1212,11 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
       discoverActiveTaskContext(workspace, projectFile).status,
       "ambiguous_or_corrupt"
     );
+    const multi = discoverActiveTaskContext(workspace, projectFile);
+    assert.strictEqual(multi.errorCode, "MULTIPLE_HEALTHY_ROUTE_TASKS");
     const catalog = listToolsRouteContext(workspace, projectFile);
     assert.strictEqual(catalog.status, "ambiguous_or_corrupt");
+    assert.strictEqual(catalog.errorCode, "MULTIPLE_HEALTHY_ROUTE_TASKS");
     assert.strictEqual(catalog.catalogMode, "route_union");
     assert.ok(Array.isArray(catalog.route.activeTools));
     assert.ok(catalog.route.activeTools.includes("read_file"));
@@ -1237,6 +1240,15 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
     assert.strictEqual(allowed.ok, true);
     assert.strictEqual(allowed.taskSessionId, taskA.taskSessionId);
 
+    const topLevel = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      { ownerCapability: capA },
+      { activeProject: projectFile, consumeBudget: false }
+    );
+    assert.strictEqual(topLevel.ok, true);
+    assert.strictEqual(topLevel.taskSessionId, taskA.taskSessionId);
+
     const foreign = authorizeActiveRouteTool(
       workspace,
       "read_file",
@@ -1256,6 +1268,15 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
     assert.strictEqual(other.mcpConnectionId, "");
     assert.strictEqual(other.conversationId, undefined);
 
+    const listedTop = listActiveTasks(workspace, projectFile, {});
+    // Simulate parser via top-level capability through listActiveTasks options
+    // (server routeOwnershipFromArgs now maps args.ownerCapability).
+    const listedTopLevel = listActiveTasks(workspace, projectFile, {
+      ownerCapability: capA,
+    });
+    assert.ok(listedTopLevel.tasks.some((item) => item.connectionMatches === true));
+    assert.ok(listedTop.tasks.every((item) => item.connectionMatches !== true));
+
     const deniedCancel = cancelActiveTask(
       workspace,
       projectFile,
@@ -1264,6 +1285,14 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
       {}
     );
     assert.strictEqual(deniedCancel.errorCode, "TASK_OWNED_BY_ANOTHER_CONNECTION");
+
+    const corruptDir = path.join(stateRoot, "tasks", "corrupt_blocker");
+    fs.mkdirSync(corruptDir, { recursive: true });
+    fs.writeFileSync(path.join(corruptDir, "workspace-root.txt"), workspace);
+    fs.writeFileSync(path.join(corruptDir, "state.json"), "{");
+    const blockedCatalog = listToolsRouteContext(workspace, projectFile);
+    assert.strictEqual(blockedCatalog.errorCode, "TASK_STATE_CORRUPT");
+    assert.notStrictEqual(blockedCatalog.catalogMode, "route_union");
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;

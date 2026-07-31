@@ -453,6 +453,7 @@ def active_task_route_context(
                 continue
             return {
                 "status": "ambiguous_or_corrupt",
+                "errorCode": "TASK_STATE_CORRUPT",
                 "error": f"task state is corrupt: {state_path}",
             }
         if not isinstance(state, dict):
@@ -460,6 +461,7 @@ def active_task_route_context(
                 continue
             return {
                 "status": "ambiguous_or_corrupt",
+                "errorCode": "TASK_STATE_CORRUPT",
                 "error": f"task state is not an object: {state_path}",
             }
         route_scope = (
@@ -485,6 +487,7 @@ def active_task_route_context(
             if current_project in {hinted_project, state_project}:
                 return {
                     "status": "ambiguous_or_corrupt",
+                    "errorCode": "TASK_SCOPE_MISMATCH",
                     "error": f"task project ownership mismatch: {state_path}",
                 }
             continue
@@ -497,6 +500,7 @@ def active_task_route_context(
             if current_workspace in {hinted_workspace, state_owner}:
                 return {
                     "status": "ambiguous_or_corrupt",
+                    "errorCode": "TASK_OWNER_HINT_MISMATCH",
                     "error": f"task workspace ownership mismatch: {state_path}",
                 }
             continue
@@ -552,6 +556,7 @@ def active_task_route_context(
             if not isinstance(state.get("toolRoute"), dict):
                 return {
                     "status": "ambiguous_or_corrupt",
+                    "errorCode": "TASK_ROUTE_MISSING",
                     "error": f"running task has no toolRoute: {state_path}",
                 }
             if not task_owns_active_tool_route(
@@ -590,9 +595,17 @@ def active_task_route_context(
                         else {}
                     )
                     if lease and lease_health(continuity).get("active") is not True:
-                        return {"status": "blocked", "state": state}
+                        return {
+                            "status": "blocked",
+                            "errorCode": "TASK_ROUTE_BLOCKED",
+                            "state": state,
+                        }
                     if recovery.get("conflicts") or supervisor.get("blockers"):
-                        return {"status": "blocked", "state": state}
+                        return {
+                            "status": "blocked",
+                            "errorCode": "TASK_ROUTE_BLOCKED",
+                            "state": state,
+                        }
                     unproven_candidates.append(state)
                 continue
             continuity = (
@@ -616,25 +629,37 @@ def active_task_route_context(
                 else {}
             )
             if lease and lease_health(continuity).get("active") is not True:
-                return {"status": "blocked", "state": state}
-            if recovery.get("conflicts") or supervisor.get("blockers"):
-                return {"status": "blocked", "state": state}
-            running.append(state)
-            if len(running) > 1:
                 return {
-                    "status": "ambiguous_or_corrupt",
-                    "error": "multiple running tasks prevent deterministic route ownership",
+                    "status": "blocked",
+                    "errorCode": "TASK_ROUTE_BLOCKED",
+                    "state": state,
                 }
+            if recovery.get("conflicts") or supervisor.get("blockers"):
+                return {
+                    "status": "blocked",
+                    "errorCode": "TASK_ROUTE_BLOCKED",
+                    "state": state,
+                }
+            running.append(state)
     if len(running) == 1:
         return {"status": "active", "state": running[0]}
+    if len(running) > 1:
+        return {
+            "status": "ambiguous_or_corrupt",
+            "errorCode": "MULTIPLE_HEALTHY_ROUTE_TASKS",
+            "error": "multiple running tasks prevent deterministic route ownership",
+            "healthyRoutes": running,
+        }
     if require_owner_capability:
         if scoped_claimants:
             return {
                 "status": "ambiguous_or_corrupt",
+                "errorCode": "TASK_ROUTE_OWNERSHIP_REQUIRED",
                 "error": (
                     "Running conversation-scoped task(s) require "
                     "taskAuthorization.ownerCapability for route ownership."
                 ),
+                "healthyRoutes": list(unproven_candidates),
             }
         return {"status": "none"}
     if len(unproven_candidates) == 1:
@@ -642,29 +667,41 @@ def active_task_route_context(
     if len(unproven_candidates) > 1 or scoped_claimants > 1:
         return {
             "status": "ambiguous_or_corrupt",
+            "errorCode": "MULTIPLE_HEALTHY_ROUTE_TASKS",
             "error": "multiple running tasks prevent deterministic route ownership",
+            "healthyRoutes": list(unproven_candidates),
         }
     return {"status": "none"}
+
+
+_CATALOG_UNION_ERROR_CODES = {
+    "MULTIPLE_HEALTHY_ROUTE_TASKS",
+    "TASK_ROUTE_OWNERSHIP_REQUIRED",
+}
 
 
 def collect_project_active_tool_union(
     workspace: Path,
     *,
     active_project: str = "",
+    healthy_routes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Union of activeTools across all project-scoped running route tasks."""
 
     tools: set[str] = set()
     route_parts: list[str] = []
     task_count = 0
-    for state in _iter_running_task_states(workspace, active_project=active_project):
+    states = healthy_routes
+    if states is None:
+        states = _iter_running_task_states(workspace, active_project=active_project)
+    for state in states:
+        if not isinstance(state, dict):
+            continue
         mode = str(state.get("mode") or "").strip().lower()
         if mode in {"plan_only", "detached"}:
             continue
-        route = (
-            state.get("toolRoute")
-            if isinstance(state.get("toolRoute"), dict)
-            else {}
+        route = effective_tool_route(state.get("toolRoute")) or (
+            state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
         )
         if not route:
             continue
@@ -698,9 +735,13 @@ def list_tools_route_context(
     )
     if context.get("status") != "ambiguous_or_corrupt":
         return context
+    # Corrupt / scope mismatch stay recovery-only.
+    if str(context.get("errorCode") or "") not in _CATALOG_UNION_ERROR_CODES:
+        return context
     union = collect_project_active_tool_union(
         workspace,
         active_project=active_project,
+        healthy_routes=list(context.get("healthyRoutes") or []) or None,
     )
     if not union.get("tools"):
         return context
