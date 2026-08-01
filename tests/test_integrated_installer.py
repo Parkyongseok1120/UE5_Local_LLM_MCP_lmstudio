@@ -14,6 +14,25 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.py"
 
 
+@pytest.fixture(autouse=True)
+def _ensure_node_npm_on_path(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unreal adapter tests need node/npm; provide shims when the host has none."""
+    if shutil.which("node") and shutil.which("npm"):
+        return
+    bindir = tmp_path_factory.mktemp("node-shims")
+    if os.name == "nt":
+        (bindir / "node.cmd").write_text("@echo v20.20.2\r\n", encoding="utf-8")
+        (bindir / "npm.cmd").write_text("@echo 10.8.2\r\n", encoding="utf-8")
+    else:
+        node = bindir / "node"
+        npm = bindir / "npm"
+        node.write_text("#!/bin/sh\necho v20.20.2\n", encoding="utf-8")
+        npm.write_text("#!/bin/sh\necho 10.8.2\n", encoding="utf-8")
+        node.chmod(0o755)
+        npm.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
 def _load_installer_module():
     spec = importlib.util.spec_from_file_location("integrated_install", INSTALLER)
     module = importlib.util.module_from_spec(spec)
@@ -129,6 +148,68 @@ def test_interactive_cline_selection_uses_default_settings_path(
 
     assert "cline" in components
     assert args.cline_settings == Path.home() / ".cline" / "data" / "settings" / "cline_mcp_settings.json"
+
+
+def test_applescript_quote_escapes_backslashes_and_quotes() -> None:
+    module = _load_installer_module()
+    sys.modules.pop("integrated_install", None)
+    assert module._applescript_quote('a"b\\c') == 'a\\"b\\\\c'
+
+
+def test_macos_picker_prefers_osascript_over_tkinter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    project = tmp_path / "Demo.uproject"
+    project.write_text("{}", encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_osascript(kind: str, initial_directory: Path) -> str:
+        calls.append(f"osascript:{kind}:{initial_directory}")
+        return str(project)
+
+    def fake_tkinter(kind: str, initial_directory: Path) -> str:
+        calls.append("tkinter")
+        raise AssertionError("tkinter should not run when osascript succeeds")
+
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module, "_pick_with_osascript", fake_osascript)
+    monkeypatch.setattr(module, "_pick_with_tkinter", fake_tkinter)
+
+    selected = module._pick_indexing_target("uproject", tmp_path)
+    sys.modules.pop("integrated_install", None)
+
+    assert selected == project.resolve()
+    assert calls == [f"osascript:uproject:{tmp_path}"]
+
+
+def test_macos_picker_falls_back_to_tkinter_when_osascript_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    folder = tmp_path / "Projects"
+    folder.mkdir()
+    calls: list[str] = []
+
+    def fake_osascript(kind: str, initial_directory: Path) -> str:
+        calls.append("osascript")
+        raise RuntimeError("not allowed to send Apple events")
+
+    def fake_tkinter(kind: str, initial_directory: Path) -> str:
+        calls.append(f"tkinter:{kind}")
+        return str(folder)
+
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module, "_pick_with_osascript", fake_osascript)
+    monkeypatch.setattr(module, "_pick_with_tkinter", fake_tkinter)
+
+    selected = module._pick_indexing_target("folder", tmp_path)
+    sys.modules.pop("integrated_install", None)
+
+    assert selected == folder.resolve()
+    assert calls == ["osascript", "tkinter:folder"]
 
 
 @pytest.mark.parametrize(
@@ -261,6 +342,7 @@ def _run(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
             sys.executable,
             str(INSTALLER),
             "--yes",
+            "--skip-runtime-bootstrap",
             "--codex-home",
             str(tmp_path / "codex"),
             "--lmstudio-home",

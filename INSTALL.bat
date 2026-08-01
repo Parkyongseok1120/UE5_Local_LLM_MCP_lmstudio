@@ -3,9 +3,19 @@ setlocal
 cd /d "%~dp0"
 where py >nul 2>nul
 if errorlevel 1 goto use_python
+py -3.12 -c "import sys" >nul 2>nul
+if not errorlevel 1 (
+    py -3.12 install.py %*
+    goto finish
+)
 py -3 install.py %*
 goto finish
 :use_python
+where python3.12 >nul 2>nul
+if not errorlevel 1 (
+    python3.12 install.py %*
+    goto finish
+)
 python install.py %*
 :finish
 set "INSTALL_EXIT=%ERRORLEVEL%"

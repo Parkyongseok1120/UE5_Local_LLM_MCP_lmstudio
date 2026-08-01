@@ -139,50 +139,97 @@ def _project_picker_initial_directory(args: argparse.Namespace) -> Path:
     return Path.home()
 
 
-def _pick_indexing_target(kind: str, initial_directory: Path) -> Path | None:
-    """Open the native file picker through tkinter without asking for a typed path."""
-    root: Any | None = None
+def _picker_title(kind: str) -> str:
+    if kind == "uproject":
+        return "Select Unreal project (.uproject) to index"
+    if kind == "engine":
+        return "Select Unreal Engine root folder"
+    return "Select folder to scan for Unreal projects"
+
+
+def _applescript_quote(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _pick_with_osascript(kind: str, initial_directory: Path) -> str | None:
+    """Use macOS choose file/folder so the dialog activates from Terminal/iTerm."""
+    start = initial_directory if initial_directory.is_dir() else Path.home()
+    prompt = _applescript_quote(_picker_title(kind))
+    default = _applescript_quote(str(start))
+    if kind == "uproject":
+        script = (
+            "try\n"
+            f'  set theFile to choose file with prompt "{prompt}" '
+            f'default location (POSIX file "{default}")\n'
+            "  return POSIX path of theFile\n"
+            "on error number -128\n"
+            '  return ""\n'
+            "end try"
+        )
+    else:
+        script = (
+            "try\n"
+            f'  set theFolder to choose folder with prompt "{prompt}" '
+            f'default location (POSIX file "{default}")\n'
+            "  return POSIX path of theFolder\n"
+            "on error number -128\n"
+            '  return ""\n'
+            "end try"
+        )
+    completed = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "osascript picker failed").strip()
+        raise RuntimeError(detail)
+    selected = completed.stdout.strip()
+    return selected or None
+
+
+def _pick_with_tkinter(kind: str, initial_directory: Path) -> str | None:
+    """Fallback picker for Windows/Linux, and macOS when osascript is unavailable."""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            root.attributes("-topmost", True)
-        except tk.TclError:
-            pass
+        root.attributes("-topmost", True)
+    except tk.TclError:
+        pass
+    try:
+        root.lift()
+        root.focus_force()
+        root.update()
+    except tk.TclError:
+        pass
+    title = _picker_title(kind)
+    initial = str(initial_directory if initial_directory.is_dir() else Path.home())
+    try:
         if kind == "uproject":
-            selected = filedialog.askopenfilename(
+            return filedialog.askopenfilename(
                 parent=root,
-                title="Select Unreal project (.uproject) to index",
-                initialdir=str(initial_directory),
+                title=title,
+                initialdir=initial,
                 filetypes=(("Unreal Project", "*.uproject"),),
-            )
-        elif kind == "engine":
-            selected = filedialog.askdirectory(
-                parent=root,
-                title="Select Unreal Engine root folder",
-                initialdir=str(initial_directory),
-                mustexist=True,
-            )
-        else:
-            selected = filedialog.askdirectory(
-                parent=root,
-                title="Select folder to scan for Unreal projects",
-                initialdir=str(initial_directory),
-                mustexist=True,
-            )
-    except Exception as exc:  # GUI backends fail differently across supported desktop platforms.
-        print(f"  Project picker unavailable: {exc}")
-        return None
+            ) or None
+        return filedialog.askdirectory(
+            parent=root,
+            title=title,
+            initialdir=initial,
+            mustexist=True,
+        ) or None
     finally:
-        if root is not None:
-            try:
-                root.destroy()
-            except Exception:
-                pass
+        try:
+            root.destroy()
+        except Exception:
+            pass
 
+
+def _normalize_picked_path(kind: str, selected: str | None) -> Path | None:
     if not selected:
         return None
     path = Path(selected).expanduser().resolve()
@@ -193,6 +240,28 @@ def _pick_indexing_target(kind: str, initial_directory: Path) -> Path | None:
         print(f"  Ignoring invalid folder selection: {path}")
         return None
     return path
+
+
+def _pick_indexing_target(kind: str, initial_directory: Path) -> Path | None:
+    """Open a native file/folder picker without asking for a typed path."""
+    print(f"  Opening picker: {_picker_title(kind)}")
+    errors: list[str] = []
+
+    # Terminal-launched Python on macOS often fails to surface tkinter dialogs.
+    # Prefer AppleScript choose file/folder so Finder presents the panel.
+    if sys.platform == "darwin":
+        try:
+            return _normalize_picked_path(kind, _pick_with_osascript(kind, initial_directory))
+        except Exception as exc:
+            errors.append(f"osascript: {exc}")
+
+    try:
+        return _normalize_picked_path(kind, _pick_with_tkinter(kind, initial_directory))
+    except Exception as exc:
+        errors.append(f"tkinter: {exc}")
+        detail = "; ".join(errors) if errors else str(exc)
+        print(f"  Project picker unavailable: {detail}")
+        return None
 
 
 def _interactive_project_indexing(args: argparse.Namespace) -> None:
@@ -764,7 +833,7 @@ def _install_context_compactor(args: argparse.Namespace) -> None:
     plugin = ROOT / "lmstudio-context-compactor-plugin"
     if not plugin.is_dir():
         raise FileNotFoundError(f"context compactor source missing: {plugin}")
-    npm = shutil.which("npm")
+    npm = str(getattr(args, "runtime_npm", None) or "") or shutil.which("npm")
     lms = shutil.which("lms")
     if not lms:
         candidate = args.lmstudio_home / "bin" / ("lms.exe" if os.name == "nt" else "lms")
@@ -789,9 +858,9 @@ def _live_server_status(url: str) -> dict[str, Any]:
 
 def install(args: argparse.Namespace) -> dict[str, Any]:
     profile, components = _resolve_components(args)
-    python_exe = Path(sys.executable).resolve()
-    if sys.version_info < (3, 10):
-        raise RuntimeError("Python 3.10+ is required")
+    # Real installs re-exec under Python 3.12 in main(); unit tests may call install()
+    # directly on older interpreters with --skip-runtime-bootstrap.
+    python_exe = Path(getattr(args, "runtime_python", None) or sys.executable).resolve()
     if not (SKILL_SOURCE / "SKILL.md").is_file():
         raise FileNotFoundError(f"skill source missing: {SKILL_SOURCE}")
 
@@ -865,7 +934,7 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
             _merge_mcp_entry(mcp_config, "evidence-first", evidence_entry)
 
         if "unreal" in components:
-            node = shutil.which("node")
+            node = str(getattr(args, "runtime_node", None) or "") or shutil.which("node")
             if not node:
                 raise FileNotFoundError("Node.js 20+ is required for the Unreal adapter")
             node_exe = Path(node).resolve()
@@ -878,7 +947,7 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
             if not (agent_root / "src" / "server.js").is_file():
                 raise FileNotFoundError("Unreal agent MCP source is missing")
             if not args.skip_deps:
-                npm = shutil.which("npm")
+                npm = str(getattr(args, "runtime_npm", None) or "") or shutil.which("npm")
                 if not npm:
                     raise FileNotFoundError("npm is required for the Unreal adapter")
                 _run([npm, "ci", "--no-audit", "--no-fund"], cwd=agent_root, dry_run=args.dry_run)
@@ -977,9 +1046,17 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
             _install_context_compactor(args)
 
         if args.build_rag:
-            pwsh = shutil.which("pwsh") or shutil.which("powershell")
+            pwsh = str(getattr(args, "runtime_pwsh", None) or "") or shutil.which("pwsh") or shutil.which(
+                "powershell"
+            )
             if not pwsh:
-                raise FileNotFoundError("--build-rag requires PowerShell (pwsh or powershell)")
+                if args.dry_run:
+                    pwsh = "powershell" if platform.system() == "Windows" else "pwsh"
+                else:
+                    raise FileNotFoundError(
+                        "--build-rag requires PowerShell (pwsh). Re-run install.sh without "
+                        "--skip-runtime-bootstrap so the installer can download it."
+                    )
             _run(
                 _powershell_file_command(
                     pwsh,
@@ -1053,6 +1130,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--index-tier", choices=["lite", "standard", "full"], default="standard")
     parser.add_argument("--build-rag", action="store_true")
     parser.add_argument("--skip-deps", action="store_true")
+    parser.add_argument(
+        "--skip-runtime-bootstrap",
+        action="store_true",
+        help="Do not download/install Python 3.12, Node.js/npm, or PowerShell (pwsh); use PATH tools only.",
+    )
     parser.add_argument("--skip-context-compactor", action="store_true")
     parser.add_argument("--no-codex", action="store_true")
     parser.add_argument("--no-lmstudio", action="store_true")
@@ -1090,6 +1172,24 @@ def main() -> int:
         if args.rollback:
             result = rollback_last_install(args.state_home.expanduser().resolve(), dry_run=args.dry_run)
         else:
+            if not args.skip_runtime_bootstrap:
+                from installer.bootstrap_runtimes import ensure_runtimes
+
+                runtimes = ensure_runtimes(
+                    state_home=args.state_home.expanduser(),
+                    script_path=Path(__file__).resolve(),
+                    argv=sys.argv[1:],
+                    dry_run=args.dry_run,
+                    need_node=True,
+                    need_pwsh=True,
+                )
+                args.runtime_python = Path(runtimes["python"])
+                if runtimes.get("node"):
+                    args.runtime_node = Path(runtimes["node"])
+                if runtimes.get("npm"):
+                    args.runtime_npm = Path(runtimes["npm"])
+                if runtimes.get("pwsh"):
+                    args.runtime_pwsh = Path(runtimes["pwsh"])
             result = install(args)
     except (FileNotFoundError, OSError, RuntimeError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2))

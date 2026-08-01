@@ -140,14 +140,15 @@ def _write_launchers(staging: Path) -> None:
     target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     (staging / "PORTABLE-INSTALL.md").write_text(
         "# Integrated portable installer\n\n"
-        "Requirements: Python 3.10+. STANDARD/FULL also require Node.js 20+. "
-        "FULL context compaction requires npm and the LM Studio `lms` CLI.\n\n"
+        "Requirements: The installer bootstraps Python 3.12, Node.js 20+/npm, and PowerShell 7 "
+        "(pwsh) when missing, for the host CPU architecture (arm64/x64). "
+        "FULL context compaction also requires the LM Studio `lms` CLI.\n\n"
         "- Windows: `INSTALL.bat`\n"
         "- Linux and macOS: `./install.sh`\n\n"
         "The installer asks for SAFE, STANDARD, FULL, or CUSTOM. All profiles remain "
         "read-only unless agent mode and its separate risk acknowledgement are both supplied.\n"
         "Run `python3 install.py --help` for automation flags. Generated indexes and machine "
-        "configuration are not bundled by default. RAG indexing on Linux/macOS requires `pwsh`; "
+        "configuration are not bundled by default. RAG indexing uses the bootstrapped `pwsh`; "
         "custom Unreal installs can be supplied with `--engine-root` or `UNREAL_ENGINE_ROOT`.\n",
         encoding="utf-8",
         newline="\n",

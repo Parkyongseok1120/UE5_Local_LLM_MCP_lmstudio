@@ -6,10 +6,10 @@ Product release: **1.3.0 Beta1**. The installer reports the same value with `pyt
 
 ## Requirements
 
-- SAFE: Python 3.10+ and LM Studio 0.4+ for native MCP API use.
-- STANDARD: SAFE requirements plus Node.js 20+.
-- FULL: STANDARD requirements plus npm and the LM Studio `lms` CLI.
-- RAG index generation is a separate opt-in action. Lite/Standard/Full indexing requires PowerShell Core (`pwsh`) and an installed Unreal Engine on Linux/macOS.
+- The installer bootstraps **Python 3.12**, **Node.js 20+/npm**, and **PowerShell 7 (`pwsh`)** into a user-local cache when they are missing or too old (Windows, macOS, and Linux). Host CPU architecture (arm64/x64, including Apple Silicon vs Rosetta) is detected before downloads.
+- SAFE also needs LM Studio 0.4+ for native MCP API use.
+- FULL context compaction additionally needs the LM Studio `lms` CLI.
+- RAG index generation is a separate opt-in action and uses the bootstrapped `pwsh` plus an installed Unreal Engine.
 
 ## Start
 
