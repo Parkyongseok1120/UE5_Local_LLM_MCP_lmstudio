@@ -87,20 +87,27 @@ def test_patch_unreal_rag_overwrites_existing_timeout(tmp_path) -> None:
     assert patched["timeout"] == mod.DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
 
 
-def test_patch_unreal_rag_requires_fresh_proxy_when_compactor_is_installed(tmp_path) -> None:
+def test_patch_unreal_rag_repairs_old_strict_proxy_gate_to_advisory(tmp_path) -> None:
     mod = load_module()
     python = tmp_path / "python.exe"
     python.write_text("", encoding="utf-8")
-    entry = {"command": "python", "args": [], "env": {}}
+    entry = {
+        "command": "python",
+        "args": [],
+        "env": {"MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE": "1"},
+    }
 
     patched = mod.patch_unreal_rag(
         entry,
         ROOT,
         python,
-        require_context_compactor=True,
+        context_compactor_advisory=True,
     )
 
-    assert patched["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "1"
+    assert patched["env"]["MCP_CONTEXT_COMPACTOR_ADVISORY"] == "1"
+    assert patched["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "0"
+    assert patched["env"]["MCP_FRONTEND"] == "lmstudio"
+    assert patched["env"]["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] == "lmstudio"
     assert patched["env"]["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] == "300"
 
 

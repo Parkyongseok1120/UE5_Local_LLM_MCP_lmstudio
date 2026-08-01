@@ -15,6 +15,8 @@ Allowed project file tools are only the `unreal-rag` and `unreal-agent` MCP tool
 
 `write_file` is create-only: it refuses to overwrite existing files, so use `replace_in_file` to edit them and never retry `write_file` after a "file already exists" or timeout error — verify state with `read_file` first. After a successful write, continue automatically; stop and wait for the user only on a timeout, validation failure/rollback, a failed tool call, or a repeating error.
 
+Never invent `taskAuthorization`. Call `unreal_agent_plan` once when no server-issued authorization exists. An inactive `unreal-context-compactor` is advisory by default and is not SAFE mode or a macOS/LM Studio file-permission failure; follow an explicit strict-policy recovery action without dumping paste-ready source code.
+
 If the active project is not your target `.uproject`, call `unreal_set_active_project` with the correct path from `projectContext.uprojectPath`.
 
 If `unreal_rag_health` returns `okForChat=false` or `chatAction=stop_and_report_rag_rebuild_required`, do **not** search project files for RAG repair scripts. Reply `rag_blocked` plus the reported `recommendedCommand` / `recommendedDoctorCommand`.

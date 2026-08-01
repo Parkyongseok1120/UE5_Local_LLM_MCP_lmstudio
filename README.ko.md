@@ -86,7 +86,7 @@ cd UE5_Local_LLM_MCP_lmstudio
 
 ### 설치 진입점은 하나입니다
 
-Windows에서는 루트의 `INSTALL.bat`, Linux와 macOS에서는 `install.sh`를 실행합니다. 둘 다 같은 `install.py`를 호출합니다. SAFE/AGENT/RAG/Cline/컨텍스트 압축기별 설치 파일은 없으며, 통합 설치 화면에서 선택합니다. Unreal 어댑터가 포함되면 `SAFE` 또는 `AGENT` 권한을 번호로 고르고, AGENT는 위험 확인을 한 번 더 거친 뒤 최종 설치 요약에서 다시 확인할 수 있습니다. `installer/`에는 매니페스트와 안내만 남겼고 고급 유지보수·검증 도구는 `scripts/installer_support/`로 분리했습니다.
+Windows에서는 루트의 `INSTALL.bat`, Linux와 macOS에서는 `install.sh`를 실행합니다. 둘 다 같은 `install.py`를 호출합니다. SAFE/AGENT/RAG/Cline/컨텍스트 압축기별 설치 파일은 없으며, 통합 설치 화면에서 선택합니다. Unreal 어댑터가 포함되면 `SAFE` 또는 `AGENT` 권한을 번호로 고르고, AGENT는 위험 확인을 한 번 더 거친 뒤 최종 설치 요약에서 다시 확인할 수 있습니다. `installer/`에는 bootstrap runtime 코드와 검증 가능한 매니페스트를 두고, 고급 유지보수·검증 도구는 `scripts/installer_support/`로 분리했습니다.
 
 그 다음 LM Studio에서 모델을 로드하고 Local Server를 시작한 뒤, `unreal-rag` / `unreal-agent` MCP를 활성화하고 index를 빌드합니다. 설치 프로그램은 `unreal-context-compactor`도 함께 설치합니다. 자동 컨텍스트 확장을 쓰려면 기반 LLM을 정확히 하나만 로드하거나 플러그인 설정의 `targetModel`에 정확한 모델 키를 지정한 뒤, **컨텍스트 확장을 쓸 채팅마다 모델 드롭다운에서 `unreal-context-compactor`를 선택하세요. 기존 채팅의 선택 모델은 설치로 자동 변경되지 않으며, Qwen/GPT 기반 모델을 직접 선택하면 설치된 프록시를 우회합니다.** 프록시는 모델에 전달되는 과거 대화만 압축하며, 화면에 보이는 채팅과 기존 MCP 서버는 바꾸지 않습니다.
 
@@ -97,8 +97,7 @@ cd lmstudio-context-compactor-plugin
 npm run status
 ```
 
-이 검사는 운영체제와 무관하게 최근 30분 이내의 프록시 텔레메트리만 인정하므로, 예전 채팅의 낡은 증거가 현재 활성 상태로 오인되지 않습니다.
-FULL 설치에서 AGENT 권한을 켠 경우에는 최근 프록시 증거가 없으면 쓰기 작업 계획 시작 자체도 fail-closed로 차단됩니다.
+이 검사는 운영체제와 무관하게 최근 30분 이내의 프록시 텔레메트리만 인정하므로, 예전 채팅의 낡은 증거가 현재 활성 상태로 오인되지 않습니다. Beta3에서 프록시는 LM Studio용 continuity 보조 기능이며 write 권한의 필수 조건이 아닙니다. Qwen/GPT를 직접 선택해도 AGENT 쓰기는 허용됩니다. 관리자가 `MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1`을 명시한 경우에만 LM Studio frontend에서 strict routing을 적용합니다. Cline, CLI, Ollama, 자체/remote client는 LM Studio proxy telemetry가 아니라 각 frontend의 continuity proof를 사용해야 합니다.
 
 > **필수 — LM Studio 기본 도구 `js-code-sandbox`(JavaScript/TypeScript Code Sandbox)는 반드시 끄세요.**  
 > Unreal 코딩 채팅에서는 LM Studio 기본 **JavaScript/TypeScript Code Sandbox** 플러그인을 비활성화하거나 숨기세요. 이 샌드박스는 별도 작업 디렉터리를 쓰며 활성 `.uproject` 루트와 **연결되지 않습니다**. 모델이 여기서 파일 I/O를 하면 경로 오류, 잘못된 편집, `unreal-agent`와의 충돌이 납니다. 프로젝트 파일 작업은 `unreal-rag` + `unreal-agent` MCP만 사용하세요 (`read_file`, `replace_in_file`, 신규 파일만 `write_file`). 자동 승인을 쓰는 경우 `%USERPROFILE%\.lmstudio\settings.json`의 `chat.skipToolConfirmationPatterns`에서 `lmstudio/js-code-sandbox:*` 항목을 제거하고 LM Studio를 재시작하세요. 자세한 내용: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md).
@@ -139,10 +138,10 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 실프로젝트 작업 시 실전 규칙:
 
 - 가능하면 **채팅 하나에 범위를 좁히기** (예: “컴파일 에러 3개 수정”, “dev console 전체 구현”은 한 세션에 넣지 않기).
-- **UBT/linker 전체 로그를 채팅에 붙여넣지 마세요.** `read_unreal_logs` 또는 로그 파일 경로를 쓰고, 첫 번째 의미 있는 에러 구간만 공유하세요.
+- **UBT/linker 전체 로그를 채팅에 붙여넣지 마세요.** `read_unreal_logs`의 `mode=tail`은 최근 오류, `mode=first_error`는 byte 0부터 최초 원인 탐색, `mode=range`와 `cursorByte`/`nextCursorByte`는 제한된 범위 순회에 사용하세요.
 - **헤더 → .cpp 순서는 정상입니다.** 새 헤더에 `write_file` 후 `CPP_DEFINITION_MISSING` advisory가 보일 수 있습니다. 매칭 `.cpp`를 쓰기 전까지는 기대되는 동작이며, 그 자체로 롤백 사유가 아닙니다.
 - 모델이 자주 지어내는 **UE API**는 피하세요: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. 대신 `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, 값으로 넘기는 `SpawnTransform`, 소유 actor/subsystem의 `GetWorld()`를 쓰세요.
-- **compact tool 응답 (v1.2.5 baseline, Beta3 유지):** `build_unreal_project`는 한 줄 summary + likely error 최대 40줄 + `.agent/logs/latest-build.log` 경로만 반환합니다(stdout/stderr 전체 아님). `read_unreal_logs`는 최신 로그 1개와 첫 error cluster가 기본입니다. 컨텍스트 프록시는 압축 뒤에도 required next tool, 변경 파일, diagnostic, build state 같은 제어 필드를 유지합니다.
+- **compact tool 응답 (v1.2.5 baseline, Beta3 유지):** `build_unreal_project`는 한 줄 summary + likely error 최대 40줄 + `.agent/logs/latest-build.log` 경로만 반환합니다(stdout/stderr 전체 아님). `read_unreal_logs`는 최신 로그의 제한된 tail이 기본이며 원본 잘림 여부를 반환합니다. 컨텍스트 프록시는 압축 뒤에도 required next tool, 변경 파일, diagnostic, build state 같은 제어 필드를 유지합니다.
 
 자동 압축은 세션을 연장하지만, 이미 너무 큰 system prompt/tool schema를 줄이거나 포화된 KV cache를 복구할 수는 없습니다. 프록시가 hard safety margin을 회복하지 못하면 `write_session_handoff`를 호출하고 새 채팅에서 `.agent/handoff/latest.md`를 이어가세요.
 

@@ -76,6 +76,22 @@ def test_uv_and_node_asset_names_for_current_host() -> None:
     sys.modules.pop("bootstrap_runtimes", None)
 
 
+def test_runtime_manifest_covers_every_platform_arch_and_probe_contract() -> None:
+    module = _load()
+    result = module.validate_runtime_manifest()
+    assert result == {"runtimeCount": 4, "assetCount": 18}
+    for runtime_name in ("uv", "node", "pwsh"):
+        definition = module.RUNTIME_DEFINITIONS[runtime_name]
+        assert definition["urlTemplate"].startswith("https://")
+        assert definition["executableProbe"]["args"]
+        for asset in definition["assets"]:
+            assert module.runtime_download_url(runtime_name, asset["filename"]).endswith(
+                asset["filename"]
+            )
+            assert asset["executable"]
+    sys.modules.pop("bootstrap_runtimes", None)
+
+
 def test_ensure_runtimes_skip_uses_current_interpreter() -> None:
     module = _load()
     result = module.ensure_runtimes(

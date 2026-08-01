@@ -54,7 +54,13 @@ def canonical_workspace_root(start: Path | None = None) -> Path:
             data = json.loads(config_path.read_text(encoding="utf-8"))
             configured = str(data.get("rootPath") or "").strip()
             if configured:
-                return Path(configured)
+                native_root = configured.replace("\\", os.sep).replace("/", os.sep)
+                candidate = Path(native_root).expanduser()
+                # Ignore a stale root copied from another machine. The
+                # discovered workspace is a safer recovery target than a
+                # non-existent path (or a foreign drive-letter literal).
+                if candidate.is_absolute() and candidate.exists():
+                    return candidate.resolve()
         except Exception:
             pass
     return root
@@ -106,7 +112,9 @@ def load_workspace_config(start: Path | None = None) -> dict:
         "rootPath": str(canonical_workspace_root(root)),
         "engineVersion": DEFAULT_ENGINE_VERSION,
         "indexNamespace": DEFAULT_INDEX_NAMESPACE,
-        "indexPath": str(FALLBACK_INDEX_REL).replace("/", "\\"),
+        # Persist portable relative paths. Path separators are normalized for
+        # the current host only when the value is resolved.
+        "indexPath": FALLBACK_INDEX_REL.as_posix(),
         "defaultEngineRoot": "",
         "knowledgeRoots": {
             "guidelines": "RAG_Project_Guidelines",
@@ -251,7 +259,11 @@ def resolve_index_path(start: Path | None = None) -> Path:
     root = canonical_workspace_root(start)
     index_path = str(config.get("indexPath") or "").strip()
     if index_path:
-        candidate = Path(index_path)
+        # workspace.json is portable and may have been written by a different
+        # frontend or host OS. Treat both slash styles as separators instead
+        # of creating a literal backslash filename on macOS/Linux.
+        native_index_path = index_path.replace("\\", os.sep).replace("/", os.sep)
+        candidate = Path(native_index_path).expanduser()
         if candidate.is_absolute():
             return candidate.resolve()
         return (root / candidate).resolve()

@@ -76,6 +76,10 @@ With `MCP_ESSENTIAL_TOOLS=1` alone, extended tools stay hidden to reduce model c
 
 In LM Studio chat, `writeGate` and plan `gates` are **advisory** (prompt/orchestrator text). The wrapper path can enforce harder. Still obey `writeGate.writesAllowed=false`. Server-side loop guards (`READ_REPEAT_*`, `EVIDENCE_STAGNATION*`, `TOOL_REPEAT_BLOCKED`, mutation duplicate) are hard.
 
+`taskAuthorization` is server-issued capability data. Never invent placeholder session IDs/tokens. If it is absent, call `unreal_agent_plan` once; on recoverable stale/incomplete/budget responses, follow the returned `taskAuthorization` and `nextAction` instead of claiming SAFE mode or file-permission failure.
+
+The context compactor is advisory by default. `contextCompactorRouting.policy=advisory` with `active=false` does not block AGENT writes. Only explicit `policy=required` for `MCP_FRONTEND=lmstudio` blocks startup; Cline/CLI/Ollama/custom/remote frontends use frontend-specific continuity proof.
+
 ## Logic review (false-bug guard)
 
 When reviewing gameplay/cinematic logic (not compile errors):
@@ -170,7 +174,7 @@ Paste [`prompts/lmstudio_session_bootstrap.md`](../prompts/lmstudio_session_boot
 
 ## Context Budget and Session Handoff
 
-`build_unreal_project` is compact by default: it returns a one-line `summary`, up to 40 likely error lines, and `.agent/logs/latest-build.log` as `fullLogPath`. Raw stdout/stderr is omitted unless `verboseOutput=true`. `read_unreal_logs` defaults to the first error cluster from the newest log (one file, 60 tail lines).
+`build_unreal_project` is compact by default: it returns a one-line `summary`, up to 40 likely error lines, and `.agent/logs/latest-build.log` as `fullLogPath`. Raw stdout/stderr is omitted unless `verboseOutput=true`. `read_unreal_logs` defaults to a bounded tail; use `mode=first_error` to scan from byte zero and `mode=range` with `cursorByte`/`nextCursorByte` when exact traversal is needed. Always inspect `sourceTruncated`/`hasMore`.
 
 All unreal-agent results have a final `MCP_AGENT_RESULT_MAX_CHARS` safety ceiling (default 32000 characters). Narrow the tool arguments when a response reports truncation; do not immediately request verbose output.
 
@@ -218,6 +222,8 @@ Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_
 | Model answers without tools | Resend session bootstrap; check Essential Tools ON |
 | Wrong paths (`Documents` vs project) | Call `unreal_get_active_project`; use returned root |
 | Writes on review/runtime tasks | Re-call `unreal_agent_plan`; obey `writeGate.writesAllowed=false` |
+| `CONTEXT_COMPACTOR_NOT_ACTIVE` | This is an explicit LM Studio chat-model routing policy, not SAFE mode, `ALLOW_WRITE`, confirmation UI, or macOS privacy. Select `unreal-context-compactor` only when `policy=required`; advisory mode allows direct Qwen/GPT writes. |
+| Fake/unknown `taskAuthorization` | Do not repair IDs/tokens. Call `unreal_agent_plan` once and copy its complete server-issued authorization. |
 | Model calls `run_javascript` / `js-code-sandbox` | Start a new chat with the bootstrap prompt, remove sandbox auto-approval, and hide/disable the sandbox plugin if available |
 | Hallucinated analysis | Force `read_file` before claims or edits |
 | False logic bugs (early return = "missing") | Read sibling `.h` UENUM/field docs first; classify `ByDesign`/`Ambiguous`; run `unreal_review_claim_validate` |

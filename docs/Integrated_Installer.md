@@ -2,13 +2,13 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release: **1.3.0 Beta3**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest remains at `2.1.0`.
+Product release: **1.3.0 Beta3**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest is `2.1.1`.
 
 ## Requirements
 
 - A host **Python 3.10+** is required only to start `install.py`. The launcher prints a platform-specific recovery command instead of falling through to a missing or incompatible interpreter.
 - The installer establishes managed **Python 3.12** first. It downloads **Node.js 20+/npm** only for Unreal/context-compactor components and **PowerShell 7 (`pwsh`)** only when `--build-rag` is selected, reducing SAFE-profile failure surface.
-- Runtime archives are pinned by version and SHA-256 for x64/arm64 on Windows, macOS, and Ubuntu/glibc. Extraction rejects traversal, unsafe links, encrypted ZIP members, special files, and archive bombs before writing the runtime cache.
+- Runtime archives are pinned by version and SHA-256 for x64/arm64 on Windows, macOS, and Ubuntu/glibc. [`installer/runtime-manifest.json`](../installer/runtime-manifest.json) is the SSOT for URL, filename, platform, architecture, checksum, executable, and probe metadata. Extraction rejects traversal, unsafe links, encrypted ZIP members, special files, and archive bombs before writing the runtime cache.
 - SAFE also needs LM Studio 0.4+ for native MCP API use.
 - FULL context compaction additionally needs the LM Studio `lms` CLI.
 - RAG index generation is a separate opt-in action and uses the bootstrapped `pwsh` plus an installed Unreal Engine.
@@ -62,11 +62,13 @@ AGENT requires a second confirmation. Declining that confirmation continues safe
 
 Install profile and RAG indexing depth are independent. Use `--index-tier lite|standard|full`; selecting FULL does not select full indexing and never builds an index unless `--build-rag` is also supplied.
 
+FULL installs the LM Studio context proxy in advisory mode. Direct Qwen/GPT selection remains write-capable after AGENT authority is explicitly enabled. Strict proxy evidence is an administrator opt-in and applies only when `MCP_FRONTEND=lmstudio` matches `MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS`; Cline, CLI, Ollama, custom, and remote frontends require their own continuity policy.
+
 Interactive Unreal installs first restore the project-indexing picker. Choose a `.uproject` in the native file explorer to set the active project, or choose one or more folders to add project search roots. No typed path is required.
 
 Interactive Unreal installs without an explicit `--engine-root` or `UNREAL_ENGINE_ROOT` then ask how to resolve the engine: choose **Epic Games Launcher auto-detection**, or choose a **custom/source engine folder** in the native folder picker. The selected custom folder must contain a usable Unreal Engine layout. Explicit `--engine-root` and `UNREAL_ENGINE_ROOT` values remain authoritative.
 
-The installer then shows a separate RAG indexing selector: **Skip** (default), **Lite**, **Standard** (recommended), or **Full**. Choosing Lite, Standard, or Full runs the complete tier-aware collection pipeline before building: Standard refreshes project text, active-project symbols/profile/architecture, engine API symbols, and the module graph; Full additionally refreshes the complete `Engine/Source` text input. For non-interactive use, the equivalents are:
+The installer then shows a separate RAG indexing selector: **Skip** (default), **Lite**, **Standard** (recommended), or **Full**. Choosing Lite, Standard, or Full first refreshes portable project guidelines and game-design inputs, then runs the tier-aware collection pipeline before building. Standard also refreshes project text, active-project symbols/profile/architecture, engine API symbols, and the module graph; Full additionally refreshes the complete `Engine/Source` text input. For non-interactive use, the equivalents are:
 
 ```text
 python3 install.py --profile standard --yes --build-rag
@@ -109,6 +111,17 @@ python3 install.py --rollback
 Managed skill/config files are journaled and can be restored by `--rollback`. External package-manager/plugin actions and generated indexes are reported separately and are not claimed as transactionally reversible.
 
 Runtime bootstrap and managed installation use separate process locks. A Python re-exec retains the bootstrap ownership token, while unrelated concurrent installers fail before sharing or replacing a partially extracted cache. Managed file and journal replacements are flushed before atomic rename where the host supports it.
+
+Before changing a runtime version or checksum, update the runtime manifest as one unit and run:
+
+```text
+python3 scripts/manage_runtime_manifest.py validate
+python3 scripts/manage_runtime_manifest.py list
+# after independently verifying upstream checksum files:
+python3 scripts/manage_runtime_manifest.py update-checksums checksums.json
+```
+
+The validator rejects missing platform/architecture rows, duplicate assets, non-HTTPS URL templates, malformed SHA-256 values, and missing executable probes.
 
 ## Portable package
 

@@ -63,6 +63,8 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "scripts/semantic_refactor_guard.py",
         "scripts/phase_tool_router.py",
         "scripts/approve_feature_intent.py",
+        "scripts/manage_runtime_manifest.py",
+        "installer/runtime-manifest.json",
         "lmstudio-unreal-agent-mcp/src/server.js",
         "lmstudio-unreal-agent-mcp/src/route-watcher.js",
         "lmstudio-context-compactor-plugin/package-lock.json",
@@ -84,6 +86,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "__init__.py",
         "bootstrap_runtimes.py",
         "manifest.json",
+        "runtime-manifest.json",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.3.0 Beta3"

@@ -131,6 +131,69 @@ def test_agent_exposes_apply_edit_bundle_but_requires_task_authorization(tmp_pat
         client.close()
 
 
+def test_agent_rejects_fabricated_write_authorization_with_plan_recovery(
+    tmp_path: Path,
+) -> None:
+    require_agent_mcp_deps()
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(tmp_path),
+            "AGENT_STATE_ROOT": str(tmp_path / "state"),
+            "ALLOW_WRITE": "1",
+        }
+    )
+    client = _StdioClient(
+        [_node_exe(), str(AGENT_SERVER)],
+        env=env,
+        cwd=ROOT / "lmstudio-unreal-agent-mcp",
+    )
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "t", "version": "1"},
+            },
+            1,
+        )
+        client.proc.stdin.write(
+            json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            + "\n"
+        )
+        client.proc.stdin.flush()
+        result = client.call_tool(
+            "write_file",
+            {
+                "taskAuthorization": {
+                    "taskSessionId": "t1",
+                    "authToken": "tok_t1",
+                    "planId": "plan_t1",
+                    "planRevision": "1",
+                    "activeSliceId": "slice_t1",
+                    "routeHash": "route_t1",
+                    "routePhase": "executor",
+                },
+                "path": "Source/Demo/Fabricated.h",
+                "content": "blocked\n",
+            },
+            2,
+        )
+        assert result["result"].get("isError") is True
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert payload["errorCode"] == "TASK_AUTH_INVALID_FORMAT"
+        assert payload["stopCurrentWorkflow"] is False
+        assert payload["recoveryActionRequired"] is True
+        assert payload["nextAction"] == "unreal_agent_plan"
+        assert payload["taskAuthorizationSource"] == "server_only"
+        assert payload["doNotFabricateTaskAuthorization"] is True
+        assert not (tmp_path / "Source" / "Demo" / "Fabricated.h").exists()
+    finally:
+        client.close()
+
+
 def test_callable_rag_matches_manifest(tmp_path: Path, monkeypatch) -> None:
     import importlib.util
 

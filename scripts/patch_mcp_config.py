@@ -117,7 +117,7 @@ def patch_unreal_rag(
     workspace: Path,
     python_exe: Path,
     *,
-    require_context_compactor: bool | None = None,
+    context_compactor_advisory: bool | None = None,
 ) -> dict[str, Any]:
     index = resolve_index_path(workspace)
     entry["command"] = str(python_exe)
@@ -129,16 +129,21 @@ def patch_unreal_rag(
     entry = patch_server(entry, workspace, SHARED_CONFIG)
     env = dict(entry.get("env") or {})
     env["UNREAL58_ROOT"] = str(workspace)
+    env["MCP_FRONTEND"] = "lmstudio"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
-    require_compactor = (
+    compactor_installed = (
         context_compactor_is_installed()
-        if require_context_compactor is None
-        else require_context_compactor
+        if context_compactor_advisory is None
+        else context_compactor_advisory
     )
-    if require_compactor:
-        env.setdefault("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "1")
+    if compactor_installed:
+        env["MCP_CONTEXT_COMPACTOR_ADVISORY"] = "1"
+        # Repair older Beta 3 installs that made the optional proxy a hard
+        # prerequisite for every write task.
+        env["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] = "0"
+        env["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] = "lmstudio"
         env.setdefault("MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS", "300")
     entry["env"] = env
     entry["timeout"] = DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS

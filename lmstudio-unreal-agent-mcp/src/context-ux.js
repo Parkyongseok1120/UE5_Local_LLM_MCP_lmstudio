@@ -703,6 +703,12 @@ function compactLogPayload(payload, maxChars = DEFAULT_LOG_RESULT_MAX_CHARS) {
       sourceBytes: log.sourceBytes,
       bytesRead: log.bytesRead,
       sourceTruncated: Boolean(log.sourceTruncated),
+      mode: log.mode,
+      cursorByte: log.cursorByte,
+      nextCursorByte: log.nextCursorByte,
+      hasMore: Boolean(log.hasMore),
+      firstErrorFound: log.firstErrorFound,
+      scanTruncated: Boolean(log.scanTruncated),
       lines: firstErrorCluster(log.lines || [], 3, 24)
     }))
   };
@@ -766,6 +772,7 @@ module.exports = {
   extractLikelyCompileErrors,
   compactCompilerDiagnostic,
   firstErrorCluster,
+  isInterestingLogLine,
   formatSessionHandoff,
   parseBuildExecutionSummary,
   resolveAgentResultMaxChars,

@@ -7,16 +7,15 @@ from pathlib import Path
 
 import pytest
 
+from conftest import powershell_prefix
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_SUPPORT = ROOT / "scripts" / "installer_support"
 
 
 def _run_ps1(script: str, *args: str) -> subprocess.CompletedProcess[str]:
     cmd = [
-        "powershell",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
+        *powershell_prefix(),
         "-File",
         str(INSTALLER_SUPPORT / script),
         *args,
@@ -45,10 +44,7 @@ def test_resolve_rag_index_path_unreal57(tmp_path: Path) -> None:
 def _run_activation_status(state_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
+            *powershell_prefix(),
             "-File",
             str(ROOT / "scripts" / "Test-ContextCompactorActivation.ps1"),
             "-StateRoot",
@@ -128,7 +124,7 @@ def test_sync_shared_workspace_drops_paths_from_another_pc(tmp_path: Path) -> No
         "-EngineRoot '' | Out-Null"
     )
     ps = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        [*powershell_prefix(), "-Command", command],
         capture_output=True,
         text=True,
         cwd=str(ROOT),

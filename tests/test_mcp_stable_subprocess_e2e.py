@@ -1163,7 +1163,10 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
     log_dir = project_dir / ".agent" / "logs"
     log_dir.mkdir(parents=True)
     (log_dir / "latest-build.log").write_text(
-        "Demo.cpp(1): error C2065: fixture failure\n",
+        ("x\n" * 32_767)
+        + "error C1000: original failure across a scan boundary\n"
+        + ("follow-on noise\n" * 8_000)
+        + "Demo.cpp(9): error C2065: fixture failure\n",
         encoding="utf-8",
     )
 
@@ -1180,6 +1183,7 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
         "AGENT_MCP_CONFIG": str(config),
         "ALLOW_WRITE": "0",
         "ALLOW_UNREAL_BUILD": "0",
+        "LOG_READ_MAX_BYTES": "65536",
     })
     client = _StdioJsonRpc([_node_exe(), str(AGENT_SERVER)], env=env, cwd=ROOT / "lmstudio-unreal-agent-mcp")
     try:
@@ -1215,5 +1219,28 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
         assert logs["result"].get("isError") is not True
         assert "latest-build.log" in logs_text
         assert "error C2065" in logs_text
+
+        first_error = client.request(
+            "tools/call",
+            {"name": "read_unreal_logs", "arguments": {"mode": "first_error"}},
+            req_id=4,
+        )
+        first_payload = json.loads(first_error["result"]["content"][0]["text"])
+        assert first_payload["responseMode"] == "first_error"
+        assert first_payload["logs"][0]["firstErrorFound"] is True
+        assert any("error C1000" in line for line in first_payload["logs"][0]["lines"])
+
+        ranged = client.request(
+            "tools/call",
+            {
+                "name": "read_unreal_logs",
+                "arguments": {"mode": "range", "cursorByte": 0, "maxBytes": 65536},
+            },
+            req_id=5,
+        )
+        range_payload = json.loads(ranged["result"]["content"][0]["text"])
+        assert range_payload["responseMode"] == "range"
+        assert range_payload["logs"][0]["nextCursorByte"] == 65536
+        assert range_payload["logs"][0]["hasMore"] is True
     finally:
         client.close()

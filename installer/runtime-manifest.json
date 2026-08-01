@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "supportedPlatforms": ["darwin", "windows", "linux"],
+  "supportedArchitectures": ["arm64", "x64"],
+  "runtimes": {
+    "python": {
+      "version": "3.12.13",
+      "delivery": "uv-managed",
+      "executableProbe": {
+        "args": ["-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+        "expectedMajorMinor": "3.12"
+      },
+      "architectureProbe": {
+        "args": ["-c", "import platform; m=platform.machine().lower(); print('arm64' if m in {'arm64','aarch64'} else 'x64' if m in {'x86_64','amd64','x64'} else m)"]
+      }
+    },
+    "uv": {
+      "version": "0.12.1",
+      "urlTemplate": "https://github.com/astral-sh/uv/releases/download/{version}/{asset}",
+      "executableProbe": {"args": ["--version"], "expectedPrefix": "uv {version}"},
+      "assets": [
+        {"platform": "darwin", "architecture": "arm64", "filename": "uv-aarch64-apple-darwin.tar.gz", "sha256": "77d2906988e8074fd43f2f329ec452ebbf9b0c257ba1c66451c71de70a6baf42", "executable": "uv"},
+        {"platform": "darwin", "architecture": "x64", "filename": "uv-x86_64-apple-darwin.tar.gz", "sha256": "69d9f9a00337f25a50dcb13882052da08b8469bac11091c98c5694c3c6721467", "executable": "uv"},
+        {"platform": "windows", "architecture": "arm64", "filename": "uv-aarch64-pc-windows-msvc.zip", "sha256": "9bc7c18e616230fa2dc6fb24bc3afde18a95c2b5c9433de747e9502c66041568", "executable": "uv.exe"},
+        {"platform": "windows", "architecture": "x64", "filename": "uv-x86_64-pc-windows-msvc.zip", "sha256": "8fcb0cb46e1229065e344758980924e569bef5882ef45f46fada8fb24e06b74a", "executable": "uv.exe"},
+        {"platform": "linux", "architecture": "arm64", "filename": "uv-aarch64-unknown-linux-gnu.tar.gz", "sha256": "769d373e146692c639b5fbaae33b331c297a32e03d30448772051902df52bbf4", "executable": "uv"},
+        {"platform": "linux", "architecture": "x64", "filename": "uv-x86_64-unknown-linux-gnu.tar.gz", "sha256": "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb", "executable": "uv"}
+      ]
+    },
+    "node": {
+      "version": "20.20.2",
+      "urlTemplate": "https://nodejs.org/dist/v{version}/{asset}",
+      "executableProbe": {"args": ["--version"], "minimumMajor": 20},
+      "architectureProbe": {"args": ["-p", "process.arch"]},
+      "assets": [
+        {"platform": "darwin", "architecture": "arm64", "filename": "node-v20.20.2-darwin-arm64.tar.gz", "sha256": "466e05f3477c20dfb723054dfebffe55bc74660ee77f612166fca121dacb65b6", "executable": "bin/node", "companionExecutable": "bin/npm"},
+        {"platform": "darwin", "architecture": "x64", "filename": "node-v20.20.2-darwin-x64.tar.gz", "sha256": "8be6f5e4bb128c82774f8a0b8d7a1cc1365a7977d9657cece0ca647b3fe04e61", "executable": "bin/node", "companionExecutable": "bin/npm"},
+        {"platform": "windows", "architecture": "arm64", "filename": "node-v20.20.2-win-arm64.zip", "sha256": "d5c5b1d56f7f9469830eb1f57efeec0a6a9078c0a9e88cd5b4b4b48f46c22069", "executable": "node.exe", "companionExecutable": "npm.cmd"},
+        {"platform": "windows", "architecture": "x64", "filename": "node-v20.20.2-win-x64.zip", "sha256": "dc3700fdd57a63eedb8fd7e3c7baaa32e6a740a1b904167ff4204bc68ed8bf77", "executable": "node.exe", "companionExecutable": "npm.cmd"},
+        {"platform": "linux", "architecture": "arm64", "filename": "node-v20.20.2-linux-arm64.tar.gz", "sha256": "47ef73d543ecf6eb19435f6c03a0ac4809b3bf0dd6b26c7c571efc2a6572a74d", "executable": "bin/node", "companionExecutable": "bin/npm"},
+        {"platform": "linux", "architecture": "x64", "filename": "node-v20.20.2-linux-x64.tar.gz", "sha256": "19e56f0825510207dd904f087fe52faa0a4eb6b2aab5f0ea7a33830d04888b8b", "executable": "bin/node", "companionExecutable": "bin/npm"}
+      ]
+    },
+    "pwsh": {
+      "version": "7.5.4",
+      "urlTemplate": "https://github.com/PowerShell/PowerShell/releases/download/v{version}/{asset}",
+      "executableProbe": {"args": ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"], "minimumMajor": 7},
+      "assets": [
+        {"platform": "darwin", "architecture": "arm64", "filename": "powershell-7.5.4-osx-arm64.tar.gz", "sha256": "3aaadd7ca62f1e4dbe59145b6af24e926d61f8da8a4782bc535e500c184135f0", "executable": "pwsh"},
+        {"platform": "darwin", "architecture": "x64", "filename": "powershell-7.5.4-osx-x64.tar.gz", "sha256": "cd16a04c1b99cdacbdc0337b0fd0da50dbf1a8b4e8437bcb4ca9118ef729211a", "executable": "pwsh"},
+        {"platform": "windows", "architecture": "arm64", "filename": "PowerShell-7.5.4-win-arm64.zip", "sha256": "0c0b2bf04e853917508280531cd49bba8b3049837e3c805ebc042e2741ca52b3", "executable": "pwsh.exe"},
+        {"platform": "windows", "architecture": "x64", "filename": "PowerShell-7.5.4-win-x64.zip", "sha256": "b40d192ae95ba6ccc4cc362ff4e1b18ca6fb5055bebbcd3920684e12701fa8f6", "executable": "pwsh.exe"},
+        {"platform": "linux", "architecture": "arm64", "filename": "powershell-7.5.4-linux-arm64.tar.gz", "sha256": "4b32d4cb86a43dfb83d5602d0294295bf22fafbf9e0785d1aaef81938cda92f8", "executable": "pwsh"},
+        {"platform": "linux", "architecture": "x64", "filename": "powershell-7.5.4-linux-x64.tar.gz", "sha256": "1fd7983fe56ca9e6233f126925edb24bf6b6b33e356b69996d925c4db94e2fef", "executable": "pwsh"}
+      ]
+    }
+  }
+}

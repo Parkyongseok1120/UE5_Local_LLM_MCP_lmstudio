@@ -8,7 +8,7 @@ compacted `Chat` to the configured underlying local model when the remaining bud
 With zero or multiple loaded LLMs, the plugin fails with a list of candidates and asks for an
 exact model key. The existing `mcp/unreal-agent` and `mcp/unreal-rag` plugins remain tool providers.
 
-Version 0.3.4 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
+Version 0.3.5 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
 before every prediction and buffers model text/tool calls until LM Studio confirms a safe stop.
 Context-limit and max-output truncations are discarded instead of being presented as completed work.
 Strict tool-call rejection remains off by default, so multiple tool calls are preserved. **Select
@@ -20,6 +20,10 @@ After sending one message through the proxy, run `npm run status` from this dire
 macOS, or Linux. A successful check requires fresh routing evidence (30 minutes by default), and
 reports the routed target model and latest measured token budget. Historical stale evidence cannot
 make an inactive chat look active.
+
+The proxy is advisory for normal AGENT installs. Selecting Qwen/GPT directly bypasses compaction but does not disable server-authorized writes. A strict proxy requirement is an explicit LM Studio-only administrator policy; other frontends must use their own continuity proof.
+
+Per-session storage keeps the newest 20 checkpoint generations, three rolled event files, and the active files. A bounded daily GC removes completed/inactive sessions after 90 days and cancelled sessions after 30 days. Active/running sessions and sessions containing quarantined `*.corrupt-*` artifacts are never auto-deleted. Retention can be increased with `LMS_CONTEXT_COMPACTOR_COMPLETED_RETENTION_DAYS`, `LMS_CONTEXT_COMPACTOR_CANCELLED_RETENTION_DAYS`, and `LMS_CONTEXT_COMPACTOR_INACTIVE_RETENTION_DAYS`.
 
 
 For local development, run lms dev from this directory. The plugin uses the existing mcp/unreal-agent and mcp/unreal-rag installations; it does not replace either MCP server.

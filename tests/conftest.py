@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -14,6 +15,18 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 AGENT_MCP_ROOT = ROOT / "lmstudio-unreal-agent-mcp"
 AGENT_MCP_SDK = AGENT_MCP_ROOT / "node_modules" / "@modelcontextprotocol" / "sdk"
+
+
+def powershell_prefix() -> list[str]:
+    """Return the host-native PowerShell 7 command prefix for fixture tests."""
+    candidates = ("powershell", "pwsh") if sys.platform == "win32" else ("pwsh", "powershell")
+    executable = next((shutil.which(name) for name in candidates if shutil.which(name)), None)
+    if not executable:
+        pytest.skip("PowerShell 7/pwsh is unavailable")
+    command = [executable, "-NoProfile"]
+    if sys.platform == "win32":
+        command.extend(["-ExecutionPolicy", "Bypass"])
+    return command
 
 
 @pytest.fixture(autouse=True)

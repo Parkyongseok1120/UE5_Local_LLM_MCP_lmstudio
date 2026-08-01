@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import posixpath
+import re
 import shutil
 import stat
 import subprocess
@@ -18,42 +20,111 @@ from typing import Callable
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-REQUIRED_PYTHON = (3, 12)
-PINNED_PYTHON_VERSION = "3.12.13"
-REQUIRED_NODE_MAJOR = 20
-PINNED_NODE_VERSION = "20.20.2"
-PINNED_UV_VERSION = "0.12.1"
-PINNED_PWSH_VERSION = "7.5.4"
+RUNTIME_MANIFEST_PATH = Path(__file__).with_name("runtime-manifest.json")
+
+
+def _load_runtime_manifest(path: Path = RUNTIME_MANIFEST_PATH) -> dict:
+    if not path.is_file() or path.stat().st_size > 1024 * 1024:
+        raise RuntimeError(f"runtime manifest is missing or oversized: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"runtime manifest is unreadable: {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("runtime manifest root must be a JSON object")
+    return payload
+
+
+RUNTIME_MANIFEST = _load_runtime_manifest()
+RUNTIME_DEFINITIONS = RUNTIME_MANIFEST.get("runtimes") or {}
+
+
+def _runtime_definition(name: str) -> dict:
+    value = RUNTIME_DEFINITIONS.get(name)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"runtime manifest definition is missing: {name}")
+    return value
+
+
+PINNED_PYTHON_VERSION = str(_runtime_definition("python").get("version") or "")
+REQUIRED_PYTHON = tuple(int(part) for part in PINNED_PYTHON_VERSION.split(".")[:2])
+PINNED_NODE_VERSION = str(_runtime_definition("node").get("version") or "")
+REQUIRED_NODE_MAJOR = int(PINNED_NODE_VERSION.split(".", 1)[0])
+PINNED_UV_VERSION = str(_runtime_definition("uv").get("version") or "")
+PINNED_PWSH_VERSION = str(_runtime_definition("pwsh").get("version") or "")
 TOOLCHAIN_DIRNAME = "evidence-first-runtimes"
 BOOTSTRAP_ENV = "EVIDENCE_FIRST_RUNTIME_BOOTSTRAPPED"
 MAX_ARCHIVE_MEMBERS = 100_000
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 
-# Pinned upstream SHA-256 values from uv's per-asset .sha256 files, Node's
-# SHASUMS256.txt, and PowerShell's hashes.sha256. A download is never extracted
-# until its digest matches this table. Coverage is x64/arm64 on Windows, macOS,
-# and Ubuntu/glibc.
 ARCHIVE_SHA256 = {
-    "uv-aarch64-apple-darwin.tar.gz": "77d2906988e8074fd43f2f329ec452ebbf9b0c257ba1c66451c71de70a6baf42",
-    "uv-x86_64-apple-darwin.tar.gz": "69d9f9a00337f25a50dcb13882052da08b8469bac11091c98c5694c3c6721467",
-    "uv-aarch64-pc-windows-msvc.zip": "9bc7c18e616230fa2dc6fb24bc3afde18a95c2b5c9433de747e9502c66041568",
-    "uv-x86_64-pc-windows-msvc.zip": "8fcb0cb46e1229065e344758980924e569bef5882ef45f46fada8fb24e06b74a",
-    "uv-aarch64-unknown-linux-gnu.tar.gz": "769d373e146692c639b5fbaae33b331c297a32e03d30448772051902df52bbf4",
-    "uv-x86_64-unknown-linux-gnu.tar.gz": "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb",
-    "node-v20.20.2-darwin-arm64.tar.gz": "466e05f3477c20dfb723054dfebffe55bc74660ee77f612166fca121dacb65b6",
-    "node-v20.20.2-darwin-x64.tar.gz": "8be6f5e4bb128c82774f8a0b8d7a1cc1365a7977d9657cece0ca647b3fe04e61",
-    "node-v20.20.2-linux-arm64.tar.gz": "47ef73d543ecf6eb19435f6c03a0ac4809b3bf0dd6b26c7c571efc2a6572a74d",
-    "node-v20.20.2-linux-x64.tar.gz": "19e56f0825510207dd904f087fe52faa0a4eb6b2aab5f0ea7a33830d04888b8b",
-    "node-v20.20.2-win-arm64.zip": "d5c5b1d56f7f9469830eb1f57efeec0a6a9078c0a9e88cd5b4b4b48f46c22069",
-    "node-v20.20.2-win-x64.zip": "dc3700fdd57a63eedb8fd7e3c7baaa32e6a740a1b904167ff4204bc68ed8bf77",
-    "powershell-7.5.4-linux-arm64.tar.gz": "4b32d4cb86a43dfb83d5602d0294295bf22fafbf9e0785d1aaef81938cda92f8",
-    "powershell-7.5.4-linux-x64.tar.gz": "1fd7983fe56ca9e6233f126925edb24bf6b6b33e356b69996d925c4db94e2fef",
-    "powershell-7.5.4-osx-arm64.tar.gz": "3aaadd7ca62f1e4dbe59145b6af24e926d61f8da8a4782bc535e500c184135f0",
-    "powershell-7.5.4-osx-x64.tar.gz": "cd16a04c1b99cdacbdc0337b0fd0da50dbf1a8b4e8437bcb4ca9118ef729211a",
-    "PowerShell-7.5.4-win-arm64.zip": "0c0b2bf04e853917508280531cd49bba8b3049837e3c805ebc042e2741ca52b3",
-    "PowerShell-7.5.4-win-x64.zip": "b40d192ae95ba6ccc4cc362ff4e1b18ca6fb5055bebbcd3920684e12701fa8f6",
+    str(asset.get("filename")): str(asset.get("sha256"))
+    for definition in RUNTIME_DEFINITIONS.values()
+    if isinstance(definition, dict)
+    for asset in definition.get("assets") or []
+    if isinstance(asset, dict)
 }
+
+
+def validate_runtime_manifest(manifest: dict | None = None) -> dict[str, int]:
+    payload = manifest or RUNTIME_MANIFEST
+    if payload.get("schemaVersion") != 1:
+        raise RuntimeError("runtime manifest schemaVersion must be 1")
+    platforms = tuple(payload.get("supportedPlatforms") or [])
+    architectures = tuple(payload.get("supportedArchitectures") or [])
+    if set(platforms) != {"darwin", "windows", "linux"}:
+        raise RuntimeError("runtime manifest must cover darwin/windows/linux")
+    if set(architectures) != {"arm64", "x64"}:
+        raise RuntimeError("runtime manifest must cover arm64/x64")
+    runtimes = payload.get("runtimes")
+    if not isinstance(runtimes, dict) or set(runtimes) != {"python", "uv", "node", "pwsh"}:
+        raise RuntimeError("runtime manifest must define python, uv, node, and pwsh")
+    filenames: set[str] = set()
+    asset_count = 0
+    for name, definition in runtimes.items():
+        if not isinstance(definition, dict) or not str(definition.get("version") or ""):
+            raise RuntimeError(f"runtime version is missing: {name}")
+        probe = definition.get("executableProbe")
+        if not isinstance(probe, dict) or not isinstance(probe.get("args"), list):
+            raise RuntimeError(f"runtime executable probe is missing: {name}")
+        if name == "python":
+            if definition.get("delivery") != "uv-managed":
+                raise RuntimeError("python runtime delivery must be uv-managed")
+            continue
+        template = str(definition.get("urlTemplate") or "")
+        if not template.startswith("https://") or "{version}" not in template or "{asset}" not in template:
+            raise RuntimeError(f"runtime URL template is invalid: {name}")
+        assets = definition.get("assets")
+        if not isinstance(assets, list):
+            raise RuntimeError(f"runtime assets must be an array: {name}")
+        expected = {(platform, arch) for platform in platforms for arch in architectures}
+        observed: set[tuple[str, str]] = set()
+        for asset in assets:
+            if not isinstance(asset, dict):
+                raise RuntimeError(f"runtime asset must be an object: {name}")
+            pair = (str(asset.get("platform") or ""), str(asset.get("architecture") or ""))
+            if pair in observed:
+                raise RuntimeError(f"duplicate runtime platform/architecture: {name} {pair}")
+            observed.add(pair)
+            filename = str(asset.get("filename") or "")
+            digest = str(asset.get("sha256") or "")
+            executable = str(asset.get("executable") or "")
+            if not filename or filename in filenames:
+                raise RuntimeError(f"runtime asset filename is missing or duplicated: {filename}")
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise RuntimeError(f"runtime SHA-256 is invalid: {filename}")
+            if not executable or PurePosixPath(executable).is_absolute() or ".." in PurePosixPath(executable).parts:
+                raise RuntimeError(f"runtime executable probe path is invalid: {filename}")
+            template.format(version=definition["version"], asset=filename)
+            filenames.add(filename)
+            asset_count += 1
+        if observed != expected:
+            raise RuntimeError(f"runtime asset matrix is incomplete: {name}")
+    return {"runtimeCount": len(runtimes), "assetCount": asset_count}
+
+
+validate_runtime_manifest()
 
 
 def toolchain_root(state_home: Path | None = None) -> Path:
@@ -164,37 +235,42 @@ def validate_host_runtime() -> dict[str, str]:
     return details
 
 
+def _runtime_asset(name: str, system: str | None = None, arch: str | None = None) -> dict:
+    target = (
+        str(system or host_os()),
+        str(arch or cpu_arch()),
+    )
+    for asset in _runtime_definition(name).get("assets") or []:
+        if not isinstance(asset, dict):
+            continue
+        if (str(asset.get("platform")), str(asset.get("architecture"))) == target:
+            return asset
+    raise RuntimeError(f"runtime asset is missing for {name} {target[0]}-{target[1]}")
+
+
+def runtime_download_url(name: str, asset_name: str | None = None) -> str:
+    definition = _runtime_definition(name)
+    asset = asset_name or str(_runtime_asset(name).get("filename") or "")
+    return str(definition.get("urlTemplate") or "").format(
+        version=str(definition.get("version") or ""),
+        asset=asset,
+    )
+
+
 def uv_asset_name() -> str:
-    system = host_os()
-    arch = cpu_arch()
-    if system == "darwin":
-        uv_arch = "aarch64" if arch == "arm64" else "x86_64"
-        return f"uv-{uv_arch}-apple-darwin.tar.gz"
-    if system == "windows":
-        uv_arch = "aarch64" if arch == "arm64" else "x86_64"
-        return f"uv-{uv_arch}-pc-windows-msvc.zip"
-    uv_arch = "aarch64" if arch == "arm64" else "x86_64"
-    return f"uv-{uv_arch}-unknown-linux-gnu.tar.gz"
+    return str(_runtime_asset("uv").get("filename") or "")
 
 
 def node_asset_name(version: str = PINNED_NODE_VERSION) -> str:
-    system = host_os()
-    arch = cpu_arch()
-    if system == "darwin":
-        return f"node-v{version}-darwin-{arch}.tar.gz"
-    if system == "windows":
-        return f"node-v{version}-win-{arch}.zip"
-    return f"node-v{version}-linux-{arch if arch == 'arm64' else 'x64'}.tar.gz"
+    if str(version) != PINNED_NODE_VERSION:
+        raise ValueError("node version must be updated in runtime-manifest.json first")
+    return str(_runtime_asset("node").get("filename") or "")
 
 
 def pwsh_asset_name(version: str = PINNED_PWSH_VERSION) -> str:
-    system = host_os()
-    arch = cpu_arch()
-    if system == "darwin":
-        return f"powershell-{version}-osx-{arch}.tar.gz"
-    if system == "windows":
-        return f"PowerShell-{version}-win-{arch}.zip"
-    return f"powershell-{version}-linux-{arch if arch == 'arm64' else 'x64'}.tar.gz"
+    if str(version) != PINNED_PWSH_VERSION:
+        raise ValueError("PowerShell version must be updated in runtime-manifest.json first")
+    return str(_runtime_asset("pwsh").get("filename") or "")
 
 
 def _absolute_path(path: Path) -> Path:
@@ -316,9 +392,13 @@ def _clear_macos_quarantine(path: Path) -> None:
 
 
 def _node_arch(executable: Path) -> str | None:
+    arguments = list(
+        (_runtime_definition("node").get("architectureProbe") or {}).get("args")
+        or ["-p", "process.arch"]
+    )
     try:
         completed = subprocess.run(
-            [str(executable), "-p", "process.arch"],
+            [str(executable), *arguments],
             capture_output=True,
             text=True,
             check=True,
@@ -347,7 +427,11 @@ def _command_version(executable: Path, arguments: list[str]) -> str | None:
 
 
 def _uv_is_usable(executable: Path) -> bool:
-    version = _command_version(executable, ["--version"])
+    arguments = list(
+        (_runtime_definition("uv").get("executableProbe") or {}).get("args")
+        or ["--version"]
+    )
+    version = _command_version(executable, arguments)
     fields = version.strip().lower().split() if version else []
     return len(fields) >= 2 and fields[:2] == ["uv", PINNED_UV_VERSION]
 
@@ -380,15 +464,13 @@ def _npm_is_usable(node: Path, npm: Path) -> bool:
 
 
 def _python_arch(executable: Path) -> str | None:
+    arguments = list(
+        (_runtime_definition("python").get("architectureProbe") or {}).get("args")
+        or []
+    )
     try:
         completed = subprocess.run(
-            [
-                str(executable),
-                "-c",
-                "import platform; m=platform.machine().lower(); "
-                "print('arm64' if m in {'arm64','aarch64'} else "
-                "'x64' if m in {'x86_64','amd64','x64'} else m)",
-            ],
+            [str(executable), *arguments],
             capture_output=True,
             text=True,
             check=True,
@@ -460,9 +542,13 @@ def _mark_executable(path: Path) -> None:
 
 
 def _python_version(executable: Path) -> tuple[int, int] | None:
+    arguments = list(
+        (_runtime_definition("python").get("executableProbe") or {}).get("args")
+        or []
+    )
     try:
         completed = subprocess.run(
-            [str(executable), "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+            [str(executable), *arguments],
             capture_output=True,
             text=True,
             check=True,
@@ -478,9 +564,13 @@ def _python_version(executable: Path) -> tuple[int, int] | None:
 
 
 def _node_major(executable: Path) -> int | None:
+    arguments = list(
+        (_runtime_definition("node").get("executableProbe") or {}).get("args")
+        or ["--version"]
+    )
     try:
         completed = subprocess.run(
-            [str(executable), "--version"],
+            [str(executable), *arguments],
             capture_output=True,
             text=True,
             check=True,
@@ -588,9 +678,13 @@ def find_node_npm(extra_bin_dirs: list[Path] | None = None) -> tuple[Path, Path]
 
 
 def _pwsh_major(executable: Path) -> int | None:
+    arguments = list(
+        (_runtime_definition("pwsh").get("executableProbe") or {}).get("args")
+        or ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"]
+    )
     try:
         completed = subprocess.run(
-            [str(executable), "-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"],
+            [str(executable), *arguments],
             capture_output=True,
             text=True,
             check=True,
@@ -632,7 +726,7 @@ def _ensure_uv(root: Path, *, dry_run: bool = False, download: Downloader = _def
         return uv_bin
 
     asset = uv_asset_name()
-    url = f"https://github.com/astral-sh/uv/releases/download/{PINNED_UV_VERSION}/{asset}"
+    url = runtime_download_url("uv", asset)
     print(f"  Installing uv {PINNED_UV_VERSION} for Python bootstrap...")
     if dry_run:
         return uv_bin
@@ -720,7 +814,7 @@ def install_node_npm(
         if _node_arch(node_path) in {None, cpu_arch()} and _npm_is_usable(node_path, npm_path):
             return _absolute_path(node_path), _absolute_path(npm_path)
 
-    url = f"https://nodejs.org/dist/v{version}/{asset}"
+    url = runtime_download_url("node", asset)
     print(f"  Installing Node.js {version} (includes npm)...")
     if dry_run:
         return node_path, npm_path
@@ -765,7 +859,7 @@ def install_pwsh(
     if pwsh_path.is_file() and (_pwsh_major(pwsh_path) or 0) >= 7:
         return _absolute_path(pwsh_path)
 
-    url = f"https://github.com/PowerShell/PowerShell/releases/download/v{version}/{asset}"
+    url = runtime_download_url("pwsh", asset)
     print(f"  Installing PowerShell {version} (pwsh)...")
     if dry_run:
         return pwsh_path

@@ -109,6 +109,10 @@ $sourcePath = Join-Path $dataDir "raw_source.jsonl"
 $projectSymbolsPath = Join-Path $dataDir "raw_project_symbols.jsonl"
 $projectProfilesPath = Join-Path $dataDir "raw_project_profiles.jsonl"
 $projectArchitecturePath = Join-Path $dataDir "raw_project_architecture.jsonl"
+$guidelinesPath = Join-Path $dataDir "raw_guidelines.jsonl"
+$gameDesignPath = Join-Path $dataDir "raw_game_design.jsonl"
+$guidelinesRoot = Join-Path $workspace "RAG_Project_Guidelines"
+$gameDesignRoot = Join-Path $workspace "Game_Design_Docs"
 $engineSourceRoot = Get-EngineSourceRoot -SharedConfig $shared -Workspace $workspace
 $projectInfo = Resolve-ActiveProjectInfo -SharedConfig $shared
 
@@ -123,6 +127,28 @@ Write-Host ""
 
 Push-Location $workspace
 try {
+    Write-Host "[1/9] collect-guidelines"
+    if (Test-Path -LiteralPath $guidelinesRoot -PathType Container) {
+        & $py (Join-Path $scriptsDir "collect_project_guidelines.py") `
+            --root $guidelinesRoot `
+            --out $guidelinesPath
+        if ($LASTEXITCODE -ne 0) { throw "collect-guidelines failed" }
+    }
+    else {
+        Write-Host "[1/9] skip guidelines (directory not present)"
+    }
+
+    Write-Host "[2/9] collect-game-design"
+    if (Test-Path -LiteralPath $gameDesignRoot -PathType Container) {
+        & $py (Join-Path $scriptsDir "collect_game_design_docs.py") `
+            --root $gameDesignRoot `
+            --out $gameDesignPath
+        if ($LASTEXITCODE -ne 0) { throw "collect-game-design failed" }
+    }
+    else {
+        Write-Host "[2/9] skip game design docs (directory not present)"
+    }
+
     if ($resolvedTier -eq "lite") {
         foreach ($excluded in @(
                 $symbolsPath,
@@ -139,7 +165,7 @@ try {
         Remove-TierInput -Path $sourcePath -Reason "excluded by $resolvedTier tier"
     }
 
-    Write-Host "[1/7] collect-projects"
+    Write-Host "[3/9] collect-projects"
     $searchRoots = @($shared.projectSearchRoots | Where-Object {
             $_ -and (([string]$_).Replace('\', '/') -notlike "*/Unreal58-RAG/data") -and (Test-Path -LiteralPath $_)
         })
@@ -168,7 +194,7 @@ try {
         if (-not $engineSourceRoot -or -not (Test-Path -LiteralPath $engineSourceRoot -PathType Container)) {
             throw "Engine/Source not found. Re-run installer with --engine-root or set UNREAL_ENGINE_ROOT."
         }
-        Write-Host "[2/7] collect-symbols (engine)"
+        Write-Host "[4/9] collect-symbols (engine)"
         if (Test-Path $symbolsPath) { Remove-Item -LiteralPath $symbolsPath -Force }
         if (Test-Path $sidecarPath) { Remove-Item -LiteralPath $sidecarPath -Force }
         & $py (Join-Path $scriptsDir "collect_unreal_symbols.py") `
@@ -180,7 +206,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "collect-symbols (engine) failed" }
 
         if ($projectInfo -and (Test-Path -LiteralPath $projectInfo.SourceRoot)) {
-            Write-Host "[3/7] collect-symbols (project: $($projectInfo.ProjectName))"
+            Write-Host "[5/9] collect-symbols (project: $($projectInfo.ProjectName))"
             if (Test-Path $projectSymbolsPath) { Remove-Item -LiteralPath $projectSymbolsPath -Force }
             & $py (Join-Path $scriptsDir "collect_unreal_symbols.py") `
                 --root $projectInfo.SourceRoot `
@@ -190,7 +216,7 @@ try {
                 --project-name $projectInfo.ProjectName
             if ($LASTEXITCODE -ne 0) { throw "collect-symbols (project) failed" }
 
-            Write-Host "[4/7] collect-project-profile + architecture"
+            Write-Host "[6/9] collect-project-profile + architecture"
             Remove-TierInput -Path $projectProfilesPath -Reason "refresh active project profile"
             Remove-TierInput -Path $projectArchitecturePath -Reason "refresh active project architecture"
             & $py (Join-Path $scriptsDir "collect_unreal_project_profile.py") `
@@ -204,14 +230,14 @@ try {
             if ($LASTEXITCODE -ne 0) { Write-Warning "collect-project-architecture failed (continuing)" }
         }
         else {
-            Write-Host "[3/7] skip project symbols (no active project Source/)"
-            Write-Host "[4/7] skip project profile"
+            Write-Host "[5/9] skip project symbols (no active project Source/)"
+            Write-Host "[6/9] skip project profile"
             foreach ($staleProjectInput in @($projectSymbolsPath, $projectProfilesPath, $projectArchitecturePath)) {
                 Remove-TierInput -Path $staleProjectInput -Reason "no active project"
             }
         }
 
-        Write-Host "[5/7] collect-module-graph"
+        Write-Host "[7/9] collect-module-graph"
         $graphArgs = @(
             (Join-Path $scriptsDir "build_unreal_module_graph.py"),
             "--symbols", $symbolsPath,
@@ -225,14 +251,14 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "collect-module-graph failed" }
     }
     else {
-        Write-Host "[2/7] skip engine/project symbols (lite tier)"
-        Write-Host "[3/7] skip project symbols (lite tier)"
-        Write-Host "[4/7] skip project profile (lite tier)"
-        Write-Host "[5/7] skip module graph (lite tier)"
+        Write-Host "[4/9] skip engine/project symbols (lite tier)"
+        Write-Host "[5/9] skip project symbols (lite tier)"
+        Write-Host "[6/9] skip project profile (lite tier)"
+        Write-Host "[7/9] skip module graph (lite tier)"
     }
 
     if ($resolvedTier -eq "full") {
-        Write-Host "[6/7] collect-source (engine full text)"
+        Write-Host "[8/9] collect-source (engine full text)"
         Remove-TierInput -Path $sourcePath -Reason "refresh full-tier engine source"
         & $py (Join-Path $scriptsDir "collect_unreal_source.py") `
             --root $engineSourceRoot `
@@ -240,7 +266,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "collect-source failed" }
     }
     else {
-        Write-Host "[6/7] skip engine source dump (tier=$resolvedTier)"
+        Write-Host "[8/9] skip engine source dump (tier=$resolvedTier)"
     }
 
     if (-not $SkipEditorIngest) {
@@ -302,7 +328,7 @@ try {
     }
 
     if (-not $SkipBuild) {
-        Write-Host "[7/7] build index"
+        Write-Host "[9/9] build index"
         & $py (Join-Path $scriptsDir "incremental_build.py") --out-dir $dataDir --force
         if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
@@ -311,7 +337,7 @@ try {
         }
     }
     else {
-        Write-Host "[7/7] skip build"
+        Write-Host "[9/9] skip build"
     }
 }
 finally {

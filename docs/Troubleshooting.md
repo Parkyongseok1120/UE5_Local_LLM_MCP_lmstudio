@@ -79,6 +79,22 @@ Compare deltas in `Reports/eval/deltas/`. See [Eval_Regression_Workflow.md](Eval
 
 Rerun `python install.py --profile standard --yes` to restore SAFE read-only defaults.
 
+## AGENT write is reported as blocked after selecting Qwen directly
+
+This is not a macOS Privacy & Security problem when the MCP result is `CONTEXT_COMPACTOR_NOT_ACTIVE`. Beta3 installs the LM Studio context proxy as advisory, so direct Qwen/GPT selection remains write-capable. Re-run the installer or `python scripts/patch_mcp_config.py`, then restart/toggle the MCP servers so `MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=0`, `MCP_CONTEXT_COMPACTOR_ADVISORY=1`, and `MCP_FRONTEND=lmstudio` are loaded.
+
+Only an administrator-set strict LM Studio policy may require selecting `unreal-context-compactor`. Cline, CLI, Ollama, custom, and remote clients must not be blocked by LM Studio proxy telemetry.
+
+If the error is `TASK_AUTH_INVALID_FORMAT` or `TASK_STATE_MISSING`, the model fabricated or reused invalid capability data. Call `unreal_agent_plan` once and use the returned authorization unchanged; do not fall back to paste-ready code.
+
+## Oversized Unreal log may hide the original failure
+
+- `read_unreal_logs mode=tail` reads recent failures.
+- `mode=first_error` scans from byte zero for the first actionable error within the bounded scan budget.
+- `mode=range cursorByte=N` returns `nextCursorByte` and `hasMore` for deterministic traversal.
+
+When `sourceTruncated=true`, do not claim that the returned tail contains the root cause.
+
 ## Long task cannot write after an interruption
 
 Inspect `unreal_task_checkpoint` with `action=status`.

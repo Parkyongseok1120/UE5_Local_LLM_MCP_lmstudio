@@ -6,16 +6,15 @@ from pathlib import Path
 
 import pytest
 
+from conftest import powershell_prefix
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_SUPPORT = ROOT / "scripts" / "installer_support"
 
 
 def _run_ps1(script: str, *args: str) -> subprocess.CompletedProcess[str]:
     cmd = [
-        "powershell",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
+        *powershell_prefix(),
         "-File",
         str(INSTALLER_SUPPORT / script),
         *args,

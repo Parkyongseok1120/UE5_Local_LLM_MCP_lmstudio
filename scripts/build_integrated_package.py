@@ -154,7 +154,6 @@ def _write_launchers(staging: Path) -> None:
         "configuration are not bundled by default. RAG indexing uses the bootstrapped `pwsh`; "
         "custom Unreal installs can be supplied with `--engine-root` or `UNREAL_ENGINE_ROOT`.\n",
         encoding="utf-8",
-        newline="\n",
     )
 
 

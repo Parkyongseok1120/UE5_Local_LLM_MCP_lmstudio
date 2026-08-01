@@ -3,16 +3,15 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from conftest import powershell_prefix
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_rag_ps1_doctor_parses_and_runs() -> None:
     ps = subprocess.run(
         [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
+            *powershell_prefix(),
             "-File",
             str(ROOT / "rag.ps1"),
             "doctor",

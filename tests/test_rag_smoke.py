@@ -77,6 +77,50 @@ def test_rebuild_status_if_present():
         assert status["reason"] == "index-unreadable"
 
 
+def test_default_index_path_is_native_when_workspace_config_is_absent(tmp_path):
+    workspace = tmp_path / "UE5_Local_LLM_MCP_lmstudio"
+    workspace.mkdir()
+
+    assert resolve_index_path(workspace) == (
+        workspace / "data" / "unreal58" / "rag.sqlite"
+    ).resolve()
+
+
+def test_index_path_normalizes_foreign_relative_separators(tmp_path):
+    workspace = tmp_path / "UE5_Local_LLM_MCP_lmstudio"
+    config_dir = workspace / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.json").write_text(
+        json.dumps({
+            "rootPath": str(workspace),
+            "indexNamespace": "unreal59",
+            "indexPath": r"data\unreal59\rag.sqlite",
+        }),
+        encoding="utf-8",
+    )
+
+    assert resolve_index_path(workspace) == (
+        workspace / "data" / "unreal59" / "rag.sqlite"
+    ).resolve()
+
+
+def test_stale_configured_root_falls_back_to_discovered_workspace(tmp_path):
+    workspace = tmp_path / "UE5_Local_LLM_MCP_lmstudio"
+    config_dir = workspace / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.json").write_text(
+        json.dumps({
+            "rootPath": str(tmp_path / "missing-other-host-root"),
+            "indexPath": "data/unreal58/rag.sqlite",
+        }),
+        encoding="utf-8",
+    )
+
+    assert resolve_index_path(workspace) == (
+        workspace / "data" / "unreal58" / "rag.sqlite"
+    ).resolve()
+
+
 def test_index_health_handles_missing_chunks_table(tmp_path):
     import sqlite3
 

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import powershell_prefix
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 AGENT = ROOT / "lmstudio-unreal-agent-mcp"
@@ -94,10 +96,7 @@ def test_python_node_state_root_stays_beside_direct_shared_config(tmp_path: Path
 def test_build_cline_mcp_config_includes_agent_state_root(tmp_path: Path) -> None:
     ps = subprocess.run(
         [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
+            *powershell_prefix(),
             "-Command",
             (
                     f". '{ROOT / 'scripts' / 'installer_support' / 'Install-PathHelpers.ps1'}'; "

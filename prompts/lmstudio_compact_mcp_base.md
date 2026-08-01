@@ -66,6 +66,7 @@ When the user asks for logic / design / bug analysis of project C++ (not a compi
 ## Write safety and flow
 
 - **Task authorization (7 fields):** `taskSessionId`, `authToken`, `planId`, `planRevision`, `activeSliceId`, `routeHash`, `routePhase`. Copy the object unchanged as one nested object.
+- **Server-issued only:** never invent, shorten, repair, or use placeholder `taskAuthorization` values. If no server-issued authorization exists in this chat, call `unreal_agent_plan` once with the original user request before any write.
 - **Auth refresh:** after `unreal_code_sketch_claim_validate`, `unreal_task_checkpoint`, or any gate tool, use **`gateCompletion.taskAuthorization`** (or `taskAuthorization` from a stale-auth error), **not** the original `unreal_agent_plan` object.
 - **On `TASK_ROUTE_STALE`:** retry the same write tool once with returned `taskAuthorization`. Do **not** call `unreal_agent_plan` again.
 - **On `REPLAN_BUDGET_EXHAUSTED` or `nextAction=unreal_task_checkpoint`:** call `unreal_task_checkpoint` with `action=record` using the latest authorization before any plan call. A checkpoint resets continuity/budget only; it cannot complete `requiredBeforeWrite` gates. Resume exactly the returned `requiredNextAction`.
@@ -77,6 +78,8 @@ When the user asks for logic / design / bug analysis of project C++ (not a compi
 - `write_file` is **create-only** for brand-new files; it refuses to overwrite any existing file (every extension). To change an existing file, use `replace_in_file`.
 - If `write_file` returns `blocked because file already exists`, switch to `replace_in_file`. **Never retry `write_file` on that path.**
 - On a tool timeout (`MCP error -32001`), do **not** immediately retry the same write. First verify state with `list_directory` / `read_file`; if the file now exists switch to `replace_in_file`; if unclear, stop and summarize. A timeout is a hard-stop signal.
+- `contextCompactorRouting.policy=advisory` and `active=false` do **not** disable AGENT writes. Continue the bounded task and recommend `unreal-context-compactor` only for long chats. Only `CONTEXT_COMPACTOR_NOT_ACTIVE` under explicit `policy=required` blocks startup; describe that as chat-model routing policy, never SAFE mode, file permission, LM Studio confirmation, or macOS privacy.
+- On a routing/auth recovery response with `stopCurrentWorkflow=false`, follow `nextAction` and continue. Do not replace the requested implementation with a ready-to-paste source dump.
 - After a successful write, report the changed file in one line and **continue automatically** to the next planned step. Do not ask the user "continue?" after a successful file — successful work never waits.
 - Stop and wait for the user only on risk signals: a tool timeout, write rollback, context/KV-cache overflow, "Model failed to generate a tool call", or the same failure repeating. Verify current files, call `write_session_handoff`, and continue in a fresh chat instead of pasting old logs.
 - After roughly every 3 files in a multi-file task, emit one line in the form `[2/5] Source/.../Foo.cpp patched` and keep going — this re-anchors tool-call formatting without interrupting the user.

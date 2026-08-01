@@ -998,6 +998,12 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
       exhausted.errorCode,
       "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
     );
+    assert.strictEqual(exhausted.nextAction, "unreal_task_checkpoint");
+    assert.deepStrictEqual(exhausted.nextActions, [
+      "unreal_task_status",
+      "unreal_task_checkpoint",
+      "unreal_task_cancel",
+    ]);
 
     const corruptDir = path.join(stateRoot, "tasks", "corrupt_task");
     fs.mkdirSync(corruptDir, { recursive: true });

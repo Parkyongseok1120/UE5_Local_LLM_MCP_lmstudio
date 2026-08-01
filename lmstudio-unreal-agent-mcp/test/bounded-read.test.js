@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { readUtf8Tail } = require("../src/bounded-read");
+const { readUtf8Range, readUtf8Tail } = require("../src/bounded-read");
 
 test("readUtf8Tail bounds large logs and drops the partial first line", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-log-read-"));
@@ -36,6 +36,52 @@ test("readUtf8Tail returns a complete small file", async () => {
     const result = await readUtf8Tail(log, 1_024);
     assert.equal(result.sourceTruncated, false);
     assert.equal(result.content, "alpha\nbeta\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readUtf8Range exposes a stable continuation cursor and drops partial lines", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-log-range-"));
+  const log = path.join(root, "range.log");
+  try {
+    fs.writeFileSync(log, `${"a".repeat(2_000)}\nfirst error C1000\nlast\n`, "utf8");
+    const first = await readUtf8Range(log, 0, 1_024);
+    assert.equal(first.requestedStartByte, 0);
+    assert.equal(first.nextCursorByte, 1_024);
+    assert.equal(first.hasMore, true);
+    const second = await readUtf8Range(log, first.nextCursorByte, 1_024);
+    assert.doesNotMatch(second.content, /^a+/u);
+    assert.match(second.content, /first error C1000/u);
+    assert.ok(second.nextCursorByte > first.nextCursorByte);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readUtf8Range preserves a complete line when the cursor is already aligned", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-log-aligned-"));
+  const log = path.join(root, "aligned.log");
+  try {
+    fs.writeFileSync(log, "alpha\nerror C2000\nomega\n", "utf8");
+    const result = await readUtf8Range(log, Buffer.byteLength("alpha\n"), 1_024);
+    assert.equal(result.startsAtLineBoundary, true);
+    assert.match(result.content, /^error C2000/u);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readUtf8Range can preserve a partial leading line for streaming scanners", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-log-stream-"));
+  const log = path.join(root, "stream.log");
+  try {
+    fs.writeFileSync(log, `${"x".repeat(1_020)}error C3000\n`, "utf8");
+    const result = await readUtf8Range(log, 1_024, 1_024, {
+      preservePartialLeading: true,
+    });
+    assert.equal(result.startsAtLineBoundary, false);
+    assert.match(result.content, /^r C3000/u);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

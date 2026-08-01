@@ -294,6 +294,7 @@ def compact_agent_plan_payload(
             "taskAuthorizationRequiredForWrites",
             "writeToolAuthorizationArgs",
             "authorizationRetryPolicy",
+            "contextCompactorRouting",
         )
         if key in compact
     }

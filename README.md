@@ -94,7 +94,7 @@ The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal a
 
 ### One installer, two platform launchers
 
-`INSTALL.bat` and `install.sh` are thin platform launchers for the same `install.py` implementation. There are no separate SAFE, AGENT, RAG, Cline, or context-compactor installers. Choose those options inside the integrated installer. `installer/` now contains only the manifest and an explanation; advanced maintenance tools live under `scripts/installer_support/`.
+`INSTALL.bat` and `install.sh` are thin platform launchers for the same `install.py` implementation. There are no separate SAFE, AGENT, RAG, Cline, or context-compactor installers. Choose those options inside the integrated installer. `installer/` contains bootstrap runtime code and validated manifests; advanced maintenance tools live under `scripts/installer_support/`.
 
 Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unreal-agent`, and build your index. The installer also installs `unreal-context-compactor`. To enable automatic context expansion, keep exactly one underlying LLM loaded (or set its exact `targetModel` in the plugin settings), then **select `unreal-context-compactor` in the model dropdown for every chat that should use expansion. Installation does not change the model already selected in an existing chat; selecting the underlying Qwen/GPT model directly bypasses the installed proxy.** The proxy compacts only the model-facing history; the visible chat and the existing MCP servers remain unchanged.
 
@@ -105,8 +105,7 @@ cd lmstudio-context-compactor-plugin
 npm run status
 ```
 
-The cross-platform checker only accepts fresh proxy telemetry; stale evidence from an older chat is rejected.
-In a FULL install with AGENT authority, write-task planning also fails closed unless fresh proxy evidence exists.
+The cross-platform checker only accepts fresh proxy telemetry; stale evidence from an older chat is rejected. In Beta3 the proxy is an LM Studio continuity aid, not a write-authority prerequisite: selecting Qwen/GPT directly remains AGENT-write capable. An administrator can explicitly opt into strict LM Studio-only routing with `MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1`; Cline, CLI, Ollama, custom, and remote clients must use their own frontend-specific continuity proof instead of LM Studio proxy telemetry.
 
 ### Rider + Cline (optional)
 
@@ -159,10 +158,10 @@ Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context 
 Practical rules for day-to-day Unreal project work:
 
 - **One bounded task per chat** when possible (e.g. “fix these 3 compile errors”, not “implement the whole dev console”).
-- **Do not paste full UBT/linker logs** into chat. Use `read_unreal_logs` or the log file path; share only the first meaningful error slice.
+- **Do not paste full UBT/linker logs** into chat. Use `read_unreal_logs`: `mode=tail` for recent failures, `mode=first_error` to scan from byte zero for the original cause, and `mode=range` with `cursorByte`/`nextCursorByte` for bounded traversal.
 - **Header-then-.cpp is normal.** `write_file` on a new header may show advisory `CPP_DEFINITION_MISSING` until the matching `.cpp` is written — that is expected, not a rollback trigger on its own.
 - **Avoid invented UE APIs** the model often hallucinates: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. Prefer `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, `SpawnTransform` by value, and the owning actor/subsystem's `GetWorld()`.
-- **Compact tool responses (v1.2.5 baseline, retained in Beta3):** `build_unreal_project` returns a one-line summary + up to 40 likely errors + `.agent/logs/latest-build.log` path (not full stdout/stderr). `read_unreal_logs` defaults to the newest log and first error cluster. The context proxy preserves control fields such as the required next tool, modified files, diagnostics, and build state across compaction.
+- **Compact tool responses (v1.2.5 baseline, retained in Beta3):** `build_unreal_project` returns a one-line summary + up to 40 likely errors + `.agent/logs/latest-build.log` path (not full stdout/stderr). `read_unreal_logs` defaults to the newest bounded tail and exposes whether the source was truncated. The context proxy preserves control fields such as the required next tool, modified files, diagnostics, and build state across compaction.
 
 Automatic compaction extends a session but cannot shrink an oversized system prompt/tool schema or repair a saturated KV cache. If the proxy cannot restore its hard safety margin, use `write_session_handoff`, start a fresh chat, and resume from `.agent/handoff/latest.md`.
 

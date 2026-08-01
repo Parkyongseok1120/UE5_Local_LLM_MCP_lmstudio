@@ -652,7 +652,7 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
     } == {"1"}
 
 
-def test_full_agent_install_requires_fresh_context_proxy_evidence(tmp_path: Path) -> None:
+def test_full_agent_install_keeps_context_proxy_advisory(tmp_path: Path) -> None:
     module = _load_installer_module()
     args = module.build_parser().parse_args(["--profile", "full"])
     args.enable_agent_mode = True
@@ -664,10 +664,13 @@ def test_full_agent_install_requires_fresh_context_proxy_evidence(tmp_path: Path
         tmp_path / "node",
         tmp_path / "shared.json",
         tmp_path / "agent.json",
-        require_context_compactor=True,
+        context_compactor_advisory=True,
     )
     rag_env = entries["unreal-rag"]["env"]
-    assert rag_env["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "1"
+    assert rag_env["MCP_FRONTEND"] == "lmstudio"
+    assert rag_env["MCP_CONTEXT_COMPACTOR_ADVISORY"] == "1"
+    assert rag_env["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "0"
+    assert rag_env["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] == "lmstudio"
     assert rag_env["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] == "300"
     sys.modules.pop("integrated_install", None)
 
@@ -977,3 +980,14 @@ def test_tier_pipeline_removes_inputs_excluded_by_standard_and_lite() -> None:
         "$projectArchitecturePath",
     ):
         assert path_name in pipeline
+
+
+def test_tier_pipeline_collects_portable_guideline_inputs_before_build() -> None:
+    pipeline = (ROOT / "scripts" / "run_index_pipeline.ps1").read_text(encoding="utf-8")
+    assert 'collect_project_guidelines.py' in pipeline
+    assert 'collect_game_design_docs.py' in pipeline
+    assert '$guidelinesRoot = Join-Path $workspace "RAG_Project_Guidelines"' in pipeline
+    assert '$gameDesignRoot = Join-Path $workspace "Game_Design_Docs"' in pipeline
+    assert pipeline.index('Write-Host "[1/9] collect-guidelines"') < pipeline.index(
+        'Write-Host "[9/9] build index"'
+    )

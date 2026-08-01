@@ -36,6 +36,51 @@ from rag_embeddings import embedding_status
 
 _ENGINE_PROJECTS = frozenset({"", "engine", "Engine", "__engine__"})
 
+_ROUTE_SAME_CALL_RETRY_CODES = frozenset(
+    {"TASK_AUTH_INCOMPLETE", "TASK_ROUTE_STALE", "TASK_STATE_LOCKED"}
+)
+_ROUTE_RECOVERY_ACTION_CODES = frozenset(
+    {
+        "TASK_AUTH_INVALID_FORMAT",
+        "TASK_AUTH_MISMATCH",
+        "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+        "TASK_ROUTE_OWNERSHIP_REQUIRED",
+        "TASK_SESSION_REQUIRED",
+        "TASK_STATE_MISSING",
+        "TASK_TOOL_NOT_ACTIVE",
+    }
+)
+
+
+def _route_authorization_failure_payload(
+    result: dict[str, Any], tool_name: str
+) -> dict[str, Any]:
+    """Preserve route recovery semantics instead of turning every denial into a hard stop."""
+
+    payload = {**result, "tool": str(tool_name or "")}
+    error_code = str(payload.get("errorCode") or "TASK_ROUTE_AUTH_FAILED")
+    same_call_retry = error_code in _ROUTE_SAME_CALL_RETRY_CODES
+    recovery_action = (
+        error_code in _ROUTE_RECOVERY_ACTION_CODES
+        or bool(payload.get("nextAction"))
+        or bool(payload.get("nextActions"))
+    )
+    payload.setdefault("retryable", same_call_retry)
+    payload.setdefault(
+        "stopCurrentWorkflow", not (same_call_retry or recovery_action)
+    )
+    if recovery_action:
+        payload.setdefault("recoveryActionRequired", True)
+        payload.setdefault(
+            "agentInstruction",
+            (
+                "Follow nextAction/taskAuthorization from this response and continue the "
+                "same user workflow. Do not invent authorization, misreport a file-"
+                "permission failure, or fall back to paste-ready source code."
+            ),
+        )
+    return payload
+
 
 def annotate_other_project_rows(rows: list[dict[str, Any]], active_names: list[str]) -> list[dict[str, Any]]:
     active = {str(name).strip().lower() for name in active_names if str(name).strip()}
@@ -3326,6 +3371,8 @@ class McpServer:
                     "Classify task and return evidencePlan, toolPolicy, writeGate, checkpoints, "
                     "stopConditions, retryPolicy, projectContext, and suggestedToolCalls before edits. "
                     "LM Studio chat: call this FIRST after unreal_get_active_project. "
+                    "This is the only source of initial server-issued taskAuthorization; never "
+                    "fabricate IDs or tokens. "
                     "Copy suggestedToolCalls args exactly, including projectName/folderHint, and never write "
                     "when writeGate.writesAllowed is false."
                 ),
@@ -3943,12 +3990,9 @@ class McpServer:
             if not route_authorization.get("ok"):
                 self.structured_tool_result(
                     message_id,
-                    {
-                        **route_authorization,
-                        "tool": str(name or ""),
-                        "retryable": False,
-                        "stopCurrentWorkflow": True,
-                    },
+                    _route_authorization_failure_payload(
+                        route_authorization, str(name or "")
+                    ),
                 )
                 return
             self._active_route_context = route_authorization
@@ -3967,12 +4011,9 @@ class McpServer:
             if not route_authorization.get("ok"):
                 self.structured_tool_result(
                     message_id,
-                    {
-                        **route_authorization,
-                        "tool": str(name or ""),
-                        "retryable": False,
-                        "stopCurrentWorkflow": True,
-                    },
+                    _route_authorization_failure_payload(
+                        route_authorization, str(name or "")
+                    ),
                 )
                 return
             self._active_route_context = route_authorization
@@ -3991,12 +4032,9 @@ class McpServer:
                 if not route_authorization.get("ok"):
                     self.structured_tool_result(
                         message_id,
-                        {
-                            **route_authorization,
-                            "tool": str(name or ""),
-                            "retryable": False,
-                            "stopCurrentWorkflow": True,
-                        },
+                        _route_authorization_failure_payload(
+                            route_authorization, str(name or "")
+                        ),
                     )
                     return
                 self._active_route_context = route_authorization
@@ -4480,10 +4518,37 @@ class McpServer:
                     self.tool_result(message_id, "Missing request", is_error=True)
                     return
                 payload = build_agent_plan(request, mode).to_dict()
-                if (
-                    os.environ.get("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "").strip().lower()
+                writes_allowed = (
+                    (payload.get("writeGate") or {}).get("writesAllowed") is True
+                )
+                compactor_strict_requested = (
+                    os.environ.get("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "")
+                    .strip()
+                    .lower()
                     in {"1", "true", "yes", "on"}
-                    and (payload.get("writeGate") or {}).get("writesAllowed") is True
+                )
+                frontend = str(os.environ.get("MCP_FRONTEND") or "unknown").strip().lower()
+                required_frontends = {
+                    item.strip().lower()
+                    for item in os.environ.get(
+                        "MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS", "lmstudio"
+                    ).split(",")
+                    if item.strip()
+                }
+                compactor_required = (
+                    compactor_strict_requested and frontend in required_frontends
+                )
+                compactor_advisory = (
+                    os.environ.get("MCP_CONTEXT_COMPACTOR_ADVISORY", "")
+                    .strip()
+                    .lower()
+                    in {"1", "true", "yes", "on"}
+                    and frontend == "lmstudio"
+                )
+                if writes_allowed and (
+                    compactor_required
+                    or compactor_advisory
+                    or compactor_strict_requested
                 ):
                     from context_compactor_status import recent_context_compactor_status
 
@@ -4496,22 +4561,61 @@ class McpServer:
                     compactor_status = recent_context_compactor_status(
                         max_age_seconds=max_age_seconds
                     )
-                    if compactor_status.get("active") is not True:
+                    compactor_active = compactor_status.get("active") is True
+                    payload["contextCompactorRouting"] = {
+                        "policy": (
+                            "required"
+                            if compactor_required
+                            else "advisory"
+                            if compactor_advisory
+                            else "not_applicable"
+                        ),
+                        "frontend": frontend,
+                        "strictRequested": compactor_strict_requested,
+                        "strictScopeMatched": compactor_required,
+                        "requiredFrontends": sorted(required_frontends),
+                        "active": compactor_active,
+                        "blocksWrites": compactor_required and not compactor_active,
+                        "directModelAllowed": not compactor_required,
+                        "status": compactor_status,
+                        "recommendation": (
+                            "For long multi-file LM Studio tasks, select unreal-context-compactor "
+                            "in the chat model dropdown. Directly selected Qwen/GPT models and "
+                            "non-LM-Studio frontends remain write-capable unless that frontend has "
+                            "its own explicit continuity-proof policy."
+                        ),
+                    }
+                    if compactor_required and not compactor_active:
                         self.structured_tool_result(
                             message_id,
                             {
                                 "ok": False,
                                 "errorCode": "CONTEXT_COMPACTOR_NOT_ACTIVE",
                                 "error": (
-                                    "Agent write task was not started because this chat has no fresh "
-                                    "unreal-context-compactor routing evidence."
+                                    "Strict context-compactor policy blocked task startup because "
+                                    "this chat has no fresh unreal-context-compactor routing evidence."
                                 ),
+                                "failureLayer": "chat_model_routing_policy",
+                                "agentAuthority": "unchanged",
+                                "notCausedBy": [
+                                    "SAFE_MODE",
+                                    "ALLOW_WRITE",
+                                    "LM_STUDIO_TOOL_CONFIRMATION",
+                                    "MACOS_PRIVACY_PERMISSION",
+                                ],
                                 "contextCompactorStatus": compactor_status,
                                 "retryable": False,
                                 "stopCurrentWorkflow": True,
+                                "doNotFallbackToManualCode": True,
                                 "requiredUserAction": (
                                     "Select unreal-context-compactor in this chat's model dropdown, "
                                     "then send the request again."
+                                ),
+                                "agentInstruction": (
+                                    "State that strict chat-model routing policy blocked startup. "
+                                    "Do not call this a file permission or SAFE-mode failure, and do "
+                                    "not dump ready-to-paste source code. Give only the exact model-"
+                                    "dropdown recovery action."
                                 ),
                             },
                         )
@@ -4590,6 +4694,10 @@ class McpServer:
                     "activeTools": (compact_plan.get("toolRoute") or {}).get("activeTools") or [],
                     "taskAuthorization": compact_plan.get("taskAuthorization") or {},
                 }
+                if compact_plan.get("contextCompactorRouting"):
+                    plan_summary["contextCompactorRouting"] = compact_plan[
+                        "contextCompactorRouting"
+                    ]
                 self.tool_result(
                     message_id,
                     json.dumps(plan_summary, ensure_ascii=False, indent=2),

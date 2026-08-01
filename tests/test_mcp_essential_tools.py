@@ -372,10 +372,38 @@ def test_unreal_agent_plan_description_mentions_chat_first(monkeypatch, tmp_path
     plan = next(t for t in server.all_tool_definitions() if t["name"] == "unreal_agent_plan")
     assert "FIRST" in plan["description"]
     assert "toolPolicy" in plan["description"]
+    assert "server-issued taskAuthorization" in plan["description"]
+
+
+def test_route_authorization_recovery_is_not_converted_to_hard_stop(monkeypatch):
+    mod = _load_rag_mcp_module()
+    payload = mod._route_authorization_failure_payload(
+        {
+            "ok": False,
+            "errorCode": "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+            "nextActions": ["unreal_task_checkpoint"],
+        },
+        "read_file",
+    )
+    assert payload["retryable"] is False
+    assert payload["stopCurrentWorkflow"] is False
+    assert payload["recoveryActionRequired"] is True
+    assert "paste-ready" in payload["agentInstruction"]
+
+
+def test_terminal_route_integrity_failure_still_stops(monkeypatch):
+    mod = _load_rag_mcp_module()
+    payload = mod._route_authorization_failure_payload(
+        {"ok": False, "errorCode": "TASK_STATE_CORRUPT"},
+        "read_file",
+    )
+    assert payload["retryable"] is False
+    assert payload["stopCurrentWorkflow"] is True
 
 
 def test_agent_write_plan_fails_closed_without_fresh_context_proxy(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("MCP_FRONTEND", "lmstudio")
     monkeypatch.setenv("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "1")
     monkeypatch.setenv("LMS_CONTEXT_COMPACTOR_STATE_DIR", str(tmp_path / "missing-compactor-state"))
     monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
@@ -399,9 +427,105 @@ def test_agent_write_plan_fails_closed_without_fresh_context_proxy(monkeypatch, 
     assert payload["ok"] is False
     assert payload["errorCode"] == "CONTEXT_COMPACTOR_NOT_ACTIVE"
     assert payload["stopCurrentWorkflow"] is True
+    assert payload["failureLayer"] == "chat_model_routing_policy"
+    assert payload["agentAuthority"] == "unchanged"
+    assert payload["doNotFallbackToManualCode"] is True
+    assert "SAFE_MODE" in payload["notCausedBy"]
+    assert "MACOS_PRIVACY_PERMISSION" in payload["notCausedBy"]
     tasks_root = tmp_path / "agent-state" / "tasks"
     if tasks_root.exists():
         assert not list(tasks_root.iterdir())
+
+
+def test_agent_write_plan_allows_direct_model_under_advisory_policy(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("MCP_FRONTEND", "lmstudio")
+    monkeypatch.setenv("MCP_CONTEXT_COMPACTOR_ADVISORY", "1")
+    monkeypatch.setenv("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "0")
+    monkeypatch.setenv(
+        "LMS_CONTEXT_COMPACTOR_STATE_DIR",
+        str(tmp_path / "missing-compactor-state"),
+    )
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
+    project = tmp_path / "Demo" / "Demo.uproject"
+    project.parent.mkdir(parents=True)
+    project.write_text("{}", encoding="utf-8")
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(
+        json.dumps({"activeProject": str(project)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        17,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {
+                "request": "Create Source/Demo/NewActor.h and implement the actor class",
+                "mode": "codegen",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["taskAuthorization"]["taskSessionId"]
+    routing = payload["contextCompactorRouting"]
+    assert routing["policy"] == "advisory"
+    assert routing["active"] is False
+    assert routing["blocksWrites"] is False
+    assert routing["directModelAllowed"] is True
+
+
+def test_strict_compactor_request_does_not_block_non_lmstudio_frontend(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("MCP_FRONTEND", "cline")
+    monkeypatch.setenv("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "1")
+    monkeypatch.setenv("MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS", "lmstudio")
+    monkeypatch.setenv(
+        "LMS_CONTEXT_COMPACTOR_STATE_DIR",
+        str(tmp_path / "missing-compactor-state"),
+    )
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
+    project = tmp_path / "Demo" / "Demo.uproject"
+    project.parent.mkdir(parents=True)
+    project.write_text("{}", encoding="utf-8")
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(json.dumps({"activeProject": str(project)}), encoding="utf-8")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        18,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {"request": "Create Source/Demo/NewActor.h", "mode": "codegen"},
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["taskAuthorization"]["taskSessionId"]
+    routing = payload["contextCompactorRouting"]
+    assert routing["policy"] == "not_applicable"
+    assert routing["frontend"] == "cline"
+    assert routing["strictRequested"] is True
+    assert routing["strictScopeMatched"] is False
+    assert routing["blocksWrites"] is False
 
 
 def test_code_sketch_tool_exposes_project_generation_contract(monkeypatch, tmp_path):

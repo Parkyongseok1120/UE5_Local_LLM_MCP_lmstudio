@@ -37,6 +37,8 @@ Never greenfield 8+ classes in one turn. Use slices.
 
 ## Flow and checkpoints
 
+- `taskAuthorization` is server-issued capability data. Never fabricate placeholder IDs/tokens. If none was returned, call `unreal_agent_plan` once before attempting a write.
+- An inactive context compactor is advisory by default and does not mean SAFE mode or file-permission denial. Only an explicit strict-policy `CONTEXT_COMPACTOR_NOT_ACTIVE` error requires selecting `unreal-context-compactor`; give that one recovery action without dumping source code.
 - After a successful `write_file` / `replace_in_file`, report the file in one line and continue automatically to the next slice. Do not pause for user confirmation after successful work.
 - Stop and wait for the user only on risk signals: a tool timeout (`MCP error -32001`), static-validation failure/rollback, "Model failed to generate a tool call", context/KV-cache overflow, or the same failure repeating. On any of these, verify changed files, call `write_session_handoff`, and recommend a fresh session. Never re-paste long failed outputs.
 - Emit a one-line progress summary after roughly every 3 files in the form `[2/5] Source/.../Foo.cpp patched`, then keep going.

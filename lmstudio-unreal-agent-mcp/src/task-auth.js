@@ -824,7 +824,14 @@ function mutateRouteBudget(
         error: `Phase tool-call budget exhausted (${count + reserved}/${limit}).`,
         toolRoute: route,
         toolRouteUsage: usage,
-        nextActions: ["get_workspace_info", "get_active_project"],
+        nextAction: "unreal_task_checkpoint",
+        nextActions: [
+          "unreal_task_status",
+          "unreal_task_checkpoint",
+          "unreal_task_cancel",
+        ],
+        agentInstruction:
+          "Use the control-plane checkpoint/status action next. Do not retry the budgeted work tool or claim a pending gate complete.",
       };
     }
     if (mode === "reserve") {
@@ -2026,7 +2033,13 @@ function authorizeTaskRouteTool(
     };
   }
   const sanitized = sanitizeTaskSessionId(fields.taskSessionId);
-  if (!sanitized.ok) return { ok: false, error: sanitized.error };
+  if (!sanitized.ok) {
+    return {
+      ok: false,
+      error: sanitized.error,
+      errorCode: "TASK_AUTH_INVALID_FORMAT",
+    };
+  }
   const stateResult = readTaskStateResult(workspaceRoot, sanitized.taskSessionId);
   const state = stateResult.state;
   if (!state) {
@@ -2165,7 +2178,11 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
   }
   const sanitized = sanitizeTaskSessionId(fields.taskSessionId);
   if (!sanitized.ok) {
-    return { ok: false, error: sanitized.error };
+    return {
+      ok: false,
+      error: sanitized.error,
+      errorCode: "TASK_AUTH_INVALID_FORMAT",
+    };
   }
   const stateResult = readTaskStateResult(workspaceRoot, sanitized.taskSessionId);
   const state = stateResult.state;
@@ -2178,7 +2195,12 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
         taskSessionId: sanitized.taskSessionId,
       };
     }
-    return { ok: false, error: `Unknown task session: ${sanitized.taskSessionId}` };
+    return {
+      ok: false,
+      error: `Unknown task session: ${sanitized.taskSessionId}`,
+      errorCode: stateResult.errorCode || "TASK_STATE_MISSING",
+      taskSessionId: sanitized.taskSessionId,
+    };
   }
   if (String(state.taskSessionId || "").trim() !== sanitized.taskSessionId) {
     return {

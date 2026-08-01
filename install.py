@@ -931,7 +931,7 @@ def _unreal_entries(
     node_exe: Path,
     shared_config: Path,
     agent_config: Path,
-    require_context_compactor: bool = False,
+    context_compactor_advisory: bool = False,
 ) -> dict[str, dict[str, Any]]:
     allow = "1" if args.enable_agent_mode else "0"
     state_root = args.lmstudio_home / "state" / "unreal-agent"
@@ -947,6 +947,7 @@ def _unreal_entries(
             "SHARED_UNREAL_CONFIG": str(shared_config),
             "AGENT_STATE_ROOT": str(state_root),
             "UNREAL58_ROOT": str(ROOT),
+            "MCP_FRONTEND": "lmstudio",
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
             "MCP_ESSENTIAL_TOOLS": "1",
@@ -974,8 +975,14 @@ def _unreal_entries(
             "VALIDATE_ON_WRITE": allow,
         },
     }
-    if require_context_compactor:
-        rag_entry["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] = "1"
+    if context_compactor_advisory:
+        # The compactor is an optional stability layer, not an authority
+        # boundary.  Directly selecting the underlying model must keep AGENT
+        # writes usable; strict blocking remains an explicit administrator
+        # opt-in through MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1.
+        rag_entry["env"]["MCP_CONTEXT_COMPACTOR_ADVISORY"] = "1"
+        rag_entry["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] = "0"
+        rag_entry["env"]["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] = "lmstudio"
         rag_entry["env"]["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] = "300"
     if args.engine_root:
         rag_entry["env"]["UNREAL_ENGINE_ROOT"] = str(args.engine_root)
@@ -1258,7 +1265,7 @@ def install(
                 node_exe,
                 shared_path,
                 agent_path,
-                require_context_compactor=(
+                context_compactor_advisory=(
                     args.enable_agent_mode and "context_compactor" in components
                 ),
             ).items():

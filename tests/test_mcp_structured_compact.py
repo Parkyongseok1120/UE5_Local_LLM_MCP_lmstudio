@@ -123,6 +123,12 @@ def test_agent_plan_compaction_preserves_authorization_and_bounds_repeated_reque
         "taskAuthorizationRequiredForWrites": True,
         "writeToolAuthorizationArgs": {"taskAuthorization": authorization},
         "authorizationRetryPolicy": {"reuseExistingAuthorization": True},
+        "contextCompactorRouting": {
+            "policy": "advisory",
+            "active": False,
+            "blocksWrites": False,
+            "directModelAllowed": True,
+        },
         "checkpoints": ["c" * 2_000 for _ in range(30)],
         "stopConditions": ["s" * 2_000 for _ in range(30)],
         "retryPolicy": ["p" * 2_000 for _ in range(30)],
@@ -131,6 +137,8 @@ def test_agent_plan_compaction_preserves_authorization_and_bounds_repeated_reque
     compact = compact_agent_plan_payload(payload, max_bytes=8_000)
     assert compact["taskAuthorization"] == authorization
     assert compact["writeToolAuthorizationArgs"]["taskAuthorization"] == authorization
+    assert compact["contextCompactorRouting"]["policy"] == "advisory"
+    assert compact["contextCompactorRouting"]["directModelAllowed"] is True
     assert len(compact["request"]) < 1_300
     assert len(json.dumps(compact, ensure_ascii=False)) <= 8_000
     assert len(json.dumps(compact, ensure_ascii=False)) < len(json.dumps(payload, ensure_ascii=False))

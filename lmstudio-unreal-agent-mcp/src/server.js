@@ -122,6 +122,7 @@ const {
   errorPayload,
   firstErrorCluster,
   formatSessionHandoff,
+  isInterestingLogLine,
   resolveAgentResultMaxChars,
   slimWriteSuccessPayload,
   writeDisciplineOptions,
@@ -151,7 +152,7 @@ const {
   clearReadSuccessHistory
 } = require("./tool-read-history");
 const { runUnrealBuildFromPlan } = require("./build-executor");
-const { readUtf8Tail } = require("./bounded-read");
+const { readUtf8Range, readUtf8Tail } = require("./bounded-read");
 const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
 const {
   recordValidationFailure,
@@ -233,6 +234,10 @@ const SEARCH_MAX_FILES = Math.min(
 const LOG_READ_MAX_BYTES = Math.min(
   numberEnv("LOG_READ_MAX_BYTES", 4 * 1024 * 1024, 64 * 1024),
   32 * 1024 * 1024
+);
+const LOG_FIRST_ERROR_SCAN_MAX_BYTES = Math.min(
+  numberEnv("LOG_FIRST_ERROR_SCAN_MAX_BYTES", 32 * 1024 * 1024, LOG_READ_MAX_BYTES),
+  256 * 1024 * 1024
 );
 const ALLOW_SOURCE_DELETE = ["1", "true", "yes", "on"].includes(
   String(process.env.ALLOW_SOURCE_DELETE || "").trim().toLowerCase()
@@ -496,12 +501,42 @@ function enforceTaskAuth(args, options = {}) {
     const routeStale = auth.errorCode === "TASK_ROUTE_STALE";
     const authMismatch = auth.errorCode === "TASK_AUTH_MISMATCH";
     const incomplete = auth.errorCode === "TASK_AUTH_INCOMPLETE";
+    const invalidFormat = auth.errorCode === "TASK_AUTH_INVALID_FORMAT";
+    const missingState = auth.errorCode === "TASK_STATE_MISSING";
+    const toolInactive = auth.errorCode === "TASK_TOOL_NOT_ACTIVE";
+    const budgetExhausted = auth.errorCode === "TASK_PHASE_TOOL_BUDGET_EXHAUSTED";
+    const recoveryActionRequired = (
+      authMismatch
+      || invalidFormat
+      || missingState
+      || toolInactive
+      || budgetExhausted
+    );
+    const canContinueWorkflow = incomplete || routeStale || recoveryActionRequired;
+    const recoveryNextSteps = [];
+    if (invalidFormat || missingState) {
+      recoveryNextSteps.push(
+        "Do not invent or repair taskAuthorization fields. Call unreal_agent_plan once with the original user request, then copy its server-issued taskAuthorization unchanged."
+      );
+    } else if (toolInactive) {
+      recoveryNextSteps.push(
+        `Do not retry ${String(options.toolName || "the write tool")}. Call ${String(auth.nextAction || "the active pending gate")} with the returned taskAuthorization.`
+      );
+    } else if (budgetExhausted) {
+      recoveryNextSteps.push(
+        "Do not retry the budgeted tool. Record an unreal_task_checkpoint, then follow its returned requiredNextAction."
+      );
+    }
     return fail(auth.error || "Task authorization failed.", {
       taskSessionId: auth.taskSessionId,
       errorCode: auth.errorCode || "TASK_AUTH_FAILED",
       retryable: incomplete || routeStale,
-      stopCurrentWorkflow: !(incomplete || routeStale),
+      stopCurrentWorkflow: !canContinueWorkflow,
+      recoveryActionRequired,
+      taskAuthorizationSource: "server_only",
+      doNotFabricateTaskAuthorization: true,
       authorizationRefreshRequired: routeStale || authMismatch,
+      ...(recoveryNextSteps.length ? { nextSteps: recoveryNextSteps } : {}),
       ...(auth.taskAuthorization ? { taskAuthorization: auth.taskAuthorization } : {}),
       ...(auth.nextAction ? { nextAction: auth.nextAction } : {}),
       ...(incomplete ? {
@@ -513,12 +548,92 @@ function enforceTaskAuth(args, options = {}) {
         agentInstruction: "Do not replan. Retry the same write tool once with taskAuthorization from this error response.",
       } : {}),
       ...(authMismatch ? {
-        agentInstruction: "Plan identity changed. Copy taskAuthorization from this error, then replan or re-run required gates before writing. Do not retry the write tool alone.",
+        agentInstruction: "Plan identity changed. Copy taskAuthorization from this error, then replan or re-run required gates before writing. Do not retry the write tool alone and do not stop the whole user workflow.",
+      } : {}),
+      ...(invalidFormat || missingState ? {
+        doNotRetry: [String(options.toolName || "write_tool")],
+        nextAction: "unreal_agent_plan",
+        suggestedToolCalls: [{ tool: "unreal_agent_plan", args: { request: "<original user request>" } }],
+        agentInstruction: "The supplied taskAuthorization was not server-issued or no longer exists. Never fabricate authorization. Call unreal_agent_plan once, then continue with the returned route.",
+      } : {}),
+      ...(toolInactive ? {
+        doNotRetry: [String(options.toolName || "write_tool")],
+        agentInstruction: `The write tool is not active in this phase. Call ${String(auth.nextAction || "the pending gate")} and continue; do not present manual paste-ready code.`,
+      } : {}),
+      ...(budgetExhausted ? {
+        doNotRetry: [String(options.toolName || "work_tool")],
+        agentInstruction: "The phase budget requires a checkpoint transition. Continue through unreal_task_checkpoint; do not stop or fall back to manual code.",
       } : {}),
     });
   }
   // Success must return null so write_file/replace_in_file proceed (not return the auth object).
   return null;
+}
+
+const ROUTE_SAME_CALL_RETRY_CODES = new Set([
+  "TASK_AUTH_INCOMPLETE",
+  "TASK_ROUTE_STALE",
+  "TASK_STATE_LOCKED",
+]);
+
+function routeAuthorizationFailureOptions(result = {}, toolName = "") {
+  const errorCode = String(result.errorCode || "TASK_ROUTE_AUTH_FAILED");
+  const sameCallRetry = ROUTE_SAME_CALL_RETRY_CODES.has(errorCode);
+  let nextAction = String(result.nextAction || "").trim();
+  if (!nextAction && errorCode === "TASK_PHASE_TOOL_BUDGET_EXHAUSTED") {
+    nextAction = "unreal_task_checkpoint";
+  }
+  if (!nextAction && errorCode === "TASK_TOOL_NOT_ACTIVE") {
+    const route = result.toolRoute && typeof result.toolRoute === "object"
+      ? result.toolRoute
+      : {};
+    const pending = Array.isArray(route.pendingGates)
+      ? route.pendingGates.map(String).filter(Boolean)
+      : [];
+    const active = Array.isArray(route.activeTools)
+      ? route.activeTools.map(String).filter(Boolean)
+      : [];
+    nextAction = pending[0] || active[0] || "unreal_task_checkpoint";
+  }
+  if (
+    !nextAction
+    && (errorCode === "TASK_AUTH_INVALID_FORMAT"
+      || errorCode === "TASK_STATE_MISSING")
+  ) {
+    nextAction = "unreal_agent_plan";
+  }
+  if (errorCode === "TASK_AUTH_MISMATCH") {
+    nextAction = "unreal_agent_plan";
+  }
+  const advertisedActions = Array.isArray(result.nextActions)
+    ? result.nextActions.map(String).filter(Boolean)
+    : [];
+  const recoveryActionRequired = Boolean(nextAction || advertisedActions.length);
+  const canContinueWorkflow = sameCallRetry || recoveryActionRequired;
+  const instruction = errorCode === "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
+    ? "Do not retry the budgeted work tool. Call unreal_task_checkpoint and continue with its returned taskAuthorization/requiredNextAction; do not fall back to manual code."
+    : errorCode === "TASK_AUTH_INVALID_FORMAT" || errorCode === "TASK_STATE_MISSING"
+      ? "The supplied taskAuthorization was not server-issued or no longer exists. Never fabricate authorization. Call unreal_agent_plan once with the original request, then continue the returned route."
+      : sameCallRetry
+        ? "Retry the same tool once using the complete server-issued taskAuthorization returned by the latest response."
+        : recoveryActionRequired
+          ? `Do not retry ${String(toolName || "the blocked tool")}. Call ${nextAction || advertisedActions[0]} and continue the same user workflow.`
+          : "Stop the current workflow and report the exact routing integrity failure.";
+  return {
+    errorCode,
+    retryable: sameCallRetry,
+    stopCurrentWorkflow: !canContinueWorkflow,
+    recoveryActionRequired,
+    taskAuthorizationSource: "server_only",
+    doNotFabricateTaskAuthorization: true,
+    ...(toolName && !sameCallRetry ? { doNotRetry: [String(toolName)] } : {}),
+    ...(nextAction ? { nextAction } : {}),
+    ...(advertisedActions.length ? { nextActions: advertisedActions } : {}),
+    ...(result.taskAuthorization ? { taskAuthorization: result.taskAuthorization } : {}),
+    ...(result.toolRoute ? { toolRoute: result.toolRoute } : {}),
+    ...(result.toolRouteUsage ? { toolRouteUsage: result.toolRouteUsage } : {}),
+    agentInstruction: instruction,
+  };
 }
 
 function commitMutationRouteBudget(args, toolName) {
@@ -534,14 +649,13 @@ function commitMutationRouteBudget(args, toolName) {
     toolName
   );
   if (!consumed.ok) {
-    return fail(consumed.error || "Task phase tool budget exhausted.", {
-      taskSessionId: fields.taskSessionId,
-      errorCode: consumed.errorCode || "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
-      retryable: false,
-      stopCurrentWorkflow: true,
-      toolRoute: consumed.toolRoute,
-      toolRouteUsage: consumed.toolRouteUsage,
-    });
+    return fail(
+      consumed.error || "Task phase tool budget exhausted.",
+      {
+        taskSessionId: fields.taskSessionId,
+        ...routeAuthorizationFailureOptions(consumed, toolName),
+      }
+    );
   }
   return null;
 }
@@ -1537,8 +1651,11 @@ function allAgentTools() {
       },
       {
         name: "read_unreal_logs",
-        description: "Read a compact error-focused slice from the newest MCP build log or Unreal runtime log. Defaults to one file and 60 tail lines to protect chat context.",
+        description: "Read a compact error-focused slice from the newest MCP build log or Unreal runtime log. Supports bounded tail, first-error scanning from byte zero, and cursor/range reads so oversized logs do not hide the original failure.",
         inputSchema: makeJsonSchema({
+          mode: { type: "string", enum: ["tail", "first_error", "range"], description: "tail (default), first_error from byte zero, or range from cursorByte." },
+          cursorByte: { type: "number", description: "Start byte for range mode. Use nextCursorByte to continue." },
+          maxBytes: { type: "number", description: "Bytes per range/scan chunk, 64 KiB to LOG_READ_MAX_BYTES." },
           maxLines: { type: "number", description: "Max tail lines per log file. Default 60, max 500." },
           maxFiles: { type: "number", description: "Newest log files to inspect. Default 1, max 3." },
           filter: { type: "string", description: "Optional case-insensitive substring filter (Error, Assert, etc.)." },
@@ -1630,7 +1747,7 @@ function allAgentTools() {
       },
       {
         name: "write_file",
-        description: "Create a brand-new UTF-8 file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1 and gateCompletion.taskAuthorization with routePhase=executor. Pass concrete targetFiles and changeKind=new_file to unreal_code_sketch_claim_validate before write. Create-only: any file that already exists is blocked. Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
+        description: "Create a brand-new UTF-8 file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1 and server-issued gateCompletion.taskAuthorization with routePhase=executor; never fabricate authorization, and call unreal_agent_plan once if none exists. Pass concrete targetFiles and changeKind=new_file to unreal_code_sketch_claim_validate before write. Create-only: any file that already exists is blocked. Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
         inputSchema: makeJsonSchema({
           ...taskAuthSchemaProperties(),
           path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
@@ -1640,7 +1757,7 @@ function allAgentTools() {
       },
       {
         name: "replace_in_file",
-        description: "Safely replace exact text in a file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying. Byte-identical repeat calls are rejected as a loop guard.",
+        description: "Safely replace exact text in a file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Requires ALLOW_WRITE=1 and server-issued taskAuthorization; never fabricate authorization, and call unreal_agent_plan once if none exists. Preferred patch tool for existing files; read the file first and set expectedOccurrences=1 when possible. Line endings (CRLF/LF) are normalized automatically — copy oldText exactly as shown by read_file or read_file_range. If oldText not found, a diagnostic hint and nearest partial match will be shown; do NOT retry with the same oldText — use read_file_range to re-read the exact lines and correct oldText before retrying. Byte-identical repeat calls are rejected as a loop guard.",
         inputSchema: makeJsonSchema({
           ...taskAuthSchemaProperties(),
           path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
@@ -1671,7 +1788,7 @@ function allAgentTools() {
       },
       {
         name: "delete_file",
-        description: "Delete one file under the active project's Source/ tree only after propose_file_deletions returned a per-file approvalToken and the user approved that plan. Requires taskAuthorization from unreal_agent_plan, ALLOW_WRITE=1, and ALLOW_SOURCE_DELETE=1. Extended mode only.",
+        description: "Delete one file under the active project's Source/ tree only after propose_file_deletions returned a per-file approvalToken and the user approved that plan. Requires server-issued taskAuthorization from unreal_agent_plan, ALLOW_WRITE=1, and ALLOW_SOURCE_DELETE=1; never fabricate authorization. Extended mode only.",
         inputSchema: makeJsonSchema({
           ...taskAuthSchemaProperties(),
           path: { type: "string", description: "workspace:// or project:// path inside the active project's Source tree." },
@@ -1685,7 +1802,7 @@ function allAgentTools() {
       },
       {
         name: "apply_edit_bundle",
-        description: "Apply a multi-file edit bundle atomically with pre-hash capture, scoped validation, and rollback on failure. Requires ALLOW_WRITE=1.",
+        description: "Apply a multi-file edit bundle atomically with pre-hash capture, scoped validation, and rollback on failure. Requires ALLOW_WRITE=1 and server-issued taskAuthorization; never fabricate authorization, and call unreal_agent_plan once if none exists.",
         inputSchema: makeJsonSchema({
           files: {
             type: "array",
@@ -1855,13 +1972,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       );
     }
     if (!routePreflight.ok) {
-      return fail(routePreflight.error || "Task route authorization failed.", {
-        errorCode: routePreflight.errorCode || "TASK_ROUTE_AUTH_FAILED",
-        retryable: false,
-        stopCurrentWorkflow: true,
-        toolRoute: routePreflight.toolRoute,
-        toolRouteUsage: routePreflight.toolRouteUsage,
-      });
+      return fail(
+        routePreflight.error || "Task route authorization failed.",
+        routeAuthorizationFailureOptions(routePreflight, name)
+      );
     }
     const earlyRepeatBlock = checkToolRepeatBlocked(name, args, priorSeq);
     if (earlyRepeatBlock.blocked) {
@@ -1955,13 +2069,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (DEFER_BUDGET_UNTIL_SUCCESS.has(name)) {
         const reserved = runBudgetOp(reserveRouteCall);
         if (!reserved.ok) {
-          return fail(reserved.error || "Task route authorization failed.", {
-            errorCode: reserved.errorCode || "TASK_ROUTE_AUTH_FAILED",
-            retryable: false,
-            stopCurrentWorkflow: true,
-            toolRoute: reserved.toolRoute,
-            toolRouteUsage: reserved.toolRouteUsage,
-          });
+          return fail(
+            reserved.error || "Task route authorization failed.",
+            routeAuthorizationFailureOptions(reserved, name)
+          );
         }
         if (reserved.reservationId) {
           pendingBudgetReservation = { id: String(reserved.reservationId) };
@@ -1987,13 +2098,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
           );
         if (!budgetCommit.ok) {
-          return fail(budgetCommit.error || "Task route authorization failed.", {
-            errorCode: budgetCommit.errorCode || "TASK_ROUTE_AUTH_FAILED",
-            retryable: false,
-            stopCurrentWorkflow: true,
-            toolRoute: budgetCommit.toolRoute,
-            toolRouteUsage: budgetCommit.toolRouteUsage,
-          });
+          return fail(
+            budgetCommit.error || "Task route authorization failed.",
+            routeAuthorizationFailureOptions(budgetCommit, name)
+          );
         }
       }
     }
@@ -2018,13 +2126,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (reservationId) {
           runBudgetOp(rollbackRouteReservation, reservationId);
         }
-        return fail(committed.error || "Task route authorization failed.", {
-          errorCode: committed.errorCode || "TASK_ROUTE_AUTH_FAILED",
-          retryable: false,
-          stopCurrentWorkflow: true,
-          toolRoute: committed.toolRoute,
-          toolRouteUsage: committed.toolRouteUsage,
-        });
+        return fail(
+          committed.error || "Task route authorization failed.",
+          routeAuthorizationFailureOptions(committed, name)
+        );
       }
       return null;
     };
@@ -2253,6 +2358,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const maxLines = Math.max(20, Math.min(Number(args.maxLines || 60), 500));
       const maxFiles = Math.max(1, Math.min(Number(args.maxFiles || 1), 3));
       const summaryOnly = args.summaryOnly !== false;
+      const readMode = ["tail", "first_error", "range"].includes(String(args.mode || "").toLowerCase())
+        ? String(args.mode).toLowerCase()
+        : "tail";
+      const rangeCursorByte = Math.max(0, Math.trunc(Number(args.cursorByte || 0)));
+      const chunkBytes = Math.max(
+        64 * 1024,
+        Math.min(Math.trunc(Number(args.maxBytes || LOG_READ_MAX_BYTES)), LOG_READ_MAX_BYTES),
+      );
       const filterText = String(args.filter || "").toLowerCase();
       const logFiles = [];
       for (const logsDir of logsDirs) {
@@ -2279,8 +2392,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       for (const logEntry of picked) {
         const logPath = logEntry.path;
         let bounded;
+        let firstErrorFound = null;
+        let scanTruncated = false;
         try {
-          bounded = await readUtf8Tail(logPath, LOG_READ_MAX_BYTES);
+          if (readMode === "range") {
+            bounded = await readUtf8Range(logPath, rangeCursorByte, chunkBytes);
+          } else if (readMode === "first_error") {
+            let cursor = 0;
+            let bytesScanned = 0;
+            let priorLines = [];
+            let partialLine = "";
+            let foundLines = [];
+            let sourceBytes = 0;
+            let nextCursorByte = 0;
+            while (bytesScanned < LOG_FIRST_ERROR_SCAN_MAX_BYTES) {
+              const scan = await readUtf8Range(
+                logPath,
+                cursor,
+                chunkBytes,
+                { preservePartialLeading: true },
+              );
+              sourceBytes = scan.sourceBytes;
+              nextCursorByte = scan.nextCursorByte;
+              bytesScanned += scan.bytesRead;
+              const currentLines = scan.content.split(/\r?\n/);
+              currentLines[0] = `${partialLine}${currentLines[0] || ""}`;
+              partialLine = scan.hasMore ? (currentLines.pop() || "") : "";
+              const combined = [...priorLines, ...currentLines];
+              const matchIndex = combined.findIndex((line) => (
+                filterText
+                  ? String(line).toLowerCase().includes(filterText)
+                  : isInterestingLogLine(line)
+              ));
+              if (matchIndex >= 0) {
+                const start = Math.max(0, matchIndex - 4);
+                foundLines = combined.slice(start, Math.min(combined.length, matchIndex + 5));
+                firstErrorFound = true;
+                break;
+              }
+              priorLines = combined.slice(-4);
+              cursor = scan.nextCursorByte;
+              if (!scan.hasMore || scan.bytesRead <= 0) break;
+            }
+            scanTruncated = nextCursorByte < sourceBytes;
+            if (firstErrorFound !== true) {
+              firstErrorFound = false;
+              foundLines = priorLines;
+            }
+            bounded = {
+              content: foundLines.join("\n"),
+              sourceBytes,
+              bytesRead: bytesScanned,
+              requestedStartByte: 0,
+              contentStartByte: 0,
+              nextCursorByte,
+              hasMore: scanTruncated,
+              sourceTruncated: scanTruncated,
+            };
+          } else {
+            bounded = await readUtf8Tail(logPath, chunkBytes);
+          }
         } catch (error) {
           if (error && ["ENOENT", "EACCES", "EPERM"].includes(error.code)) {
             skippedLogReadCount += 1;
@@ -2292,7 +2463,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let filtered = filterText
           ? lines.filter((line) => line.toLowerCase().includes(filterText))
           : lines;
-        if (summaryOnly) {
+        if (readMode === "first_error") {
+          filtered = lines.slice(0, maxLines);
+        } else if (readMode === "range") {
+          filtered = filtered.slice(0, maxLines);
+        } else if (summaryOnly) {
           filtered = firstErrorCluster(filtered, 4, 30);
         } else {
           filtered = filtered.slice(-maxLines);
@@ -2304,6 +2479,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           sourceBytes: bounded.sourceBytes,
           bytesRead: bounded.bytesRead,
           sourceTruncated: bounded.sourceTruncated,
+          mode: readMode,
+          cursorByte: bounded.requestedStartByte ?? null,
+          nextCursorByte: bounded.nextCursorByte ?? null,
+          hasMore: Boolean(bounded.hasMore),
+          firstErrorFound,
+          scanTruncated,
         });
       }
       const truncatedSourceCount = chunks.filter((chunk) => chunk.sourceTruncated).length;
@@ -2315,12 +2496,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ok: chunks.length > 0,
         projectDir,
         logsDirs,
-        responseMode: summaryOnly ? "summary" : "tail",
+        responseMode: readMode === "tail" && summaryOnly ? "summary" : readMode,
         logReadMaxBytes: LOG_READ_MAX_BYTES,
+        firstErrorScanMaxBytes: LOG_FIRST_ERROR_SCAN_MAX_BYTES,
         truncatedSourceCount,
         skippedLogReadCount,
         sourceReadNote: truncatedSourceCount
-          ? "Only the bounded tail of oversized log files was scanned; use the full log path for older diagnostics."
+          ? readMode === "tail"
+            ? "Only the bounded tail was scanned. Retry with mode=first_error for the original failure or mode=range with cursorByte for precise traversal."
+            : "The bounded scan/range did not cover the full source. Continue from nextCursorByte when hasMore=true."
           : null,
         suggestedRagMode: filterText.includes("error") || filterText.includes("fatal")
           ? "compile_fix"
@@ -3066,11 +3250,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       );
       if (!auth.ok) {
-        return fail(auth.error || "Task authorization failed.", {
-          errorCode: auth.errorCode || "TASK_AUTH_FAILED",
-          ...(auth.taskAuthorization ? { taskAuthorization: auth.taskAuthorization } : {}),
-          ...(auth.nextAction ? { nextAction: auth.nextAction } : {}),
-        });
+        return fail(
+          auth.error || "Task authorization failed.",
+          routeAuthorizationFailureOptions(auth, "apply_edit_bundle")
+        );
       }
       await agentNotify("Applying edit bundle…");
       const bundle = {

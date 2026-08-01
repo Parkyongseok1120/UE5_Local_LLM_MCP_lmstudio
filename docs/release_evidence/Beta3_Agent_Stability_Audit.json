@@ -1,0 +1,203 @@
+{
+  "mode": "audit",
+  "claims": [
+    {
+      "claim": "FULL/AGENT installation incorrectly converted the optional LM Studio context proxy into a mandatory write-start gate, blocking directly selected Qwen even though agent write authority remained enabled.",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "claimType": "behavior",
+      "unknowns": [],
+      "evidence": [
+        {"kind": "project_source", "location": "install.py:_unreal_entries", "observation": "The installer previously emitted MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1 whenever FULL/AGENT included the plugin."},
+        {"kind": "project_source", "location": "scripts/unreal_rag_mcp.py:McpServer.handle_tool_call(unreal_agent_plan)", "observation": "Strict proxy telemetry was evaluated before task_start and returned CONTEXT_COMPACTOR_NOT_ACTIVE."},
+        {"kind": "test", "location": "tests/test_mcp_essential_tools.py", "observation": "Regression tests prove advisory direct-model startup, explicit LM Studio strict blocking, and non-LM-Studio frontend bypass."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/server.js:ALLOW_WRITE", "observation": "Node write authority remained enabled; the failure was not SAFE mode or filesystem permission."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "install.py", "symbol": "_unreal_entries"},
+        {"stage": "decision", "stageStatus": "present", "location": "scripts/unreal_rag_mcp.py", "symbol": "compactor_required"},
+        {"stage": "observer", "stageStatus": "present", "location": "scripts/unreal_rag_mcp.py", "symbol": "CONTEXT_COMPACTOR_NOT_ACTIVE"}
+      ]
+    },
+    {
+      "claim": "Recoverable task authorization and phase-budget responses were overwritten with stopCurrentWorkflow=true, encouraging the chat model to abandon implementation and emit manual code.",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "claimType": "behavior",
+      "unknowns": [],
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/server.js:routeAuthorizationFailureOptions", "observation": "Recovery is now classified separately from same-call retry and terminal integrity failure."},
+        {"kind": "project_source", "location": "scripts/unreal_rag_mcp.py:_route_authorization_failure_payload", "observation": "RAG routing no longer overwrites checkpoint/gate recovery with a hard stop."},
+        {"kind": "test", "location": "tests/test_tool_call_authorization.py:test_agent_rejects_fabricated_write_authorization_with_plan_recovery", "observation": "A fabricated t1/tok_t1 authorization returns TASK_AUTH_INVALID_FORMAT and a server-issued unreal_agent_plan recovery without writing."}
+      ],
+      "counterEvidence": [
+        {"kind": "test", "location": "tests/test_mcp_essential_tools.py:test_terminal_route_integrity_failure_still_stops", "observation": "Corrupt task-state integrity failures remain terminal and fail closed."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "lmstudio-unreal-agent-mcp/src/server.js", "symbol": "tools/call"},
+        {"stage": "decision", "stageStatus": "present", "location": "lmstudio-unreal-agent-mcp/src/server.js", "symbol": "routeAuthorizationFailureOptions"},
+        {"stage": "observer", "stageStatus": "present", "location": "lmstudio-unreal-agent-mcp/src/context-ux.js", "symbol": "errorPayload"}
+      ]
+    },
+    {
+      "claim": "Tail-only Unreal log reads could omit the original error in oversized logs.",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "claimType": "behavior",
+      "unknowns": [],
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/bounded-read.js:readUtf8Range", "observation": "Range reads now return byte cursors, hasMore, and truncation state."},
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/server.js:read_unreal_logs", "observation": "The API now supports tail, first_error from byte zero, and cursor/range modes."},
+        {"kind": "test", "location": "tests/test_mcp_stable_subprocess_e2e.py:test_failed_static_scan_stamps_generation_and_project_build_log_is_readable", "observation": "Subprocess coverage proves an original error before a large noisy tail is found by first_error while range cursors remain stable."}
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "lmstudio-unreal-agent-mcp/src/server.js", "symbol": "read_unreal_logs"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "lmstudio-unreal-agent-mcp/src/bounded-read.js", "symbol": "readUtf8Range/readUtf8Tail"},
+        {"stage": "observer", "stageStatus": "present", "location": "lmstudio-unreal-agent-mcp/src/server.js", "symbol": "sourceTruncated/nextCursorByte"}
+      ]
+    },
+    {
+      "claim": "Context-compactor files were bounded per session but session directories had no global retention policy.",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "claimType": "state_transition",
+      "unknowns": [],
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/checkpoint-store.js:cleanupSessions", "observation": "Daily bounded GC applies 90-day completed/inactive and 30-day cancelled retention, excludes current/active sessions, and preserves corrupt artifacts."},
+        {"kind": "test", "location": "lmstudio-context-compactor-plugin/test/checkpoint-store.test.js", "observation": "Tests verify old completed/cancelled/inactive sessions are deleted and active/corrupt sessions remain."}
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/checkpoint-store.js", "symbol": "maybeCleanupSessions"},
+        {"stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/checkpoint-store.js", "symbol": "cleanupSessions retention/status/corrupt checks"},
+        {"stage": "mutation", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/checkpoint-store.js", "symbol": "fs.rm"}
+      ]
+    },
+    {
+      "claim": "Pinned runtime metadata was secure at download time but version, URL, platform, architecture, checksum, and executable probes lacked one validated maintenance contract.",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "claimType": "architecture",
+      "unknowns": [],
+      "evidence": [
+        {"kind": "project_source", "location": "installer/runtime-manifest.json", "observation": "One manifest now defines Python/uv/Node/PowerShell versions, HTTPS templates, 18 platform/architecture assets, SHA-256 values, and probes."},
+        {"kind": "project_source", "location": "scripts/manage_runtime_manifest.py", "observation": "The maintenance CLI validates/list assets and prevalidates checksum updates before atomic replacement."},
+        {"kind": "test", "location": "tests/test_bootstrap_runtimes.py:test_runtime_manifest_covers_every_platform_arch_and_probe_contract", "observation": "Matrix/probe/url coverage is regression tested."}
+      ],
+      "counterEvidence": [],
+      "behaviorPath": []
+    },
+    {
+      "claim": "When workspace.json was absent or copied across operating systems, the shared index resolver could preserve foreign separators or a stale root and point LM Studio at a non-existent RAG database.",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "claimType": "behavior",
+      "unknowns": [],
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/workspace_paths.py:canonical_workspace_root/resolve_index_path",
+          "observation": "Portable slash styles are normalized for the current host and non-existent roots copied from another machine fall back to the discovered workspace."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_rag_smoke.py:test_default_index_path_is_native_when_workspace_config_is_absent",
+          "observation": "Fresh macOS/Linux-style workspaces resolve to data/unreal58/rag.sqlite instead of a literal backslash filename."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_rag_smoke.py:test_index_path_normalizes_foreign_relative_separators",
+          "observation": "A Windows-style portable relative path resolves to native path components on the current host."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "install.py:_unreal_entries",
+          "observation": "The primary Python installer already constructed native paths directly; the defect affected shared resolver and repair flows."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/patch_mcp_config.py",
+          "symbol": "patch_unreal_rag"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/workspace_paths.py",
+          "symbol": "canonical_workspace_root/resolve_index_path"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "LM Studio mcp.json",
+          "symbol": "mcpServers.unreal-rag.args"
+        }
+      ]
+    },
+    {
+      "claim": "The integrated --build-rag pipeline omitted project guidelines and game-design inputs, so a successfully built index could lack the compile, Blueprint, and project-profile continuity documents expected by retrieval policy.",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "claimType": "data_flow",
+      "unknowns": [],
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/run_index_pipeline.ps1",
+          "observation": "The integrated pipeline now collects raw_guidelines.jsonl and raw_game_design.jsonl before every index build, while active project profiles remain part of standard/full collection."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_installer.py:test_tier_pipeline_collects_portable_guideline_inputs_before_build",
+          "observation": "The installer pipeline contract requires both portable document collectors to run before the build stage."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_retrieval_guideline_sidecar.py",
+          "observation": "The rebuilt live index ranks all four stabilized guideline/profile cases in the required top-five window."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "rag.ps1:build",
+          "observation": "The legacy explicit rag.ps1 build route already collected guideline and game-design inputs; the omission was specific to the consolidated installer pipeline."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "install.py",
+          "symbol": "--build-rag"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "scripts/run_index_pipeline.ps1",
+          "symbol": "collect-guidelines/collect-game-design"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "scripts/evaluate_rag_queries.py",
+          "symbol": "evaluate_case"
+        }
+      ]
+    }
+  ]
+}

@@ -18,9 +18,12 @@ Beta3 advances the 1.3 prerelease line with a portable evidence-first analysis l
 - Added cached/compact architecture analysis, risk-tiered orchestration, architecture-first routing, and Essential-profile tool exposure.
 - Consolidated installation into `INSTALL.bat`, `install.sh`, and their shared `install.py`, with interactive SAFE/AGENT authority confirmation and independent RAG depth selection.
 - Added Windows, Ubuntu Linux, and macOS-aware installation, engine discovery, Editor export, indexing, and build launch paths. Physical Ubuntu/macOS Unreal certification remains pending.
-- Hardened Windows, macOS, and Ubuntu bootstrap paths with component-scoped runtime downloads, pinned SHA-256 verification, bounded traversal-safe extraction, post-install executable probes, concurrent-bootstrap locking, semantic Unreal version selection, and Epic Launcher manifest discovery.
+- Hardened Windows, macOS, and Ubuntu bootstrap paths with component-scoped runtime downloads, a validated runtime manifest (URL/filename/platform/architecture/SHA-256/probe), bounded traversal-safe extraction, post-install executable probes, concurrent-bootstrap locking, semantic Unreal version selection, and Epic Launcher manifest discovery.
+- Normalized portable RAG index separators on every host and ignored stale workspace roots copied from another machine, including the fresh-install case where `workspace.json` does not exist yet.
+- Fixed the consolidated `--build-rag` pipeline to collect project guidelines and game-design inputs before indexing, preventing a healthy-looking index from silently omitting compile, Blueprint, and project-profile retrieval guidance.
 - Strengthened release verification, atomic RAG index/report writes, timeout handling, live-test quality gates, and regression metrics.
-- Hardened the context proxy with per-turn durable checkpoints, atomic output buffering, truncated-prediction rejection, fresh activation evidence, and fail-closed AGENT startup when the proxy is bypassed.
+- Hardened the context proxy with per-turn durable checkpoints, atomic output buffering, truncated-prediction rejection, fresh activation evidence, and bounded session-directory retention. Direct Qwen/GPT selection remains write-capable; strict proxy startup is an explicit LM Studio-only policy rather than a cross-frontend prerequisite.
+- Classified recoverable task-auth/route failures without terminating the user workflow, rejected fabricated authorization with a server-issued-plan recovery route, and added `tail`, `first_error`, and cursor/range Unreal log reads.
 - Added automatic post-mutation task checkpoints, refreshed route authorization in write responses, explicit skipped-validation advisories, and non-retry recovery guidance after post-write bookkeeping failures.
 - Bounded activation-telemetry scanning and rejected stale or future-dated proxy evidence so corrupt clocks and oversized histories cannot silently authorize AGENT work.
 - Fixed Windows `cp1252` package-builder status output and added deterministic success/error regression coverage.
@@ -30,9 +33,9 @@ Beta3 advances the 1.3 prerelease line with a portable evidence-first analysis l
 | Component | Version |
 |---|---|
 | Product | 1.3.0 Beta3 |
-| Node agent MCP | 0.3.1 |
-| Context compactor | 0.3.4 / revision 7 |
-| Portable manifest | 2.1.0 |
+| Node agent MCP | 0.3.2 |
+| Context compactor | 0.3.5 / revision 8 |
+| Portable manifest | 2.1.1 |
 
 Python 3.10+, Node.js 20+, and LM Studio 0.4+ are required according to the selected installer profile. Unreal Engine 5.x support uses a user-built index; UE 5.8 remains the primary validated knowledge target.
 
@@ -65,9 +68,12 @@ Beta3는 범용 evidence-first 분석 계층, 강화된 아키텍처·코드 생
 - architecture cache/compact 응답, risk-tier orchestration, architecture-first routing, Essential profile tool 노출을 추가했습니다.
 - 설치 진입점을 `INSTALL.bat`, `install.sh`, 공통 `install.py`로 통합하고 SAFE/AGENT 권한 확인과 RAG depth 선택을 분리했습니다.
 - Windows, Ubuntu Linux, macOS별 설치, engine 탐색, Editor export, indexing, build 경로를 구현했습니다. 실제 Ubuntu/macOS Unreal 인증은 아직 남아 있습니다.
-- Windows, macOS, Ubuntu bootstrap에 컴포넌트별 runtime 다운로드, 고정 SHA-256 검증, traversal·용량 제한 안전 추출, 설치 후 실행 검사, 동시 bootstrap lock, Unreal semantic version 선택, Epic Launcher manifest 탐색을 추가했습니다.
+- Windows, macOS, Ubuntu bootstrap에 컴포넌트별 runtime 다운로드, 검증 가능한 runtime manifest(URL/file/platform/architecture/SHA-256/probe), traversal·용량 제한 안전 추출, 설치 후 실행 검사, 동시 bootstrap lock, Unreal semantic version 선택, Epic Launcher manifest 탐색을 추가했습니다.
+- 모든 host에서 portable RAG index 경로 구분자를 정규화하고, 다른 장비에서 복사되어 더 이상 존재하지 않는 workspace root를 무시하도록 했습니다. `workspace.json`이 아직 없는 fresh-install 경로도 포함됩니다.
+- 통합 `--build-rag` 파이프라인이 인덱스 생성 전에 프로젝트 guideline과 game-design 입력을 수집하도록 수정하여, 정상처럼 보이는 인덱스에서 compile·Blueprint·project-profile 검색 지침이 조용히 누락되는 문제를 막았습니다.
 - release verification, atomic RAG index/report write, timeout, live-test quality gate, regression metric을 강화했습니다.
-- 컨텍스트 프록시에 매 턴 영속 체크포인트, 원자적 출력 버퍼링, 잘린 응답 거부, 최근 활성 증거, 프록시 우회 시 AGENT 시작 차단을 추가했습니다.
+- 컨텍스트 프록시에 매 턴 영속 체크포인트, 원자적 출력 버퍼링, 잘린 응답 거부, 최근 활성 증거, 제한된 세션 디렉터리 보존 정책을 추가했습니다. Qwen/GPT 직접 선택은 계속 쓰기 가능하며 strict proxy 시작 조건은 모든 frontend의 필수 조건이 아니라 명시적인 LM Studio 전용 정책입니다.
+- 복구 가능한 task-auth/route 오류가 전체 작업을 종료하지 않도록 분류하고, 조작된 authorization을 server-issued plan 복구 경로로 거부하며, Unreal 로그의 `tail`/`first_error`/cursor-range 읽기를 추가했습니다.
 - 모든 성공한 변경 뒤 자동 task checkpoint를 기록하고, 쓰기 응답에 갱신된 route authorization을 반환하며, 검증 생략을 명시적 advisory로 표시하고, post-write bookkeeping 실패 시 중복 쓰기를 막는 복구 지침을 추가했습니다.
 - 활성 텔레메트리 탐색량에 상한을 두고 오래되거나 미래 시각인 프록시 증거를 거부하여 잘못된 시스템 시각과 과도한 이벤트 기록이 AGENT 작업을 잘못 허용하지 않도록 했습니다.
 - Windows `cp1252` 환경의 package-builder 상태 출력 실패를 수정하고 성공·오류 회귀 테스트를 추가했습니다.
@@ -77,9 +83,9 @@ Beta3는 범용 evidence-first 분석 계층, 강화된 아키텍처·코드 생
 | 컴포넌트 | 버전 |
 |---|---|
 | 제품 | 1.3.0 Beta3 |
-| Node agent MCP | 0.3.1 |
-| Context compactor | 0.3.4 / revision 7 |
-| Portable manifest | 2.1.0 |
+| Node agent MCP | 0.3.2 |
+| Context compactor | 0.3.5 / revision 8 |
+| Portable manifest | 2.1.1 |
 
 선택한 설치 profile에 따라 Python 3.10+, Node.js 20+, LM Studio 0.4+가 필요합니다. Unreal Engine 5.x 지식은 사용자가 직접 구축한 index를 사용하며, UE 5.8이 주 검증 대상입니다.
 
