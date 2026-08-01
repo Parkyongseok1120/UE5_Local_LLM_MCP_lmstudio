@@ -22,7 +22,13 @@ def resolve_agent_state_root(workspace: Path | None = None) -> Path:
     if override:
         return Path(override).expanduser().resolve()
     config_path = resolve_shared_config_path()
-    return (config_path.parent.parent / "state" / "unreal-agent").resolve()
+    config_dir = config_path.parent
+    # Installed layouts use <app>/config/unreal-workspace.json.  Tests,
+    # portable launches, and explicit overrides may instead point directly to
+    # <dir>/unreal-workspace.json; walking two parents from that form can land
+    # at /state on POSIX and fail with a permission error.
+    app_root = config_dir.parent if config_dir.name.casefold() == "config" else config_dir
+    return (app_root / "state" / "unreal-agent").resolve()
 
 
 def ensure_state_root_layout(state_root: Path | None = None) -> Path:

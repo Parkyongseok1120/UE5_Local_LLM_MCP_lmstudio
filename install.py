@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import platform
@@ -1175,14 +1176,18 @@ def main() -> int:
             if not args.skip_runtime_bootstrap:
                 from installer.bootstrap_runtimes import ensure_runtimes
 
-                runtimes = ensure_runtimes(
-                    state_home=args.state_home.expanduser(),
-                    script_path=Path(__file__).resolve(),
-                    argv=sys.argv[1:],
-                    dry_run=args.dry_run,
-                    need_node=True,
-                    need_pwsh=True,
-                )
+                # stdout is the installer's machine-readable JSON contract.
+                # Keep bootstrap progress visible without corrupting that
+                # stream for package managers and smoke tests.
+                with contextlib.redirect_stdout(sys.stderr):
+                    runtimes = ensure_runtimes(
+                        state_home=args.state_home.expanduser(),
+                        script_path=Path(__file__).resolve(),
+                        argv=sys.argv[1:],
+                        dry_run=args.dry_run,
+                        need_node=True,
+                        need_pwsh=True,
+                    )
                 args.runtime_python = Path(runtimes["python"])
                 if runtimes.get("node"):
                     args.runtime_node = Path(runtimes["node"])

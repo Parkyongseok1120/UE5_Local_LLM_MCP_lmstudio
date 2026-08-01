@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Literal
 
 ReportFormat = Literal["md", "pptx", "docx", "pdf"]
@@ -282,7 +282,14 @@ def resolve_report_output_path(
     if output_path is None:
         candidate = reports_root / f"report{suffix}"
     else:
-        raw = Path(str(output_path))
+        output_text = str(output_path)
+        raw = Path(output_text)
+        windows_raw = PureWindowsPath(output_text)
+        if (windows_raw.drive or windows_raw.is_absolute()) and not raw.is_absolute():
+            # On POSIX, Path("C:/...") is considered relative.  Treat foreign
+            # absolute/drive paths as absolute input too so a caller cannot
+            # smuggle one through by changing the host running the MCP server.
+            raise ValueError(f"outputPath must stay under {reports_root}")
         candidate = (reports_root / raw.name).resolve() if not raw.is_absolute() else raw.resolve()
         if reports_root not in candidate.parents and candidate != reports_root:
             raise ValueError(f"outputPath must stay under {reports_root}")

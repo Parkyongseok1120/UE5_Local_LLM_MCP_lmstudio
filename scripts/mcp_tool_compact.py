@@ -9,6 +9,8 @@ from typing import Any
 
 # Safety ceiling only — each tool compacts/sizes its own payload (graphDetail, detailLevel, etc.).
 DEFAULT_MAX_TOOL_CHARS = 80_000
+CODE_SKETCH_STRUCTURED_MAX_CHARS = 11_000
+AGENT_PLAN_STRUCTURED_MAX_CHARS = 14_000
 
 
 def max_tool_result_chars() -> int:
@@ -33,6 +35,319 @@ def compact_json_text(payload: dict[str, Any], *, limit: int | None = None) -> s
     return truncate_text(json.dumps(payload, ensure_ascii=False, indent=2), limit)
 
 
+def _compact_gate_completion(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        key: value[key]
+        for key in (
+            "ok",
+            "gate",
+            "errorCode",
+            "error",
+            "nextAction",
+            "agentInstruction",
+            "taskAuthorization",
+            "writeReadiness",
+            "toolRoute",
+        )
+        if key in value
+    }
+
+
+def _compact_generation_contract(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    targets = []
+    for raw in value.get("targets") or []:
+        if not isinstance(raw, dict):
+            continue
+        source = raw.get("sourceEvidence") if isinstance(raw.get("sourceEvidence"), dict) else {}
+        targets.append(
+            {
+                key: item
+                for key, item in {
+                    "path": raw.get("path"),
+                    "absolutePath": raw.get("absolutePath"),
+                    "exists": raw.get("exists"),
+                    "sourceLike": raw.get("sourceLike"),
+                    "mode": raw.get("mode"),
+                    "knownSymbolCount": raw.get("knownSymbolCount"),
+                    "pairedSources": raw.get("pairedSources") or [],
+                    "fileHash": source.get("fileHash"),
+                }.items()
+                if item not in (None, "", [])
+            }
+        )
+    return {
+        key: item
+        for key, item in {
+            "ok": value.get("ok"),
+            "mode": value.get("mode"),
+            "changeKind": value.get("changeKind"),
+            "projectRoot": value.get("projectRoot"),
+            "projectSpecific": value.get("projectSpecific"),
+            "targets": targets,
+            "invariants": (value.get("invariants") or [])[:8],
+            "validationRequired": (value.get("validationRequired") or [])[:8],
+            "issues": value.get("issues") or [],
+            "warnings": value.get("warnings") or [],
+            "writeGate": value.get("writeGate") or {},
+            "architectureImplementationGate": value.get("architectureImplementationGate") or {},
+            "proofBoundary": value.get("proofBoundary"),
+        }.items()
+        if item not in (None, "", [])
+    }
+
+
+def _compact_sketch_row(row: dict[str, Any], *, keep_evidence: bool) -> dict[str, Any]:
+    verdict = str(row.get("verdict") or "")
+    compact = {
+        key: row[key]
+        for key in ("symbol", "receiver", "receiverType", "verdict", "replacement", "note")
+        if key in row and row[key] not in (None, "")
+    }
+    if keep_evidence and verdict != "verified" and isinstance(row.get("evidence"), list):
+        compact["evidence"] = row["evidence"][:2]
+    return compact
+
+
+def compact_code_sketch_payload(
+    payload: dict[str, Any],
+    *,
+    max_bytes: int = CODE_SKETCH_STRUCTURED_MAX_CHARS,
+) -> dict[str, Any]:
+    """Compact sketch validation without dropping any known_bad replacement."""
+
+    rows = [row for row in (payload.get("results") or []) if isinstance(row, dict)]
+    known_bad = [row for row in rows if row.get("verdict") == "known_bad"]
+    unverified = [
+        row
+        for row in rows
+        if row.get("verdict") in {"unverified", "skipped_budget", "skipped_graph"}
+    ]
+    weak = [row for row in rows if row.get("verdict") == "weak"]
+    verified = [row for row in rows if row.get("verdict") == "verified"]
+    selected = [
+        *(_compact_sketch_row(row, keep_evidence=True) for row in known_bad),
+        *(_compact_sketch_row(row, keep_evidence=True) for row in unverified[:24]),
+        *(_compact_sketch_row(row, keep_evidence=True) for row in weak[:8]),
+    ]
+    compact = {
+        key: payload[key]
+        for key in (
+            "ok",
+            "errorCode",
+            "error",
+            "retryable",
+            "verdictSummary",
+            "indexPath",
+            "indexExists",
+            "projectGraphAvailable",
+            "projectGraphSymbolCount",
+            "symbolCount",
+            "localDeclarationCount",
+            "verifiedCount",
+            "knownBadCount",
+            "unverifiedCount",
+            "weakCount",
+            "skippedGraphCount",
+            "sketchCharCount",
+            "maxSketchChars",
+            "indexLookupMode",
+            "indexLookupSymbolCount",
+            "indexLookupQueryCount",
+            "graphStatus",
+            "guidance",
+            "agentInstruction",
+        )
+        if key in payload
+    }
+    compact["results"] = selected
+    compact["resultOmissions"] = {
+        "unverified": max(0, len(unverified) - 24),
+        "weak": max(0, len(weak) - 8),
+        "verified": len(verified),
+    }
+    if "generationContract" in payload:
+        compact["generationContract"] = _compact_generation_contract(payload.get("generationContract"))
+    for key in ("architectureProposalValidation", "architectureImplementationGate"):
+        if key in payload:
+            compact[key] = payload[key]
+    gate = _compact_gate_completion(payload.get("gateCompletion"))
+    if gate is not None:
+        compact["gateCompletion"] = gate
+    if len(json.dumps(compact, ensure_ascii=False)) <= max_bytes:
+        compact["_structuredTruncated"] = len(selected) != len(rows)
+        return compact
+
+    # Keep every known_bad symbol and its complete replacement even at the hard
+    # response boundary; secondary notes/evidence and lower verdicts yield first.
+    compact["results"] = [
+        {
+            key: row[key]
+            for key in ("symbol", "verdict", "replacement")
+            if key in row and row[key] not in (None, "")
+        }
+        for row in known_bad
+    ]
+    compact["resultOmissions"] = {
+        "unverified": len(unverified),
+        "weak": len(weak),
+        "verified": len(verified),
+    }
+    compact["_structuredTruncated"] = True
+    if len(json.dumps(compact, ensure_ascii=False)) <= max_bytes:
+        return compact
+
+    # Authorization and replacements are the non-negotiable recovery surfaces.
+    minimal = {
+        key: compact[key]
+        for key in (
+            "ok",
+            "errorCode",
+            "error",
+            "verdictSummary",
+            "knownBadCount",
+            "unverifiedCount",
+            "weakCount",
+            "skippedGraphCount",
+            "graphStatus",
+            "agentInstruction",
+            "results",
+            "resultOmissions",
+            "gateCompletion",
+        )
+        if key in compact
+    }
+    minimal["_structuredTruncated"] = True
+    return minimal
+
+
+def compact_agent_plan_payload(
+    payload: dict[str, Any],
+    *,
+    max_bytes: int = AGENT_PLAN_STRUCTURED_MAX_CHARS,
+) -> dict[str, Any]:
+    """Bound repeated plan context while preserving all write/recovery controls."""
+
+    compact = dict(payload)
+    request = str(compact.get("request") or "")
+    if len(request) > 1_200:
+        compact["request"] = request[:1_200] + "... [request truncated in response]"
+    evidence = compact.get("evidencePlan")
+    if isinstance(evidence, dict):
+        evidence = dict(evidence)
+        queries = list(evidence.get("queries") or [])
+        if queries:
+            evidence["queries"] = [str(queries[0])[:600]]
+            evidence["queryCount"] = len(queries)
+        compact["evidencePlan"] = evidence
+    feature = compact.get("featureIntent")
+    if isinstance(feature, dict):
+        feature = dict(feature)
+        feature["candidates"] = [
+            {
+                key: candidate.get(key)
+                for key in (
+                    "intentId",
+                    "title",
+                    "score",
+                    "eligible",
+                    "acceptanceCriterionCount",
+                    "issues",
+                )
+                if candidate.get(key) not in (None, "", [])
+            }
+            for candidate in (feature.get("candidates") or [])[:5]
+            if isinstance(candidate, dict)
+        ]
+        compact["featureIntent"] = feature
+    compact["suggestedToolCalls"] = _shrink_value(
+        list(compact.get("suggestedToolCalls") or [])[:8],
+        max_str=600,
+        max_list=12,
+    )
+    for key, limit in (("checkpoints", 14), ("stopConditions", 10), ("retryPolicy", 8), ("notes", 14)):
+        if isinstance(compact.get(key), list):
+            compact[key] = [str(item)[:700] for item in compact[key][:limit]]
+    serialized = json.dumps(compact, ensure_ascii=False)
+    if len(serialized) <= max_bytes:
+        return compact
+    protected = {
+        key: compact[key]
+        for key in (
+            "taskKind",
+            "editStrategy",
+            "toolPolicy",
+            "writeGate",
+            "checkpoints",
+            "stopConditions",
+            "retryPolicy",
+            "orchestration",
+            "toolRoute",
+            "roleSession",
+            "promptContract",
+            "selectedHypothesisId",
+            "selectedCandidateId",
+            "taskAuthorization",
+            "taskAuthorizationRequiredForWrites",
+            "writeToolAuthorizationArgs",
+            "authorizationRetryPolicy",
+        )
+        if key in compact
+    }
+    protected.update(
+        {
+            "request": compact.get("request"),
+            "evidencePlan": compact.get("evidencePlan") or {},
+            "suggestedToolCalls": compact.get("suggestedToolCalls") or [],
+            "projectContext": _shrink_value(compact.get("projectContext") or {}, max_str=500, max_list=12),
+            "featureIntent": _shrink_value(compact.get("featureIntent") or {}, max_str=500, max_list=10),
+            "sourceEvidence": _shrink_value(compact.get("sourceEvidence") or {}, max_str=500, max_list=10),
+            "errorRoute": _shrink_value(compact.get("errorRoute") or {}, max_str=500, max_list=10),
+            "_structuredTruncated": True,
+        }
+    )
+    if len(json.dumps(protected, ensure_ascii=False)) <= max_bytes:
+        return protected
+    authorization_surfaces = {
+        key: protected[key]
+        for key in (
+            "taskAuthorization",
+            "taskAuthorizationRequiredForWrites",
+            "writeToolAuthorizationArgs",
+            "authorizationRetryPolicy",
+        )
+        if key in protected
+    }
+    for max_str, max_list in ((400, 8), (240, 6), (120, 4)):
+        candidate = _shrink_value(protected, max_str=max_str, max_list=max_list)
+        if not isinstance(candidate, dict):
+            continue
+        candidate.update(authorization_surfaces)
+        candidate["_structuredTruncated"] = True
+        if len(json.dumps(candidate, ensure_ascii=False)) <= max_bytes:
+            return candidate
+    return {
+        key: protected[key]
+        for key in (
+            "taskKind",
+            "editStrategy",
+            "writeGate",
+            "toolRoute",
+            "roleSession",
+            "promptContract",
+            "taskAuthorization",
+            "taskAuthorizationRequiredForWrites",
+            "writeToolAuthorizationArgs",
+            "authorizationRetryPolicy",
+            "_structuredTruncated",
+        )
+        if key in protected
+    }
+
+
 def _shrink_value(value: Any, *, max_str: int, max_list: int) -> Any:
     if isinstance(value, str):
         if len(value) <= max_str:
@@ -50,12 +365,23 @@ def _shrink_value(value: Any, *, max_str: int, max_list: int) -> Any:
 
 
 def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> dict[str, Any]:
-    """Return a valid dict that fits within max_bytes without string-slicing JSON."""
+    """Return valid compact JSON, preserving safety-critical recovery surfaces."""
     if not isinstance(payload, dict):
         return {"value": payload}
 
     specialized = payload
-    if "exportDir" in payload or "needsEditorExport" in payload:
+    if "verdictSummary" in payload and "knownBadCount" in payload:
+        # The sketch compactor deliberately treats every known-bad replacement
+        # as non-negotiable.  A second generic pass could silently discard those
+        # recovery instructions when a caller supplies an unrealistically tiny
+        # byte budget.
+        return compact_code_sketch_payload(payload, max_bytes=max_bytes)
+    elif "taskAuthorizationRequiredForWrites" in payload and "toolRoute" in payload:
+        # Authorization and routing fields must remain byte-for-byte usable by
+        # the next tool call, so never feed them through generic string/list
+        # shrinking after the plan-specific compactor has protected them.
+        return compact_agent_plan_payload(payload, max_bytes=max_bytes)
+    elif "exportDir" in payload or "needsEditorExport" in payload:
         specialized = compact_metadata_status_payload(payload)
     elif "rebuild" in payload or "chunkCount" in payload:
         specialized = compact_sync_metadata_payload(payload)

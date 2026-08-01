@@ -32,6 +32,12 @@ function createFakeEngine(version, folderPrefix = "UE-portable-") {
     "utf8"
   );
   fs.writeFileSync(path.join(batchDir, "Build.bat"), "@echo off\r\nexit /b 0\r\n", "utf8");
+  if (process.platform !== "win32") {
+    const hostFolder = process.platform === "darwin" ? "Mac" : "Linux";
+    const hostDir = path.join(batchDir, hostFolder);
+    fs.mkdirSync(hostDir, { recursive: true });
+    fs.writeFileSync(path.join(hostDir, "Build.sh"), "#!/bin/sh\nexit 0\n", "utf8");
+  }
   return root;
 }
 
@@ -165,7 +171,7 @@ test("Unix UBT DLL is launched through dotnet and Build.sh through /bin/sh", () 
   assert.strictEqual(defaultBuildPlatform("linux"), "Linux");
 });
 
-test("spawnBuildProcess uses cmd.exe for build bat", () => {
+test("spawnBuildProcess uses cmd.exe for build bat", { skip: process.platform !== "win32" }, () => {
   const bat = path.join(os.tmpdir(), "Build.bat");
   const args = buildArgs({
     kind: "build_bat",
@@ -217,6 +223,12 @@ test("runUnrealBuildFromPlan reports timedOut", async () => {
   fs.mkdirSync(batDir, { recursive: true });
   const bat = path.join(batDir, "Build.bat");
   fs.writeFileSync(bat, "@echo off\r\nping -n 30 127.0.0.1 >nul\r\n");
+  if (process.platform !== "win32") {
+    const hostFolder = process.platform === "darwin" ? "Mac" : "Linux";
+    const hostDir = path.join(batDir, hostFolder);
+    fs.mkdirSync(hostDir, { recursive: true });
+    fs.writeFileSync(path.join(hostDir, "Build.sh"), "#!/bin/sh\nsleep 30\n", "utf8");
+  }
   const result = await runUnrealBuildFromPlan({
     workspaceRoot: os.tmpdir(),
     build: {

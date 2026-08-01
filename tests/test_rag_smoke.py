@@ -97,6 +97,8 @@ def test_index_health_handles_missing_chunks_table(tmp_path):
 
 
 def test_engine_root_has_no_hardcoded_unreal_install_fallback(tmp_path, monkeypatch):
+    import workspace_paths
+
     workspace = tmp_path / "UE5_Local_LLM_MCP_lmstudio"
     config_dir = workspace / "config"
     config_dir.mkdir(parents=True)
@@ -111,9 +113,11 @@ def test_engine_root_has_no_hardcoded_unreal_install_fallback(tmp_path, monkeypa
     monkeypatch.delenv("UNREAL_UBT_PATH", raising=False)
     monkeypatch.delenv("ProgramFiles", raising=False)
     monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    monkeypatch.setattr(workspace_paths, "_discover_engine_roots", lambda: [])
 
     assert str(resolve_engine_root(workspace)) in {"", "."}
-    assert resolve_ubt_path(workspace) == Path("UnrealBuildTool.exe")
+    expected_ubt = "UnrealBuildTool.exe" if sys.platform == "win32" else "UnrealBuildTool.dll"
+    assert resolve_ubt_path(workspace) == Path(expected_ubt)
 
 
 def test_engine_discovery_supports_mac_and_linux_common_layouts(tmp_path):

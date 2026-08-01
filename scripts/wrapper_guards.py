@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from unreal_static_validate import (
@@ -144,8 +144,10 @@ def changed_paths_between(before: dict[str, str], after: dict[str, str]) -> list
 def safe_output_path(root: Path, relative_path: str) -> Path:
     if not relative_path or "\x00" in relative_path:
         raise ValueError("empty or invalid path")
-    raw = Path(relative_path.replace("/", "\\"))
-    if raw.is_absolute() or raw.drive:
+    path_text = str(relative_path)
+    windows_raw = PureWindowsPath(path_text)
+    raw = PurePosixPath(path_text.replace("\\", "/"))
+    if raw.is_absolute() or windows_raw.is_absolute() or windows_raw.drive:
         raise ValueError(f"absolute paths are not allowed: {relative_path}")
     if any(part in {"..", ""} for part in raw.parts):
         raise ValueError(f"path traversal is not allowed: {relative_path}")
@@ -166,7 +168,7 @@ def safe_output_path(root: Path, relative_path: str) -> Path:
             "writes are limited to Source/, Config/, project .uproject, "
             "and Plugins/<Plugin>/Source/ or plugin descriptors"
         )
-    target = (root / raw).resolve()
+    target = root.joinpath(*raw.parts).resolve()
     resolved_root = root.resolve()
     if target != resolved_root and resolved_root not in target.parents:
         raise ValueError(f"path escapes workspace: {relative_path}")
@@ -285,7 +287,7 @@ def blueprint_native_event_dual_surface_blockers(bundle: dict[str, Any]) -> list
 def multifile_exact_snippets(root: Path, paths: list[str], *, context_lines: int = 1) -> str:
     lines: list[str] = ["Exact current snippets (copy oldText from these):"]
     for rel in paths[:6]:
-        path = root / rel.replace("/", "\\")
+        path = root.joinpath(*PurePosixPath(rel.replace("\\", "/")).parts)
         if not path.is_file():
             continue
         text = read_text(path)

@@ -53,7 +53,8 @@ def test_node_build_proof_unit() -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
-        shell=True,
+        shell=False,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

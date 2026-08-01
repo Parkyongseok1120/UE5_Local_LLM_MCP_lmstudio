@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -9,6 +10,8 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from code_sketch_claim_validate import (  # noqa: E402
+    MAX_SKETCH_CHARS,
+    _lookup_many_exact,
     extract_member_call_claims,
     extract_member_calls,
     extract_symbols,
@@ -72,6 +75,70 @@ def test_validate_sketch_ok_when_only_common_safe_symbols():
     result = validate_sketch("AActor* a; UWorld* w; FString name;", NO_INDEX)
     assert result["ok"] is True
     assert result["symbolCount"] == 0
+
+
+def test_oversized_sketch_fails_before_index_or_graph_work(monkeypatch):
+    monkeypatch.setattr(
+        "code_sketch_claim_validate._resolve_index",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("index resolution must not run")),
+    )
+    result = validate_sketch("UTooLargeType " + ("x" * MAX_SKETCH_CHARS), NO_INDEX)
+    assert result["ok"] is False
+    assert result["errorCode"] == "SKETCH_TOO_LARGE"
+    assert result["indexLookupMode"] == "not_started"
+    assert result["results"] == []
+
+
+def test_exact_batch_lookup_uses_one_indexed_query_for_many_symbols(tmp_path: Path):
+    index = tmp_path / "rag.sqlite"
+    connection = sqlite3.connect(index)
+    connection.execute(
+        "create table chunks (symbol_name text, symbol_kind text, title text, locator text, "
+        "source text, project text, module_name text, metadata_json text)"
+    )
+    connection.execute("create index chunks_symbol_name_idx on chunks(symbol_name)")
+    connection.execute(
+        "insert into chunks values (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "UKnownType",
+            "class",
+            "UKnownType class",
+            "/Engine/KnownType.h",
+            "unreal_symbol",
+            "Engine",
+            "Runtime",
+            "{}",
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    rows, error, query_count = _lookup_many_exact(
+        index,
+        ["UKnownType", *(f"UUnknown{value:03d}" for value in range(60))],
+    )
+    assert error == ""
+    assert query_count == 1
+    assert list(rows) == ["uknowntype"]
+    assert rows["uknowntype"][0]["evidence_source"] == "rag_index_exact"
+
+
+def test_validate_sketch_batches_all_index_candidates_once(monkeypatch, tmp_path: Path):
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"placeholder")
+    calls: list[list[str]] = []
+
+    def fake_exact(_index, symbols, *, top_k=5):
+        calls.append(list(symbols))
+        return {}, "", 1
+
+    monkeypatch.setattr("code_sketch_claim_validate._lookup_many_exact", fake_exact)
+    sketch = "\n".join(f"UType{value:03d}* Value{value};" for value in range(60))
+    result = validate_sketch(sketch, index)
+    assert len(calls) == 1
+    assert len(calls[0]) == 60
+    assert result["indexLookupQueryCount"] == 1
+    assert result["unverifiedCount"] == 60
 
 
 def test_live_project_hallucinations_return_replacements():
@@ -268,18 +335,18 @@ def test_member_method_on_different_receiver_is_not_verified(monkeypatch, tmp_pa
     index = tmp_path / "rag.sqlite"
     index.write_bytes(b"index")
 
-    def fake_lookup(_index, symbol, top_k=5):
-        if symbol == "SetState":
-            return [
+    def fake_lookup(_index, symbols, *, top_k=5):
+        return {
+            "setstate": [
                 {
                     "symbol_name": "SetState",
                     "symbol_kind": "function",
                     "qualified_name": "UDifferentComponent::SetState",
                 }
             ]
-        return []
+        }, "", 1
 
-    monkeypatch.setattr("code_sketch_claim_validate._lookup", fake_lookup)
+    monkeypatch.setattr("code_sketch_claim_validate._lookup_many_exact", fake_lookup)
     result = validate_sketch(
         "class UMyComponent {}; UMyComponent* Comp; Comp->SetState(true);",
         index,
@@ -294,18 +361,18 @@ def test_member_method_requires_exact_receiver_owner(monkeypatch, tmp_path: Path
     index = tmp_path / "rag.sqlite"
     index.write_bytes(b"index")
 
-    def fake_lookup(_index, symbol, top_k=5):
-        if symbol == "SetState":
-            return [
+    def fake_lookup(_index, symbols, *, top_k=5):
+        return {
+            "setstate": [
                 {
                     "symbol_name": "SetState",
                     "symbol_kind": "function",
                     "qualified_name": "UMyComponent::SetState",
                 }
             ]
-        return []
+        }, "", 1
 
-    monkeypatch.setattr("code_sketch_claim_validate._lookup", fake_lookup)
+    monkeypatch.setattr("code_sketch_claim_validate._lookup_many_exact", fake_lookup)
     result = validate_sketch(
         "class UMyComponent {}; UMyComponent* Comp; Comp->SetState(true);",
         index,
@@ -321,8 +388,12 @@ def test_ownerless_exact_member_evidence_is_weak_and_fail_closed(monkeypatch, tm
     index.write_bytes(b"index")
 
     monkeypatch.setattr(
-        "code_sketch_claim_validate._lookup",
-        lambda *_args, **_kwargs: [{"symbol_name": "SetState", "symbol_kind": "function"}],
+        "code_sketch_claim_validate._lookup_many_exact",
+        lambda *_args, **_kwargs: (
+            {"setstate": [{"symbol_name": "SetState", "symbol_kind": "function"}]},
+            "",
+            1,
+        ),
     )
     result = validate_sketch(
         "class UMyComponent {}; UMyComponent* Comp; Comp->SetState(true);",

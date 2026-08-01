@@ -81,6 +81,8 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     assert public_launchers == {"INSTALL.bat", "install.sh"}
     assert {path.name for path in (output / "installer").iterdir()} == {
         "README.md",
+        "__init__.py",
+        "bootstrap_runtimes.py",
         "manifest.json",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))

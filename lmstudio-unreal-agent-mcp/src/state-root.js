@@ -19,7 +19,10 @@ function resolveAgentStateRoot(_workspaceRoot = "") {
   }
   const configPath = resolveSharedConfigPath();
   const configDir = path.dirname(configPath);
-  return path.join(path.dirname(configDir), "state", "unreal-agent");
+  const appRoot = path.basename(configDir).toLowerCase() === "config"
+    ? path.dirname(configDir)
+    : configDir;
+  return path.join(appRoot, "state", "unreal-agent");
 }
 
 function ensureStateRootLayout(stateRoot = resolveAgentStateRoot()) {

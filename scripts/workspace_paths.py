@@ -409,16 +409,16 @@ def normalize_locator(locator: str, workspace_root: Path | None = None) -> str:
     if not text:
         return text
 
-    normalized = text.replace("/", "\\")
-    workspace_text = str(workspace_root)
+    normalized = text.replace("\\", "/")
+    workspace_text = str(workspace_root).replace("\\", "/")
 
     for legacy in LEGACY_LOCATOR_PREFIXES:
-        legacy_norm = legacy.replace("/", "\\")
+        legacy_norm = legacy.replace("\\", "/")
         if normalized.lower().startswith(legacy_norm.lower()):
             suffix = normalized[len(legacy_norm) :].lstrip("\\/")
             return str(workspace_root / Path(suffix))
 
-    physical_text = str(physical_root)
+    physical_text = str(physical_root).replace("\\", "/")
     if normalized.lower().startswith(physical_text.lower()):
         suffix = normalized[len(physical_text) :].lstrip("\\/")
         return str(workspace_root / Path(suffix))

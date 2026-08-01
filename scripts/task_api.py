@@ -3161,6 +3161,11 @@ def task_replan(
                 "errorCode": "REPLAN_BUDGET_EXHAUSTED",
                 "nextAction": "unreal_task_checkpoint",
                 "checkpointRecordRequired": True,
+                "agentInstruction": (
+                    "Call unreal_task_checkpoint with action=record using the latest "
+                    "taskAuthorization. Do not call unreal_agent_plan again and do not mark "
+                    "any pending gate complete; resume only the checkpoint requiredNextAction."
+                ),
             }
             return None
         prior_supervisor = (
@@ -4445,6 +4450,10 @@ def authorize_task_tool(
                         "unreal_task_checkpoint",
                         "unreal_task_cancel",
                     ],
+                    "agentInstruction": (
+                        "Use the control-plane checkpoint/status action next. Do not retry the "
+                        "budgeted work tool or claim a pending gate complete."
+                    ),
                 }
             calls = [
                 str(item)

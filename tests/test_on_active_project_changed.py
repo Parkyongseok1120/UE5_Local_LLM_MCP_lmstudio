@@ -202,7 +202,7 @@ def test_plugin_skips_when_installed_enabled_and_compiled(tmp_path: Path) -> Non
     )
 
     install_plugin(project=project, workspace=workspace, enable=True, update=True)
-    binary = project.parent / "Plugins" / PLUGIN_NAME / "Binaries" / "Win64" / f"UnrealEditor-{PLUGIN_NAME}.dll"
+    binary = plugin_binary_path(project)
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.write_bytes(b"compiled")
 

@@ -71,11 +71,14 @@ function Find-Python {
         return $bundled
     }
 
-    $localCandidates = @(
-        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
-        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
-        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe")
-    )
+    $localCandidates = @()
+    if ($env:LOCALAPPDATA) {
+        $localCandidates = @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe")
+        )
+    }
     foreach ($candidate in $localCandidates) {
         if (Test-Path $candidate) {
             return $candidate
@@ -894,7 +897,7 @@ switch ($Command) {
         }
     }
     "doctor" {
-        $doctorArgs = @("scripts\rag_doctor.py", "--rag-root", (Get-Location).Path)
+        $doctorArgs = @((Join-Path $PSScriptRoot "scripts/rag_doctor.py"), "--rag-root", (Get-Location).Path)
         if ($RepoOnly) {
             $doctorArgs += "--repo-only"
         }

@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -140,6 +142,8 @@ def test_release_readiness_fails_closed_when_every_step_is_skipped() -> None:
 
 
 def test_node_install_command_available_via_cmd_on_windows() -> None:
+    if sys.platform != "win32":
+        pytest.skip("cmd.exe/npm.cmd contract is Windows-only")
     proc = subprocess.run(
         ["cmd", "/c", "npm.cmd", "--version"],
         cwd=ROOT / "lmstudio-unreal-agent-mcp",

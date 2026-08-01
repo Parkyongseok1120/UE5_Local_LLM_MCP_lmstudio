@@ -200,6 +200,7 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     )
     assert exhausted["ok"] is False
     assert exhausted["errorCode"] == "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
+    assert "Do not retry" in exhausted["agentInstruction"]
     assert set(exhausted["nextActions"]) == {
         "unreal_task_status",
         "unreal_task_checkpoint",
@@ -457,6 +458,8 @@ def test_replan_window_stays_closed_until_a_new_checkpoint(
     )
     assert immediate["errorCode"] == "REPLAN_BUDGET_EXHAUSTED"
     assert immediate["checkpointRecordRequired"] is True
+    assert "Do not call unreal_agent_plan again" in immediate["agentInstruction"]
+    assert "do not mark any pending gate complete" in immediate["agentInstruction"]
 
     second_checkpoint = task_checkpoint(
         tmp_path,

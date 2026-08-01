@@ -242,6 +242,7 @@ def test_autonomy_blocked_route_lists_and_dispatches_bounded_replan(
     assert denied["ok"] is False
     assert denied["errorCode"] == "REPLAN_BUDGET_EXHAUSTED"
     assert denied["checkpointRecordRequired"] is True
+    assert "Do not call unreal_agent_plan again" in denied["agentInstruction"]
 
 
 def test_non_autonomy_blocked_routes_hide_and_reject_replan(
@@ -404,6 +405,140 @@ def test_code_sketch_tool_exposes_project_generation_contract(monkeypatch, tmp_p
     assert contract["mode"] == "project_specific"
     assert contract["targets"][0]["exists"] is True
     assert contract["writeGate"]["requiresReadBeforeWrite"] is True
+    assert payload["graphStatus"]["status"] == "ready"
+    assert payload["graphStatus"]["graphSource"] in {
+        "rebuilt",
+        "memory_verified",
+        "persistent_verified",
+    }
+
+
+def test_failed_prewrite_gate_explicitly_forbids_checkpoint_completion(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    result = mod._record_prewrite_gate(
+        server,
+        gate_name="unreal_code_sketch_claim_validate",
+        arguments={"taskAuthorization": {"taskSessionId": "task"}},
+        evidence={"ok": False, "errorCode": "SKETCH_TOO_LARGE"},
+        gate_passed=False,
+    )
+    assert result["errorCode"] == "GATE_VALIDATION_FAILED"
+    assert result["validationErrorCode"] == "SKETCH_TOO_LARGE"
+    assert "Do not use a checkpoint" in result["agentInstruction"]
+
+
+def test_code_sketch_rebuilds_graph_and_accepts_project_local_symbol(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    target = project / "Source" / "Demo" / "Public" / "GomokuRuleEngine.h"
+    target.parent.mkdir(parents=True)
+    target.write_text("class UGomokuRuleEngine {};\n", encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        18,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "UGomokuRuleEngine* Rules = nullptr;",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/Public/GomokuRuleEngine.h"],
+                "changeKind": "modify_existing",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True, payload
+    assert payload["graphStatus"]["status"] == "ready"
+    assert payload["graphStatus"]["graphSource"] == "rebuilt"
+    assert payload["projectGraphAvailable"] is True
+    assert payload["unverifiedCount"] == 0
+
+
+def test_oversized_code_sketch_skips_graph_preparation(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    target = project / "Source" / "Demo" / "Worker.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void Run() {}\n", encoding="utf-8")
+
+    def forbidden_graph(*_args, **_kwargs):
+        raise AssertionError("oversized sketch must not prepare a graph")
+
+    def forbidden_generation_contract(*_args, **_kwargs):
+        raise AssertionError("oversized sketch must not inspect generation targets")
+
+    server.architecture_graph = forbidden_graph
+    monkeypatch.setattr(mod, "build_generation_contract", forbidden_generation_contract)
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        19,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "UTooLarge " + ("x" * mod.MAX_SKETCH_CHARS),
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/Worker.cpp"],
+            },
+        },
+    )
+
+    result = sent[-1]["result"]
+    payload = result["structuredContent"]
+    assert payload["errorCode"] == "SKETCH_TOO_LARGE"
+    assert payload["graphStatus"]["status"] == "skipped_oversized"
+    assert payload["indexLookupMode"] == "not_started"
+    assert payload["generationContract"]["writeGate"]["writesAllowed"] is False
+    assert len(result["content"][0]["text"]) < 2_000
+
+
+def test_code_sketch_surfaces_project_graph_failure_without_engine_miss_guidance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    target = project / "Source" / "Demo" / "Worker.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void Run() {}\n", encoding="utf-8")
+
+    def broken_graph(*_args, **_kwargs):
+        raise OSError("graph fixture unavailable")
+
+    server.architecture_graph = broken_graph
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        20,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "UProjectLocalType* Value = nullptr;",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/Worker.cpp"],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "PROJECT_GRAPH_UNAVAILABLE"
+    assert payload["graphStatus"]["status"] == "unavailable"
+    assert payload["skippedGraphCount"] == 1
+    assert payload["results"][0]["verdict"] == "skipped_graph"
+    assert "Project-local symbols" in payload["guidance"]
+    assert "engine header" not in payload["guidance"]
 
 
 def test_code_sketch_architecture_proposal_blocks_incomplete_implementation(monkeypatch, tmp_path):
@@ -762,6 +897,40 @@ def test_architecture_reasoning_reuses_graph_until_source_changes(monkeypatch, t
     assert second_graph is first_graph
     assert third_source == "rebuilt"
     assert third_graph is not first_graph
+
+
+def test_content_verified_architecture_cache_does_not_rehash_unchanged_sources(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    import build_symbol_graph
+
+    freshness_calls: list[str] = []
+    original_freshness_check = build_symbol_graph.graph_is_fresh_for_root
+
+    def counted_freshness_check(graph, root):
+        freshness_calls.append(str(root))
+        return original_freshness_check(graph, root)
+
+    monkeypatch.setattr(build_symbol_graph, "graph_is_fresh_for_root", counted_freshness_check)
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "Worker.cpp").write_text("void Run() { CurrentState = 1; }\n", encoding="utf-8")
+
+    first_graph, first_source, _ = server.architecture_graph(
+        str(project), require_content_verification=True
+    )
+    calls_after_first_load = len(freshness_calls)
+    second_graph, second_source, _ = server.architecture_graph(
+        str(project), require_content_verification=True
+    )
+
+    assert first_source in {"rebuilt", "persistent_verified"}
+    assert calls_after_first_load >= 1
+    assert second_source == "memory_verified"
+    assert second_graph is first_graph
+    assert len(freshness_calls) == calls_after_first_load
 
 
 def test_architecture_reasoning_rejects_non_object_proposal(monkeypatch, tmp_path):

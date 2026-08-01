@@ -71,6 +71,16 @@ def test_base_prompt_documents_seven_field_auth_refresh() -> None:
     assert "TASK_ROUTE_STALE" in text
 
 
+def test_base_prompt_documents_sketch_slice_and_checkpoint_gate_rules() -> None:
+    text = read_text("prompts/lmstudio_compact_mcp_base.md")
+    assert "active-slice draft" in text
+    assert "12k characters" in text
+    assert "architectureSymbols" in text
+    assert "REPLAN_BUDGET_EXHAUSTED" in text
+    assert "cannot complete `requiredBeforeWrite` gates" in text
+    assert "GATE_VALIDATION_FAILED" in text
+
+
 def test_qwen35_prompt_uses_seven_field_auth_refresh() -> None:
     text = read_text("prompts/lmstudio_qwen35_9b_compact_system.md")
 

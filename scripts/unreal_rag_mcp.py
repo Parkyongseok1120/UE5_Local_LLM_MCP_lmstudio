@@ -22,8 +22,10 @@ from workspace_paths import (
     shared_config_path,
 )
 from mcp_tool_compact import (
+    compact_agent_plan_payload,
     compact_asset_graph_payload,
     compact_architecture_payload,
+    compact_code_sketch_payload,
     compact_export_payload,
     compact_json_text,
     compact_metadata_status_payload,
@@ -69,7 +71,7 @@ from editor_metadata_status import editor_metadata_status
 from blueprint_claim_validate import validate_blueprint_claims
 from material_claim_validate import validate_material_claims
 from node_plan_validate import validate_node_plan
-from code_sketch_claim_validate import validate_sketch
+from code_sketch_claim_validate import MAX_SKETCH_CHARS, validate_sketch
 from code_generation_contract import build_generation_contract
 from semantic_refactor_guard import (
     capture_semantic_snapshot,
@@ -453,6 +455,13 @@ def _record_prewrite_gate(
             "gate": gate_name,
             "errorCode": "GATE_VALIDATION_FAILED",
             "error": "Analysis completed, but its validation contract did not pass; the write gate remains closed.",
+            "validationErrorCode": str(evidence.get("errorCode") or ""),
+            "nextAction": str(evidence.get("nextAction") or gate_name),
+            "agentInstruction": (
+                "Keep this gate pending. Do not use a checkpoint to report it complete. "
+                "Apply the returned replacement/recovery guidance, shrink to the active slice if needed, "
+                "then run this gate once with fresh evidence."
+            ),
         }
     from task_api import task_record_gate
 
@@ -702,58 +711,145 @@ def _handle_unreal_code_sketch_claim_validate(
     if not sketch.strip():
         server.tool_result(message_id, "Missing required argument: sketch", is_error=True)
         return
+    oversized = len(sketch) > MAX_SKETCH_CHARS
     project_root = str(arguments.get("projectRoot") or "").strip()
-    if not project_root:
+    if not project_root and not oversized:
         active = str(load_shared_config().get("activeProject") or "").strip()
         if active:
             active_path = Path(active).resolve()
             project_root = str(active_path.parent if active_path.suffix.lower() == ".uproject" else active_path)
-    target_files, argument_error = _string_list_argument(arguments.get("targetFiles"), "targetFiles")
-    if argument_error:
-        _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
-        return
-    validation_plan, argument_error = _string_list_argument(arguments.get("validationPlan"), "validationPlan")
-    if argument_error:
-        _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
-        return
+    target_files: list[str] = []
+    validation_plan: list[str] = []
+    if not oversized:
+        target_files, argument_error = _string_list_argument(arguments.get("targetFiles"), "targetFiles")
+        if argument_error:
+            _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
+            return
+        validation_plan, argument_error = _string_list_argument(arguments.get("validationPlan"), "validationPlan")
+        if argument_error:
+            _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
+            return
     graph: dict[str, Any] | None = None
-    if project_root:
+    graph_status: dict[str, Any] = {
+        "status": "not_requested" if not project_root else "not_started",
+        "projectRoot": project_root,
+        "sourceRoot": "",
+        "graphSource": "unavailable",
+        "symbolCount": 0,
+        "preparationMs": 0.0,
+    }
+    if project_root and not oversized:
         try:
-            from build_symbol_graph import graph_is_fresh_for_root
-            from symbol_graph import load_symbol_graph
-
-            candidate = load_symbol_graph(server.workspace)
-            resolved_project_root = Path(project_root).resolve()
+            resolved_project_root = Path(project_root).expanduser().resolve()
             if resolved_project_root.is_file() and resolved_project_root.suffix.lower() == ".uproject":
                 resolved_project_root = resolved_project_root.parent
-            candidate_source_root = str(candidate.get("sourceRoot") or "").strip()
-            candidate_root = Path(candidate_source_root).resolve() if candidate_source_root else None
-            accepted_roots = {resolved_project_root, (resolved_project_root / "Source").resolve()}
-            if (
-                candidate_root is not None
-                and candidate_root in accepted_roots
-                and graph_is_fresh_for_root(candidate, candidate_root)
-            ):
-                graph = candidate
-        except (OSError, ValueError):
+            if not resolved_project_root.is_dir():
+                raise ValueError("projectRoot does not resolve to an existing directory")
+            source_candidate = resolved_project_root / "Source"
+            graph_root = source_candidate if source_candidate.is_dir() else resolved_project_root
+            graph, graph_source, graph_ms = server.architecture_graph(
+                graph_root,
+                require_content_verification=True,
+            )
+            graph_status.update(
+                {
+                    "status": "ready",
+                    "sourceRoot": str(graph_root),
+                    "graphSource": graph_source,
+                    "symbolCount": len(graph.get("symbols") or []),
+                    "preparationMs": round(graph_ms, 2),
+                }
+            )
+        except Exception as exc:
             graph = None
+            graph_status.update(
+                {
+                    "status": "unavailable",
+                    "errorCode": "PROJECT_GRAPH_UNAVAILABLE",
+                    "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                    "nextAction": (
+                        "Confirm activeProject/projectRoot, then rebuild the project symbol graph once."
+                    ),
+                }
+            )
+    elif oversized:
+        graph_status["status"] = "skipped_oversized"
     payload = validate_sketch(
         sketch,
         server.index,
         top_k=max(1, min(16, int(arguments.get("topK") or 5))),
         graph=graph,
     )
-    payload["generationContract"] = build_generation_contract(
-        str(arguments.get("request") or sketch),
-        project_root=project_root or None,
-        target_files=target_files,
-        change_kind=str(arguments.get("changeKind") or "modify_existing"),
-        validation_plan=validation_plan,
-        graph=graph,
-    )
+    payload["graphStatus"] = graph_status
+    if project_root and not oversized and graph_status["status"] != "ready":
+        skipped_graph = 0
+        for row in payload.get("results") or []:
+            if not isinstance(row, dict) or row.get("verdict") not in {"unverified", "weak"}:
+                continue
+            row["verdict"] = "skipped_graph"
+            row["note"] = (
+                "Project graph preparation failed, so this unresolved symbol was not "
+                "classified as an engine/API miss. Recover the graph before deciding."
+            )
+            skipped_graph += 1
+        payload["unverifiedCount"] = 0
+        payload["weakCount"] = 0
+        payload["skippedGraphCount"] = skipped_graph
+        payload["verdictSummary"] = (
+            f"{payload.get('verifiedCount', 0)} verified, "
+            f"{payload.get('knownBadCount', 0)} known_bad, "
+            f"{skipped_graph} skipped_graph"
+        )
+        payload.update(
+            {
+                "ok": False,
+                "errorCode": "PROJECT_GRAPH_UNAVAILABLE",
+                "error": graph_status.get("error") or "Project symbol graph is unavailable.",
+                "retryable": True,
+                "guidance": (
+                    "Project-local symbols were not classified as engine misses. "
+                    "Restore a fresh project graph, then validate the active slice once."
+                ),
+                "agentInstruction": (
+                    "Do not retry the same sketch or mark the gate complete. "
+                    "Run the graph recovery nextAction once, then revalidate the active slice."
+                ),
+            }
+        )
+    if oversized:
+        payload["generationContract"] = {
+            "ok": False,
+            "mode": "blocked",
+            "changeKind": str(arguments.get("changeKind") or "modify_existing"),
+            "projectRoot": project_root,
+            "projectSpecific": False,
+            "targets": [],
+            "issues": ["Sketch exceeds the active-slice validation limit."],
+            "writeGate": {
+                "writesAllowed": False,
+                "reason": "sketch exceeds active-slice limit",
+            },
+            "proofBoundary": "No source or API validation was performed for the oversized sketch.",
+        }
+    else:
+        payload["generationContract"] = build_generation_contract(
+            str(arguments.get("request") or sketch),
+            project_root=project_root or None,
+            target_files=target_files,
+            change_kind=str(arguments.get("changeKind") or "modify_existing"),
+            validation_plan=validation_plan,
+            graph=graph,
+        )
     architecture_proposal = arguments.get("architectureProposal")
     if architecture_proposal is not None:
-        if not project_root:
+        if oversized:
+            payload["architectureProposalValidation"] = {
+                "ok": False,
+                "issues": ["Split the oversized sketch before architecture proposal validation."],
+            }
+            payload["generationContract"]["writeGate"]["writesAllowed"] = False
+            payload["generationContract"]["writeGate"]["reason"] = "sketch exceeds active-slice limit"
+        elif not project_root:
             payload["architectureProposalValidation"] = {
                 "ok": False,
                 "issues": ["projectRoot is required to validate an architecture proposal before implementation."],
@@ -812,7 +908,30 @@ def _handle_unreal_code_sketch_claim_validate(
     )
     if gate_completion is not None:
         payload["gateCompletion"] = gate_completion
-    server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+    compact_payload = compact_code_sketch_payload(payload)
+    graph_summary = compact_payload.get("graphStatus") or {}
+    gate_summary = compact_payload.get("gateCompletion") or {}
+    summary_lines = [str(compact_payload.get("verdictSummary") or "Sketch validation completed.")]
+    if compact_payload.get("errorCode"):
+        summary_lines.append(
+            f"{compact_payload['errorCode']}: {compact_payload.get('error') or ''}".strip()
+        )
+    if graph_summary:
+        summary_lines.append(
+            "projectGraph="
+            f"{graph_summary.get('status') or 'unknown'}"
+            f" ({graph_summary.get('graphSource') or 'unavailable'})"
+        )
+    if gate_summary.get("agentInstruction"):
+        summary_lines.append(str(gate_summary["agentInstruction"]))
+    elif compact_payload.get("agentInstruction"):
+        summary_lines.append(str(compact_payload["agentInstruction"]))
+    server.tool_result(
+        message_id,
+        "\n".join(summary_lines),
+        structured=compact_payload,
+        char_limit=24_000,
+    )
 
 
 def _handle_unreal_semantic_refactor_guard(
@@ -1759,12 +1878,14 @@ class McpServer:
         cached = self._architecture_graph_cache.get(key)
         if cached and cached.get("signature") == signature:
             graph = cached.get("graph")
-            if isinstance(graph, dict) and (
-                not require_content_verification
-                or graph_is_fresh_for_root(graph, root)
-            ):
-                source = "memory_verified" if require_content_verification else "memory"
-                return graph, source, (time.perf_counter() - started) * 1000
+            if isinstance(graph, dict):
+                if not require_content_verification:
+                    return graph, "memory", (time.perf_counter() - started) * 1000
+                if cached.get("contentVerified"):
+                    return graph, "memory_verified", (time.perf_counter() - started) * 1000
+                if graph_is_fresh_for_root(graph, root):
+                    cached["contentVerified"] = True
+                    return graph, "memory_verified", (time.perf_counter() - started) * 1000
 
         candidate = load_symbol_graph(self.workspace)
         if graph_is_fresh_for_root(candidate, root):
@@ -1776,6 +1897,11 @@ class McpServer:
         self._architecture_graph_cache[key] = {
             "signature": source_inventory_signature(root),
             "graph": graph,
+            # Both paths above compared the graph against current source
+            # contents (or built it from them), so repeated write-gate calls can
+            # rely on the unchanged inventory signature instead of rehashing
+            # every source file.
+            "contentVerified": True,
         }
         return graph, source, (time.perf_counter() - started) * 1000
 
@@ -4364,7 +4490,21 @@ class McpServer:
                         "TASK_NOT_WRITABLE",
                     ],
                 }
-                self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
+                compact_plan = compact_agent_plan_payload(payload)
+                plan_summary = {
+                    "taskKind": compact_plan.get("taskKind"),
+                    "editStrategy": compact_plan.get("editStrategy"),
+                    "writesAllowed": (compact_plan.get("writeGate") or {}).get("writesAllowed"),
+                    "pendingGates": (compact_plan.get("toolRoute") or {}).get("pendingGates") or [],
+                    "activeTools": (compact_plan.get("toolRoute") or {}).get("activeTools") or [],
+                    "taskAuthorization": compact_plan.get("taskAuthorization") or {},
+                }
+                self.tool_result(
+                    message_id,
+                    json.dumps(plan_summary, ensure_ascii=False, indent=2),
+                    structured=compact_plan,
+                    char_limit=30_000,
+                )
             elif name in {"clangd_goto_definition", "clangd_find_references"}:
                 from clangd_helper import find_references, goto_definition
 

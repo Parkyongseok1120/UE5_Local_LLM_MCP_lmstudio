@@ -10,8 +10,8 @@ APIs before presenting compile-ready code.
 
 Verdicts:
 - ``known_bad``: symbol matches the invented-API / wrong-lifecycle denylist.
-- ``verified``: an exact or prefix symbol match exists in the index.
-- ``weak``: only a fuzzy/semantic match exists; treat as needs-confirmation.
+- ``verified``: an exact symbol match exists in the index or project graph.
+- ``weak``: only a graph prefix or owner-less match exists; treat as needs-confirmation.
 - ``unverified``: no index evidence found; must not be presented as real API.
 
 This tool never writes files and never runs a build. It is evidence only.
@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,11 @@ COMMON_SAFE = {
     "UWorldSubsystem", "UGameInstanceSubsystem", "UEngineSubsystem",
     "UCLASS", "USTRUCT", "UENUM", "UFUNCTION", "UPROPERTY", "UINTERFACE",
 }
+
+# This is an input safety boundary, not a symbol-count policy.  Large feature
+# drafts must be split into the active implementation slice before validation.
+MAX_SKETCH_CHARS = 12_000
+EXACT_LOOKUP_BATCH_SIZE = 400
 
 
 def extract_symbols(text: str) -> list[str]:
@@ -145,12 +151,93 @@ def _resolve_index(index: str | Path | None) -> Path:
 
 
 def _lookup(index: Path, symbol: str, top_k: int = 5) -> list[dict[str, Any]]:
+    """Legacy semantic lookup retained for explicit, non-gating API searches.
+
+    Sketch validation deliberately does not call this path: a cache miss can
+    require several broad LIKE scans of a large RAG database, and fuzzy rows do
+    not provide enough evidence to pass the fail-closed sketch gate anyway.
+    """
     from rag_semantic import symbol_lookup
 
     try:
         return symbol_lookup(index, symbol, top_k=top_k)
     except Exception:
         return []
+
+
+def _lookup_many_exact(
+    index: Path,
+    symbols: list[str],
+    *,
+    top_k: int = 5,
+) -> tuple[dict[str, list[dict[str, Any]]], str, int]:
+    """Resolve exact symbol names with bounded, indexed, read-only SQL batches."""
+
+    ordered = list(dict.fromkeys(symbol for symbol in symbols if symbol))
+    if not ordered or not index.is_file():
+        return {}, "", 0
+
+    rows_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    query_count = 0
+    try:
+        connection = sqlite3.connect(
+            f"{index.resolve().as_uri()}?mode=ro",
+            uri=True,
+            timeout=1.0,
+        )
+        connection.row_factory = sqlite3.Row
+        try:
+            columns = {
+                str(row[1])
+                for row in connection.execute("pragma table_info(chunks)").fetchall()
+            }
+            required = {"symbol_name", "symbol_kind", "title", "locator"}
+            if not required.issubset(columns):
+                missing = ", ".join(sorted(required - columns))
+                return {}, f"RAG chunks schema is missing required columns: {missing}", 0
+            optional = [
+                column
+                for column in ("source", "project", "module_name", "metadata_json")
+                if column in columns
+            ]
+            select_columns = ["symbol_name", "symbol_kind", "title", "locator", *optional]
+            for start in range(0, len(ordered), EXACT_LOOKUP_BATCH_SIZE):
+                batch = ordered[start : start + EXACT_LOOKUP_BATCH_SIZE]
+                placeholders = ",".join("?" for _ in batch)
+                query_count += 1
+                matches = connection.execute(
+                    f"select {', '.join(select_columns)} from chunks "
+                    f"where symbol_name in ({placeholders}) "
+                    "order by symbol_name, title, locator",
+                    batch,
+                ).fetchall()
+                for match in matches:
+                    item = dict(match)
+                    metadata: dict[str, Any] = {}
+                    raw_metadata = item.pop("metadata_json", "")
+                    if raw_metadata:
+                        try:
+                            decoded = json.loads(str(raw_metadata))
+                            metadata = decoded if isinstance(decoded, dict) else {}
+                        except json.JSONDecodeError:
+                            metadata = {}
+                    qualified = str(
+                        metadata.get("qualified_name")
+                        or metadata.get("qualifiedName")
+                        or ""
+                    )
+                    if qualified:
+                        item["qualified_name"] = qualified
+                    item["evidence_source"] = "rag_index_exact"
+                    key = str(item.get("symbol_name") or "").casefold()
+                    bucket = rows_by_symbol.setdefault(key, [])
+                    if len(bucket) < top_k:
+                        bucket.append(item)
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        return {}, f"{type(exc).__name__}: {exc}", query_count
+    return rows_by_symbol, "", query_count
 
 
 def _graph_symbol_index(graph: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
@@ -294,9 +381,46 @@ def validate_sketch(
 ) -> dict[str, Any]:
     from unreal_api_denylist import check_denylist
 
+    sketch_chars = len(sketch or "")
+    if sketch_chars > MAX_SKETCH_CHARS:
+        return {
+            "ok": False,
+            "errorCode": "SKETCH_TOO_LARGE",
+            "error": (
+                f"Sketch is {sketch_chars} characters; the validation limit is "
+                f"{MAX_SKETCH_CHARS}."
+            ),
+            "retryable": True,
+            "verdictSummary": "Sketch was not inspected because it exceeds the active-slice size limit.",
+            "indexPath": str(index or ""),
+            "indexExists": False,
+            "projectGraphAvailable": False,
+            "projectGraphSymbolCount": 0,
+            "symbolCount": 0,
+            "localDeclarationCount": 0,
+            "verifiedCount": 0,
+            "knownBadCount": 0,
+            "unverifiedCount": 0,
+            "weakCount": 0,
+            "results": [],
+            "sketchCharCount": sketch_chars,
+            "maxSketchChars": MAX_SKETCH_CHARS,
+            "indexLookupMode": "not_started",
+            "indexLookupSymbolCount": 0,
+            "indexLookupQueryCount": 0,
+            "guidance": (
+                "Split the draft to the current target-file slice and validate that smaller sketch. "
+                "Do not checkpoint or claim the code-sketch gate complete."
+            ),
+            "agentInstruction": (
+                "Split to the active slice, keep targetFiles exact, and call "
+                "unreal_code_sketch_claim_validate once with the smaller draft."
+            ),
+        }
+
     index_path = _resolve_index(index)
     index_exists = index_path.exists()
-    graph_available = isinstance(graph, dict) and bool(graph.get("symbols"))
+    graph_available = isinstance(graph, dict) and isinstance(graph.get("symbols"), list)
     graph_index = _graph_symbol_index(graph)
 
     denylist_hits = check_denylist(sketch)
@@ -305,6 +429,19 @@ def validate_sketch(
     candidates = extract_symbols(sketch)
     member_claims = extract_member_call_claims(sketch)
     local_declarations = extract_local_declarations(sketch)
+    lookup_symbols: list[str] = []
+    for symbol in [*candidates, *(claim["member"] for claim in member_claims)]:
+        if symbol in COMMON_SAFE or symbol in local_declarations:
+            continue
+        if symbol.casefold() in denied_terms:
+            continue
+        if symbol not in lookup_symbols:
+            lookup_symbols.append(symbol)
+    exact_rows, index_lookup_error, index_lookup_queries = _lookup_many_exact(
+        index_path,
+        lookup_symbols,
+        top_k=top_k,
+    ) if index_exists else ({}, "", 0)
 
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -349,7 +486,7 @@ def validate_sketch(
             top_k=top_k,
             symbol_index=graph_index,
         )
-        rag_rows = _lookup(index_path, symbol, top_k=top_k) if index_exists else []
+        rag_rows = exact_rows.get(symbol.casefold(), [])
         rows = graph_rows + [
             row for row in rag_rows
             if not any(
@@ -368,11 +505,11 @@ def validate_sketch(
         note = ""
         if verdict == "unverified":
             note = (
-                "No symbol evidence in index. Do not present as a real API; "
+                "No exact symbol evidence in the project graph or index. Do not present as a real API; "
                 "confirm against the engine header or mark UNKNOWN."
             )
         elif verdict == "weak":
-            note = "Only a fuzzy or owner-less match found; confirm the exact receiver and signature before use."
+            note = "Only a prefix or owner-less match found; confirm the exact receiver and signature before use."
         if is_member and receiver_type and verdict == "unverified" and evidence:
             note = (
                 f"{symbol} exists, but no exact {receiver_type}::{symbol} owner match was found. "
@@ -424,8 +561,8 @@ def validate_sketch(
     verdict_order = {"known_bad": 0, "unverified": 1, "weak": 2, "verified": 3}
     results.sort(key=lambda item: (verdict_order.get(str(item.get("verdict")), 9), str(item.get("symbol"))))
 
-    return {
-        "ok": known_bad == 0 and unverified == 0 and weak == 0,
+    payload = {
+        "ok": known_bad == 0 and unverified == 0 and weak == 0 and not index_lookup_error,
         "verdictSummary": verdict_summary,
         "indexPath": str(index_path),
         "indexExists": index_exists,
@@ -438,12 +575,31 @@ def validate_sketch(
         "unverifiedCount": unverified,
         "weakCount": weak,
         "results": results,
+        "sketchCharCount": sketch_chars,
+        "maxSketchChars": MAX_SKETCH_CHARS,
+        "indexLookupMode": "exact_batch" if index_exists else "index_unavailable",
+        "indexLookupSymbolCount": len(lookup_symbols),
+        "indexLookupQueryCount": index_lookup_queries,
         "guidance": (
             "Replace every known_bad item using its replacement, downgrade unverified or weak "
             "symbols to UNKNOWN, then validate receiver types and exact signatures before presenting it. "
             "Keep proof level at Proposed."
         ),
     }
+    if index_lookup_error:
+        payload.update(
+            {
+                "ok": False,
+                "errorCode": "SKETCH_INDEX_LOOKUP_FAILED",
+                "error": index_lookup_error,
+                "retryable": True,
+                "agentInstruction": (
+                    "Check unreal_rag_health once; do not repeat the same sketch validation "
+                    "until the index is readable."
+                ),
+            }
+        )
+    return payload
 
 
 def parse_args() -> argparse.Namespace:

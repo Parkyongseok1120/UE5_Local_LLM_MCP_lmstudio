@@ -58,6 +58,39 @@ def test_python_state_root_ignores_workspace_without_env(tmp_path: Path, monkeyp
     assert resolve_agent_state_root(tmp_path / "repo").resolve() == expected
 
 
+def test_python_node_state_root_stays_beside_direct_shared_config(tmp_path: Path, monkeypatch) -> None:
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text("{}", encoding="utf-8")
+    monkeypatch.delenv("AGENT_STATE_ROOT", raising=False)
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+
+    sys.path.insert(0, str(SCRIPTS))
+    from state_root import resolve_agent_state_root  # noqa: E402
+
+    expected = (tmp_path / "state" / "unreal-agent").resolve()
+    assert resolve_agent_state_root().resolve() == expected
+
+    proc = subprocess.run(
+        [
+            "node",
+            "-e",
+            "const { resolveAgentStateRoot } = require('./src/state-root');"
+            "console.log(resolveAgentStateRoot());",
+        ],
+        cwd=str(AGENT),
+        env={
+            **os.environ,
+            "SHARED_UNREAL_CONFIG": str(shared),
+            "AGENT_STATE_ROOT": "",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert Path(proc.stdout.strip()).resolve() == expected
+
+
 def test_build_cline_mcp_config_includes_agent_state_root(tmp_path: Path) -> None:
     ps = subprocess.run(
         [
@@ -83,6 +116,7 @@ def test_build_cline_mcp_config_includes_agent_state_root(tmp_path: Path) -> Non
         text=True,
         cwd=str(ROOT),
         timeout=60,
+        check=False,
     )
     if ps.returncode != 0:
         pytest.skip(f"PowerShell unavailable: {ps.stderr or ps.stdout}")
