@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -71,10 +72,11 @@ def test_context_compactor_status_rejects_install_only_state(tmp_path: Path) -> 
 def test_context_compactor_status_reports_runtime_route_and_compaction(tmp_path: Path) -> None:
     session = tmp_path / "session-a"
     session.mkdir()
+    measured_at = datetime.now(tz=timezone.utc).isoformat()
     events = [
         {
             "type": "context_measurement",
-            "at": "2026-07-17T03:00:00.000Z",
+            "at": measured_at,
             "proxyActive": True,
             "targetModel": "test-qwen",
             "inputTokens": 65000,
@@ -83,7 +85,7 @@ def test_context_compactor_status_reports_runtime_route_and_compaction(tmp_path:
         },
         {
             "type": "compaction_decision",
-            "at": "2026-07-17T03:00:01.000Z",
+            "at": measured_at,
             "applied": True,
             "postRemainingTokens": 21000,
         },

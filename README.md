@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0 Beta1
+# UE5_Local_LLM_MCP_lmstudio 1.3.0 Beta3
 
-> **Beta release:** the portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows, Linux, and macOS. Native Unreal engine discovery, indexing paths, Editor export, and agent build launchers are host-aware; Linux/macOS RAG indexing still requires `pwsh`, and live platform certification is pending. See [1.3.0 Beta1 Release Notes](docs/Release_Notes_1_3_0_Beta1.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **Beta release:** the portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows, Ubuntu Linux, and macOS. Native Unreal engine discovery, indexing paths, Editor export, and agent build launchers are host-aware; Ubuntu/macOS RAG indexing uses `pwsh`, and live platform certification is pending. Runtime downloads are pinned and SHA-256 verified before bounded safe extraction. See [1.3.0 Beta3 Release Notes](docs/Release_Notes_1_3_0_Beta3.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -28,15 +28,15 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — July 2026**
 >
-> **Current release: 1.3.0 Beta1.** The 1.3 line now includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, meaning-preserving refactor snapshots and proof gates, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates.
+> **Current release: 1.3.0 Beta3.** The 1.3 line now includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, meaning-preserving refactor snapshots and proof gates, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates.
 >
-> Beta1 has automated repository evidence, not a new live-model score. The latest saved model results below remain the v1.2.5 UE 5.8 baseline and must not be read as a measured Beta1 improvement. Physical Linux/macOS Unreal certification, Ollama support, and the separated runtime/semantic capability scorecards remain in progress.
+> Beta3 has automated repository evidence, not a new live-model score. The latest saved model results below remain the v1.2.5 UE 5.8 baseline and must not be read as a measured Beta3 improvement. Physical Ubuntu/macOS Unreal certification, Ollama support, and the separated runtime/semantic capability scorecards remain in progress.
 
 ## Documentation Hub
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0_Beta1.md"><img alt="1.3.0 Beta1 Release Notes" src="https://img.shields.io/badge/Release-1.3.0%20Beta1-yellow?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_0_Beta3.md"><img alt="1.3.0 Beta3 Release Notes" src="https://img.shields.io/badge/Release-1.3.0%20Beta3-yellow?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
   <a href="docs/Roadmap_1_3_0.md"><img alt="v1.3.0 Roadmap" src="https://img.shields.io/badge/Roadmap-v1.3.0-orange?logo=gitbook"></a>
@@ -45,7 +45,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 ## Latest Results
 
-These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 Beta1 live rerun has not been completed yet.
+These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 Beta3 live rerun has not been completed yet.
 
 | Model / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
@@ -87,7 +87,7 @@ See [`docs/VERSIONING.md`](docs/VERSIONING.md) for product vs component version 
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
 cd UE5_Local_LLM_MCP_lmstudio
 # Windows: INSTALL.bat
-# Linux/macOS: ./install.sh
+# Ubuntu Linux/macOS: ./install.sh
 ```
 
 The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal adapter is included, it presents a numbered SAFE/AGENT authority choice and shows the final authority in a confirmation summary. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. FULL adds the context compactor but remains read-only unless AGENT authority is explicitly confirmed. See [Integrated Installer](docs/Integrated_Installer.md).
@@ -100,9 +100,13 @@ Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unrea
 
 After sending one message through that selection, verify actual routing—not just installed files—with:
 
-```powershell
-.\scripts\Test-ContextCompactorActivation.ps1
+```shell
+cd lmstudio-context-compactor-plugin
+npm run status
 ```
+
+The cross-platform checker only accepts fresh proxy telemetry; stale evidence from an older chat is rejected.
+In a FULL install with AGENT authority, write-task planning also fails closed unless fresh proxy evidence exists.
 
 ### Rider + Cline (optional)
 
@@ -147,7 +151,7 @@ Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context 
 
 | Symptom in LM Studio logs | What to do |
 |---|---|
-| `request (...) exceeds the available context size (54272)` | Run `.\scripts\Test-ContextCompactorActivation.ps1` first. If it has no route evidence, select `unreal-context-compactor` for this chat. If the proxy already reports that it cannot meet the 5,000-token hard margin, use a larger context or start a new chat with a 5–10-line handoff. |
+| `request (...) exceeds the available context size (54272)` | Run `npm --prefix lmstudio-context-compactor-plugin run status` first. If it has no fresh route evidence, select `unreal-context-compactor` for this chat. If the proxy cannot meet the 8,000-token hard margin, use a larger context or start a new chat with a 5–10-line handoff. |
 | `failed to restore kv cache` / `cache size limit reached` | Same as above — session memory is saturated. New chat is faster than raising context alone. |
 | `Model failed to generate a tool call` after a long edit loop | Stop, summarize changed files + remaining errors, new chat. |
 | `js-code-sandbox` appears in logs during Unreal work | Disable it (see Quick Install note above). |
@@ -158,7 +162,7 @@ Practical rules for day-to-day Unreal project work:
 - **Do not paste full UBT/linker logs** into chat. Use `read_unreal_logs` or the log file path; share only the first meaningful error slice.
 - **Header-then-.cpp is normal.** `write_file` on a new header may show advisory `CPP_DEFINITION_MISSING` until the matching `.cpp` is written — that is expected, not a rollback trigger on its own.
 - **Avoid invented UE APIs** the model often hallucinates: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. Prefer `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, `SpawnTransform` by value, and the owning actor/subsystem's `GetWorld()`.
-- **Compact tool responses (v1.2.5 baseline, retained in Beta1):** `build_unreal_project` returns a one-line summary + up to 40 likely errors + `.agent/logs/latest-build.log` path (not full stdout/stderr). `read_unreal_logs` defaults to the newest log and first error cluster. The context proxy preserves control fields such as the required next tool, modified files, diagnostics, and build state across compaction.
+- **Compact tool responses (v1.2.5 baseline, retained in Beta3):** `build_unreal_project` returns a one-line summary + up to 40 likely errors + `.agent/logs/latest-build.log` path (not full stdout/stderr). `read_unreal_logs` defaults to the newest log and first error cluster. The context proxy preserves control fields such as the required next tool, modified files, diagnostics, and build state across compaction.
 
 Automatic compaction extends a session but cannot shrink an oversized system prompt/tool schema or repair a saturated KV cache. If the proxy cannot restore its hard safety margin, use `write_session_handoff`, start a fresh chat, and resume from `.agent/handoff/latest.md`.
 
@@ -170,7 +174,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 | Topic | File |
 |---|---|
-| 1.3.0 Beta1 release notes | [docs/Release_Notes_1_3_0_Beta1.md](docs/Release_Notes_1_3_0_Beta1.md) |
+| 1.3.0 Beta3 release notes | [docs/Release_Notes_1_3_0_Beta3.md](docs/Release_Notes_1_3_0_Beta3.md) |
 | Detailed project overview | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | Model measurement results | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | Version performance history | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -191,7 +195,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 ## Summary
 
-1.3.0 Beta1 is still a prerelease, but its architecture, installer, and release paths are guarded by broader automated checks.
+1.3.0 Beta3 is still a prerelease, but its architecture, installer, and release paths are guarded by broader automated checks.
 
 For narrow UE 5.8 compile-fix work, the current community fine-tuned Qwen 3.6 27B local workflow is strong in live UBT validation (36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B also has a saved compact-model result (35/36 Pass@K, 33/36 Pass@1). Treat these as internal workflow results, not general model equivalence to Claude or GPT-class systems.
 

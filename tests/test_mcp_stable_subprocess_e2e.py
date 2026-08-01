@@ -420,13 +420,34 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             2,
         )
         assert created["result"].get("isError") is not True, created
+        created_payload = json.loads(created["result"]["content"][0]["text"])
+        assert created_payload["continuityCheckpoint"]["ok"] is True
+        assert created_payload["continuityCheckpoint"]["checkpointHash"]
+        post_create_auth = created_payload["taskAuthorization"]
+        assert post_create_auth == created_payload["continuityCheckpoint"]["taskAuthorization"]
+        assert post_create_auth["routeHash"] == created_payload["toolRoute"]["routeHash"]
+        assert post_create_auth["routePhase"] == created_payload["toolRoute"]["phase"]
+        persisted_after_create = json.loads(
+            (
+                tmp_path
+                / "state"
+                / "unreal-agent"
+                / "tasks"
+                / post_create_auth["taskSessionId"]
+                / "state.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert persisted_after_create["continuity"]["checkpoint"]["status"] == "recorded"
+        assert "Source/DemoGame/Public/NewThing.h" in persisted_after_create[
+            "continuity"
+        ]["checkpoint"]["modifiedFiles"]
 
         read = client.request(
             "tools/call",
             {
                 "name": "read_file",
                 "arguments": {
-                    "taskAuthorization": create_auth,
+                    "taskAuthorization": post_create_auth,
                     "path": "Source/DemoGame/Public/NewThing.h",
                 },
             },
@@ -451,7 +472,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                     "name": "unreal_task_checkpoint",
                     "arguments": {
                         "action": "record",
-                        "taskAuthorization": create_auth,
+                        "taskAuthorization": post_create_auth,
                         "phase": "implementation",
                         "modifiedFiles": [
                             "Source/DemoGame/Public/NewThing.h"
@@ -528,6 +549,11 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             4,
         )
         assert replaced["result"].get("isError") is not True, replaced
+        replaced_payload = json.loads(replaced["result"]["content"][0]["text"])
+        assert replaced_payload["continuityCheckpoint"]["ok"] is True
+        assert replaced_payload["taskAuthorization"] == replaced_payload[
+            "continuityCheckpoint"
+        ]["taskAuthorization"]
         assert (source_dir / "NewThing.h").read_text(encoding="utf-8") == "beta\n"
         mutation = json.loads((project_dir / ".agent" / "state" / "mutation.json").read_text(encoding="utf-8"))
         assert mutation["mutationGeneration"] == 2

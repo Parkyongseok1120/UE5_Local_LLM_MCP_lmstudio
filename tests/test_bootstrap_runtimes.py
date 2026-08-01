@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
+import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -44,6 +47,9 @@ def test_runtime_asset_names_cover_os_and_cpu_matrix(
     assert uv_part in module.uv_asset_name()
     assert node_part in module.node_asset_name()
     assert pwsh_part in module.pwsh_asset_name()
+    assert module.uv_asset_name() in module.ARCHIVE_SHA256
+    assert module.node_asset_name() in module.ARCHIVE_SHA256
+    assert module.pwsh_asset_name() in module.ARCHIVE_SHA256
     sys.modules.pop("bootstrap_runtimes", None)
 
 
@@ -152,4 +158,118 @@ def test_cpu_arch_prefers_apple_silicon_over_rosetta_machine(
 
     monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
     assert module.cpu_arch() == "arm64"
+    sys.modules.pop("bootstrap_runtimes", None)
+
+
+def test_runtime_archive_checksum_mismatch_fails_closed(tmp_path: Path) -> None:
+    module = _load()
+    archive = tmp_path / module.node_asset_name()
+    archive.write_bytes(b"corrupted")
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        module._verify_archive(archive)
+    sys.modules.pop("bootstrap_runtimes", None)
+
+
+def test_runtime_download_rejects_oversized_declared_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load()
+
+    class Response:
+        headers = {"Content-Length": str(module.MAX_DOWNLOAD_BYTES + 1)}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def read(_size):
+            return b""
+
+    monkeypatch.setattr(module.urllib_request, "urlopen", lambda *_args, **_kwargs: Response())
+    destination = tmp_path / "runtime.zip"
+    with pytest.raises(RuntimeError, match="download exceeds"):
+        module._default_download("https://example.invalid/runtime.zip", destination)
+    assert not destination.exists()
+    assert not destination.with_suffix(".zip.tmp").exists()
+    sys.modules.pop("bootstrap_runtimes", None)
+
+
+def test_uv_probe_accepts_pinned_version_with_build_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load()
+    monkeypatch.setattr(
+        module,
+        "_command_version",
+        lambda _path, _args: f"uv {module.PINNED_UV_VERSION} (build arch)",
+    )
+    assert module._uv_is_usable(Path("uv")) is True
+    monkeypatch.setattr(module, "_command_version", lambda _path, _args: "uv 0.11.0")
+    assert module._uv_is_usable(Path("uv")) is False
+    sys.modules.pop("bootstrap_runtimes", None)
+
+
+def test_zip_path_traversal_is_rejected_before_extraction(tmp_path: Path) -> None:
+    module = _load()
+    archive = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("../escaped.txt", "no")
+    destination = tmp_path / "extract"
+    with pytest.raises(RuntimeError, match="unsafe archive member"):
+        module._extract_archive(archive, destination)
+    assert not (tmp_path / "escaped.txt").exists()
+    sys.modules.pop("bootstrap_runtimes", None)
+
+
+def test_tar_symlink_escape_is_rejected_before_extraction(tmp_path: Path) -> None:
+    module = _load()
+    archive = tmp_path / "unsafe.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        member = tarfile.TarInfo("runtime/link")
+        member.type = tarfile.SYMTYPE
+        member.linkname = "../../outside"
+        handle.addfile(member, io.BytesIO())
+    with pytest.raises(RuntimeError, match="unsafe archive"):
+        module._extract_archive(archive, tmp_path / "extract")
+    sys.modules.pop("bootstrap_runtimes", None)
+
+
+def test_find_node_npm_never_pairs_node_with_unrelated_global_npm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load()
+    node_dir = tmp_path / "node-only"
+    global_dir = tmp_path / "global-npm"
+    node_dir.mkdir()
+    global_dir.mkdir()
+    node = node_dir / "node"
+    npm = global_dir / "npm"
+    node.write_text("#!/bin/sh\necho v20.20.2\n", encoding="utf-8")
+    npm.write_text("#!/bin/sh\necho 10.0.0\n", encoding="utf-8")
+    node.chmod(0o755)
+    npm.chmod(0o755)
+    monkeypatch.setattr(module, "cpu_arch", lambda: "x64")
+    monkeypatch.setattr(module, "_node_major", lambda _path: 20)
+    monkeypatch.setattr(module, "_node_arch", lambda _path: "x64")
+    monkeypatch.setattr(
+        module.shutil,
+        "which",
+        lambda name: str(npm) if name == "npm" else None,
+    )
+    assert module.find_node_npm([node_dir]) is None
+    sys.modules.pop("bootstrap_runtimes", None)
+
+
+def test_ubuntu_runtime_guard_rejects_musl_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load()
+    monkeypatch.setattr(module, "host_os", lambda: "linux")
+    monkeypatch.setattr(module, "cpu_arch", lambda: "x64")
+    monkeypatch.setattr(module.platform, "libc_ver", lambda: ("musl", "1.2.5"))
+    with pytest.raises(RuntimeError, match="Ubuntu 22.04/24.04"):
+        module.validate_host_runtime()
     sys.modules.pop("bootstrap_runtimes", None)

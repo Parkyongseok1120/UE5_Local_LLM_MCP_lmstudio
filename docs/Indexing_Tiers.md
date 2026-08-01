@@ -53,7 +53,7 @@ Manual re-run:
 scripts\installer_support\Export-EditorMetadata.ps1 -IngestOnly
 ```
 
-On Linux/macOS, run PowerShell scripts through PowerShell Core, for example:
+On Ubuntu Linux/macOS, run PowerShell scripts through PowerShell Core, for example:
 
 ```sh
 pwsh ./scripts/run_index_pipeline.ps1 -Tier standard -WorkspaceRoot "$PWD"

@@ -912,6 +912,25 @@ def _handle_unreal_code_sketch_claim_validate(
     graph_summary = compact_payload.get("graphStatus") or {}
     gate_summary = compact_payload.get("gateCompletion") or {}
     summary_lines = [str(compact_payload.get("verdictSummary") or "Sketch validation completed.")]
+    blocking_rows = [
+        row
+        for row in compact_payload.get("results") or []
+        if isinstance(row, dict)
+        and row.get("verdict") in {"known_bad", "unverified", "weak", "skipped_graph"}
+    ]
+    if blocking_rows:
+        summary_lines.append(
+            "blockingSymbols="
+            + ", ".join(
+                f"{row.get('symbol') or '<unknown>'}:{row.get('verdict') or 'unknown'}"
+                for row in blocking_rows[:6]
+            )
+        )
+    contract_issues = list(
+        (compact_payload.get("generationContract") or {}).get("issues") or []
+    )
+    if contract_issues:
+        summary_lines.append("contractIssue=" + str(contract_issues[0]))
     if compact_payload.get("errorCode"):
         summary_lines.append(
             f"{compact_payload['errorCode']}: {compact_payload.get('error') or ''}".strip()
@@ -921,6 +940,29 @@ def _handle_unreal_code_sketch_claim_validate(
             "projectGraph="
             f"{graph_summary.get('status') or 'unknown'}"
             f" ({graph_summary.get('graphSource') or 'unavailable'})"
+        )
+    next_authorization = gate_summary.get("taskAuthorization")
+    next_route = gate_summary.get("toolRoute")
+    if gate_summary.get("ok") and isinstance(next_authorization, dict):
+        summary_lines.append(
+            "nextTaskAuthorization="
+            + json.dumps(next_authorization, ensure_ascii=False, separators=(",", ":"))
+        )
+        if isinstance(next_route, dict):
+            summary_lines.append(
+                "activeRoute="
+                + json.dumps(
+                    {
+                        "phase": next_route.get("phase"),
+                        "activeTools": next_route.get("activeTools") or [],
+                        "selectedSlice": next_route.get("selectedSlice") or {},
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        summary_lines.append(
+            "Reuse nextTaskAuthorization exactly for the next tool call; do not synthesize routePhase or routeHash."
         )
     if gate_summary.get("agentInstruction"):
         summary_lines.append(str(gate_summary["agentInstruction"]))
@@ -1830,6 +1872,19 @@ class McpServer:
 
             reconcile_stale_jobs(self.workspace)
         except Exception:
+            pass
+        try:
+            from task_api import release_expired_idle_active_task_route
+            from workspace_paths import resolve_active_project_path
+
+            active_project = resolve_active_project_path()
+            release_expired_idle_active_task_route(
+                self.workspace,
+                active_project=str(active_project or ""),
+            )
+        except Exception:
+            # Startup remains available in recovery-only mode when reconciliation
+            # cannot prove that an expired route is safe to release.
             pass
 
     def _maybe_refresh_project_caches(self) -> None:
@@ -4425,6 +4480,42 @@ class McpServer:
                     self.tool_result(message_id, "Missing request", is_error=True)
                     return
                 payload = build_agent_plan(request, mode).to_dict()
+                if (
+                    os.environ.get("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "").strip().lower()
+                    in {"1", "true", "yes", "on"}
+                    and (payload.get("writeGate") or {}).get("writesAllowed") is True
+                ):
+                    from context_compactor_status import recent_context_compactor_status
+
+                    try:
+                        max_age_seconds = int(
+                            os.environ.get("MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS", "300")
+                        )
+                    except ValueError:
+                        max_age_seconds = 300
+                    compactor_status = recent_context_compactor_status(
+                        max_age_seconds=max_age_seconds
+                    )
+                    if compactor_status.get("active") is not True:
+                        self.structured_tool_result(
+                            message_id,
+                            {
+                                "ok": False,
+                                "errorCode": "CONTEXT_COMPACTOR_NOT_ACTIVE",
+                                "error": (
+                                    "Agent write task was not started because this chat has no fresh "
+                                    "unreal-context-compactor routing evidence."
+                                ),
+                                "contextCompactorStatus": compactor_status,
+                                "retryable": False,
+                                "stopCurrentWorkflow": True,
+                                "requiredUserAction": (
+                                    "Select unreal-context-compactor in this chat's model dropdown, "
+                                    "then send the request again."
+                                ),
+                            },
+                        )
+                        return
                 from task_api import task_replan, task_start
 
                 config = load_shared_config()

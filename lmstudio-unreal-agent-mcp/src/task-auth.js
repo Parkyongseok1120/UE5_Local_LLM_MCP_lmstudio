@@ -550,6 +550,22 @@ function validateToolRoute(state, fields, args, toolName) {
     ? state.toolRoute
     : null;
   if (!activeRoute) return { ok: true, legacy: true };
+  const activeTools = new Set(Array.isArray(activeRoute.activeTools) ? activeRoute.activeTools.map(String) : []);
+  // A stale authorization must not instruct the model to retry a tool that the
+  // refreshed route cannot execute. Surface the real phase/gate action first.
+  if (toolName && !activeTools.has(toolName)) {
+    const pending = Array.isArray(activeRoute.pendingGates)
+      ? activeRoute.pendingGates.map(String).filter(Boolean)
+      : [];
+    return {
+      ok: false,
+      errorCode: "TASK_TOOL_NOT_ACTIVE",
+      error: `${toolName} is not active in route phase ${String(activeRoute.phase || "")}.`,
+      toolRoute: activeRoute,
+      taskAuthorization: taskAuthorizationForState(state),
+      nextAction: pending[0] || "use_active_route_tool",
+    };
+  }
   if (
     !fields.routeHash
     || !fields.routePhase
@@ -560,15 +576,6 @@ function validateToolRoute(state, fields, args, toolName) {
       ok: false,
       errorCode: "TASK_ROUTE_STALE",
       error: "taskAuthorization routeHash/routePhase is missing or stale.",
-      toolRoute: activeRoute,
-    };
-  }
-  const activeTools = new Set(Array.isArray(activeRoute.activeTools) ? activeRoute.activeTools.map(String) : []);
-  if (toolName && !activeTools.has(toolName)) {
-    return {
-      ok: false,
-      errorCode: "TASK_TOOL_NOT_ACTIVE",
-      error: `${toolName} is not active in route phase ${String(activeRoute.phase || "")}.`,
       toolRoute: activeRoute,
     };
   }
@@ -1628,7 +1635,9 @@ function listToolsRouteContext(workspaceRoot, activeProject = "") {
 
 function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], options = {}) {
   const scriptsDir = path.resolve(__dirname, "../../scripts");
-  const python = String(process.env.PYTHON_EXE || process.env.PYTHON || "python").trim() || "python";
+  const fallbackPython = process.platform === "win32" ? "python" : "python3";
+  const python = String(process.env.PYTHON_EXE || process.env.PYTHON || fallbackPython).trim()
+    || fallbackPython;
   const stdinPayload = options.stdinPayload && typeof options.stdinPayload === "object"
     ? options.stdinPayload
     : null;
@@ -1636,7 +1645,7 @@ function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], opti
     "import json, sys",
     "from pathlib import Path",
     `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
-    "from task_api import task_cancel, task_cancel_active, task_quarantine_corrupt",
+    "from task_api import task_cancel, task_cancel_active, task_checkpoint, task_quarantine_corrupt",
     stdinPayload
       ? "_stdin = json.load(sys.stdin)"
       : "_stdin = {}",
@@ -1699,6 +1708,39 @@ function cancelTaskViaPython(workspaceRoot, taskSessionId, options = {}) {
       stdinPayload: {
         conversationId,
         ownerCapability,
+      },
+    }
+  );
+}
+
+function checkpointMutationViaPython(workspaceRoot, args, modifiedFiles, options = {}) {
+  const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : (args?.task_authorization && typeof args.task_authorization === "object"
+      ? args.task_authorization
+      : {});
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_checkpoint(Path(sys.argv[1]), "
+      + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
+      + "action='record', phase='executor', "
+      + "modified_files=list((_stdin or {}).get('modifiedFiles') or []), "
+      + "required_next_action=str((_stdin or {}).get('requiredNextAction') or ''), "
+      + "validation=dict((_stdin or {}).get('validation') or {}), "
+      + "note=str((_stdin or {}).get('note') or ''), "
+      + "preserve_route_usage=True, include_git_changes=False)"
+    ),
+    [],
+    {
+      stdinPayload: {
+        taskAuthorization: nested,
+        modifiedFiles: Array.isArray(modifiedFiles) ? modifiedFiles.map(String) : [],
+        requiredNextAction: String(options.requiredNextAction || "continue_active_slice"),
+        validation: options.validation && typeof options.validation === "object"
+          ? options.validation
+          : {},
+        note: String(options.note || "automatic checkpoint after successful mutation"),
       },
     }
   );
@@ -2338,6 +2380,7 @@ module.exports = {
   listActiveTasks,
   cancelActiveTask,
   quarantineCorruptTask,
+  checkpointMutationViaPython,
   listToolsRouteContext,
   collectProjectActiveToolUnion,
 };

@@ -15,12 +15,13 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 DEFAULTS: dict[str, int] = {
-    "soft_remaining_tokens": 10_000,
-    "hard_remaining_tokens": 5_000,
+    "soft_remaining_tokens": 14_000,
+    "hard_remaining_tokens": 8_000,
     "max_output_reserve": 4_096,
+    "safety_margin_tokens": 1_024,
     "normal_tool_result_reserve": 3_000,
     "build_tool_result_reserve": 8_000,
-    "recent_messages": 12,
+    "recent_messages": 8,
 }
 
 
@@ -51,7 +52,12 @@ def budget_decision(
         if any(word in (next_tool_name or "").lower() for word in ("build", "compile"))
         else int(cfg["normal_tool_result_reserve"])
     )
-    reserved = int(cfg["max_output_reserve"]) + int(tool_schema_tokens) + tool_reserve
+    reserved = (
+        int(cfg["max_output_reserve"])
+        + int(cfg["safety_margin_tokens"])
+        + int(tool_schema_tokens)
+        + tool_reserve
+    )
     remaining = int(context_length) - int(input_tokens) - reserved
     action = "normal"
     if remaining < int(cfg["hard_remaining_tokens"]):

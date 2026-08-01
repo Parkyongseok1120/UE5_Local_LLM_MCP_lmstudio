@@ -26,15 +26,19 @@ async function main() {
       enabled: true,
       observeOnly: false,
       strictToolControlPlane: false,
+      bufferUntilPredictionComplete: true,
+      rejectTruncatedPredictions: true,
+      requireCheckpointPersistence: true,
       targetModel: process.env.LMS_CONTEXT_COMPACTOR_TARGET_MODEL || "",
       softRemainingTokens: 10_000,
-      hardRemainingTokens: 5_000,
+      hardRemainingTokens: 8_000,
       maxOutputReserve: 256,
+      safetyMarginTokens: 1_024,
       normalToolResultReserve: 256,
       buildToolResultReserve: 512,
       recentCompleteTurns: 1,
       minimumTurnsBetweenCompactions: 0,
-      targetRemainingTokensAfterCompaction: 20_000,
+      targetRemainingTokensAfterCompaction: 24_000,
     };
     const client = new LMStudioClient();
     const controller = {
@@ -109,7 +113,7 @@ async function main() {
     assert.ok(measurement.inputTokens > measurement.contextLength, "The generator did not receive an over-limit history");
     assert.equal(measurement.decision.action, "hard_compact");
     assert.equal(compaction?.applied, true, "Active compaction was not applied before the tool call");
-    assert.ok(compaction.postRemainingTokens >= 5_000, "Post-compaction hard margin was not met");
+    assert.ok(compaction.postRemainingTokens >= 8_000, "Post-compaction hard margin was not met");
     console.log(JSON.stringify({
       ok: true,
       active: true,

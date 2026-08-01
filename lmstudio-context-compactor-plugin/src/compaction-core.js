@@ -6,14 +6,15 @@ const COMPACTION_SCHEMA_VERSION = 1;
 const DEFAULT_COMPACTION_CONFIG = Object.freeze({
   enabled: true,
   observeOnly: false,
-  softRemainingTokens: 10000,
-  hardRemainingTokens: 5000,
+  softRemainingTokens: 14000,
+  hardRemainingTokens: 8000,
   maxOutputReserve: 4096,
+  safetyMarginTokens: 1024,
   normalToolResultReserve: 3000,
   buildToolResultReserve: 8000,
-  recentCompleteTurns: 6,
-  minimumTurnsBetweenCompactions: 3,
-  targetRemainingTokensAfterCompaction: 20000,
+  recentCompleteTurns: 4,
+  minimumTurnsBetweenCompactions: 0,
+  targetRemainingTokensAfterCompaction: 24000,
   maxCheckpointFacts: 32,
 });
 
@@ -277,7 +278,10 @@ function expectedToolReserve(toolName, config = {}) {
 
 function budgetDecision({ contextLength, inputTokens, nextToolName, config = {}, toolSchemaTokens = 0 }) {
   const merged = { ...DEFAULT_COMPACTION_CONFIG, ...config };
-  const reserve = Number(merged.maxOutputReserve) + Number(toolSchemaTokens || 0) + expectedToolReserve(nextToolName, merged);
+  const reserve = Number(merged.maxOutputReserve)
+    + Number(merged.safetyMarginTokens || 0)
+    + Number(toolSchemaTokens || 0)
+    + expectedToolReserve(nextToolName, merged);
   const remaining = Number(contextLength) - Number(inputTokens) - reserve;
   let action = "normal";
   if (remaining < merged.hardRemainingTokens) action = "hard_compact";

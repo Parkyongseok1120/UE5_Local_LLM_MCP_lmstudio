@@ -46,12 +46,34 @@ def test_installer_profiles_are_manifest_driven() -> None:
     module = _load_installer_module()
     sys.modules.pop("integrated_install", None)
     manifest = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.0 Beta1"
+    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.0 Beta3"
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
         if name != "custom"
     }
+    assert manifest["requires"]["linuxBaseline"] == "Ubuntu 22.04/24.04 (glibc)"
+    assert manifest["portablePackage"]["runtimeArchiveIntegrity"] == "pinned-sha256"
+    assert manifest["portablePackage"]["supportedHosts"] == [
+        "windows",
+        "ubuntu-linux",
+        "macos",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("system_name", "unreal_platform"),
+    [("Windows", "Win64"), ("Darwin", "Mac"), ("Linux", "Linux")],
+)
+def test_installer_maps_each_supported_host_to_unreal_platform(
+    monkeypatch: pytest.MonkeyPatch,
+    system_name: str,
+    unreal_platform: str,
+) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr(module.platform, "system", lambda: system_name)
+    assert module._default_platform() == unreal_platform
+    sys.modules.pop("integrated_install", None)
 
 
 def test_engine_auto_detection_accepts_native_build_sh_layout(
@@ -64,8 +86,43 @@ def test_engine_auto_detection_accepts_native_build_sh_layout(
     script = engine / "Engine" / "Build" / "BatchFiles" / "Linux" / "Build.sh"
     script.parent.mkdir(parents=True)
     script.write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+    monkeypatch.setattr(module, "_launcher_manifest_engine_locations", lambda: [])
     monkeypatch.setattr(module, "_common_engine_locations", lambda: [parent])
     assert module._detect_engine_root("5.8") == engine.resolve()
+    sys.modules.pop("integrated_install", None)
+
+
+def test_engine_auto_detection_uses_semantic_version_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    parent = tmp_path / "engines"
+    for name in ("UE_5.9", "UE_5.10"):
+        (parent / name / "Engine" / "Source").mkdir(parents=True)
+    monkeypatch.setattr(module, "_launcher_manifest_engine_locations", lambda: [])
+    monkeypatch.setattr(module, "_common_engine_locations", lambda: [parent])
+    assert module._detect_engine_root() == (parent / "UE_5.10").resolve()
+    sys.modules.pop("integrated_install", None)
+
+
+def test_windows_launcher_manifest_adds_nondefault_engine_location(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    program_data = tmp_path / "ProgramData"
+    engine = tmp_path / "Epic Library" / "UE_5.8"
+    (engine / "Engine" / "Source").mkdir(parents=True)
+    manifest = program_data / "Epic" / "UnrealEngineLauncher" / "LauncherInstalled.dat"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps({"InstallationList": [{"AppName": "UE_5.8", "InstallLocation": str(engine)}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    assert module._launcher_manifest_engine_locations() == [engine]
     sys.modules.pop("integrated_install", None)
 
 
@@ -436,6 +493,17 @@ def test_dry_run_is_zero_mutation(tmp_path: Path) -> None:
     assert not (tmp_path / "state").exists()
 
 
+def test_installer_rejects_filesystem_root_as_managed_target(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    args = module.build_parser().parse_args(["--profile", "safe", "--yes", "--dry-run"])
+    args.codex_home = Path(Path.cwd().anchor)
+    args.lmstudio_home = tmp_path / "lmstudio"
+    args.state_home = tmp_path / "state"
+    with pytest.raises(ValueError, match="must not be a filesystem root"):
+        module.install(args)
+    sys.modules.pop("integrated_install", None)
+
+
 def test_existing_install_lock_fails_before_managed_targets_are_written(tmp_path: Path) -> None:
     lock = tmp_path / "state" / "install.lock"
     lock.parent.mkdir(parents=True)
@@ -445,6 +513,78 @@ def test_existing_install_lock_fails_before_managed_targets_are_written(tmp_path
     assert "another installer is active" in result.stdout
     assert not (tmp_path / "codex").exists()
     assert not (tmp_path / "lmstudio").exists()
+
+
+def test_fresh_partial_install_lock_is_not_stolen(tmp_path: Path) -> None:
+    lock = tmp_path / "state" / "install.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("", encoding="utf-8")
+    result = _run(tmp_path, "--profile", "safe")
+    assert result.returncode == 1
+    assert "another installer is active" in result.stdout
+    assert lock.exists()
+
+
+def test_bootstrap_lock_can_be_reacquired_only_with_same_reexec_token(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    first = module.InstallLock(
+        tmp_path,
+        lock_name="runtime-bootstrap.lock",
+        owner_token="same-install",
+    )
+    first.acquire()
+    resumed = module.InstallLock(
+        tmp_path,
+        lock_name="runtime-bootstrap.lock",
+        owner_token="same-install",
+    )
+    resumed.acquire()
+    assert resumed.acquired is True
+    resumed.release()
+    assert not resumed.path.exists()
+    first.acquired = False
+    sys.modules.pop("integrated_install", None)
+
+
+def test_runtime_bootstrap_only_requests_components_that_need_runtimes() -> None:
+    module = _load_installer_module()
+    assert module._runtime_requirements({"codex", "lmstudio"}, build_rag=False) == (False, False)
+    assert module._runtime_requirements({"unreal"}, build_rag=False) == (True, False)
+    assert module._runtime_requirements({"context_compactor"}, build_rag=False) == (True, False)
+    assert module._runtime_requirements({"unreal"}, build_rag=True) == (True, True)
+    sys.modules.pop("integrated_install", None)
+
+
+def test_directory_replacement_restores_original_when_old_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    source = tmp_path / "source"
+    target = tmp_path / "managed" / "target"
+    state = tmp_path / "state"
+    source.mkdir()
+    target.mkdir(parents=True)
+    (source / "value.txt").write_text("new", encoding="utf-8")
+    (target / "value.txt").write_text("old", encoding="utf-8")
+    transaction = module.Transaction(state, [tmp_path])
+    original_rmtree = module.shutil.rmtree
+    failed = False
+
+    def fail_old_cleanup(path, *args, **kwargs):
+        nonlocal failed
+        candidate = Path(path)
+        if not failed and candidate.name.startswith(".target-old-"):
+            failed = True
+            raise OSError("simulated cleanup failure")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(module.shutil, "rmtree", fail_old_cleanup)
+    with pytest.raises(OSError, match="simulated cleanup failure"):
+        transaction.replace_directory(source, target)
+    assert (target / "value.txt").read_text(encoding="utf-8") == "old"
+    assert transaction.actions == []
+    sys.modules.pop("integrated_install", None)
 
 
 def test_stale_install_lock_is_cleared_automatically(tmp_path: Path) -> None:
@@ -477,6 +617,12 @@ def test_noninteractive_agent_mode_requires_explicit_risk_acceptance(tmp_path: P
     assert "--accept-agent-risk" in result.stdout
 
 
+def test_rag_build_rejects_profiles_without_unreal_component(tmp_path: Path) -> None:
+    result = _run(tmp_path, "--profile", "safe", "--build-rag")
+    assert result.returncode == 1
+    assert "--build-rag requires the unreal component" in result.stdout
+
+
 def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) -> None:
     result = _run(
         tmp_path,
@@ -494,6 +640,7 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
     assert payload["safeMode"] is False
     mcp = json.loads((tmp_path / "lmstudio" / "mcp.json").read_text(encoding="utf-8"))
     env = mcp["mcpServers"]["unreal-agent"]["env"]
+    assert Path(env["PYTHON_EXE"]).resolve() == Path(sys.executable).resolve()
     assert {
         env[key]
         for key in (
@@ -503,6 +650,26 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
             "VALIDATE_ON_WRITE",
         )
     } == {"1"}
+
+
+def test_full_agent_install_requires_fresh_context_proxy_evidence(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    args = module.build_parser().parse_args(["--profile", "full"])
+    args.enable_agent_mode = True
+    args.lmstudio_home = tmp_path / "lmstudio"
+    args.workspace_root = [tmp_path / "projects"]
+    entries = module._unreal_entries(
+        args,
+        Path(sys.executable),
+        tmp_path / "node",
+        tmp_path / "shared.json",
+        tmp_path / "agent.json",
+        require_context_compactor=True,
+    )
+    rag_env = entries["unreal-rag"]["env"]
+    assert rag_env["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "1"
+    assert rag_env["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] == "300"
+    sys.modules.pop("integrated_install", None)
 
 
 def test_custom_rule_and_cline_install(tmp_path: Path) -> None:
@@ -552,6 +719,36 @@ def test_last_install_can_be_rolled_back(tmp_path: Path) -> None:
     restored = json.loads(original.read_text(encoding="utf-8"))
     assert restored == {"mcpServers": {"original": {}}}
     assert not (tmp_path / "codex" / "skills" / "evidence-first-code-audit").exists()
+
+
+def test_rollback_preflight_preserves_current_file_when_backup_is_missing(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    state = tmp_path / "state"
+    target = tmp_path / "managed" / "config.json"
+    target.parent.mkdir()
+    target.write_text("current", encoding="utf-8")
+    state.mkdir()
+    (state / "install-journal.json").write_text(
+        json.dumps(
+            {
+                "allowedRoots": [str(tmp_path / "managed")],
+                "backupRoot": str(state / "backups" / "missing-generation"),
+                "actions": [
+                    {
+                        "kind": "file",
+                        "target": str(target),
+                        "existed": True,
+                        "backup": str(state / "backups" / "missing-generation" / "000-config.json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="backup is missing"):
+        module.rollback_last_install(state)
+    assert target.read_text(encoding="utf-8") == "current"
+    sys.modules.pop("integrated_install", None)
 
 
 def test_unreal_safe_component_registers_read_only_agent(tmp_path: Path) -> None:
@@ -635,6 +832,21 @@ def test_explicit_engine_root_is_persisted_and_forwarded_to_mcp(tmp_path: Path) 
     assert shared["defaultEngineRoot"] == str(engine)
     assert mcp["mcpServers"]["unreal-rag"]["env"]["UNREAL_ENGINE_ROOT"] == str(engine)
     assert mcp["mcpServers"]["unreal-agent"]["env"]["UNREAL_ENGINE_ROOT"] == str(engine)
+
+
+def test_invalid_unreal_engine_environment_fails_instead_of_silently_falling_back(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("UNREAL_ENGINE_ROOT", str(tmp_path / "missing-engine"))
+    result = _run(
+        tmp_path,
+        "--profile",
+        "standard",
+        "--skip-deps",
+    )
+    assert result.returncode == 1
+    assert "UNREAL_ENGINE_ROOT does not contain a usable Unreal Engine layout" in result.stdout
 
 
 @pytest.mark.parametrize("tier", ["standard", "full"])

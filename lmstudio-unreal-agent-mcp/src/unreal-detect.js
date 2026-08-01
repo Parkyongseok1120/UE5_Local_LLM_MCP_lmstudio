@@ -6,6 +6,7 @@ const path = require("path");
 const os = require("os");
 const cp = require("child_process");
 const { promisify } = require("util");
+const { atomicWriteText } = require("./atomic-io");
 
 const execFile = promisify(cp.execFile);
 
@@ -74,7 +75,7 @@ function loadConfig(configPath) {
 function saveConfig(configPath, config) {
   const directory = path.dirname(configPath);
   fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  atomicWriteText(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
 function getActiveProject(configPath) {
@@ -274,6 +275,21 @@ function engineFolderFromAssociation(value) {
   return null;
 }
 
+function compareEngineFolders(left, right) {
+  const parts = (value) => {
+    const match = String(value || "").match(/UE[_ -]?(\d+(?:\.\d+)*)/i);
+    return match ? match[1].split(".").map((part) => Number(part)) : [];
+  };
+  const leftParts = parts(left);
+  const rightParts = parts(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const delta = Number(leftParts[index] || 0) - Number(rightParts[index] || 0);
+    if (delta !== 0) return delta;
+  }
+  return String(left || "").localeCompare(String(right || ""));
+}
+
 function engineBuildToolCandidates(engineRoot, hostPlatform = process.platform) {
   const batchRoot = path.join(engineRoot, "Engine", "Build", "BatchFiles");
   const ubtRoot = path.join(engineRoot, "Engine", "Binaries", "DotNET", "UnrealBuildTool");
@@ -353,14 +369,19 @@ async function findEngineInstalls(options = {}) {
   for (const location of locations) {
     if (!(await exists(location))) continue;
     await addInstall(location, "common-location");
-    const entries = await fsp.readdir(location, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fsp.readdir(location, { withFileTypes: true });
+    } catch {
+      continue;
+    }
     for (const entry of entries) {
       if (!entry.isDirectory() || !/^UE_/i.test(entry.name)) continue;
       await addInstall(path.join(location, entry.name), "discovered");
     }
   }
 
-  installs.sort((a, b) => a.folderName.localeCompare(b.folderName));
+  installs.sort((a, b) => compareEngineFolders(a.folderName, b.folderName));
   return installs;
 }
 

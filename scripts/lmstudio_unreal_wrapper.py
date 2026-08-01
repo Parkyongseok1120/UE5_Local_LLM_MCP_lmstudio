@@ -3259,13 +3259,13 @@ def run(args: argparse.Namespace) -> int:
                     )
                     compacted_messages = candidate
                     post_decision = candidate_decision
-                    if post_decision.remaining_tokens >= 20_000 or retained_messages == 0:
+                    if post_decision.remaining_tokens >= 24_000 or retained_messages == 0:
                         break
                     retained_messages -= 1
                 messages = compacted_messages
-                if post_decision.remaining_tokens < 5_000:
+                if post_decision.remaining_tokens < 8_000:
                     error_message = (
-                        "Context remains below the 5,000-token hard margin after maximum compaction: "
+                        "Context remains below the 8,000-token hard margin after maximum compaction: "
                         f"{post_decision.remaining_tokens} tokens remain. Increase --context-length or reduce prompt/tool context."
                     )
                     write_file(attempt_dir / "context_compaction_error.txt", error_message + "\n")

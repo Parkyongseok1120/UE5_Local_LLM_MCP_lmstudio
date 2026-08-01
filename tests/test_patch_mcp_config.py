@@ -87,13 +87,32 @@ def test_patch_unreal_rag_overwrites_existing_timeout(tmp_path) -> None:
     assert patched["timeout"] == mod.DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
 
 
+def test_patch_unreal_rag_requires_fresh_proxy_when_compactor_is_installed(tmp_path) -> None:
+    mod = load_module()
+    python = tmp_path / "python.exe"
+    python.write_text("", encoding="utf-8")
+    entry = {"command": "python", "args": [], "env": {}}
+
+    patched = mod.patch_unreal_rag(
+        entry,
+        ROOT,
+        python,
+        require_context_compactor=True,
+    )
+
+    assert patched["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "1"
+    assert patched["env"]["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] == "300"
+
+
 def test_patch_unreal_agent_sets_validate_on_write_and_timeout(tmp_path) -> None:
     mod = load_module()
     node = tmp_path / "node.exe"
     node.write_text("", encoding="utf-8")
     entry = {"command": "node", "args": [], "env": {"ALLOW_WRITE": "1"}}
 
-    patched = mod.patch_unreal_agent(entry, ROOT, node)
+    python = tmp_path / "python3"
+    python.write_text("", encoding="utf-8")
+    patched = mod.patch_unreal_agent(entry, ROOT, node, python)
 
     assert patched["timeout"] == mod.DEFAULT_UNREAL_AGENT_MCP_TIMEOUT_MS
     assert patched["env"]["MCP_REQUIRE_PLAN_AUTH"] == "1"
@@ -101,6 +120,7 @@ def test_patch_unreal_agent_sets_validate_on_write_and_timeout(tmp_path) -> None
     assert patched["env"]["VALIDATE_ON_WRITE_TIMEOUT_MS"] == "45000"
     assert patched["env"]["MCP_AGENT_RESULT_MAX_CHARS"] == "32000"
     assert patched["env"]["BUILD_VERBOSE_OUTPUT"] == "0"
+    assert patched["env"]["PYTHON_EXE"] == str(python)
 
 
 def test_patch_unreal_agent_preserves_existing_context_env_values(tmp_path) -> None:
@@ -116,7 +136,9 @@ def test_patch_unreal_agent_preserves_existing_context_env_values(tmp_path) -> N
         },
     }
 
-    patched = mod.patch_unreal_agent(entry, ROOT, node)
+    python = tmp_path / "python3"
+    python.write_text("", encoding="utf-8")
+    patched = mod.patch_unreal_agent(entry, ROOT, node, python)
 
     assert patched["env"]["MCP_AGENT_RESULT_MAX_CHARS"] == "12000"
     assert patched["env"]["BUILD_VERBOSE_OUTPUT"] == "1"

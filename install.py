@@ -8,6 +8,8 @@ import contextlib
 import json
 import os
 import platform
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -40,6 +42,9 @@ PROFILE_DEFAULTS = {
 ALL_COMPONENTS = set(INSTALL_MANIFEST["components"])
 PORTABLE_RULE_FILENAME = "evidence-first-code-audit.md"
 CLINE_SETTINGS_RELATIVE_PATH = Path(".cline") / "data" / "settings" / "cline_mcp_settings.json"
+BOOTSTRAP_LOCK_TOKEN_ENV = "EVIDENCE_FIRST_BOOTSTRAP_LOCK_TOKEN"
+INVALID_LOCK_GRACE_SECONDS = 300
+MAX_INSTALLER_JSON_BYTES = 16 * 1024 * 1024
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -48,6 +53,12 @@ def _is_within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _reject_filesystem_root(path: Path, label: str) -> None:
+    resolved = path.expanduser().resolve()
+    if resolved.parent == resolved:
+        raise ValueError(f"{label} must not be a filesystem root: {resolved}")
 
 
 def _default_portable_rule_path(args: argparse.Namespace) -> Path:
@@ -74,6 +85,43 @@ def _engine_root_is_valid(root: Path) -> bool:
     return any(path.exists() for path in candidates)
 
 
+def _launcher_manifest_engine_locations() -> list[Path]:
+    manifests: list[Path] = []
+    if sys.platform == "win32":
+        program_data = os.environ.get("PROGRAMDATA", "").strip()
+        if program_data:
+            manifests.append(Path(program_data) / "Epic" / "UnrealEngineLauncher" / "LauncherInstalled.dat")
+    elif sys.platform == "darwin":
+        manifests.append(
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Epic"
+            / "UnrealEngineLauncher"
+            / "LauncherInstalled.dat"
+        )
+    locations: list[Path] = []
+    for manifest in manifests:
+        try:
+            if manifest.stat().st_size > 2 * 1024 * 1024:
+                continue
+            payload = json.loads(manifest.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, json.JSONDecodeError, UnicodeError):
+            continue
+        rows = payload.get("InstallationList") if isinstance(payload, dict) else None
+        for row in rows if isinstance(rows, list) else []:
+            location = str(row.get("InstallLocation") or "").strip() if isinstance(row, dict) else ""
+            if location:
+                locations.append(Path(location).expanduser())
+    return locations
+
+
+def _engine_sort_key(path: Path) -> tuple[tuple[int, ...], str]:
+    match = re.search(r"UE[_ -]?(\d+(?:\.\d+)*)", path.name, flags=re.IGNORECASE)
+    version = tuple(int(part) for part in match.group(1).split(".")) if match else ()
+    return version, path.name.casefold()
+
+
 def _common_engine_locations() -> list[Path]:
     explicit = os.environ.get("UNREAL_ENGINE_ROOT", "").strip()
     locations: list[Path] = [Path(explicit).expanduser()] if explicit else []
@@ -98,13 +146,22 @@ def _common_engine_locations() -> list[Path]:
 
 def _detect_engine_root(engine_association: str = "") -> Path | None:
     candidates: list[Path] = []
-    for location in _common_engine_locations():
+    for location in [*_launcher_manifest_engine_locations(), *_common_engine_locations()]:
         if _engine_root_is_valid(location):
             candidates.append(location)
-        if location.is_dir():
-            candidates.extend(path for path in location.glob("UE_5.*") if _engine_root_is_valid(path))
-    unique = {str(path.resolve()).casefold(): path.resolve() for path in candidates}
-    ordered = sorted(unique.values(), key=lambda path: path.name, reverse=True)
+        try:
+            if location.is_dir():
+                candidates.extend(path for path in location.glob("UE_5.*") if _engine_root_is_valid(path))
+        except OSError:
+            continue
+    unique: dict[str, Path] = {}
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        unique[str(resolved).casefold()] = resolved
+    ordered = sorted(unique.values(), key=_engine_sort_key, reverse=True)
     requested = engine_association.strip()
     if requested and requested[0:1].isdigit():
         requested = f"UE_{requested}"
@@ -349,6 +406,11 @@ def _json_bytes(payload: Any) -> bytes:
 def _load_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
+    size = path.stat().st_size
+    if size > MAX_INSTALLER_JSON_BYTES:
+        raise ValueError(
+            f"JSON file exceeds the {MAX_INSTALLER_JSON_BYTES}-byte installer safety limit: {path}"
+        )
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
@@ -358,7 +420,9 @@ def _default_platform() -> str:
         return "Win64"
     if system == "darwin":
         return "Mac"
-    return "Linux"
+    if system == "linux":
+        return "Linux"
+    raise RuntimeError(f"unsupported host platform: {platform.system()}")
 
 
 def _process_is_alive(pid: int) -> bool:
@@ -382,26 +446,59 @@ def _process_is_alive(pid: int) -> bool:
     return True
 
 
+def _sync_directory(path: Path) -> None:
+    """Best-effort rename durability on POSIX; directory fsync is unavailable on Windows."""
+    if os.name == "nt":
+        return
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 @dataclass
 class InstallLock:
     state_home: Path
     dry_run: bool = False
+    lock_name: str = "install.lock"
+    owner_token: str = ""
     path: Path = field(init=False)
     acquired: bool = False
 
     def __post_init__(self) -> None:
-        self.path = self.state_home / "install.lock"
+        if Path(self.lock_name).name != self.lock_name:
+            raise ValueError(f"invalid installer lock name: {self.lock_name}")
+        self.path = self.state_home / self.lock_name
 
     def _clear_stale_lock(self) -> bool:
         try:
+            stat_result = self.path.stat()
             payload = json.loads(self.path.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            return True
         except (OSError, json.JSONDecodeError, UnicodeError):
             payload = {}
+            try:
+                stat_result = self.path.stat()
+            except FileNotFoundError:
+                return True
+            except OSError:
+                return False
         pid = payload.get("pid") if isinstance(payload, dict) else None
         if isinstance(pid, int) and _process_is_alive(pid):
             return False
+        if not isinstance(pid, int) and time.time() - stat_result.st_mtime < INVALID_LOCK_GRACE_SECONDS:
+            # Another process may have created the exclusive lock but not yet
+            # flushed its JSON owner record. Never steal that fresh lock window.
+            return False
         try:
             self.path.unlink(missing_ok=True)
+            _sync_directory(self.path.parent)
             return True
         except OSError:
             return False
@@ -414,13 +511,30 @@ class InstallLock:
             try:
                 descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError as exc:
+                try:
+                    payload = json.loads(self.path.read_text(encoding="utf-8-sig"))
+                except (OSError, json.JSONDecodeError, UnicodeError):
+                    payload = {}
+                if (
+                    self.owner_token
+                    and isinstance(payload, dict)
+                    and payload.get("ownerToken") == self.owner_token
+                ):
+                    self.acquired = True
+                    return
                 if self._clear_stale_lock():
                     continue
                 raise RuntimeError(
                     f"another installer is active (or a stale lock remains): {self.path}"
                 ) from exc
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump({"pid": os.getpid(), "createdAt": time.time()}, handle)
+                payload = {"pid": os.getpid(), "createdAt": time.time()}
+                if self.owner_token:
+                    payload["ownerToken"] = self.owner_token
+                json.dump(payload, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            _sync_directory(self.path.parent)
             self.acquired = True
             return
         raise RuntimeError(
@@ -430,7 +544,20 @@ class InstallLock:
     def release(self) -> None:
         if self.acquired:
             try:
-                self.path.unlink()
+                try:
+                    payload = json.loads(self.path.read_text(encoding="utf-8-sig"))
+                except (OSError, json.JSONDecodeError, UnicodeError):
+                    payload = {}
+                owns_lock = (
+                    isinstance(payload, dict)
+                    and (
+                        (self.owner_token and payload.get("ownerToken") == self.owner_token)
+                        or (not self.owner_token and payload.get("pid") == os.getpid())
+                    )
+                )
+                if owns_lock:
+                    self.path.unlink(missing_ok=True)
+                    _sync_directory(self.path.parent)
             finally:
                 self.acquired = False
 
@@ -477,7 +604,10 @@ class Transaction:
         try:
             with os.fdopen(fd, "wb") as handle:
                 handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temporary, target)
+            _sync_directory(target.parent)
         finally:
             if temporary.exists():
                 temporary.unlink()
@@ -499,6 +629,7 @@ class Transaction:
         staging = staging_parent / target.name
         old = target.parent / f".{target.name}-old-{uuid.uuid4().hex}"
         moved_old = False
+        installed_new = False
         try:
             shutil.copytree(
                 source,
@@ -509,10 +640,14 @@ class Transaction:
                 target.replace(old)
                 moved_old = True
             staging.replace(target)
+            installed_new = True
             if old.exists():
                 shutil.rmtree(old) if old.is_dir() else old.unlink()
+            _sync_directory(target.parent)
         except Exception:
-            if moved_old and old.exists() and not target.exists():
+            if moved_old and old.exists():
+                if installed_new and target.exists():
+                    shutil.rmtree(target) if target.is_dir() else target.unlink()
                 old.replace(target)
             raise
         finally:
@@ -527,15 +662,21 @@ class Transaction:
             return
         for action in reversed(self.actions):
             target = self._assert_allowed(Path(action["target"]))
+            backup = Path(action["backup"]) if action["existed"] else None
+            if backup is not None and not backup.exists():
+                raise RuntimeError(
+                    f"cannot roll back {target}: managed backup is missing: {backup}"
+                )
             if target.exists():
                 shutil.rmtree(target) if target.is_dir() else target.unlink()
             if action["existed"]:
-                backup = Path(action["backup"])
+                assert backup is not None
                 if backup.is_dir():
                     shutil.copytree(backup, target)
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(backup, target)
+            _sync_directory(target.parent)
 
     def commit(self, metadata: dict[str, Any]) -> Path | None:
         if self.dry_run:
@@ -555,7 +696,10 @@ class Transaction:
         try:
             with os.fdopen(fd, "wb") as handle:
                 handle.write(_json_bytes(journal))
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temporary, journal_path)
+            _sync_directory(journal_path.parent)
         finally:
             if temporary.exists():
                 temporary.unlink()
@@ -563,31 +707,52 @@ class Transaction:
 
 
 def rollback_last_install(state_home: Path, *, dry_run: bool = False) -> dict[str, Any]:
+    _reject_filesystem_root(state_home, "state home")
     journal_path = state_home / "install-journal.json"
     journal = _load_json(journal_path, None)
     if not isinstance(journal, dict):
         raise FileNotFoundError(f"install journal not found: {journal_path}")
     allowed = [Path(value).resolve() for value in journal.get("allowedRoots") or []]
-    restored = 0
+    for root in allowed:
+        _reject_filesystem_root(root, "journal allowed root")
+    backup_root = Path(str(journal.get("backupRoot") or "")).resolve()
+    if not _is_within(backup_root, state_home) or backup_root == state_home.resolve():
+        raise ValueError(f"journal backup root escaped state home: {backup_root}")
+    prepared: list[tuple[dict[str, Any], Path, Path | None]] = []
     for action in reversed(journal.get("actions") or []):
+        if not isinstance(action, dict) or "target" not in action:
+            raise ValueError("install journal contains an invalid action")
         target = Path(action["target"]).resolve()
+        _reject_filesystem_root(target, "journal target")
         if not any(_is_within(target, root) or target == root for root in allowed):
             raise ValueError(f"journal target escaped approved roots: {target}")
+        backup = None
+        if action.get("existed"):
+            backup = Path(str(action.get("backup") or "")).resolve()
+            if not _is_within(backup, backup_root) or not backup.exists():
+                raise RuntimeError(
+                    f"cannot roll back {target}: managed backup is missing or outside backup root: {backup}"
+                )
+        prepared.append((action, target, backup))
+    restored = 0
+    for action, target, backup in prepared:
         print(f"{'[dry-run] ' if dry_run else ''}rollback: {target}")
         if dry_run:
             continue
         if target.exists():
             shutil.rmtree(target) if target.is_dir() else target.unlink()
         if action.get("existed"):
-            backup = Path(action["backup"])
+            assert backup is not None
             if backup.is_dir():
                 shutil.copytree(backup, target)
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(backup, target)
+        _sync_directory(target.parent)
         restored += 1
     if not dry_run:
         journal_path.unlink()
+        _sync_directory(journal_path.parent)
     return {"ok": True, "restored": restored, "journal": str(journal_path)}
 
 
@@ -731,6 +896,8 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         raise ValueError("SAFE profile cannot enable agent mode")
     if args.enable_agent_mode and "unreal" not in components:
         raise ValueError("--enable-agent-mode requires the unreal component")
+    if args.build_rag and "unreal" not in components:
+        raise ValueError("--build-rag requires the unreal component")
     if args.enable_agent_mode and not args.accept_agent_risk:
         raise ValueError("agent mode requires explicit --accept-agent-risk")
     if interactive:
@@ -764,6 +931,7 @@ def _unreal_entries(
     node_exe: Path,
     shared_config: Path,
     agent_config: Path,
+    require_context_compactor: bool = False,
 ) -> dict[str, dict[str, Any]]:
     allow = "1" if args.enable_agent_mode else "0"
     state_root = args.lmstudio_home / "state" / "unreal-agent"
@@ -794,6 +962,7 @@ def _unreal_entries(
             "SHARED_UNREAL_CONFIG": str(shared_config),
             "AGENT_STATE_ROOT": str(state_root),
             "UNREAL58_ROOT": str(ROOT),
+            "PYTHON_EXE": str(python_exe),
             "ALLOW_WRITE": allow,
             "ALLOW_COMMANDS": allow,
             "ALLOW_UNREAL_BUILD": allow,
@@ -805,17 +974,52 @@ def _unreal_entries(
             "VALIDATE_ON_WRITE": allow,
         },
     }
+    if require_context_compactor:
+        rag_entry["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] = "1"
+        rag_entry["env"]["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] = "300"
     if args.engine_root:
         rag_entry["env"]["UNREAL_ENGINE_ROOT"] = str(args.engine_root)
         agent_entry["env"]["UNREAL_ENGINE_ROOT"] = str(args.engine_root)
     return {"unreal-rag": rag_entry, "unreal-agent": agent_entry}
 
 
-def _run(command: list[str], *, cwd: Path, dry_run: bool) -> None:
-    print(("[dry-run] " if dry_run else "") + "run: " + " ".join(command))
+def _display_command(command: list[str]) -> str:
+    return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
+
+
+def _native_subprocess_command(command: list[str]) -> list[str]:
+    if os.name == "nt" and Path(command[0]).suffix.lower() in {".cmd", ".bat"}:
+        return [
+            os.environ.get("COMSPEC", "cmd.exe"),
+            "/d",
+            "/s",
+            "/c",
+            subprocess.list2cmdline(command),
+        ]
+    return command
+
+
+def _run(
+    command: list[str],
+    *,
+    cwd: Path,
+    dry_run: bool,
+    timeout: float | None = None,
+) -> None:
+    print(("[dry-run] " if dry_run else "") + "run: " + _display_command(command))
     if dry_run:
         return
-    subprocess.run(command, cwd=str(cwd), check=True)
+    try:
+        subprocess.run(
+            _native_subprocess_command(command),
+            cwd=str(cwd),
+            check=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"command timed out after {timeout:g}s: {_display_command(command)}"
+        ) from exc
 
 
 def _powershell_file_command(
@@ -830,7 +1034,10 @@ def _powershell_file_command(
     return command
 
 
-def _install_context_compactor(args: argparse.Namespace) -> None:
+def _install_context_compactor(
+    args: argparse.Namespace,
+    external_actions_started: list[str] | None = None,
+) -> None:
     plugin = ROOT / "lmstudio-context-compactor-plugin"
     if not plugin.is_dir():
         raise FileNotFoundError(f"context compactor source missing: {plugin}")
@@ -841,11 +1048,33 @@ def _install_context_compactor(args: argparse.Namespace) -> None:
         if candidate.exists():
             lms = str(candidate)
     if not npm or not lms:
-        raise FileNotFoundError("context compactor requires npm and the lms CLI")
+        raise FileNotFoundError(
+            "context compactor requires npm and the LM Studio lms CLI. "
+            "Install/start LM Studio once, then retry."
+        )
+    try:
+        subprocess.run(
+            [lms, "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"LM Studio lms CLI is not executable: {lms}") from exc
     if not args.skip_deps:
-        _run([npm, "ci", "--no-audit", "--no-fund"], cwd=plugin, dry_run=args.dry_run)
-        _run([npm, "test"], cwd=plugin, dry_run=args.dry_run)
-    _run([lms, "dev", "--install", "-y"], cwd=plugin, dry_run=args.dry_run)
+        if not args.dry_run and external_actions_started is not None:
+            external_actions_started.append("context-compactor-npm-dependencies")
+        _run(
+            [npm, "ci", "--no-audit", "--no-fund"],
+            cwd=plugin,
+            dry_run=args.dry_run,
+            timeout=600,
+        )
+        _run([npm, "test"], cwd=plugin, dry_run=args.dry_run, timeout=600)
+    if not args.dry_run and external_actions_started is not None:
+        external_actions_started.append("context-compactor-plugin-install")
+    _run([lms, "dev", "--install", "-y"], cwd=plugin, dry_run=args.dry_run, timeout=120)
 
 
 def _live_server_status(url: str) -> dict[str, Any]:
@@ -857,8 +1086,12 @@ def _live_server_status(url: str) -> dict[str, Any]:
         return {"reachable": False, "error": str(exc)}
 
 
-def install(args: argparse.Namespace) -> dict[str, Any]:
-    profile, components = _resolve_components(args)
+def install(
+    args: argparse.Namespace,
+    *,
+    resolved_components: tuple[str, set[str]] | None = None,
+) -> dict[str, Any]:
+    profile, components = resolved_components or _resolve_components(args)
     # Real installs re-exec under Python 3.12 in main(); unit tests may call install()
     # directly on older interpreters with --skip-runtime-bootstrap.
     python_exe = Path(getattr(args, "runtime_python", None) or sys.executable).resolve()
@@ -869,6 +1102,14 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
     args.lmstudio_home = args.lmstudio_home.expanduser().resolve()
     args.state_home = args.state_home.expanduser().resolve()
     args.workspace_root = [path.expanduser().resolve() for path in args.workspace_root]
+    configured_engine = os.environ.get("UNREAL_ENGINE_ROOT", "").strip()
+    if "unreal" in components and not args.engine_root and configured_engine:
+        environment_engine = Path(configured_engine).expanduser().resolve()
+        if not _engine_root_is_valid(environment_engine):
+            raise ValueError(
+                f"UNREAL_ENGINE_ROOT does not contain a usable Unreal Engine layout: {environment_engine}"
+            )
+        args.engine_root = environment_engine
     if args.active_project:
         args.active_project = args.active_project.expanduser().resolve()
         if not args.active_project.is_file() or args.active_project.suffix.lower() != ".uproject":
@@ -887,6 +1128,8 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
     allowed_roots.extend(path.parent for path in args.rule_path)
     if args.cline_settings:
         allowed_roots.append(args.cline_settings.parent)
+    for root in allowed_roots:
+        _reject_filesystem_root(root, "managed install root")
     tx = Transaction(args.state_home, allowed_roots, dry_run=args.dry_run)
     lock = InstallLock(args.state_home, dry_run=args.dry_run)
     installed_skill = args.codex_home / "skills" / SKILL_NAME
@@ -905,6 +1148,7 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
         "projectSearchRoots": [str(path) for path in args.workspace_root],
         "engineRoot": str(args.engine_root) if args.engine_root else None,
     }
+    external_actions_started: list[str] = []
     lock.acquire()
     try:
         if "codex" in components or "lmstudio" in components or "cline" in components:
@@ -951,7 +1195,14 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
                 npm = str(getattr(args, "runtime_npm", None) or "") or shutil.which("npm")
                 if not npm:
                     raise FileNotFoundError("npm is required for the Unreal adapter")
-                _run([npm, "ci", "--no-audit", "--no-fund"], cwd=agent_root, dry_run=args.dry_run)
+                if not args.dry_run:
+                    external_actions_started.append("unreal-agent-npm-dependencies")
+                _run(
+                    [npm, "ci", "--no-audit", "--no-fund"],
+                    cwd=agent_root,
+                    dry_run=args.dry_run,
+                    timeout=600,
+                )
 
             shared_path = args.lmstudio_home / "config" / "unreal-workspace.json"
             agent_path = args.lmstudio_home / "config" / "unreal-agent.json"
@@ -1001,7 +1252,16 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
             }
             tx.write_file(agent_path, _json_bytes(agent_payload))
             assert mcp_config is not None
-            for name, entry in _unreal_entries(args, python_exe, node_exe, shared_path, agent_path).items():
+            for name, entry in _unreal_entries(
+                args,
+                python_exe,
+                node_exe,
+                shared_path,
+                agent_path,
+                require_context_compactor=(
+                    args.enable_agent_mode and "context_compactor" in components
+                ),
+            ).items():
                 _merge_mcp_entry(mcp_config, name, entry)
 
         settings_path = args.lmstudio_home / "settings.json"
@@ -1044,20 +1304,20 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
             tx.write_file(args.cline_settings, _json_bytes(cline))
 
         if "context_compactor" in components:
-            _install_context_compactor(args)
+            _install_context_compactor(args, external_actions_started)
 
         if args.build_rag:
-            pwsh = str(getattr(args, "runtime_pwsh", None) or "") or shutil.which("pwsh") or shutil.which(
-                "powershell"
-            )
+            pwsh = str(getattr(args, "runtime_pwsh", None) or "") or shutil.which("pwsh")
             if not pwsh:
                 if args.dry_run:
-                    pwsh = "powershell" if platform.system() == "Windows" else "pwsh"
+                    pwsh = "pwsh"
                 else:
                     raise FileNotFoundError(
-                        "--build-rag requires PowerShell (pwsh). Re-run install.sh without "
+                        "--build-rag requires PowerShell 7 (pwsh). Re-run the platform launcher without "
                         "--skip-runtime-bootstrap so the installer can download it."
                     )
+            if not args.dry_run:
+                external_actions_started.append("rag-index-build")
             _run(
                 _powershell_file_command(
                     pwsh,
@@ -1090,7 +1350,7 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
 
         report["lmStudioServer"] = _live_server_status(args.lmstudio_url)
         report["indexTier"] = args.index_tier if "unreal" in components else None
-        report["externalActions"] = [
+        report["externalActions"] = external_actions_started if not args.dry_run else [
             action
             for action, enabled in (
                 ("context-compactor-plugin-install", "context_compactor" in components),
@@ -1107,8 +1367,20 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
         journal = tx.commit(report)
         report["journal"] = str(journal or "")
         return report
-    except Exception:
-        tx.rollback_actions()
+    except Exception as install_error:
+        try:
+            tx.rollback_actions()
+        except Exception as rollback_error:
+            raise RuntimeError(
+                f"installation failed ({install_error}); managed rollback also failed ({rollback_error}). "
+                f"Inspect the backups under {tx.backup_root} before retrying."
+            ) from install_error
+        if external_actions_started:
+            raise RuntimeError(
+                f"installation failed after external actions started ({install_error}). "
+                "Managed files were rolled back, but these actions may have left external state: "
+                f"{', '.join(external_actions_started)}."
+            ) from install_error
         raise
     finally:
         lock.release()
@@ -1166,27 +1438,87 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _runtime_requirements(
+    components: set[str],
+    *,
+    build_rag: bool,
+) -> tuple[bool, bool]:
+    need_node = bool({"unreal", "context_compactor"} & components)
+    need_pwsh = bool(build_rag)
+    return need_node, need_pwsh
+
+
+def _bootstrap_runtime_phase(
+    args: argparse.Namespace,
+    *,
+    need_node: bool,
+    need_pwsh: bool,
+    reexec: bool,
+) -> dict[str, str]:
+    from installer.bootstrap_runtimes import ensure_runtimes
+
+    bootstrap_lock_token = os.environ.get(BOOTSTRAP_LOCK_TOKEN_ENV, "") or uuid.uuid4().hex
+    os.environ[BOOTSTRAP_LOCK_TOKEN_ENV] = bootstrap_lock_token
+    bootstrap_lock = InstallLock(
+        args.state_home.expanduser().resolve(),
+        dry_run=args.dry_run,
+        lock_name="runtime-bootstrap.lock",
+        owner_token=bootstrap_lock_token,
+    )
+    bootstrap_lock.acquire()
+    try:
+        # stdout is the installer's machine-readable JSON contract.
+        # Keep bootstrap progress visible without corrupting that stream.
+        with contextlib.redirect_stdout(sys.stderr):
+            return ensure_runtimes(
+                state_home=args.state_home.expanduser(),
+                script_path=Path(__file__).resolve(),
+                argv=sys.argv[1:],
+                dry_run=args.dry_run,
+                need_node=need_node,
+                need_pwsh=need_pwsh,
+                reexec=reexec,
+            )
+    finally:
+        bootstrap_lock.release()
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     try:
+        _reject_filesystem_root(args.state_home, "state home")
+        _reject_filesystem_root(args.codex_home, "Codex home")
+        _reject_filesystem_root(args.lmstudio_home, "LM Studio home")
         if args.rollback:
             result = rollback_last_install(args.state_home.expanduser().resolve(), dry_run=args.dry_run)
         else:
+            initial_runtimes: dict[str, str] = {}
             if not args.skip_runtime_bootstrap:
-                from installer.bootstrap_runtimes import ensure_runtimes
+                # Establish the supported Python first. If this re-execs, it does
+                # so before interactive choices, avoiding duplicate prompts or
+                # loss of picker selections.
+                initial_runtimes = _bootstrap_runtime_phase(
+                    args,
+                    need_node=False,
+                    need_pwsh=False,
+                    reexec=True,
+                )
+                args.runtime_python = Path(initial_runtimes["python"])
 
-                # stdout is the installer's machine-readable JSON contract.
-                # Keep bootstrap progress visible without corrupting that
-                # stream for package managers and smoke tests.
-                with contextlib.redirect_stdout(sys.stderr):
-                    runtimes = ensure_runtimes(
-                        state_home=args.state_home.expanduser(),
-                        script_path=Path(__file__).resolve(),
-                        argv=sys.argv[1:],
-                        dry_run=args.dry_run,
-                        need_node=True,
-                        need_pwsh=True,
+            resolved_components = _resolve_components(args)
+            if not args.skip_runtime_bootstrap:
+                need_node, need_pwsh = _runtime_requirements(
+                    resolved_components[1],
+                    build_rag=args.build_rag,
+                )
+                runtimes = initial_runtimes
+                if need_node or need_pwsh:
+                    runtimes = _bootstrap_runtime_phase(
+                        args,
+                        need_node=need_node,
+                        need_pwsh=need_pwsh,
+                        reexec=False,
                     )
                 args.runtime_python = Path(runtimes["python"])
                 if runtimes.get("node"):
@@ -1195,9 +1527,15 @@ def main() -> int:
                     args.runtime_npm = Path(runtimes["npm"])
                 if runtimes.get("pwsh"):
                     args.runtime_pwsh = Path(runtimes["pwsh"])
-            result = install(args)
-    except (FileNotFoundError, OSError, RuntimeError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2))
+            result = install(args, resolved_components=resolved_components)
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"ok": False, "error": str(exc), "errorType": type(exc).__name__},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("ok") else 1

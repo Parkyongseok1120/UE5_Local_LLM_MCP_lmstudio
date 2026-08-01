@@ -400,10 +400,12 @@ def _active_tools(
         if not selected_slice["scopeRequired"]:
             if task_kind == "refactor":
                 tools.insert(3, "apply_edit_bundle")
+            elif task_kind in {"edit", "codegen", "code_sketch"}:
+                tools[3:3] = ["apply_edit_bundle", "write_file", "replace_in_file"]
             elif task_kind in {"compile_fix", "reflection_fix", "module_fix", "runtime_edit"}:
                 tools.insert(3, "replace_in_file")
             else:
-                tools[3:3] = ["write_file", "replace_in_file"]
+                tools[3:3] = ["apply_edit_bundle", "write_file", "replace_in_file"]
         if has_runtime_session or task_kind in {"runtime", "runtime_edit", "runtime_debug"}:
             tools.insert(3, "unreal_runtime_debug_session")
     elif phase == "verifier":
@@ -456,7 +458,8 @@ def _prompt_contract(role: str, task_session_id: str, phase: str) -> dict[str, A
         ),
         "executor": (
             "Edit only files in selectedSlice, then stop for validation. "
-            "Do not expand scope or choose a different candidate."
+            "Prefer apply_edit_bundle when the selected slice contains multiple files, "
+            "and never exceed maxFilesPerSlice. Do not expand scope or choose a different candidate."
         ),
         "runtime": (
             "Run one falsifiable runtime step against the selected hypothesis. "

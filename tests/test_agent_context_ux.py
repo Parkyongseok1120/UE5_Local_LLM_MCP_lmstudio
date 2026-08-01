@@ -233,6 +233,23 @@ def test_slim_write_success_payload_includes_scan_mode_and_elapsed() -> None:
     assert payload["validationSummary"]["elapsedMs"] == 318
 
 
+def test_slim_write_success_payload_surfaces_skipped_validator_failure() -> None:
+    payload = run_node(
+        "ux.slimWriteSuccessPayload('created', "
+        "{ok:true, skipped:true, infrastructureError:true, "
+        "note:'validator unavailable; run static_validate_project before build', "
+        "advisoryFindings:[{severity:'error',code:'VALIDATOR_EXEC_FAILED',path:'A.h',line:0,message:'bad python'}]}, "
+        "{operation:'create', path:'Source/A.h'})"
+    )
+    summary = payload["validationSummary"]
+    assert summary["skipped"] is True
+    assert summary["infrastructureError"] is True
+    assert summary["blockingErrorCount"] == 0
+    assert summary["advisoryErrorCount"] == 1
+    assert summary["topFindings"][0]["code"] == "VALIDATOR_EXEC_FAILED"
+    assert "static_validate_project" in summary["note"]
+
+
 
 def test_write_discipline_options_for_existing_paths() -> None:
     payload = run_node("ux.writeDisciplineOptions(true)")

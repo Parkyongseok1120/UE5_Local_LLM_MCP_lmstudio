@@ -140,11 +140,14 @@ def _write_launchers(staging: Path) -> None:
     target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     (staging / "PORTABLE-INSTALL.md").write_text(
         "# Integrated portable installer\n\n"
-        "Requirements: The installer bootstraps Python 3.12, Node.js 20+/npm, and PowerShell 7 "
-        "(pwsh) when missing, for the host CPU architecture (arm64/x64). "
+        "Requirements: Python 3.10+ starts the installer, which establishes managed Python 3.12. "
+        "Node.js 20+/npm is downloaded only for Unreal/context components and PowerShell 7 "
+        "(`pwsh`) only for an opt-in RAG build. Runtime archives are pinned by SHA-256 and safely "
+        "extracted for the host CPU architecture (arm64/x64). "
         "FULL context compaction also requires the LM Studio `lms` CLI.\n\n"
         "- Windows: `INSTALL.bat`\n"
-        "- Linux and macOS: `./install.sh`\n\n"
+        "- Ubuntu Linux and macOS: `./install.sh`\n\n"
+        "The Linux baseline is Ubuntu 22.04/24.04 with glibc; musl/Alpine is not supported.\n\n"
         "The installer asks for SAFE, STANDARD, FULL, or CUSTOM. All profiles remain "
         "read-only unless agent mode and its separate risk acknowledgement are both supplied.\n"
         "Run `python3 install.py --help` for automation flags. Generated indexes and machine "

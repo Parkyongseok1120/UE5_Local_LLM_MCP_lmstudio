@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -194,6 +195,12 @@ def _is_engine_root(path: Path) -> bool:
     return engine.is_dir() and ((engine / "Source").is_dir() or (engine / "Build").is_dir())
 
 
+def _engine_sort_key(path: Path) -> tuple[tuple[int, ...], str]:
+    match = re.search(r"UE[_ -]?(\d+(?:\.\d+)*)", path.name, flags=re.IGNORECASE)
+    version = tuple(int(part) for part in match.group(1).split(".")) if match else ()
+    return version, path.name.casefold()
+
+
 def _discover_engine_roots(
     host_platform: str | None = None,
     environ: dict[str, str] | None = None,
@@ -205,14 +212,17 @@ def _discover_engine_roots(
         if not location.is_dir():
             continue
         roots = [location] if _is_engine_root(location) else []
-        roots.extend(path for path in location.glob("UE_5.*") if _is_engine_root(path))
+        try:
+            roots.extend(path for path in location.glob("UE_5.*") if _is_engine_root(path))
+        except OSError:
+            continue
         for root in roots:
             resolved = root.resolve()
             key = str(resolved).casefold() if (host_platform or sys.platform) == "win32" else str(resolved)
             if key not in seen:
                 seen.add(key)
                 candidates.append(resolved)
-    candidates.sort(key=lambda path: path.name, reverse=True)
+    candidates.sort(key=_engine_sort_key, reverse=True)
     return candidates
 
 

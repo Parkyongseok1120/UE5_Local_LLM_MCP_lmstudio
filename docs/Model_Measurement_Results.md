@@ -6,7 +6,7 @@
 
 These results are internal UE 5.8 RAG/MCP/UBT workflow measurements. They are not public standardized model benchmarks and must not be described as general Claude, GPT, or Qwen model rankings.
 
-The current product is **1.3.0 Beta1**, but no paired Beta1 live-model rerun has been completed. All scores on this page remain historical v1.2.5 baselines until a new artifact is published.
+The current product is **1.3.0 Beta3**, but no paired Beta3 live-model rerun has been completed. All scores on this page remain historical v1.2.5 baselines until a new artifact is published.
 
 Full validation write-up for the 2026-07-11 post-stabilization run: [Live_Validation_Results_20260711.md](Live_Validation_Results_20260711.md).
 
@@ -39,7 +39,7 @@ Full validation write-up for the 2026-07-11 post-stabilization run: [Live_Valida
 
 이 결과는 UE 5.8 RAG/MCP/UBT 워크플로 내부 측정입니다. 공개 표준 벤치마크가 아니며, Claude/GPT/Qwen의 일반 성능 순위로 해석하면 안 됩니다.
 
-현재 제품은 **1.3.0 Beta1**이지만 Beta1 paired live-model 재측정은 아직 완료되지 않았습니다. 새로운 artifact가 공개되기 전까지 이 문서의 모든 점수는 historical v1.2.5 baseline입니다.
+현재 제품은 **1.3.0 Beta3**이지만 Beta3 paired live-model 재측정은 아직 완료되지 않았습니다. 새로운 artifact가 공개되기 전까지 이 문서의 모든 점수는 historical v1.2.5 baseline입니다.
 
 2026-07-11 stabilization 이후 검증 전체 기록: [Live_Validation_Results_20260711.md](Live_Validation_Results_20260711.md).
 

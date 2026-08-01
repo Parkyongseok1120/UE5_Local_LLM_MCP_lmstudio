@@ -374,6 +374,36 @@ def test_unreal_agent_plan_description_mentions_chat_first(monkeypatch, tmp_path
     assert "toolPolicy" in plan["description"]
 
 
+def test_agent_write_plan_fails_closed_without_fresh_context_proxy(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "1")
+    monkeypatch.setenv("LMS_CONTEXT_COMPACTOR_STATE_DIR", str(tmp_path / "missing-compactor-state"))
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        16,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {
+                "request": "Create Source/Demo/NewActor.h and implement the actor class",
+                "mode": "codegen",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "CONTEXT_COMPACTOR_NOT_ACTIVE"
+    assert payload["stopCurrentWorkflow"] is True
+    tasks_root = tmp_path / "agent-state" / "tasks"
+    if tasks_root.exists():
+        assert not list(tasks_root.iterdir())
+
+
 def test_code_sketch_tool_exposes_project_generation_contract(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     mod = _load_rag_mcp_module()
@@ -459,6 +489,94 @@ def test_code_sketch_rebuilds_graph_and_accepts_project_local_symbol(monkeypatch
     assert payload["graphStatus"]["graphSource"] == "rebuilt"
     assert payload["projectGraphAvailable"] is True
     assert payload["unverifiedCount"] == 0
+
+
+def test_greenfield_sketch_gate_advances_to_executor(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    project = tmp_path / "Demo"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "Existing.h").write_text("class UExisting {};\n", encoding="utf-8")
+    uproject = project / "Demo.uproject"
+    uproject.write_text("{}", encoding="utf-8")
+
+    from task_api import task_start
+
+    started = task_start(
+        tmp_path,
+        request="Create two Gomoku gameplay classes",
+        project_file=str(uproject),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [{"sliceId": "task", "files": []}],
+        },
+    )
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        181,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": (
+                    "AGomokuGameMode : AGameModeBase\n"
+                    "AGomokuGameState : AGameStateBase"
+                ),
+                "request": "Create two Gomoku gameplay classes",
+                "projectRoot": str(project),
+                "targetFiles": [
+                    "Source/Demo/GomokuGameMode.h",
+                    "Source/Demo/GomokuGameState.h",
+                ],
+                "changeKind": "multifile",
+                "taskAuthorization": started["taskAuthorization"],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True, payload
+    assert payload["gateCompletion"]["ok"] is True, payload
+    assert payload["gateCompletion"]["toolRoute"]["phase"] == "executor"
+    assert payload["gateCompletion"]["taskAuthorization"]["routePhase"] == "executor"
+    text_result = sent[-1]["result"]["content"][0]["text"]
+    assert "nextTaskAuthorization=" in text_result
+    assert payload["gateCompletion"]["taskAuthorization"]["routeHash"] in text_result
+    assert '"phase":"executor"' in text_result
+    assert "do not synthesize routePhase or routeHash" in text_result
+
+
+def test_code_sketch_text_result_names_blocking_symbols(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Demo"
+    project.mkdir()
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        182,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "UDefinitelyMissingApi* Value;",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/NewThing.h"],
+                "changeKind": "new_file",
+            },
+        },
+    )
+
+    text_result = sent[-1]["result"]["content"][0]["text"]
+    assert "blockingSymbols=UDefinitelyMissingApi:unverified" in text_result
 
 
 def test_oversized_code_sketch_skips_graph_preparation(monkeypatch, tmp_path):
@@ -956,6 +1074,7 @@ def test_architecture_reasoning_rejects_non_object_proposal(monkeypatch, tmp_pat
 
 def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")
     server.workspace = tmp_path

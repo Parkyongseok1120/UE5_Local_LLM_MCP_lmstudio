@@ -14,6 +14,7 @@ from code_sketch_claim_validate import (  # noqa: E402
     _lookup_many_exact,
     extract_member_call_claims,
     extract_member_calls,
+    extract_local_declarations,
     extract_symbols,
     validate_sketch,
 )
@@ -47,6 +48,32 @@ def test_extract_member_call_claims_infers_receiver_types():
         ("UMyComponent", "SetState", "member"),
         ("UGameplayStatics", "GetPlayerController", "static"),
     }
+
+
+def test_architecture_inheritance_shorthand_declares_greenfield_types():
+    sketch = """AGomokuGameMode : AGameModeBase
+AGomokuGameState : AGameStateBase
+UGomokuRuleEngine* RuleEngine;
+"""
+
+    assert extract_local_declarations(sketch) == {
+        "AGomokuGameMode",
+        "AGomokuGameState",
+    }
+    result = validate_sketch(sketch, NO_INDEX)
+    assert result["ok"] is False
+    assert {row["symbol"] for row in result["results"]} == {"UGomokuRuleEngine"}
+
+
+def test_greenfield_inheritance_shorthand_does_not_claim_new_types_are_engine_apis():
+    result = validate_sketch(
+        "AGomokuGameMode : AGameModeBase\nAGomokuGameState : AGameStateBase",
+        NO_INDEX,
+    )
+
+    assert result["ok"] is True
+    assert result["localDeclarationCount"] == 2
+    assert result["unverifiedCount"] == 0
 
 
 def test_denylist_flags_known_hallucinations():

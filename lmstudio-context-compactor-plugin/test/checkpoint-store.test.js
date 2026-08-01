@@ -42,3 +42,48 @@ test("corrupt active checkpoint is quarantined and does not block generation", a
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("newest durable generation recovers a stale active checkpoint", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-recover-generation-"));
+  try {
+    await store.saveCheckpoint("session", {
+      schemaVersion: 1,
+      checkpointGeneration: 1,
+      completedToolCallIds: [],
+    }, root);
+    const dir = store.sessionDir("session", root);
+    fs.writeFileSync(
+      path.join(dir, "checkpoint-000002.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        checkpointGeneration: 2,
+        completedToolCallIds: [],
+      }),
+      "utf8",
+    );
+
+    const checkpoint = await store.loadCheckpoint("session", root);
+    assert.equal(checkpoint.checkpointGeneration, 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("corrupt active checkpoint falls back to the newest durable generation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-recover-corrupt-"));
+  try {
+    await store.saveCheckpoint("session", {
+      schemaVersion: 1,
+      checkpointGeneration: 7,
+      completedToolCallIds: [],
+    }, root);
+    const dir = store.sessionDir("session", root);
+    fs.writeFileSync(path.join(dir, "active-checkpoint.json"), "{broken", "utf8");
+
+    const checkpoint = await store.loadCheckpoint("session", root);
+    assert.equal(checkpoint.checkpointGeneration, 7);
+    assert.ok(fs.readdirSync(dir).some((name) => name.startsWith("active-checkpoint.corrupt-")));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

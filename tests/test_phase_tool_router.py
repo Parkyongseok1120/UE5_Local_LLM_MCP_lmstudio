@@ -19,6 +19,7 @@ from task_api import (  # noqa: E402
     active_task_route_context,
     authorize_active_task_tool,
     authorize_task_tool,
+    release_expired_idle_active_task_route,
     task_checkpoint,
     task_record_gate,
     task_replan,
@@ -77,6 +78,7 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
     )
     assert executor["roleSession"] == "executor"
     assert MUTATION_TOOLS.intersection(executor["activeTools"])
+    assert "apply_edit_bundle" in executor["activeTools"]
     assert executor["selectedSlice"]["files"] == ["Source/Demo/Foo.cpp"]
 
     runtime_state = _state(writes=False)
@@ -243,6 +245,43 @@ def test_checkpoint_record_resets_budget_without_phase_change(
     assert state["toolRouteUsage"]["count"] == 0
     assert state["toolRouteUsage"]["calls"] == []
     assert state["toolRouteUsage"]["resetReason"] == "checkpoint_record"
+
+
+def test_automatic_checkpoint_preserves_phase_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Create Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
+    )
+    active_tool = started["toolRoute"]["activeTools"][0]
+    assert authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={"taskAuthorization": started["taskAuthorization"]},
+    )["ok"]
+
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        action="record",
+        phase="executor",
+        modified_files=["Source/Demo/Foo.cpp"],
+        validation={},
+        preserve_route_usage=True,
+        include_git_changes=False,
+    )
+    assert recorded["ok"] is True
+    state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(encoding="utf-8")
+    )
+    assert state["toolRouteUsage"]["count"] == 1
+    assert state["toolRouteUsage"]["calls"] == [active_tool]
+    assert state["toolRouteUsage"]["checkpointRecordedWithoutBudgetReset"] is True
 
 
 def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
@@ -624,6 +663,39 @@ def test_gate_mismatch_returns_refresh_auth_not_same_tool_retry(
     assert denied["nextAction"] != "retry_same_tool_with_returned_taskAuthorization"
 
 
+def test_stale_planner_auth_reports_pending_gate_instead_of_retrying_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Create Source/Demo/NewThing.h",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [{"sliceId": "task", "files": []}],
+        },
+    )
+    stale = dict(started["taskAuthorization"])
+    stale["routeHash"] = "stale"
+
+    denied = authorize_task_tool(
+        tmp_path,
+        tool_name="write_file",
+        task_authorization=stale,
+        arguments={"path": "Source/Demo/NewThing.h"},
+    )
+
+    assert denied["errorCode"] == "TASK_TOOL_NOT_ACTIVE"
+    assert denied["nextAction"] == "unreal_code_sketch_claim_validate"
+    assert denied["taskAuthorization"]["routePhase"] == "planner"
+    assert denied["nextAction"] != "retry_same_tool_with_returned_taskAuthorization"
+
+
 def test_authorization_retry_policy_lists_match_runtime_contract() -> None:
     source = (
         Path(__file__).resolve().parents[1]
@@ -768,6 +840,70 @@ def test_route_discovery_distinguishes_none_blocked_corrupt_and_ambiguous(
         active_task_route_context(tmp_path)["status"]
         == "ambiguous_or_corrupt"
     )
+
+
+def test_expired_idle_route_is_released_without_losing_task_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
+    )
+    session = started["taskSessionId"]
+    state_path = task_root(tmp_path, session) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["continuity"]["lease"]["expiresAt"] = "2000-01-01T00:00:00+00:00"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    result = release_expired_idle_active_task_route(tmp_path)
+
+    assert result == {
+        "ok": True,
+        "released": True,
+        "reason": "expired_idle_lease",
+        "taskSessionId": session,
+    }
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "cancelled"
+    assert persisted["autoReleasedReason"] == "expired_idle_lease"
+    assert persisted["continuity"]["lease"]["status"] == "released"
+    assert active_task_route_context(tmp_path)["status"] == "none"
+
+
+def test_expired_route_with_unconfirmed_job_remains_recovery_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["continuity"]["lease"]["expiresAt"] = "2000-01-01T00:00:00+00:00"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(
+        "task_api._discover_jobs_linked_to_task",
+        lambda workspace, session: {
+            "discoveryComplete": True,
+            "jobs": [{"jobId": "job-live", "status": "running"}],
+            "errors": [],
+        },
+    )
+
+    result = release_expired_idle_active_task_route(tmp_path)
+
+    assert result["released"] is False
+    assert result["reason"] == "linked_job_not_proven_terminal"
+    assert active_task_route_context(tmp_path)["status"] == "blocked"
+    assert json.loads(state_path.read_text(encoding="utf-8"))["status"] == "running"
 
 
 def test_plan_only_running_task_does_not_own_tool_route(

@@ -17,7 +17,8 @@ def test_budget_gate_reserves_build_output() -> None:
         tool_schema_tokens=2_000,
     )
     assert decision.action == "soft_compact"
-    assert decision.remaining_tokens == 9_904
+    assert decision.remaining_tokens == 8_880
+    assert decision.reserved_tokens == 15_120
 
 
 def test_checkpoint_keeps_recovery_contract() -> None:

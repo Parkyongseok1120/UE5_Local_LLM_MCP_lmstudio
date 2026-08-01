@@ -45,17 +45,29 @@ function resolveValidateOnWriteTimeoutMs() {
 const VALIDATE_ON_WRITE_TIMEOUT_MS = resolveValidateOnWriteTimeoutMs();
 
 function resolvePythonExe() {
-  const bundled = path.join(
+  const explicit = String(process.env.PYTHON_EXE || process.env.PYTHON || "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  const bundledRoot = path.join(
     os.homedir(),
     ".cache",
     "codex-runtimes",
     "codex-primary-runtime",
     "dependencies",
-    "python",
-    "python.exe"
+    "python"
   );
-  if (fs.existsSync(bundled)) {
-    return bundled;
+  const bundledCandidates = process.platform === "win32"
+    ? [path.join(bundledRoot, "python.exe")]
+    : [
+      path.join(bundledRoot, "bin", "python3.12"),
+      path.join(bundledRoot, "bin", "python3"),
+      path.join(bundledRoot, "bin", "python"),
+    ];
+  for (const bundled of bundledCandidates) {
+    if (fs.existsSync(bundled)) {
+      return bundled;
+    }
   }
   const localRoot = path.join(process.env.LOCALAPPDATA || "", "Programs", "Python");
   if (fs.existsSync(localRoot)) {
@@ -70,7 +82,7 @@ function resolvePythonExe() {
       }
     }
   }
-  return "python";
+  return process.platform === "win32" ? "python" : "python3";
 }
 
 function isSourceLike(filePath) {
@@ -420,9 +432,9 @@ function formatValidationResult(result) {
   if (!result) {
     return "";
   }
-  if (result.skipped && result.ok !== false) {
-    return "";
-  }
+  const displayFindings = result.skipped
+    ? (result.advisoryFindings || result.findings || [])
+    : (result.findings || []);
   const lines = [
     "",
     "Static validation:",
@@ -431,15 +443,23 @@ function formatValidationResult(result) {
     `elapsedMs=${result.elapsedMs || 0}`,
     `findingCount=${result.findingCount}`,
   ];
-  for (const finding of (result.findings || []).slice(0, 20)) {
+  if (result.skipped) {
+    lines.push(
+      `Validation SKIPPED: ${result.note || "validation infrastructure was unavailable or exceeded its time budget."}`,
+      "Run static_validate_project before build readiness is claimed."
+    );
+  }
+  for (const finding of displayFindings.slice(0, 20)) {
     lines.push(
       `- [${finding.severity}] ${finding.code} ${finding.path}:${finding.line} ${finding.message}`
     );
   }
-  if ((result.findings || []).length > 20) {
-    lines.push(`... ${result.findings.length - 20} more finding(s)`);
+  if (displayFindings.length > 20) {
+    lines.push(`... ${displayFindings.length - 20} more finding(s)`);
   }
-  if (!result.ok) {
+  if (result.skipped) {
+    lines.push("Validation status is advisory-only until a full static validation succeeds.");
+  } else if (!result.ok) {
     lines.push("Validation FAILED. Fix findings before claiming compile readiness.");
   } else if (result.writeTarget && (result.deferredCount || result.preExistingCount)) {
     lines.push(`Validation passed for this write (no blocking errors on ${result.writeTarget}).`);
@@ -488,6 +508,7 @@ module.exports = {
   VALIDATE_ON_WRITE_TIMEOUT_MS,
   resolveValidateOnWrite,
   resolveValidateOnWriteTimeoutMs,
+  resolvePythonExe,
   validateAfterWrite,
   formatValidationResult,
   runStaticValidation,

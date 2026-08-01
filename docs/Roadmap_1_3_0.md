@@ -4,7 +4,7 @@
 
 ## English
 
-The v1.3 line is now active at **1.3.0 Beta1**. This document separates what Beta1 already ships from the evidence and capability work still required for a stable 1.3.0.
+The v1.3 line is now active at **1.3.0 Beta3**. This document separates what Beta3 already ships from the evidence and capability work still required for a stable 1.3.0.
 
 ## v1.2.5 Completed Baseline
 
@@ -17,14 +17,14 @@ v1.3.0 starts from the following delivered baseline; these are not remaining v1.
 - Rider + Cline has an installer path, setup guide, and smoke checklist. It is supported as a tool-backed workflow, not yet as a separately benchmarked frontend.
 - Hint-only failure memory can be collected, rejected, and incrementally indexed; it never outranks engine evidence.
 
-## 1.3.0 Beta1 Delivered
+## 1.3.0 Beta3 Delivered
 
 - Portable `evidence-first-code-audit` skill plus LM Studio MCP and preset integration.
 - Project-wide symbol, dependency, call, and conservative data-flow graphs with freshness/completeness checks.
 - Fail-closed architecture proposal, change-impact, and code-generation contracts.
 - Cached compact architecture analysis, risk-tiered orchestration, and architecture-first routing.
 - One integrated installer with explicit SAFE/AGENT authority selection and independent RAG depth.
-- Host-aware Windows/Linux/macOS installation and Unreal paths, with physical Linux/macOS certification still pending.
+- Host-aware Windows/Ubuntu/macOS installation and Unreal paths, with physical Ubuntu/macOS certification still pending.
 - Stronger release verification, atomic reports/index builds, live-test quality gates, and Windows encoding regression coverage.
 - P1-P3 reasoning rails: architecture candidate portfolios and scored selection; meaning-preserving refactor snapshots and exact proof gates; long-task leases/checkpoints/conflict recovery; ranked runtime hypotheses and experiments; isolated patch candidate comparison; metric/trace/soak oracles; asset migration contracts; verified/expired failure-memory lifecycle.
 
@@ -34,10 +34,10 @@ These rails are repository-tested workflow capability. Physical Unreal PIE/Autom
 
 | Version | Target Window | Scope |
 |---|---|---|
-| 1.3.0 Beta1 | Current prerelease | Evidence-first architecture/codegen foundation, integrated installer, orchestration, and release hardening. |
+| 1.3.0 Beta3 | Current prerelease | Evidence-first architecture/codegen foundation, integrated installer, orchestration, and release hardening. |
 | v1.3.0 stable | After beta exit gates | Fresh separated live scorecards, beta regression closure, and evidence-backed release documentation. Ollama and frontend-parity work must be reported as delivered or explicitly deferred. |
 | v1.3.1 | After v1.3.0 stabilization | Polish for additional frontends, installer cleanup, docs, and failure-memory improvements. |
-| v1.3.2 | Later 1.3.x | Certify the implemented Linux/macOS native paths with platform-specific live Unreal install, indexing, build, and evaluation runs. |
+| v1.3.2 | Later 1.3.x | Certify the implemented Ubuntu/macOS native paths with platform-specific live Unreal install, indexing, build, and evaluation runs. |
 
 ## Direction
 
@@ -73,9 +73,9 @@ v1.2.5 closes the compile-fix stabilization line with a saved 36-case live Pass@
 
 ### Remaining Gaps for Stable v1.3.0 and Later
 
-The completed v1.2.5 performance baseline and Beta1 infrastructure are recorded above. The rows below name remaining work; they are not regressions in the completed compile-fix suite.
+The completed v1.2.5 performance baseline and Beta3 infrastructure are recorded above. The rows below name remaining work; they are not regressions in the completed compile-fix suite.
 
-| Gap | Beta1 state | Planned work | Target |
+| Gap | Beta3 state | Planned work | Target |
 |---|---|---|---|
 | Long-session context collapse (~60K tokens) | **Delivered for the LM Studio model-facing history:** automatic compaction uses a hard margin, while oversized schemas and saturated KV cache still require a fresh chat/handoff. | Add activation/compaction telemetry and define equivalent compaction behavior for additional frontends. | v1.3.0 |
 | UBT / build log token bloat | **Delivered for MCP tool output:** compact responses and full-log artifacts are the default; some wrapper retry paths can still repeat more context than needed. | Apply one compact error-slice contract across wrapper, MCP, and retry loops. | v1.3.0 |
@@ -118,17 +118,16 @@ Planned scope:
 - Document known differences: streaming behavior, context limits, tool/MCP availability, and JSON strictness.
 - Initial support goal is compile-fix wrapper compatibility, not full MCP chat parity.
 
-### Linux and macOS Certification Target for v1.3.2
+### Ubuntu and macOS Certification Target for v1.3.2
 
-The native installer/runtime path now exists: the POSIX launcher uses `python3`, indexing passes that exact interpreter through `pwsh`, engine discovery is host-specific, macOS maps to Unreal's `Mac` platform, and agent builds use host `Build.sh` or `dotnet UnrealBuildTool.dll`. Static, parser, and fixture tests cover those contracts. This is not yet equivalent to live release certification on physical macOS/Linux Unreal installations.
+The native installer/runtime path now exists: the POSIX launcher validates its bootstrap Python, indexing passes the managed interpreter through `pwsh`, engine discovery is host-specific, macOS maps to Unreal's `Mac` platform, and agent builds use host `Build.sh` or `dotnet UnrealBuildTool.dll`. The Linux baseline is explicitly Ubuntu 22.04/24.04 with glibc; musl is rejected before downloading incompatible GNU archives. Static, parser, and fixture tests cover those contracts. This is not yet equivalent to live release certification on physical macOS/Ubuntu Unreal installations.
 
 Remaining certification work:
 
-- Run the installer and each indexing tier on physical Linux and macOS hosts.
+- Run the installer and each indexing tier on physical Ubuntu and macOS hosts.
 - Prove native Unreal Editor metadata export and a real UBT build on each host.
 - Verify packaged executable permissions, paths containing spaces/non-ASCII text, and localized output on each filesystem.
-- Document Linux distribution assumptions and required packages.
-- Document macOS prerequisites, Apple Silicon/Intel differences where relevant, and Unreal Engine source/binary installation requirements.
+- Confirm the documented Ubuntu package baseline and macOS Apple Silicon/Intel behavior on clean machines.
 - Keep native claims qualified until the eval harness can run at least a dry-run and small live subset reliably on each platform.
 
 ## Forbidden Fake Fixes
@@ -154,11 +153,11 @@ v1.3.0 should report field-level scores, not one combined score. Compile-fix, se
 - Do not claim general Sonnet/GPT equivalence from local holdout results.
 - Do not merge compile-fix, semantic-refactor, runtime-debug, and C++ capability into one headline score.
 - Do not treat UBT green as sufficient for advanced C++ capability cases.
-- Do not present fixture-tested Linux/macOS paths as live platform certification; keep that proof target in v1.3.2.
+- Do not present fixture-tested Ubuntu/macOS paths as live platform certification; keep that proof target in v1.3.2.
 
 ## Korean
 
-v1.3 라인은 이제 **1.3.0 Beta1**로 활성화되었습니다. 이 문서는 Beta1에 이미 포함된 기능과 stable 1.3.0 전에 필요한 근거·capability 작업을 분리합니다.
+v1.3 라인은 이제 **1.3.0 Beta3**로 활성화되었습니다. 이 문서는 Beta3에 이미 포함된 기능과 stable 1.3.0 전에 필요한 근거·capability 작업을 분리합니다.
 
 ## v1.2.5 완료 기준선
 
@@ -171,14 +170,14 @@ v1.3.0은 아래의 완료된 기준선에서 시작합니다. 이 항목들은 
 - Rider + Cline은 설치 경로, setup guide, smoke checklist를 갖춘 tool-backed workflow로 지원합니다. 다만 별도 frontend benchmark로 측정되지는 않았습니다.
 - hint-only failure memory는 수집·거절·incremental index가 가능하며 engine evidence보다 우선하지 않습니다.
 
-## 1.3.0 Beta1 완료 항목
+## 1.3.0 Beta3 완료 항목
 
 - Portable `evidence-first-code-audit` skill과 LM Studio MCP/preset 통합.
 - freshness/completeness 검사를 포함한 프로젝트 전역 symbol, dependency, call, 보수적 data-flow graph.
 - Fail-closed architecture proposal, change-impact, code-generation contract.
 - Cached compact architecture 분석, risk-tier orchestration, architecture-first routing.
 - 명시적 SAFE/AGENT 권한 선택과 독립 RAG depth를 제공하는 단일 통합 설치기.
-- Host-aware Windows/Linux/macOS 설치·Unreal 경로. 실제 Linux/macOS 인증은 아직 남아 있음.
+- Host-aware Windows/Ubuntu/macOS 설치·Unreal 경로. 실제 Ubuntu/macOS 인증은 아직 남아 있음.
 - 강화된 release verification, atomic report/index build, live-test quality gate, Windows encoding 회귀 검증.
 - P1~P3 추론 rail: architecture 후보 portfolio·점수 기반 선택, 의미 보존 refactor snapshot·정확한 proof gate, 장기 작업 lease/checkpoint/충돌 복구, runtime 가설 순위·반증 실험, 격리 patch 후보 비교, metric/trace/soak oracle, asset migration contract, 검증·만료 상태를 갖는 failure memory.
 
@@ -188,10 +187,10 @@ v1.3.0은 아래의 완료된 기준선에서 시작합니다. 이 항목들은 
 
 | 버전 | 목표 시점 | 범위 |
 |---|---|---|
-| 1.3.0 Beta1 | 현재 prerelease | Evidence-first architecture/codegen 기반, 통합 설치기, orchestration, release hardening. |
+| 1.3.0 Beta3 | 현재 prerelease | Evidence-first architecture/codegen 기반, 통합 설치기, orchestration, release hardening. |
 | v1.3.0 stable | Beta 종료 gate 통과 후 | 새로운 분리 live scorecard, Beta regression 종료, 근거 기반 release 문서. Ollama와 frontend parity는 완료 또는 명시적 연기로 보고. |
 | v1.3.1 | v1.3.0 안정화 이후 | 추가 frontend polish, installer 정리, docs, failure-memory 개선. |
-| v1.3.2 | 이후 1.3.x | 구현된 Linux/macOS native path를 실제 플랫폼의 Unreal 설치·인덱싱·빌드·평가 run으로 인증. |
+| v1.3.2 | 이후 1.3.x | 구현된 Ubuntu/macOS native path를 실제 플랫폼의 Unreal 설치·인덱싱·빌드·평가 run으로 인증. |
 
 ## 방향
 
@@ -227,9 +226,9 @@ v1.2.5는 compile-fix 안정화 라인을 36-case live Pass@1 36/36 결과로 �
 
 ### Stable v1.3.0 이후까지 남은 과제
 
-완료된 v1.2.5 성능 baseline과 Beta1 infrastructure는 위에 기록했습니다. 아래 표는 남은 작업만 다루며 완료된 compile-fix suite의 회귀를 뜻하지 않습니다.
+완료된 v1.2.5 성능 baseline과 Beta3 infrastructure는 위에 기록했습니다. 아래 표는 남은 작업만 다루며 완료된 compile-fix suite의 회귀를 뜻하지 않습니다.
 
-| Gap | Beta1 상태 | 계획 작업 | 목표 버전 |
+| Gap | Beta3 상태 | 계획 작업 | 목표 버전 |
 |---|---|---|---|
 | 긴 세션 컨텍스트 붕괴 (~60K tokens) | **LM Studio 모델 전달 히스토리에는 완료:** 자동 압축이 hard margin을 사용합니다. 다만 과도하게 큰 schema나 포화된 KV cache는 새 채팅/handoff가 필요합니다. | activation/compaction telemetry를 추가하고 다른 frontend의 동등한 compaction 동작을 정의. | v1.3.0 |
 | UBT / build log 토큰 비대 | **MCP tool 응답에는 완료:** compact 응답과 full-log artifact가 기본이며, 일부 wrapper retry 경로는 필요한 것보다 많은 context를 반복할 수 있습니다. | wrapper, MCP, retry loop 전체에 하나의 compact error-slice 계약 적용. | v1.3.0 |
@@ -272,17 +271,16 @@ v1.3.0에서는 LM Studio와 분리된 local model frontend로 Ollama app 경로
 - streaming behavior, context limit, tool/MCP availability, JSON strictness 차이 문서화.
 - 초기 목표는 compile-fix wrapper 호환성이고, full MCP chat parity는 아님.
 
-### Linux와 macOS 인증은 v1.3.2 목표
+### Ubuntu와 macOS 인증은 v1.3.2 목표
 
-native installer/runtime 경로는 구현되어 있습니다. POSIX launcher는 `python3`를 사용하고, indexing은 동일 interpreter를 `pwsh`에 전달하며, engine discovery는 host별로 분리됩니다. macOS는 Unreal `Mac` platform으로 매핑되고 agent build는 host `Build.sh` 또는 `dotnet UnrealBuildTool.dll`을 사용합니다. static/parser/fixture test로 이 계약을 검증했지만, 실제 macOS/Linux Unreal 설치에서의 live release 인증과 동일한 근거는 아닙니다.
+native installer/runtime 경로는 구현되어 있습니다. POSIX launcher는 bootstrap Python 버전을 확인하고, indexing은 관리되는 interpreter를 `pwsh`에 전달하며, engine discovery는 host별로 분리됩니다. macOS는 Unreal `Mac` platform으로 매핑되고 agent build는 host `Build.sh` 또는 `dotnet UnrealBuildTool.dll`을 사용합니다. Linux 기준은 glibc 기반 Ubuntu 22.04/24.04로 명시했으며 musl에서는 호환되지 않는 GNU archive를 받기 전에 중단합니다. static/parser/fixture test로 이 계약을 검증했지만, 실제 macOS/Ubuntu Unreal 설치에서의 live release 인증과 동일한 근거는 아닙니다.
 
 남은 인증 작업:
 
-- 실제 Linux/macOS host에서 installer와 각 indexing tier 실행.
+- 실제 Ubuntu/macOS host에서 installer와 각 indexing tier 실행.
 - 각 host에서 Unreal Editor metadata export와 실제 UBT build 증명.
 - package executable permission, 공백·비ASCII path, localized output을 각 filesystem에서 검증.
-- Linux distro 가정과 required package 문서화.
-- macOS prerequisite, 해당되는 경우 Apple Silicon/Intel 차이, Unreal Engine source/binary install 요구사항 문서화.
+- 문서화한 Ubuntu package 기준과 macOS Apple Silicon/Intel 동작을 clean machine에서 확인.
 - 각 플랫폼에서 eval harness가 dry-run과 작은 live subset을 안정적으로 실행할 때까지 native 지원 claim을 제한적으로 유지.
 
 ## 금지해야 하는 Fake Fix
@@ -308,4 +306,4 @@ v1.3.0은 하나의 합산 점수로 보고하지 않습니다. compile-fix, sem
 - local holdout 결과만으로 일반적인 Sonnet/GPT 동등성을 주장하지 않음.
 - compile-fix, semantic-refactor, runtime-debug, C++ capability를 하나의 headline score로 합치지 않음.
 - advanced C++ capability case에서 UBT green만으로 충분하다고 보지 않음.
-- fixture test를 통과한 Linux/macOS 경로를 실제 플랫폼 live 인증처럼 표현하지 않음. 해당 증명은 v1.3.2 목표로 유지.
+- fixture test를 통과한 Ubuntu/macOS 경로를 실제 플랫폼 live 인증처럼 표현하지 않음. 해당 증명은 v1.3.2 목표로 유지.

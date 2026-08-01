@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
+import posixpath
 import shutil
 import stat
 import subprocess
@@ -11,18 +13,47 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 REQUIRED_PYTHON = (3, 12)
+PINNED_PYTHON_VERSION = "3.12.13"
 REQUIRED_NODE_MAJOR = 20
 PINNED_NODE_VERSION = "20.20.2"
 PINNED_UV_VERSION = "0.12.1"
 PINNED_PWSH_VERSION = "7.5.4"
 TOOLCHAIN_DIRNAME = "evidence-first-runtimes"
 BOOTSTRAP_ENV = "EVIDENCE_FIRST_RUNTIME_BOOTSTRAPPED"
+MAX_ARCHIVE_MEMBERS = 100_000
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
+
+# Pinned upstream SHA-256 values from uv's per-asset .sha256 files, Node's
+# SHASUMS256.txt, and PowerShell's hashes.sha256. A download is never extracted
+# until its digest matches this table. Coverage is x64/arm64 on Windows, macOS,
+# and Ubuntu/glibc.
+ARCHIVE_SHA256 = {
+    "uv-aarch64-apple-darwin.tar.gz": "77d2906988e8074fd43f2f329ec452ebbf9b0c257ba1c66451c71de70a6baf42",
+    "uv-x86_64-apple-darwin.tar.gz": "69d9f9a00337f25a50dcb13882052da08b8469bac11091c98c5694c3c6721467",
+    "uv-aarch64-pc-windows-msvc.zip": "9bc7c18e616230fa2dc6fb24bc3afde18a95c2b5c9433de747e9502c66041568",
+    "uv-x86_64-pc-windows-msvc.zip": "8fcb0cb46e1229065e344758980924e569bef5882ef45f46fada8fb24e06b74a",
+    "uv-aarch64-unknown-linux-gnu.tar.gz": "769d373e146692c639b5fbaae33b331c297a32e03d30448772051902df52bbf4",
+    "uv-x86_64-unknown-linux-gnu.tar.gz": "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb",
+    "node-v20.20.2-darwin-arm64.tar.gz": "466e05f3477c20dfb723054dfebffe55bc74660ee77f612166fca121dacb65b6",
+    "node-v20.20.2-darwin-x64.tar.gz": "8be6f5e4bb128c82774f8a0b8d7a1cc1365a7977d9657cece0ca647b3fe04e61",
+    "node-v20.20.2-linux-arm64.tar.gz": "47ef73d543ecf6eb19435f6c03a0ac4809b3bf0dd6b26c7c571efc2a6572a74d",
+    "node-v20.20.2-linux-x64.tar.gz": "19e56f0825510207dd904f087fe52faa0a4eb6b2aab5f0ea7a33830d04888b8b",
+    "node-v20.20.2-win-arm64.zip": "d5c5b1d56f7f9469830eb1f57efeec0a6a9078c0a9e88cd5b4b4b48f46c22069",
+    "node-v20.20.2-win-x64.zip": "dc3700fdd57a63eedb8fd7e3c7baaa32e6a740a1b904167ff4204bc68ed8bf77",
+    "powershell-7.5.4-linux-arm64.tar.gz": "4b32d4cb86a43dfb83d5602d0294295bf22fafbf9e0785d1aaef81938cda92f8",
+    "powershell-7.5.4-linux-x64.tar.gz": "1fd7983fe56ca9e6233f126925edb24bf6b6b33e356b69996d925c4db94e2fef",
+    "powershell-7.5.4-osx-arm64.tar.gz": "3aaadd7ca62f1e4dbe59145b6af24e926d61f8da8a4782bc535e500c184135f0",
+    "powershell-7.5.4-osx-x64.tar.gz": "cd16a04c1b99cdacbdc0337b0fd0da50dbf1a8b4e8437bcb4ca9118ef729211a",
+    "PowerShell-7.5.4-win-arm64.zip": "0c0b2bf04e853917508280531cd49bba8b3049837e3c805ebc042e2741ca52b3",
+    "PowerShell-7.5.4-win-x64.zip": "b40d192ae95ba6ccc4cc362ff4e1b18ca6fb5055bebbcd3920684e12701fa8f6",
+}
 
 
 def toolchain_root(state_home: Path | None = None) -> Path:
@@ -84,6 +115,55 @@ def cpu_arch() -> str:
     raise RuntimeError(f"unsupported CPU architecture for runtime bootstrap: {machine}")
 
 
+def validate_host_runtime() -> dict[str, str]:
+    """Reject known-incompatible hosts before downloading platform runtimes."""
+    system = host_os()
+    details = {"os": system, "arch": cpu_arch()}
+    if system != "linux":
+        return details
+    libc_name, libc_version = platform.libc_ver()
+    normalized_libc = str(libc_name or "").strip().lower()
+    if not normalized_libc:
+        try:
+            completed = subprocess.run(
+                ["ldd", "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            ldd_text = f"{completed.stdout}\n{completed.stderr}".lower()
+            if "musl" in ldd_text:
+                normalized_libc = "musl"
+                libc_name = "musl"
+        except OSError:
+            pass
+    if normalized_libc and normalized_libc not in {"glibc", "gnu libc"}:
+        raise RuntimeError(
+            f"unsupported Linux C library: {libc_name} {libc_version}. "
+            "The Linux installer baseline is Ubuntu 22.04/24.04 with glibc; musl/Alpine needs a separate runtime build."
+        )
+    details["libc"] = f"{libc_name} {libc_version}".strip() or "unknown"
+    os_release = Path("/etc/os-release")
+    try:
+        values = {}
+        for line in os_release.read_text(encoding="utf-8").splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key] = value.strip().strip('"')
+        details["distribution"] = values.get("PRETTY_NAME") or values.get("ID") or "unknown"
+        details["distributionId"] = values.get("ID", "")
+    except OSError:
+        details["distribution"] = "unknown"
+        details["distributionId"] = ""
+    if details["distributionId"] == "alpine":
+        raise RuntimeError(
+            "unsupported Linux distribution: Alpine/musl. "
+            "The Linux installer baseline is Ubuntu 22.04/24.04 with glibc."
+        )
+    return details
+
+
 def uv_asset_name() -> str:
     system = host_os()
     arch = cpu_arch()
@@ -132,12 +212,83 @@ def _default_download(url: str, destination: Path) -> None:
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     try:
         with urllib_request.urlopen(url, timeout=180) as response, temporary.open("wb") as handle:
-            shutil.copyfileobj(response, handle)
+            content_length = response.headers.get("Content-Length")
+            try:
+                declared_size = int(content_length) if content_length else 0
+            except ValueError:
+                declared_size = 0
+            if declared_size > MAX_DOWNLOAD_BYTES:
+                raise RuntimeError(
+                    f"download exceeds the {MAX_DOWNLOAD_BYTES}-byte safety limit: {url}"
+                )
+            downloaded = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if downloaded > MAX_DOWNLOAD_BYTES:
+                    raise RuntimeError(
+                        f"download exceeds the {MAX_DOWNLOAD_BYTES}-byte safety limit: {url}"
+                    )
+                handle.write(chunk)
         temporary.replace(destination)
-    except urllib_error.URLError as exc:
+    except Exception as exc:
         if temporary.exists():
             temporary.unlink()
-        raise RuntimeError(f"failed to download {url}: {exc}") from exc
+        if isinstance(exc, urllib_error.URLError):
+            raise RuntimeError(f"failed to download {url}: {exc}") from exc
+        raise
+
+
+def _verify_archive(archive: Path) -> None:
+    expected = ARCHIVE_SHA256.get(archive.name)
+    if not expected:
+        raise RuntimeError(f"no pinned SHA-256 is registered for runtime archive: {archive.name}")
+    digest = hashlib.sha256()
+    with archive.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if actual.lower() != expected.lower():
+        raise RuntimeError(
+            f"SHA-256 mismatch for {archive.name}: expected {expected}, got {actual}. "
+            "The download was not extracted."
+        )
+
+
+def _safe_archive_parts(name: str) -> tuple[str, ...]:
+    normalized = str(name or "").replace("\\", "/")
+    if not normalized or "\x00" in normalized or normalized.startswith("/"):
+        raise RuntimeError(f"unsafe archive member path: {name!r}")
+    path = PurePosixPath(normalized)
+    parts = path.parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise RuntimeError(f"unsafe archive member path: {name!r}")
+    if any(":" in part for part in parts):
+        raise RuntimeError(f"unsafe archive member drive path: {name!r}")
+    return tuple(parts)
+
+
+def _safe_link_target(member_name: str, link_name: str, *, hardlink: bool) -> None:
+    link = str(link_name or "").replace("\\", "/")
+    if not link or link.startswith("/"):
+        raise RuntimeError(f"unsafe archive link target: {member_name!r} -> {link_name!r}")
+    member = PurePosixPath(*_safe_archive_parts(member_name))
+    base = PurePosixPath() if hardlink else member.parent
+    normalized = posixpath.normpath(str(base / PurePosixPath(link)))
+    _safe_archive_parts(normalized)
+
+
+def _validate_archive_limits(member_count: int, total_size: int, archive: Path) -> None:
+    if member_count > MAX_ARCHIVE_MEMBERS:
+        raise RuntimeError(
+            f"archive contains too many members ({member_count} > {MAX_ARCHIVE_MEMBERS}): {archive.name}"
+        )
+    if total_size > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+        raise RuntimeError(
+            f"archive expands beyond the {MAX_ARCHIVE_UNCOMPRESSED_BYTES}-byte safety limit: {archive.name}"
+        )
 
 
 def _node_search_dirs(root: Path, version: str = PINNED_NODE_VERSION) -> list[Path]:
@@ -182,6 +333,52 @@ def _node_arch(executable: Path) -> str | None:
     return None
 
 
+def _command_version(executable: Path, arguments: list[str]) -> str | None:
+    try:
+        completed = subprocess.run(
+            [str(executable), *arguments],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return completed.stdout.strip() or completed.stderr.strip() or None
+
+
+def _uv_is_usable(executable: Path) -> bool:
+    version = _command_version(executable, ["--version"])
+    fields = version.strip().lower().split() if version else []
+    return len(fields) >= 2 and fields[:2] == ["uv", PINNED_UV_VERSION]
+
+
+def _npm_is_usable(node: Path, npm: Path) -> bool:
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join(
+        [str(node.parent), env.get("PATH", "")]
+    ).rstrip(os.pathsep)
+    command = [str(npm), "--version"]
+    if os.name == "nt" and npm.suffix.lower() in {".cmd", ".bat"}:
+        command = [
+            os.environ.get("COMSPEC", "cmd.exe"),
+            "/d",
+            "/s",
+            "/c",
+            subprocess.list2cmdline(command),
+        ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return bool(completed.stdout.strip())
+
+
 def _python_arch(executable: Path) -> str | None:
     try:
         completed = subprocess.run(
@@ -209,9 +406,51 @@ def _extract_archive(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     if archive.suffix == ".zip" or archive.name.endswith(".zip"):
         with zipfile.ZipFile(archive) as handle:
-            handle.extractall(destination)
+            members = handle.infolist()
+            _validate_archive_limits(
+                len(members),
+                sum(max(0, int(member.file_size)) for member in members),
+                archive,
+            )
+            for member in members:
+                parts = _safe_archive_parts(member.filename)
+                if member.flag_bits & 0x1:
+                    raise RuntimeError(f"encrypted archive member is not supported: {member.filename}")
+                mode = (member.external_attr >> 16) & 0o170000
+                if stat.S_ISLNK(mode):
+                    raise RuntimeError(f"symbolic links are not allowed in zip archives: {member.filename}")
+                target = destination.joinpath(*parts)
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with handle.open(member, "r") as source, target.open("wb") as output:
+                    shutil.copyfileobj(source, output)
         return
     with tarfile.open(archive, "r:*") as handle:
+        members = handle.getmembers()
+        _validate_archive_limits(
+            len(members),
+            sum(max(0, int(member.size)) for member in members if member.isfile()),
+            archive,
+        )
+        symbolic_paths = {
+            _safe_archive_parts(member.name)
+            for member in members
+            if member.issym()
+        }
+        for member in members:
+            parts = _safe_archive_parts(member.name)
+            member.mode &= 0o777
+            if member.isdev() or member.isfifo():
+                raise RuntimeError(f"special archive member is not allowed: {member.name}")
+            if member.issym() or member.islnk():
+                _safe_link_target(member.name, member.linkname, hardlink=member.islnk())
+            if any(
+                len(parts) > len(link_parts) and parts[: len(link_parts)] == link_parts
+                for link_parts in symbolic_paths
+            ):
+                raise RuntimeError(f"archive member is nested beneath a symbolic link: {member.name}")
         handle.extractall(destination)
 
 
@@ -264,7 +503,7 @@ def _candidate_python_names() -> list[str]:
 def find_python_312(extra_bin_dirs: list[Path] | None = None) -> Path | None:
     wanted = cpu_arch()
     current = Path(sys.executable).resolve()
-    if sys.version_info[:2] >= REQUIRED_PYTHON:
+    if sys.version_info[:2] == REQUIRED_PYTHON:
         current_arch = _python_arch(current)
         # Accept current interpreter when arch matches, or when arch cannot be probed.
         if current_arch in {None, wanted}:
@@ -302,7 +541,7 @@ def find_python_312(extra_bin_dirs: list[Path] | None = None) -> Path | None:
             continue
         seen.add(key)
         version = _python_version(resolved)
-        if not version or version < REQUIRED_PYTHON:
+        if not version or version != REQUIRED_PYTHON:
             continue
         arch = _python_arch(resolved)
         if arch not in {None, wanted}:
@@ -343,13 +582,22 @@ def find_node_npm(extra_bin_dirs: list[Path] | None = None) -> tuple[Path, Path]
             if shim.is_file():
                 npm = shim
                 break
-        if npm is None:
-            which_npm = shutil.which("npm")
-            if which_npm:
-                npm = Path(which_npm)
-        if npm is not None and npm.is_file():
+        if npm is not None and npm.is_file() and _npm_is_usable(candidate, npm):
             return _absolute_path(candidate), _absolute_path(npm)
     return None
+
+
+def _pwsh_major(executable: Path) -> int | None:
+    try:
+        completed = subprocess.run(
+            [str(executable), "-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return int(completed.stdout.strip().splitlines()[-1])
+    except (OSError, subprocess.CalledProcessError, ValueError, IndexError):
+        return None
 
 
 def find_pwsh(extra_bin_dirs: list[Path] | None = None) -> Path | None:
@@ -358,16 +606,12 @@ def find_pwsh(extra_bin_dirs: list[Path] | None = None) -> Path | None:
     for directory in extra_bin_dirs or []:
         for name in names:
             searched.append(directory / name)
-    # Windows may already have Windows PowerShell; prefer pwsh (PowerShell 7+).
+    # Only PowerShell 7+ is supported; Windows PowerShell 5.1 is not cross-platform
+    # compatible with the same indexing scripts.
     for name in ("pwsh", "pwsh.exe"):
         located = shutil.which(name)
         if located:
             searched.append(Path(located))
-    if host_os() == "windows":
-        located = shutil.which("powershell")
-        if located:
-            searched.append(Path(located))
-
     seen: set[str] = set()
     for candidate in searched:
         path = candidate.expanduser()
@@ -375,20 +619,8 @@ def find_pwsh(extra_bin_dirs: list[Path] | None = None) -> Path | None:
         if key in seen or not path.is_file():
             continue
         seen.add(key)
-        try:
-            completed = subprocess.run(
-                [str(path), "-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            major = int(completed.stdout.strip().splitlines()[-1])
-        except (OSError, subprocess.CalledProcessError, ValueError):
-            continue
-        if major >= 7 or path.name.lower().startswith("powershell"):
-            # Accept Windows PowerShell 5.1 as a last-resort Windows fallback.
-            if major < 7 and host_os() != "windows":
-                continue
+        major = _pwsh_major(path)
+        if major is not None and major >= 7:
             return _absolute_path(path)
     return None
 
@@ -396,7 +628,7 @@ def find_pwsh(extra_bin_dirs: list[Path] | None = None) -> Path | None:
 def _ensure_uv(root: Path, *, dry_run: bool = False, download: Downloader = _default_download) -> Path:
     binary_name = "uv.exe" if host_os() == "windows" else "uv"
     uv_bin = root / "uv" / binary_name
-    if uv_bin.is_file():
+    if uv_bin.is_file() and _uv_is_usable(uv_bin):
         return uv_bin
 
     asset = uv_asset_name()
@@ -409,6 +641,7 @@ def _ensure_uv(root: Path, *, dry_run: bool = False, download: Downloader = _def
         archive = Path(tmp) / asset
         extract_root = Path(tmp) / "extracted"
         download(url, archive)
+        _verify_archive(archive)
         _extract_archive(archive, extract_root)
         matches = list(extract_root.rglob(binary_name))
         if not matches:
@@ -417,6 +650,9 @@ def _ensure_uv(root: Path, *, dry_run: bool = False, download: Downloader = _def
         shutil.copy2(matches[0], uv_bin)
         if host_os() != "windows":
             _mark_executable(uv_bin)
+            _clear_macos_quarantine(uv_bin)
+    if not _uv_is_usable(uv_bin):
+        raise RuntimeError(f"uv failed its post-install execution check: {uv_bin}")
     return uv_bin
 
 
@@ -427,7 +663,7 @@ def install_python_312(
     download: Downloader = _default_download,
 ) -> Path:
     uv = _ensure_uv(root, dry_run=dry_run, download=download)
-    print("  Installing Python 3.12 via uv...")
+    print(f"  Installing Python {PINNED_PYTHON_VERSION} via uv...")
     if dry_run:
         return root / "python3.12"
     env = os.environ.copy()
@@ -437,10 +673,14 @@ def install_python_312(
     env["UV_PYTHON_INSTALL_DIR"] = str(python_dir)
     env["UV_PYTHON_BIN_DIR"] = str(bin_dir)
     # Keep uv from trying to write user-global shim directories.
-    env.setdefault("XDG_BIN_HOME", str(bin_dir))
-    subprocess.run([str(uv), "python", "install", "3.12"], check=True, env=env)
+    env["XDG_BIN_HOME"] = str(bin_dir)
+    subprocess.run(
+        [str(uv), "python", "install", PINNED_PYTHON_VERSION],
+        check=True,
+        env=env,
+    )
     completed = subprocess.run(
-        [str(uv), "python", "find", "3.12"],
+        [str(uv), "python", "find", PINNED_PYTHON_VERSION],
         capture_output=True,
         text=True,
         check=True,
@@ -449,6 +689,12 @@ def install_python_312(
     path = Path(completed.stdout.strip())
     if not path.is_file():
         raise RuntimeError("uv installed Python 3.12 but the interpreter path was not found")
+    version = _python_version(path)
+    architecture = _python_arch(path)
+    if not version or version != REQUIRED_PYTHON or architecture not in {None, cpu_arch()}:
+        raise RuntimeError(
+            f"managed Python failed its post-install version/architecture check: {path}"
+        )
     return path.resolve()
 
 
@@ -471,7 +717,7 @@ def install_node_npm(
         npm_path = target / "bin" / npm_name
 
     if node_path.is_file() and npm_path.is_file() and (_node_major(node_path) or 0) >= REQUIRED_NODE_MAJOR:
-        if _node_arch(node_path) in {None, cpu_arch()}:
+        if _node_arch(node_path) in {None, cpu_arch()} and _npm_is_usable(node_path, npm_path):
             return _absolute_path(node_path), _absolute_path(npm_path)
 
     url = f"https://nodejs.org/dist/v{version}/{asset}"
@@ -483,6 +729,7 @@ def install_node_npm(
         archive = Path(tmp) / asset
         extract_root = Path(tmp) / "extracted"
         download(url, archive)
+        _verify_archive(archive)
         _extract_archive(archive, extract_root)
         children = [path for path in extract_root.iterdir() if path.is_dir()]
         if len(children) != 1:
@@ -498,6 +745,8 @@ def install_node_npm(
         _clear_macos_quarantine(target)
     if not node_path.is_file() or not npm_path.is_file():
         raise RuntimeError(f"Node.js/npm missing after extracting {asset}")
+    if (_node_major(node_path) or 0) < REQUIRED_NODE_MAJOR or not _npm_is_usable(node_path, npm_path):
+        raise RuntimeError(f"Node.js/npm failed its post-install execution check: {target}")
     # Keep the npm shim path (do not resolve through to npm-cli.js).
     return _absolute_path(node_path), _absolute_path(npm_path)
 
@@ -513,7 +762,7 @@ def install_pwsh(
     target = root / f"powershell-{version}"
     pwsh_name = "pwsh.exe" if host_os() == "windows" else "pwsh"
     pwsh_path = target / pwsh_name
-    if pwsh_path.is_file():
+    if pwsh_path.is_file() and (_pwsh_major(pwsh_path) or 0) >= 7:
         return _absolute_path(pwsh_path)
 
     url = f"https://github.com/PowerShell/PowerShell/releases/download/v{version}/{asset}"
@@ -525,6 +774,7 @@ def install_pwsh(
         archive = Path(tmp) / asset
         extract_root = Path(tmp) / "extracted"
         download(url, archive)
+        _verify_archive(archive)
         _extract_archive(archive, extract_root)
         # Portable archives may extract flat or into a single top-level folder.
         matches = list(extract_root.rglob(pwsh_name))
@@ -545,6 +795,14 @@ def install_pwsh(
         _clear_macos_quarantine(target)
     if not pwsh_path.is_file():
         raise RuntimeError(f"pwsh missing after extracting {asset}")
+    if (_pwsh_major(pwsh_path) or 0) < 7:
+        hint = (
+            " On Ubuntu, install the runtime libraries with: "
+            "sudo apt-get update && sudo apt-get install -y ca-certificates libicu-dev libssl3 zlib1g"
+            if host_os() == "linux"
+            else " Check host security policy and executable permissions, then retry."
+        )
+        raise RuntimeError(f"PowerShell 7 failed its post-install execution check: {pwsh_path}.{hint}")
     return _absolute_path(pwsh_path)
 
 
@@ -589,12 +847,17 @@ def ensure_runtimes(
             "bootstrapped": "0",
         }
 
+    host = validate_host_runtime()
     root = toolchain_root(state_home)
     root.mkdir(parents=True, exist_ok=True)
     arch = cpu_arch()
     print("\nRuntime bootstrap:")
     print(f"  Toolchain cache: {root}")
     print(f"  Host arch: {host_os()}-{arch}")
+    if host_os() == "linux":
+        print(f"  Linux host: {host.get('distribution', 'unknown')} ({host.get('libc', 'unknown')})")
+        if host.get("distributionId") not in {"", "ubuntu"}:
+            print("  Note: Ubuntu 22.04/24.04 is the supported Linux baseline; this glibc host is best-effort.")
 
     python = find_python_312([root / "bin", root / "python"])
     bootstrapped = False
@@ -650,7 +913,7 @@ def ensure_runtimes(
         and os.environ.get(BOOTSTRAP_ENV) != "1"
         and Path(sys.executable).resolve() != python.resolve()
         and (
-            sys.version_info[:2] < REQUIRED_PYTHON
+            sys.version_info[:2] != REQUIRED_PYTHON
             or (_python_arch(Path(sys.executable)) not in {None, arch})
         )
     ):

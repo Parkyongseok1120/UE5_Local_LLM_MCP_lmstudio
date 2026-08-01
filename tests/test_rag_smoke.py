@@ -126,3 +126,13 @@ def test_engine_discovery_supports_mac_and_linux_common_layouts(tmp_path):
     direct = tmp_path / "UnrealEngine"
     (direct / "Engine" / "Source").mkdir(parents=True)
     assert direct.resolve() in _discover_engine_roots("linux", {}, tmp_path)
+
+
+def test_engine_discovery_orders_semantic_versions(tmp_path):
+    parent = tmp_path / "Epic Games"
+    for name in ("UE_5.9", "UE_5.10"):
+        (parent / name / "Engine" / "Source").mkdir(parents=True)
+    assert [path.name for path in _discover_engine_roots("linux", {}, tmp_path)] == [
+        "UE_5.10",
+        "UE_5.9",
+    ]

@@ -1045,9 +1045,10 @@ def validate_component_registration_includes(path: Path, text: str, root: Path) 
         re.compile(r"CreateDefaultSubobject\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>"),
         re.compile(r"NewObject\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>"),
     )
+    masked = mask_comments_and_strings(text)
     seen: set[tuple[str, str]] = set()
     for pattern in patterns:
-        for match in pattern.finditer(text):
+        for match in pattern.finditer(masked):
             symbol = match.group(1)
             if not symbol.startswith("U"):
                 continue
@@ -1074,6 +1075,8 @@ def validate_component_registration_includes(path: Path, text: str, root: Path) 
                             ),
                         )
                     )
+                continue
+            if (root / resolution.declaring_file).resolve() == path.resolve():
                 continue
             if has_include(text, resolution.preferred_include):
                 continue
@@ -3838,4 +3841,3 @@ def can_run_autofix_ubt(findings: list[Finding], *, autofix_written: bool = Fals
     if not has_static_errors(findings):
         return True
     return False
-

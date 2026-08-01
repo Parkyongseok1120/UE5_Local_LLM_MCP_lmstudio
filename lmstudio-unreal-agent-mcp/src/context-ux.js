@@ -251,8 +251,10 @@ function validationFindingMeta(code) {
 }
 
 function compactValidationPayload(validation, maxFindings = DEFAULT_VALIDATION_FINDING_CAP) {
-  if (!validation || validation.skipped) return null;
-  const rawFindings = validation.findings || [];
+  if (!validation) return null;
+  const rawFindings = validation.skipped
+    ? (validation.advisoryFindings || validation.findings || [])
+    : (validation.findings || []);
   const seen = new Set();
   const grouped = [];
   for (const finding of rawFindings) {
@@ -273,7 +275,9 @@ function compactValidationPayload(validation, maxFindings = DEFAULT_VALIDATION_F
   }
   const findings = grouped.slice(0, maxFindings);
   const omittedFindingCount = Math.max(0, grouped.length - findings.length);
-  const blockingErrorCount = grouped.filter((item) => item.severity === "error").length;
+  const rawErrorCount = grouped.filter((item) => item.severity === "error").length;
+  const blockingErrorCount = validation.skipped ? 0 : rawErrorCount;
+  const advisoryErrorCount = validation.skipped ? rawErrorCount : 0;
   const warningCount = grouped.filter((item) => item.severity === "warning").length;
   const infoCount = grouped.filter((item) => item.severity === "info").length;
   const groups = [...new Set(grouped.map((item) => item.group))];
@@ -283,12 +287,15 @@ function compactValidationPayload(validation, maxFindings = DEFAULT_VALIDATION_F
     findings,
     omittedFindingCount,
     blockingErrorCount,
+    advisoryErrorCount,
     warningCount,
     infoCount,
     advisoryOnly: blockingErrorCount === 0,
     groups,
     deferredCount: validation.deferredCount || 0,
     preExistingCount: validation.preExistingCount || 0,
+    skipped: Boolean(validation.skipped),
+    infrastructureError: Boolean(validation.infrastructureError),
     timedOut: Boolean(validation.timedOut),
     note: validation.note || (omittedFindingCount
       ? `${omittedFindingCount} more advisory finding(s) omitted; run static_validate_project for full list.`
@@ -317,6 +324,7 @@ function slimWriteSuccessPayload(summary, validation, options = {}) {
       ok: compact.ok,
       findingCount: compact.findingCount,
       blockingErrorCount: compact.blockingErrorCount,
+      advisoryErrorCount: compact.advisoryErrorCount,
       warningCount: compact.warningCount,
       infoCount: compact.infoCount,
       groups: compact.groups,
@@ -330,12 +338,15 @@ function slimWriteSuccessPayload(summary, validation, options = {}) {
       omittedFindingCount: compact.omittedFindingCount,
       deferredCount: compact.deferredCount,
       preExistingCount: compact.preExistingCount,
+      skipped: compact.skipped,
+      infrastructureError: compact.infrastructureError,
       note: compact.note
     };
   }
-  if (validation && validation.timedOut) {
+  if (validation && validation.skipped) {
     payload.validationSummary = payload.validationSummary || { ok: true };
-    payload.validationSummary.note = "validation skipped (time budget); run static_validate_project before build";
+    payload.validationSummary.note = validation.note
+      || "validation skipped; run static_validate_project before build";
   }
   return payload;
 }
@@ -689,6 +700,9 @@ function compactLogPayload(payload, maxChars = DEFAULT_LOG_RESULT_MAX_CHARS) {
     logs: (payload.logs || []).map((log) => ({
       file: log.file,
       lineCount: log.lineCount,
+      sourceBytes: log.sourceBytes,
+      bytesRead: log.bytesRead,
+      sourceTruncated: Boolean(log.sourceTruncated),
       lines: firstErrorCluster(log.lines || [], 3, 24)
     }))
   };

@@ -50,3 +50,14 @@ def test_component_include_autofix_inserts_include(tmp_path: Path) -> None:
     written = apply_component_include_autofix(root, findings)
     updated = cpp.read_text(encoding="utf-8")
     assert written or "BoxComponent.h" in updated or "Components/" in updated
+
+
+def test_component_registration_ignores_comment_only_newobject(tmp_path: Path) -> None:
+    root = _holdout_fixture(tmp_path)
+    header = root / "Source" / "HoldoutFixture" / "Public" / "HoldoutRuleEngine.h"
+    header.write_text(
+        "class UHoldoutRuleEngine {};\n// Example only: NewObject<UHoldoutRuleEngine>()\n",
+        encoding="utf-8",
+    )
+    findings = validate_component_registration_includes(header, header.read_text(encoding="utf-8"), root)
+    assert not [finding for finding in findings if finding.code == "COMPONENT_REGISTRATION_INCLUDE_MISSING"]

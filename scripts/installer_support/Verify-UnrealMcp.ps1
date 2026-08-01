@@ -136,7 +136,7 @@ Check "rag shared state_root.py" { if (-not (Test-Path (Join-Path $root "scripts
 Check "tool contract registry" { if (-not (Test-Path (Join-Path $root "config\tool_contract.json"))) { throw "missing config/tool_contract.json" } }
 Check "context compactor source" {
     $pluginRoot = Join-Path $ragRoot "lmstudio-context-compactor-plugin"
-    foreach ($required in @("manifest.json", "package.json", "src\generator.ts", "src\compaction-core.js")) {
+    foreach ($required in @("manifest.json", "package.json", "src\generator.ts", "src\compaction-core.js", "scripts\status.cjs")) {
         if (-not (Test-Path -LiteralPath (Join-Path $pluginRoot $required))) {
             throw "missing lmstudio-context-compactor-plugin\$required"
         }
@@ -196,25 +196,38 @@ Check "installed context compactor" {
         }
     }
 }
-$activationScript = Join-Path $ragRoot "scripts\Test-ContextCompactorActivation.ps1"
+$activationScript = Join-Path $ragRoot "lmstudio-context-compactor-plugin\scripts\status.cjs"
 if (-not (Test-Path -LiteralPath $activationScript)) {
-    Check "context compactor activation checker" { throw "missing scripts\Test-ContextCompactorActivation.ps1" }
+    Check "context compactor activation checker" { throw "missing lmstudio-context-compactor-plugin\scripts\status.cjs" }
 }
 else {
-    $activationArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $activationScript, "-Json")
-    if ($RequireContextCompaction) { $activationArgs += "-RequireCompaction" }
-    $activationOutput = & powershell @activationArgs 2>&1 | Out-String
-    $activationExit = $LASTEXITCODE
-    if ($activationExit -eq 0) {
-        Write-Host "[PASS] Context compactor activation evidence" -ForegroundColor Green
-    }
-    elseif ($RequireContextCompactorActivation -or $RequireContextCompaction) {
-        Check "context compactor activation evidence" {
-            throw "proxy activation was not proven: $($activationOutput.Trim())"
+    $activationArgs = @($activationScript, "--json")
+    if ($RequireContextCompaction) { $activationArgs += "--require-compaction" }
+    $activationNode = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $activationNode) {
+        if ($RequireContextCompactorActivation -or $RequireContextCompaction) {
+            Check "context compactor activation evidence" {
+                throw "Node.js 20+ is required for the activation checker"
+            }
+        }
+        else {
+            Warn "Context compactor activation was not checked because Node.js is unavailable."
         }
     }
     else {
-        Warn "Context compactor is installed but has no runtime activation evidence. Select unreal-context-compactor as the chat model; selecting the underlying model bypasses it."
+        $activationOutput = & $activationNode.Source @activationArgs 2>&1 | Out-String
+        $activationExit = $LASTEXITCODE
+        if ($activationExit -eq 0) {
+            Write-Host "[PASS] Context compactor activation evidence" -ForegroundColor Green
+        }
+        elseif ($RequireContextCompactorActivation -or $RequireContextCompaction) {
+            Check "context compactor activation evidence" {
+                throw "proxy activation was not proven: $($activationOutput.Trim())"
+            }
+        }
+        else {
+            Warn "Context compactor is installed but has no runtime activation evidence. Select unreal-context-compactor as the chat model; selecting the underlying model bypasses it."
+        }
     }
 }
 }

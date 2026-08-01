@@ -83,6 +83,7 @@ const {
   listActiveTasks,
   cancelActiveTask,
   quarantineCorruptTask,
+  checkpointMutationViaPython,
 } = require("./task-auth");
 const {
   activeRouteFingerprint,
@@ -150,6 +151,7 @@ const {
   clearReadSuccessHistory
 } = require("./tool-read-history");
 const { runUnrealBuildFromPlan } = require("./build-executor");
+const { readUtf8Tail } = require("./bounded-read");
 const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
 const {
   recordValidationFailure,
@@ -188,7 +190,10 @@ if (ALLOW_EXISTING_SOURCE_WRITE) {
     + "This is a manual override; unset it in mcp.json after the one-off operation."
   );
 }
-const MAX_READ_BYTES = Number(process.env.MAX_READ_BYTES || 64 * 1024);
+const MAX_READ_BYTES = Math.min(
+  Math.trunc(numberEnv("MAX_READ_BYTES", 64 * 1024, 4 * 1024)),
+  32 * 1024 * 1024
+);
 const FILE_CACHE_MAX_ENTRIES = numberEnv("FILE_CACHE_MAX_ENTRIES", 20, 0);
 const FILE_CACHE_MAX_BYTES = numberEnv("FILE_CACHE_MAX_BYTES", MAX_READ_BYTES, 0);
 const WORKSPACE_INFO_CACHE_TTL_MS = numberEnv("WORKSPACE_INFO_CACHE_TTL_MS", 60 * 1000, 0);
@@ -209,13 +214,26 @@ function resolveCodeDetail(raw) {
   const key = String(raw || "compact").trim().toLowerCase();
   return Object.prototype.hasOwnProperty.call(CODE_DETAIL_READ_BYTES, key) ? key : "compact";
 }
-const MAX_OUTPUT_BYTES = Number(process.env.MAX_OUTPUT_BYTES || 1024 * 256);
+const MAX_OUTPUT_BYTES = Math.min(
+  Math.trunc(numberEnv("MAX_OUTPUT_BYTES", 1024 * 256, 16 * 1024)),
+  8 * 1024 * 1024
+);
 const MCP_AGENT_RESULT_MAX_CHARS = resolveAgentResultMaxChars();
 const BUILD_VERBOSE_OUTPUT = ["1", "true", "yes", "on"].includes(
   String(process.env.BUILD_VERBOSE_OUTPUT || "").trim().toLowerCase()
 );
-const COMMAND_TIMEOUT_MS = Number(process.env.COMMAND_TIMEOUT_MS || 1000 * 60 * 10);
-const SEARCH_MAX_FILES = Number(process.env.SEARCH_MAX_FILES || 5000);
+const COMMAND_TIMEOUT_MS = Math.min(
+  Math.trunc(numberEnv("COMMAND_TIMEOUT_MS", 1000 * 60 * 10, 1000)),
+  1000 * 60 * 60
+);
+const SEARCH_MAX_FILES = Math.min(
+  Math.trunc(numberEnv("SEARCH_MAX_FILES", 5000, 1)),
+  50_000
+);
+const LOG_READ_MAX_BYTES = Math.min(
+  numberEnv("LOG_READ_MAX_BYTES", 4 * 1024 * 1024, 64 * 1024),
+  32 * 1024 * 1024
+);
 const ALLOW_SOURCE_DELETE = ["1", "true", "yes", "on"].includes(
   String(process.env.ALLOW_SOURCE_DELETE || "").trim().toLowerCase()
 );
@@ -376,6 +394,57 @@ async function bumpProjectMutationGeneration(targetPath, content) {
   return await recordMutation(projectDir, projectRelativePath, content);
 }
 
+function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = null) {
+  const checkpoint = checkpointMutationViaPython(WORKSPACE_ROOT, args, modifiedFiles, {
+    requiredNextAction: "continue_active_slice_then_validate",
+    validation: validation || {},
+  });
+  if (!checkpoint || checkpoint.ok !== true) {
+    return {
+      ok: false,
+      errorCode: String(checkpoint?.errorCode || "CONTINUITY_CHECKPOINT_FAILED"),
+      error: String(checkpoint?.error || "Automatic continuity checkpoint failed."),
+    };
+  }
+  const continuity = checkpoint.continuity && typeof checkpoint.continuity === "object"
+    ? checkpoint.continuity
+    : {};
+  const recorded = continuity.checkpoint && typeof continuity.checkpoint === "object"
+    ? continuity.checkpoint
+    : {};
+  return {
+    ok: true,
+    checkpointHash: String(recorded.checkpointHash || ""),
+    phase: String(recorded.phase || "executor"),
+    modifiedFiles: Array.isArray(recorded.modifiedFiles) ? recorded.modifiedFiles : [],
+    ...(checkpoint.taskAuthorization && typeof checkpoint.taskAuthorization === "object"
+      ? { taskAuthorization: checkpoint.taskAuthorization }
+      : {}),
+    ...(checkpoint.toolRoute && typeof checkpoint.toolRoute === "object"
+      ? { toolRoute: checkpoint.toolRoute }
+      : {}),
+  };
+}
+
+function continuityCheckpointFailure(checkpoint, operation, paths, mutation = null) {
+  return fail(checkpoint.error || "Automatic continuity checkpoint failed after write.", {
+    errorCode: "CONTINUITY_CHECKPOINT_FAILED",
+    underlyingErrorCode: checkpoint.errorCode || "",
+    operation,
+    paths,
+    writeApplied: true,
+    checkpointFailed: true,
+    retryable: false,
+    doNotRetry: [operation],
+    ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
+    nextSteps: [
+      "Do NOT retry the mutation — the file change and mutation generation are already recorded.",
+      "Read the affected file(s), then call unreal_task_checkpoint to recover continuity.",
+      "Run static_validate_project before build_unreal_project.",
+    ],
+  });
+}
+
 async function agentNotify(message, level = "info") {
   try {
     await server.notification({
@@ -502,9 +571,18 @@ function validationToolResult(summary, validation, options = {}) {
     "commandSucceeded", "proofSatisfied", "recoveryRequired", "errorCode",
     "retryable", "doNotRetry", "stopCurrentWorkflow", "suggestedToolCalls",
     "validationOverrideAvailable", "buildAllowedForValidatedGeneration", "requiredNextTool",
+    "continuityCheckpoint", "taskAuthorization", "toolRoute",
   ];
   for (const key of passthrough) {
     if (options[key] !== undefined) base[key] = options[key];
+  }
+  if (options.continuityCheckpoint && typeof options.continuityCheckpoint === "object") {
+    if (options.continuityCheckpoint.taskAuthorization) {
+      base.taskAuthorization = options.continuityCheckpoint.taskAuthorization;
+    }
+    if (options.continuityCheckpoint.toolRoute) {
+      base.toolRoute = options.continuityCheckpoint.toolRoute;
+    }
   }
   const result = text(JSON.stringify(base, null, 2));
   if (options.isError) result.isError = true;
@@ -2178,21 +2256,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const filterText = String(args.filter || "").toLowerCase();
       const logFiles = [];
       for (const logsDir of logsDirs) {
-        const entries = await fsp.readdir(logsDir, { withFileTypes: true });
-        logFiles.push(...entries
-          .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".log"))
-          .map((entry) => path.join(logsDir, entry.name)));
+        let entries;
+        try {
+          entries = await fsp.readdir(logsDir, { withFileTypes: true });
+        } catch (error) {
+          if (error && ["ENOENT", "EACCES", "EPERM"].includes(error.code)) continue;
+          throw error;
+        }
+        for (const entry of entries) {
+          if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".log")) continue;
+          const logPath = path.join(logsDir, entry.name);
+          const logStat = await statSafe(logPath);
+          if (logStat?.isFile()) {
+            logFiles.push({ path: logPath, mtimeMs: logStat.mtimeMs });
+          }
+        }
       }
-      logFiles.sort((a, b) => {
-        const sa = fs.statSync(a);
-        const sb = fs.statSync(b);
-        return sb.mtimeMs - sa.mtimeMs;
-      });
+      logFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
       const picked = logFiles.slice(0, maxFiles);
       const chunks = [];
-      for (const logPath of picked) {
-        const content = await fsp.readFile(logPath, "utf8");
-        const lines = content.split(/\r?\n/);
+      let skippedLogReadCount = 0;
+      for (const logEntry of picked) {
+        const logPath = logEntry.path;
+        let bounded;
+        try {
+          bounded = await readUtf8Tail(logPath, LOG_READ_MAX_BYTES);
+        } catch (error) {
+          if (error && ["ENOENT", "EACCES", "EPERM"].includes(error.code)) {
+            skippedLogReadCount += 1;
+            continue;
+          }
+          throw error;
+        }
+        const lines = bounded.content.split(/\r?\n/);
         let filtered = filterText
           ? lines.filter((line) => line.toLowerCase().includes(filterText))
           : lines;
@@ -2204,9 +2300,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         chunks.push({
           file: path.relative(projectDir, logPath).replace(/\\/g, "/"),
           lineCount: filtered.length,
-          lines: filtered
+          lines: filtered,
+          sourceBytes: bounded.sourceBytes,
+          bytesRead: bounded.bytesRead,
+          sourceTruncated: bounded.sourceTruncated,
         });
       }
+      const truncatedSourceCount = chunks.filter((chunk) => chunk.sourceTruncated).length;
       const firstLine = chunks.flatMap((chunk) => chunk.lines).find((line) => String(line).trim()) || "";
       const payload = compactLogPayload({
         summary: chunks.length
@@ -2216,6 +2316,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectDir,
         logsDirs,
         responseMode: summaryOnly ? "summary" : "tail",
+        logReadMaxBytes: LOG_READ_MAX_BYTES,
+        truncatedSourceCount,
+        skippedLogReadCount,
+        sourceReadNote: truncatedSourceCount
+          ? "Only the bounded tail of oversized log files was scanned; use the full log path for older diagnostics."
+          : null,
         suggestedRagMode: filterText.includes("error") || filterText.includes("fatal")
           ? "compile_fix"
           : "runtime_debug",
@@ -2595,8 +2701,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         let summary = `OK — ${rel} created.`;
         const nextSteps = ["Continue the planned edit set, then run build_unreal_project for C++/Build.cs changes."];
-        if (validation && validation.timedOut) {
-          summary += " Static validation exceeded its time budget.";
+        if (validation && validation.skipped) {
+          summary += validation.timedOut
+            ? " Static validation exceeded its time budget."
+            : " Static validation infrastructure was unavailable.";
           nextSteps.unshift("Run static_validate_project before build.");
         }
         let mutation;
@@ -2605,12 +2713,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } catch (err) {
           return mutationBookkeepingFailure(err.message || err, "create", rel);
         }
+        const checkpoint = recordAutomaticContinuityCheckpoint(args, [target], validation);
+        if (!checkpoint.ok) {
+          return continuityCheckpointFailure(checkpoint, "write_file", [rel], mutation);
+        }
         return validationToolResult(summary, validation, {
           path: rel,
           operation: "create",
           bytesWritten: Buffer.byteLength(contentToWrite, "utf8"),
           nextSteps,
           ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
+          continuityCheckpoint: checkpoint,
         });
       } finally {
         releasePathLock(target);
@@ -2785,8 +2898,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         let summary = `OK — ${rel} patched (${occurrences} replacement(s)).`;
         const nextSteps = ["Continue the plan, or run build_unreal_project when the C++/Build.cs edit set is complete."];
-        if (validation && validation.timedOut) {
-          summary += " Static validation exceeded its time budget.";
+        if (validation && validation.skipped) {
+          summary += validation.timedOut
+            ? " Static validation exceeded its time budget."
+            : " Static validation infrastructure was unavailable.";
           nextSteps.unshift("Run static_validate_project before build.");
         }
         let mutation;
@@ -2795,12 +2910,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } catch (err) {
           return mutationBookkeepingFailure(err.message || err, "replace", rel);
         }
+        const checkpoint = recordAutomaticContinuityCheckpoint(args, [target], validation);
+        if (!checkpoint.ok) {
+          return continuityCheckpointFailure(checkpoint, "replace_in_file", [rel], mutation);
+        }
         return validationToolResult(summary, validation, {
           path: rel,
           operation: "replace",
           replacements: occurrences,
           nextSteps,
           ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
+          continuityCheckpoint: checkpoint,
         });
       } finally {
         releasePathLock(target);
@@ -2906,6 +3026,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             });
           }
         }
+        const checkpoint = recordAutomaticContinuityCheckpoint(args, [target], null);
+        if (!checkpoint.ok) {
+          return continuityCheckpointFailure(checkpoint, "delete_file", [rel], mutation);
+        }
         return text(JSON.stringify({
           ok: true,
           deleted: rel,
@@ -2915,6 +3039,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ifNotDeleted,
           ifDeleted,
           ...(mutation ? { mutationGeneration: mutation.mutationGeneration } : {}),
+          continuityCheckpoint: checkpoint,
+          ...(checkpoint.taskAuthorization ? { taskAuthorization: checkpoint.taskAuthorization } : {}),
+          ...(checkpoint.toolRoute ? { toolRoute: checkpoint.toolRoute } : {}),
         }, null, 2));
       } finally {
         releasePathLock(target);
@@ -3000,9 +3127,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
       }
 
-      const primaryValidation = Array.isArray(tx.validation?.validationResults)
-        ? tx.validation.validationResults[0]
-        : null;
+      const validationResults = Array.isArray(tx.validation?.validationResults)
+        ? tx.validation.validationResults
+        : [];
+      const primaryValidation = validationResults.find((item) => item?.skipped)
+        || validationResults[0]
+        || null;
       let lastMutation = null;
       for (const absPath of tx.writtenAbs) {
         const relPath = path.relative(projectRoot, absPath).replace(/\\/g, "/");
@@ -3013,13 +3143,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return mutationBookkeepingFailure(error.message, "apply_edit_bundle", relPath);
         }
       }
+      const checkpoint = recordAutomaticContinuityCheckpoint(
+        args,
+        tx.writtenAbs,
+        primaryValidation
+      );
+      if (!checkpoint.ok) {
+        return continuityCheckpointFailure(
+          checkpoint,
+          "apply_edit_bundle",
+          tx.writtenAbs.map((item) => path.relative(projectRoot, item).replace(/\\/g, "/")),
+          lastMutation
+        );
+      }
+      const bundleNextSteps = ["Run build_unreal_project after C++ edits."];
+      if (primaryValidation?.skipped) {
+        bundleNextSteps.unshift("Run static_validate_project before build.");
+      }
       return validationToolResult(`OK — applied ${tx.writtenAbs.length} file(s) from bundle.`, primaryValidation, {
         operation: "apply_edit_bundle",
         writtenCount: tx.writtenAbs.length,
         preChangeHashes: tx.preChangeHashes,
         transactionId: tx.transactionId,
         ...(lastMutation ? { mutationGeneration: lastMutation.mutationGeneration } : {}),
-        nextSteps: ["Run build_unreal_project after C++ edits."],
+        continuityCheckpoint: checkpoint,
+        nextSteps: bundleNextSteps,
         phase: "editing",
         userMessage: `Applied ${tx.writtenAbs.length} file(s) from bundle`,
         cancellable: false,

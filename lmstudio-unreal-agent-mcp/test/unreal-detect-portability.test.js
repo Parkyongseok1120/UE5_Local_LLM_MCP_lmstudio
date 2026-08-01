@@ -125,3 +125,13 @@ test("engine discovery accepts native Mac and Linux Build.sh layouts", async () 
   }
 });
 
+test("engine discovery sorts semantic versions so UE 5.10 is newer than UE 5.9", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-semver-engines-"));
+  for (const name of ["UE_5.9", "UE_5.10"]) {
+    const script = path.join(parent, name, "Engine", "Build", "BatchFiles", "Linux", "Build.sh");
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, "#!/usr/bin/env sh\nexit 0\n", "utf8");
+  }
+  const installs = await findEngineInstalls({ hostPlatform: "linux", roots: [parent], env: {} });
+  assert.deepStrictEqual(installs.map((item) => item.folderName), ["UE_5.9", "UE_5.10"]);
+});

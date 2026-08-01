@@ -43,7 +43,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "skills/evidence-first-code-audit/assets/lmstudio-evidence-first.preset.json",
         "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py",
         "config/evidence_first_benchmark_cases.json",
-        "docs/Release_Notes_1_3_0_Beta1.md",
+        "docs/Release_Notes_1_3_0_Beta3.md",
         "scripts/architecture_reasoning.py",
         "scripts/build_symbol_graph.py",
         "scripts/change_impact_contract.py",
@@ -86,10 +86,18 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "manifest.json",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert packaged_installer_manifest["productVersion"] == "1.3.0 Beta1"
+    assert packaged_installer_manifest["productVersion"] == "1.3.0 Beta3"
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
     assert (output / "install.sh").read_bytes() == (ROOT / "install.sh").read_bytes()
-    assert "pause >nul" in (output / "INSTALL.bat").read_text(encoding="utf-8")
+    windows_launcher = (output / "INSTALL.bat").read_text(encoding="utf-8")
+    posix_launcher = (output / "install.sh").read_text(encoding="utf-8")
+    assert "pause >nul" in windows_launcher
+    assert "Python 3.10 or newer" in windows_launcher
+    assert "Python 3.10 or newer" in posix_launcher
+    assert "sudo apt-get install -y python3 ca-certificates" in posix_launcher
+    portable_help = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
+    assert "Ubuntu 22.04/24.04 with glibc" in portable_help
+    assert "pinned by SHA-256" in portable_help
     forbidden = {".git", ".venv", "node_modules", "tests", "Reports", ".agent"}
     assert not any(forbidden.intersection(path.relative_to(output).parts) for path in output.rglob("*"))
     assert not any(path.suffix in {".sqlite", ".db"} for path in output.rglob("*"))

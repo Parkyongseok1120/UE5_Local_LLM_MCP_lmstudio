@@ -2,20 +2,45 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release: **1.3.0 Beta1**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest remains at `2.1.0`.
+Product release: **1.3.0 Beta3**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest remains at `2.1.0`.
 
 ## Requirements
 
-- The installer bootstraps **Python 3.12**, **Node.js 20+/npm**, and **PowerShell 7 (`pwsh`)** into a user-local cache when they are missing or too old (Windows, macOS, and Linux). Host CPU architecture (arm64/x64, including Apple Silicon vs Rosetta) is detected before downloads.
+- A host **Python 3.10+** is required only to start `install.py`. The launcher prints a platform-specific recovery command instead of falling through to a missing or incompatible interpreter.
+- The installer establishes managed **Python 3.12** first. It downloads **Node.js 20+/npm** only for Unreal/context-compactor components and **PowerShell 7 (`pwsh`)** only when `--build-rag` is selected, reducing SAFE-profile failure surface.
+- Runtime archives are pinned by version and SHA-256 for x64/arm64 on Windows, macOS, and Ubuntu/glibc. Extraction rejects traversal, unsafe links, encrypted ZIP members, special files, and archive bombs before writing the runtime cache.
 - SAFE also needs LM Studio 0.4+ for native MCP API use.
 - FULL context compaction additionally needs the LM Studio `lms` CLI.
 - RAG index generation is a separate opt-in action and uses the bootstrapped `pwsh` plus an installed Unreal Engine.
+
+### Host baseline
+
+| Host | Supported bootstrap baseline | Host-specific behavior |
+|---|---|---|
+| Windows 10/11 | x64 or arm64, Python 3.10+ launcher | Uses `INSTALL.bat`; requires PowerShell 7 (`pwsh`) for indexing rather than silently falling back to Windows PowerShell 5.1. Epic Launcher manifests and Program Files locations are scanned. |
+| macOS | Apple Silicon or Intel, Python 3.10+ launcher | Detects Apple Silicon even under Rosetta, selects a native runtime archive, clears quarantine on the managed runtime, and validates it by execution. |
+| Ubuntu Linux | Ubuntu 22.04/24.04, glibc, x64 or arm64 | This is the Linux baseline. musl/Alpine fails early because the pinned GNU runtimes are incompatible; other glibc distributions are best-effort and are identified during bootstrap. |
+
+Ubuntu bootstrap prerequisite:
+
+```text
+sudo apt-get update
+sudo apt-get install -y python3 ca-certificates
+```
+
+If the downloaded PowerShell binary cannot start because host libraries are missing:
+
+```text
+sudo apt-get install -y libicu-dev libssl3 zlib1g
+```
+
+These are implemented and fixture-tested paths, not a claim of physical Unreal/LM Studio certification on every host. Beta3 still requires clean-machine Windows, macOS, and Ubuntu release runs before broad platform certification.
 
 ## Start
 
 ```text
 Windows: INSTALL.bat
-Linux/macOS: ./install.sh
+Ubuntu Linux/macOS: ./install.sh
 Any OS:  python3 install.py
 ```
 
@@ -83,13 +108,15 @@ python3 install.py --rollback
 
 Managed skill/config files are journaled and can be restored by `--rollback`. External package-manager/plugin actions and generated indexes are reported separately and are not claimed as transactionally reversible.
 
+Runtime bootstrap and managed installation use separate process locks. A Python re-exec retains the bootstrap ownership token, while unrelated concurrent installers fail before sharing or replacing a partially extracted cache. Managed file and journal replacements are flushed before atomic rename where the host supports it.
+
 ## Portable package
 
 ```text
 python3 scripts/build_integrated_package.py --output /safe/output/Evidence-First-Integrated --zip /safe/output/Evidence-First-Integrated.zip
 ```
 
-The package contains Windows, Linux, and macOS launchers plus a deterministic SHA-256 inventory. It excludes user configuration, machine paths, caches, dependencies, tests, and RAG indexes by default. `--include-index` is explicit.
+The package contains Windows, Ubuntu Linux, and macOS launchers plus a deterministic SHA-256 inventory. It excludes user configuration, machine paths, caches, dependencies, tests, and RAG indexes by default. `--include-index` is explicit.
 
 Package-builder status JSON is ASCII-safe so successful and failed builds remain machine-readable when a Windows runner or legacy console uses `cp1252`. Package contents and manifests remain UTF-8.
 

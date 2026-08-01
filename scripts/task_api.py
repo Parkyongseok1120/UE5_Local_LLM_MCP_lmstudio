@@ -1239,6 +1239,8 @@ def _discover_git_changed_files(root: Path) -> dict[str, Any]:
                 relative = candidate.relative_to(root)
             except ValueError:
                 continue
+            if relative.parts and relative.parts[0].casefold() == ".agent":
+                continue
             discovered.append(relative.as_posix())
             if len(set(discovered)) > MAX_CHECKPOINT_FILES:
                 result["issues"].append(
@@ -1273,6 +1275,8 @@ def _checkpoint_path_union(
     workspace: Path,
     state: dict[str, Any],
     caller_paths: list[str],
+    *,
+    include_git_changes: bool = True,
 ) -> dict[str, Any]:
     root = _continuity_project_root(workspace, state)
     continuity = (
@@ -1290,7 +1294,12 @@ def _checkpoint_path_union(
         for item in (checkpoint.get("modifiedFiles") or [])
         if str(item).strip()
     ]
-    git = _discover_git_changed_files(root)
+    git = _discover_git_changed_files(root) if include_git_changes else {
+        "available": False,
+        "files": [],
+        "warnings": [],
+        "issues": [],
+    }
     sources = (
         ("caller", list(caller_paths or [])),
         ("prior_checkpoint", prior_paths),
@@ -2368,6 +2377,129 @@ def _discover_jobs_linked_to_task(
     }
 
 
+def release_expired_idle_active_task_route(
+    workspace: Path,
+    *,
+    active_project: str = "",
+) -> dict[str, Any]:
+    """Release a stale route only when it is proven to have no live job.
+
+    A crashed MCP connection can leave a running task with an expired lease. That
+    state deliberately blocks mutations, but it should not reduce every fresh MCP
+    session to the recovery-only catalog when there is no process left to recover.
+    The cancelled task remains persisted and can still be explicitly resumed.
+    """
+
+    context = active_task_route_context(
+        workspace,
+        active_project=active_project,
+    )
+    state = context.get("state") if isinstance(context.get("state"), dict) else {}
+    if context.get("status") != "blocked" or context.get("errorCode") != "TASK_ROUTE_BLOCKED":
+        return {"ok": True, "released": False, "reason": "route_not_expired_blocked"}
+
+    continuity = state.get("continuity") if isinstance(state.get("continuity"), dict) else {}
+    lease = continuity.get("lease") if isinstance(continuity.get("lease"), dict) else {}
+    recovery = continuity.get("recovery") if isinstance(continuity.get("recovery"), dict) else {}
+    supervisor = (
+        state.get("autonomySupervisor")
+        if isinstance(state.get("autonomySupervisor"), dict)
+        else {}
+    )
+    session = str(state.get("taskSessionId") or "").strip()
+    if (
+        not session
+        or not lease
+        or lease_health(continuity).get("active") is True
+        or recovery.get("conflicts")
+        or supervisor.get("blockers")
+        or state.get("orphanProcessSuspected") is True
+    ):
+        return {"ok": True, "released": False, "reason": "route_requires_recovery"}
+
+    discovery = _discover_jobs_linked_to_task(workspace, session)
+    linked_jobs = [job for job in discovery.get("jobs") or [] if isinstance(job, dict)]
+    if not discovery.get("discoveryComplete") or any(
+        _job_blocks_quarantine(job) for job in linked_jobs
+    ):
+        return {
+            "ok": True,
+            "released": False,
+            "reason": "linked_job_not_proven_terminal",
+            "taskSessionId": session,
+        }
+
+    released_at = _utc_now()
+
+    def mutate(latest: dict[str, Any]) -> dict[str, Any] | None:
+        latest_continuity = (
+            latest.get("continuity")
+            if isinstance(latest.get("continuity"), dict)
+            else {}
+        )
+        latest_lease = (
+            latest_continuity.get("lease")
+            if isinstance(latest_continuity.get("lease"), dict)
+            else {}
+        )
+        latest_recovery = (
+            latest_continuity.get("recovery")
+            if isinstance(latest_continuity.get("recovery"), dict)
+            else {}
+        )
+        latest_supervisor = (
+            latest.get("autonomySupervisor")
+            if isinstance(latest.get("autonomySupervisor"), dict)
+            else {}
+        )
+        latest_discovery = _discover_jobs_linked_to_task(workspace, session)
+        latest_jobs = [
+            job
+            for job in latest_discovery.get("jobs") or []
+            if isinstance(job, dict)
+        ]
+        if (
+            str(latest.get("status") or "") != "running"
+            or not latest_lease
+            or lease_health(latest_continuity).get("active") is True
+            or str(latest.get("activeJobId") or "").strip()
+            or latest.get("orphanProcessSuspected") is True
+            or latest_recovery.get("conflicts")
+            or latest_supervisor.get("blockers")
+            or not latest_discovery.get("discoveryComplete")
+            or any(_job_blocks_quarantine(job) for job in latest_jobs)
+        ):
+            return None
+        latest["status"] = "cancelled"
+        latest["autoReleasedReason"] = "expired_idle_lease"
+        latest["autoReleasedAt"] = released_at
+        latest_lease["status"] = "released"
+        latest_continuity["lease"] = latest_lease
+        latest["continuity"] = latest_continuity
+        latest["updatedAt"] = released_at
+        _append_log(
+            workspace,
+            session,
+            "Automatically released expired idle route at MCP startup",
+        )
+        return latest
+
+    result = _mutate_task_state(workspace, session, mutate)
+    if result.get("ok") is not True:
+        return {
+            "ok": True,
+            "released": False,
+            "reason": "route_changed_during_reconciliation",
+            "taskSessionId": session,
+        }
+    return {
+        "ok": True,
+        "released": True,
+        "reason": "expired_idle_lease",
+        "taskSessionId": session,
+    }
+
+
 def _jobs_linked_to_task(workspace: Path, task_session_id: str) -> list[dict[str, Any]]:
     """Return non-safe-terminal jobs that still need cancel attention."""
 
@@ -3431,6 +3563,8 @@ def task_checkpoint(
     validation: dict[str, Any] | None = None,
     note: str = "",
     accept_current_files: bool = False,
+    preserve_route_usage: bool = False,
+    include_git_changes: bool = True,
 ) -> dict[str, Any]:
     """Heartbeat, checkpoint, and safely recover a long-running task."""
 
@@ -3524,6 +3658,7 @@ def task_checkpoint(
                 workspace,
                 state,
                 list(modified_files or []),
+                include_git_changes=include_git_changes,
             )
             if discovered["issues"]:
                 mutation_result = {
@@ -3594,20 +3729,26 @@ def task_checkpoint(
                 if isinstance(state.get("toolRouteUsage"), dict)
                 else {}
             )
-            state["toolRouteUsage"] = {
-                "routeHash": str(prior_usage.get("routeHash") or ""),
-                "phase": str(prior_usage.get("phase") or ""),
-                "roleSession": str(prior_usage.get("roleSession") or ""),
-                "count": 0,
-                "calls": [],
-                "resetReason": "checkpoint_record",
-                "checkpointHash": str(
-                    (
-                        state.get("continuity", {}).get("checkpoint") or {}
-                    ).get("checkpointHash")
-                    or ""
-                ),
-            }
+            checkpoint_hash = str(
+                (state.get("continuity", {}).get("checkpoint") or {}).get("checkpointHash")
+                or ""
+            )
+            if preserve_route_usage:
+                state["toolRouteUsage"] = {
+                    **prior_usage,
+                    "checkpointHash": checkpoint_hash,
+                    "checkpointRecordedWithoutBudgetReset": True,
+                }
+            else:
+                state["toolRouteUsage"] = {
+                    "routeHash": str(prior_usage.get("routeHash") or ""),
+                    "phase": str(prior_usage.get("phase") or ""),
+                    "roleSession": str(prior_usage.get("roleSession") or ""),
+                    "count": 0,
+                    "calls": [],
+                    "resetReason": "checkpoint_record",
+                    "checkpointHash": checkpoint_hash,
+                }
         else:
             conflicts, discovery_warnings, discovery_issues = _checkpoint_conflicts(
                 workspace,
@@ -3654,6 +3795,7 @@ def task_checkpoint(
                     workspace,
                     state,
                     list(modified_files or []),
+                    include_git_changes=include_git_changes,
                 )
                 if discovered["issues"]:
                     mutation_result = {
@@ -4379,6 +4521,21 @@ def authorize_task_tool(
             or supplied_hash != str(route.get("routeHash") or "")
             or supplied_phase != str(route.get("phase") or "")
         ):
+            if tool_name not in CONTROL_PLANE_TOOLS and tool_name not in set(
+                route.get("activeTools") or []
+            ):
+                pending = [str(item) for item in route.get("pendingGates") or []]
+                return {
+                    "ok": False,
+                    "errorCode": "TASK_TOOL_NOT_ACTIVE",
+                    "error": (
+                        f"{tool_name} is not active in route phase "
+                        f"{route.get('phase')}"
+                    ),
+                    "toolRoute": compact_tool_route(route),
+                    "taskAuthorization": task_authorization_for_state(state),
+                    "nextAction": pending[0] if pending else "use_active_route_tool",
+                }
             return _auth_refresh_failure(
                 {
                     "ok": False,

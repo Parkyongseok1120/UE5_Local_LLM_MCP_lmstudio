@@ -16,6 +16,17 @@ AGENT_MCP_ROOT = ROOT / "lmstudio-unreal-agent-mcp"
 AGENT_MCP_SDK = AGENT_MCP_ROOT / "node_modules" / "@modelcontextprotocol" / "sdk"
 
 
+@pytest.fixture(autouse=True)
+def isolate_lmstudio_runtime_state(tmp_path, monkeypatch):
+    """Prevent tests from reading or mutating the user's live LM Studio state."""
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "lmstudio-state"))
+    monkeypatch.setenv(
+        "SHARED_UNREAL_CONFIG",
+        str(tmp_path / "lmstudio-config" / "unreal-workspace.json"),
+    )
+
+
 def require_agent_mcp_deps() -> None:
     if not AGENT_MCP_SDK.is_dir():
         pytest.skip("agent MCP npm deps missing; run: cd lmstudio-unreal-agent-mcp && npm ci")

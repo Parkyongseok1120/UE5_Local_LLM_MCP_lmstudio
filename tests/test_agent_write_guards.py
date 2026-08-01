@@ -506,6 +506,36 @@ console.log(JSON.stringify({ text }));
     assert "Advisory: 1 deferred counterpart finding(s)" in text
 
 
+def test_format_validation_result_never_hides_skipped_validation() -> None:
+    script = """
+const validateWrite = require('./src/validate-write.js');
+const text = validateWrite.formatValidationResult({
+  ok: true,
+  skipped: true,
+  infrastructureError: true,
+  projectRoot: '/tmp/Demo',
+  scanMode: 'scoped',
+  findingCount: 0,
+  findings: [],
+  advisoryFindings: [{
+    severity: 'error',
+    code: 'VALIDATOR_EXEC_FAILED',
+    path: '/tmp/Demo',
+    line: 0,
+    message: 'Python runtime was unavailable.',
+  }],
+  note: 'Python runtime was unavailable.',
+});
+console.log(JSON.stringify({ text }));
+"""
+    payload = _run_node(script)
+    text = payload["text"]
+    assert "Validation SKIPPED" in text
+    assert "Python runtime was unavailable" in text
+    assert "VALIDATOR_EXEC_FAILED" in text
+    assert "static_validate_project" in text
+
+
 def test_blocking_errors_of_falls_back_to_has_errors_when_field_missing() -> None:
     script = """
 const validateWrite = require('./src/validate-write.js');
@@ -515,4 +545,3 @@ console.log(JSON.stringify({ legacy, modern }));
 """
     payload = _run_node(script)
     assert payload == {"legacy": True, "modern": False}
-

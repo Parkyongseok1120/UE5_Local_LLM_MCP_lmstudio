@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0 Beta1
+# UE5_Local_LLM_MCP_lmstudio 1.3.0 Beta3
 
-> **Beta 릴리스:** portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows, Linux, macOS에서 하나의 통합 workflow로 설치할 수 있습니다. Unreal engine 탐색·인덱싱 경로·Editor export·agent build launcher는 host별 경로를 사용합니다. Linux/macOS의 RAG indexing에는 `pwsh`가 필요하며, 실제 플랫폼 live 인증은 아직 남아 있습니다. [1.3.0 Beta1 릴리스 노트](docs/Release_Notes_1_3_0_Beta1.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
+> **Beta 릴리스:** portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows, Ubuntu Linux, macOS에서 하나의 통합 workflow로 설치할 수 있습니다. Unreal engine 탐색·인덱싱 경로·Editor export·agent build launcher는 host별 경로를 사용합니다. Ubuntu/macOS의 RAG indexing은 `pwsh`를 사용하며, 실제 플랫폼 live 인증은 아직 남아 있습니다. Runtime archive는 고정 SHA-256을 확인하고 제한된 안전 추출을 거칩니다. [1.3.0 Beta3 릴리스 노트](docs/Release_Notes_1_3_0_Beta3.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
@@ -28,9 +28,9 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 > **프로젝트 현황 — 2026년 7월**
 >
-> **현재 릴리스는 1.3.0 Beta1입니다.** 1.3 라인에는 특정 프로젝트에 종속되지 않는 evidence-first 분석 skill, LM Studio MCP 통합, 프로젝트 전역 symbol/dependency/call/data-flow 분석, fail-closed architecture/change-impact/code-generation contract, 의미 보존 refactor snapshot·proof gate, 장기 작업 checkpoint 복구, 순위 기반 runtime experiment와 patch 후보 비교, risk-tier orchestration, 단일 cross-platform installer, 강화된 release/live-test gate가 포함됩니다.
+> **현재 릴리스는 1.3.0 Beta3입니다.** 1.3 라인에는 특정 프로젝트에 종속되지 않는 evidence-first 분석 skill, LM Studio MCP 통합, 프로젝트 전역 symbol/dependency/call/data-flow 분석, fail-closed architecture/change-impact/code-generation contract, 의미 보존 refactor snapshot·proof gate, 장기 작업 checkpoint 복구, 순위 기반 runtime experiment와 patch 후보 비교, risk-tier orchestration, 단일 cross-platform installer, 강화된 release/live-test gate가 포함됩니다.
 >
-> Beta1에는 저장소 자동 검증 근거가 있지만 새로운 live-model 점수는 아직 없습니다. 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline이며 Beta1의 측정 성능 향상으로 해석하면 안 됩니다. 실제 Linux/macOS Unreal 인증, Ollama 지원, 분리된 runtime/semantic capability scorecard는 계속 진행 중입니다.
+> Beta3에는 저장소 자동 검증 근거가 있지만 새로운 live-model 점수는 아직 없습니다. 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline이며 Beta3의 측정 성능 향상으로 해석하면 안 됩니다. 실제 Ubuntu/macOS Unreal 인증, Ollama 지원, 분리된 runtime/semantic capability scorecard는 계속 진행 중입니다.
 
 ---
 
@@ -38,7 +38,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0_Beta1.md"><img alt="1.3.0 Beta1 Release Notes" src="https://img.shields.io/badge/Release-1.3.0%20Beta1-yellow?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_0_Beta3.md"><img alt="1.3.0 Beta3 Release Notes" src="https://img.shields.io/badge/Release-1.3.0%20Beta3-yellow?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
   <a href="docs/Roadmap_1_3_0.md"><img alt="v1.3.0 Roadmap" src="https://img.shields.io/badge/Roadmap-v1.3.0-orange?logo=gitbook"></a>
@@ -47,7 +47,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 ## 최신 결과
 
-아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 Beta1 paired live 재측정은 아직 완료되지 않았습니다.
+아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 Beta3 paired live 재측정은 아직 완료되지 않았습니다.
 
 | 모델 / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
@@ -92,9 +92,13 @@ Windows에서는 루트의 `INSTALL.bat`, Linux와 macOS에서는 `install.sh`�
 
 선택 후 메시지를 한 번 보낸 다음 아래 명령으로 실제 프록시 경유 증거를 확인할 수 있습니다. `PASS` 없이 설치 파일/리비전만 일치하는 상태는 활성화가 아닙니다.
 
-```powershell
-.\scripts\Test-ContextCompactorActivation.ps1
+```shell
+cd lmstudio-context-compactor-plugin
+npm run status
 ```
+
+이 검사는 운영체제와 무관하게 최근 30분 이내의 프록시 텔레메트리만 인정하므로, 예전 채팅의 낡은 증거가 현재 활성 상태로 오인되지 않습니다.
+FULL 설치에서 AGENT 권한을 켠 경우에는 최근 프록시 증거가 없으면 쓰기 작업 계획 시작 자체도 fail-closed로 차단됩니다.
 
 > **필수 — LM Studio 기본 도구 `js-code-sandbox`(JavaScript/TypeScript Code Sandbox)는 반드시 끄세요.**  
 > Unreal 코딩 채팅에서는 LM Studio 기본 **JavaScript/TypeScript Code Sandbox** 플러그인을 비활성화하거나 숨기세요. 이 샌드박스는 별도 작업 디렉터리를 쓰며 활성 `.uproject` 루트와 **연결되지 않습니다**. 모델이 여기서 파일 I/O를 하면 경로 오류, 잘못된 편집, `unreal-agent`와의 충돌이 납니다. 프로젝트 파일 작업은 `unreal-rag` + `unreal-agent` MCP만 사용하세요 (`read_file`, `replace_in_file`, 신규 파일만 `write_file`). 자동 승인을 쓰는 경우 `%USERPROFILE%\.lmstudio\settings.json`의 `chat.skipToolConfirmationPatterns`에서 `lmstudio/js-code-sandbox:*` 항목을 제거하고 LM Studio를 재시작하세요. 자세한 내용: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md).
@@ -127,7 +131,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 | LM Studio 로그 증상 | 대응 |
 |---|---|
-| `request (...) exceeds the available context size (54272)` | `.\scripts\Test-ContextCompactorActivation.ps1`로 프록시 경유부터 확인하세요. 증거가 없다면 이 채팅의 모델을 `unreal-context-compactor`로 바꾸십시오. 프록시가 이미 5,000-token hard margin을 확보할 수 없다고 보고했다면 context를 늘리거나 5–10줄 handoff와 함께 새 채팅을 시작하세요. |
+| `request (...) exceeds the available context size (54272)` | `npm --prefix lmstudio-context-compactor-plugin run status`로 최근 프록시 경유부터 확인하세요. 증거가 없다면 이 채팅의 모델을 `unreal-context-compactor`로 바꾸십시오. 프록시가 8,000-token hard margin을 확보할 수 없다고 보고했다면 context를 늘리거나 5–10줄 handoff와 함께 새 채팅을 시작하세요. |
 | `failed to restore kv cache` / `cache size limit reached` | 위와 동일 — 세션 메모리가 포화된 상태입니다. context만 올리는 것보다 새 채팅이 빠릅니다. |
 | 긴 수정 루프 뒤 `Model failed to generate a tool call` | 멈추고, 변경 파일 + 남은 에러를 요약한 뒤 새 채팅으로. |
 | Unreal 작업 중 로그에 `js-code-sandbox` 등장 | 위 Quick Install 안내대로 비활성화하세요. |
@@ -138,7 +142,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 - **UBT/linker 전체 로그를 채팅에 붙여넣지 마세요.** `read_unreal_logs` 또는 로그 파일 경로를 쓰고, 첫 번째 의미 있는 에러 구간만 공유하세요.
 - **헤더 → .cpp 순서는 정상입니다.** 새 헤더에 `write_file` 후 `CPP_DEFINITION_MISSING` advisory가 보일 수 있습니다. 매칭 `.cpp`를 쓰기 전까지는 기대되는 동작이며, 그 자체로 롤백 사유가 아닙니다.
 - 모델이 자주 지어내는 **UE API**는 피하세요: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. 대신 `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, 값으로 넘기는 `SpawnTransform`, 소유 actor/subsystem의 `GetWorld()`를 쓰세요.
-- **compact tool 응답 (v1.2.5 baseline, Beta1 유지):** `build_unreal_project`는 한 줄 summary + likely error 최대 40줄 + `.agent/logs/latest-build.log` 경로만 반환합니다(stdout/stderr 전체 아님). `read_unreal_logs`는 최신 로그 1개와 첫 error cluster가 기본입니다. 컨텍스트 프록시는 압축 뒤에도 required next tool, 변경 파일, diagnostic, build state 같은 제어 필드를 유지합니다.
+- **compact tool 응답 (v1.2.5 baseline, Beta3 유지):** `build_unreal_project`는 한 줄 summary + likely error 최대 40줄 + `.agent/logs/latest-build.log` 경로만 반환합니다(stdout/stderr 전체 아님). `read_unreal_logs`는 최신 로그 1개와 첫 error cluster가 기본입니다. 컨텍스트 프록시는 압축 뒤에도 required next tool, 변경 파일, diagnostic, build state 같은 제어 필드를 유지합니다.
 
 자동 압축은 세션을 연장하지만, 이미 너무 큰 system prompt/tool schema를 줄이거나 포화된 KV cache를 복구할 수는 없습니다. 프록시가 hard safety margin을 회복하지 못하면 `write_session_handoff`를 호출하고 새 채팅에서 `.agent/handoff/latest.md`를 이어가세요.
 
@@ -150,7 +154,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 | 주제 | 파일 |
 |---|---|
-| 1.3.0 Beta1 릴리스 노트 | [docs/Release_Notes_1_3_0_Beta1.md](docs/Release_Notes_1_3_0_Beta1.md) |
+| 1.3.0 Beta3 릴리스 노트 | [docs/Release_Notes_1_3_0_Beta3.md](docs/Release_Notes_1_3_0_Beta3.md) |
 | 상세 프로젝트 개요 | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | 모델 측정 결과 | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | 버전별 성능 이력 | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -171,7 +175,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 ## 요약
 
-1.3.0 Beta1은 prerelease이지만, 아키텍처·설치·릴리스 경로를 더 넓은 자동 검증으로 보호합니다.
+1.3.0 Beta3은 prerelease이지만, 아키텍처·설치·릴리스 경로를 더 넓은 자동 검증으로 보호합니다.
 
 좁은 UE 5.8 compile-fix 작업에서는 현재 community fine-tuned Qwen 3.6 27B local workflow가 live UBT validation에서 강한 결과를 냈습니다(36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B도 compact-model 결과를 저장했습니다(35/36 Pass@K, 33/36 Pass@1). 이 결과는 내부 workflow 측정이며, Claude/GPT 계열과의 일반 모델 동등성 주장이 아닙니다.
 

@@ -8,9 +8,21 @@ const path = require("path");
 
 const {
   resolveProjectRootForFile,
+  resolvePythonExe,
   validateReplaceOccurrences,
   isValidationInfrastructureFailure
 } = require("../src/validate-write");
+
+test("resolvePythonExe honors installer-provided PYTHON_EXE", () => {
+  const original = process.env.PYTHON_EXE;
+  process.env.PYTHON_EXE = "/opt/codex/python3.12";
+  try {
+    assert.equal(resolvePythonExe(), "/opt/codex/python3.12");
+  } finally {
+    if (original === undefined) delete process.env.PYTHON_EXE;
+    else process.env.PYTHON_EXE = original;
+  }
+});
 
 test("expectedOccurrences=1 rejects ambiguous replace", () => {
   const err = validateReplaceOccurrences("hello world hello", "hello", "hi", { expectedOccurrences: 1 });

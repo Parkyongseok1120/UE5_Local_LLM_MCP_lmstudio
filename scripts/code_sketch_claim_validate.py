@@ -55,6 +55,10 @@ TEMPLATE_VARIABLE_TYPE_RE = re.compile(
 LOCAL_TYPE_DECL_RE = re.compile(
     r"\b(?:class|struct|enum(?:\s+class)?)\s+(?:[A-Z0-9_]+_API\s+)?([AUFSI][A-Z][A-Za-z0-9_]{2,})\b"
 )
+LOCAL_INHERITANCE_SKETCH_RE = re.compile(
+    r"(?m)^\s*([AUFSI][A-Z][A-Za-z0-9_]{2,})\s*:\s*(?:public\s+)?"
+    r"[AUFSI][A-Z][A-Za-z0-9_]{2,}\s*$"
+)
 LOCAL_DELEGATE_DECL_RE = re.compile(
     r"\bDECLARE_(?:DYNAMIC_)?MULTICAST_DELEGATE(?:_[A-Za-z]+Params?)?\s*\(\s*([A-Za-z_]\w*)"
 )
@@ -64,7 +68,7 @@ LOCAL_DELEGATE_DECL_RE = re.compile(
 COMMON_SAFE = {
     "UObject", "AActor", "UActorComponent", "USceneComponent", "UClass",
     "FString", "FName", "FText", "FVector", "FRotator", "FTransform",
-    "UWorld", "APawn", "ACharacter", "APlayerController", "AGameModeBase",
+    "UWorld", "APawn", "ACharacter", "APlayerController", "AGameModeBase", "AGameStateBase",
     "UWorldSubsystem", "UGameInstanceSubsystem", "UEngineSubsystem",
     "UCLASS", "USTRUCT", "UENUM", "UFUNCTION", "UPROPERTY", "UINTERFACE",
 }
@@ -137,6 +141,12 @@ def extract_member_call_claims(text: str) -> list[dict[str, str]]:
 def extract_local_declarations(text: str) -> set[str]:
     """Return symbols introduced by the sketch itself, not claimed as engine APIs."""
     declared = {match.group(1) for match in LOCAL_TYPE_DECL_RE.finditer(text or "")}
+    # Architecture sketches commonly use ``ANewType : AActor`` instead of a
+    # complete C++ class declaration. Treat only this anchored inheritance form
+    # as a proposed local declaration; engine/member claims remain fail-closed.
+    declared.update(
+        match.group(1) for match in LOCAL_INHERITANCE_SKETCH_RE.finditer(text or "")
+    )
     declared.update(match.group(1) for match in LOCAL_DELEGATE_DECL_RE.finditer(text or ""))
     return declared
 

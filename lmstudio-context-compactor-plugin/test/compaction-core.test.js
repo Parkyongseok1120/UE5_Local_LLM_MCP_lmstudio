@@ -12,7 +12,8 @@ test("budget gate reserves output, tool schema, and build result space", () => {
     toolSchemaTokens: 2_000,
   });
   assert.equal(soft.action, "soft_compact");
-  assert.equal(soft.remainingTokens, 9_904);
+  assert.equal(soft.remainingTokens, 8_880);
+  assert.equal(soft.reservedTokens, 15_120);
 
   const hard = core.budgetDecision({
     contextLength: 32_000,

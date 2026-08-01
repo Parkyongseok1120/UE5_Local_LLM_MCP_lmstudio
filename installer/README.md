@@ -5,7 +5,7 @@ Do not start installation from this directory.
 The supported user entry points are intentionally limited to:
 
 - Windows: `INSTALL.bat`
-- Linux and macOS: `install.sh`
+- Ubuntu Linux and macOS: `install.sh`
 - Any operating system or automation: `install.py`
 
 `install.py` is the only installer implementation. Internal Unreal maintenance and
@@ -27,7 +27,13 @@ engine or select a custom/source engine folder. The authority choice is:
 AGENT authority requires a second confirmation and the final install summary shows
 the selected authority before any installation work starts.
 
-On macOS and Linux, Standard/Full indexing requires `pwsh`. Engine discovery uses
+On macOS and Ubuntu Linux, opt-in indexing requires PowerShell 7 (`pwsh`). Engine discovery uses
 host-native common locations and accepts `UNREAL_ENGINE_ROOT` or `--engine-root`
 for source/custom installs. Unreal builds use the host `Build.sh` (with the UBT DLL
 through `dotnet` as fallback), while Windows keeps its existing UBT/Build.bat path.
+
+The launcher needs Python 3.10+ to start, then the installer establishes managed
+Python 3.12. Node/npm is bootstrapped only for Unreal or context-compactor
+components, and `pwsh` only for `--build-rag`. All pinned runtime archives are
+SHA-256 verified and safely extracted. The Linux runtime baseline is Ubuntu
+22.04/24.04 with glibc; musl/Alpine is rejected with an actionable error.

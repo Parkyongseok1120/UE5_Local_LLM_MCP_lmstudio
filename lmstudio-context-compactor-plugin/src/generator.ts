@@ -36,11 +36,32 @@ async function loadCheckpointBestEffort(sessionId: string): Promise<any | null> 
   }
 }
 
-async function saveCheckpointBestEffort(sessionId: string, checkpoint: any): Promise<void> {
+async function saveCheckpointBestEffort(
+  sessionId: string,
+  checkpoint: any,
+): Promise<{ ok: boolean; error?: string }> {
   try {
     await store.saveCheckpoint(sessionId, checkpoint);
+    return { ok: true };
   } catch (error: any) {
-    console.warn(`[unreal-context-compactor] Checkpoint save failed; generation will continue: ${error?.message || error}`);
+    const message = String(error?.message || error);
+    console.warn(`[unreal-context-compactor] Checkpoint save failed: ${message}`);
+    return { ok: false, error: message };
+  }
+}
+
+async function persistCheckpoint(
+  sessionId: string,
+  checkpoint: any,
+  required: boolean,
+  stage: string,
+): Promise<void> {
+  const saved = await saveCheckpointBestEffort(sessionId, checkpoint);
+  if (!saved.ok && required) {
+    throw new Error(
+      `Context safety checkpoint could not be persisted (${stage}): ${saved.error || "unknown error"}. `
+      + "Generation was stopped before unsafe output was committed.",
+    );
   }
 }
 
@@ -155,6 +176,7 @@ function validateToolRequest(request: any, checkpoint: any): { ok: boolean; reas
 async function generate(ctl: GeneratorController, history: Chat): Promise<void> {
   const enabled = Boolean(configValue(ctl, "enabled", true));
   const observeOnly = Boolean(configValue(ctl, "observeOnly", false));
+  const requireCheckpointPersistence = Boolean(configValue(ctl, "requireCheckpointPersistence", true));
   const configuredTargetModel = String(configValue(ctl, "targetModel", "") || "").trim();
 
   const messages = plainMessages(history);
@@ -191,16 +213,16 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     });
   }
 
-  const pendingCalls = [
+  let unresolvedPendingCalls: any[] = [
     ...(Array.isArray(checkpoint?.pendingToolCalls) ? checkpoint.pendingToolCalls : []),
     ...(checkpoint?.pendingToolCall ? [checkpoint.pendingToolCall] : []),
   ];
-  if (checkpoint && pendingCalls.length > 0) {
+  if (checkpoint && unresolvedPendingCalls.length > 0) {
     const currentSnapshots = core.snapshotMessages(messages);
     const completed = currentSnapshots.flatMap((message: any) => message.toolResults || []);
     const anonymousCompletedCount = completed.filter((result: any) => !result.toolCallId).length;
     const matchedIds: string[] = [];
-    const remainingPending = pendingCalls.filter((pending: any) => {
+    const remainingPending = unresolvedPendingCalls.filter((pending: any) => {
       const pendingId = pending?.id || null;
       const observedResultCount = Number(pending?.observedToolResultCount || 0);
       const hasAnonymousBaseline = Number.isFinite(Number(pending?.observedAnonymousToolResultCount));
@@ -212,15 +234,36 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       if (matched && pendingId) matchedIds.push(String(pendingId));
       return !matched;
     });
-    if (remainingPending.length !== pendingCalls.length) {
+    if (remainingPending.length !== unresolvedPendingCalls.length) {
       checkpoint.completedToolCallIds = [
         ...(checkpoint.completedToolCallIds || []),
         ...matchedIds,
       ].filter((id: string, index: number, ids: string[]) => ids.indexOf(id) === index).slice(-256);
       checkpoint.pendingToolCall = null;
       checkpoint.pendingToolCalls = remainingPending;
-      await saveCheckpointBestEffort(sessionId, checkpoint);
+      await persistCheckpoint(
+        sessionId,
+        checkpoint,
+        requireCheckpointPersistence,
+        "pending_tool_result_reconciliation",
+      );
     }
+    unresolvedPendingCalls = remainingPending;
+  }
+  if (unresolvedPendingCalls.length > 0) {
+    await appendEventBestEffort(sessionId, {
+      type: "generation_blocked",
+      at: new Date().toISOString(),
+      reason: "pending_tool_result_missing",
+      pendingToolCalls: unresolvedPendingCalls.map((pending: any) => ({
+        id: pending?.id || null,
+        name: pending?.name || "",
+      })),
+    });
+    throw new Error(
+      `Generation is paused because ${unresolvedPendingCalls.length} prior tool call(s) still lack a result. `
+      + "Wait for LM Studio to record the tool result, or resolve/cancel the failed tool call before sending another message.",
+    );
   }
 
   const currentFormatted = await model.applyPromptTemplate(history);
@@ -229,21 +272,25 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const toolDefinitions = ctl.getToolDefinitions();
   const toolSchemaTokens = await model.countTokens(JSON.stringify(toolDefinitions));
   const nextToolName = checkpoint?.requiredNextTool?.name || "";
-  const hardRemainingTokens = finiteNumber(configValue(ctl, "hardRemainingTokens", 5000), 5000);
+  const hardRemainingTokens = finiteNumber(configValue(ctl, "hardRemainingTokens", 8000), 8000);
   const config = {
     enabled,
     observeOnly,
     strictToolControlPlane: Boolean(configValue(ctl, "strictToolControlPlane", false)),
-    softRemainingTokens: finiteNumber(configValue(ctl, "softRemainingTokens", 10000), 10000, hardRemainingTokens),
+    bufferUntilPredictionComplete: Boolean(configValue(ctl, "bufferUntilPredictionComplete", true)),
+    rejectTruncatedPredictions: Boolean(configValue(ctl, "rejectTruncatedPredictions", true)),
+    requireCheckpointPersistence,
+    softRemainingTokens: finiteNumber(configValue(ctl, "softRemainingTokens", 14000), 14000, hardRemainingTokens),
     hardRemainingTokens,
     maxOutputReserve: finiteNumber(configValue(ctl, "maxOutputReserve", 4096), 4096, 1),
+    safetyMarginTokens: finiteNumber(configValue(ctl, "safetyMarginTokens", 1024), 1024),
     temperature: finiteNumber(configValue(ctl, "temperature", 0.1), 0.1, 0, 1),
     normalToolResultReserve: finiteNumber(configValue(ctl, "normalToolResultReserve", 3000), 3000),
     buildToolResultReserve: finiteNumber(configValue(ctl, "buildToolResultReserve", 8000), 8000),
-    recentCompleteTurns: Math.floor(finiteNumber(configValue(ctl, "recentCompleteTurns", 6), 6, 0, 100)),
-    minimumTurnsBetweenCompactions: Math.floor(finiteNumber(configValue(ctl, "minimumTurnsBetweenCompactions", 3), 3, 0, 100)),
+    recentCompleteTurns: Math.floor(finiteNumber(configValue(ctl, "recentCompleteTurns", 4), 4, 0, 100)),
+    minimumTurnsBetweenCompactions: Math.floor(finiteNumber(configValue(ctl, "minimumTurnsBetweenCompactions", 0), 0, 0, 100)),
     targetRemainingTokensAfterCompaction: finiteNumber(
-      configValue(ctl, "targetRemainingTokensAfterCompaction", 20000), 20000, hardRemainingTokens,
+      configValue(ctl, "targetRemainingTokensAfterCompaction", 24000), 24000, hardRemainingTokens,
     ),
   };
   const decision = core.budgetDecision({ contextLength, inputTokens, nextToolName, config, toolSchemaTokens });
@@ -261,6 +308,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     inputTokens,
     contextLength,
     decision,
+    workingDirectory,
   });
 
   const nextCheckpoint = core.buildCheckpoint(messages, checkpoint || {}, { maxCheckpointFacts: 32 });
@@ -289,7 +337,6 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       modelChat = compactedMetrics.chat;
       nextCheckpoint.lastCompactionSourceMessageCount = messages.length;
     }
-    await saveCheckpointBestEffort(sessionId, nextCheckpoint);
     if (applied && compactedMetrics) modelChat = compactedMetrics.chat;
     await appendEventBestEffort(sessionId, {
       type: "compaction_decision",
@@ -313,9 +360,30 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       messagesSinceLastCompaction,
     });
   }
+  await persistCheckpoint(
+    sessionId,
+    nextCheckpoint,
+    requireCheckpointPersistence,
+    "before_prediction",
+  );
+  if (decision.action === "hard_compact" && (!enabled || observeOnly)) {
+    await appendEventBestEffort(sessionId, {
+      type: "generation_blocked",
+      at: new Date().toISOString(),
+      reason: enabled ? "observe_only_at_hard_limit" : "compactor_disabled_at_hard_limit",
+      decision,
+    });
+    throw new Error(
+      "Context is below the hard safety threshold, but compaction is not active. "
+      + "Enable the context compactor and disable observe-only mode before continuing.",
+    );
+  }
   const events: any[] = [];
   const requests: any[] = [];
   const strictToolControlPlane = Boolean(config.strictToolControlPlane);
+  const bufferUntilPredictionComplete = Boolean(config.bufferUntilPredictionComplete)
+    || requireCheckpointPersistence
+    || Boolean(config.rejectTruncatedPredictions);
   const emitEvent = (event: any) => {
     if (event.kind === "fragment") ctl.fragmentGenerated(event.content, event.opts);
     else if (event.kind === "start") ctl.toolCallGenerationStarted({ toolCallId: event.toolCallId });
@@ -325,7 +393,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     else if (event.kind === "failure") ctl.toolCallGenerationFailed(new Error(event.error));
   };
   const recordEvent = (event: any) => {
-    if (strictToolControlPlane) events.push(event);
+    if (strictToolControlPlane || bufferUntilPredictionComplete) events.push(event);
     else emitEvent(event);
   };
   const prediction = model.respond(modelChat, {
@@ -359,7 +427,29 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
     },
   });
-  await prediction.result();
+  const predictionResult: any = await prediction.result();
+  const stopReason = String(predictionResult?.stats?.stopReason || "");
+  const unsafeStopReasons = new Set(["contextLengthReached", "failed", "modelUnloaded"]);
+  const truncated = unsafeStopReasons.has(stopReason)
+    || (Boolean(config.rejectTruncatedPredictions) && stopReason === "maxPredictedTokensReached");
+  await appendEventBestEffort(sessionId, {
+    type: "prediction_completion",
+    at: new Date().toISOString(),
+    stopReason: stopReason || "unspecified",
+    bufferedEventCount: events.length,
+    toolRequestCount: requests.length,
+    outputCommitted: false,
+    outputCommitPending: !truncated,
+  });
+  if (truncated) {
+    const safelyBuffered = strictToolControlPlane || bufferUntilPredictionComplete;
+    throw new Error(
+      `Model prediction was discarded because it did not complete safely (stopReason=${stopReason}). `
+      + (safelyBuffered
+        ? "No buffered text or tool call was committed; compact the context or increase the model context/output limit."
+        : "Atomic output was explicitly disabled, so already-streamed output may be partial. Enable atomic output before retrying."),
+    );
+  }
 
   const verdictByCallId = new Map<number, { ok: boolean; reason?: string }>();
   for (const entry of requests) {
@@ -374,18 +464,6 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         request: entry.request,
         reason: verdict.reason,
       });
-    }
-  }
-
-  if (strictToolControlPlane) {
-    for (const event of events) {
-      if (event.kind !== "end") {
-        emitEvent(event);
-        continue;
-      }
-      const verdict = verdictByCallId.get(event.callId) || { ok: true };
-      if (verdict.ok) emitEvent(event);
-      else ctl.toolCallGenerationFailed(new Error(`Tool call rejected by control plane: ${verdict.reason}`));
     }
   }
 
@@ -409,8 +487,33 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       }
       return pending;
     });
-    await saveCheckpointBestEffort(sessionId, nextCheckpoint);
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "pending_tool_calls",
+    );
   }
+
+  if (strictToolControlPlane || bufferUntilPredictionComplete) {
+    for (const event of events) {
+      if (event.kind !== "end") {
+        emitEvent(event);
+        continue;
+      }
+      const verdict = verdictByCallId.get(event.callId) || { ok: true };
+      if (verdict.ok) emitEvent(event);
+      else ctl.toolCallGenerationFailed(new Error(`Tool call rejected by control plane: ${verdict.reason}`));
+    }
+  }
+  await appendEventBestEffort(sessionId, {
+    type: "prediction_output_committed",
+    at: new Date().toISOString(),
+    stopReason: stopReason || "unspecified",
+    emittedEventCount: events.length,
+    toolRequestCount: requests.length,
+    outputCommitted: true,
+  });
 }
 
 export { generate };

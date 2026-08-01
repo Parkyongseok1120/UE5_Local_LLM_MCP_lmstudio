@@ -9,6 +9,8 @@ const test = require("node:test");
 const {
   authorizeActiveRouteTool,
   authorizeTaskRouteTool,
+  cancelActiveTask,
+  checkpointMutationViaPython,
   discoverActiveTaskContext,
   featureIntentTargetHash,
   requiredFields,
@@ -731,6 +733,32 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
     assert.strictEqual(stale.taskAuthorization.routeHash, "route-1");
     assert.strictEqual(stale.taskAuthorization.routePhase, "executor");
 
+    const plannerState = routeState(projectFile);
+    plannerState.toolRoute = {
+      ...plannerState.toolRoute,
+      phase: "planner",
+      roleSession: "planner",
+      activeTools: ["unreal_code_sketch_claim_validate"],
+      pendingGates: ["unreal_code_sketch_claim_validate"],
+    };
+    writeRouteState(stateRoot, plannerState);
+    const inactiveWrite = validateMutationAuth(
+      workspace,
+      {
+        taskAuthorization: { ...routeAuthorization, routeHash: "stale" },
+        path: "Source/Demo/Foo.cpp",
+      },
+      { requireAll: true, toolName: "replace_in_file" }
+    );
+    assert.strictEqual(inactiveWrite.errorCode, "TASK_TOOL_NOT_ACTIVE");
+    assert.strictEqual(inactiveWrite.nextAction, "unreal_code_sketch_claim_validate");
+    assert.strictEqual(inactiveWrite.taskAuthorization.routePhase, "planner");
+    assert.notStrictEqual(
+      inactiveWrite.nextAction,
+      "retry_same_tool_with_returned_taskAuthorization"
+    );
+    writeRouteState(stateRoot, state);
+
     const mismatch = validateMutationAuth(
       workspace,
       {
@@ -781,6 +809,88 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("cancel bridge uses the host python3 fallback when PYTHON_EXE is absent", {
+  skip: process.platform === "win32",
+}, () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-cancel-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-cancel-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const state = routeState(projectFile);
+  writeRouteState(stateRoot, state);
+  const previousRoot = process.env.AGENT_STATE_ROOT;
+  const previousPythonExe = process.env.PYTHON_EXE;
+  const previousPython = process.env.PYTHON;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  delete process.env.PYTHON_EXE;
+  delete process.env.PYTHON;
+  try {
+    const cancelled = cancelActiveTask(
+      workspace,
+      projectFile,
+      authorization.taskSessionId,
+      true
+    );
+    assert.strictEqual(cancelled.ok, true, JSON.stringify(cancelled));
+    assert.strictEqual(cancelled.status, "cancelled");
+  } finally {
+    if (previousRoot === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previousRoot;
+    if (previousPythonExe === undefined) delete process.env.PYTHON_EXE;
+    else process.env.PYTHON_EXE = previousPythonExe;
+    if (previousPython === undefined) delete process.env.PYTHON;
+    else process.env.PYTHON = previousPython;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("mutation checkpoint bridge persists the written file", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-checkpoint-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-checkpoint-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  const target = path.join(workspace, "Source", "Demo", "Foo.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(projectFile, "{}");
+  fs.writeFileSync(target, "// written\n");
+  const state = routeState(projectFile, {
+    toolRouteUsage: {
+      routeHash: "route-1",
+      phase: "executor",
+      roleSession: "executor",
+      count: 1,
+      calls: ["write_file"],
+    },
+  });
+  writeRouteState(stateRoot, state);
+  const previousRoot = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const result = checkpointMutationViaPython(
+      workspace,
+      { taskAuthorization: { ...authorization, routeHash: "route-1", routePhase: "executor" } },
+      [target],
+      { requiredNextAction: "continue_active_slice" }
+    );
+    assert.strictEqual(result.ok, true, JSON.stringify(result));
+    assert.strictEqual(result.continuity.checkpoint.status, "recorded");
+    assert.ok(result.continuity.checkpoint.modifiedFiles.includes("Source/Demo/Foo.cpp"));
+    assert.strictEqual(result.taskAuthorization.authToken, authorization.authToken);
+    assert.strictEqual(result.taskAuthorization.routeHash, result.toolRoute.routeHash);
+    assert.strictEqual(result.taskAuthorization.routePhase, result.toolRoute.phase);
+    const persisted = JSON.parse(fs.readFileSync(
+      path.join(stateRoot, "tasks", authorization.taskSessionId, "state.json"),
+      "utf8"
+    ));
+    assert.strictEqual(persisted.continuity.checkpoint.status, "recorded");
+  } finally {
+    if (previousRoot === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previousRoot;
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }

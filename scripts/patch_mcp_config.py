@@ -13,6 +13,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from atomic_io import atomic_write_text
 from workspace_paths import find_workspace_root as resolve_workspace_root, resolve_index_path
 
 DEFAULT_LMSTUDIO_ROOT = Path.home() / ".lmstudio"
@@ -100,7 +101,24 @@ def patch_server(entry: dict[str, Any], workspace: Path, shared_config: Path) ->
     return entry
 
 
-def patch_unreal_rag(entry: dict[str, Any], workspace: Path, python_exe: Path) -> dict[str, Any]:
+def context_compactor_is_installed() -> bool:
+    return (
+        DEFAULT_LMSTUDIO_ROOT
+        / "extensions"
+        / "plugins"
+        / "codex"
+        / "unreal-context-compactor"
+        / "manifest.json"
+    ).is_file()
+
+
+def patch_unreal_rag(
+    entry: dict[str, Any],
+    workspace: Path,
+    python_exe: Path,
+    *,
+    require_context_compactor: bool | None = None,
+) -> dict[str, Any]:
     index = resolve_index_path(workspace)
     entry["command"] = str(python_exe)
     entry["args"] = [
@@ -114,6 +132,14 @@ def patch_unreal_rag(entry: dict[str, Any], workspace: Path, python_exe: Path) -
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
+    require_compactor = (
+        context_compactor_is_installed()
+        if require_context_compactor is None
+        else require_context_compactor
+    )
+    if require_compactor:
+        env.setdefault("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "1")
+        env.setdefault("MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS", "300")
     entry["env"] = env
     entry["timeout"] = DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
     return entry
@@ -131,7 +157,12 @@ def resolve_agent_root(workspace: Path) -> Path:
     )
 
 
-def patch_unreal_agent(entry: dict[str, Any], workspace: Path, node_exe: Path) -> dict[str, Any]:
+def patch_unreal_agent(
+    entry: dict[str, Any],
+    workspace: Path,
+    node_exe: Path,
+    python_exe: Path,
+) -> dict[str, Any]:
     agent_root = resolve_agent_root(workspace)
     entry["command"] = str(node_exe)
     entry["args"] = [str(agent_root / "src" / "server.js")]
@@ -140,6 +171,7 @@ def patch_unreal_agent(entry: dict[str, Any], workspace: Path, node_exe: Path) -
     env["AGENT_MCP_CONFIG"] = str(agent_root / "config" / "agent-mcp.json")
     env["SHARED_UNREAL_CONFIG"] = str(SHARED_CONFIG)
     env["UNREAL58_ROOT"] = str(workspace)
+    env["PYTHON_EXE"] = str(python_exe)
     env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
     env.setdefault("MCP_REQUIRE_PLAN_AUTH", "1")
     env.setdefault("MCP_AGENT_RESULT_MAX_CHARS", "32000")
@@ -159,7 +191,11 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def save_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def prune_forbidden_tool_confirmation_patterns(settings: dict[str, Any]) -> list[str]:
@@ -231,7 +267,9 @@ def main() -> None:
     if "unreal-rag" in servers:
         servers["unreal-rag"] = patch_unreal_rag(servers["unreal-rag"], workspace, args.python)
     if "unreal-agent" in servers:
-        servers["unreal-agent"] = patch_unreal_agent(servers["unreal-agent"], workspace, node_exe)
+        servers["unreal-agent"] = patch_unreal_agent(
+            servers["unreal-agent"], workspace, node_exe, args.python
+        )
 
     if args.dry_run:
         print(json.dumps(config, ensure_ascii=False, indent=2))

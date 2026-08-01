@@ -1,15 +1,15 @@
 {
   "name": "unreal-context-compactor",
-  "version": "0.3.2",
+  "version": "0.3.4",
   "private": true,
   "main": "index.js",
   "scripts": {
     "dev": "lms dev",
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test test/compaction-core.test.js test/checkpoint-store.test.js test/generator-compat.test.cjs",
+    "test": "npm run build && node --test test/compaction-core.test.js test/checkpoint-store.test.js test/generator-compat.test.cjs test/status.test.cjs",
     "test:active": "npm run build && node test/active-generator-smoke.cjs",
     "test:active:tool": "npm run build && node test/active-tool-generator-smoke.cjs",
-    "status": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/Test-ContextCompactorActivation.ps1"
+    "status": "node scripts/status.cjs"
   },
   "dependencies": {
     "@lmstudio/sdk": "^1.5.0"

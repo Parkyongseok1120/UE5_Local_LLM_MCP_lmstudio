@@ -100,7 +100,163 @@ test("default mode preserves multiple tool calls and fragment metadata", async (
     assert.equal(fragment.content, "OK");
     assert.equal(fragment.opts.tokenCount, 2);
     assert.equal(fragment.opts.containsDrafted, true);
+    assert.equal(activeCheckpoint(stateRoot).sourceMessageCount, history.length);
   } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+for (const stopReason of ["contextLengthReached", "maxPredictedTokensReached"]) {
+  test(`unsafe prediction stop ${stopReason} discards buffered output`, async () => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-stop-"));
+    process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+    try {
+      const { generate } = require("../dist/generator.js");
+      const emitted = [];
+      const model = {
+        identifier: "stop-reason-model",
+        async applyPromptTemplate() { return "formatted"; },
+        async countTokens(value) { return String(value || "").length; },
+        async getContextLength() { return 100_000; },
+        respond(_history, opts) {
+          opts.onPredictionFragment({ content: "partial output that must not escape" });
+          opts.onToolCallRequestStart(1, { toolCallId: "partial-call" });
+          opts.onToolCallRequestNameReceived(1, "write_file");
+          return { async result() { return { stats: { stopReason } }; } };
+        },
+      };
+      const controller = controllerFor(model, {}, stateRoot, emitted, []);
+      const history = Chat.empty();
+      history.append("user", "continue safely");
+
+      await assert.rejects(generate(controller, history), new RegExp(stopReason));
+      assert.deepEqual(emitted, []);
+      const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+        .find((entry) => entry.isDirectory());
+      const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+        .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+      const completion = events.find((event) => event.type === "prediction_completion");
+      assert.equal(completion.stopReason, stopReason);
+      assert.equal(completion.outputCommitted, false);
+    } finally {
+      delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test("observe-only mode fails closed at the hard context threshold", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-observe-hard-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let respondCalled = false;
+    const model = {
+      identifier: "observe-only-model",
+      async applyPromptTemplate() { return "x".repeat(3_000); },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 10_000; },
+      respond() {
+        respondCalled = true;
+        return { async result() { return {}; } };
+      },
+    };
+    const controller = controllerFor(model, { observeOnly: true }, stateRoot, [], []);
+    const history = Chat.empty();
+    history.append("user", "do not truncate");
+
+    await assert.rejects(generate(controller, history), /compaction is not active/i);
+    assert.equal(respondCalled, false);
+    assert.ok(activeCheckpoint(stateRoot));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("required checkpoint persistence blocks generation before model output", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-persist-"));
+  const blockedRoot = path.join(temp, "not-a-directory");
+  fs.writeFileSync(blockedRoot, "block");
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = blockedRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let respondCalled = false;
+    const model = {
+      identifier: "persistence-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        respondCalled = true;
+        return { async result() { return {}; } };
+      },
+    };
+    const controller = controllerFor(model, { requireCheckpointPersistence: true }, blockedRoot, [], []);
+    const history = Chat.empty();
+    history.append("user", "persist before responding");
+
+    await assert.rejects(generate(controller, history), /could not be persisted/i);
+    assert.equal(respondCalled, false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("pending tool checkpoint is durable before buffered tool output is committed", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-pending-persist-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  const checkpointStore = require("../dist/checkpoint-store.js");
+  const originalSave = checkpointStore.saveCheckpoint;
+  let saveCount = 0;
+  checkpointStore.saveCheckpoint = async (...args) => {
+    saveCount += 1;
+    if (saveCount === 2) throw new Error("injected pending checkpoint failure");
+    return originalSave(...args);
+  };
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const model = {
+      identifier: "pending-persistence-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onPredictionFragment({ content: "calling tool" });
+        opts.onToolCallRequestStart(1, { toolCallId: "call-1" });
+        opts.onToolCallRequestNameReceived(1, "read_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"A.cpp"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "call-1",
+            type: "function",
+            name: "read_file",
+            arguments: { path: "A.cpp" },
+          },
+        });
+        return { async result() { return {}; } };
+      },
+    };
+    const controller = controllerFor(
+      model,
+      { requireCheckpointPersistence: true },
+      stateRoot,
+      emitted,
+      [{ type: "function", function: { name: "read_file" } }],
+    );
+    const history = Chat.empty();
+    history.append("user", "read safely");
+
+    await assert.rejects(
+      generate(controller, history),
+      /pending_tool_calls.*injected pending checkpoint failure/i,
+    );
+    assert.deepEqual(emitted, []);
+  } finally {
+    checkpointStore.saveCheckpoint = originalSave;
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -291,7 +447,10 @@ test("anonymous multi-tool checkpoints clear one tool result at a time", async (
       });
     }
 
-    await generate(controller, historyWithResults(1));
+    await assert.rejects(
+      generate(controller, historyWithResults(1)),
+      /prior tool call.*still lack a result/i,
+    );
     checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.pendingToolCalls.length, 1);
     assert.equal(checkpoint.pendingToolCalls[0].name, "read_file_range");
