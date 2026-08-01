@@ -134,23 +134,35 @@ def test_ensure_runtimes_dry_run_without_downloads(
     sys.modules.pop("bootstrap_runtimes", None)
 
 
-def test_find_node_npm_keeps_npm_shim_path(
+@pytest.mark.parametrize(
+    ("system", "node_name", "npm_name"),
+    [
+        ("darwin", "node", "npm"),
+        ("windows", "node.exe", "npm.cmd"),
+    ],
+)
+def test_find_node_npm_keeps_platform_npm_shim_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    system: str,
+    node_name: str,
+    npm_name: str,
 ) -> None:
     module = _load()
     bin_dir = tmp_path / "node-v20.20.2" / "bin"
     bin_dir.mkdir(parents=True)
-    node = bin_dir / "node"
-    npm = bin_dir / "npm"
+    node = bin_dir / node_name
+    npm = bin_dir / npm_name
     node.write_text("#!/bin/sh\necho v20.20.2\n", encoding="utf-8")
     npm.write_text("#!/bin/sh\necho 10.0.0\n", encoding="utf-8")
     node.chmod(0o755)
     npm.chmod(0o755)
 
-    monkeypatch.setattr(module, "host_os", lambda: "darwin")
+    monkeypatch.setattr(module, "host_os", lambda: system)
     monkeypatch.setattr(module, "cpu_arch", lambda: "arm64")
+    monkeypatch.setattr(module, "_node_major", lambda _path: 20)
     monkeypatch.setattr(module, "_node_arch", lambda _path: "arm64")
+    monkeypatch.setattr(module, "_npm_is_usable", lambda _node, _npm: True)
     monkeypatch.setattr(module.shutil, "which", lambda _name: None)
 
     found = module.find_node_npm([bin_dir])
@@ -158,6 +170,17 @@ def test_find_node_npm_keeps_npm_shim_path(
     assert found[0] == module._absolute_path(node)
     assert found[1] == module._absolute_path(npm)
     assert "npm-cli.js" not in str(found[1])
+    sys.modules.pop("bootstrap_runtimes", None)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe/npm.cmd contract is Windows-only")
+def test_npm_is_usable_accepts_windows_cmd_shim() -> None:
+    module = _load()
+    node = module.shutil.which("node")
+    npm = module.shutil.which("npm.cmd")
+    assert node is not None
+    assert npm is not None
+    assert module._npm_is_usable(Path(node), Path(npm)) is True
     sys.modules.pop("bootstrap_runtimes", None)
 
 

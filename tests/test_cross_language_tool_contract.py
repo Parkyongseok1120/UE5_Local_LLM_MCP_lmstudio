@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -46,8 +48,19 @@ def test_node_syntax_check() -> None:
 
 
 def test_node_build_proof_unit() -> None:
+    npm = shutil.which("npm")
+    assert npm is not None
+    command = [npm, "test"]
+    if sys.platform == "win32" and Path(npm).suffix.lower() in {".cmd", ".bat"}:
+        command = [
+            os.environ.get("COMSPEC", "cmd.exe"),
+            "/d",
+            "/s",
+            "/c",
+            subprocess.list2cmdline(command),
+        ]
     result = subprocess.run(
-        ["npm", "test"],
+        command,
         cwd=ROOT / "lmstudio-unreal-agent-mcp",
         capture_output=True,
         text=True,

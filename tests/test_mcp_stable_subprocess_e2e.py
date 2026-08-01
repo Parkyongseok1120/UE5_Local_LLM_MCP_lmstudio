@@ -1162,13 +1162,22 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
     )
     log_dir = project_dir / ".agent" / "logs"
     log_dir.mkdir(parents=True)
-    (log_dir / "latest-build.log").write_text(
+    build_log = log_dir / "latest-build.log"
+    build_log.write_text(
         ("x\n" * 32_767)
         + "error C1000: original failure across a scan boundary\n"
         + ("follow-on noise\n" * 8_000)
         + "Demo.cpp(9): error C2065: fixture failure\n",
         encoding="utf-8",
     )
+    newline_end_offsets = [
+        index + 1
+        for index, byte in enumerate(build_log.read_bytes())
+        if byte == 0x0A
+    ]
+    assert len(newline_end_offsets) >= 120
+    first_range_end = newline_end_offsets[59]
+    second_range_end = newline_end_offsets[119]
 
     shared = tmp_path / "shared.json"
     shared.write_text(json.dumps({"activeProject": str(project_dir / "DemoGame.uproject")}), encoding="utf-8")
@@ -1241,7 +1250,7 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
         range_payload = json.loads(ranged["result"]["content"][0]["text"])
         assert range_payload["responseMode"] == "range"
         assert range_payload["logs"][0]["lineCount"] == 60
-        assert range_payload["logs"][0]["nextCursorByte"] == 120
+        assert range_payload["logs"][0]["nextCursorByte"] == first_range_end
         assert range_payload["logs"][0]["hasMore"] is True
 
         continued = client.request(
@@ -1258,7 +1267,7 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
         )
         continued_payload = json.loads(continued["result"]["content"][0]["text"])
         assert continued_payload["logs"][0]["lineCount"] == 60
-        assert continued_payload["logs"][0]["cursorByte"] == 120
-        assert continued_payload["logs"][0]["nextCursorByte"] == 240
+        assert continued_payload["logs"][0]["cursorByte"] == first_range_end
+        assert continued_payload["logs"][0]["nextCursorByte"] == second_range_end
     finally:
         client.close()
