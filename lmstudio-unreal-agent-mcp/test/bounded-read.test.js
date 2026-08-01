@@ -86,3 +86,55 @@ test("readUtf8Range can preserve a partial leading line for streaming scanners",
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("readUtf8Range line limit advances only through returned lines", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-log-lines-"));
+  const log = path.join(root, "lines.log");
+  try {
+    const sourceLines = Array.from(
+      { length: 200 },
+      (_, index) => `line-${String(index).padStart(3, "0")}`,
+    );
+    fs.writeFileSync(log, `${sourceLines.join("\n")}\n`, "utf8");
+
+    const first = await readUtf8Range(log, 0, 65_536, {
+      preservePartialLeading: true,
+      maxLines: 60,
+    });
+    const second = await readUtf8Range(log, first.nextCursorByte, 65_536, {
+      preservePartialLeading: true,
+      maxLines: 60,
+    });
+
+    assert.deepEqual(first.content.trimEnd().split("\n"), sourceLines.slice(0, 60));
+    assert.deepEqual(second.content.trimEnd().split("\n"), sourceLines.slice(60, 120));
+    assert.equal(
+      first.nextCursorByte,
+      Buffer.byteLength(`${sourceLines.slice(0, 60).join("\n")}\n`),
+    );
+    assert.equal(first.hasMore, true);
+    assert.equal(first.lineLimited, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readUtf8Range keeps multibyte UTF-8 intact across byte cursors", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-log-utf8-"));
+  const log = path.join(root, "utf8.log");
+  try {
+    const source = `${"🙂".repeat(400)}\n끝\n`;
+    fs.writeFileSync(log, source, "utf8");
+    const first = await readUtf8Range(log, 0, 1_025, { preservePartialLeading: true });
+    const second = await readUtf8Range(log, first.nextCursorByte, 1_025, {
+      preservePartialLeading: true,
+    });
+
+    assert.doesNotMatch(first.content, /�/u);
+    assert.doesNotMatch(second.content, /�/u);
+    assert.equal(first.content + second.content, source);
+    assert.equal(first.nextCursorByte % 4, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

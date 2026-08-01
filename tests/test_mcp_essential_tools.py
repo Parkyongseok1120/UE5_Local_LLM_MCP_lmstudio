@@ -492,7 +492,7 @@ def test_strict_compactor_request_does_not_block_non_lmstudio_frontend(
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     monkeypatch.setenv("MCP_FRONTEND", "cline")
     monkeypatch.setenv("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "1")
-    monkeypatch.setenv("MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS", "lmstudio")
+    monkeypatch.setenv("MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS", "lmstudio,cline")
     monkeypatch.setenv(
         "LMS_CONTEXT_COMPACTOR_STATE_DIR",
         str(tmp_path / "missing-compactor-state"),
@@ -526,6 +526,8 @@ def test_strict_compactor_request_does_not_block_non_lmstudio_frontend(
     assert routing["strictRequested"] is True
     assert routing["strictScopeMatched"] is False
     assert routing["blocksWrites"] is False
+    assert routing["active"] is None
+    assert routing["status"]["telemetryChecked"] is False
 
 
 def test_code_sketch_tool_exposes_project_generation_contract(monkeypatch, tmp_path):

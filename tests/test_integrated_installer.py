@@ -675,6 +675,33 @@ def test_full_agent_install_keeps_context_proxy_advisory(tmp_path: Path) -> None
     sys.modules.pop("integrated_install", None)
 
 
+def test_cline_entries_do_not_inherit_lmstudio_context_policy(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    args = module.build_parser().parse_args(["--profile", "full"])
+    args.enable_agent_mode = True
+    args.lmstudio_home = tmp_path / "lmstudio"
+    args.workspace_root = [tmp_path / "projects"]
+    entries = module._unreal_entries(
+        args,
+        Path(sys.executable),
+        tmp_path / "node",
+        tmp_path / "shared.json",
+        tmp_path / "agent.json",
+        context_compactor_advisory=True,
+    )
+
+    cline_rag = module._mcp_entry_for_frontend(entries["unreal-rag"], "cline")
+    cline_agent = module._mcp_entry_for_frontend(entries["unreal-agent"], "cline")
+
+    assert entries["unreal-rag"]["env"]["MCP_FRONTEND"] == "lmstudio"
+    assert entries["unreal-rag"]["env"]["MCP_CONTEXT_COMPACTOR_ADVISORY"] == "1"
+    assert cline_rag["env"]["MCP_FRONTEND"] == "cline"
+    assert cline_agent["env"]["MCP_FRONTEND"] == "cline"
+    assert module.LMSTUDIO_CONTEXT_POLICY_ENV.isdisjoint(cline_rag["env"])
+    assert module.LMSTUDIO_CONTEXT_POLICY_ENV.isdisjoint(cline_agent["env"])
+    sys.modules.pop("integrated_install", None)
+
+
 def test_custom_rule_and_cline_install(tmp_path: Path) -> None:
     rule = tmp_path / "agent" / "rule.md"
     cline = tmp_path / "cline" / "mcp.json"
@@ -693,6 +720,31 @@ def test_custom_rule_and_cline_install(tmp_path: Path) -> None:
     assert "work evidence-first" in rule.read_text(encoding="utf-8")
     cline_payload = json.loads(cline.read_text(encoding="utf-8"))
     assert "evidence-first" in cline_payload["mcpServers"]
+
+
+def test_custom_unreal_cline_install_uses_cline_frontend_identity(tmp_path: Path) -> None:
+    cline = tmp_path / "cline" / "mcp.json"
+    result = _run(
+        tmp_path,
+        "--profile",
+        "custom",
+        "--components",
+        "codex,lmstudio,unreal,cline",
+        "--cline-settings",
+        str(cline),
+        "--workspace-root",
+        str(tmp_path / "projects"),
+        "--enable-agent-mode",
+        "--accept-agent-risk",
+        "--skip-deps",
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(cline.read_text(encoding="utf-8"))
+    for name in ("unreal-rag", "unreal-agent"):
+        env = payload["mcpServers"][name]["env"]
+        assert env["MCP_FRONTEND"] == "cline"
+        assert not any(key.startswith("MCP_CONTEXT_COMPACTOR_") for key in env)
+    assert "MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE" not in payload["mcpServers"]["unreal-rag"]["env"]
 
 
 def test_portable_rule_uses_managed_default_path_when_not_supplied(tmp_path: Path) -> None:

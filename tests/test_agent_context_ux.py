@@ -105,6 +105,24 @@ def test_log_compaction_prefers_first_error_cluster() -> None:
     assert payload["truncated"] is True
 
 
+def test_range_log_compaction_never_advances_past_omitted_lines() -> None:
+    payload = run_node(
+        "ux.compactLogPayload({responseMode:'range',summary:'LOGS READY',ok:true,logs:[{"
+        "file:'Game.log',lineCount:2,lines:['x'.repeat(2000),'y'.repeat(2000)],"
+        "sourceBytes:8000,bytesRead:4002,bytesReturned:4002,sourceTruncated:true,"
+        "mode:'range',cursorByte:120,contentStartByte:120,contentEndByte:4122,"
+        "nextCursorByte:4122,hasMore:true}]}, 1000)"
+    )
+    log = payload["logs"][0]
+    assert payload["rangeRetryRequired"] is True
+    assert payload["exactTraversalPreserved"] is True
+    assert log["lines"] == []
+    assert log["cursorByte"] == 120
+    assert log["nextCursorByte"] == 120
+    assert log["contentEndByte"] == 120
+    assert log["hasMore"] is True
+
+
 def test_handoff_is_short_and_has_fixed_resume_path() -> None:
     handoff = run_node(
         "ux.formatSessionHandoff({summary:'Fixed two files',"

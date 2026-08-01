@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
 import json
 import os
@@ -42,6 +43,12 @@ PROFILE_DEFAULTS = {
 ALL_COMPONENTS = set(INSTALL_MANIFEST["components"])
 PORTABLE_RULE_FILENAME = "evidence-first-code-audit.md"
 CLINE_SETTINGS_RELATIVE_PATH = Path(".cline") / "data" / "settings" / "cline_mcp_settings.json"
+LMSTUDIO_CONTEXT_POLICY_ENV = {
+    "MCP_CONTEXT_COMPACTOR_ADVISORY",
+    "MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE",
+    "MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS",
+    "MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS",
+}
 BOOTSTRAP_LOCK_TOKEN_ENV = "EVIDENCE_FIRST_BOOTSTRAP_LOCK_TOKEN"
 INVALID_LOCK_GRACE_SECONDS = 300
 MAX_INSTALLER_JSON_BYTES = 16 * 1024 * 1024
@@ -912,6 +919,19 @@ def _merge_mcp_entry(config: dict[str, Any], name: str, entry: dict[str, Any]) -
     servers[name] = entry
 
 
+def _mcp_entry_for_frontend(entry: dict[str, Any], frontend: str) -> dict[str, Any]:
+    """Clone an MCP entry without leaking LM Studio-only routing policy."""
+    normalized_frontend = str(frontend or "unknown").strip().lower() or "unknown"
+    cloned = copy.deepcopy(entry)
+    env = dict(cloned.get("env") or {})
+    env["MCP_FRONTEND"] = normalized_frontend
+    if normalized_frontend != "lmstudio":
+        for key in LMSTUDIO_CONTEXT_POLICY_ENV:
+            env.pop(key, None)
+    cloned["env"] = env
+    return cloned
+
+
 def _evidence_mcp_entry(python_exe: Path, installed_skill: Path) -> dict[str, Any]:
     return {
         "command": str(python_exe),
@@ -963,6 +983,7 @@ def _unreal_entries(
             "SHARED_UNREAL_CONFIG": str(shared_config),
             "AGENT_STATE_ROOT": str(state_root),
             "UNREAL58_ROOT": str(ROOT),
+            "MCP_FRONTEND": "lmstudio",
             "PYTHON_EXE": str(python_exe),
             "ALLOW_WRITE": allow,
             "ALLOW_COMMANDS": allow,
@@ -1307,7 +1328,14 @@ def install(
             _merge_mcp_entry(cline, "evidence-first", evidence_entry)
             if "unreal" in components and mcp_config:
                 for name in ("unreal-rag", "unreal-agent"):
-                    _merge_mcp_entry(cline, name, mcp_config["mcpServers"][name])
+                    _merge_mcp_entry(
+                        cline,
+                        name,
+                        _mcp_entry_for_frontend(
+                            mcp_config["mcpServers"][name],
+                            "cline",
+                        ),
+                    )
             tx.write_file(args.cline_settings, _json_bytes(cline))
 
         if "context_compactor" in components:

@@ -1655,7 +1655,7 @@ function allAgentTools() {
         inputSchema: makeJsonSchema({
           mode: { type: "string", enum: ["tail", "first_error", "range"], description: "tail (default), first_error from byte zero, or range from cursorByte." },
           cursorByte: { type: "number", description: "Start byte for range mode. Use nextCursorByte to continue." },
-          maxBytes: { type: "number", description: "Bytes per range/scan chunk, 64 KiB to LOG_READ_MAX_BYTES." },
+          maxBytes: { type: "number", description: "Bytes per chunk: range accepts 1 KiB to LOG_READ_MAX_BYTES; tail/first_error use at least 64 KiB." },
           maxLines: { type: "number", description: "Max tail lines per log file. Default 60, max 500." },
           maxFiles: { type: "number", description: "Newest log files to inspect. Default 1, max 3." },
           filter: { type: "string", description: "Optional case-insensitive substring filter (Error, Assert, etc.)." },
@@ -2362,9 +2362,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ? String(args.mode).toLowerCase()
         : "tail";
       const rangeCursorByte = Math.max(0, Math.trunc(Number(args.cursorByte || 0)));
+      const requestedChunkBytes = Math.min(
+        Math.trunc(Number(args.maxBytes || LOG_READ_MAX_BYTES)),
+        LOG_READ_MAX_BYTES,
+      );
       const chunkBytes = Math.max(
-        64 * 1024,
-        Math.min(Math.trunc(Number(args.maxBytes || LOG_READ_MAX_BYTES)), LOG_READ_MAX_BYTES),
+        readMode === "range" ? 1024 : 64 * 1024,
+        requestedChunkBytes,
       );
       const filterText = String(args.filter || "").toLowerCase();
       const logFiles = [];
@@ -2396,7 +2400,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let scanTruncated = false;
         try {
           if (readMode === "range") {
-            bounded = await readUtf8Range(logPath, rangeCursorByte, chunkBytes);
+            bounded = await readUtf8Range(
+              logPath,
+              rangeCursorByte,
+              chunkBytes,
+              {
+                preservePartialLeading: true,
+                maxLines,
+              },
+            );
           } else if (readMode === "first_error") {
             let cursor = 0;
             let bytesScanned = 0;
@@ -2460,6 +2472,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           throw error;
         }
         const lines = bounded.content.split(/\r?\n/);
+        if (
+          readMode === "range"
+          && lines.length > 1
+          && lines[lines.length - 1] === ""
+          && /\r?\n$/u.test(bounded.content)
+        ) {
+          lines.pop();
+        }
         let filtered = filterText
           ? lines.filter((line) => line.toLowerCase().includes(filterText))
           : lines;
@@ -2478,11 +2498,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           lines: filtered,
           sourceBytes: bounded.sourceBytes,
           bytesRead: bounded.bytesRead,
+          bytesReturned: bounded.bytesReturned ?? bounded.bytesRead,
           sourceTruncated: bounded.sourceTruncated,
           mode: readMode,
           cursorByte: bounded.requestedStartByte ?? null,
+          contentStartByte: bounded.contentStartByte ?? null,
+          contentEndByte: bounded.contentEndByte ?? bounded.nextCursorByte ?? null,
           nextCursorByte: bounded.nextCursorByte ?? null,
           hasMore: Boolean(bounded.hasMore),
+          lineLimited: Boolean(bounded.lineLimited),
           firstErrorFound,
           scanTruncated,
         });

@@ -133,6 +133,11 @@ def patch_unreal_rag(
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
+    # This command repairs normal Beta 3 installs. Clear an inherited hard gate
+    # even when the optional plugin is missing or corrupt; strict mode is an
+    # explicit administrator policy, not a stale-install default.
+    env["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] = "0"
+    env["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] = "lmstudio"
     compactor_installed = (
         context_compactor_is_installed()
         if context_compactor_advisory is None
@@ -140,11 +145,10 @@ def patch_unreal_rag(
     )
     if compactor_installed:
         env["MCP_CONTEXT_COMPACTOR_ADVISORY"] = "1"
-        # Repair older Beta 3 installs that made the optional proxy a hard
-        # prerequisite for every write task.
-        env["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] = "0"
-        env["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] = "lmstudio"
         env.setdefault("MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS", "300")
+    else:
+        env.pop("MCP_CONTEXT_COMPACTOR_ADVISORY", None)
+        env.pop("MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS", None)
     entry["env"] = env
     entry["timeout"] = DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
     return entry

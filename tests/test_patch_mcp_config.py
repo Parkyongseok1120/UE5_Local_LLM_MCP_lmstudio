@@ -111,6 +111,33 @@ def test_patch_unreal_rag_repairs_old_strict_proxy_gate_to_advisory(tmp_path) ->
     assert patched["env"]["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] == "300"
 
 
+def test_patch_unreal_rag_clears_old_strict_gate_when_compactor_is_missing(tmp_path) -> None:
+    mod = load_module()
+    python = tmp_path / "python.exe"
+    python.write_text("", encoding="utf-8")
+    entry = {
+        "command": "python",
+        "args": [],
+        "env": {
+            "MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE": "1",
+            "MCP_CONTEXT_COMPACTOR_ADVISORY": "1",
+            "MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS": "999",
+        },
+    }
+
+    patched = mod.patch_unreal_rag(
+        entry,
+        ROOT,
+        python,
+        context_compactor_advisory=False,
+    )
+
+    assert patched["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "0"
+    assert patched["env"]["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] == "lmstudio"
+    assert "MCP_CONTEXT_COMPACTOR_ADVISORY" not in patched["env"]
+    assert "MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS" not in patched["env"]
+
+
 def test_patch_unreal_agent_sets_validate_on_write_and_timeout(tmp_path) -> None:
     mod = load_module()
     node = tmp_path / "node.exe"

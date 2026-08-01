@@ -1240,7 +1240,25 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
         )
         range_payload = json.loads(ranged["result"]["content"][0]["text"])
         assert range_payload["responseMode"] == "range"
-        assert range_payload["logs"][0]["nextCursorByte"] == 65536
+        assert range_payload["logs"][0]["lineCount"] == 60
+        assert range_payload["logs"][0]["nextCursorByte"] == 120
         assert range_payload["logs"][0]["hasMore"] is True
+
+        continued = client.request(
+            "tools/call",
+            {
+                "name": "read_unreal_logs",
+                "arguments": {
+                    "mode": "range",
+                    "cursorByte": range_payload["logs"][0]["nextCursorByte"],
+                    "maxBytes": 65536,
+                },
+            },
+            req_id=6,
+        )
+        continued_payload = json.loads(continued["result"]["content"][0]["text"])
+        assert continued_payload["logs"][0]["lineCount"] == 60
+        assert continued_payload["logs"][0]["cursorByte"] == 120
+        assert continued_payload["logs"][0]["nextCursorByte"] == 240
     finally:
         client.close()

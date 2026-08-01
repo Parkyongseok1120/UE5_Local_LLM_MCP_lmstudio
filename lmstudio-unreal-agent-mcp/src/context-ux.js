@@ -693,6 +693,39 @@ function compactLogPayload(payload, maxChars = DEFAULT_LOG_RESULT_MAX_CHARS) {
   let serialized = JSON.stringify(payload, null, 2);
   if (serialized.length <= maxChars) return payload;
 
+  if (payload?.responseMode === "range") {
+    // Never compact away range lines while retaining a cursor beyond them.
+    // Reset continuation to the requested cursor so a smaller retry remains
+    // lossless and deterministic.
+    return {
+      ...payload,
+      summary: "RANGE RESPONSE TOO LARGE — retry with maxFiles=1 and a smaller maxBytes value.",
+      truncated: true,
+      originalChars: serialized.length,
+      exactTraversalPreserved: true,
+      rangeRetryRequired: true,
+      suggestedRangeArgs: { maxFiles: 1, maxBytes: 4096 },
+      logs: (payload.logs || []).map((log) => ({
+        file: log.file,
+        lineCount: 0,
+        lines: [],
+        sourceBytes: log.sourceBytes,
+        bytesRead: 0,
+        bytesReturned: 0,
+        sourceTruncated: Number(log.cursorByte || 0) > 0
+          || Number(log.cursorByte || 0) < Number(log.sourceBytes || 0),
+        mode: "range",
+        cursorByte: log.cursorByte,
+        contentStartByte: log.cursorByte,
+        contentEndByte: log.cursorByte,
+        nextCursorByte: log.cursorByte,
+        hasMore: Number(log.cursorByte || 0) < Number(log.sourceBytes || 0),
+        lineLimited: false,
+        rangeRetryRequired: true,
+      })),
+    };
+  }
+
   const compact = {
     ...payload,
     truncated: true,

@@ -4536,7 +4536,9 @@ class McpServer:
                     if item.strip()
                 }
                 compactor_required = (
-                    compactor_strict_requested and frontend in required_frontends
+                    compactor_strict_requested
+                    and frontend == "lmstudio"
+                    and frontend in required_frontends
                 )
                 compactor_advisory = (
                     os.environ.get("MCP_CONTEXT_COMPACTOR_ADVISORY", "")
@@ -4545,11 +4547,7 @@ class McpServer:
                     in {"1", "true", "yes", "on"}
                     and frontend == "lmstudio"
                 )
-                if writes_allowed and (
-                    compactor_required
-                    or compactor_advisory
-                    or compactor_strict_requested
-                ):
+                if writes_allowed and (compactor_required or compactor_advisory):
                     from context_compactor_status import recent_context_compactor_status
 
                     try:
@@ -4620,6 +4618,28 @@ class McpServer:
                             },
                         )
                         return
+                elif writes_allowed and compactor_strict_requested:
+                    # LM Studio proxy telemetry is never continuity proof for a
+                    # different frontend, even if a broad/mistyped allowlist
+                    # happens to contain that frontend.
+                    payload["contextCompactorRouting"] = {
+                        "policy": "not_applicable",
+                        "frontend": frontend,
+                        "strictRequested": True,
+                        "strictScopeMatched": False,
+                        "requiredFrontends": sorted(required_frontends),
+                        "active": None,
+                        "blocksWrites": False,
+                        "directModelAllowed": True,
+                        "status": {
+                            "telemetryChecked": False,
+                            "reason": "lmstudio_proxy_evidence_not_applicable",
+                        },
+                        "recommendation": (
+                            "Use this frontend's own continuity-proof policy. "
+                            "LM Studio context-compactor telemetry was not checked."
+                        ),
+                    }
                 from task_api import task_replan, task_start
 
                 config = load_shared_config()
