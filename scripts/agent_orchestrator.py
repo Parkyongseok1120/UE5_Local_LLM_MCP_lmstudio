@@ -30,6 +30,7 @@ EditStrategy = Literal[
 
 COMPILE_MARKERS = (
     "c1083", "lnk2019", "uht", "generated.h", "build.cs", "compile error",
+    "build error", "build failure", "fails to build", "does not build",
     "undefined", "unresolved", "missing module", "signature mismatch",
     "cpp_function_signature_mismatch", "declaration", "definition",
     "빌드 오류", "빌드오류", "컴파일 오류", "컴파일오류",
@@ -38,7 +39,14 @@ COMPILE_CONTEXT_MARKERS = (
     "compile", "build", "link", "uht", "c1083", "lnk2019", "generated.h", "build.cs",
     "빌드", "컴파일", "undefined", "unresolved",
 )
-BROAD_ERROR_MARKERS = ("에러", "오류")
+COMPILE_FIX_GOAL_PATTERNS = (
+    r"\b(?:fix|repair|correct|patch).{0,100}\b(?:compil(?:e|es|ed|ing)?|build(?:s|ing)?)\b",
+    r"\b(?:compil(?:e|es|ed|ing)?|build(?:s|ing)?).{0,100}\b(?:fix|repair|correct|patch)\b",
+    r"\b(?:until|so\s+that).{0,40}\b(?:it\s+)?(?:compil(?:e|es)|builds?)\b",
+    r"(?:컴파일|빌드).{0,40}(?:성공|될\s*때까지|되도록|통과)",
+    r"(?:고쳐|수정|패치).{0,80}(?:컴파일|빌드)",
+)
+BROAD_ERROR_MARKERS = ("에러", "오류", "error", "failure", "failed")
 READ_ONLY_OVERRIDE_MARKERS = (
     "수정하지 말", "분석만", "설명만", "계획만",
     "don't edit", "do not edit", "read only", "no edits", "analysis only",
@@ -112,6 +120,14 @@ SKETCH_MARKERS = (
     "코드로 짜면 어떻게 돼", "코드로 보여줘", "구현 예제", "구현 예시",
     "파일에 적용하지 말", "파일 수정 없이", "채팅창에만", "코드만 작성해줘",
     "대략 어떻게 구현할지", "c++로 표현해줘", "apply하지 말", "draft only",
+)
+# Protocol/tool identifiers can occur inside an otherwise concrete implementation
+# request.  Their internal word "sketch" describes the validator, not the user's
+# requested outcome, so mask them before applying the natural-language sketch
+# heuristic.
+SKETCH_PROTOCOL_IDENTIFIERS = (
+    "unreal_code_sketch_claim_validate",
+    "code_sketch_claim_validate",
 )
 from rag_modes import ASSET_METADATA_MODES  # single source of truth
 from tool_policy import tool_sequence_for_task
@@ -246,15 +262,22 @@ def build_orchestration_decision(
 ) -> dict[str, Any]:
     """Select a bounded reasoning/validation route for the active model profile."""
     write_task = task_kind in {"edit", "compile_fix", "refactor"}
-    high_risk = (
+    architecture_gate_required = (
         task_kind == "refactor"
-        or file_count_hint > 2
         or architecture_required
         or domain_kind in {"architecture", "subsystem", "replication"}
     )
-    if high_risk:
+    high_risk = (
+        task_kind == "refactor"
+        or file_count_hint > 2
+        or architecture_gate_required
+    )
+    if architecture_gate_required:
         risk_tier = "high"
         strategy = "architecture_first"
+    elif high_risk:
+        risk_tier = "high"
+        strategy = "staged_guarded"
     elif write_task:
         risk_tier = "medium"
         strategy = "guarded"
@@ -263,7 +286,7 @@ def build_orchestration_decision(
         strategy = "evidence_first"
 
     required_before_write: list[str] = []
-    if write_task and high_risk:
+    if write_task and architecture_gate_required:
         required_before_write.append("unreal_architecture_reasoning")
     if write_task:
         required_before_write.append("unreal_code_sketch_claim_validate")
@@ -352,6 +375,8 @@ def _is_plan_only_request(text: str) -> bool:
 def _is_compile_fix_request(text: str) -> bool:
     if any(m in text for m in COMPILE_MARKERS):
         return True
+    if any(re.search(pattern, text) for pattern in COMPILE_FIX_GOAL_PATTERNS):
+        return True
     if any(m in text for m in BROAD_ERROR_MARKERS):
         return any(m in text for m in COMPILE_CONTEXT_MARKERS)
     return False
@@ -368,6 +393,13 @@ def _is_runtime_symptom_analysis(text: str) -> bool:
 
 def _is_project_specific(text: str) -> bool:
     return any(marker in text for marker in PROJECT_SPECIFIC_MARKERS)
+
+
+def _has_sketch_intent(text: str) -> bool:
+    natural_language = str(text or "")
+    for identifier in SKETCH_PROTOCOL_IDENTIFIERS:
+        natural_language = natural_language.replace(identifier, " ")
+    return any(marker in natural_language for marker in SKETCH_MARKERS)
 
 
 def classify_task(request: str, mode: str = "auto") -> TaskKind:
@@ -392,7 +424,7 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "inspect_only"
     if _is_compile_fix_request(text):
         return "compile_fix"
-    if any(m in text for m in SKETCH_MARKERS):
+    if _has_sketch_intent(text):
         return "code_sketch"
     if _has_refactor_intent(text):
         return "refactor"

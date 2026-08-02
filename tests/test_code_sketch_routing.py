@@ -24,6 +24,15 @@ def test_classify_sketch_explicit_mode():
     assert classify_task("anything", "code_sketch") == "code_sketch"
 
 
+def test_validator_tool_name_does_not_turn_implementation_into_sketch():
+    request = (
+        "Implement GomokuBoardActor.cpp and GomokuGameState.cpp. "
+        "Validate with unreal_code_sketch_claim_validate before writes."
+    )
+
+    assert classify_task(request, "auto") == "edit"
+
+
 def test_compile_error_beats_sketch():
     # A concrete compile error should still route to compile_fix, not code_sketch.
     assert classify_task("C1083 컴파일 오류 나는 코드 시안", "auto") == "compile_fix"
@@ -31,6 +40,38 @@ def test_compile_error_beats_sketch():
 
 def test_resolve_mode_sketch_hint():
     assert resolve_mode("예시 코드 보여줘", "auto") == "code_sketch"
+
+
+def test_embedded_component_suffix_does_not_select_component_prototype():
+    request = (
+        "Implement a Gomoku board with InstancedStaticMeshComponent and "
+        "convert click positions to board coordinates."
+    )
+
+    assert resolve_mode(request, "auto") != "prototype_component"
+
+
+def test_multi_system_gomoku_request_keeps_generic_domain_and_dynamic_slices():
+    request = (
+        "AGomokuGameMode, AGomokuGameState, AGomokuBoardActor, "
+        "AGomokuPlayerController, WGomokuHUD를 순차적으로 구현. "
+        "돌은 InstancedStaticMeshComponent를 사용하고 턴 시간 시스템도 붙인다."
+    )
+
+    plan = build_agent_plan(request, "auto").to_dict()
+    assert plan["domainKind"] == "generic"
+    assert not plan.get("executablePlanSlices")
+    assert not plan.get("planSlices")
+
+
+def test_explicit_standalone_component_request_still_routes_to_component():
+    assert (
+        resolve_mode(
+            "Implement a standalone component UHealthComponent on ADemoActor",
+            "auto",
+        )
+        == "prototype_component"
+    )
 
 
 def test_sketch_plan_is_read_only():

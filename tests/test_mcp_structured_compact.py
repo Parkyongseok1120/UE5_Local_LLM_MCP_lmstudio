@@ -59,6 +59,47 @@ def test_code_sketch_compaction_preserves_every_known_bad_replacement() -> None:
     ]
 
 
+def test_code_sketch_compaction_preserves_deterministic_recovery() -> None:
+    payload = {
+        "ok": False,
+        "gatePassed": False,
+        "writeGateClosed": True,
+        "verdictSummary": "0 verified, 0 weak, 0 known_bad, 1 unverified",
+        "knownBadCount": 0,
+        "unverifiedCount": 1,
+        "weakCount": 0,
+        "firstBlocker": {
+            "symbol": "InitializeBoard",
+            "verdict": "unverified",
+            "note": "No exact owner/signature evidence.",
+        },
+        "nextAction": "unreal_symbol_lookup",
+        "nextActionArgs": {
+            "query": "InitializeBoard",
+            "top_k": 8,
+            "detailLevel": "compact",
+        },
+        "doNotRetryUnchanged": True,
+        "reuseCurrentTaskAuthorization": True,
+        "agentInstruction": "Do not rerun the unchanged sketch.",
+        "results": [
+            {
+                "symbol": "InitializeBoard",
+                "verdict": "unverified",
+                "note": "No exact owner/signature evidence.",
+            }
+        ],
+    }
+
+    compact = compact_code_sketch_payload(payload, max_bytes=600)
+
+    assert compact["firstBlocker"]["symbol"] == "InitializeBoard"
+    assert compact["nextAction"] == "unreal_symbol_lookup"
+    assert compact["nextActionArgs"]["query"] == "InitializeBoard"
+    assert compact["doNotRetryUnchanged"] is True
+    assert compact["reuseCurrentTaskAuthorization"] is True
+
+
 def test_generic_compaction_routes_sketch_payload_to_safe_compactor() -> None:
     payload = {
         "ok": False,

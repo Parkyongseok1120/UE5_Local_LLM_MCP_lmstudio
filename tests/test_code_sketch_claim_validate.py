@@ -31,6 +31,60 @@ def test_extract_symbols_finds_unreal_types():
     assert "UMovieSceneSequence" in syms
 
 
+def test_actor_suffix_member_name_is_not_an_unreal_type_claim():
+    syms = extract_symbols(
+        "BoardActor = Board; AGomokuBoardActor* TypedBoardActor = nullptr;"
+    )
+
+    assert "BoardActor" not in syms
+    assert "TypedBoardActor" not in syms
+    assert syms == ["AGomokuBoardActor"]
+
+
+def test_legacy_input_enum_value_is_not_an_unreal_type_claim():
+    syms = extract_symbols(
+        "InputComponent->BindAction(Name, IE_Pressed, this, &AThing::OnClick); "
+        "FObjectInitializer Initializer;"
+    )
+
+    assert "IE_Pressed" not in syms
+    assert syms == ["AThing", "FObjectInitializer"]
+
+
+def test_inherited_input_component_bindings_are_known_receiver_calls():
+    claims = extract_member_call_claims(
+        'InputComponent->BindAction("Click", IE_Pressed, this, &AThing::OnClick);'
+    )
+
+    assert claims == []
+
+
+def test_dynamic_delegate_binding_macros_are_not_index_symbol_claims():
+    claims = extract_member_call_claims(
+        """
+RestartButton->OnClicked.AddDynamic(this, &WGomokuHUD::OnRestartClicked);
+Source->OnChanged.AddUniqueDynamic(this, &UListener::OnChanged);
+Source->OnChanged.Broadcast(Value);
+Source->OnChanged.RemoveDynamic(this, &UListener::OnChanged);
+Source->OnChanged.IsAlreadyBound(this, &UListener::OnChanged);
+"""
+    )
+
+    assert not any(
+        claim["member"]
+        in {"AddDynamic", "AddUniqueDynamic", "Broadcast", "RemoveDynamic", "IsAlreadyBound"}
+        for claim in claims
+    )
+
+
+def test_add_lambda_is_not_treated_as_a_dynamic_delegate_primitive():
+    claims = extract_member_call_claims(
+        "RestartButton->OnClicked.AddLambda([this]() { OnRestartClicked(); });"
+    )
+
+    assert any(claim["member"] == "AddLambda" for claim in claims)
+
+
 def test_extract_member_calls():
     calls = extract_member_calls("P->SetRestoreState(true); Actor->GetActorTransform();")
     assert "SetRestoreState" in calls
@@ -44,10 +98,492 @@ def test_extract_member_call_claims_infers_receiver_types():
     assert {
         (claim["receiverType"], claim["member"], claim["callKind"])
         for claim in claims
-    } == {
-        ("UMyComponent", "SetState", "member"),
-        ("UGameplayStatics", "GetPlayerController", "static"),
+    } == {("UMyComponent", "SetState", "member")}
+
+
+def test_qualified_function_definition_is_not_a_static_api_claim():
+    claims = extract_member_call_claims(
+        """
+void AGomokuGameState::AdvanceTurn()
+{
+    UGameplayStatics::GetPlayerController(World, 0);
+}
+"""
+    )
+
+    assert {
+        (claim["receiverType"], claim["member"], claim["callKind"])
+        for claim in claims
+    } == set()
+
+
+def test_paired_declaration_context_types_cpp_member_receivers():
+    claims = extract_member_call_claims(
+        """
+void AGomokuGameState::OnStonePlaced()
+{
+    if (RuleEngineRef.IsValid())
+    {
+        RuleEngineRef->IsGameWon(WinnerId);
     }
+}
+""",
+        declaration_context=(
+            "class AGomokuGameState { "
+            "TWeakObjectPtr<UGomokuRuleEngine> RuleEngineRef; };"
+        ),
+    )
+
+    assert {
+        (claim["receiverType"], claim["member"], claim["callKind"])
+        for claim in claims
+    } == {("UGomokuRuleEngine", "IsGameWon", "member")}
+
+
+def test_paired_declaration_context_accepts_elaborated_template_pointer_type():
+    claims = extract_member_call_claims(
+        "GS->HandlePlaceStone(0, FIntPoint(1, 2));",
+        declaration_context="TObjectPtr<class AGomokuGameState> GS;",
+    )
+
+    assert {
+        (claim["receiverType"], claim["member"], claim["callKind"])
+        for claim in claims
+    } == {("AGomokuGameState", "HandlePlaceStone", "member")}
+
+
+def test_common_container_and_engine_members_do_not_create_false_blockers():
+    claims = extract_member_call_claims(
+        """
+PlayerRemainingTimes.FindOrAdd(1);
+PlayerRemainingTimes.Reset();
+StoneInstances->AddInstance(Transform);
+StoneInstances->ClearInstances();
+StoneInstances->GetInstanceCount();
+StoneInstances->GetInstanceTransform(0, Transform, true);
+StoneInstances->GetStaticMesh();
+StoneInstances->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+StoneInstances->SetVisibility(true);
+StoneInstances->IsValid();
+FMath::Abs(Value);
+FMath::RoundToInt(Value);
+Transform.SetScale3D(FVector(1.f));
+Transform.SetLocation(FVector::ZeroVector);
+""",
+        declaration_context="""
+TMap<int32, float> PlayerRemainingTimes;
+TSubobjectPtr<UInstancedStaticMeshComponent> StoneInstances;
+FTransform Transform;
+""",
+    )
+
+    assert {
+        (claim["receiverType"], claim["member"], claim["callKind"])
+        for claim in claims
+    } == {("UInstancedStaticMeshComponent", "IsValid", "member")}
+
+
+def test_concise_container_field_sketch_does_not_force_symbol_lookup_loop():
+    claims = extract_member_call_claims(
+        """
+ActivePlayerIndices.Reset();
+ActivePlayerIndices.Add(PlayerIndex);
+const int32 Count = ActivePlayerIndices.Num();
+"""
+    )
+
+    assert claims == []
+
+
+def test_collision_query_params_and_scene_query_stat_are_common_engine_primitives():
+    result = validate_sketch(
+        "FCollisionQueryParams Params(SCENE_QUERY_STAT(BoardClick), false, this);",
+        NO_INDEX,
+    )
+
+    assert result["ok"] is True
+    assert result["unverifiedCount"] == 0
+
+
+def test_stable_hit_result_and_gameplay_statics_helpers_are_not_weak_claims():
+    claims = extract_member_call_claims(
+        "FHitResult Hit; AActor* Actor = Hit.GetActor(); "
+        "AGameStateBase* State = UGameplayStatics::GetGameState(this); "
+        "UGameplayStatics::DeprojectScreenToWorld(PC, ScreenPosition, WorldPosition, WorldDirection);"
+    )
+
+    assert claims == []
+
+
+def test_invented_deprojection_helper_is_known_bad_with_replacement():
+    result = validate_sketch(
+        "FVector Start = DeprojectScreenPositionToFVector(ScreenPosition);",
+        NO_INDEX,
+    )
+
+    assert result["ok"] is False
+    bad = next(row for row in result["results"] if row["verdict"] == "known_bad")
+    assert bad["symbol"] == "deprojectscreenpositiontofvector"
+    assert "DeprojectMousePositionToWorld" in bad["replacement"]
+
+
+def test_invented_deprojection_to_fov_is_known_bad_with_exact_replacement():
+    result = validate_sketch(
+        "PC->DeprojectScreenToWorldToFov(ScreenX, ScreenY, Location, Direction);",
+        NO_INDEX,
+        declaration_context="APlayerController* PC;",
+    )
+
+    assert result["ok"] is False
+    bad = next(row for row in result["results"] if row["verdict"] == "known_bad")
+    assert bad["symbol"] == "deprojectscreentoworldtofov"
+    assert "DeprojectScreenPositionToWorld" in bad["replacement"]
+
+
+def test_invented_scene_delegate_macro_is_known_bad_with_exact_replacement():
+    result = validate_sketch(
+        'FCollisionQueryParams Params(SCENE_DELEGATE_NAME("BoardClick"), false, this);',
+        NO_INDEX,
+    )
+
+    assert result["ok"] is False
+    bad = next(row for row in result["results"] if row["verdict"] == "known_bad")
+    assert bad["symbol"] == "scene_delegate_name"
+    assert "SCENE_QUERY_STAT" in bad["replacement"]
+
+
+def test_click_trace_primitives_are_known_receiver_calls():
+    claims = extract_member_call_claims(
+        """
+FCollisionQueryParams Params;
+Params.AddIgnoredActor(this);
+FVector WorldDir;
+FVector Normalized = WorldDir.GetSafeNormal();
+APlayerController* PC;
+PC->DeprojectScreenPositionToWorld(ScreenX, ScreenY, WorldLoc, WorldDir);
+"""
+    )
+
+    assert claims == []
+
+
+def test_world_line_trace_primitives_are_known_receiver_calls():
+    claims = extract_member_call_claims(
+        """
+UWorld* World;
+FHitResult Hit;
+FCollisionQueryParams Params(SCENE_QUERY_STAT(BoardClick), false, this);
+if (World->IsGameWorld())
+{
+    World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params);
+}
+"""
+    )
+
+    assert claims == []
+
+
+def test_gameplay_player_lookup_and_screen_hit_are_known_receiver_calls():
+    claims = extract_member_call_claims(
+        """
+APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0);
+FHitResult Hit;
+PC->GetHitResultAtScreenPosition(
+    FVector2D(ScreenX, ScreenY), ECC_Visibility, false, Hit);
+"""
+    )
+
+    assert claims == []
+
+
+def test_deproject_ray_origin_cannot_be_used_as_board_hit_location():
+    result = validate_sketch(
+        """
+APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0);
+FVector WorldLoc, WorldDir;
+UGameplayStatics::DeprojectScreenToWorld(
+    PC, FVector2D(ScreenX, ScreenY), WorldLoc, WorldDir);
+int32 GridX = 0, GridY = 0;
+WorldToGrid(WorldLoc, GridX, GridY);
+""",
+        NO_INDEX,
+    )
+
+    bad = next(row for row in result["results"] if row["verdict"] == "known_bad")
+    assert bad["symbol"] == "deproject_origin_used_as_hit"
+    assert "GetHitResultAtScreenPosition" in bad["replacement"]
+    assert result["ok"] is False
+
+
+def test_world_zero_plane_cannot_replace_actual_board_hit():
+    result = validate_sketch(
+        """
+FVector RayOrigin, RayDir;
+PC->DeprojectScreenPositionToWorld(ScreenX, ScreenY, RayOrigin, RayDir);
+const float BoardZ = 0.f;
+const float T = (BoardZ - RayOrigin.Z) / RayDir.Z;
+const FVector HitLocation = RayOrigin + RayDir * T;
+WorldToGrid(HitLocation, GridX, GridY);
+""",
+        NO_INDEX,
+        declaration_context="APlayerController* PC;",
+    )
+
+    bad = next(row for row in result["results"] if row["verdict"] == "known_bad")
+    assert bad["symbol"] == "world_zero_plane_used_as_board_hit"
+    assert "GetHitResultAtScreenPosition" in bad["replacement"]
+    assert result["ok"] is False
+
+
+def test_round_completion_progress_cannot_be_reset_or_incremented_each_turn():
+    result = validate_sketch(
+        """
+void AGomokuGameState::StartNewTurn()
+{
+    CurrentRoundIndex++;
+    PlayersCompletedThisRound.Reset();
+    OnTurnChanged.Broadcast(CurrentPlayerIndex, CurrentRoundIndex);
+}
+
+void AGomokuGameState::EndCurrentTurn(bool bForceEnd)
+{
+    PlayersCompletedThisRound.Add(CurrentPlayerIndex);
+    const bool bRoundCompleted =
+        PlayersCompletedThisRound.Num() >= LocalPlayerCount;
+    StartNewTurn();
+}
+""",
+        NO_INDEX,
+    )
+
+    bad_symbols = {
+        row["symbol"]
+        for row in result["results"]
+        if row["verdict"] == "known_bad"
+    }
+    assert {
+        "round_progress_reset_at_turn_start",
+        "round_incremented_at_each_turn_start",
+        "round_completion_uses_configured_player_count",
+    }.issubset(bad_symbols)
+    assert result["ok"] is False
+
+
+def test_round_completion_set_can_reset_after_active_players_finish():
+    result = validate_sketch(
+        """
+void AGomokuGameState::EndCurrentTurn(bool bForceEnd)
+{
+    PlayersCompletedThisRound.Add(CurrentPlayerIndex);
+    if (HaveAllActivePlayersCompletedRound())
+    {
+        ++CurrentRoundIndex;
+        ApplyEndOfRoundRecovery();
+        PlayersCompletedThisRound.Reset();
+    }
+    AdvanceToNextActivePlayer();
+}
+""",
+        NO_INDEX,
+    )
+
+    assert not any(
+        row["verdict"] == "known_bad"
+        and row["symbol"].startswith("round_")
+        for row in result["results"]
+    )
+
+
+def test_active_round_membership_and_reverse_turn_order_must_not_use_count_or_clamp():
+    result = validate_sketch(
+        """
+const int32 StartPos = ActivePlayerIndices.IndexOfByKey(CurrentPlayerIndex);
+const int32 Pos = FMath::Max<int32>(
+    0, StartPos + Step * TurnDirection);
+const int32 Candidate = ActivePlayerIndices[Pos];
+
+const bool bAllActed =
+    PlayersCompletedThisRound.Num() == ActivePlayerIndices.Num();
+""",
+        NO_INDEX,
+    )
+
+    bad_symbols = {
+        row["symbol"]
+        for row in result["results"]
+        if row["verdict"] == "known_bad"
+    }
+    assert "round_completion_compares_set_count_only" in bad_symbols
+    assert "turn_direction_clamped_instead_of_wrapped" in bad_symbols
+    assert result["ok"] is False
+
+
+def test_reverse_turn_temporary_cannot_be_clamped_on_later_line():
+    result = validate_sketch(
+        """
+int32 UGomokuRuleEngine::AdvanceTurnIndex(int32 CurrentIndex, int32 Direction) const
+{
+    const int32 ActiveCount = ActivePlayerIndices.Num();
+    int64 Next = static_cast<int64>(CurrentIndex) + static_cast<int64>(Direction);
+    Next = FMath::Max(Next, 0LL);
+    return static_cast<int32>(Next % ActiveCount);
+}
+""",
+        NO_INDEX,
+    )
+
+    assert any(
+        row["verdict"] == "known_bad"
+        and row["symbol"] == "turn_direction_clamped_instead_of_wrapped"
+        for row in result["results"]
+    )
+    assert result["ok"] is False
+
+
+def test_active_round_membership_and_reverse_turn_order_accept_wrapping_and_all_of():
+    result = validate_sketch(
+        """
+const int32 Count = ActivePlayerIndices.Num();
+const int32 Pos =
+    (StartPos + (Step + 1) * TurnDirection + Count * 2) % Count;
+const int32 Candidate = ActivePlayerIndices[Pos];
+bool bAllActed = !ActivePlayerIndices.IsEmpty();
+for (const int32 ActiveId : ActivePlayerIndices)
+{
+    if (!PlayersCompletedThisRound.Contains(ActiveId))
+    {
+        bAllActed = false;
+        break;
+    }
+}
+""",
+        NO_INDEX,
+    )
+
+    assert not any(
+        row["verdict"] == "known_bad"
+        and row["symbol"] in {
+            "round_completion_compares_set_count_only",
+            "turn_direction_clamped_instead_of_wrapped",
+        }
+        for row in result["results"]
+    )
+
+
+def test_explicit_screen_coordinates_cannot_be_replaced_by_current_cursor_query():
+    result = validate_sketch(
+        """
+void ABoard::OnScreenClick(int32 ScreenX, int32 ScreenY)
+{
+    FHitResult Hit;
+    PC->GetHitResultUnderCursorByChannel(
+        ETraceTypeQuery::TraceTypeQuery1, true, Hit);
+}
+""",
+        NO_INDEX,
+    )
+
+    bad = next(row for row in result["results"] if row["verdict"] == "known_bad")
+    assert bad["symbol"] == "screen_coordinates_ignored_for_cursor_hit"
+    assert "GetHitResultAtScreenPosition" in bad["replacement"]
+    assert result["ok"] is False
+
+
+def test_obsolete_or_invented_unreal_pointer_wrappers_are_known_bad():
+    result = validate_sketch(
+        "TSubobjectPtr<UStaticMeshComponent> Mesh; TWidgetPtr<UButton> Button;",
+        NO_INDEX,
+    )
+
+    assert result["ok"] is False
+    bad = {
+        row["symbol"]: row
+        for row in result["results"]
+        if row["verdict"] == "known_bad"
+    }
+    assert {"tsubobjectptr", "twidgetptr"}.issubset(bad)
+    assert "TObjectPtr" in bad["tsubobjectptr"]["replacement"]
+    assert "BindWidget" in bad["twidgetptr"]["replacement"]
+
+
+def test_show_mouse_cursor_method_hallucination_is_known_bad():
+    result = validate_sketch("ShowMouseCursor(true);", NO_INDEX)
+
+    assert result["ok"] is False
+    bad = next(row for row in result["results"] if row["verdict"] == "known_bad")
+    assert bad["symbol"] == "showmousecursor"
+    assert "bShowMouseCursor" in bad["replacement"]
+
+
+def test_invented_camera_direction_helper_and_unqualified_statics_are_known_bad():
+    result = validate_sketch(
+        "FVector Direction = UKismetMathLibrary::GetDirectionToLookAtFromCamera(A, B, C); "
+        "APlayerController* PC = GameplayStatics::GetPlayerController(World, 0);",
+        NO_INDEX,
+    )
+
+    assert result["ok"] is False
+    bad = {
+        row["symbol"]: row
+        for row in result["results"]
+        if row["verdict"] == "known_bad"
+    }
+    assert "getdirectiontolookatfromcamera" in bad
+    assert "gameplaystatics_getplayercontroller_unqualified" in bad
+    assert "DeprojectScreenPositionToWorld" in bad[
+        "getdirectiontolookatfromcamera"
+    ]["replacement"]
+    assert "UGameplayStatics" in bad[
+        "gameplaystatics_getplayercontroller_unqualified"
+    ]["replacement"]
+
+
+def test_nonexistent_ism_transform_methods_remain_api_claims():
+    claims = extract_member_call_claims(
+        """
+StoneInstances->SetNumInstances(225, true);
+StoneInstances->SetInstanceTransform(0, Transform, true);
+""",
+        declaration_context=(
+            "TObjectPtr<UInstancedStaticMeshComponent> StoneInstances; "
+            "FTransform Transform;"
+        ),
+    )
+
+    assert {
+        (claim["receiverType"], claim["member"])
+        for claim in claims
+    } == {
+        ("UInstancedStaticMeshComponent", "SetNumInstances"),
+        ("UInstancedStaticMeshComponent", "SetInstanceTransform"),
+    }
+
+
+def test_comments_and_string_literals_do_not_create_api_claims():
+    sketch = '''
+// GomokuGameMode.h uses UserWidget after the next slice.
+const TCHAR* Label = "UFakeWidget->BogusCall()";
+/* UAnotherFakeSubsystem should not be treated as code. */
+'''
+
+    assert extract_symbols(sketch) == []
+    assert extract_member_call_claims(sketch) == []
+    assert validate_sketch(sketch, NO_INDEX)["ok"] is True
+
+
+def test_build_cs_collection_calls_are_not_unreal_cpp_api_claims():
+    sketch = '''
+// O_Mock.Build.cs: add UMG/Slate for Gomoku HUD.
+PublicDependencyModuleNames.AddRange(new string[] { "Core", "UMG" });
+PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
+// GomokuGameMode.h: prepare UserWidget includes.
+'''
+
+    assert extract_symbols(sketch) == []
+    assert extract_member_call_claims(sketch) == []
+    result = validate_sketch(sketch, NO_INDEX)
+    assert result["ok"] is True
+    assert result["symbolCount"] == 0
 
 
 def test_architecture_inheritance_shorthand_declares_greenfield_types():
@@ -358,6 +894,27 @@ public:
     assert "UPROPERTY" not in result_symbols
 
 
+def test_existing_target_delegate_in_declaration_context_is_project_local():
+    result = validate_sketch(
+        """
+UPROPERTY(BlueprintAssignable)
+FOnMatchEndedDelegate OnMatchEnded;
+""",
+        NO_INDEX,
+        declaration_context="""
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+    FOnMatchEndedDelegate, const FGomokuWinResult&, WinResult);
+""",
+    )
+
+    assert result["ok"] is True
+    assert result["localDeclarationCount"] == 1
+    assert not any(
+        item["symbol"] == "FOnMatchEndedDelegate"
+        for item in result["results"]
+    )
+
+
 def test_member_method_on_different_receiver_is_not_verified(monkeypatch, tmp_path: Path):
     index = tmp_path / "rag.sqlite"
     index.write_bytes(b"index")
@@ -460,6 +1017,60 @@ def test_project_graph_verifies_project_member_without_rag_index():
     assert method["verdict"] == "verified"
     assert result["projectGraphAvailable"] is True
     assert result["ok"] is True
+
+
+def test_project_graph_verifies_static_class_for_reflected_project_class():
+    graph = {
+        "symbols": [
+            {
+                "symbol_name": "AGomokuBoardActor",
+                "symbol_kind": "class",
+                "base_class": "AActor",
+                "is_reflected": True,
+                "file_path": "Source/Game/GomokuBoardActor.h",
+                "line_start": 8,
+            }
+        ]
+    }
+
+    result = validate_sketch(
+        "UClass* BoardClass = AGomokuBoardActor::StaticClass();",
+        NO_INDEX,
+        graph=graph,
+    )
+
+    static_class = next(
+        item for item in result["results"] if item["symbol"] == "StaticClass"
+    )
+    assert static_class["verdict"] == "verified"
+    assert static_class["receiverType"] == "AGomokuBoardActor"
+    assert result["ok"] is True
+
+
+def test_static_class_stays_unverified_without_reflected_type_proof():
+    graph = {
+        "symbols": [
+            {
+                "symbol_name": "FHelperType",
+                "symbol_kind": "class",
+                "is_reflected": False,
+                "file_path": "Source/Game/HelperType.h",
+                "line_start": 3,
+            }
+        ]
+    }
+
+    result = validate_sketch(
+        "UClass* HelperClass = FHelperType::StaticClass();",
+        NO_INDEX,
+        graph=graph,
+    )
+
+    static_class = next(
+        item for item in result["results"] if item["symbol"] == "StaticClass"
+    )
+    assert static_class["verdict"] == "unverified"
+    assert result["ok"] is False
 
 
 def test_project_graph_accepts_member_declared_on_local_base_class():

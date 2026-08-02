@@ -182,6 +182,7 @@ def test_task_authorization_schema_accepts_owner_capability() -> None:
 
     schema = rag._task_authorization_schema()
     assert "ownerCapability" in schema["properties"]
+    assert "ownerCapability" in schema["required"]
     assert "conversationId" in schema["properties"]
     assert schema.get("additionalProperties") is False
 

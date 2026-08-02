@@ -550,6 +550,33 @@ function validateToolRoute(state, fields, args, toolName) {
     ? state.toolRoute
     : null;
   if (!activeRoute) return { ok: true, legacy: true };
+  const requiredFirstTool = String(activeRoute.requiredFirstTool || "").trim();
+  const completion = state.routeFacts?.requiredFirstToolAttempt;
+  const requiredFirstToolCompleted = Boolean(
+    completion
+    && typeof completion === "object"
+    && String(completion.tool || "") === requiredFirstTool
+    && String(completion.planRevision || "") === String(state.planRevision || "")
+  );
+  if (
+    toolName
+    && requiredFirstTool
+    && !requiredFirstToolCompleted
+    && toolName !== requiredFirstTool
+  ) {
+    const authorization = taskAuthorizationForState(state);
+    return {
+      ok: false,
+      errorCode: "TASK_REQUIRED_FIRST_TOOL",
+      error: `${requiredFirstTool} must run before other tools in this plan.`,
+      toolRoute: activeRoute,
+      taskAuthorization: authorization,
+      nextAction: requiredFirstTool,
+      nextActionArgs: { taskAuthorization: authorization },
+      retryable: true,
+      agentInstruction: `Call ${requiredFirstTool} now with the returned taskAuthorization. Do not inspect or edit files first.`,
+    };
+  }
   const activeTools = new Set(Array.isArray(activeRoute.activeTools) ? activeRoute.activeTools.map(String) : []);
   // A stale authorization must not instruct the model to retry a tool that the
   // refreshed route cannot execute. Surface the real phase/gate action first.
@@ -601,6 +628,13 @@ function validateToolRoute(state, fields, args, toolName) {
         ok: false,
         errorCode: "TASK_SLICE_SCOPE_REQUIRED",
         error: "Mutation requires a non-empty server-selected slice.",
+        toolRoute: activeRoute,
+        taskAuthorization: taskAuthorizationForState(state),
+        nextAction: "unreal_code_sketch_claim_validate",
+        nextActionArgs: {
+          targetFileLimit: maxFiles,
+          taskAuthorization: taskAuthorizationForState(state),
+        },
       };
     }
     if (requestedPaths.length > maxFiles) {
@@ -608,6 +642,13 @@ function validateToolRoute(state, fields, args, toolName) {
         ok: false,
         errorCode: "TASK_ROUTE_SCOPE_EXCEEDED",
         error: `Mutation file count exceeds active slice limit (${requestedPaths.length} > ${maxFiles}).`,
+        toolRoute: activeRoute,
+        taskAuthorization: taskAuthorizationForState(state),
+        nextAction: "unreal_code_sketch_claim_validate",
+        nextActionArgs: {
+          targetFileLimit: maxFiles,
+          taskAuthorization: taskAuthorizationForState(state),
+        },
       };
     }
     const outsideSlice = requestedPaths.filter(
@@ -620,6 +661,13 @@ function validateToolRoute(state, fields, args, toolName) {
         ok: false,
         errorCode: "TASK_SLICE_TARGET_MISMATCH",
         error: `Mutation target is outside selected slice: ${outsideSlice[0]}`,
+        toolRoute: activeRoute,
+        taskAuthorization: taskAuthorizationForState(state),
+        nextAction: "unreal_code_sketch_claim_validate",
+        nextActionArgs: {
+          targetFileLimit: maxFiles,
+          taskAuthorization: taskAuthorizationForState(state),
+        },
       };
     }
   }
@@ -721,7 +769,11 @@ function mutateRouteBudget(
     const reservations = purgeExpiredReservations(usage);
     const count = Number(usage.count || 0);
     const reserved = reservations.length;
-    const limit = Math.max(2, Math.min(6, Number(route.maxToolCallsPerPhase || 2)));
+    // Keep the write server aligned with the Python route contract. Planner
+    // routes may expose eight bounded evidence calls, while executor routes
+    // remain at six. Clamping every route to six made the server advertise an
+    // 8-call route and then reject call 7 as "6/6".
+    const limit = Math.max(2, Math.min(8, Number(route.maxToolCallsPerPhase || 2)));
     if (mode === "rollback") {
       const targetId = String(reservationId || "").trim();
       if (!targetId) {
@@ -818,20 +870,31 @@ function mutateRouteBudget(
       };
     }
     if (count + reserved >= limit) {
+      const checkpointAuthorization = taskAuthorizationForState(current);
       return {
         ok: false,
         errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
         error: `Phase tool-call budget exhausted (${count + reserved}/${limit}).`,
         toolRoute: route,
         toolRouteUsage: usage,
+        taskAuthorization: checkpointAuthorization,
         nextAction: "unreal_task_checkpoint",
+        nextActionArgs: {
+          action: "record",
+          phase: String(route.phase || "working"),
+          requiredNextAction: String(toolName || ""),
+          includeGitChanges: false,
+          taskAuthorization: checkpointAuthorization,
+        },
         nextActions: [
-          "unreal_task_status",
           "unreal_task_checkpoint",
+          "unreal_task_status",
           "unreal_task_cancel",
         ],
         agentInstruction:
-          "Use the control-plane checkpoint/status action next. Do not retry the budgeted work tool or claim a pending gate complete.",
+          "Call unreal_task_checkpoint exactly once with nextActionArgs (action=record). "
+          + "action=status only inspects state and does not renew the work-call budget. "
+          + "Then continue requiredNextAction with the returned taskAuthorization.",
       };
     }
     if (mode === "reserve") {
@@ -852,6 +915,21 @@ function mutateRouteBudget(
       usage.reservations = next;
       usage.reserved = next.length;
       current.toolRouteUsage = usage;
+      // Calling the required diagnostic once is enough to release its
+      // server-directed recovery path. The build can legitimately stop at a
+      // pre-build validation gate and require static_validate_project; waiting
+      // for a successful/committed build would deadlock that recovery.
+      if (String(route.requiredFirstTool || "") === String(toolName || "")) {
+        const routeFacts = current.routeFacts && typeof current.routeFacts === "object"
+          ? { ...current.routeFacts }
+          : {};
+        routeFacts.requiredFirstToolAttempt = {
+          tool: String(toolName),
+          planRevision: String(current.planRevision || ""),
+          attemptedAt: new Date().toISOString(),
+        };
+        current.routeFacts = routeFacts;
+      }
       current.updatedAt = new Date().toISOString();
       atomicWriteJson(statePath, current);
       return {
@@ -1652,7 +1730,7 @@ function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], opti
     "import json, sys",
     "from pathlib import Path",
     `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
-    "from task_api import task_cancel, task_cancel_active, task_checkpoint, task_quarantine_corrupt",
+    "from task_api import task_cancel, task_cancel_active, task_checkpoint, task_quarantine_corrupt, task_record_build_recovery, task_mark_build_recovery_evidence, task_complete_after_successful_build",
     stdinPayload
       ? "_stdin = json.load(sys.stdin)"
       : "_stdin = {}",
@@ -1736,7 +1814,8 @@ function checkpointMutationViaPython(workspaceRoot, args, modifiedFiles, options
       + "required_next_action=str((_stdin or {}).get('requiredNextAction') or ''), "
       + "validation=dict((_stdin or {}).get('validation') or {}), "
       + "note=str((_stdin or {}).get('note') or ''), "
-      + "preserve_route_usage=True, include_git_changes=False)"
+      + "preserve_route_usage=True, include_git_changes=False, "
+      + "advance_gate_snapshots=True)"
     ),
     [],
     {
@@ -1750,6 +1829,72 @@ function checkpointMutationViaPython(workspaceRoot, args, modifiedFiles, options
         note: String(options.note || "automatic checkpoint after successful mutation"),
       },
     }
+  );
+}
+
+function recordBuildRecoveryViaPython(workspaceRoot, args, recovery) {
+  const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : {};
+  if (!nested.taskSessionId || !recovery || typeof recovery !== "object") {
+    return { ok: true, active: false };
+  }
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_record_build_recovery(Path(sys.argv[1]), "
+      + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
+      + "recovery=dict((_stdin or {}).get('recovery') or {}))"
+    ),
+    [],
+    { stdinPayload: { taskAuthorization: nested, recovery } }
+  );
+}
+
+function completeTaskAfterBuildViaPython(workspaceRoot, args, buildEvidence = {}) {
+  const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : {};
+  if (!nested.taskSessionId) {
+    return { ok: true, active: false };
+  }
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_complete_after_successful_build(Path(sys.argv[1]), "
+      + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
+      + "proof_level=str((_stdin or {}).get('proofLevel') or ''), "
+      + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0), "
+      + "build_log_path=str((_stdin or {}).get('buildLogPath') or ''))"
+    ),
+    [],
+    {
+      stdinPayload: {
+        taskAuthorization: nested,
+        proofLevel: String(buildEvidence.proofLevel || "Built"),
+        mutationGeneration: Number(buildEvidence.mutationGeneration || 0),
+        buildLogPath: String(buildEvidence.buildLogPath || ""),
+      },
+    }
+  );
+}
+
+function markBuildRecoveryEvidenceViaPython(workspaceRoot, args, targetFile) {
+  const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : {};
+  if (!nested.taskSessionId || !String(targetFile || "").trim()) {
+    return { ok: true, active: false };
+  }
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_mark_build_recovery_evidence(Path(sys.argv[1]), "
+      + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
+      + "target_file=str((_stdin or {}).get('targetFile') or ''))"
+    ),
+    [],
+    { stdinPayload: { taskAuthorization: nested, targetFile: String(targetFile) } }
   );
 }
 
@@ -1974,13 +2119,22 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
   }
   if (active.status !== "active") {
     const errorCode = String(active.errorCode || "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT");
+    const ownershipRetry = errorCode === "TASK_ROUTE_OWNERSHIP_REQUIRED";
     return {
       ok: false,
       errorCode,
       error: active.error || "Task route is ambiguous, corrupt, or blocked.",
       routeStatus: active.status,
       toolRoute: active.route,
-      nextAction: routeRecoveryNextAction(errorCode),
+      nextAction: ownershipRetry ? toolName : routeRecoveryNextAction(errorCode),
+      ...(ownershipRetry ? {
+        retryable: true,
+        nextActionArgs: { requiresCompleteTaskAuthorization: true },
+        agentInstruction: (
+          "Retry the same tool once with the complete taskAuthorization previously "
+          + "returned by the plan, gate, or checkpoint. Do not recover or cancel the task."
+        ),
+      } : {}),
     };
   }
   const route = active.route;
@@ -2403,6 +2557,9 @@ module.exports = {
   cancelActiveTask,
   quarantineCorruptTask,
   checkpointMutationViaPython,
+  completeTaskAfterBuildViaPython,
+  recordBuildRecoveryViaPython,
+  markBuildRecoveryEvidenceViaPython,
   listToolsRouteContext,
   collectProjectActiveToolUnion,
 };

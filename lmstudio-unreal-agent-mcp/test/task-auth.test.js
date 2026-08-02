@@ -11,6 +11,7 @@ const {
   authorizeTaskRouteTool,
   cancelActiveTask,
   checkpointMutationViaPython,
+  completeTaskAfterBuildViaPython,
   discoverActiveTaskContext,
   featureIntentTargetHash,
   requiredFields,
@@ -31,6 +32,48 @@ const authorization = {
 
 test("requiredFields accepts nested taskAuthorization unchanged", () => {
   assert.deepStrictEqual(requiredFields({ taskAuthorization: authorization }), authorization);
+});
+
+test("successful build bridge completes task state and releases its lease", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-build-complete-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-build-complete-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    writeGate: { writesAllowed: true },
+    continuity: {
+      lease: {
+        status: "active",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const result = completeTaskAfterBuildViaPython(
+      workspace,
+      { taskAuthorization: authorization },
+      {
+        proofLevel: "Built",
+        mutationGeneration: 4,
+        buildLogPath: ".agent/logs/latest-build.log",
+      }
+    );
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.status, "completed");
+    const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    assert.strictEqual(state.status, "completed");
+    assert.strictEqual(state.continuity.lease.status, "released");
+    assert.strictEqual(state.completionEvidence.mutationGeneration, 4);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("nested taskAuthorization validates against task state", () => {
@@ -806,6 +849,14 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
       { requireAll: true, toolName: "replace_in_file" }
     );
     assert.strictEqual(suffixEscape.errorCode, "TASK_SLICE_TARGET_MISMATCH");
+    assert.strictEqual(suffixEscape.nextAction, "unreal_code_sketch_claim_validate");
+    assert.strictEqual(suffixEscape.taskAuthorization.routePhase, "executor");
+    assert.strictEqual(suffixEscape.taskAuthorization.routeHash, "route-1");
+    assert.strictEqual(suffixEscape.nextActionArgs.targetFileLimit, 2);
+    assert.strictEqual(
+      suffixEscape.nextActionArgs.taskAuthorization.routeHash,
+      "route-1"
+    );
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
@@ -888,6 +939,102 @@ test("mutation checkpoint bridge persists the written file", () => {
       "utf8"
     ));
     assert.strictEqual(persisted.continuity.checkpoint.status, "recorded");
+  } finally {
+    if (previousRoot === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previousRoot;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("successful mutation checkpoint advances scope-gate hash for the next edit", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-checkpoint-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-checkpoint-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  const target = path.join(workspace, "Source", "Demo", "Foo.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(projectFile, "{}");
+  fs.writeFileSync(target, "// before\n");
+  const beforeHash = require("crypto").createHash("sha1").update("// before\n").digest("hex");
+  const gate = "unreal_code_sketch_claim_validate";
+  const gateSetHash = require("crypto").createHash("sha256").update(JSON.stringify({
+    activeSliceId: authorization.activeSliceId,
+    planId: authorization.planId,
+    planRevision: authorization.planRevision,
+    projectFile,
+    requiredBeforeWrite: [gate],
+    taskSessionId: authorization.taskSessionId,
+  })).digest("hex");
+  const state = routeState(projectFile, {
+    requiredBeforeWrite: [gate],
+    requiredGateSetHash: gateSetHash,
+    completedGates: {
+      [gate]: {
+        status: "completed",
+        gateSetHash,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        targetSnapshots: [{
+          path: "Source/Demo/Foo.cpp",
+          absolutePath: target,
+          exists: true,
+          fileHash: beforeHash,
+        }],
+      },
+    },
+    pendingGates: [],
+    selectedTargetSnapshots: [{
+      path: "Source/Demo/Foo.cpp",
+      exists: true,
+      fileHash: beforeHash,
+    }],
+  });
+  writeRouteState(stateRoot, state);
+
+  // This write represents a mutation that already passed authorization and
+  // committed successfully; the automatic checkpoint must advance its CAS
+  // baseline so a second bounded edit can proceed without rerunning the gate.
+  fs.writeFileSync(target, "// after first authorized edit\n");
+  const afterHash = require("crypto")
+    .createHash("sha1")
+    .update("// after first authorized edit\n")
+    .digest("hex");
+
+  const previousRoot = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const result = checkpointMutationViaPython(
+      workspace,
+      { taskAuthorization: { ...authorization, routeHash: "route-1", routePhase: "executor" } },
+      [target],
+      { requiredNextAction: "continue_active_slice" }
+    );
+    assert.strictEqual(result.ok, true, JSON.stringify(result));
+    assert.deepStrictEqual(result.advancedGateSnapshots, ["Source/Demo/Foo.cpp"]);
+
+    const persisted = JSON.parse(fs.readFileSync(
+      path.join(stateRoot, "tasks", authorization.taskSessionId, "state.json"),
+      "utf8"
+    ));
+    assert.strictEqual(
+      persisted.completedGates[gate].targetSnapshots[0].fileHash,
+      afterHash
+    );
+
+    const nextAuthorization = result.taskAuthorization;
+    const secondEdit = validateMutationAuth(
+      workspace,
+      { taskAuthorization: nextAuthorization, path: "Source/Demo/Foo.cpp" },
+      { requireAll: true }
+    );
+    assert.strictEqual(secondEdit.ok, true, JSON.stringify(secondEdit));
+
+    fs.writeFileSync(target, "// external change\n");
+    const externalChange = validateMutationAuth(
+      workspace,
+      { taskAuthorization: nextAuthorization, path: "Source/Demo/Foo.cpp" },
+      { requireAll: true }
+    );
+    assert.strictEqual(externalChange.errorCode, "GATE_TARGET_STALE");
   } finally {
     if (previousRoot === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previousRoot;
@@ -1000,10 +1147,13 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
     );
     assert.strictEqual(exhausted.nextAction, "unreal_task_checkpoint");
     assert.deepStrictEqual(exhausted.nextActions, [
-      "unreal_task_status",
       "unreal_task_checkpoint",
+      "unreal_task_status",
       "unreal_task_cancel",
     ]);
+    assert.strictEqual(exhausted.nextActionArgs.action, "record");
+    assert.strictEqual(exhausted.nextActionArgs.requiredNextAction, "read_file");
+    assert.strictEqual(exhausted.nextActionArgs.includeGitChanges, false);
 
     const corruptDir = path.join(stateRoot, "tasks", "corrupt_task");
     fs.mkdirSync(corruptDir, { recursive: true });
@@ -1194,6 +1344,15 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
     );
     assert.strictEqual(blocked.ok, false);
     assert.strictEqual(blocked.errorCode, "TASK_PHASE_TOOL_BUDGET_EXHAUSTED");
+    assert.strictEqual(blocked.nextAction, "unreal_task_checkpoint");
+    assert.strictEqual(blocked.nextActionArgs.action, "record");
+    assert.strictEqual(blocked.nextActionArgs.requiredNextAction, "read_file");
+    assert.strictEqual(blocked.nextActionArgs.includeGitChanges, false);
+    assert.strictEqual(
+      blocked.nextActionArgs.taskAuthorization.taskSessionId,
+      authorization.taskSessionId
+    );
+    assert.match(blocked.agentInstruction, /action=record/);
     assert.strictEqual(
       commitRouteReservation(
         workspace,
@@ -1233,6 +1392,186 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
     assert.strictEqual(state.toolRouteUsage.count, 1);
     assert.strictEqual(state.toolRouteUsage.reserved, 0);
     assert.deepStrictEqual(state.toolRouteUsage.reservations, []);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("planner route honors an advertised eight-call budget", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-eight-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-eight-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    writeGate: { writesAllowed: true },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-budget-eight",
+      phase: "planner",
+      activeTools: ["read_file"],
+      allowedPathScopes: ["Source"],
+      maxToolCallsPerPhase: 8,
+    },
+    toolRouteUsage: {
+      routeHash: "route-budget-eight",
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = { routeHash: "route-budget-eight", routePhase: "planner" };
+  try {
+    for (let index = 0; index < 8; index += 1) {
+      const reservation = reserveRouteCall(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        "read_file"
+      );
+      assert.strictEqual(reservation.ok, true);
+      assert.strictEqual(
+        commitRouteReservation(
+          workspace,
+          authorization.taskSessionId,
+          fields,
+          {},
+          "read_file",
+          reservation.reservationId
+        ).ok,
+        true
+      );
+    }
+    const blocked = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file"
+    );
+    assert.strictEqual(blocked.ok, false);
+    assert.strictEqual(blocked.errorCode, "TASK_PHASE_TOOL_BUDGET_EXHAUSTED");
+    assert.match(blocked.error, /8\/8/);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("required first tool blocks speculative reads and unlocks after commit", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-first-tool-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-first-tool-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    writeGate: { writesAllowed: true },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-first-tool",
+      phase: "planner",
+      activeTools: ["build_unreal_project", "read_file"],
+      allowedPathScopes: ["Source"],
+      maxToolCallsPerPhase: 8,
+      requiredFirstTool: "build_unreal_project",
+    },
+    toolRouteUsage: {
+      routeHash: "route-first-tool",
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = { routeHash: "route-first-tool", routePhase: "planner" };
+  try {
+    const prematureRead = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file"
+    );
+    assert.strictEqual(prematureRead.ok, false);
+    assert.strictEqual(prematureRead.errorCode, "TASK_REQUIRED_FIRST_TOOL");
+    assert.strictEqual(prematureRead.nextAction, "build_unreal_project");
+
+    const build = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "build_unreal_project"
+    );
+    assert.strictEqual(build.ok, true);
+    const recoveryRead = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file"
+    );
+    assert.strictEqual(recoveryRead.ok, true);
+    assert.strictEqual(
+      rollbackRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        "read_file",
+        recoveryRead.reservationId
+      ).ok,
+      true
+    );
+    assert.strictEqual(
+      commitRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        "build_unreal_project",
+        build.reservationId
+      ).ok,
+      true
+    );
+
+    const read = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file"
+    );
+    assert.strictEqual(read.ok, true);
+    assert.strictEqual(
+      rollbackRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        "read_file",
+        read.reservationId
+      ).ok,
+      true
+    );
+    const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    assert.strictEqual(
+      state.routeFacts.requiredFirstToolAttempt.planRevision,
+      authorization.planRevision
+    );
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
@@ -1346,6 +1685,19 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
       ).errorCode,
       "TASK_ROUTE_OWNERSHIP_REQUIRED"
     );
+    const omittedCapability = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      { conversationId: "conv-aaaa" },
+      { activeProject: projectFile }
+    );
+    assert.strictEqual(omittedCapability.nextAction, "read_file");
+    assert.strictEqual(omittedCapability.retryable, true);
+    assert.strictEqual(
+      omittedCapability.nextActionArgs.requiresCompleteTaskAuthorization,
+      true
+    );
+    assert.ok(String(omittedCapability.agentInstruction).includes("Do not recover or cancel"));
 
     const wrongCap = authorizeActiveRouteTool(
       workspace,

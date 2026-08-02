@@ -150,6 +150,7 @@ def test_agent_mcp_subprocess_tools_list_stable_essential(tmp_path: Path) -> Non
         for mutation_tool in ("write_file", "replace_in_file"):
             schema = definitions[mutation_tool]["inputSchema"]
             assert "taskAuthorization" in schema["required"]
+            assert "ownerCapability" in schema["properties"]["taskAuthorization"]["required"]
         invalid = client.request("tools/call", {"name": "read_file", "arguments": {}}, req_id=3)
         invalid_result = invalid["result"]
         invalid_payload = json.loads(invalid_result["content"][0]["text"])
@@ -302,7 +303,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                 "arguments": {
                     "request": (
                         "Create a one-line compile-only header "
-                        "Source/DemoGame/Public/NewThing.h containing alpha exactly"
+                        "Source/DemoGame/Public/NewThing.h containing int alpha = 1; exactly"
                     )
                 },
             },
@@ -355,10 +356,10 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             {
                 "name": "unreal_code_sketch_claim_validate",
                 "arguments": {
-                    "sketch": "alpha\n",
+                    "sketch": "int alpha = 1;\n",
                     "request": (
                         "Create a one-line compile-only header "
-                        "Source/DemoGame/Public/NewThing.h containing alpha exactly"
+                        "Source/DemoGame/Public/NewThing.h containing int alpha = 1; exactly"
                     ),
                     "projectRoot": str(project_dir),
                     "targetFiles": ["Source/DemoGame/Public/NewThing.h"],
@@ -416,7 +417,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
 
         created = client.request(
             "tools/call",
-            {"name": "write_file", "arguments": {"taskAuthorization": create_auth, "path": "Source/DemoGame/Public/NewThing.h", "content": "alpha\n"}},
+            {"name": "write_file", "arguments": {"taskAuthorization": create_auth, "path": "Source/DemoGame/Public/NewThing.h", "content": "int alpha = 1;\n"}},
             2,
         )
         assert created["result"].get("isError") is not True, created
@@ -510,7 +511,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                 {
                     "name": "unreal_code_sketch_claim_validate",
                     "arguments": {
-                        "sketch": "beta\n",
+                        "sketch": "int beta = 1;\n",
                         "request": (
                             "Implement exact replacement in existing "
                             "Source/DemoGame/Public/NewThing.h: replace alpha "
@@ -554,11 +555,11 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         assert replaced_payload["taskAuthorization"] == replaced_payload[
             "continuityCheckpoint"
         ]["taskAuthorization"]
-        assert (source_dir / "NewThing.h").read_text(encoding="utf-8") == "beta\n"
+        assert (source_dir / "NewThing.h").read_text(encoding="utf-8") == "int beta = 1;\n"
         mutation = json.loads((project_dir / ".agent" / "state" / "mutation.json").read_text(encoding="utf-8"))
         assert mutation["mutationGeneration"] == 2
         assert set(mutation["paths"]) == {"Source/DemoGame/Public/NewThing.h"}
-        assert mutation["paths"]["Source/DemoGame/Public/NewThing.h"] == hashlib.sha256(b"beta\n").hexdigest()
+        assert mutation["paths"]["Source/DemoGame/Public/NewThing.h"] == hashlib.sha256(b"int beta = 1;\n").hexdigest()
     finally:
         client.close()
 
@@ -637,17 +638,11 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
         client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         listed = client.request("tools/list", {}, 2)
         names = {tool["name"] for tool in listed["result"]["tools"]}
-        expected = set(started["toolRoute"]["activeTools"]).intersection(
-            MANIFEST["agentEssential"]
-        ) | {
-            "get_workspace_info",
-            "get_active_project",
-            "list_active_tasks",
-            "cancel_active_task",
-            "quarantine_corrupt_task",
-        }
+        expected = set(MANIFEST["agentEssential"])
         assert names == expected
         assert "read_file" in names
+        assert "replace_in_file" in names
+        assert "build_unreal_project" in names
 
         read = client.request(
             "tools/call",

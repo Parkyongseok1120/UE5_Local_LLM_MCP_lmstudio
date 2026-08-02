@@ -75,6 +75,37 @@ KNOWN_BAD_API: dict[str, str] = {
         "EnablePhysicsSimulation is not a universal actor API. Use "
         "UPrimitiveComponent::SetSimulatePhysics on the colliding component."
     ),
+    "deprojectscreenpositiontofvector": (
+        "DeprojectScreenPositionToFVector is not an APlayerController API. Use "
+        "DeprojectMousePositionToWorld(WorldLocation, WorldDirection) or "
+        "DeprojectScreenPositionToWorld(ScreenX, ScreenY, WorldLocation, WorldDirection)."
+    ),
+    "deprojectscreentoworldtofov": (
+        "DeprojectScreenToWorldToFov is not an APlayerController API. Use "
+        "DeprojectScreenPositionToWorld(ScreenX, ScreenY, WorldLocation, WorldDirection)."
+    ),
+    "scene_delegate_name": (
+        "SCENE_DELEGATE_NAME is not an Unreal scene-query stat macro. Use "
+        "SCENE_QUERY_STAT(QueryName) when constructing FCollisionQueryParams."
+    ),
+    "tsubobjectptr": (
+        "TSubobjectPtr is obsolete and absent from UE 5.8. Store reflected component "
+        "fields as TObjectPtr<ComponentType> (or a compatible UPROPERTY pointer) and "
+        "assign the result of CreateDefaultSubobject in the constructor."
+    ),
+    "twidgetptr": (
+        "TWidgetPtr is not an Unreal UMG pointer type. A BindWidget field should use "
+        "TObjectPtr<UWidgetSubclass> with UPROPERTY(meta=(BindWidget))."
+    ),
+    "showmousecursor": (
+        "APlayerController exposes bShowMouseCursor as a property; it does not have "
+        "a ShowMouseCursor(bool) method. Assign bShowMouseCursor = true/false."
+    ),
+    "getdirectiontolookatfromcamera": (
+        "GetDirectionToLookAtFromCamera is not a UKismetMathLibrary API. Use "
+        "APlayerController::DeprojectMousePositionToWorld or "
+        "DeprojectScreenPositionToWorld to obtain the world ray."
+    ),
 }
 
 KNOWN_BAD_API_REPLACEMENTS: dict[str, str] = {
@@ -97,10 +128,197 @@ KNOWN_BAD_API_REPLACEMENTS: dict[str, str] = {
     "apawn_getcharactermovement": (
         "ACharacter* Character = Cast<ACharacter>(Pawn); // null-check before Character->GetCharacterMovement()"
     ),
+    "deprojectscreenpositiontofvector": (
+        "FVector WorldLocation, WorldDirection; "
+        "DeprojectMousePositionToWorld(WorldLocation, WorldDirection);"
+    ),
+    "deprojectscreentoworldtofov": (
+        "FVector WorldLocation, WorldDirection; "
+        "PlayerController->DeprojectScreenPositionToWorld("
+        "ScreenX, ScreenY, WorldLocation, WorldDirection);"
+    ),
+    "scene_delegate_name": "SCENE_QUERY_STAT(BoardClick)",
+    "deproject_origin_used_as_hit": (
+        "FHitResult Hit; PlayerController->GetHitResultAtScreenPosition("
+        "FVector2D(ScreenX, ScreenY), ECC_Visibility, false, Hit); "
+        "WorldToGrid(Hit.Location, GridX, GridY);"
+    ),
+    "world_zero_plane_used_as_board_hit": (
+        "FHitResult Hit; PlayerController->GetHitResultAtScreenPosition("
+        "FVector2D(ScreenX, ScreenY), ECC_Visibility, false, Hit); "
+        "WorldToGrid(Hit.Location, GridX, GridY);"
+    ),
+    "round_progress_reset_at_turn_start": (
+        "Do not reset PlayersCompletedThisRound in StartNewTurn. Add the player who just "
+        "acted in EndCurrentTurn, advance to the next eligible player, and reset the set "
+        "only after every active player is represented and the round is incremented."
+    ),
+    "round_incremented_at_each_turn_start": (
+        "Increment CurrentRoundIndex only in the branch that proves every active player "
+        "completed the round; StartNewTurn must not increment it on every turn."
+    ),
+    "round_completion_uses_configured_player_count": (
+        "Compare PlayersCompletedThisRound against the current active-player ids/count, "
+        "excluding resigned or inactive players, not LocalPlayerCount."
+    ),
+    "round_completion_compares_set_count_only": (
+        "Check every current active player id with PlayersCompletedThisRound.Contains(Id). "
+        "Set-count equality is insufficient because a player can resign mid-round, leaving "
+        "a stale completed id while a different active id is missing."
+    ),
+    "turn_direction_clamped_instead_of_wrapped": (
+        "Use positive modulo over ActivePlayerIndices.Num() for both +1 and -1 traversal; "
+        "do not clamp a negative position to zero."
+    ),
+    "screen_coordinates_ignored_for_cursor_hit": (
+        "FHitResult Hit; PlayerController->GetHitResultAtScreenPosition("
+        "FVector2D(ScreenX, ScreenY), ECC_Visibility, false, Hit);"
+    ),
+    "tsubobjectptr": "TObjectPtr<USceneComponent> Component;",
+    "twidgetptr": "UPROPERTY(meta=(BindWidget)) TObjectPtr<UButton> Button;",
+    "showmousecursor": "bShowMouseCursor = true;",
+    "getdirectiontolookatfromcamera": (
+        "FVector WorldLocation, WorldDirection; "
+        "DeprojectScreenPositionToWorld(ScreenX, ScreenY, WorldLocation, WorldDirection);"
+    ),
+    "gameplaystatics_getplayercontroller_unqualified": (
+        "UGameplayStatics::GetPlayerController(WorldContextObject, 0);"
+    ),
 }
 
 # Context-sensitive patterns: real API names used in invalid call shapes.
 KNOWN_BAD_API_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    (
+        "screen_coordinates_ignored_for_cursor_hit",
+        re.compile(
+            r"\b[A-Za-z_]\w*\s*\(\s*int32\s+ScreenX\s*,\s*int32\s+ScreenY\s*\)"
+            r"[\s\S]{0,2200}?\bGetHitResultUnderCursor(?:ByChannel|ForObjects)?\s*\(",
+            re.IGNORECASE,
+        ),
+        (
+            "This function receives explicit ScreenX/ScreenY coordinates but queries the current "
+            "cursor instead. Use APlayerController::GetHitResultAtScreenPosition with the supplied "
+            "FVector2D(ScreenX, ScreenY) so the clicked coordinates remain authoritative."
+        ),
+    ),
+    (
+        "deproject_origin_used_as_hit",
+        re.compile(
+            r"\bDeprojectScreenToWorld\s*\("
+            r"[^,]+,\s*(?:FVector2D\s*\([^)]*\)|[^,]+),"
+            r"\s*(?P<origin>[A-Za-z_]\w*)\s*,\s*[A-Za-z_]\w*\s*\)"
+            r"[\s\S]{0,1800}?\bWorldToGrid\s*\(\s*(?P=origin)\b",
+            re.IGNORECASE,
+        ),
+        (
+            "DeprojectScreenToWorld returns a near-plane ray origin, not the board hit point. "
+            "Trace that ray or use APlayerController::GetHitResultAtScreenPosition, then pass "
+            "Hit.Location to WorldToGrid."
+        ),
+    ),
+    (
+        "world_zero_plane_used_as_board_hit",
+        re.compile(
+            r"\bDeproject(?:ScreenToWorld|ScreenPositionToWorld)\s*\("
+            r"[\s\S]{0,1800}?\b(?:BoardZ|PlaneZ|GroundZ)\s*=\s*0(?:\.0*)?f?\s*;"
+            r"[\s\S]{0,1800}?\bWorldToGrid\s*\(",
+            re.IGNORECASE,
+        ),
+        (
+            "A hard-coded world Z=0 ray-plane intersection is not the board's actual collision "
+            "hit and breaks when the board actor is moved or rotated. Use the supplied screen "
+            "coordinates with APlayerController::GetHitResultAtScreenPosition (or a verified "
+            "world trace), then pass Hit.Location to WorldToGrid."
+        ),
+    ),
+    (
+        "round_progress_reset_at_turn_start",
+        re.compile(
+            r"\bStartNewTurn\s*\([^)]*\)\s*\{"
+            r"[\s\S]{0,1800}?\bPlayersCompletedThisRound\s*\.\s*Reset\s*\(",
+            re.IGNORECASE,
+        ),
+        (
+            "Resetting the round-completion set at each turn discards earlier players and "
+            "prevents an all-active-players completion condition from accumulating. Reset it "
+            "only after the round-complete branch increments the round."
+        ),
+    ),
+    (
+        "round_incremented_at_each_turn_start",
+        re.compile(
+            r"\bStartNewTurn\s*\([^)]*\)\s*\{"
+            r"[\s\S]{0,1200}?\bCurrentRoundIndex\s*\+\+"
+            r"[\s\S]{0,2600}?\bPlayersCompletedThisRound\b",
+            re.IGNORECASE,
+        ),
+        (
+            "A round tracked by PlayersCompletedThisRound cannot increment in every "
+            "StartNewTurn call. Increment only after the active-player completion set is full."
+        ),
+    ),
+    (
+        "round_completion_uses_configured_player_count",
+        re.compile(
+            r"\bPlayersCompletedThisRound\s*\.\s*Num\s*\(\s*\)"
+            r"\s*>?=\s*LocalPlayerCount\b",
+            re.IGNORECASE,
+        ),
+        (
+            "LocalPlayerCount includes players who may have resigned or become inactive. "
+            "Round completion must compare the completed-player ids with the current active "
+            "players so departure cannot stall the match."
+        ),
+    ),
+    (
+        "round_completion_compares_set_count_only",
+        re.compile(
+            r"\bPlayersCompletedThisRound\s*\.\s*Num\s*\(\s*\)"
+            r"\s*==\s*ActivePlayer(?:Indices|Ids|Players)\s*\.\s*Num\s*\(\s*\)",
+            re.IGNORECASE,
+        ),
+        (
+            "Equal set sizes do not prove equal membership when active players can change "
+            "during a round. Require PlayersCompletedThisRound.Contains(Id) for every current "
+            "active player id."
+        ),
+    ),
+    (
+        "turn_direction_clamped_instead_of_wrapped",
+        re.compile(
+            r"\bFMath\s*::\s*Max(?:\s*<[^>]+>)?\s*\(\s*0\s*,"
+            r"[^;\n]{0,220}\b(?:TurnDirection|Direction)\b[^;\n]*\)"
+            r"[\s\S]{0,800}?\bActivePlayer(?:Indices|Ids|Players)\b",
+            re.IGNORECASE,
+        ),
+        (
+            "Clamping a directed circular index to zero repeats/stops at the first player "
+            "when traversing in reverse. Normalize with positive modulo by the active-player "
+            "count so both directions wrap."
+        ),
+    ),
+    (
+        "turn_direction_clamped_instead_of_wrapped",
+        re.compile(
+            r"\bAdvanceTurn(?:Index)?\s*\([^)]*\bDirection\b[^)]*\)\s*(?:const\s*)?\{"
+            r"[\s\S]{0,2200}?\b(?P<index>[A-Za-z_]\w*)\s*=\s*"
+            r"FMath\s*::\s*Max(?:\s*<[^>]+>)?\s*\(\s*(?P=index)\s*,\s*0(?:LL|L|f)?\s*\)",
+            re.IGNORECASE,
+        ),
+        (
+            "Clamping a temporary directed index against zero still breaks reverse traversal, "
+            "even when the Direction expression was assigned on an earlier line. Normalize with "
+            "positive modulo over the active-player positions instead."
+        ),
+    ),
+    (
+        "gameplaystatics_getplayercontroller_unqualified",
+        re.compile(r"(?<![A-Za-z0-9_])GameplayStatics\s*::\s*GetPlayerController\s*\("),
+        (
+            "The public engine helper is UGameplayStatics::GetPlayerController; "
+            "GameplayStatics::GetPlayerController is not a public gameplay-module API."
+        ),
+    ),
     (
         "world_geturl",
         re.compile(

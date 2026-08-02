@@ -56,15 +56,20 @@ RAG_ESSENTIAL_TOOLS = frozenset(
         "unreal_review_claim_validate",
         "unreal_diagram_validate",
         "unreal_project_status",
+        "unreal_task_status",
+        "unreal_task_list_active",
+        "unreal_task_recover_active",
+        "unreal_task_cancel_active",
+        "unreal_task_quarantine_corrupt",
+        "unreal_task_retry_job_cancel",
+        "unreal_task_checkpoint",
+        "unreal_task_cancel",
     }
 )
 
 RAG_STABLE_HIDDEN_TOOLS = frozenset(
     {
         "unreal_task_start",
-        "unreal_task_status",
-        "unreal_task_checkpoint",
-        "unreal_task_cancel",
         "unreal_task_resume",
         "unreal_task_approve",
         "unreal_project_prepare",
@@ -136,8 +141,8 @@ def validate_phase_tool_route(route: dict[str, Any]) -> list[str]:
     if phantom:
         issues.append(f"activeTools contains non-callable tools: {phantom}")
     max_calls = int(route.get("maxToolCallsPerPhase") or 0)
-    if not 2 <= max_calls <= 6:
-        issues.append("maxToolCallsPerPhase must be between 2 and 6")
+    if not 2 <= max_calls <= 8:
+        issues.append("maxToolCallsPerPhase must be between 2 and 8")
     role = str(route.get("roleSession") or "")
     if role in {"planner", "runtime", "verifier"} and MUTATION_TOOLS.intersection(
         tools

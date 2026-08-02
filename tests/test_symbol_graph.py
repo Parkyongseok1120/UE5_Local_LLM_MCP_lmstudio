@@ -56,6 +56,32 @@ public:
     assert matches[0]["owner_build_cs"].endswith("Demo.Build.cs")
 
 
+def test_symbol_graph_qualifies_member_declarations_inside_header_class(tmp_path):
+    source = tmp_path / "Source"
+    source.mkdir()
+    (source / "GomokuGameState.h").write_text(
+        """
+class AGomokuGameState : public AGameStateBase
+{
+public:
+    void AdvanceTurn();
+    bool IsGameOver() const;
+};
+""",
+        encoding="utf-8",
+    )
+
+    graph = build_symbol_graph.build_symbol_graph(source)
+    functions = {
+        (row["symbol_name"], row["qualified_name"])
+        for row in graph["symbols"]
+        if row["symbol_kind"] == "function"
+    }
+
+    assert ("AdvanceTurn", "AGomokuGameState::AdvanceTurn") in functions
+    assert ("IsGameOver", "AGomokuGameState::IsGameOver") in functions
+
+
 def test_symbol_graph_parses_next_line_qualified_definition_without_promoting_calls(
     tmp_path,
 ):
@@ -152,7 +178,7 @@ FWorker::~FWorker()
         if row["symbol_kind"] == "function"
     }
 
-    assert ("BeginPlay", "") in functions
+    assert ("BeginPlay", "FWorker::BeginPlay") in functions
     assert ("FWorker", "FWorker::FWorker") in functions
     assert ("~FWorker", "FWorker::~FWorker") in functions
 

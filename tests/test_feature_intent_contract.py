@@ -85,6 +85,35 @@ def test_named_existing_owner_is_bounded_without_a_literal_file_path() -> None:
     assert analysis["requiresResolution"] is False
 
 
+def test_detailed_named_feature_with_one_ui_choice_is_bounded() -> None:
+    analysis = analyze_feature_intent_ambiguity(
+        "Implement AGomokuGameMode, AGomokuGameState, and AGomokuBoardActor for "
+        "a 15x15 local hotseat game. Use WGomokuHUD or a simple UI widget, keep "
+        "architecture clean and extensible for later multiplayer, and provide "
+        "all required Unreal C++ files.",
+        write_intent=True,
+    )
+
+    assert analysis["ambiguityScore"] < 0.45
+    assert analysis["boundedScope"] is True
+    assert analysis["recommendedAction"] == "bounded_assumption"
+    assert analysis["requiresResolution"] is False
+
+
+def test_detailed_local_feature_summary_stays_bounded_without_class_names() -> None:
+    analysis = analyze_feature_intent_ambiguity(
+        "Implement Gomoku local 2-player hotseat game with board actor, mouse "
+        "click placement, turn system, win detection, restart button, personal "
+        "timer, and timeout auto-place logic.",
+        write_intent=True,
+    )
+
+    assert analysis["ambiguityScore"] < 0.45
+    assert analysis["boundedScope"] is True
+    assert analysis["recommendedAction"] == "bounded_assumption"
+    assert analysis["requiresResolution"] is False
+
+
 def test_broad_vague_cross_cutting_write_is_high_ambiguity() -> None:
     analysis = analyze_feature_intent_ambiguity(
         "Implement the best architecture for this whole project, maybe subsystem "

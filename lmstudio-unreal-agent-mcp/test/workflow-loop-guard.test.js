@@ -8,6 +8,7 @@ const {
   recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
+  recordBuildRecoveryContract,
   recordRecoveryEvidenceCall,
   resetWorkflowLoopGuardForTests,
 } = require("../src/workflow-loop-guard");
@@ -81,12 +82,89 @@ test("failed build caps evidence reads until a mutation changes generation", () 
   assert.equal(afterMutation.active, false);
 });
 
+test("planned recovery evidence has a fresh scope without resetting pre-task limits", () => {
+  const project = "/tmp/Demo";
+  finishBuildAttempt(project, 21, {
+    commandSucceeded: false,
+    stderr: "error C2039: missing member",
+  });
+
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(recordRecoveryEvidenceCall(project, 21, {
+      budget: 2,
+      scopeKey: "pre_task",
+    }).blocked, false);
+  }
+  assert.equal(recordRecoveryEvidenceCall(project, 21, {
+    budget: 2,
+    scopeKey: "pre_task",
+  }).blocked, true);
+
+  const planned = recordRecoveryEvidenceCall(project, 21, {
+    budget: 2,
+    scopeKey: "task_12345678",
+  });
+  assert.equal(planned.blocked, false);
+  assert.equal(planned.count, 1);
+  assert.equal(planned.scopeKey, "task_12345678");
+});
+
 test("successful build does not activate the recovery evidence budget", () => {
   const project = "/tmp/Demo";
   finishBuildAttempt(project, 30, { commandSucceeded: true });
   for (let index = 0; index < 10; index += 1) {
     assert.equal(recordRecoveryEvidenceCall(project, 30, { budget: 2 }).blocked, false);
   }
+});
+
+test("failed build enforces the exact first-error range before other reads", () => {
+  const project = "/tmp/Demo";
+  finishBuildAttempt(project, 31, {
+    commandSucceeded: false,
+    stderr: "Source/Demo/Foo.cpp:40:2: error: bad call",
+  });
+  recordBuildRecoveryContract(project, 31, {
+    targetFile: "Source/Demo/Foo.cpp",
+    requiredNextTool: "read_file_range",
+    requiredNextToolArgs: {
+      path: "Source/Demo/Foo.cpp",
+      startLine: 25,
+      endLine: 55,
+    },
+  });
+
+  const wrongTool = recordRecoveryEvidenceCall(project, 31, {
+    budget: 8,
+    tool: "read_file",
+    fileAbsPath: "/tmp/Demo/Source/Demo/Foo.cpp",
+  });
+  assert.equal(wrongTool.blocked, true);
+  assert.equal(wrongTool.reason, "build_recovery_required_tool_mismatch");
+  assert.equal(wrongTool.count, 0);
+
+  const wrongFile = recordRecoveryEvidenceCall(project, 31, {
+    budget: 8,
+    tool: "read_file_range",
+    fileAbsPath: "/tmp/Demo/Source/Demo/Bar.cpp",
+  });
+  assert.equal(wrongFile.blocked, true);
+  assert.equal(wrongFile.reason, "build_recovery_target_mismatch");
+
+  const exact = recordRecoveryEvidenceCall(project, 31, {
+    budget: 8,
+    tool: "read_file_range",
+    fileAbsPath: "/tmp/Demo/Source/Demo/Foo.cpp",
+  });
+  assert.equal(exact.blocked, false);
+  assert.equal(exact.count, 1);
+
+  const extra = recordRecoveryEvidenceCall(project, 31, {
+    budget: 8,
+    tool: "read_file",
+    fileAbsPath: "/tmp/Demo/Source/Demo/Bar.cpp",
+  });
+  assert.equal(extra.blocked, true);
+  assert.equal(extra.reason, "build_recovery_evidence_complete");
 });
 
 test("validation success clears a prior validation fingerprint", () => {

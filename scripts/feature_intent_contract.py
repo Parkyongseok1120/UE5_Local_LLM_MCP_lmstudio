@@ -54,7 +54,7 @@ _VAGUE_SIGNALS = (
 )
 _BROAD_SIGNALS = (
     "whole project", "entire project", "across modules", "multiple modules",
-    "architecture", "system-wide", "프로젝트 전체", "전체 구조", "여러 모듈", "아키텍처",
+    "system-wide", "프로젝트 전체", "전체 구조", "여러 모듈",
 )
 _WRITE_SIGNALS = (
     "implement", "create", "add", "change", "modify", "fix", "refactor", "generate",
@@ -281,6 +281,15 @@ def analyze_feature_intent_ambiguity(
             else marker in text
         )
     )
+    # A concrete implementation choice such as "WGomokuHUD or simple UI widget"
+    # is not the same as an open-ended "maybe/best/proper" request. Keep the
+    # choice in the ambiguity score, but do not let that one token make an
+    # otherwise named, reversible target unbounded.
+    hard_vague_hits = sum(
+        1
+        for marker in _VAGUE_SIGNALS
+        if marker.strip() != "or" and marker in text
+    )
     broad_hits = sum(1 for marker in _BROAD_SIGNALS if marker in text)
     has_concrete_target = bool(
         re.search(r"(?:Source|Plugins|Config)[/\\][^\s]+", request, re.IGNORECASE)
@@ -296,6 +305,52 @@ def analyze_feature_intent_ambiguity(
             r"(?:기존|현재)\s*[가-힣a-z0-9_ ]{0,32}(?:컴포넌트|액터|서브시스템|클래스|모듈)",
             text,
         )
+    )
+    # A feature can be bounded by an explicit local runtime boundary and
+    # concrete observable behavior even when a small model summarizes away the
+    # original C++ class/file names. This is common for detailed game-feature
+    # prompts (local hotseat, exact board/timer values, win/restart/timeout
+    # behavior). Do not turn those into an unrelated replication/persistence
+    # architecture choice merely because the tool-call summary lacks a path.
+    has_explicit_local_boundary = any(
+        marker in text
+        for marker in (
+            "local hotseat",
+            "local 2-player",
+            "local two-player",
+            "single player",
+            "single-player",
+            "one pc",
+            "한 pc",
+            "로컬 2인",
+            "로컬 2명",
+        )
+    )
+    observable_detail_hits = sum(
+        1
+        for marker in (
+            "mouse",
+            "input",
+            "click",
+            "win",
+            "restart",
+            "timeout",
+            "auto-place",
+            "turn",
+            "board",
+            "timer",
+            "초",
+            "클릭",
+            "승리",
+            "재시작",
+            "시간 초과",
+            "턴",
+            "보드",
+        )
+        if marker in text
+    )
+    has_bounded_local_behavior = bool(
+        has_explicit_local_boundary and observable_detail_hits >= 3
     )
     points = 10
     points += min(20, vague_hits * 10)
@@ -314,9 +369,13 @@ def analyze_feature_intent_ambiguity(
         marker in text for marker in ("migration", "delete", "rename", "schema", "마이그레이션", "삭제")
     )
     inferred_bounded = bool(bounded_scope) if bounded_scope is not None else (
-        (has_concrete_target or has_explicit_existing_owner)
+        (
+            has_concrete_target
+            or has_explicit_existing_owner
+            or has_bounded_local_behavior
+        )
         and broad_hits == 0
-        and vague_hits == 0
+        and hard_vague_hits == 0
     )
     if score < 0.45 and inferred_reversible and inferred_bounded:
         action = "bounded_assumption"

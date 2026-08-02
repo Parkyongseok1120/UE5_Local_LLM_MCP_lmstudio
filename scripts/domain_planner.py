@@ -105,6 +105,27 @@ def build_domain_profile(request: str, mode: str = "auto") -> DomainProfile:
     scores: dict[str, float] = {"generic": 0.1}
     for kind, markers in DOMAIN_SIGNALS.items():
         hits = sum(1 for marker in markers if _marker_present(text, marker))
+        # A bare use of "architecture" commonly describes an implementation
+        # quality (for example, "use an efficient architecture") rather than
+        # requesting an architecture decision. Require a design/change/review
+        # verb, or one of the separate ownership/lifetime/authority signals,
+        # before inserting the expensive architecture gate.
+        if kind == "architecture" and hits == 1 and _marker_present(text, "architecture"):
+            architecture_change = bool(
+                re.search(
+                    r"\b(?:analy[sz]e|review|plan|design|redesign|refactor|replace|migrate)\b"
+                    r"[^.;\n]{0,64}\barchitecture\b"
+                    r"|\barchitecture\b[^.;\n]{0,64}"
+                    r"\b(?:analy[sz]e|review|plan|redesign|refactor|replace|migration)\b"
+                    r"|(?:설계|재설계|분석|검토|리팩터|마이그레이션|구조\s*변경)"
+                    r"[^.;\n]{0,64}(?:architecture|아키텍처)"
+                    r"|(?:architecture|아키텍처)[^.;\n]{0,64}"
+                    r"(?:설계|재설계|분석|검토|리팩터|마이그레이션|구조\s*변경)",
+                    text,
+                )
+            )
+            if not architecture_change:
+                hits = 0
         if hits:
             scores[kind] = min(0.35 + hits * 0.2, 1.0)
     if mode == "prototype_component":

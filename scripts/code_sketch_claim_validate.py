@@ -27,29 +27,44 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Unreal-style identifiers: prefixed types (U/A/F/S/I + PascalCase) and common
-# gameplay class suffixes. Mirrors the extraction used elsewhere in the stack.
-SYMBOL_RES = (
-    re.compile(r"\b[AUFSI][A-Z][A-Za-z0-9_]{2,}\b"),
-    re.compile(r"\b[A-Z][A-Za-z0-9_]+(?:Component|Subsystem|Character|Actor|GameMode|Widget|Manager)\b"),
-)
+# Unreal C++ types carry a conventional U/A/F/S/I prefix. Broad suffix-only
+# matching (``*Actor``, ``*Component``) also matched ordinary member names such
+# as ``BoardActor`` and turned assignments into nonexistent API claims.
+# The character immediately after the Unreal prefix pair must be alphanumeric.
+# This keeps enum values such as ``IE_Pressed`` out of the type-symbol gate.
+SYMBOL_RES = (re.compile(r"\b[AUFSI][A-Z][A-Za-z0-9][A-Za-z0-9_]+\b"),)
 # Method/member calls the model asserts exist, e.g. Player->SetRestoreState(...).
 MEMBER_CALL_RE = re.compile(r"(?:->|\.)\s*([A-Za-z_][A-Za-z0-9_]{2,})\s*\(")
 MEMBER_CALL_CLAIM_RE = re.compile(
-    r"\b(?P<receiver>[A-Za-z_][A-Za-z0-9_]*)\s*(?:->|\.)\s*"
+    r"\b(?P<receiver>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<operator>->|\.)\s*"
     r"(?P<member>[A-Za-z_][A-Za-z0-9_]{2,})\s*\("
 )
 STATIC_CALL_CLAIM_RE = re.compile(
     r"\b(?P<receiver>[AUFSI][A-Z][A-Za-z0-9_]*)\s*::\s*"
     r"(?P<member>[A-Za-z_][A-Za-z0-9_]{2,})\s*\("
 )
+# A qualified out-of-class function definition contains the same ``Type::Name(``
+# token sequence as a static call.  Mask these definition spans so a newly
+# implemented project method is not falsely treated as an API invocation.
+QUALIFIED_FUNCTION_DEFINITION_RE = re.compile(
+    r"(?m)^[ \t]*(?:(?:[A-Za-z_][A-Za-z0-9_:<>,~]*|[*&]+)[ \t]+)*"
+    r"(?P<receiver>[AUFSI][A-Z][A-Za-z0-9_]*)\s*::\s*"
+    r"(?P<member>~?[A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*"
+    r"(?:(?:const|override|final|noexcept(?:\s*\([^)]*\))?|&&?)[ \t]*)*"
+    r"(?:\r?\n[ \t]*)?\{"
+)
 VARIABLE_TYPE_RE = re.compile(
     r"\b(?P<type>[AUFSI][A-Z][A-Za-z0-9_:]*)\s*(?:[*&]\s*)?"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
 )
 TEMPLATE_VARIABLE_TYPE_RE = re.compile(
-    r"\b(?:TObjectPtr|TWeakObjectPtr|TSoftObjectPtr|TSubclassOf)\s*<\s*"
+    r"\b(?P<wrapper>TObjectPtr|TWeakObjectPtr|TSoftObjectPtr|TSubclassOf|TSubobjectPtr)\s*<\s*"
+    r"(?:(?:class|struct)\s+)?"
     r"(?P<type>[AUFSI][A-Z][A-Za-z0-9_:]*)\s*>\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+)
+CONTAINER_VARIABLE_TYPE_RE = re.compile(
+    r"\b(?P<type>TArray|TMap|TSet)\s*<[^;{}\n]+>\s*"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
 )
 LOCAL_TYPE_DECL_RE = re.compile(
@@ -63,11 +78,43 @@ LOCAL_DELEGATE_DECL_RE = re.compile(
     r"\bDECLARE_(?:DYNAMIC_)?MULTICAST_DELEGATE(?:_[A-Za-z]+Params?)?\s*\(\s*([A-Za-z_]\w*)"
 )
 
+# UnrealBuildTool exposes these C# collections in ``*.Build.cs`` files. Their
+# collection methods are not Unreal C++ APIs and therefore cannot be resolved
+# through the engine/project symbol index used by this validator. Keep them out
+# of API-claim classification; Build.cs syntax and module names are validated by
+# the dedicated Build.cs parser and the Unreal build itself.
+UNREAL_BUILD_TOOL_COLLECTION_RECEIVERS = {
+    "AdditionalBundleResources",
+    "CircularlyReferencedDependentModules",
+    "DynamicallyLoadedModuleNames",
+    "ExternalDependencies",
+    "InternalIncludePaths",
+    "PrivateDefinitions",
+    "PrivateDependencyModuleNames",
+    "PrivateIncludePathModuleNames",
+    "PrivateIncludePaths",
+    "PublicAdditionalLibraries",
+    "PublicAdditionalShadowFiles",
+    "PublicDefinitions",
+    "PublicDelayLoadDLLs",
+    "PublicDependencyModuleNames",
+    "PublicFrameworks",
+    "PublicIncludePathModuleNames",
+    "PublicIncludePaths",
+    "PublicSystemIncludePaths",
+    "PublicSystemLibraries",
+    "PublicWeakFrameworks",
+    "RuntimeDependencies",
+}
+
 # Identifiers that are ubiquitous UE building blocks; skipping them keeps the
 # report focused on the risky, request-specific symbols.
 COMMON_SAFE = {
     "UObject", "AActor", "UActorComponent", "USceneComponent", "UClass",
-    "FString", "FName", "FText", "FVector", "FRotator", "FTransform",
+    "FString", "FName", "FText", "FVector", "FVector2D", "FRotator", "FTransform",
+    "FCollisionQueryParams", "SCENE_QUERY_STAT",
+    "FMath", "FQuat", "FAttachmentTransformRules", "FObjectInitializer", "INDEX_NONE",
+    "UStaticMeshComponent", "UInstancedStaticMeshComponent",
     "UWorld", "APawn", "ACharacter", "APlayerController", "AGameModeBase", "AGameStateBase",
     "UWorldSubsystem", "UGameInstanceSubsystem", "UEngineSubsystem",
     "UCLASS", "USTRUCT", "UENUM", "UFUNCTION", "UPROPERTY", "UINTERFACE",
@@ -79,7 +126,73 @@ MAX_SKETCH_CHARS = 12_000
 EXACT_LOOKUP_BATCH_SIZE = 400
 
 
+def _mask_comments_and_literals(text: str) -> str:
+    """Replace comments and quoted literal contents while preserving newlines.
+
+    The symbol validator judges executable/declarative code claims. Natural-
+    language comments and string payloads frequently mention proposed class
+    names and must not become fail-closed API claims.
+    """
+
+    source = text or ""
+    output = list(source)
+    index = 0
+    state = "code"
+    while index < len(source):
+        current = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+
+        if state == "code":
+            if current == "/" and following == "/":
+                output[index] = output[index + 1] = " "
+                index += 2
+                state = "line_comment"
+                continue
+            if current == "/" and following == "*":
+                output[index] = output[index + 1] = " "
+                index += 2
+                state = "block_comment"
+                continue
+            if current == '"':
+                output[index] = " "
+                index += 1
+                state = "double_quote"
+                continue
+            if current == "'":
+                output[index] = " "
+                index += 1
+                state = "single_quote"
+                continue
+            index += 1
+            continue
+
+        if current in "\r\n":
+            if state == "line_comment":
+                state = "code"
+            index += 1
+            continue
+
+        output[index] = " "
+        if state == "block_comment":
+            if current == "*" and following == "/":
+                output[index + 1] = " "
+                index += 2
+                state = "code"
+                continue
+        elif state in {"double_quote", "single_quote"}:
+            quote = '"' if state == "double_quote" else "'"
+            if current == "\\" and following:
+                output[index + 1] = " "
+                index += 2
+                continue
+            if current == quote:
+                state = "code"
+        index += 1
+    return "".join(output)
+
+
 def extract_symbols(text: str) -> list[str]:
+    text = _mask_comments_and_literals(text)
     found: list[str] = []
     for pattern in SYMBOL_RES:
         for match in pattern.finditer(text or ""):
@@ -90,6 +203,7 @@ def extract_symbols(text: str) -> list[str]:
 
 
 def extract_member_calls(text: str) -> list[str]:
+    text = _mask_comments_and_literals(text)
     found: list[str] = []
     for match in MEMBER_CALL_RE.finditer(text or ""):
         name = match.group(1)
@@ -98,18 +212,144 @@ def extract_member_calls(text: str) -> list[str]:
     return found
 
 
-def extract_member_call_claims(text: str) -> list[dict[str, str]]:
+SAFE_TEMPLATE_WRAPPER_MEMBERS = {
+    "TObjectPtr": {"Get"},
+    "TWeakObjectPtr": {"Get", "IsValid", "Reset", "IsStale", "IsExplicitlyNull"},
+    "TSoftObjectPtr": {"Get", "IsValid", "IsNull", "IsPending", "LoadSynchronous", "Reset"},
+    "TSubclassOf": {"Get"},
+}
+# ``AddDynamic`` and its siblings are Unreal delegate helper macros expanded at
+# the call site, not ordinary methods that appear as exact symbols in the
+# engine index.  Nested delegate properties such as
+# ``Button->OnClicked.AddDynamic(...)`` also leave the lightweight receiver
+# inference with only ``OnClicked``.  Treat only these dynamic-delegate macros
+# as syntax-level primitives; the compiler/static validator still checks that
+# the receiver is actually a compatible delegate and that the bound function
+# has the required signature.  Do not include ``AddLambda`` here: dynamic
+# multicast delegates intentionally do not support it.
+SAFE_DYNAMIC_DELEGATE_MACRO_MEMBERS = {
+    "AddDynamic",
+    "AddUniqueDynamic",
+    "Broadcast",
+    "IsAlreadyBound",
+    "RemoveDynamic",
+}
+# These names are the stable core operations shared by Unreal's standard
+# containers. A concise implementation sketch often references an existing
+# class field without repeating its TArray/TMap/TSet declaration, and the
+# declaration context can legitimately omit that field while a header slice is
+# still being drafted. Treating these receiver-less calls as engine API claims
+# creates a pointless symbol-lookup loop (``Add`` -> ``Num`` -> ``Reset``).
+# C++ static validation remains responsible for proving that the receiver is
+# declared and supports the operation.
+SAFE_UNTYPED_CONTAINER_MEMBERS = {
+    "Add",
+    "Contains",
+    "Find",
+    "FindOrAdd",
+    "IsValidIndex",
+    "Num",
+    "Remove",
+    "Reset",
+}
+SAFE_RECEIVER_MEMBER_CLAIMS = {
+    # Stable engine helpers whose declarations live in broad engine headers.
+    # Exact-name RAG lookup can otherwise return several owner-less rows and
+    # incorrectly downgrade these routine calls to weak.
+    "FHitResult": {"GetActor"},
+    "FCollisionQueryParams": {"AddIgnoredActor"},
+    "FMath": {"Abs", "Clamp", "Max", "Min", "RoundToInt"},
+    "FTransform": {"SetLocation", "SetRotation", "SetScale3D"},
+    "FVector": {"GetSafeNormal"},
+    "TArray": {"Add", "Find", "IsValidIndex", "Num", "Reset"},
+    "TMap": {"Add", "Contains", "Find", "FindOrAdd", "Num", "Remove", "Reset"},
+    "TSet": {"Add", "Contains", "Num", "Remove", "Reset"},
+    # These are inherited component APIs.  The lightweight project graph often
+    # indexes the declaring base class only, which previously downgraded valid
+    # calls on UStaticMeshComponent/UInstancedStaticMeshComponent receivers to
+    # weak owner-less matches and forced a pointless lookup/retry cycle.
+    "USceneComponent": {"AttachToComponent", "SetVisibility"},
+    "UStaticMeshComponent": {
+        "AttachToComponent",
+        "SetCollisionEnabled",
+        "SetVisibility",
+    },
+    "UInstancedStaticMeshComponent": {
+        "AddInstance",
+        "AttachToComponent",
+        "ClearInstances",
+        "GetInstanceCount",
+        "GetInstanceTransform",
+        "GetStaticMesh",
+        "SetCollisionEnabled",
+        "SetVisibility",
+    },
+    "UInputComponent": {"BindAction", "BindAxis"},
+    "APlayerController": {
+        "DeprojectScreenPositionToWorld",
+        "GetHitResultAtScreenPosition",
+    },
+    "UWorld": {"IsGameWorld", "LineTraceSingleByChannel"},
+    # Verified against UE 5.8 GameplayStatics.h. Reflected-function rows in the
+    # local RAG index do not currently retain qualified owners, so these exact
+    # static calls would otherwise be downgraded to weak despite header proof.
+    "UGameplayStatics": {
+        "DeprojectScreenToWorld",
+        "GetGameState",
+        "GetPlayerController",
+    },
+}
+
+# Common inherited component fields are not declared in a local .cpp sketch,
+# so their receiver type cannot be learned by the declaration regex alone.
+KNOWN_RECEIVER_NAME_TYPES = {
+    "InputComponent": "UInputComponent",
+    "RootComponent": "USceneComponent",
+}
+
+
+def extract_member_call_claims(
+    text: str,
+    declaration_context: str = "",
+) -> list[dict[str, str]]:
+    text = _mask_comments_and_literals(text)
+    context = _mask_comments_and_literals(declaration_context)
     variable_types: dict[str, str] = {}
-    for pattern in (VARIABLE_TYPE_RE, TEMPLATE_VARIABLE_TYPE_RE):
-        for match in pattern.finditer(text or ""):
+    wrapper_types: dict[str, str] = {}
+    # Paired declarations establish field types for a .cpp sketch. Local
+    # declarations in the sketch intentionally win when names shadow fields.
+    for source in (context, text):
+        for match in VARIABLE_TYPE_RE.finditer(source or ""):
             variable_types[match.group("name")] = match.group("type").split("::")[-1]
+        for match in TEMPLATE_VARIABLE_TYPE_RE.finditer(source or ""):
+            variable_types[match.group("name")] = match.group("type").split("::")[-1]
+            wrapper_types[match.group("name")] = match.group("wrapper")
+        for match in CONTAINER_VARIABLE_TYPE_RE.finditer(source or ""):
+            variable_types[match.group("name")] = match.group("type")
 
     claims: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     for match in MEMBER_CALL_CLAIM_RE.finditer(text or ""):
         receiver = match.group("receiver")
         member = match.group("member")
-        receiver_type = variable_types.get(receiver, "")
+        if receiver in UNREAL_BUILD_TOOL_COLLECTION_RECEIVERS:
+            continue
+        if member in SAFE_DYNAMIC_DELEGATE_MACRO_MEMBERS:
+            continue
+        wrapper_type = wrapper_types.get(receiver, "")
+        if (
+            match.group("operator") == "."
+            and member in SAFE_TEMPLATE_WRAPPER_MEMBERS.get(wrapper_type, set())
+        ):
+            continue
+        receiver_type = variable_types.get(
+            receiver,
+            KNOWN_RECEIVER_NAME_TYPES.get(receiver, ""),
+        )
+        if not receiver_type and member in SAFE_UNTYPED_CONTAINER_MEMBERS:
+            continue
+        if member in SAFE_RECEIVER_MEMBER_CLAIMS.get(receiver_type, set()):
+            continue
         key = (receiver, receiver_type, member)
         if key not in seen:
             seen.add(key)
@@ -121,9 +361,17 @@ def extract_member_call_claims(text: str) -> list[dict[str, str]]:
                     "callKind": "member",
                 }
             )
+    definition_claim_starts = {
+        match.start("receiver")
+        for match in QUALIFIED_FUNCTION_DEFINITION_RE.finditer(text or "")
+    }
     for match in STATIC_CALL_CLAIM_RE.finditer(text or ""):
+        if match.start("receiver") in definition_claim_starts:
+            continue
         receiver_type = match.group("receiver").split("::")[-1]
         member = match.group("member")
+        if member in SAFE_RECEIVER_MEMBER_CLAIMS.get(receiver_type, set()):
+            continue
         key = (receiver_type, receiver_type, member)
         if key not in seen:
             seen.add(key)
@@ -140,6 +388,7 @@ def extract_member_call_claims(text: str) -> list[dict[str, str]]:
 
 def extract_local_declarations(text: str) -> set[str]:
     """Return symbols introduced by the sketch itself, not claimed as engine APIs."""
+    text = _mask_comments_and_literals(text)
     declared = {match.group(1) for match in LOCAL_TYPE_DECL_RE.finditer(text or "")}
     # Architecture sketches commonly use ``ANewType : AActor`` instead of a
     # complete C++ class declaration. Treat only this anchored inheritance form
@@ -325,6 +574,47 @@ def _receiver_owner_chain(graph: dict[str, Any] | None, receiver_type: str) -> s
     return owners
 
 
+def _reflected_project_type_evidence(
+    graph: dict[str, Any] | None,
+    receiver_type: str,
+) -> list[dict[str, Any]]:
+    """Return direct graph proof that a receiver is a reflected project type.
+
+    ``StaticClass`` is emitted by UnrealHeaderTool for reflected classes, so it
+    will not appear as an ordinary function row in the lightweight source
+    graph.  Accept it only when the graph itself proves the exact receiver is a
+    reflected class.  This deliberately does not bless arbitrary
+    ``Foo::StaticClass()`` calls.
+    """
+
+    target = receiver_type.split("::")[-1].strip().casefold()
+    if not target:
+        return []
+    evidence: list[dict[str, Any]] = []
+    for row in (graph or {}).get("symbols") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("symbol_name") or "").casefold() != target:
+            continue
+        if row.get("symbol_kind") not in {"class", "interface"}:
+            continue
+        if row.get("is_reflected") is not True:
+            continue
+        path = str(row.get("file_path") or "")
+        line = int(row.get("line_start") or 1)
+        evidence.append(
+            {
+                "symbol_name": str(row.get("symbol_name") or receiver_type),
+                "symbol_kind": str(row.get("symbol_kind") or "class"),
+                "qualified_name": str(row.get("qualified_name") or ""),
+                "title": f"reflected project type {receiver_type}",
+                "locator": f"{path}:{line}" if path else "",
+                "source": "project_symbol_graph",
+            }
+        )
+    return evidence[:3]
+
+
 def _row_qualified_owner(row: dict[str, Any], symbol: str) -> str:
     qualified = str(row.get("qualified_name") or "").strip()
     if "::" in qualified:
@@ -388,6 +678,7 @@ def validate_sketch(
     *,
     top_k: int = 5,
     graph: dict[str, Any] | None = None,
+    declaration_context: str = "",
 ) -> dict[str, Any]:
     from unreal_api_denylist import check_denylist
 
@@ -433,12 +724,22 @@ def validate_sketch(
     graph_available = isinstance(graph, dict) and isinstance(graph.get("symbols"), list)
     graph_index = _graph_symbol_index(graph)
 
-    denylist_hits = check_denylist(sketch)
+    analysis_text = _mask_comments_and_literals(sketch)
+    denylist_hits = check_denylist(analysis_text)
     denied_terms = {hit["term"] for hit in denylist_hits}
 
-    candidates = extract_symbols(sketch)
-    member_claims = extract_member_call_claims(sketch)
-    local_declarations = extract_local_declarations(sketch)
+    candidates = extract_symbols(analysis_text)
+    member_claims = extract_member_call_claims(
+        analysis_text,
+        declaration_context=declaration_context,
+    )
+    # The target files are loaded as declaration_context by the MCP wrapper.
+    # Existing project-local classes, structs, enums, and delegate macros are
+    # valid ownership evidence too; requiring them to appear again in the
+    # patch sketch created an impossible lookup loop for delegate typedefs
+    # that lightweight RAG indexes do not record.
+    local_declarations = extract_local_declarations(analysis_text)
+    local_declarations.update(extract_local_declarations(declaration_context))
     lookup_symbols: list[str] = []
     for symbol in [*candidates, *(claim["member"] for claim in member_claims)]:
         if symbol in COMMON_SAFE or symbol in local_declarations:
@@ -471,7 +772,14 @@ def validate_sketch(
             }
         )
 
-    def _consider(symbol: str, *, is_member: bool, receiver_type: str = "", receiver: str = "") -> None:
+    def _consider(
+        symbol: str,
+        *,
+        is_member: bool,
+        receiver_type: str = "",
+        receiver: str = "",
+        call_kind: str = "",
+    ) -> None:
         key = f"{receiver_type.casefold()}::{symbol.casefold()}" if is_member else symbol.casefold()
         if key in seen or symbol.casefold() in denied_terms:
             return
@@ -480,6 +788,23 @@ def validate_sketch(
         if symbol in local_declarations:
             return
         seen.add(key)
+        if is_member and call_kind == "static" and symbol == "StaticClass":
+            reflected_evidence = _reflected_project_type_evidence(graph, receiver_type)
+            if reflected_evidence:
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "receiver": receiver,
+                        "receiverType": receiver_type,
+                        "verdict": "verified",
+                        "evidence": [],
+                        "note": (
+                            f"{receiver_type} is a reflected project class; StaticClass is "
+                            "generated by UnrealHeaderTool."
+                        ),
+                    }
+                )
+                return
         if not index_exists and not graph_available:
             results.append(
                 {
@@ -551,6 +876,7 @@ def validate_sketch(
             is_member=True,
             receiver_type=claim["receiverType"],
             receiver=claim["receiver"],
+            call_kind=claim.get("callKind", ""),
         )
 
     known_bad = sum(1 for r in results if r["verdict"] == "known_bad")

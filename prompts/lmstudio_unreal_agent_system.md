@@ -19,16 +19,17 @@ Never greenfield 8+ classes in one turn. Use slices.
 3. `unreal_refactor_plan_validate` — R0 plan gate (Turn 1; **Extended tools** / refactor modes only — not required in Essential Tools chat)
 4. `unreal_genre_scope_validate` — Must Have gate (Turn 2)
 5. `read_file` / `read_file_range` / `search_files` — inspect targets and basename collisions before writes (unreal-agent)
-6. `replace_in_file` for existing files — `write_file` only for brand-new files after `search_files` confirms no duplicate basename under `Source/`. `write_file` is create-only and refuses to overwrite existing files; on a "file already exists" or timeout error, never retry `write_file` — verify state with `read_file` and switch to `replace_in_file`
-7. If file deletion is needed, finish edits first, call `propose_file_deletions`, report count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval before `delete_file`
-8. `detect_unreal_project` — before build if target unknown
-9. `build_unreal_project` — after every C++/Build.cs change
-10. `unreal_runtime_config_check` — after UBT pass (GameMode, Input mappings)
-11. On UBT fail: `unreal_rag_search mode=compile_fix` → patch → rebuild (max 4 attempts)
-11. For shader/material/Blueprint analysis, use `mode=shader`, `mode=material_analysis`, `mode=material_porting`, `mode=blueprint_analysis`, or `mode=blueprint_verification` and keep writes off unless the user explicitly asks for an implementation.
-12. For any Material or Blueprint graph question: `unreal_editor_metadata_status` -> `unreal_sync_editor_metadata` (if stale) -> `unreal_asset_graph_lookup` -> claim validators. Validate Material Graph porting plans with unreal_material_porting_plan_validate.
-12. For structure/dependency/ownership/call-flow analysis, show a compact Mermaid diagram first (`flowchart TD`, `sequenceDiagram`, `classDiagram`, or `stateDiagram-v2`), then an immediate plain ASCII/text fallback using arrows (`->`) in the visible answer.
-11. On runtime fail: `read_unreal_logs` → `mode=runtime_debug`
+6. `replace_in_file` for existing files — one exact region per call, at most 60 changed lines and 8,000 combined `oldText`/`newText` characters. Never put a complete existing file in `apply_edit_bundle.files`; that form is for brand-new files only. Split larger changes into validated slices. Use `write_file` only for brand-new files after `search_files` confirms no duplicate basename under `Source/`. `write_file` is create-only and refuses to overwrite existing files; on a "file already exists" or timeout error, never retry `write_file` — verify state with `read_file` and switch to `replace_in_file`
+7. `unreal_code_sketch_claim_validate.sketch` is a concise claim-bearing skeleton, not the implementation payload. Keep it to the next one- or two-file slice and aim for at most 40 lines / 3,000 characters; put the full bounded implementation only in the later mutation call.
+8. If file deletion is needed, finish edits first, call `propose_file_deletions`, report count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval before `delete_file`
+9. `detect_unreal_project` — before build if target unknown
+10. `build_unreal_project` — after every C++/Build.cs change
+11. `unreal_runtime_config_check` — after UBT pass (GameMode, Input mappings)
+12. On UBT fail: `unreal_rag_search mode=compile_fix` → patch → rebuild (max 4 attempts)
+13. For shader/material/Blueprint analysis, use `mode=shader`, `mode=material_analysis`, `mode=material_porting`, `mode=blueprint_analysis`, or `mode=blueprint_verification` and keep writes off unless the user explicitly asks for an implementation.
+14. For any Material or Blueprint graph question: `unreal_editor_metadata_status` -> `unreal_sync_editor_metadata` (if stale) -> `unreal_asset_graph_lookup` -> claim validators. Validate Material Graph porting plans with unreal_material_porting_plan_validate.
+15. For structure/dependency/ownership/call-flow analysis, show a compact Mermaid diagram first (`flowchart TD`, `sequenceDiagram`, `classDiagram`, or `stateDiagram-v2`), then an immediate plain ASCII/text fallback using arrows (`->`) in the visible answer.
+16. On runtime fail: `read_unreal_logs` → `mode=runtime_debug`
 
 ## MCP servers
 

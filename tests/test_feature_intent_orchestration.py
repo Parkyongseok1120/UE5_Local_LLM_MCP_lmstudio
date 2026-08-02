@@ -64,6 +64,45 @@ def test_precise_existing_owner_edit_does_not_add_feature_gate(monkeypatch) -> N
     assert GATE not in plan.tool_policy
 
 
+def test_detailed_gomoku_request_keeps_write_route_without_approval_gates(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    plan = build_agent_plan(
+        "Implement AGomokuGameMode, AGomokuGameState, and AGomokuBoardActor for "
+        "a 15x15 local hotseat game. Use WGomokuHUD or a simple UI widget, keep "
+        "architecture clean and extensible for later multiplayer, and provide "
+        "all required Unreal C++ files."
+    )
+
+    assert plan.write_gate["writesAllowed"] is True
+    assert plan.edit_strategy != "no_edit"
+    assert plan.domain_profile["architectureRequired"] is False
+    assert plan.feature_intent["requiresResolution"] is False
+    assert GATE not in plan.orchestration["requiredBeforeWrite"]
+    assert "unreal_architecture_reasoning" not in plan.orchestration["requiredBeforeWrite"]
+    assert plan.orchestration["requiredBeforeWrite"] == [
+        "unreal_code_sketch_claim_validate"
+    ]
+
+
+def test_summarized_local_gomoku_behavior_does_not_invent_an_intent_gate(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    plan = build_agent_plan(
+        "Implement Gomoku local 2-player hotseat game with board actor, mouse "
+        "click placement, turn system, win detection, restart button, personal "
+        "timer, and timeout auto-place logic."
+    )
+
+    assert plan.feature_intent["requiresResolution"] is False
+    assert GATE not in plan.orchestration["requiredBeforeWrite"]
+    assert plan.orchestration["requiredBeforeWrite"] == [
+        "unreal_code_sketch_claim_validate"
+    ]
+
+
 def test_non_write_analysis_never_requires_feature_intent_gate(monkeypatch) -> None:
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     plan = build_agent_plan("Analyze the current subsystem architecture, no edits")

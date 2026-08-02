@@ -301,6 +301,34 @@ def test_compact_validation_payload_advisory_only_false_with_errors() -> None:
     assert payload["warningCount"] == 1
 
 
+def test_compact_validation_payload_never_hides_blocking_errors_behind_advisories() -> None:
+    findings = [
+        {
+            "severity": "warning",
+            "code": f"WARN_{index}",
+            "path": "A.cpp",
+            "line": index,
+            "message": "advisory",
+        }
+        for index in range(20)
+    ]
+    findings.append(
+        {
+            "severity": "error",
+            "code": "BLOCKING_LAST",
+            "path": "B.h",
+            "line": 99,
+            "message": "must be visible",
+        }
+    )
+    payload = run_node(
+        f"ux.compactValidationPayload({json.dumps({'findings': findings, 'ok': False})}, 5)"
+    )
+    assert payload["findings"][0]["code"] == "BLOCKING_LAST"
+    assert payload["omittedBlockingErrorCount"] == 0
+    assert "advisory finding" not in payload["note"]
+
+
 def test_validation_finding_meta_replication_before_uproperty() -> None:
     replication = run_node("ux.validationFindingMeta('REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME')")
     assert replication["group"] == "Networking"

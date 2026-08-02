@@ -131,6 +131,40 @@ def test_agent_exposes_apply_edit_bundle_but_requires_task_authorization(tmp_pat
         client.close()
 
 
+def test_agent_mutation_tools_advertise_bounded_payload_contract(tmp_path: Path) -> None:
+    require_agent_mcp_deps()
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(tmp_path),
+            "ALLOW_WRITE": "1",
+        }
+    )
+    client = _StdioClient(
+        [_node_exe(), str(AGENT_SERVER)],
+        env=env,
+        cwd=ROOT / "lmstudio-unreal-agent-mcp",
+    )
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "t", "version": "1"},
+            },
+            1,
+        )
+        listed = client.request("tools/list", {}, 2)["result"]["tools"]
+        by_name = {tool["name"]: tool for tool in listed}
+        assert "at most 60 changed lines" in by_name["replace_in_file"]["description"]
+        assert "never put a complete existing file" in by_name["apply_edit_bundle"]["description"]
+        assert "brand-new files only" in by_name["apply_edit_bundle"]["inputSchema"]["properties"]["files"]["description"]
+    finally:
+        client.close()
+
+
 def test_agent_rejects_fabricated_write_authorization_with_plan_recovery(
     tmp_path: Path,
 ) -> None:

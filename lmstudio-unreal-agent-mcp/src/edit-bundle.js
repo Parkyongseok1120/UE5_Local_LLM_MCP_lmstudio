@@ -42,8 +42,20 @@ function entryByteSize(item) {
 function validateBundleLimits(bundle, maxFilesPerEdit = DEFAULT_MAX_FILES_PER_EDIT) {
   const relPaths = bundlePaths(bundle);
   const unique = new Set(relPaths);
-  if (unique.size !== relPaths.length) {
-    throw new Error("apply_edit_bundle: duplicate paths in bundle are not allowed");
+  const filePaths = (bundle?.files || [])
+    .filter((item) => item?.path)
+    .map((item) => String(item.path).replace(/\\/g, "/"));
+  if (new Set(filePaths).size !== filePaths.length) {
+    throw new Error("apply_edit_bundle: duplicate files[] paths are not allowed");
+  }
+  const patchPaths = new Set(
+    (bundle?.patches || [])
+      .filter((item) => item?.path)
+      .map((item) => String(item.path).replace(/\\/g, "/"))
+  );
+  const mixedPath = filePaths.find((rel) => patchPaths.has(rel));
+  if (mixedPath) {
+    throw new Error(`apply_edit_bundle: ${mixedPath} cannot appear in both files[] and patches[]`);
   }
   if (unique.size > maxFilesPerEdit) {
     throw new Error(`apply_edit_bundle: too many files (max ${maxFilesPerEdit})`);
@@ -145,7 +157,9 @@ async function captureBaseline(targets, journal, stateRoot) {
 
 async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) {
   const writtenAbs = [];
+  const writtenAbsSet = new Set();
   const postWriteHashes = {};
+  const patchedPaths = new Set();
 
   for (const item of bundle?.patches || []) {
     const rel = String(item.path).replace(/\\/g, "/");
@@ -163,13 +177,19 @@ async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) 
       writeStarted: true,
     });
     const priorContent = base.existedBefore ? await fsp.readFile(abs, "utf8") : "";
+    // Repeated patches for one file are applied in request order. The first
+    // edit is guarded by the caller's/baseline hash; later edits compare their
+    // exact oldText against the content produced by the preceding edit.
+    const readHash = patchedPaths.has(rel)
+      ? null
+      : (item.readHash || base.preHash || null);
     const result = await replaceWithCAS({
       targetPath: abs,
       priorContent,
       oldText: String(item.oldText || ""),
       newText: String(item.newText || ""),
       expectedOccurrences: Number(item.expectedOccurrences ?? 1),
-      readHash: item.readHash || base.preHash || null,
+      readHash,
     });
     if (!result.ok) {
       throw new Error(result.error || `Patch failed for ${rel}`);
@@ -182,7 +202,11 @@ async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) 
       writeCompleted: true,
       restored: false,
     });
-    writtenAbs.push(abs);
+    patchedPaths.add(rel);
+    if (!writtenAbsSet.has(abs)) {
+      writtenAbsSet.add(abs);
+      writtenAbs.push(abs);
+    }
   }
 
   for (const item of bundle?.files || []) {
@@ -217,7 +241,10 @@ async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) 
       writeCompleted: true,
       restored: false,
     });
-    writtenAbs.push(abs);
+    if (!writtenAbsSet.has(abs)) {
+      writtenAbsSet.add(abs);
+      writtenAbs.push(abs);
+    }
   }
 
   journal.status = "committed";

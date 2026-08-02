@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -14,6 +15,7 @@ from phase_tool_router import (  # noqa: E402
     selection_binding,
 )
 from plan_consistency import validate_phase_tool_route  # noqa: E402
+from feature_intent_contract import target_snapshot_hash  # noqa: E402
 from task_api import (  # noqa: E402
     _refresh_server_owned_state,
     active_task_route_context,
@@ -21,11 +23,15 @@ from task_api import (  # noqa: E402
     authorize_task_tool,
     release_expired_idle_active_task_route,
     task_checkpoint,
+    task_complete_after_successful_build,
+    task_mark_build_recovery_evidence,
+    task_record_build_recovery,
     task_record_gate,
     task_replan,
     task_root,
     task_start,
     task_status,
+    task_validate_build_recovery_sketch,
 )
 
 
@@ -72,6 +78,24 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
     assert planner == derive_tool_route(planner_state)
     assert planner["roleSession"] == "planner"
     assert not MUTATION_TOOLS.intersection(planner["activeTools"])
+    assert "list_directory" in planner["activeTools"]
+    assert planner["maxToolCallsPerPhase"] == 8
+
+    compile_planner_state = _state(writes=True)
+    compile_planner_state["taskKind"] = "compile_fix"
+    compile_planner_state["requiredBeforeWrite"] = [
+        "unreal_code_sketch_claim_validate"
+    ]
+    compile_planner_state["pendingGates"] = [
+        "unreal_code_sketch_claim_validate"
+    ]
+    compile_planner = derive_tool_route(compile_planner_state)
+    assert compile_planner["roleSession"] == "planner"
+    assert "build_unreal_project" in compile_planner["activeTools"]
+    assert "static_validate_project" in compile_planner["activeTools"]
+    assert "unreal_code_sketch_claim_validate" in compile_planner["activeTools"]
+    assert "requiredFirstTool" not in compile_planner
+    assert not MUTATION_TOOLS.intersection(compile_planner["activeTools"])
 
     executor = derive_tool_route(
         _state(writes=True, files=["Source/Demo/Foo.cpp"])
@@ -79,6 +103,11 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
     assert executor["roleSession"] == "executor"
     assert MUTATION_TOOLS.intersection(executor["activeTools"])
     assert "apply_edit_bundle" in executor["activeTools"]
+    assert "unreal_code_sketch_claim_validate" in executor["activeTools"]
+    assert "unreal_symbol_lookup" in executor["activeTools"]
+    assert "search_files" in executor["activeTools"]
+    assert "read_unreal_logs" in executor["activeTools"]
+    assert executor["maxToolCallsPerPhase"] == 8
     assert executor["selectedSlice"]["files"] == ["Source/Demo/Foo.cpp"]
 
     runtime_state = _state(writes=False)
@@ -88,18 +117,232 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
     assert not MUTATION_TOOLS.intersection(runtime["activeTools"])
 
     verifier_state = _state(writes=False)
-    verifier_state["continuity"]["checkpoint"] = {
-        "phase": "validation",
-        "checkpointHash": "checkpoint-2",
+    verifier_state["runtimeDebugSession"] = {
+        "status": "awaiting_same_observer_verification"
     }
     verifier = derive_tool_route(verifier_state)
     assert verifier["roleSession"] == "verifier"
     assert not MUTATION_TOOLS.intersection(verifier["activeTools"])
+    assert "unreal_rag_search" in verifier["activeTools"]
+    assert "unreal_symbol_lookup" in verifier["activeTools"]
+
+    metadata_only_state = _state(
+        writes=True,
+        files=["Source/Demo/Foo.cpp"],
+    )
+    metadata_only_state["continuity"]["checkpoint"] = {
+        "phase": "planner",
+        "checkpointHash": "checkpoint-2",
+    }
+    metadata_only = derive_tool_route(metadata_only_state)
+    assert metadata_only["roleSession"] == "executor"
+    assert "replace_in_file" in metadata_only["activeTools"]
 
     for route in (planner, executor, runtime, verifier):
         assert 5 <= len(route["activeTools"]) <= 10
-        assert 2 <= route["maxToolCallsPerPhase"] <= 6
+        assert 2 <= route["maxToolCallsPerPhase"] <= 8
         assert validate_phase_tool_route(route) == []
+
+
+def test_compile_plan_recommends_build_without_hard_blocking_diagnostics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Fix current build errors",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "compile_fix",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [],
+        },
+    )
+    authorization = started["taskAuthorization"]
+
+    static_check = authorize_task_tool(
+        tmp_path,
+        tool_name="static_validate_project",
+        task_authorization=authorization,
+        arguments={},
+    )
+    assert static_check["ok"] is True
+
+    build = authorize_task_tool(
+        tmp_path,
+        tool_name="build_unreal_project",
+        task_authorization=authorization,
+        arguments={},
+    )
+    assert build["ok"] is True
+
+    source_read = authorize_task_tool(
+        tmp_path,
+        tool_name="read_file",
+        task_authorization=authorization,
+        arguments={"path": "Source/Demo/Foo.cpp"},
+    )
+    assert source_read["ok"] is True
+
+
+def test_successful_build_completion_releases_route_ownership(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement a bounded Unreal edit and build it",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
+    )
+
+    completed = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        proof_level="Built",
+        mutation_generation=3,
+        build_log_path=".agent/logs/latest-build.log",
+    )
+
+    assert completed["ok"] is True
+    assert completed["status"] == "completed"
+    assert completed["completionEvidence"]["mutationGeneration"] == 3
+    state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text()
+    )
+    assert state["status"] == "completed"
+    assert state["continuity"]["lease"]["status"] == "released"
+    assert active_task_route_context(tmp_path)["status"] == "none"
+
+    repeated = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+    )
+    assert repeated["ok"] is True
+    assert repeated["alreadyCompleted"] is True
+
+
+def test_build_recovery_scope_is_shared_and_fail_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Fix current build errors",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "compile_fix",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [],
+        },
+    )
+    authorization = started["taskAuthorization"]
+    target = "Source/Demo/FirstError.cpp"
+
+    recorded = task_record_build_recovery(
+        tmp_path,
+        task_authorization=authorization,
+        recovery={
+            "targetFile": target,
+            "requiredNextTool": "read_file_range",
+            "requiredNextToolArgs": {
+                "path": f"project://{target}",
+                "startLine": 12,
+                "endLine": 20,
+            },
+            "firstError": "FirstError.cpp:14: error",
+            "mutationGeneration": 4,
+        },
+    )
+    assert recorded["ok"] is True
+
+    before_read = task_validate_build_recovery_sketch(
+        tmp_path,
+        task_authorization=authorization,
+        target_files=[target],
+    )
+    assert before_read["errorCode"] == "BUILD_RECOVERY_REQUIRED_EVIDENCE"
+    assert before_read["nextActionArgs"]["path"] == f"project://{target}"
+
+    observed = task_mark_build_recovery_evidence(
+        tmp_path,
+        task_authorization=authorization,
+        target_file=target,
+    )
+    assert observed["ok"] is True
+
+    broad = task_validate_build_recovery_sketch(
+        tmp_path,
+        task_authorization=authorization,
+        target_files=[target, "Source/Demo/ParallelError.cpp"],
+    )
+    assert broad["errorCode"] == "BUILD_RECOVERY_TARGET_SCOPE_MISMATCH"
+    assert broad["nextActionArgs"]["targetFiles"] == [target]
+    assert broad["nextActionArgs"]["taskAuthorization"]["taskSessionId"] == started[
+        "taskSessionId"
+    ]
+
+    exact = task_validate_build_recovery_sketch(
+        tmp_path,
+        task_authorization=authorization,
+        target_files=[target],
+    )
+    assert exact == {"ok": True, "active": True, "targetFile": target}
+
+
+def test_oversized_gate_slice_returns_executable_bounded_retry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Create three bounded source files",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [{"sliceId": "task", "files": []}],
+        },
+    )
+
+    denied = authorize_task_tool(
+        tmp_path,
+        tool_name="unreal_code_sketch_claim_validate",
+        task_authorization=started["taskAuthorization"],
+        arguments={
+            "targetFiles": [
+                "Source/Demo/One.cpp",
+                "Source/Demo/Two.cpp",
+                "Source/Demo/Three.cpp",
+            ]
+        },
+    )
+
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "TASK_ROUTE_SCOPE_EXCEEDED"
+    assert denied["nextAction"] == "unreal_code_sketch_claim_validate"
+    assert denied["nextActionArgs"]["maxFilesPerSlice"] == 2
+    assert denied["taskAuthorization"] == started["taskAuthorization"]
+    assert "Do not replan or stop" in denied["agentInstruction"]
 
 
 def test_checkpoint_and_reselection_change_selection_binding_and_gates() -> None:
@@ -202,7 +445,12 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     )
     assert exhausted["ok"] is False
     assert exhausted["errorCode"] == "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
-    assert "Do not retry" in exhausted["agentInstruction"]
+    assert "action=record" in exhausted["agentInstruction"]
+    assert exhausted["nextAction"] == "unreal_task_checkpoint"
+    assert exhausted["nextActionArgs"]["action"] == "record"
+    assert exhausted["nextActionArgs"]["requiredNextAction"] == active_tool
+    assert exhausted["nextActionArgs"]["includeGitChanges"] is False
+    assert exhausted["nextActionArgs"]["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
     assert set(exhausted["nextActions"]) == {
         "unreal_task_status",
         "unreal_task_checkpoint",
@@ -284,6 +532,92 @@ def test_automatic_checkpoint_preserves_phase_budget(
     assert state["toolRouteUsage"]["checkpointRecordedWithoutBudgetReset"] is True
 
 
+def test_authorized_mutation_checkpoint_advances_feature_intent_binding(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "Demo"
+    target = project / "Source" / "Demo" / "Foo.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("// before\n", encoding="utf-8")
+    project_file = project / "Demo.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    gate = "unreal_feature_intent_resolve"
+    started = task_start(
+        tmp_path,
+        request="Implement a bounded change in Source/Demo/Foo.cpp",
+        project_file=str(project_file),
+        mode="agent_edit",
+        plan_payload={
+            "planId": "plan",
+            "planRevision": "1",
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": [gate]},
+            "executablePlanSlices": [
+                {"sliceId": "slice-1", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
+    )
+    snapshots = [
+        {
+            "path": "Source/Demo/Foo.cpp",
+            "absolutePath": str(target.resolve()),
+            "exists": True,
+            "fileHash": hashlib.sha1(target.read_bytes()).hexdigest(),
+        }
+    ]
+    intent_binding = {
+        "selectedIntentId": "bounded_local",
+        "intentContractHash": "a" * 64,
+        "acceptanceOracleHash": "b" * 64,
+        "targetSnapshotHash": target_snapshot_hash(snapshots),
+    }
+    recorded = task_record_gate(
+        tmp_path,
+        gate_name=gate,
+        task_authorization=started["taskAuthorization"],
+        input_payload={"request": "bounded change"},
+        evidence={"ok": True},
+        target_snapshots=snapshots,
+        intent_binding=intent_binding,
+    )
+    assert recorded["ok"] is True
+
+    target.write_text("// after first authorized edit\n", encoding="utf-8")
+    checkpointed = task_checkpoint(
+        tmp_path,
+        task_authorization=recorded["taskAuthorization"],
+        action="record",
+        phase="executor",
+        modified_files=[str(target)],
+        validation={},
+        preserve_route_usage=True,
+        include_git_changes=False,
+        advance_gate_snapshots=True,
+    )
+    assert checkpointed["ok"] is True
+    assert checkpointed["advancedGateSnapshots"] == ["Source/Demo/Foo.cpp"]
+
+    state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    record = state["completedGates"][gate]
+    assert record["targetSnapshots"][0]["fileHash"] == hashlib.sha1(
+        target.read_bytes()
+    ).hexdigest()
+    assert record["checkpointHash"] == state["continuity"]["checkpoint"][
+        "checkpointHash"
+    ]
+    assert record["targetSnapshotHash"] == state["featureIntent"][
+        "targetSnapshotHash"
+    ]
+    assert checkpointed["writeReadiness"]["ready"] is True
+
+
 def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
     tmp_path: Path,
     monkeypatch,
@@ -313,6 +647,10 @@ def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
     assert replanned["taskSessionId"] == started["taskSessionId"]
     assert replanned["planRevision"] != old_authorization["planRevision"]
     assert replanned["taskAuthorization"]["authToken"] != old_authorization["authToken"]
+    assert (
+        replanned["taskAuthorization"]["ownerCapability"]
+        == old_authorization["ownerCapability"]
+    )
     assert replanned["state"]["completedGates"] == {}
     assert replanned["state"]["selectedTargetSnapshots"] == []
     assert replanned["state"]["continuity"]["checkpoint"]["status"] == "not_recorded"
@@ -346,7 +684,98 @@ def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
     assert denied["ok"] is False
     assert denied["errorCode"] == "REPLAN_BUDGET_EXHAUSTED"
     assert denied["checkpointRecordRequired"] is True
+    assert denied["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
+    assert denied["taskAuthorization"]["authToken"]
+    assert denied["taskAuthorization"]["ownerCapability"]
+    assert denied["nextActionArgs"] == {
+        "action": "record",
+        "includeGitChanges": False,
+        "taskAuthorization": denied["taskAuthorization"],
+    }
     assert "humanCheckpointRequired" not in denied
+
+
+def test_checkpoint_restores_omitted_owner_capability_and_does_not_fake_phase(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Inspect code",
+        mode="read_only",
+        conversation_id="conv-checkpoint-auth",
+        plan_payload=_plan(writes=False),
+    )
+    authorization = dict(started["taskAuthorization"])
+    expected_capability = authorization.pop("ownerCapability")
+
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=authorization,
+        action="record",
+        phase="executor",
+        modified_files=[],
+        validation={},
+    )
+
+    assert recorded["ok"] is True
+    assert recorded["taskAuthorization"]["ownerCapability"] == expected_capability
+    assert recorded["checkpointPhaseIsMetadataOnly"] is True
+    assert recorded["reportedCheckpointPhase"] == "executor"
+    assert recorded["currentRoutePhase"] == "planner"
+    assert recorded["routeTransitioned"] is False
+    assert "metadata" in recorded["agentInstruction"]
+
+
+def test_replan_cannot_implicitly_downgrade_and_complete_running_write_task(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    plan = _plan(writes=True, files=["Source/Demo/Foo.cpp"])
+    plan["orchestration"] = {
+        "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+    }
+    started = task_start(
+        tmp_path,
+        request="Implement Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload=plan,
+    )
+
+    denied = task_replan(
+        tmp_path,
+        task_session_id=started["taskSessionId"],
+        request=(
+            "Implement Foo.cpp and validate with "
+            "unreal_code_sketch_claim_validate before writes"
+        ),
+        mode="plan_only",
+        project_file="",
+        plan_payload=_plan(writes=False),
+    )
+
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "TASK_REPLAN_WRITE_DOWNGRADE_BLOCKED"
+    assert denied["writeTaskPreserved"] is True
+    assert denied["nextAction"] == "unreal_code_sketch_claim_validate"
+    assert denied["taskAuthorization"] == started["taskAuthorization"]
+    persisted = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["status"] == "running"
+    assert persisted["planRevision"] == "1"
+    assert persisted["writesAllowed"] is True
+    continued = authorize_task_tool(
+        tmp_path,
+        tool_name="unreal_code_sketch_claim_validate",
+        task_authorization=denied["taskAuthorization"],
+        arguments={"targetFiles": ["Source/Demo/Foo.cpp"]},
+    )
+    assert continued["ok"] is True
 
 
 def test_concurrent_replans_allow_exactly_one_revision_transition(
@@ -562,6 +991,111 @@ def test_stale_route_and_suffix_path_escape_fail_closed(
     )
     assert suffix_escape["ok"] is False
     assert suffix_escape["errorCode"] == "TASK_SLICE_TARGET_MISMATCH"
+    assert suffix_escape["nextAction"] == "unreal_code_sketch_claim_validate"
+    assert suffix_escape["taskAuthorization"]["routePhase"] == "executor"
+
+
+def test_executor_can_rebind_next_code_generation_slice_without_replan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    first_path = "Source/Demo/First.h"
+    second_path = "Source/Demo/Second.h"
+    started = task_start(
+        tmp_path,
+        request="Create two source slices",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [{"sliceId": "task", "files": []}],
+        },
+    )
+    first = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=started["taskAuthorization"],
+        input_payload={"sketch": "class AFirst;", "changeKind": "new_file"},
+        evidence={"ok": True},
+        target_snapshots=[{"path": first_path, "exists": False, "fileHash": ""}],
+    )
+    assert first["ok"] is True
+    assert first["toolRoute"]["roleSession"] == "executor"
+    assert "unreal_code_sketch_claim_validate" in first["toolRoute"]["activeTools"]
+    assert "search_files" in first["toolRoute"]["activeTools"]
+
+    gate_auth = authorize_task_tool(
+        tmp_path,
+        tool_name="unreal_code_sketch_claim_validate",
+        task_authorization=first["taskAuthorization"],
+        arguments={"targetFiles": [second_path]},
+    )
+    assert gate_auth["ok"] is True
+    second = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=first["taskAuthorization"],
+        input_payload={"sketch": "class ASecond;", "changeKind": "new_file"},
+        evidence={"ok": True},
+        target_snapshots=[{"path": second_path, "exists": False, "fileHash": ""}],
+    )
+    assert second["ok"] is True
+    assert second["toolRoute"]["selectedSlice"]["files"] == [second_path]
+    assert second["taskAuthorization"]["planRevision"] == first["taskAuthorization"]["planRevision"]
+
+
+def test_compile_fix_executor_can_rebind_next_error_slice_without_replan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    first_path = "Source/Demo/First.h"
+    second_path = "Source/Demo/Second.h"
+    started = task_start(
+        tmp_path,
+        request="Fix each compiler error until the build succeeds",
+        plan_payload={
+            "taskKind": "compile_fix",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [{"sliceId": "task", "files": []}],
+        },
+    )
+    first = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=started["taskAuthorization"],
+        input_payload={"sketch": "class AFirst;", "changeKind": "existing_file"},
+        evidence={"ok": True},
+        target_snapshots=[{"path": first_path, "exists": True, "fileHash": "first"}],
+    )
+    assert first["ok"] is True
+    assert first["toolRoute"]["roleSession"] == "executor"
+    assert "unreal_code_sketch_claim_validate" in first["toolRoute"]["activeTools"]
+
+    gate_auth = authorize_task_tool(
+        tmp_path,
+        tool_name="unreal_code_sketch_claim_validate",
+        task_authorization=first["taskAuthorization"],
+        arguments={"targetFiles": [second_path]},
+    )
+    assert gate_auth["ok"] is True
+    second = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=first["taskAuthorization"],
+        input_payload={"sketch": "class ASecond;", "changeKind": "existing_file"},
+        evidence={"ok": True},
+        target_snapshots=[{"path": second_path, "exists": True, "fileHash": "second"}],
+    )
+    assert second["ok"] is True
+    assert second["toolRoute"]["selectedSlice"]["files"] == [second_path]
+    assert second["taskAuthorization"]["planRevision"] == first["taskAuthorization"]["planRevision"]
 
 
 def test_gate_target_snapshots_bind_greenfield_slice_for_executor(
@@ -952,6 +1486,10 @@ def test_foreign_connection_write_task_does_not_own_tool_route(
     )
     assert denied["ok"] is False
     assert denied["errorCode"] == "TASK_ROUTE_OWNERSHIP_REQUIRED"
+    assert denied["nextAction"] == "read_file"
+    assert denied["retryable"] is True
+    assert denied["nextActionArgs"]["requiresCompleteTaskAuthorization"] is True
+    assert "Do not recover or cancel" in denied["agentInstruction"]
     allowed = authorize_active_task_tool(
         tmp_path,
         tool_name="read_file",
@@ -1032,7 +1570,8 @@ def test_project_identity_bridges_rag_and_node_workspaces_without_cross_project_
     assert "unreal_rag_search" in names
     assert controls <= names
     assert controls.isdisjoint(started["toolRoute"]["activeTools"])
-    assert names - controls - {"unreal_agent_plan"} == set(
-        started["toolRoute"]["activeTools"]
-    ).intersection(names)
-    assert len(names) >= 2
+    from tool_exposure import rag_essential_tool_names
+
+    assert names == set(rag_essential_tool_names())
+    assert "unreal_code_sketch_claim_validate" in names
+    assert "unreal_semantic_refactor_guard" in names

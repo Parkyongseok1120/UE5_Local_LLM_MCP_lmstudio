@@ -17,6 +17,16 @@ from agent_orchestrator import (  # noqa: E402
 
 def test_classify_compile_fix():
     assert classify_task("Fix C1083 missing include in MyActor.h", "auto") == "compile_fix"
+    assert classify_task("Fix the current build errors until it builds", "auto") == "compile_fix"
+    assert classify_task(
+        "Complete the existing implementation until it compiles successfully. "
+        "No new features, just fix existing code to compile.",
+        "auto",
+    ) == "compile_fix"
+    assert classify_task(
+        "현재 생성된 C++ 구현을 실제 컴파일 성공까지 직접 완성해줘",
+        "auto",
+    ) == "compile_fix"
 
 
 def test_classify_answer_only():
@@ -242,17 +252,28 @@ def test_single_surface_codegen_uses_guarded_orchestration():
     assert payload["toolPolicy"].index("static_validate_project") < payload["toolPolicy"].index("build_unreal_project")
 
 
-def test_multifile_codegen_escalates_to_architecture_first():
+def test_multifile_codegen_is_staged_without_forcing_architecture_gate():
     plan = build_agent_plan(
-        "Implement a feature across the subsystem, component, and actor",
+        "Implement a feature across the controller, game state, and actor",
         "agent_edit",
         file_count_hint=3,
     )
     payload = plan.to_dict()
     assert payload["orchestration"]["riskTier"] == "high"
+    assert payload["orchestration"]["strategy"] == "staged_guarded"
+    assert "unreal_architecture_reasoning" not in payload["orchestration"]["requiredBeforeWrite"]
+    assert "unreal_code_sketch_claim_validate" in payload["orchestration"]["requiredBeforeWrite"]
+
+
+def test_explicit_architecture_design_still_requires_architecture_gate():
+    plan = build_agent_plan(
+        "Implement a redesign of the architecture and ownership boundaries for the match state",
+        "agent_edit",
+        file_count_hint=3,
+    )
+    payload = plan.to_dict()
     assert payload["orchestration"]["strategy"] == "architecture_first"
     assert "unreal_architecture_reasoning" in payload["orchestration"]["requiredBeforeWrite"]
-    assert payload["toolPolicy"].index("unreal_architecture_reasoning") < payload["toolPolicy"].index("replace_in_file")
 
 
 def test_orchestration_reports_active_profile_without_claiming_model_switching():

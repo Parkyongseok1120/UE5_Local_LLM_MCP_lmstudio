@@ -51,6 +51,24 @@ def test_existing_target_contract_requires_source_and_pair_read(tmp_path: Path) 
     assert result["proofBoundary"].startswith("This contract establishes")
 
 
+def test_new_cpp_contract_reads_existing_paired_header(tmp_path: Path) -> None:
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    header = source / "Worker.h"
+    header.write_text("class FWorker { public: void Run(); };\n", encoding="utf-8")
+
+    result = build_generation_contract(
+        "create the implementation",
+        project_root=tmp_path,
+        target_files=["Source/Demo/Worker.cpp"],
+        change_kind="new_file",
+    )
+
+    assert result["ok"] is True
+    assert result["targets"][0]["pairedSources"] == ["Source/Demo/Worker.h"]
+    assert [row["filePath"] for row in result["requiredReads"]] == [str(header)]
+
+
 def test_existing_edit_contract_rejects_missing_target_and_unsafe_path(tmp_path: Path) -> None:
     missing = build_generation_contract(
         "modify worker",

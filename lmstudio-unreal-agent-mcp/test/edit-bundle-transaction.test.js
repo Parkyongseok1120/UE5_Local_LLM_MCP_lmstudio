@@ -71,6 +71,48 @@ test("partial write rolls back completed journal entry", async () => {
   assert.strictEqual(fs.readFileSync(second, "utf8"), "two\n");
 });
 
+test("multiple exact patches for one file apply in listed order", async () => {
+  process.env.AGENT_STATE_ROOT = ensureStateRootLayout(tmpDir());
+  const dir = tmpDir();
+  const target = path.join(dir, "One.cpp");
+  fs.writeFileSync(target, "alpha\nbeta\ngamma\n", "utf8");
+
+  const result = await applyBundleTransaction(
+    {
+      patches: [
+        { path: "One.cpp", oldText: "alpha", newText: "ALPHA", expectedOccurrences: 1 },
+        { path: "One.cpp", oldText: "gamma", newText: "GAMMA", expectedOccurrences: 1 },
+      ],
+    },
+    async (rel) => ({ ok: true, absolutePath: path.join(dir, rel) })
+  );
+
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "ALPHA\nbeta\nGAMMA\n");
+  assert.deepStrictEqual(result.writtenAbs, [fs.realpathSync(target)]);
+});
+
+test("later failed patch on one file rolls all earlier patches back", async () => {
+  process.env.AGENT_STATE_ROOT = ensureStateRootLayout(tmpDir());
+  const dir = tmpDir();
+  const target = path.join(dir, "One.cpp");
+  fs.writeFileSync(target, "alpha\nbeta\n", "utf8");
+
+  const result = await applyBundleTransaction(
+    {
+      patches: [
+        { path: "One.cpp", oldText: "alpha", newText: "ALPHA", expectedOccurrences: 1 },
+        { path: "One.cpp", oldText: "missing", newText: "MISSING", expectedOccurrences: 1 },
+      ],
+    },
+    async (rel) => ({ ok: true, absolutePath: path.join(dir, rel) })
+  );
+
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.rolledBack, true);
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "alpha\nbeta\n");
+});
+
 test("files[] cannot overwrite existing source file", async () => {
   process.env.AGENT_STATE_ROOT = tmpDir();
   const dir = tmpDir();

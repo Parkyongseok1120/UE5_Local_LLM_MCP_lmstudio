@@ -29,7 +29,8 @@ function stateFor(projectRoot, mutationGeneration) {
       buildAttempted: false,
       buildFailed: false,
       buildFingerprint: "",
-      recoveryEvidenceCount: 0,
+      buildRecoveryContract: null,
+      recoveryEvidenceByScope: new Map(),
     };
     projectStates.set(key, state);
   }
@@ -111,8 +112,26 @@ function finishBuildAttempt(projectRoot, mutationGeneration, outcome) {
   state.buildAttempted = true;
   state.buildFailed = outcome?.commandSucceeded !== true;
   state.buildFingerprint = state.buildFailed ? buildFingerprint(outcome) : "";
-  state.recoveryEvidenceCount = 0;
+  state.buildRecoveryContract = null;
+  state.recoveryEvidenceByScope = new Map();
   return state;
+}
+
+function recordBuildRecoveryContract(projectRoot, mutationGeneration, recovery) {
+  const state = stateFor(projectRoot, mutationGeneration);
+  if (!state.buildFailed || !recovery || typeof recovery !== "object") {
+    state.buildRecoveryContract = null;
+    return null;
+  }
+  state.buildRecoveryContract = {
+    requiredNextTool: String(recovery.requiredNextTool || ""),
+    requiredNextToolArgs: recovery.requiredNextToolArgs && typeof recovery.requiredNextToolArgs === "object"
+      ? { ...recovery.requiredNextToolArgs }
+      : {},
+    targetFile: String(recovery.targetFile || "").replace(/\\/g, "/"),
+    evidenceSatisfied: false,
+  };
+  return { ...state.buildRecoveryContract };
 }
 
 /**
@@ -126,23 +145,75 @@ function recordRecoveryEvidenceCall(projectRoot, mutationGeneration, options = {
   if (!state.buildFailed) {
     return { blocked: false, active: false, count: 0, budget };
   }
-  if (state.recoveryEvidenceCount >= budget) {
+  const contract = state.buildRecoveryContract && typeof state.buildRecoveryContract === "object"
+    ? state.buildRecoveryContract
+    : null;
+  const requestedTool = String(options.tool || "");
+  if (contract?.requiredNextTool) {
+    if (contract.evidenceSatisfied) {
+      return {
+        blocked: true,
+        active: true,
+        count: 1,
+        budget,
+        reason: "build_recovery_evidence_complete",
+        buildFingerprint: state.buildFingerprint,
+        recoveryContract: { ...contract },
+      };
+    }
+    if (requestedTool && requestedTool !== contract.requiredNextTool) {
+      return {
+        blocked: true,
+        active: true,
+        count: 0,
+        budget,
+        reason: "build_recovery_required_tool_mismatch",
+        buildFingerprint: state.buildFingerprint,
+        recoveryContract: { ...contract },
+      };
+    }
+    const requestedFile = String(options.fileAbsPath || "").replace(/\\/g, "/").toLowerCase();
+    const targetFile = String(contract.targetFile || "").replace(/\\/g, "/").toLowerCase();
+    if (targetFile && requestedFile && !requestedFile.endsWith(`/${targetFile}`)) {
+      return {
+        blocked: true,
+        active: true,
+        count: 0,
+        budget,
+        reason: "build_recovery_target_mismatch",
+        buildFingerprint: state.buildFingerprint,
+        recoveryContract: { ...contract },
+      };
+    }
+    contract.evidenceSatisfied = true;
+  }
+  const scopeKey = String(options.scopeKey || "pre_task");
+  const evidenceByScope = state.recoveryEvidenceByScope instanceof Map
+    ? state.recoveryEvidenceByScope
+    : new Map();
+  state.recoveryEvidenceByScope = evidenceByScope;
+  const recoveryEvidenceCount = Number(evidenceByScope.get(scopeKey) || 0);
+  if (recoveryEvidenceCount >= budget) {
     return {
       blocked: true,
       active: true,
-      count: state.recoveryEvidenceCount,
+      count: recoveryEvidenceCount,
       budget,
+      scopeKey,
       reason: "build_recovery_evidence_budget_exhausted",
       buildFingerprint: state.buildFingerprint,
     };
   }
-  state.recoveryEvidenceCount += 1;
+  const nextCount = recoveryEvidenceCount + 1;
+  evidenceByScope.set(scopeKey, nextCount);
   return {
     blocked: false,
     active: true,
-    count: state.recoveryEvidenceCount,
+    count: nextCount,
     budget,
+    scopeKey,
     buildFingerprint: state.buildFingerprint,
+    recoveryContract: contract ? { ...contract } : null,
   };
 }
 
@@ -158,6 +229,7 @@ module.exports = {
   recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
+  recordBuildRecoveryContract,
   recordRecoveryEvidenceCall,
   resetWorkflowLoopGuardForTests,
 };

@@ -209,7 +209,10 @@ def build_generation_contract(
                     for row in known[:16]
                     if str(row.get("qualified_name") or row.get("symbol_name") or "")
                 ]
-        pairs = _paired_paths(path, root) if exists and source_like else []
+        # A newly-created .cpp still needs its already-existing header (and vice
+        # versa) as declaration evidence. Pair discovery is read-only and works
+        # even when the target itself does not exist yet.
+        pairs = _paired_paths(path, root) if source_like else []
         if pairs:
             target["pairedSources"] = [pair.relative_to(root).as_posix() for pair in pairs]
             for pair in pairs:

@@ -2,7 +2,20 @@
 
 const assert = require("assert");
 const test = require("node:test");
-const { projectSwitchGuidance } = require("../src/tool-exposure");
+const { projectSwitchGuidance, stableAgentToolNames } = require("../src/tool-exposure");
+
+test("stableAgentToolNames keeps build and edit lifecycle tools available", () => {
+  const stable = stableAgentToolNames([
+    "read_file",
+    "replace_in_file",
+    "build_unreal_project",
+    "run_command",
+  ]);
+  assert.deepStrictEqual(
+    [...stable].sort(),
+    ["build_unreal_project", "read_file", "replace_in_file"]
+  );
+});
 
 test("projectSwitchGuidance points stable profile to unreal-rag canonical tool", () => {
   const guidance = projectSwitchGuidance([

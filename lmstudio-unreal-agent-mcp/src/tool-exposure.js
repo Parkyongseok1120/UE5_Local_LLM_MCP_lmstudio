@@ -54,6 +54,11 @@ function callableAgentToolNames(allRegistered) {
   return new Set([...visible].filter((name) => allowed.has(name)));
 }
 
+function stableAgentToolNames(allRegistered) {
+  const essential = new Set(loadStableManifest().agentEssential || []);
+  return new Set(allRegistered.filter((name) => essential.has(name)));
+}
+
 function toolNotCallablePayload(toolName) {
   const message = `Tool '${toolName}' is not callable in the current MCP exposure profile.`;
   return {
@@ -86,6 +91,7 @@ function projectSwitchGuidance(allRegisteredToolNames) {
 
 module.exports = {
   callableAgentToolNames,
+  stableAgentToolNames,
   toolNotCallablePayload,
   loadStableManifest,
   projectSwitchGuidance,

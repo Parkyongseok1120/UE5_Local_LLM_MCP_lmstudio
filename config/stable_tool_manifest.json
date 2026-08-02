@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Default stable install tool exposure (MCP_ESSENTIAL_TOOLS=1). Hidden tools remain in code but require ALLOW_CONTROL_PLANE_TOOLS=1.",
+  "description": "Default stable install tool exposure (MCP_ESSENTIAL_TOOLS=1). Essential lifecycle tools remain advertised across healthy route transitions for clients that cache tools/list during generation; call-time route authorization remains authoritative, and hidden tools require ALLOW_CONTROL_PLANE_TOOLS=1.",
   "ragEssential": [
     "unreal_get_active_project",
     "unreal_set_active_project",
@@ -18,10 +18,7 @@
     "unreal_semantic_refactor_guard",
     "unreal_review_claim_validate",
     "unreal_diagram_validate",
-    "unreal_project_status"
-  ],
-  "ragHiddenUntilControlPlane": [
-    "unreal_task_start",
+    "unreal_project_status",
     "unreal_task_status",
     "unreal_task_list_active",
     "unreal_task_recover_active",
@@ -29,7 +26,10 @@
     "unreal_task_quarantine_corrupt",
     "unreal_task_retry_job_cancel",
     "unreal_task_checkpoint",
-    "unreal_task_cancel",
+    "unreal_task_cancel"
+  ],
+  "ragHiddenUntilControlPlane": [
+    "unreal_task_start",
     "unreal_task_resume",
     "unreal_task_approve",
     "unreal_project_prepare",

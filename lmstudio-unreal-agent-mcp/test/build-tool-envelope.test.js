@@ -44,7 +44,7 @@ test("compact compiler diagnostics remove machine path and mojibake tail", () =>
   const compact = compactCompilerDiagnostic(raw);
   assert.strictEqual(
     compact,
-    "StaminaComponent.cpp(93,28): error C2039: 'Empty': 'FGameplayTagContainer'"
+    "Source/StaminaComponent.cpp(93,28): error C2039: 'Empty': 'FGameplayTagContainer'"
   );
 
   const payload = buildResponsePayload({
@@ -61,6 +61,40 @@ test("compact compiler diagnostics remove machine path and mojibake tail", () =>
   assert.strictEqual(payload.suggestedToolCalls[0].args.query, "Empty");
   assert.strictEqual(payload.recovery.owner, "FGameplayTagContainer");
   assert.ok(!payload.summary.includes("D:\\BuildAgent"));
+});
+
+test("clang diagnostics keep project-relative coordinates and route to the failing range", () => {
+  const raw = "/Users/example/Game/Source/Demo/GomokuGameState.cpp:109:17: error: too few arguments to function call, single argument 'bForceEnd' was not specified";
+  const payload = buildResponsePayload({
+    result: { ok: false, exitCode: 6, stdout: raw, stderr: "", error: "" },
+    build: { target: "GameEditor", platform: "Mac", configuration: "Development" },
+    planResult: { ok: true },
+    projectPath: "/Users/example/Game/Game.uproject",
+    command: "Build.sh GameEditor Mac Development",
+    logPath: "/Users/example/Game/.agent/logs/latest-build.log",
+    verbose: false,
+  });
+
+  assert.strictEqual(
+    payload.likelyErrors[0],
+    "Source/Demo/GomokuGameState.cpp:109:17: error: too few arguments to function call, single argument 'bForceEnd' was not specified"
+  );
+  assert.strictEqual(payload.requiredNextTool, "read_file_range");
+  assert.deepStrictEqual(payload.requiredNextToolArgs, {
+    path: "Source/Demo/GomokuGameState.cpp",
+    startLine: 94,
+    endLine: 124,
+    detailLevel: "compact",
+  });
+  assert.deepStrictEqual(payload.recovery.requiredSequence, [
+    "read_file_range",
+    "unreal_code_sketch_claim_validate",
+    "replace_in_file",
+    "static_validate_project",
+    "build_unreal_project",
+  ]);
+  assert.strictEqual(payload.recovery.rebindTargetBeforeMutation, true);
+  assert.ok(!payload.nextSteps.some((step) => step.includes("No actionable")));
 });
 
 test("two compiler failures keep deterministic recovery before a successful rebuild", () => {
@@ -107,6 +141,67 @@ test("two compiler failures keep deterministic recovery before a successful rebu
   assert.strictEqual(first.requiredNextToolArgs.query, "StreamLevel");
   assert.strictEqual(second.requiredNextTool, "unreal_symbol_lookup");
   assert.strictEqual(second.requiredNextToolArgs.query, "LoadStreamLevel");
+});
+
+test("clang linker blocks preserve undefined symbols and route to the missing definition", () => {
+  const output = [
+    "[2/2] Link [Apple] libUnrealEditor-Demo.dylib",
+    "Undefined symbols for architecture arm64:",
+    '  "AGomokuGameState::SetHoveredCell(UE::Math::TIntPoint<int> const&)", referenced from:',
+    "      AGomokuGameState::execSetHoveredCell(UObject*, FFrame&, void*) in Module.Demo.gen.cpp.o",
+    '  "AGomokuGameState::Tick(float)", referenced from:',
+    "      vtable for AGomokuGameState in GomokuGameState.cpp.o",
+    "ld: symbol(s) not found for architecture arm64",
+    "clang++: error: linker command failed with exit code 1 (use -v to see invocation)",
+    "Result: Failed (OtherCompilationError)",
+  ].join("\n");
+
+  const payload = buildResponsePayload({
+    result: { ok: false, exitCode: 6, stdout: output, stderr: "", error: "" },
+    build: { target: "DemoEditor", platform: "Mac", configuration: "Development" },
+    planResult: { ok: true },
+    projectPath: "/Users/example/Demo/Demo.uproject",
+    command: "Build.sh DemoEditor Mac Development",
+    logPath: "/Users/example/Demo/.agent/logs/latest-build.log",
+    verbose: false,
+  });
+
+  assert.strictEqual(
+    payload.likelyErrors[0],
+    "Undefined symbol: AGomokuGameState::SetHoveredCell(UE::Math::TIntPoint<int> const&)"
+  );
+  assert.strictEqual(payload.recovery.category, "linker_missing_definition");
+  assert.strictEqual(payload.requiredNextTool, "unreal_symbol_lookup");
+  assert.strictEqual(payload.requiredNextToolArgs.query, "SetHoveredCell");
+  assert.ok(payload.recovery.requiredSequence.includes("unreal_agent_plan"));
+  assert.ok(payload.recovery.requiredSequence.includes("unreal_code_sketch_claim_validate"));
+  assert.ok(!payload.nextSteps.some((step) => step.includes("No actionable")));
+});
+
+test("same-file incomplete type recovery includes the source preamble when bounded", () => {
+  const output = [
+    "/Users/example/Demo/Source/Demo/Board.cpp:92:51: error: cannot initialize a parameter of type 'const APlayerController *' with an rvalue of type 'ABoard *'",
+    "/Users/example/Demo/Source/Demo/Board.cpp:100:29: error: member access into incomplete type 'ADemoGameState'",
+    "/Users/example/Demo/Source/Demo/Board.cpp:108:12: error: member access into incomplete type 'ADemoGameState'",
+  ].join("\n");
+
+  const payload = buildResponsePayload({
+    result: { ok: false, exitCode: 6, stdout: output, stderr: "", error: "" },
+    build: { target: "DemoEditor", platform: "Mac", configuration: "Development" },
+    planResult: { ok: true },
+    projectPath: "/Users/example/Demo/Demo.uproject",
+    command: "Build.sh DemoEditor Mac Development",
+    logPath: "/Users/example/Demo/.agent/logs/latest-build.log",
+    verbose: false,
+  });
+
+  assert.strictEqual(payload.recovery.includesSourcePreamble, true);
+  assert.deepStrictEqual(payload.requiredNextToolArgs, {
+    path: "Source/Demo/Board.cpp",
+    startLine: 1,
+    endLine: 123,
+    detailLevel: "compact",
+  });
 });
 
 test("build infrastructure failures still set the MCP error disposition", () => {

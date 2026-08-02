@@ -265,20 +265,6 @@ def pending_gates_for_state(state: dict[str, Any]) -> list[str]:
     return [gate for gate in required if gate not in valid]
 
 
-def _checkpoint_phase(state: dict[str, Any]) -> str:
-    continuity = (
-        state.get("continuity")
-        if isinstance(state.get("continuity"), dict)
-        else {}
-    )
-    checkpoint = (
-        continuity.get("checkpoint")
-        if isinstance(continuity.get("checkpoint"), dict)
-        else {}
-    )
-    return str(checkpoint.get("phase") or "").strip().casefold()
-
-
 def _phase_and_role(
     state: dict[str, Any],
     *,
@@ -308,21 +294,6 @@ def _phase_and_role(
             else ("planner", "planner")
         )
 
-    checkpoint_phase = _checkpoint_phase(state)
-    if checkpoint_phase in {
-        "validation",
-        "verification",
-        "verifier",
-        "build",
-        "testing",
-        "test",
-    }:
-        return "verifier", "verifier"
-    if checkpoint_phase in {"runtime", "runtime_analysis", "experiment"}:
-        return "runtime_analysis", "runtime"
-    if checkpoint_phase in {"planning", "analysis", "planner"}:
-        return "planner", "planner"
-
     writes_allowed = bool(
         (state.get("writeGate") or {}).get("writesAllowed")
         if isinstance(state.get("writeGate"), dict)
@@ -335,9 +306,13 @@ def _phase_and_role(
 
 def _task_tools(task_kind: str) -> list[str]:
     return {
-        "compile_fix": ["read_unreal_logs"],
-        "reflection_fix": ["read_unreal_logs"],
-        "module_fix": ["read_unreal_logs"],
+        # Compile-oriented requests need an authoritative first diagnostic
+        # before the model can draft a targeted fix sketch. Keeping the build
+        # hidden until executor phase forced models to inspect every source
+        # file and guess at errors instead of reproducing them.
+        "compile_fix": ["build_unreal_project", "read_unreal_logs"],
+        "reflection_fix": ["build_unreal_project", "read_unreal_logs"],
+        "module_fix": ["build_unreal_project", "read_unreal_logs"],
         "refactor": [
             "unreal_architecture_reasoning",
             "unreal_semantic_refactor_guard",
@@ -393,25 +368,55 @@ def _active_tools(
         tools = [
             "read_file",
             "read_file_range",
-            "unreal_rag_search",
+            # A build can fail at link/UHT/toolchain stages without a source
+            # coordinate. Build responses explicitly route to the newest log
+            # in that case, so the executor must not reject its own recovery.
+            "read_unreal_logs",
+            # Exact project-source discovery is a normal recovery step when a
+            # sketch or symbol lookup cannot verify a project-local helper.
+            # Keep it callable in executor instead of returning a next action
+            # that the same route rejects.
+            "search_files",
+            # The sketch gate can fail again while rebinding a later executor
+            # slice and return an exact symbol lookup as its required next
+            # action. Keep that recovery callable without changing phases.
+            "unreal_symbol_lookup",
             "static_validate_project",
             "build_unreal_project",
         ]
+        # Keep the scope-authoritative sketch gate available after entering the
+        # executor. Multi-slice edits can then validate/rebind the next bounded
+        # file slice without destroying the plan through a replan cycle.
+        if task_kind in {
+            "edit",
+            "codegen",
+            "code_sketch",
+            "compile_fix",
+            "reflection_fix",
+            "module_fix",
+            "runtime_edit",
+        }:
+            tools.insert(4, "unreal_code_sketch_claim_validate")
         if not selected_slice["scopeRequired"]:
             if task_kind == "refactor":
-                tools.insert(3, "apply_edit_bundle")
+                tools.insert(4, "apply_edit_bundle")
             elif task_kind in {"edit", "codegen", "code_sketch"}:
-                tools[3:3] = ["apply_edit_bundle", "write_file", "replace_in_file"]
+                tools[4:4] = ["apply_edit_bundle", "write_file", "replace_in_file"]
             elif task_kind in {"compile_fix", "reflection_fix", "module_fix", "runtime_edit"}:
-                tools.insert(3, "replace_in_file")
+                tools.insert(4, "replace_in_file")
             else:
-                tools[3:3] = ["apply_edit_bundle", "write_file", "replace_in_file"]
+                tools[4:4] = ["apply_edit_bundle", "write_file", "replace_in_file"]
         if has_runtime_session or task_kind in {"runtime", "runtime_edit", "runtime_debug"}:
-            tools.insert(3, "unreal_runtime_debug_session")
+            tools.insert(4, "unreal_runtime_debug_session")
     elif phase == "verifier":
         tools = [
             "read_file",
             "read_file_range",
+            # Gate failures explicitly return these as executable recovery
+            # actions. Keep them callable on the verifier route so the server
+            # never instructs a model to call a tool that the same route hides.
+            "unreal_rag_search",
+            "unreal_symbol_lookup",
             "unreal_review_claim_validate",
             "static_validate_project",
             "build_unreal_project",
@@ -420,21 +425,41 @@ def _active_tools(
         if has_runtime_session or task_kind in {"runtime", "runtime_edit", "runtime_debug"}:
             tools.insert(2, "unreal_runtime_debug_session")
     else:
-        tools = [
-            "unreal_agent_session",
-            "unreal_rag_search",
-            "unreal_symbol_lookup",
-            "search_files",
-            "read_file",
-            "read_file_range",
-            *_task_tools(task_kind),
-            *_gate_tools(pending_gates),
-        ]
+        if task_kind in {"compile_fix", "reflection_fix", "module_fix"}:
+            tools = [
+                "build_unreal_project",
+                "static_validate_project",
+                "read_unreal_logs",
+                *_gate_tools(pending_gates),
+                "unreal_rag_search",
+                "unreal_symbol_lookup",
+                "list_directory",
+                "search_files",
+                "read_file",
+                "read_file_range",
+            ]
+        else:
+            tools = [
+                "unreal_agent_session",
+                "unreal_rag_search",
+                "unreal_symbol_lookup",
+                # Directory inventory is bounded, read-only project evidence and is
+                # the natural first discovery call compact models make after a
+                # plan starts. Hiding it forced an avoidable TASK_TOOL_NOT_ACTIVE
+                # redirect before the same model fell back to search_files.
+                "list_directory",
+                "search_files",
+                "read_file",
+                "read_file_range",
+                *_task_tools(task_kind),
+                *_gate_tools(pending_gates),
+            ]
 
     unique = _unique_tools(tools)
     safe_fill = [
         "unreal_rag_search",
         "unreal_symbol_lookup",
+        "list_directory",
         "search_files",
         "read_file",
         "read_file_range",
@@ -507,8 +532,16 @@ def derive_tool_route(
         and bool(state.get("runtimeDebugSession")),
     )
     max_calls = {
-        "planner": 4,
-        "executor": 4,
+        # An existing multi-class feature commonly needs a directory listing,
+        # both sides of two declaration/definition pairs, and one gate attempt.
+        # Eight read-only/planning calls avoid a noisy forced checkpoint while
+        # remaining bounded.
+        "planner": 8,
+        # A compile/link repair commonly needs a symbol lookup, both sides of
+        # a declaration/definition pair, a sketch gate, a mutation, static
+        # validation, and a rebuild. Eight keeps that complete evidence-to-
+        # proof cycle in one route while remaining at the global hard cap.
+        "executor": 8,
         "runtime_analysis": 5,
         "verifier": 3,
     }[phase]
@@ -545,6 +578,12 @@ def derive_tool_route(
             phase,
         ),
     }
+    # Compile-oriented plans recommend an immediate build through nextAction,
+    # but do not hard-lock every other diagnostic behind it. A user may have
+    # already reproduced the same mutation generation before opening the
+    # server-owned edit plan; a second build is then deliberately deduplicated.
+    # Keeping reads/static validation available lets that valid evidence flow
+    # into a bounded fix instead of creating a build-first deadlock.
     if _include_expiry_transition:
         completed = (
             state.get("completedGates")
@@ -640,6 +679,7 @@ def compact_tool_route(route: Any) -> dict[str, Any]:
             "graphPolicy",
             "promptContract",
             "controlSurface",
+            "requiredFirstTool",
         )
         if key in value
     }

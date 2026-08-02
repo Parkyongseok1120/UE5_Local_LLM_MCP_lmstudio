@@ -40,6 +40,35 @@ def test_domain_profile_mixed_domain():
     assert "component" in profile.scores or "replication" in profile.scores
 
 
+def test_architecture_quality_constraint_does_not_become_redesign_gate():
+    profile = build_domain_profile(
+        "Implement AGomokuGameMode and AGomokuBoardActor; keep architecture clean "
+        "and extensible for later multiplayer."
+    )
+
+    assert profile.primary != "architecture"
+    assert profile.architecture_required is False
+
+
+def test_efficient_architecture_wording_does_not_become_redesign_gate():
+    profile = build_domain_profile(
+        "Implement hotseat Gomoku across several classes. Use efficient architecture "
+        "with one BoardActor and instanced stone meshes."
+    )
+
+    assert profile.primary != "architecture"
+    assert profile.architecture_required is False
+
+
+def test_explicit_architecture_design_wording_still_requires_gate():
+    profile = build_domain_profile(
+        "Design the architecture and ownership boundaries for the match state."
+    )
+
+    assert profile.primary == "architecture"
+    assert profile.architecture_required is True
+
+
 def test_architecture_decision_fingerprint_stable():
     q = ["Which owner?", "Which lifetime?"]
     assert question_fingerprint(q) == question_fingerprint(list(reversed(q)))

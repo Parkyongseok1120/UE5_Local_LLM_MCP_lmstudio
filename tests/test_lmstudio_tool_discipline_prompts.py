@@ -60,11 +60,16 @@ def test_qwen36_prompt_requires_gate_completion_auth_refresh() -> None:
     assert "gateCompletion.taskAuthorization" in text
     assert "TASK_ROUTE_STALE" in text
     assert "changeKind=new_file" in text
+    assert "changeKind=multifile" in text
+    assert "40 lines / 3,000 characters" in text
 
 
-def test_base_prompt_documents_seven_field_auth_refresh() -> None:
+def test_base_prompt_documents_complete_auth_refresh() -> None:
     text = read_text("prompts/lmstudio_compact_mcp_base.md")
 
+    assert "complete server object" in text
+    assert "ownerCapability" in text
+    assert "conversationId" in text
     assert "routeHash" in text
     assert "routePhase" in text
     assert "gateCompletion.taskAuthorization" in text
@@ -74,17 +79,20 @@ def test_base_prompt_documents_seven_field_auth_refresh() -> None:
 def test_base_prompt_documents_sketch_slice_and_checkpoint_gate_rules() -> None:
     text = read_text("prompts/lmstudio_compact_mcp_base.md")
     assert "active-slice draft" in text
-    assert "12k characters" in text
+    assert "12k is only the hard rejection ceiling" in text
+    assert "40 lines / 3,000 characters" in text
     assert "architectureSymbols" in text
     assert "REPLAN_BUDGET_EXHAUSTED" in text
     assert "cannot complete `requiredBeforeWrite` gates" in text
     assert "GATE_VALIDATION_FAILED" in text
+    assert "Never call `unreal_agent_plan` merely to satisfy" in text
 
 
-def test_qwen35_prompt_uses_seven_field_auth_refresh() -> None:
+def test_qwen35_prompt_uses_complete_auth_refresh() -> None:
     text = read_text("prompts/lmstudio_qwen35_9b_compact_system.md")
 
-    assert "seven" in text.lower()
+    assert "ownerCapability" in text
+    assert "conversationId" in text
     assert "gateCompletion.taskAuthorization" in text
     assert "TASK_ROUTE_STALE" in text
     assert "five fields" not in text

@@ -285,6 +285,24 @@ def extract_symbols_from_file(
     symbols: list[dict[str, Any]] = []
     seen: set[tuple[str, str, int]] = set()
 
+    class_scopes: list[tuple[int, int, str]] = []
+    if language in {"c", "cpp"}:
+        for class_line, class_source in enumerate(lines, start=1):
+            class_info = _class_match(class_source, language)
+            if not class_info:
+                continue
+            body_end = _find_body_end(lines, class_line, language)
+            if body_end is not None:
+                class_scopes.append((class_line, body_end, class_info[1]))
+
+    def enclosing_class(line_number: int) -> str:
+        candidates = [
+            (start, name)
+            for start, end, name in class_scopes
+            if start < line_number <= end
+        ]
+        return max(candidates, default=(0, ""))[1]
+
     def add(row: dict[str, Any]) -> None:
         key = (str(row["symbol_kind"]), str(row["symbol_name"]), int(row["line_start"]))
         if key not in seen:
@@ -378,6 +396,10 @@ def extract_symbols_from_file(
         function = _function_match(line, language)
         if function:
             name, qualified_name = function
+            if not qualified_name:
+                class_owner = enclosing_class(idx)
+                if class_owner:
+                    qualified_name = f"{class_owner}::{name}"
             add(
                 _symbol(
                     name=name,

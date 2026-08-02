@@ -1407,7 +1407,35 @@ def normalize_extensions(values: list[str] | None) -> list[str]:
 
 
 def has_hint(terms: set[str], raw: str, hints: set[str]) -> bool:
-    return any(hint.lower() in terms or hint.lower() in raw for hint in hints)
+    """Return whether a routing hint appears as a real term or phrase.
+
+    Raw substring matching made generic Unreal type names affect the task
+    domain.  For example, ``InstancedStaticMeshComponent`` used to trigger the
+    standalone component-prototype route because it contains ``component``.
+    ASCII hints therefore use identifier boundaries; non-ASCII hints retain
+    substring matching so Korean routing phrases continue to work naturally.
+    """
+
+    for hint in hints:
+        normalized = hint.strip().lower()
+        if not normalized:
+            continue
+        if normalized in terms:
+            return True
+        if re.fullmatch(r"[a-z0-9_]+(?:[ -][a-z0-9_]+)*", normalized):
+            phrase = r"[\s-]+".join(
+                re.escape(part) for part in re.split(r"[\s-]+", normalized)
+            )
+            if re.search(
+                rf"(?<![A-Za-z0-9_]){phrase}(?![A-Za-z0-9_])",
+                raw,
+                flags=re.IGNORECASE,
+            ):
+                return True
+            continue
+        if normalized in raw:
+            return True
+    return False
 
 
 def has_any_raw(raw: str, markers: tuple[str, ...]) -> bool:

@@ -273,19 +273,33 @@ function compactValidationPayload(validation, maxFindings = DEFAULT_VALIDATION_F
       doc: meta.doc
     });
   }
-  const findings = grouped.slice(0, maxFindings);
+  const severityRank = { error: 0, warning: 1, info: 2 };
+  const prioritized = grouped
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => (
+      (severityRank[String(a.item.severity || "").toLowerCase()] ?? 3)
+      - (severityRank[String(b.item.severity || "").toLowerCase()] ?? 3)
+      || a.index - b.index
+    ))
+    .map(({ item }) => item);
+  const findings = prioritized.slice(0, maxFindings);
   const omittedFindingCount = Math.max(0, grouped.length - findings.length);
   const rawErrorCount = grouped.filter((item) => item.severity === "error").length;
   const blockingErrorCount = validation.skipped ? 0 : rawErrorCount;
   const advisoryErrorCount = validation.skipped ? rawErrorCount : 0;
   const warningCount = grouped.filter((item) => item.severity === "warning").length;
   const infoCount = grouped.filter((item) => item.severity === "info").length;
+  const shownBlockingErrorCount = findings.filter((item) => item.severity === "error").length;
+  const omittedBlockingErrorCount = validation.skipped
+    ? 0
+    : Math.max(0, blockingErrorCount - shownBlockingErrorCount);
   const groups = [...new Set(grouped.map((item) => item.group))];
   return {
     ok: validation.ok !== false,
     findingCount: validation.findingCount || grouped.length,
     findings,
     omittedFindingCount,
+    omittedBlockingErrorCount,
     blockingErrorCount,
     advisoryErrorCount,
     warningCount,
@@ -298,7 +312,7 @@ function compactValidationPayload(validation, maxFindings = DEFAULT_VALIDATION_F
     infrastructureError: Boolean(validation.infrastructureError),
     timedOut: Boolean(validation.timedOut),
     note: validation.note || (omittedFindingCount
-      ? `${omittedFindingCount} more advisory finding(s) omitted; run static_validate_project for full list.`
+      ? `${omittedFindingCount} more finding(s) omitted${omittedBlockingErrorCount ? `, including ${omittedBlockingErrorCount} blocking error(s)` : ""}; run static_validate_project with narrower scope for the full list.`
       : "")
   };
 }
@@ -357,7 +371,28 @@ function extractLikelyCompileErrors(stdout, stderr, maxLines = DEFAULT_BUILD_ERR
   const combined = `${stdout || ""}\n${stderr || ""}`;
   const uhtWarningsAreErrors = /UnrealHeaderTool[^\r\n]*-WarningsAsErrors/i.test(combined)
     || /Running Internal UnrealHeaderTool[^\r\n]*-WarningsAsErrors/i.test(combined);
-  const interesting = combined.split(/\r?\n/).filter((line) => (
+  const lines = combined.split(/\r?\n/);
+  // Apple/Clang prints the useful linker diagnostics as a block whose symbol
+  // rows do not contain the word "error". Preserve those rows as compact,
+  // deterministic diagnostics before the generic final clang++ failure.
+  const undefinedSymbols = [];
+  let inUndefinedSymbolBlock = false;
+  for (const line of lines) {
+    if (/^Undefined symbols for architecture\b/i.test(String(line).trim())) {
+      inUndefinedSymbolBlock = true;
+      continue;
+    }
+    if (!inUndefinedSymbolBlock) continue;
+    const match = String(line).match(/^\s*"(.+)",\s+referenced from:\s*$/);
+    if (match) {
+      undefinedSymbols.push(`Undefined symbol: ${match[1]}`);
+      continue;
+    }
+    if (/^\s*(?:ld:|clang\+\+:|Result:|Total time)/i.test(String(line))) {
+      inUndefinedSymbolBlock = false;
+    }
+  }
+  const interesting = lines.filter((line) => (
     /\berror\s+(C\d+|LNK\d+|MSB\d+|UHT\d*)\b/i.test(line)
     || /\bfatal error\b/i.test(line)
     || /\bUnrealHeaderTool failed\b/i.test(line)
@@ -368,7 +403,8 @@ function extractLikelyCompileErrors(stdout, stderr, maxLines = DEFAULT_BUILD_ERR
     || /\bOtherCompilationError\b/i.test(line)
     || /\bUnhandled\s+\d+\s+aggregate exceptions?\b/i.test(line)
   ));
-  return interesting.slice(0, clampInt(maxLines, DEFAULT_BUILD_ERROR_LINES, 1, 120));
+  return [...undefinedSymbols, ...interesting]
+    .slice(0, clampInt(maxLines, DEFAULT_BUILD_ERROR_LINES, 1, 120));
 }
 
 function firstUsefulLine(lines) {
@@ -381,9 +417,15 @@ function compactCompilerDiagnostic(line, maxChars = 360) {
 
   // Keep a portable basename/line coordinate instead of leaking a long,
   // machine-specific absolute path into the next model prompt.
-  const source = value.match(/(?:^|[\\/])([^\\/]+\.(?:cpp|c|cc|cxx|h|hpp)\(\d+(?:,\d+)?\))/i);
+  const portableSource = value.match(
+    /(?:^|[\\/])((?:Source|Plugins)[\\/].+?\.(?:cpp|c|cc|cxx|h|hpp)(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?))(?=:\s*(?:fatal\s+)?error\b)/i
+  );
+  const source = portableSource || value.match(
+    /(?:^|[\\/])([^\\/]+\.(?:cpp|c|cc|cxx|h|hpp)(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?))(?=:\s*(?:fatal\s+)?error\b)/i
+  );
   if (source && Number.isInteger(source.index)) {
     value = value.slice(source.index + source[0].length - source[1].length);
+    value = value.replace(/\\/g, "/");
   }
 
   // A compact query needs the stable ASCII error code and C++ symbols. Localized
@@ -396,8 +438,11 @@ function compactCompilerDiagnostic(line, maxChars = 360) {
 
 function compilerDiagnosticDetails(line) {
   const compact = compactCompilerDiagnostic(line);
+  const undefinedSymbolMatch = compact.match(/^Undefined symbol:\s*(.+)$/i);
   const codeMatch = compact.match(/\b(?:fatal\s+)?error\s+([A-Z]+\d+)\b/i);
-  const locationMatch = compact.match(/^(.+\.(?:cpp|c|cc|cxx|h|hpp))\((\d+)(?:,(\d+))?\)/i);
+  const locationMatch = compact.match(
+    /^(.+\.(?:cpp|c|cc|cxx|h|hpp))(?:(?:\((\d+)(?:,(\d+))?\))|(?::(\d+)(?::(\d+))?))/i
+  );
   const quoted = [];
   const quotedPattern = /'([^']+)'|"([^"]+)"/g;
   let match;
@@ -408,9 +453,12 @@ function compilerDiagnosticDetails(line) {
     compact,
     diagnosticCode: codeMatch ? codeMatch[1].toUpperCase() : "",
     targetFile: locationMatch ? locationMatch[1] : "",
-    targetLine: locationMatch ? Number(locationMatch[2]) : null,
-    targetColumn: locationMatch && locationMatch[3] ? Number(locationMatch[3]) : null,
+    targetLine: locationMatch ? Number(locationMatch[2] || locationMatch[4]) : null,
+    targetColumn: locationMatch && (locationMatch[3] || locationMatch[5])
+      ? Number(locationMatch[3] || locationMatch[5])
+      : null,
     quoted: quoted.filter(Boolean),
+    linkerSymbol: undefinedSymbolMatch ? undefinedSymbolMatch[1].trim() : "",
   };
 }
 
@@ -428,7 +476,10 @@ function buildFailureRecovery(firstError) {
   let category = "compile_error";
   let symbolQuery = "";
 
-  if (code === "C2039") {
+  if (diagnostic.linkerSymbol) {
+    category = "linker_missing_definition";
+    symbolQuery = symbolLeaf(diagnostic.linkerSymbol.replace(/\([^)]*\).*$/, ""));
+  } else if (code === "C2039") {
     category = "missing_member";
     symbolQuery = symbolLeaf(firstQuoted);
   } else if (code === "C3861" || code === "C2065" || code === "C2061") {
@@ -463,6 +514,7 @@ function buildFailureRecovery(firstError) {
 
   if (symbolQuery) {
     const args = { query: symbolQuery, top_k: 8, detailLevel: "compact" };
+    const linkerMissingDefinition = category === "linker_missing_definition";
     return {
       ...common,
       member: code === "C2039" ? symbolQuery : null,
@@ -471,13 +523,41 @@ function buildFailureRecovery(firstError) {
       requiredNextToolArgs: args,
       requiredSequence: [
         "unreal_symbol_lookup",
+        ...(linkerMissingDefinition ? ["unreal_agent_plan"] : []),
         "read_file_range",
+        ...(linkerMissingDefinition ? ["unreal_code_sketch_claim_validate"] : []),
         "replace_in_file",
         "static_validate_project",
         "build_unreal_project",
       ],
-      forbiddenUntilMutation: ["unreal_rag_search", "unreal_agent_plan"],
+      forbiddenUntilMutation: linkerMissingDefinition
+        ? ["unreal_rag_search"]
+        : ["unreal_rag_search", "unreal_agent_plan"],
       maxEvidenceCallsBeforeMutation: 2,
+    };
+  }
+
+  if (diagnostic.targetFile && diagnostic.targetLine) {
+    const args = {
+      path: diagnostic.targetFile,
+      startLine: Math.max(1, diagnostic.targetLine - 15),
+      endLine: diagnostic.targetLine + 15,
+      detailLevel: "compact",
+    };
+    return {
+      ...common,
+      requiredNextTool: "read_file_range",
+      requiredNextToolArgs: args,
+      requiredSequence: [
+        "read_file_range",
+        "unreal_code_sketch_claim_validate",
+        "replace_in_file",
+        "static_validate_project",
+        "build_unreal_project",
+      ],
+      forbiddenUntilMutation: ["unreal_agent_plan"],
+      maxEvidenceCallsBeforeMutation: 1,
+      rebindTargetBeforeMutation: true,
     };
   }
 
@@ -588,21 +668,62 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
   };
 
   if (!result.ok) {
+    const diagnostic = compilerDiagnosticDetails(firstError);
     const actionable = firstError && (
-      /\b(?:fatal\s+)?error\s+[A-Z]+\d+\b/i.test(firstError)
+      Boolean(diagnostic.targetFile && diagnostic.targetLine)
+      || Boolean(diagnostic.linkerSymbol)
+      || /\b(?:fatal\s+)?error\s+[A-Z]+\d+\b/i.test(firstError)
       || /\b(?:UHT|UnrealHeaderTool|generated\.h)\b/i.test(firstError)
       || /\.[ch](?:pp)?\(\d+(?:,\d+)?\).*\bWarning:/i.test(firstError)
     );
     if (actionable) {
       const recovery = buildFailureRecovery(firstError);
+      // A same-file incomplete-type diagnostic means the repair commonly
+      // needs both the include preamble and the failing definition. For small
+      // source files, return that evidence in the single permitted recovery
+      // read instead of forcing the model to guess an include it was forbidden
+      // to inspect.
+      const relatedDiagnostics = compactErrorLines
+        .map((line) => ({ line, details: compilerDiagnosticDetails(line) }))
+        .filter(({ details }) => (
+          recovery.targetFile
+          && details.targetFile === recovery.targetFile
+          && Number(details.targetLine || 0) > 0
+        ));
+      const highestRelatedLine = relatedDiagnostics.reduce(
+        (highest, item) => Math.max(highest, Number(item.details.targetLine || 0)),
+        Number(recovery.targetLine || 0),
+      );
+      const needsIncludePreamble = relatedDiagnostics.some(({ line }) => (
+        /\b(?:incomplete type|unknown type name|does not name a type)\b/i.test(line)
+      ));
+      if (
+        needsIncludePreamble
+        && recovery.requiredNextTool === "read_file_range"
+        && highestRelatedLine > 0
+        && highestRelatedLine + 15 <= 150
+      ) {
+        recovery.requiredNextToolArgs = {
+          ...recovery.requiredNextToolArgs,
+          startLine: 1,
+          endLine: highestRelatedLine + 15,
+        };
+        recovery.includesSourcePreamble = true;
+      }
       payload.recovery = recovery;
       payload.requiredNextTool = recovery.requiredNextTool;
       payload.requiredNextToolArgs = recovery.requiredNextToolArgs;
-      payload.nextSteps = [
-        "Call " + recovery.requiredNextTool + " exactly once with requiredNextToolArgs; do not substitute another evidence tool.",
-        "Read the failing source range once, apply the smallest mutation, then run static_validate_project.",
-        "Rebuild only after a mutation; a new compiler error starts a new recovery state."
-      ];
+      payload.nextSteps = recovery.category === "linker_missing_definition"
+        ? [
+          "Look up the first undefined symbol exactly once with requiredNextToolArgs.",
+          "Replan one owning implementation file, read its declaration/definition range, validate a bounded sketch, and add the smallest missing definition.",
+          "Rebuild only after a mutation; a new linker symbol starts a new recovery state."
+        ]
+        : [
+          "Call " + recovery.requiredNextTool + " exactly once with requiredNextToolArgs; do not substitute another evidence tool.",
+          "After that read, validate a bounded code sketch for recovery.targetFile so the server can rebind the active slice, then apply the smallest mutation and run static_validate_project.",
+          "Rebuild only after a mutation; a new compiler error starts a new recovery state."
+        ];
       payload.suggestedToolCalls = [{
         tool: recovery.requiredNextTool,
         args: recovery.requiredNextToolArgs,

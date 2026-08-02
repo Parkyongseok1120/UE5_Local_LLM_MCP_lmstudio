@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -37,7 +38,12 @@ from rag_embeddings import embedding_status
 _ENGINE_PROJECTS = frozenset({"", "engine", "Engine", "__engine__"})
 
 _ROUTE_SAME_CALL_RETRY_CODES = frozenset(
-    {"TASK_AUTH_INCOMPLETE", "TASK_ROUTE_STALE", "TASK_STATE_LOCKED"}
+    {
+        "TASK_AUTH_INCOMPLETE",
+        "TASK_ROUTE_OWNERSHIP_REQUIRED",
+        "TASK_ROUTE_STALE",
+        "TASK_STATE_LOCKED",
+    }
 )
 _ROUTE_RECOVERY_ACTION_CODES = frozenset(
     {
@@ -45,7 +51,10 @@ _ROUTE_RECOVERY_ACTION_CODES = frozenset(
         "TASK_AUTH_MISMATCH",
         "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
         "TASK_ROUTE_OWNERSHIP_REQUIRED",
+        "TASK_ROUTE_SCOPE_EXCEEDED",
         "TASK_SESSION_REQUIRED",
+        "TASK_SLICE_SCOPE_REQUIRED",
+        "TASK_SLICE_TARGET_MISMATCH",
         "TASK_STATE_MISSING",
         "TASK_TOOL_NOT_ACTIVE",
     }
@@ -467,6 +476,7 @@ def _task_authorization_schema() -> dict[str, Any]:
         "required": [
             "taskSessionId",
             "authToken",
+            "ownerCapability",
             "planId",
             "planRevision",
             "activeSliceId",
@@ -502,10 +512,17 @@ def _record_prewrite_gate(
             "error": "Analysis completed, but its validation contract did not pass; the write gate remains closed.",
             "validationErrorCode": str(evidence.get("errorCode") or ""),
             "nextAction": str(evidence.get("nextAction") or gate_name),
-            "agentInstruction": (
-                "Keep this gate pending. Do not use a checkpoint to report it complete. "
-                "Apply the returned replacement/recovery guidance, shrink to the active slice if needed, "
-                "then run this gate once with fresh evidence."
+            "nextActionArgs": evidence.get("nextActionArgs") or {},
+            "firstBlocker": evidence.get("firstBlocker") or {},
+            "doNotRetryUnchanged": evidence.get("doNotRetryUnchanged") is True,
+            "reuseCurrentTaskAuthorization": evidence.get("reuseCurrentTaskAuthorization") is True,
+            "agentInstruction": str(
+                evidence.get("agentInstruction")
+                or (
+                    "Keep this gate pending. Do not use a checkpoint to report it complete. "
+                    "Resolve the first returned blocker, then run this gate once with changed evidence. "
+                    "Do not rerun the unchanged sketch."
+                )
             ),
         }
     from task_api import task_record_gate
@@ -527,6 +544,141 @@ def _record_prewrite_gate(
     if result.get("ok"):
         server.notify_tools_list_changed()
     return result
+
+
+def _attach_code_sketch_recovery(
+    payload: dict[str, Any],
+    *,
+    arguments: dict[str, Any],
+) -> None:
+    """Attach one deterministic recovery step to a failed sketch gate.
+
+    Compact local models otherwise tend to read ``0 known_bad`` as success and
+    immediately repeat an unchanged sketch even when weak/unverified claims are
+    still hard blockers. Keep the safety boundary, but make the first recovery
+    action executable and unambiguous.
+    """
+
+    contract_issues = list(
+        (payload.get("generationContract") or {}).get("issues") or []
+    )
+    contract_issue = str(contract_issues[0]) if contract_issues else ""
+    blocking_verdicts = {"known_bad", "unverified", "weak", "skipped_graph"}
+    blocker = next(
+        (
+            row
+            for row in (payload.get("results") or [])
+            if isinstance(row, dict)
+            and str(row.get("verdict") or "") in blocking_verdicts
+        ),
+        None,
+    )
+    first_blocker = {
+        key: blocker[key]
+        for key in (
+            "symbol",
+            "receiver",
+            "receiverType",
+            "verdict",
+            "replacement",
+            "note",
+        )
+        if isinstance(blocker, dict) and blocker.get(key) not in (None, "")
+    }
+    if isinstance(blocker, dict) and isinstance(blocker.get("evidence"), list):
+        first_blocker["evidence"] = blocker["evidence"][:2]
+
+    if contract_issue:
+        first_blocker = {
+            "verdict": "contract",
+            "note": contract_issue,
+        }
+
+    verdict = str(first_blocker.get("verdict") or "")
+    symbol = str(first_blocker.get("symbol") or "").strip()
+    if contract_issue:
+        next_action = "unreal_code_sketch_claim_validate"
+        next_action_args = {
+            "requiredChange": "fix_generation_contract",
+            "contractIssue": contract_issue,
+            "allowedTargetFiles": list(arguments.get("targetFiles") or []),
+        }
+        instruction = (
+            "The write gate is closed by the generation contract. Correct changeKind/targetFiles "
+            "and remove every labeled source section outside the active targetFiles slice. Then call "
+            "unreal_code_sketch_claim_validate once with a concise changed, slice-only claim sketch "
+            "(not the full file; aim for at most 40 lines / 3000 characters) and current "
+            "taskAuthorization. Do not perform symbol lookup for out-of-scope code, rerun unchanged, "
+            "replan, or present manual paste-ready code."
+        )
+    elif verdict in {"unverified", "weak"} and symbol:
+        next_action = "unreal_symbol_lookup"
+        next_action_args: dict[str, Any] = {
+            "query": symbol,
+            "top_k": 8,
+            "detailLevel": "compact",
+        }
+        instruction = (
+            f"The write gate is closed. Call unreal_symbol_lookup once for {symbol} with "
+            "nextActionArgs and the current taskAuthorization. If it returns no exact owner/signature "
+            "match, remove the API claim or replace it with an exact API verified from source. A "
+            "project-local helper may be declared only when it belongs to targetFiles and the requested "
+            "design already requires that helper. Never move responsibility to another class, redeclare "
+            "an engine API, or invent a wrapper merely to evade validation. "
+            "Then rerun unreal_code_sketch_claim_validate once with a concise changed claim sketch "
+            "(not the full file; aim for at most 40 lines / 3000 characters). "
+            "Do not rerun the unchanged sketch, do not replan, and do not present manual paste-ready code."
+        )
+    elif verdict == "known_bad" and symbol:
+        next_action = "unreal_code_sketch_claim_validate"
+        next_action_args = {
+            "requiredChange": f"replace_or_remove:{symbol}",
+            "replacement": str(first_blocker.get("replacement") or ""),
+        }
+        instruction = (
+            f"The write gate is closed. Replace or remove the known-bad claim {symbol} in the draft "
+            "using firstBlocker.replacement, then rerun unreal_code_sketch_claim_validate once with "
+            "a concise changed claim sketch (not the full file; aim for at most 40 lines / 3000 "
+            "characters) and current taskAuthorization. Do not rerun the unchanged sketch, "
+            "replan, or present manual paste-ready code."
+        )
+    elif verdict == "skipped_graph":
+        next_action = "unreal_code_sketch_claim_validate"
+        next_action_args = {"requiredChange": "restore_project_graph"}
+        instruction = (
+            "The write gate is closed because the project graph was unavailable. Confirm the active "
+            "project/root, repair that graph condition, and only then validate the slice once. "
+            "Do not rerun the unchanged sketch while the graph remains unavailable, replan, or present "
+            "manual paste-ready code."
+        )
+    else:
+        next_action = "unreal_code_sketch_claim_validate"
+        next_action_args = {
+            "contractIssue": str(
+                ((payload.get("generationContract") or {}).get("issues") or [""])[0]
+            )
+        }
+        instruction = (
+            "The write gate is closed by the generation contract. Fix the first contract issue or "
+            "shrink targetFiles to the bounded active slice, then validate the changed sketch once with "
+            "the current taskAuthorization. Do not rerun unchanged, replan, or present manual paste-ready code."
+        )
+
+    payload.update(
+        {
+            "gatePassed": False,
+            "writeGateClosed": True,
+            "firstBlocker": first_blocker,
+            "nextAction": next_action,
+            "nextActionArgs": next_action_args,
+            "reuseCurrentTaskAuthorization": isinstance(
+                arguments.get("taskAuthorization") or arguments.get("task_authorization"),
+                dict,
+            ),
+            "doNotRetryUnchanged": True,
+            "agentInstruction": instruction,
+        }
+    )
 
 
 def _feature_intent_target_snapshots(
@@ -770,6 +922,53 @@ def _handle_unreal_code_sketch_claim_validate(
         if argument_error:
             _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
             return
+        authorization = arguments.get("taskAuthorization") or arguments.get("task_authorization")
+        if isinstance(authorization, dict):
+            from task_api import task_validate_build_recovery_sketch
+
+            recovery_scope = task_validate_build_recovery_sketch(
+                server.workspace,
+                task_authorization=authorization,
+                target_files=target_files,
+            )
+            if recovery_scope.get("ok") is False:
+                error_code = str(
+                    recovery_scope.get("errorCode")
+                    or "BUILD_RECOVERY_TARGET_SCOPE_MISMATCH"
+                )
+                target_file = str(recovery_scope.get("targetFile") or "")
+                evidence_required = error_code == "BUILD_RECOVERY_REQUIRED_EVIDENCE"
+                payload = {
+                    **recovery_scope,
+                    "ok": False,
+                    "gatePassed": False,
+                    "writeGateClosed": True,
+                    "stopCurrentWorkflow": False,
+                    "reuseCurrentTaskAuthorization": True,
+                    "doNotRetryUnchanged": not evidence_required,
+                    "agentInstruction": (
+                        "Call the exact required read with nextActionArgs, then validate one "
+                        "repair sketch for only the returned targetFile."
+                        if evidence_required
+                        else (
+                            "Keep the current task. Validate exactly targetFiles=["
+                            f"{target_file}] for the first compiler error only; do not include "
+                            "parallel diagnostics or unrelated source sections."
+                        )
+                    ),
+                    "generationContract": {
+                        "ok": False,
+                        "mode": "build_recovery",
+                        "targets": [{"path": target_file}] if target_file else [],
+                        "issues": [str(recovery_scope.get("error") or error_code)],
+                        "writeGate": {
+                            "writesAllowed": False,
+                            "reason": "first compiler error recovery scope is not satisfied",
+                        },
+                    },
+                }
+                server.structured_tool_result(message_id, payload)
+                return
         validation_plan, argument_error = _string_list_argument(arguments.get("validationPlan"), "validationPlan")
         if argument_error:
             _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
@@ -819,13 +1018,206 @@ def _handle_unreal_code_sketch_claim_validate(
             )
     elif oversized:
         graph_status["status"] = "skipped_oversized"
+    generation_contract: dict[str, Any] | None = None
+    declaration_context = ""
+    declaration_context_files: list[str] = []
+    if not oversized:
+        generation_contract = build_generation_contract(
+            str(arguments.get("request") or sketch),
+            project_root=project_root or None,
+            target_files=target_files,
+            change_kind=str(arguments.get("changeKind") or "modify_existing"),
+            validation_plan=validation_plan,
+            graph=graph,
+        )
+        # Models often draft several `// Foo.cpp` sections while claiming only
+        # one or two targetFiles. Reject that mismatch before chasing symbols
+        # from files that are outside the server-bound active slice.
+        labeled_files = re.findall(
+            r"(?mi)^\s*(?://|/\*)\s*(?:file\s*:\s*)?"
+            r"([A-Za-z0-9_.\\/\-]+\.(?:h|hpp|hh|inl|cpp|cc|cxx|cs))"
+            r"(?=\s*(?:[-:]|(?:\*/)?\s*$))",
+            sketch,
+        )
+        allowed_paths = {
+            str(Path(item).as_posix()).casefold() for item in target_files
+        }
+        allowed_names = {Path(item).name.casefold() for item in target_files}
+        outside_labels = [
+            item
+            for item in dict.fromkeys(labeled_files)
+            if str(Path(item).as_posix()).casefold() not in allowed_paths
+            and Path(item).name.casefold() not in allowed_names
+        ]
+        if outside_labels:
+            issue = (
+                "sketch contains labeled source sections outside targetFiles: "
+                + ", ".join(outside_labels[:6])
+            )
+            generation_contract.setdefault("issues", []).insert(0, issue)
+            generation_contract["ok"] = False
+            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
+            generation_contract["writeGate"]["reason"] = "sketch exceeds active targetFiles slice"
+        # A reflected UCLASS is a generated-code/source ownership surface, not
+        # a harmless helper declaration.  Reject newly proposed reflected
+        # classes whose names do not correspond to this slice's target files.
+        # This prevents a broad sketch for BoardActor.* from quietly smuggling
+        # PlayerController/HUD classes into the authorized write pair.
+        reflected_classes = re.findall(
+            r"(?ms)\bUCLASS\s*(?:\([^)]*\))?\s*class\s+"
+            r"(?:[A-Z][A-Z0-9_]*_API\s+)?([A-Za-z_]\w*)",
+            sketch,
+        )
+        target_stems = {Path(item).stem.casefold() for item in target_files}
+        existing_target_text = ""
+        for target in generation_contract.get("targets") or []:
+            if not isinstance(target, dict) or not target.get("exists"):
+                continue
+            try:
+                existing_target_text += "\n" + Path(
+                    str(target.get("absolutePath") or "")
+                ).read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                continue
+        outside_reflected_classes: list[str] = []
+        invalid_reflected_prefixes: list[str] = []
+        for class_name in dict.fromkeys(reflected_classes):
+            if not class_name.startswith(("A", "U")):
+                invalid_reflected_prefixes.append(class_name)
+            canonical = class_name[1:] if class_name[:1] in {"A", "U", "W"} else class_name
+            matches_target = canonical.casefold() in target_stems
+            already_owned_by_target = bool(
+                re.search(rf"\bclass\s+(?:[A-Z][A-Z0-9_]*_API\s+)?{re.escape(class_name)}\b", existing_target_text)
+            )
+            if not matches_target and not already_owned_by_target:
+                outside_reflected_classes.append(class_name)
+        if outside_reflected_classes or invalid_reflected_prefixes:
+            issues = generation_contract.setdefault("issues", [])
+            if outside_reflected_classes:
+                issues.insert(
+                    0,
+                    "sketch declares reflected UCLASS types outside targetFiles: "
+                    + ", ".join(outside_reflected_classes[:6]),
+                )
+            if invalid_reflected_prefixes:
+                issues.insert(
+                    0,
+                    "UCLASS names must use an Unreal A/U prefix: "
+                    + ", ".join(invalid_reflected_prefixes[:6]),
+                )
+            generation_contract["ok"] = False
+            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
+            generation_contract["writeGate"]["reason"] = "reflected class exceeds active targetFiles slice"
+        reflected_headers: dict[str, str] = {}
+        for row in (graph or {}).get("symbols") or []:
+            if not isinstance(row, dict) or row.get("is_reflected") is not True:
+                continue
+            if row.get("symbol_kind") not in {"class", "interface"}:
+                continue
+            symbol_name = str(row.get("symbol_name") or "").strip()
+            file_name = Path(str(row.get("file_path") or "")).name
+            if symbol_name and file_name:
+                reflected_headers[symbol_name.casefold()] = file_name
+        wrong_reflected_includes: list[str] = []
+        for include_path in re.findall(
+            r'(?mi)^\s*#\s*include\s*"([^"]+)"',
+            sketch,
+        ):
+            include_name = Path(include_path).name
+            reflected_type = Path(include_name).stem
+            actual_header = reflected_headers.get(reflected_type.casefold(), "")
+            if actual_header and include_name.casefold() != actual_header.casefold():
+                wrong_reflected_includes.append(
+                    f'{include_path} names {reflected_type}, but project source declares it in {actual_header}'
+                )
+        if wrong_reflected_includes:
+            generation_contract.setdefault("issues", []).insert(
+                0,
+                "sketch uses a guessed reflected-type header: "
+                + wrong_reflected_includes[0],
+            )
+            generation_contract["ok"] = False
+            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
+            generation_contract["writeGate"]["reason"] = "reflected include path is not source-backed"
+        # A project-specific modification gate must validate the actual code
+        # shape that will be written, not a prose checklist naming APIs.  Small
+        # models otherwise submit bullets such as ``Uses: TryPlaceStone(...)``;
+        # no call-expression is extracted, the gate reports zero claims, and a
+        # completely different full-file rewrite follows.  Greenfield class
+        # inheritance shorthand remains supported by the dedicated local-type
+        # extractor, while existing-file edits require at least one concrete
+        # source marker.
+        modifies_existing = any(
+            isinstance(target, dict) and bool(target.get("exists"))
+            for target in generation_contract.get("targets") or []
+        )
+        concrete_source = bool(
+            re.search(
+                r"(?m)(?:;|[{}]|^\s*#\s*(?:include|define|if|pragma)\b|"
+                r"\b(?:UCLASS|USTRUCT|UENUM|UPROPERTY|UFUNCTION|GENERATED_BODY)\s*\()",
+                sketch,
+            )
+        )
+        if modifies_existing and not concrete_source:
+            issue = (
+                "existing-file validation requires a concrete code snippet; "
+                "a prose API/implementation summary cannot open the write gate"
+            )
+            generation_contract.setdefault("issues", []).insert(0, issue)
+            generation_contract["ok"] = False
+            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
+            generation_contract["writeGate"]["reason"] = "sketch is prose, not proposed code"
+        behavior_placeholders = re.findall(
+            r"(?mi)^\s*//[^\n]*\b(?:TODO|FIXME|implement|place|handle|execute|apply)\b"
+            r"[^\n]*\bhere\b[^\n]*$",
+            sketch,
+        )
+        if behavior_placeholders:
+            issue = (
+                "sketch leaves requested behavior as an implementation placeholder: "
+                + behavior_placeholders[0].strip()[:220]
+            )
+            generation_contract.setdefault("issues", []).insert(0, issue)
+            generation_contract["ok"] = False
+            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
+            generation_contract["writeGate"]["reason"] = "requested behavior is still a placeholder"
+        context_chunks: list[str] = []
+        context_chars = 0
+        for evidence in generation_contract.get("requiredReads") or []:
+            if not isinstance(evidence, dict):
+                continue
+            raw_path = str(evidence.get("filePath") or "").strip()
+            if not raw_path or raw_path in declaration_context_files:
+                continue
+            path = Path(raw_path)
+            if path.suffix.lower() not in {".h", ".hpp", ".hh", ".inl", ".cpp", ".cc", ".cxx"}:
+                continue
+            try:
+                source_text = path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                continue
+            remaining = 96_000 - context_chars
+            if remaining <= 0 or len(declaration_context_files) >= 4:
+                break
+            source_text = source_text[:remaining]
+            context_chunks.append(source_text)
+            context_chars += len(source_text)
+            declaration_context_files.append(raw_path)
+        declaration_context = "\n".join(context_chunks)
+
     payload = validate_sketch(
         sketch,
         server.index,
         top_k=max(1, min(16, int(arguments.get("topK") or 5))),
         graph=graph,
+        declaration_context=declaration_context,
     )
     payload["graphStatus"] = graph_status
+    payload["declarationContext"] = {
+        "fileCount": len(declaration_context_files),
+        "charCount": len(declaration_context),
+        "files": declaration_context_files,
+    }
     if project_root and not oversized and graph_status["status"] != "ready":
         skipped_graph = 0
         for row in payload.get("results") or []:
@@ -877,14 +1269,7 @@ def _handle_unreal_code_sketch_claim_validate(
             "proofBoundary": "No source or API validation was performed for the oversized sketch.",
         }
     else:
-        payload["generationContract"] = build_generation_contract(
-            str(arguments.get("request") or sketch),
-            project_root=project_root or None,
-            target_files=target_files,
-            change_kind=str(arguments.get("changeKind") or "modify_existing"),
-            validation_plan=validation_plan,
-            graph=graph,
-        )
+        payload["generationContract"] = generation_contract or {}
     architecture_proposal = arguments.get("architectureProposal")
     if architecture_proposal is not None:
         if oversized:
@@ -940,15 +1325,20 @@ def _handle_unreal_code_sketch_claim_validate(
                 "fileHash": str(source_evidence.get("fileHash") or ""),
             }
         )
+    gate_passed = bool(
+        payload.get("ok")
+        and (contract.get("writeGate") or {}).get("writesAllowed") is True
+    )
+    payload["gatePassed"] = gate_passed
+    payload["writeGateClosed"] = not gate_passed
+    if not gate_passed:
+        _attach_code_sketch_recovery(payload, arguments=arguments)
     gate_completion = _record_prewrite_gate(
         server,
         gate_name="unreal_code_sketch_claim_validate",
         arguments=arguments,
         evidence=payload,
-        gate_passed=bool(
-            payload.get("ok")
-            and (contract.get("writeGate") or {}).get("writesAllowed") is True
-        ),
+        gate_passed=gate_passed,
         target_snapshots=target_snapshots,
     )
     if gate_completion is not None:
@@ -957,6 +1347,11 @@ def _handle_unreal_code_sketch_claim_validate(
     graph_summary = compact_payload.get("graphStatus") or {}
     gate_summary = compact_payload.get("gateCompletion") or {}
     summary_lines = [str(compact_payload.get("verdictSummary") or "Sketch validation completed.")]
+    if not gate_passed:
+        summary_lines.insert(
+            0,
+            "GATE_FAILED: writes remain closed; known_bad, unverified, weak, and skipped_graph claims are blockers.",
+        )
     blocking_rows = [
         row
         for row in compact_payload.get("results") or []
@@ -970,6 +1365,14 @@ def _handle_unreal_code_sketch_claim_validate(
                 f"{row.get('symbol') or '<unknown>'}:{row.get('verdict') or 'unknown'}"
                 for row in blocking_rows[:6]
             )
+        )
+    first_blocker = compact_payload.get("firstBlocker") or {}
+    if isinstance(first_blocker, dict) and first_blocker:
+        summary_lines.append(
+            "firstBlocker="
+            f"{first_blocker.get('symbol') or '<unknown>'}:"
+            f"{first_blocker.get('verdict') or 'unknown'} — "
+            f"{first_blocker.get('note') or 'Resolve this claim before retrying the gate.'}"
         )
     contract_issues = list(
         (compact_payload.get("generationContract") or {}).get("issues") or []
@@ -985,6 +1388,17 @@ def _handle_unreal_code_sketch_claim_validate(
             "projectGraph="
             f"{graph_summary.get('status') or 'unknown'}"
             f" ({graph_summary.get('graphSource') or 'unavailable'})"
+        )
+    if not gate_passed and compact_payload.get("nextAction"):
+        summary_lines.append(
+            "nextAction="
+            + str(compact_payload["nextAction"])
+            + " "
+            + json.dumps(
+                compact_payload.get("nextActionArgs") or {},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         )
     next_authorization = gate_summary.get("taskAuthorization")
     next_route = gate_summary.get("toolRoute")
@@ -1665,13 +2079,26 @@ def build_mcp_tool_registry() -> McpToolRegistry:
             schema_dict={
                 "sketch": {
                     "type": "string",
-                    "description": "Drafted code / API list to validate before presenting it.",
+                    "maxLength": MAX_SKETCH_CHARS,
+                    "description": (
+                        "Concise claim-bearing code slice to validate, not a full source file. "
+                        "Include only declarations and API-bearing statements needed by the next "
+                        "bounded mutation; aim for <=40 lines and <=3000 characters."
+                    ),
                 },
                 "topK": {"type": "integer", "minimum": 1, "maximum": 16, "default": 5},
                 "request": {"type": "string", "description": "User intent used to establish the generated-code contract."},
                 "projectRoot": {"type": "string", "description": "Optional project root/.uproject. Defaults to active project."},
                 "targetFiles": {"type": "array", "items": {"type": "string"}, "description": "Target paths for a project-specific patch; omit only for a clearly labeled generic example."},
-                "changeKind": {"type": "string", "enum": ["new_file", "modify_existing", "single_file", "multifile"], "default": "modify_existing"},
+                "changeKind": {
+                    "type": "string",
+                    "enum": ["new_file", "modify_existing", "single_file", "multifile"],
+                    "default": "modify_existing",
+                    "description": (
+                        "Use new_file for exactly one new target. Use multifile for a bounded "
+                        "new header/source pair or any two-file slice."
+                    ),
+                },
                 "validationPlan": {"type": "array", "items": {"type": "string"}, "description": "Optional extra validation evidence requested for this change."},
                 "architectureProposal": {
                     **_architecture_proposal_schema(),
@@ -1817,12 +2244,6 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_review_claim_validate",
         "unreal_diagram_validate",
         "unreal_project_status",
-    }
-)
-
-STABLE_HIDDEN_TOOL_NAMES = frozenset(
-    {
-        "unreal_task_start",
         "unreal_task_status",
         "unreal_task_list_active",
         "unreal_task_recover_active",
@@ -1831,6 +2252,12 @@ STABLE_HIDDEN_TOOL_NAMES = frozenset(
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
         "unreal_task_cancel",
+    }
+)
+
+STABLE_HIDDEN_TOOL_NAMES = frozenset(
+    {
+        "unreal_task_start",
         "unreal_task_resume",
         "unreal_task_approve",
         "unreal_project_prepare",
@@ -2167,7 +2594,7 @@ class McpServer:
         }
 
     def all_tool_definitions(self) -> list[dict[str, Any]]:
-        from tool_exposure import callable_rag_tool_names
+        from tool_exposure import callable_rag_tool_names, rag_essential_tool_names
         from phase_tool_router import ALWAYS_DISCOVERABLE_CONTROL_TOOLS
         from task_api import list_tools_route_context
 
@@ -2196,7 +2623,20 @@ class McpServer:
         ):
             route = (context.get("state") or {}).get("toolRoute") or {}
             routed = set(route.get("activeTools") or [])
-            routed_tools = [tool for tool in exposed if tool["name"] in routed]
+            # Keep the default lifecycle surface invariant while a healthy
+            # route is activated. Several MCP clients cache the initial tool
+            # snapshot and cannot reliably add a newly routed tool mid-turn.
+            # Call-time route authorization remains the execution boundary.
+            stable = set(rag_essential_tool_names())
+            if context.get("status") != "active":
+                # Multiple healthy owners may share discovery, but no chat may
+                # claim the unbounded replan entrypoint without unique ownership.
+                stable.discard("unreal_agent_plan")
+            routed_tools = [
+                tool
+                for tool in exposed
+                if tool["name"] in routed or tool["name"] in stable
+            ]
             routed_names = {tool["name"] for tool in routed_tools}
             route_controls = [
                 tool
@@ -3044,8 +3484,9 @@ class McpServer:
                     "Extracts Unreal-style symbols and member calls from drafted code, "
                     "verifies each against the local symbol index, and flags invented "
                     "APIs (denylist) and unverified names. Call this BEFORE presenting "
-                    "compile-ready code; remove or mark UNKNOWN any known_bad/unverified "
-                    "symbol. Optional targetFiles/projectRoot additionally produce a source-backed "
+                    "compile-ready code. known_bad, unverified, weak, and skipped_graph are all hard "
+                    "write-gate blockers. On failure follow firstBlocker + nextAction exactly and never "
+                    "rerun an unchanged sketch. Optional targetFiles/projectRoot additionally produce a source-backed "
                     "generation contract (required reads, paired surfaces, invariants, and validation). Optional "
                     "architectureProposal is validated for decision/invariants/impacted surfaces/validation/alternatives "
                     "before its implementation gate can pass. "
@@ -3055,13 +3496,26 @@ class McpServer:
                     {
                         "sketch": {
                             "type": "string",
-                            "description": "Drafted code / API list to validate before presenting it.",
+                            "maxLength": MAX_SKETCH_CHARS,
+                            "description": (
+                                "Concise claim-bearing code slice, not a full source file. Include only "
+                                "declarations and API-bearing statements needed by the next bounded "
+                                "mutation; aim for <=40 lines and <=3000 characters."
+                            ),
                         },
                         "topK": {"type": "integer", "minimum": 1, "maximum": 16, "default": 5},
                         "request": {"type": "string", "description": "User intent for the source-backed generation contract."},
                         "projectRoot": {"type": "string", "description": "Optional project root/.uproject; defaults to active project."},
                         "targetFiles": {"type": "array", "items": {"type": "string"}, "description": "Target paths for project-specific code; omit only for a generic example."},
-                        "changeKind": {"type": "string", "enum": ["new_file", "modify_existing", "single_file", "multifile"], "default": "modify_existing"},
+                        "changeKind": {
+                            "type": "string",
+                            "enum": ["new_file", "modify_existing", "single_file", "multifile"],
+                            "default": "modify_existing",
+                            "description": (
+                                "Use new_file for exactly one new target. Use multifile for a "
+                                "bounded new header/source pair or any two-file slice."
+                            ),
+                        },
                         "validationPlan": {"type": "array", "items": {"type": "string"}},
                         "architectureProposal": {
                             **_architecture_proposal_schema(),
@@ -3574,6 +4028,10 @@ class McpServer:
                 "title": "Checkpoint or recover a long-running task",
                 "description": (
                     "Renew the task lease, persist a file-hash checkpoint, or recover after interruption. "
+                    "This recovery control is present in the initial tool catalog, so use it when any "
+                    "server response names unreal_task_checkpoint even if the active work route is planner/executor. "
+                    "When a phase-budget response provides nextActionArgs, copy them exactly and use action=record; "
+                    "action=status is read-only and does not renew the work-call budget. "
                     "File conflicts close the write gate until an explicit rebase accepts current files."
                 ),
                 "inputSchema": self._schema(
@@ -3597,6 +4055,7 @@ class McpServer:
                         "validation": {"type": "object"},
                         "note": {"type": "string"},
                         "acceptCurrentFiles": {"type": "boolean", "default": False},
+                        "includeGitChanges": {"type": "boolean", "default": False},
                     },
                     ["action", "taskAuthorization"],
                 ),
@@ -3897,6 +4356,7 @@ class McpServer:
         name = params.get("name")
         arguments = params.get("arguments") or {}
 
+        from phase_tool_router import ALWAYS_DISCOVERABLE_CONTROL_TOOLS
         from tool_exposure import tool_not_callable_payload
 
         tool_definitions = self._all_tool_definitions_unfiltered()
@@ -3915,6 +4375,7 @@ class McpServer:
         has_explicit_authorization = isinstance(explicit_authorization, dict)
         if (
             name not in advertised_names
+            and name not in ALWAYS_DISCOVERABLE_CONTROL_TOOLS
             and not (
                 has_explicit_authorization
                 and name in {tool["name"] for tool in tool_definitions}
@@ -4235,6 +4696,7 @@ class McpServer:
                     ),
                     note=str(arguments.get("note") or ""),
                     accept_current_files=arguments.get("acceptCurrentFiles") is True,
+                    include_git_changes=arguments.get("includeGitChanges") is True,
                 )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()
@@ -4705,6 +5167,68 @@ class McpServer:
                         "TASK_NOT_WRITABLE",
                     ],
                 }
+                pending_gates = list(tool_route.get("pendingGates") or [])
+                compile_diagnostic_first = (
+                    str(payload.get("taskKind") or "")
+                    in {"compile_fix", "reflection_fix", "module_fix"}
+                    and "build_unreal_project" in (tool_route.get("activeTools") or [])
+                )
+                next_action = (
+                    "build_unreal_project"
+                    if compile_diagnostic_first
+                    else (
+                        str(pending_gates[0])
+                        if pending_gates
+                        else "continue_with_current_tool_route"
+                    )
+                )
+                payload["nextAction"] = next_action
+                payload["nextActionArgs"] = (
+                    {
+                        "taskAuthorization": task_authorization,
+                        "responseMode": "compact",
+                    }
+                    if compile_diagnostic_first
+                    else {
+                        "taskAuthorization": task_authorization,
+                        "targetFileLimit": int(tool_route.get("maxFilesPerSlice") or 2),
+                    }
+                )
+                payload["executionContract"] = {
+                    "maxFilesPerSlice": int(tool_route.get("maxFilesPerSlice") or 2),
+                    "splitBeforeFirstGate": True,
+                    "checkpointPhaseIsMetadataOnly": True,
+                    "copyTaskAuthorizationExactly": True,
+                    "singleNewTargetChangeKind": "new_file",
+                    "newHeaderSourcePairChangeKind": "multifile",
+                    "codeSketchTargetLines": 40,
+                    "codeSketchTargetChars": 3000,
+                    "existingFileMutationTool": "replace_in_file",
+                    "maxChangedLinesPerMutation": 60,
+                    "maxCombinedPatchChars": 8000,
+                    "fullExistingFileContentInBundleAllowed": False,
+                }
+                payload["agentInstruction"] = (
+                    "Copy the complete taskAuthorization object, including ownerCapability, "
+                    "into every routed tool call. Follow nextAction exactly. "
+                    + (
+                        "Reproduce the current build first; use its first actionable error to "
+                        "choose no more than two targetFiles, then complete the pending code-sketch "
+                        "gate before editing. "
+                        if compile_diagnostic_first
+                        else ""
+                    )
+                    + "For targetFiles, "
+                    "submit only one or two files per slice; use changeKind=new_file for exactly "
+                    "one new target and changeKind=multifile for a new header/source pair. Keep "
+                    "the validation sketch to a claim-bearing skeleton (aim for at most 40 lines "
+                    "/ 3000 characters), then bind later slices after each "
+                    "successful write/validation cycle. A checkpoint phase label records "
+                    "metadata and never changes the server-owned route phase. For an existing "
+                    "file, use replace_in_file on one exact region of at most 60 changed lines "
+                    "and 8000 combined oldText/newText characters. Never send a full existing "
+                    "file in apply_edit_bundle.files; split larger work into bounded patches."
+                )
                 compact_plan = compact_agent_plan_payload(payload)
                 plan_summary = {
                     "taskKind": compact_plan.get("taskKind"),
@@ -4712,6 +5236,11 @@ class McpServer:
                     "writesAllowed": (compact_plan.get("writeGate") or {}).get("writesAllowed"),
                     "pendingGates": (compact_plan.get("toolRoute") or {}).get("pendingGates") or [],
                     "activeTools": (compact_plan.get("toolRoute") or {}).get("activeTools") or [],
+                    "maxFilesPerSlice": (compact_plan.get("toolRoute") or {}).get("maxFilesPerSlice") or 2,
+                    "nextAction": compact_plan.get("nextAction"),
+                    "nextActionArgs": compact_plan.get("nextActionArgs") or {},
+                    "executionContract": compact_plan.get("executionContract") or {},
+                    "agentInstruction": compact_plan.get("agentInstruction"),
                     "taskAuthorization": compact_plan.get("taskAuthorization") or {},
                 }
                 if compact_plan.get("contextCompactorRouting"):

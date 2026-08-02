@@ -31,6 +31,14 @@ RAG_ESSENTIAL = {
     "unreal_review_claim_validate",
     "unreal_diagram_validate",
     "unreal_project_status",
+    "unreal_task_status",
+    "unreal_task_list_active",
+    "unreal_task_recover_active",
+    "unreal_task_cancel_active",
+    "unreal_task_quarantine_corrupt",
+    "unreal_task_retry_job_cancel",
+    "unreal_task_checkpoint",
+    "unreal_task_cancel",
 }
 
 AGENT_ESSENTIAL = {
@@ -70,6 +78,12 @@ def test_default_profile_is_fail_closed(monkeypatch, tmp_path):
     server.workspace = tmp_path
     names = {tool["name"] for tool in server.all_tool_definitions()}
     assert names == RAG_ESSENTIAL
+    assert {
+        "unreal_task_status",
+        "unreal_task_checkpoint",
+        "unreal_task_recover_active",
+        "unreal_task_cancel",
+    }.issubset(names)
     assert "clangd_goto_definition" not in names
 
 
@@ -174,6 +188,52 @@ def test_active_task_control_surface_is_listed_and_callable_without_flag(
     assert sent[-1]["result"]["structuredContent"]["ok"] is True
 
 
+def test_completed_task_status_and_recovery_controls_are_not_profile_blocked(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.delenv("ALLOW_CONTROL_PLANE_TOOLS", raising=False)
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    from task_api import task_start
+
+    started = task_start(
+        tmp_path,
+        request="Inspect completed task recovery",
+        mode="plan_only",
+        plan_payload={
+            "taskKind": "inspect_only",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+    assert started["status"] == "completed"
+
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        504,
+        {
+            "name": "unreal_task_status",
+            "arguments": {"taskSessionId": started["taskSessionId"]},
+        },
+    )
+    status_payload = sent[-1]["result"]["structuredContent"]
+    assert status_payload["ok"] is True, status_payload
+    assert status_payload["status"] == "completed"
+
+    server.handle_tool_call(
+        505,
+        {"name": "unreal_task_recover_active", "arguments": {}},
+    )
+    recovery_payload = sent[-1]["result"]["structuredContent"]
+    assert recovery_payload.get("errorCode") != "TOOL_NOT_CALLABLE"
+
+
 def test_autonomy_blocked_route_lists_and_dispatches_bounded_replan(
     monkeypatch,
     tmp_path,
@@ -242,6 +302,9 @@ def test_autonomy_blocked_route_lists_and_dispatches_bounded_replan(
     assert denied["ok"] is False
     assert denied["errorCode"] == "REPLAN_BUDGET_EXHAUSTED"
     assert denied["checkpointRecordRequired"] is True
+    assert denied["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
+    assert denied["nextActionArgs"]["action"] == "record"
+    assert denied["nextActionArgs"]["taskAuthorization"] == denied["taskAuthorization"]
     assert "Do not call unreal_agent_plan again" in denied["agentInstruction"]
 
 
@@ -478,11 +541,65 @@ def test_agent_write_plan_allows_direct_model_under_advisory_policy(
 
     payload = sent[-1]["result"]["structuredContent"]
     assert payload["taskAuthorization"]["taskSessionId"]
+    assert payload["taskAuthorization"]["ownerCapability"]
+    assert payload["nextAction"] in payload["toolRoute"]["pendingGates"]
+    assert payload["executionContract"]["maxFilesPerSlice"] == 2
+    assert payload["executionContract"]["splitBeforeFirstGate"] is True
+    assert payload["executionContract"]["existingFileMutationTool"] == "replace_in_file"
+    assert payload["executionContract"]["maxChangedLinesPerMutation"] == 60
+    assert payload["executionContract"]["maxCombinedPatchChars"] == 8000
+    assert payload["executionContract"]["fullExistingFileContentInBundleAllowed"] is False
+    assert "ownerCapability" in payload["agentInstruction"]
+    assert "Never send a full existing file" in payload["agentInstruction"]
     routing = payload["contextCompactorRouting"]
     assert routing["policy"] == "advisory"
     assert routing["active"] is False
     assert routing["blocksWrites"] is False
     assert routing["directModelAllowed"] is True
+
+
+def test_compile_fix_plan_reproduces_build_before_requesting_fix_sketch(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
+    project = tmp_path / "Demo" / "Demo.uproject"
+    project.parent.mkdir(parents=True)
+    project.write_text("{}", encoding="utf-8")
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(
+        json.dumps({"activeProject": str(project)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        171,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {
+                "request": "Fix the current Unreal build errors until the project builds",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["taskKind"] == "compile_fix"
+    assert payload["nextAction"] == "build_unreal_project"
+    assert payload["nextActionArgs"]["responseMode"] == "compact"
+    assert payload["nextActionArgs"]["taskAuthorization"] == payload["taskAuthorization"]
+    assert "build_unreal_project" in payload["toolRoute"]["activeTools"]
+    assert "requiredFirstTool" not in payload["toolRoute"]
+    assert "static_validate_project" in payload["toolRoute"]["activeTools"]
+    assert "read_file" in payload["toolRoute"]["activeTools"]
+    assert "unreal_code_sketch_claim_validate" in payload["toolRoute"]["pendingGates"]
+    assert "Reproduce the current build first" in payload["agentInstruction"]
 
 
 def test_strict_compactor_request_does_not_block_non_lmstudio_frontend(
@@ -617,6 +734,64 @@ def test_code_sketch_rebuilds_graph_and_accepts_project_local_symbol(monkeypatch
     assert payload["unverifiedCount"] == 0
 
 
+def test_new_cpp_sketch_uses_existing_paired_header_declarations(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    header = source / "GomokuGameState.h"
+    header.write_text(
+        """
+class UGomokuRuleEngine
+{
+public:
+    bool IsGameWon(int32& Winner) const;
+};
+class AGomokuGameState
+{
+    TWeakObjectPtr<UGomokuRuleEngine> RuleEngineRef;
+public:
+    void OnStonePlaced();
+};
+""",
+        encoding="utf-8",
+    )
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        180,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": """
+void AGomokuGameState::OnStonePlaced()
+{
+    int32 Winner = 0;
+    if (RuleEngineRef.IsValid())
+    {
+        RuleEngineRef->IsGameWon(Winner);
+    }
+}
+""",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/GomokuGameState.cpp"],
+                "changeKind": "new_file",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True, payload
+    assert payload["generationContract"]["targets"][0]["pairedSources"] == [
+        "Source/Demo/GomokuGameState.h"
+    ]
+    assert payload["unverifiedCount"] == 0
+    assert payload["weakCount"] == 0
+
+
 def test_greenfield_sketch_gate_advances_to_executor(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     mod = _load_rag_mcp_module()
@@ -679,6 +854,72 @@ def test_greenfield_sketch_gate_advances_to_executor(monkeypatch, tmp_path):
     assert "do not synthesize routePhase or routeHash" in text_result
 
 
+def test_build_cs_and_header_sketch_does_not_stall_prewrite_gate(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    project = tmp_path / "O_Mock"
+    source = project / "Source" / "O_Mock"
+    source.mkdir(parents=True)
+    (project / "O_Mock.uproject").write_text("{}", encoding="utf-8")
+    (source / "O_Mock.Build.cs").write_text(
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core" });\n',
+        encoding="utf-8",
+    )
+    (source / "GomokuGameMode.h").write_text(
+        "class AGomokuGameMode;\n",
+        encoding="utf-8",
+    )
+
+    from task_api import task_start
+
+    started = task_start(
+        tmp_path,
+        request="Enable UMG/Slate and prepare GomokuGameMode",
+        project_file=str(project / "O_Mock.uproject"),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [{"sliceId": "task", "files": []}],
+        },
+    )
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        183,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": (
+                    "// O_Mock.Build.cs: add UMG/Slate for Gomoku HUD\n"
+                    "PublicDependencyModuleNames.AddRange(new string[] { \"Core\", \"UMG\" });\n"
+                    "PrivateDependencyModuleNames.AddRange(new string[] { \"Slate\", \"SlateCore\" });\n"
+                    "// GomokuGameMode.h: add GameStateBase and UserWidget includes.\n"
+                ),
+                "request": "Enable UMG/Slate and prepare GomokuGameMode",
+                "projectRoot": str(project),
+                "targetFiles": [
+                    "Source/O_Mock/O_Mock.Build.cs",
+                    "Source/O_Mock/GomokuGameMode.h",
+                ],
+                "changeKind": "modify_existing",
+                "taskAuthorization": started["taskAuthorization"],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True, payload
+    assert payload["symbolCount"] == 0
+    assert payload["gateCompletion"]["ok"] is True
+    assert payload["gateCompletion"]["toolRoute"]["phase"] == "executor"
+    assert "blockingSymbols=" not in sent[-1]["result"]["content"][0]["text"]
+
+
 def test_code_sketch_text_result_names_blocking_symbols(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     mod = _load_rag_mcp_module()
@@ -701,8 +942,394 @@ def test_code_sketch_text_result_names_blocking_symbols(monkeypatch, tmp_path):
         },
     )
 
+    payload = sent[-1]["result"]["structuredContent"]
     text_result = sent[-1]["result"]["content"][0]["text"]
+    assert payload["gatePassed"] is False
+    assert payload["writeGateClosed"] is True
+    assert payload["firstBlocker"]["symbol"] == "UDefinitelyMissingApi"
+    assert payload["firstBlocker"]["verdict"] == "unverified"
+    assert payload["nextAction"] == "unreal_symbol_lookup"
+    assert payload["nextActionArgs"] == {
+        "query": "UDefinitelyMissingApi",
+        "top_k": 8,
+        "detailLevel": "compact",
+    }
+    assert payload["doNotRetryUnchanged"] is True
+    assert text_result.startswith("GATE_FAILED: writes remain closed")
     assert "blockingSymbols=UDefinitelyMissingApi:unverified" in text_result
+    assert "firstBlocker=UDefinitelyMissingApi:unverified" in text_result
+    assert 'nextAction=unreal_symbol_lookup {"query":"UDefinitelyMissingApi"' in text_result
+    assert "Do not rerun the unchanged sketch" in text_result
+    assert "Never move responsibility to another class" in text_result
+
+
+def test_code_sketch_rejects_labeled_files_outside_active_target_slice(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Demo"
+    (project / "Source" / "Demo").mkdir(parents=True)
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        183,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": (
+                    "// First.cpp\nvoid First() {}\n"
+                    "// Second.cpp\nvoid Second() {}\n"
+                ),
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/First.cpp"],
+                "changeKind": "new_file",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["gatePassed"] is False
+    assert payload["firstBlocker"]["verdict"] == "contract"
+    assert "Second.cpp" in payload["firstBlocker"]["note"]
+    assert payload["nextAction"] == "unreal_code_sketch_claim_validate"
+    assert payload["nextActionArgs"]["allowedTargetFiles"] == [
+        "Source/Demo/First.cpp"
+    ]
+
+
+def test_code_sketch_rejects_block_comment_file_label_outside_slice(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Demo"
+    (project / "Source" / "Demo").mkdir(parents=True)
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        1831,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": (
+                    "/* First.cpp - implementation */\nvoid First() {}\n"
+                    "/* Second.cpp: implementation */\nvoid Second() {}\n"
+                ),
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/First.cpp"],
+                "changeKind": "new_file",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["gatePassed"] is False
+    assert "Second.cpp" in payload["firstBlocker"]["note"]
+
+
+def test_code_sketch_rejects_reflected_classes_outside_target_pair(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Demo"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "GomokuBoardActor.h").write_text(
+        "UCLASS()\nclass AGomokuBoardActor : public AActor {};\n",
+        encoding="utf-8",
+    )
+    (source / "GomokuBoardActor.cpp").write_text(
+        '#include "GomokuBoardActor.h"\n',
+        encoding="utf-8",
+    )
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        18311,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": (
+                    "UCLASS()\nclass AGomokuBoardActor : public AActor {};\n"
+                    "UCLASS()\nclass AGomokuPlayerController : public APlayerController {};\n"
+                    "UCLASS()\nclass WGomokuHUD : public UUserWidget {};\n"
+                ),
+                "projectRoot": str(project),
+                "targetFiles": [
+                    "Source/Demo/GomokuBoardActor.h",
+                    "Source/Demo/GomokuBoardActor.cpp",
+                ],
+                "changeKind": "multifile",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    issues = payload["generationContract"]["issues"]
+    assert payload["gatePassed"] is False
+    assert any("AGomokuPlayerController" in issue for issue in issues)
+    assert any("WGomokuHUD" in issue and "A/U prefix" in issue for issue in issues)
+
+
+def test_code_sketch_enforces_shared_first_build_error_scope(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    from task_api import (
+        task_mark_build_recovery_evidence,
+        task_record_build_recovery,
+        task_start,
+    )
+
+    project = tmp_path / "Demo"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    first_target = "Source/Demo/FirstError.cpp"
+    (source / "FirstError.cpp").write_text("void FirstError() {}\n", encoding="utf-8")
+    (source / "ParallelError.cpp").write_text("void ParallelError() {}\n", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Fix the current first compiler error",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "compile_fix",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [],
+        },
+    )
+    authorization = started["taskAuthorization"]
+    assert task_record_build_recovery(
+        tmp_path,
+        task_authorization=authorization,
+        recovery={
+            "targetFile": first_target,
+            "requiredNextTool": "read_file_range",
+            "requiredNextToolArgs": {
+                "path": f"project://{first_target}",
+                "startLine": 1,
+                "endLine": 1,
+            },
+        },
+    )["ok"]
+    assert task_mark_build_recovery_evidence(
+        tmp_path,
+        task_authorization=authorization,
+        target_file=first_target,
+    )["ok"]
+
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+    mod._handle_unreal_code_sketch_claim_validate(
+        server,
+        18315,
+        {
+            "sketch": "void FirstError() {}\nvoid ParallelError() {}\n",
+            "projectRoot": str(project),
+            "targetFiles": [
+                first_target,
+                "Source/Demo/ParallelError.cpp",
+            ],
+            "changeKind": "multifile",
+            "taskAuthorization": authorization,
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["errorCode"] == "BUILD_RECOVERY_TARGET_SCOPE_MISMATCH"
+    assert payload["gatePassed"] is False
+    assert payload["nextActionArgs"]["targetFiles"] == [first_target]
+    assert "parallel diagnostics" in payload["agentInstruction"]
+
+
+def test_existing_file_gate_rejects_prose_api_summary(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Demo"
+    target = project / "Source" / "Demo" / "Worker.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void Run() {}\n", encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        1832,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": (
+                    "// Worker.cpp aligned to the header\n"
+                    "- Uses: TryPlaceStone(PlayerId, X, Y)\n"
+                    "- Implements: StartTurn and EndTurn\n"
+                ),
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/Worker.cpp"],
+                "changeKind": "modify_existing",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["gatePassed"] is False
+    assert payload["firstBlocker"]["verdict"] == "contract"
+    assert "concrete code snippet" in payload["firstBlocker"]["note"]
+    assert payload["nextAction"] == "unreal_code_sketch_claim_validate"
+
+
+def test_existing_file_gate_rejects_requested_behavior_placeholder(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Demo"
+    target = project / "Source" / "Demo" / "Board.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void OnClick() {}\n", encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        18321,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": (
+                    "void OnClick()\n{\n"
+                    "    const FIntPoint Cell(1, 2);\n"
+                    "    // ... place stone using game state here\n"
+                    "}\n"
+                ),
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/Board.cpp"],
+                "changeKind": "modify_existing",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["gatePassed"] is False
+    assert any(
+        "implementation placeholder" in issue
+        for issue in payload["generationContract"]["issues"]
+    )
+
+
+def test_code_sketch_rejects_guessed_reflected_type_header(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Demo"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "GomokuGameState.h").write_text(
+        "UCLASS()\nclass AGomokuGameState : public AGameStateBase {};\n",
+        encoding="utf-8",
+    )
+    (source / "Board.cpp").write_text("void OnClick() {}\n", encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        18322,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": (
+                    '#include "AGomokuGameState.h"\n'
+                    "void OnClick() { AGomokuGameState* State = nullptr; }\n"
+                ),
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/Board.cpp"],
+                "changeKind": "modify_existing",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["gatePassed"] is False
+    assert any(
+        "GomokuGameState.h" in issue and "AGomokuGameState.h" in issue
+        for issue in payload["generationContract"]["issues"]
+    )
+
+
+def test_failed_task_sketch_gate_preserves_executable_recovery(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    project = tmp_path / "Demo"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    uproject = project / "Demo.uproject"
+    uproject.write_text("{}", encoding="utf-8")
+
+    from task_api import task_start
+
+    started = task_start(
+        tmp_path,
+        request="Create a bounded gameplay class",
+        project_file=str(uproject),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [{"sliceId": "task", "files": []}],
+        },
+    )
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        184,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "Board->InitializeDefinitelyMissingBoard();",
+                "request": "Create a bounded gameplay class",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/NewGameMode.cpp"],
+                "changeKind": "new_file",
+                "taskAuthorization": started["taskAuthorization"],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    completion = payload["gateCompletion"]
+    assert completion["errorCode"] == "GATE_VALIDATION_FAILED"
+    assert completion["nextAction"] == "unreal_symbol_lookup"
+    assert completion["nextActionArgs"]["query"] == "InitializeDefinitelyMissingBoard"
+    assert completion["firstBlocker"]["note"]
+    assert completion["doNotRetryUnchanged"] is True
+    assert completion["reuseCurrentTaskAuthorization"] is True
+    assert "Do not rerun the unchanged sketch" in completion["agentInstruction"]
 
 
 def test_oversized_code_sketch_skips_graph_preparation(monkeypatch, tmp_path):
