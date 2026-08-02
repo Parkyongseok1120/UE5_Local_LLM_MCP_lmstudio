@@ -636,11 +636,9 @@ def active_task_route_context(
             str(state.get("status") or "") == "running"
         ):
             if not isinstance(state.get("toolRoute"), dict):
-                return {
-                    "status": "ambiguous_or_corrupt",
-                    "errorCode": "TASK_ROUTE_MISSING",
-                    "error": f"running task has no toolRoute: {state_path}",
-                }
+                # Legacy/orphan running tasks without toolRoute cannot own a route.
+                # Hard-failing here blocked list_directory/plan/writes for the project.
+                continue
             mode = str(state.get("mode") or "").strip().lower()
             if mode in {"plan_only", "detached"}:
                 # Match Node: these modes never own an active tool route.
@@ -2638,6 +2636,7 @@ def _iter_discoverable_task_entries(
             if isinstance(state.get("toolRoute"), dict)
             else {}
         )
+        route_missing = not isinstance(state.get("toolRoute"), dict)
         entries.append(
             {
                 "taskSessionId": str(state.get("taskSessionId") or task_session_id),
@@ -2650,6 +2649,7 @@ def _iter_discoverable_task_entries(
                 "mcpConnectionId": str(state.get("mcpConnectionId") or ""),
                 "conversationId": str(state.get("conversationId") or ""),
                 "routePhase": str(route.get("phase") or ""),
+                "routeMissing": route_missing,
                 "ownsActiveToolRoute": task_owns_active_tool_route(
                     state,
                     conversation_id=conversation_id,
@@ -2668,10 +2668,14 @@ def _iter_discoverable_task_entries(
                 "updatedAt": str(state.get("updatedAt") or ""),
                 "activeJobId": str(state.get("activeJobId") or ""),
                 "recoverable": True,
-                "availableActions": [
-                    "unreal_task_cancel_active",
-                    "unreal_task_status",
-                ],
+                "availableActions": (
+                    ["unreal_task_cancel", "unreal_task_status"]
+                    if route_missing
+                    else [
+                        "unreal_task_cancel_active",
+                        "unreal_task_status",
+                    ]
+                ),
                 "_state": state,
             }
         )
@@ -3521,6 +3525,25 @@ def task_resolve_active_session_id(
                 "Pass conversationId from unreal_task_start, or force cancel with user confirmation."
             ),
             "tasks": foreign,
+        }
+    # Orphan / route-less running tasks are listed but not connection-owned.
+    # Allow cancel_active to target a single orphan; require an id when several remain.
+    if len(tasks) == 1:
+        return {
+            "ok": True,
+            "taskSessionId": str(tasks[0].get("taskSessionId") or ""),
+            "task": tasks[0],
+        }
+    if len(tasks) > 1:
+        return {
+            "ok": False,
+            "errorCode": "TASK_AMBIGUOUS_ACTIVE",
+            "error": (
+                "Multiple running tasks; pass taskSessionId explicitly "
+                "(use unreal_task_cancel with each taskSessionId)."
+            ),
+            "tasks": tasks,
+            "nextAction": "unreal_task_cancel",
         }
     return {
         "ok": False,
@@ -5394,6 +5417,17 @@ def authorize_active_task_tool(
         return {"ok": True, "legacy": True}
     if context.get("status") == "ambiguous_or_corrupt":
         error_code = str(context.get("errorCode") or "TASK_ROUTE_AMBIGUOUS_OR_CORRUPT")
+        # Route-less orphans must not block replan/control recovery.
+        if (
+            tool_name in NON_BUDGETED_REPLAN_TOOLS
+            and error_code == "TASK_ROUTE_MISSING"
+        ):
+            return {
+                "ok": True,
+                "legacy": True,
+                "routeMissingIgnored": True,
+                "countsAgainstPhaseBudget": False,
+            }
         failure = {
             "ok": False,
             "errorCode": error_code,

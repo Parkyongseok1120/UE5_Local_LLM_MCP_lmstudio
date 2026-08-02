@@ -1279,11 +1279,9 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
     }
     if (result.state && String(result.state.status || "") === "running") {
       if (!result.state.toolRoute || typeof result.state.toolRoute !== "object") {
-        return {
-          status: "ambiguous_or_corrupt",
-          errorCode: "TASK_ROUTE_MISSING",
-          error: `Running task has no valid tool route: ${entry.name}.`,
-        };
+        // Legacy/orphan running tasks without toolRoute cannot own a route.
+        // Hard-failing here blocked list_directory/plan/writes for the whole project.
+        continue;
       }
       const mode = String(result.state.mode || "").trim().toLowerCase();
       const routeEligible = mode !== "plan_only" && mode !== "detached";
@@ -1557,6 +1555,7 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
     );
     if (!ownsCurrent) continue;
     if (String(state.status || "") !== "running") continue;
+    const routeMissing = !(state.toolRoute && typeof state.toolRoute === "object");
     const route = state.toolRoute && typeof state.toolRoute === "object"
       ? state.toolRoute
       : {};
@@ -1577,6 +1576,7 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
       mcpConnectionId: String(state.mcpConnectionId || ""),
       conversationId: String(state.conversationId || ""),
       routePhase: String(route.phase || ""),
+      routeMissing,
       ownsActiveToolRoute: taskOwnsActiveToolRoute(
         state,
         conversationId,
