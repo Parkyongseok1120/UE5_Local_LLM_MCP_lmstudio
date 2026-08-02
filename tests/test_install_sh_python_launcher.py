@@ -117,9 +117,33 @@ def test_no_usable_python_exits_127(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_fake_python(fake_bin / "python3", (3, 9, 18), fail=True)
-    result = _run_launcher(fake_bin)
+    result = _run_launcher(fake_bin, env_extra={"HOME": str(tmp_path / "empty-home")})
     assert result.returncode == 127
     assert "Python 3.10+ was not found." in result.stderr
     assert "Checked:" in result.stderr
     assert "python3: Python 3.9.18 (too old)" in result.stderr
     assert "macOS:" in result.stderr
+    assert "PYTHON=/path/to/python3.12" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX install.sh launcher")
+def test_finds_uv_managed_python_outside_path(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_python(fake_bin / "python3", (3, 9, 6), fail=True)
+    home = tmp_path / "home"
+    uv_python = (
+        home
+        / ".local"
+        / "share"
+        / "uv"
+        / "python"
+        / "cpython-3.12.13-macos-aarch64-none"
+        / "bin"
+        / "python3.12"
+    )
+    uv_python.parent.mkdir(parents=True)
+    _write_fake_python(uv_python, (3, 12, 13))
+    result = _run_launcher(fake_bin, env_extra={"HOME": str(home)})
+    assert result.returncode == 0, result.stderr
+    assert "SELECTED=python3.12" in result.stdout

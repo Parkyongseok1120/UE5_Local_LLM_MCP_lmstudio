@@ -27,3 +27,4 @@ PORTABLE_ROOT.txt
 docs/internal/
 lmstudio-context-compactor-plugin/dist/
 .agent/
+.DS_Store
