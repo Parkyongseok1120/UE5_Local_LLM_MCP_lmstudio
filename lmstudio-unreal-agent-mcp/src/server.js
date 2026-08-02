@@ -134,7 +134,6 @@ const {
 } = require("./context-ux.js");
 const {
   callableAgentToolNames,
-  stableAgentToolNames,
   toolNotCallablePayload,
   projectSwitchGuidance,
 } = require("./tool-exposure");
@@ -930,34 +929,49 @@ function validationFailed(validation) {
   return Boolean(validation && validation.ok === false);
 }
 
-function filterAgentTools(tools, context = null) {
+function exposureProfileName() {
+  return MCP_EXTENDED_TOOLS ? "extended" : "essential";
+}
+
+function filterAgentTools(tools, _context = null) {
+  // Advertised catalog is profile ∩ control-plane visibility only.
+  // Route/phase/lease/ownership remain CallTool authorization boundaries —
+  // never shrink tools/list so LM Studio does not look like a partial install.
   const allowed = callableAgentToolNames(tools.map((tool) => tool.name));
-  const exposed = tools.filter((tool) => allowed.has(tool.name));
-  // Some MCP clients cache the tool snapshot that existed when generation
-  // started and do not safely apply tools/list_changed in the middle of a
-  // model turn. Keep the default lifecycle surface stable across a healthy
-  // route transition; route authorization below remains the execution gate.
-  const stable = stableAgentToolNames(exposed.map((tool) => tool.name));
+  return tools.filter((tool) => allowed.has(tool.name));
+}
+
+function buildToolCatalogDiagnostics(tools, context = null) {
+  const registered = Array.isArray(tools) ? tools : [];
   const resolved = context || listToolsRouteContext(
     WORKSPACE_ROOT,
     getActiveProject(CONFIG_PATH) || ""
   );
-  if (resolved.status === "none") return exposed;
-  const route = resolved.route && typeof resolved.route === "object" ? resolved.route : {};
-  const routed = Array.isArray(route.activeTools) ? route.activeTools.map(String) : [];
-  // Multi-chat: expose the union of healthy routes only; CallTool still proves ownership.
-  if (
-    resolved.status === "active"
-    || (resolved.catalogMode === "route_union" && routed.length)
-  ) {
-    const allowedNames = new Set(routed);
-    return exposed.filter(
-      (tool) => allowedNames.has(tool.name)
-        || stable.has(tool.name)
-        || SAFE_ROUTE_RECOVERY_TOOLS.has(tool.name)
-    );
-  }
-  return exposed.filter((tool) => SAFE_ROUTE_RECOVERY_TOOLS.has(tool.name));
+  const advertised = filterAgentTools(registered, resolved);
+  return {
+    profile: exposureProfileName(),
+    registeredCount: registered.length,
+    advertisedCount: advertised.length,
+    routeContextStatus: String(resolved.status || "none"),
+    routeErrorCode: String(resolved.errorCode || ""),
+    stateRoot: ensureStateRootLayout(resolveAgentStateRoot()),
+  };
+}
+
+function emitCatalogInitializedDiagnostic(context = null) {
+  const tools = allAgentTools();
+  const catalog = buildToolCatalogDiagnostics(tools, context);
+  console.error(JSON.stringify({
+    event: "mcp_catalog_initialized",
+    server: "unreal-agent",
+    profile: catalog.profile,
+    registeredToolCount: catalog.registeredCount,
+    advertisedToolCount: catalog.advertisedCount,
+    routeContextStatus: catalog.routeContextStatus,
+    routeErrorCode: catalog.routeErrorCode,
+    stateRoot: catalog.stateRoot,
+    activeProject: getActiveProject(CONFIG_PATH) || "",
+  }));
 }
 function requiredArgumentCheck(tool, args) {
   const required = Array.isArray(tool?.inputSchema?.required) ? tool.inputSchema.required : [];
@@ -1669,6 +1683,10 @@ async function buildWorkspaceInfo() {
     allowSourceDelete: ALLOW_SOURCE_DELETE,
     mcpEssentialTools: MCP_ESSENTIAL_TOOLS,
     mcpExtendedTools: MCP_EXTENDED_TOOLS,
+    toolCatalog: buildToolCatalogDiagnostics(
+      allAgentTools(),
+      listToolsRouteContext(WORKSPACE_ROOT, activeProject || "")
+    ),
     maxReadBytes: MAX_READ_BYTES,
     maxOutputBytes: MAX_OUTPUT_BYTES,
     maxAgentResultChars: MCP_AGENT_RESULT_MAX_CHARS,
@@ -4341,8 +4359,16 @@ async function main() {
       + " (writes that need the guard will fail closed until mutation_semantic_guard.py and unreal_api_denylist.py are present and importable)"
     );
   }
+  const startupRouteContext = listToolsRouteContext(
+    WORKSPACE_ROOT,
+    getActiveProject(CONFIG_PATH) || ""
+  );
+  emitCatalogInitializedDiagnostic(startupRouteContext);
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // Catalog is profile-stable; list_changed remains advisory for clients that
+  // refresh tool metadata when route fingerprints change. Do not use it to
+  // shrink the advertised Essential surface.
   startActiveRouteWatcher({
     readContext: () => listToolsRouteContext(
       WORKSPACE_ROOT,

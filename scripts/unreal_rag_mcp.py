@@ -2594,16 +2594,27 @@ class McpServer:
         }
 
     def all_tool_definitions(self) -> list[dict[str, Any]]:
-        from tool_exposure import callable_rag_tool_names, rag_essential_tool_names
-        from phase_tool_router import ALWAYS_DISCOVERABLE_CONTROL_TOOLS
-        from task_api import list_tools_route_context
+        from tool_exposure import callable_rag_tool_names
 
         tools = self._route_aware_tool_definitions(
             self._all_tool_definitions_unfiltered()
         )
         all_names = [tool["name"] for tool in tools]
         allowed = callable_rag_tool_names(all_names)
-        exposed = [tool for tool in tools if tool["name"] in allowed]
+        # Advertised catalog is profile ∩ control-plane visibility only.
+        # Route/phase/lease/ownership stay call-time authorization boundaries so
+        # blocked/corrupt/expired state cannot look like a partial MCP install.
+        return [tool for tool in tools if tool["name"] in allowed]
+
+    def tool_catalog_diagnostics(self) -> dict[str, Any]:
+        from state_root import ensure_state_root_layout, resolve_agent_state_root
+        from tool_exposure import extended_tools_enabled
+        from task_api import list_tools_route_context
+
+        registered = self._route_aware_tool_definitions(
+            self._all_tool_definitions_unfiltered()
+        )
+        advertised = self.all_tool_definitions()
         active_project = str(
             load_shared_config().get("activeProject") or ""
         ).strip()
@@ -2611,86 +2622,37 @@ class McpServer:
             self.workspace,
             active_project=active_project,
         )
-        by_name = {tool["name"]: tool for tool in tools}
-        control_surface = [
-            by_name[name]
-            for name in sorted(ALWAYS_DISCOVERABLE_CONTROL_TOOLS)
-            if name in by_name
-        ]
-        if context.get("status") == "active" or (
-            context.get("status") == "ambiguous_or_corrupt"
-            and context.get("catalogMode") == "route_union"
-        ):
-            route = (context.get("state") or {}).get("toolRoute") or {}
-            routed = set(route.get("activeTools") or [])
-            # Keep the default lifecycle surface invariant while a healthy
-            # route is activated. Several MCP clients cache the initial tool
-            # snapshot and cannot reliably add a newly routed tool mid-turn.
-            # Call-time route authorization remains the execution boundary.
-            stable = set(rag_essential_tool_names())
-            if context.get("status") != "active":
-                # Multiple healthy owners may share discovery, but no chat may
-                # claim the unbounded replan entrypoint without unique ownership.
-                stable.discard("unreal_agent_plan")
-            routed_tools = [
-                tool
-                for tool in exposed
-                if tool["name"] in routed or tool["name"] in stable
-            ]
-            routed_names = {tool["name"] for tool in routed_tools}
-            route_controls = [
-                tool
-                for tool in control_surface
-                if tool["name"] not in routed_names
-            ]
-            # Preserve the stable-profile replan entrypoint for a single active
-            # route. Multi-chat route_union must not advertise unbounded replan.
-            replan = (
-                [by_name["unreal_agent_plan"]]
-                if context.get("status") == "active"
-                and "unreal_agent_plan" in by_name
-                and "unreal_agent_plan" in allowed
-                and "unreal_agent_plan" not in routed_names
-                else []
+
+        return {
+            "profile": "extended" if extended_tools_enabled() else "essential",
+            "registeredCount": len(registered),
+            "advertisedCount": len(advertised),
+            "routeContextStatus": str(context.get("status") or "none"),
+            "routeErrorCode": str(context.get("errorCode") or ""),
+            "stateRoot": str(ensure_state_root_layout(resolve_agent_state_root(self.workspace))),
+        }
+
+    def emit_catalog_initialized_diagnostic(self) -> None:
+        catalog = self.tool_catalog_diagnostics()
+        self.log(
+            json.dumps(
+                {
+                    "event": "mcp_catalog_initialized",
+                    "server": "unreal-rag",
+                    "profile": catalog["profile"],
+                    "registeredToolCount": catalog["registeredCount"],
+                    "advertisedToolCount": catalog["advertisedCount"],
+                    "routeContextStatus": catalog["routeContextStatus"],
+                    "routeErrorCode": catalog["routeErrorCode"],
+                    "stateRoot": catalog["stateRoot"],
+                    "activeProject": str(
+                        load_shared_config().get("activeProject") or ""
+                    ).strip(),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
-            return routed_tools + route_controls + replan
-        if context.get("status") in {"blocked", "ambiguous_or_corrupt"}:
-            recovery = set(ALWAYS_DISCOVERABLE_CONTROL_TOOLS) | {
-                "unreal_project_status",
-            }
-            if context.get("status") == "blocked":
-                from task_autonomy_supervisor import autonomy_blockers
-                from task_continuity import lease_health, recovery_conflicts
-
-                blocked_state = context.get("state") or {}
-                continuity = blocked_state.get("continuity") or {}
-                if (
-                    autonomy_blockers(blocked_state.get("autonomySupervisor"))
-                    and lease_health(continuity).get("active") is True
-                    and not recovery_conflicts(continuity)
-                ):
-                    recovery.add("unreal_agent_plan")
-            return [
-                by_name[name]
-                for name in sorted(recovery)
-                if name in by_name
-            ]
-        # plan_only / foreign-connection running tasks do not shrink the catalog,
-        # but still expose cancel/status/checkpoint so stale sessions are recoverable.
-        from task_api import any_running_task_for_project
-
-        if any_running_task_for_project(
-            self.workspace,
-            active_project=active_project,
-        ):
-            exposed_names = {tool["name"] for tool in exposed}
-            extras = [
-                tool
-                for tool in control_surface
-                if tool["name"] not in exposed_names
-            ]
-            return exposed + extras
-        return exposed
+        )
 
     @staticmethod
     def _route_aware_tool_definitions(
@@ -4357,15 +4319,14 @@ class McpServer:
         arguments = params.get("arguments") or {}
 
         from phase_tool_router import ALWAYS_DISCOVERABLE_CONTROL_TOOLS
-        from tool_exposure import tool_not_callable_payload
+        from tool_exposure import callable_rag_tool_names, tool_not_callable_payload
 
         tool_definitions = self._all_tool_definitions_unfiltered()
-        # Use the same route-aware exposure result as tools/list. This keeps
-        # always-discoverable recovery controls callable while still rejecting
-        # hidden control-plane and inactive phase tools.
-        advertised_names = {
-            tool["name"] for tool in self.all_tool_definitions()
-        }
+        # Profile gate only — do not reuse route-shrunk catalogs. Route errors
+        # must surface as authorization failures, not TOOL_NOT_CALLABLE.
+        profile_allowed = callable_rag_tool_names(
+            tool["name"] for tool in tool_definitions
+        )
         explicit_authorization = (
             arguments.get("taskAuthorization")
             or arguments.get("task_authorization")
@@ -4374,7 +4335,7 @@ class McpServer:
         )
         has_explicit_authorization = isinstance(explicit_authorization, dict)
         if (
-            name not in advertised_names
+            name not in profile_allowed
             and name not in ALWAYS_DISCOVERABLE_CONTROL_TOOLS
             and not (
                 has_explicit_authorization
@@ -4559,6 +4520,7 @@ class McpServer:
                 )
                 if blocking:
                     payload["blockingReasons"] = blocking
+                payload["toolCatalog"] = self.tool_catalog_diagnostics()
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_task_start":
                 from task_api import task_start
@@ -5788,4 +5750,6 @@ if __name__ == "__main__":
             index = find_workspace_root() / index
     else:
         index = resolve_index_path()
-    McpServer(index.resolve()).run()
+    server = McpServer(index.resolve())
+    server.emit_catalog_initialized_diagnostic()
+    server.run()

@@ -92,14 +92,15 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "runtime-manifest.json",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert packaged_installer_manifest["productVersion"] == "1.3.0 RC1"
+    assert packaged_installer_manifest["productVersion"] == "1.3.0 RC2"
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
     assert (output / "install.sh").read_bytes() == (ROOT / "install.sh").read_bytes()
     windows_launcher = (output / "INSTALL.bat").read_text(encoding="utf-8")
     posix_launcher = (output / "install.sh").read_text(encoding="utf-8")
     assert "pause >nul" in windows_launcher
     assert "Python 3.10 or newer" in windows_launcher
-    assert "Python 3.10 or newer" in posix_launcher
+    assert "Python 3.10+" in posix_launcher
+    assert "python3.10" in posix_launcher
     assert "sudo apt-get install -y python3 ca-certificates" in posix_launcher
     portable_help = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
     assert "Ubuntu 22.04/24.04 with glibc" in portable_help

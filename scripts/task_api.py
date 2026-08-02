@@ -833,7 +833,8 @@ def list_tools_route_context(
     )
     if context.get("status") != "ambiguous_or_corrupt":
         return context
-    # Corrupt / scope mismatch stay recovery-only.
+    # Corrupt / scope mismatch stay out of multi-route catalogMode union.
+    # Advertised tools/list remains profile-stable; CallTool still fail-closes.
     if str(context.get("errorCode") or "") not in _CATALOG_UNION_ERROR_CODES:
         return context
     union = collect_project_active_tool_union(

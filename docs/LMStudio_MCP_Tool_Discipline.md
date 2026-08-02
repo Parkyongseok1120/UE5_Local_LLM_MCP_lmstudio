@@ -11,6 +11,16 @@ Guide for **LM Studio basic chat** with `unreal-rag` + `unreal-agent` MCP. This 
 
 Weak local models fail when too many tools are exposed. Use **Essential Tools** mode for chat.
 
+## Advertised catalog vs authorized execution
+
+`tools/list` always advertises the selected Stable Essential (or Extended) profile. Task route state — expired lease, corrupt `state.json`, checkpoint conflict, multiple healthy routes — must **not** shrink that catalog so LM Studio Integrations looks like a partial install.
+
+Call-time authorization remains the execution boundary:
+
+- Visible Essential tools may still return `TASK_ROUTE_BLOCKED`, `TASK_STATE_CORRUPT`, `TASK_LEASE_EXPIRED`, `MULTIPLE_HEALTHY_ROUTE_TASKS`, `TASK_TOOL_NOT_ACTIVE`, or ownership errors.
+- Recovery controls stay callable so operators can checkpoint, cancel, recover, or quarantine.
+- `TOOL_NOT_CALLABLE` means the tool is outside the selected exposure profile (or still control-plane hidden), not that a route is blocked.
+
 ## Essential Tools Mode
 
 Set this in both MCP server env blocks in `%USERPROFILE%\.lmstudio\mcp.json`:

@@ -2,7 +2,7 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release: **1.3.0 RC1**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest is `2.1.2`.
+Product release: **1.3.0 RC2**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest is `2.1.3`.
 
 ## Requirements
 

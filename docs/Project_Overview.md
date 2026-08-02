@@ -8,7 +8,7 @@ This page holds the detailed project status and usage notes that used to live in
 
 ## Current Status
 
-The current product release is **1.3.0 RC1**. It advances the 1.3 prerelease line with portable evidence-first analysis, deeper architecture/code-generation guardrails, cross-platform integrated installation, stability-focused task/context recovery, hardened sketch claim validation, and write-path mutation semantic guards.
+The current product release is **1.3.0 RC2**. It advances the 1.3 prerelease line with portable evidence-first analysis, deeper architecture/code-generation guardrails, cross-platform integrated installation, stability-focused task/context recovery, hardened sketch claim validation, and write-path mutation semantic guards.
 
 The latest measured live-model results remain the v1.2.5 baseline. RC1 has automated repository evidence but has not completed a new paired live-model benchmark, so the table below must not be used to claim a measured RC1 model-quality uplift.
 
@@ -35,7 +35,7 @@ See also: [Live Validation Results — 2026-07-11](Live_Validation_Results_20260
 - Added durable post-mutation checkpoints, refreshed route authorization, visible skipped-validation advisories, fail-closed proxy activation checks, and bounded telemetry diagnostics.
 - Fixed package-builder JSON output on legacy Windows encodings and added forced-`cp1252` success/error regression coverage.
 
-See [1.3.0 RC1 Release Notes](Release_Notes_1_3_0_RC1.md) for the evidence boundary and component versions.
+See [1.3.0 RC2 Release Notes](Release_Notes_1_3_0_RC2.md) for the evidence boundary and component versions.
 
 ## Minimum Requirements
 
@@ -121,7 +121,7 @@ Never enable agent mode for untrusted project paths.
 
 ## 현재 상태
 
-현재 제품 릴리스는 **1.3.0 RC1**입니다. 범용 evidence-first 분석, 강화된 architecture/code-generation guardrail, cross-platform 통합 설치, 안정성 중심의 task/context 복구, hardened sketch claim 검증, write-path mutation semantic guard를 포함하도록 1.3 prerelease 라인을 발전시킵니다.
+현재 제품 릴리스는 **1.3.0 RC2**입니다. 범용 evidence-first 분석, 강화된 architecture/code-generation guardrail, cross-platform 통합 설치, 안정성 중심의 task/context 복구, hardened sketch claim 검증, write-path mutation semantic guard를 포함하도록 1.3 prerelease 라인을 발전시킵니다.
 
 최신 live-model 측정 결과는 여전히 v1.2.5 baseline입니다. RC1에는 저장소 자동 검증 근거가 있지만 새로운 paired live-model benchmark는 아직 완료되지 않았으므로, 아래 표를 RC1 모델 품질 향상 수치로 사용하면 안 됩니다.
 
@@ -148,7 +148,7 @@ Never enable agent mode for untrusted project paths.
 - 변경 후 영속 checkpoint, 갱신된 route authorization, 검증 생략 advisory, fail-closed 프록시 활성 검사, 상한이 있는 telemetry 진단을 추가했습니다.
 - legacy Windows encoding의 package-builder JSON 출력을 수정하고 강제 `cp1252` 성공·오류 회귀 테스트를 추가했습니다.
 
-근거 범위와 컴포넌트 버전은 [1.3.0 RC1 릴리스 노트](Release_Notes_1_3_0_RC1.md)를 참고하세요.
+근거 범위와 컴포넌트 버전은 [1.3.0 RC2 릴리스 노트](Release_Notes_1_3_0_RC2.md)를 참고하세요.
 
 ## 최소 요구사항
 

@@ -1696,7 +1696,8 @@ function listToolsRouteContext(workspaceRoot, activeProject = "") {
   if (context.status !== "ambiguous_or_corrupt") {
     return context;
   }
-  // Corrupt / scope mismatch must stay recovery-only (no union).
+  // Corrupt / scope mismatch must not enter multi-route catalogMode union.
+  // Advertised tools/list remains profile-stable; CallTool still fail-closes.
   if (!CATALOG_UNION_ERROR_CODES.has(String(context.errorCode || ""))) {
     return context;
   }

@@ -308,15 +308,18 @@ def test_autonomy_blocked_route_lists_and_dispatches_bounded_replan(
     assert "Do not call unreal_agent_plan again" in denied["agentInstruction"]
 
 
-def test_non_autonomy_blocked_routes_hide_and_reject_replan(
+def test_blocked_routes_keep_catalog_but_reject_replan_at_call_time(
     monkeypatch,
     tmp_path,
 ) -> None:
+    """Advertised Essential catalog stays stable; route errors block at CallTool."""
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     mod = _load_rag_mcp_module()
     from task_api import task_root, task_start
+    from tool_exposure import load_stable_manifest
 
+    essential = set(load_stable_manifest()["ragEssential"])
     started = task_start(
         tmp_path,
         request="Edit Source/Demo/Foo.cpp",
@@ -336,12 +339,14 @@ def test_non_autonomy_blocked_routes_hide_and_reject_replan(
     sent: list[dict] = []
     server.send = sent.append
 
+    def catalog_names() -> set[str]:
+        return {tool["name"] for tool in server.all_tool_definitions()}
+
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["continuity"]["lease"]["expiresAt"] = "2000-01-01T00:00:00+00:00"
     state_path.write_text(json.dumps(state), encoding="utf-8")
-    assert "unreal_agent_plan" not in {
-        tool["name"] for tool in server.all_tool_definitions()
-    }
+    assert catalog_names() == essential
+    assert "unreal_agent_plan" in catalog_names()
     server.handle_tool_call(
         561,
         {
@@ -349,19 +354,17 @@ def test_non_autonomy_blocked_routes_hide_and_reject_replan(
             "arguments": {"request": "Must not bypass expired lease"},
         },
     )
-    assert (
-        sent[-1]["result"]["structuredContent"]["errorCode"]
-        == "TOOL_NOT_CALLABLE"
-    )
+    expired = sent[-1]["result"]["structuredContent"]
+    assert expired["ok"] is False
+    assert expired["errorCode"] == "TASK_ROUTE_BLOCKED"
+    assert expired["errorCode"] != "TOOL_NOT_CALLABLE"
 
     state["continuity"]["lease"]["expiresAt"] = "2999-01-01T00:00:00+00:00"
     state["continuity"]["recovery"]["conflicts"] = [
         {"relativePath": "Source/Demo/Foo.cpp", "reason": "content_changed"}
     ]
     state_path.write_text(json.dumps(state), encoding="utf-8")
-    assert "unreal_agent_plan" not in {
-        tool["name"] for tool in server.all_tool_definitions()
-    }
+    assert catalog_names() == essential
     server.handle_tool_call(
         562,
         {
@@ -369,10 +372,10 @@ def test_non_autonomy_blocked_routes_hide_and_reject_replan(
             "arguments": {"request": "Must not bypass checkpoint conflict"},
         },
     )
-    assert (
-        sent[-1]["result"]["structuredContent"]["errorCode"]
-        == "TOOL_NOT_CALLABLE"
-    )
+    conflict = sent[-1]["result"]["structuredContent"]
+    assert conflict["ok"] is False
+    assert conflict["errorCode"] == "TASK_ROUTE_BLOCKED"
+    assert conflict["errorCode"] != "TOOL_NOT_CALLABLE"
 
     state["status"] = "completed"
     state["continuity"]["recovery"]["conflicts"] = []
@@ -403,9 +406,7 @@ def test_non_autonomy_blocked_routes_hide_and_reject_replan(
             ],
         },
     )
-    assert "unreal_agent_plan" not in {
-        tool["name"] for tool in server.all_tool_definitions()
-    }
+    assert catalog_names() == essential
     server.handle_tool_call(
         563,
         {
@@ -413,10 +414,115 @@ def test_non_autonomy_blocked_routes_hide_and_reject_replan(
             "arguments": {"request": "Must not bypass ambiguous ownership"},
         },
     )
-    assert (
-        sent[-1]["result"]["structuredContent"]["errorCode"]
-        == "TOOL_NOT_CALLABLE"
+    multi = sent[-1]["result"]["structuredContent"]
+    assert multi["ok"] is False
+    assert multi["errorCode"] == "MULTIPLE_HEALTHY_ROUTE_TASKS"
+    assert multi["errorCode"] != "TOOL_NOT_CALLABLE"
+
+
+def test_clean_startup_advertises_manifest_rag_essential(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.delenv("MCP_EXTENDED_TOOLS", raising=False)
+    monkeypatch.delenv("ALLOW_CONTROL_PLANE_TOOLS", raising=False)
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    from tool_exposure import load_stable_manifest
+
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    names = {tool["name"] for tool in server.all_tool_definitions()}
+    assert names == set(load_stable_manifest()["ragEssential"])
+    diag = server.tool_catalog_diagnostics()
+    assert diag["profile"] == "essential"
+    assert diag["advertisedCount"] == len(names)
+    assert diag["routeContextStatus"] == "none"
+
+
+def test_active_route_keeps_rag_catalog_stable(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    from task_api import task_start
+    from tool_exposure import load_stable_manifest
+
+    essential = set(load_stable_manifest()["ragEssential"])
+    task_start(
+        tmp_path,
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
     )
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    assert {tool["name"] for tool in server.all_tool_definitions()} == essential
+    diag = server.tool_catalog_diagnostics()
+    assert diag["routeContextStatus"] == "active"
+    assert diag["advertisedCount"] == len(essential)
+
+
+def test_corrupt_route_keeps_catalog_and_recovery_controls(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    from task_api import task_root, task_start
+    from tool_exposure import load_stable_manifest
+
+    essential = set(load_stable_manifest()["ragEssential"])
+    started = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state_path.write_text("{not-json", encoding="utf-8")
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+    names = {tool["name"] for tool in server.all_tool_definitions()}
+    assert names == essential
+    assert "unreal_task_quarantine_corrupt" in names
+    diag = server.tool_catalog_diagnostics()
+    assert diag["routeContextStatus"] == "ambiguous_or_corrupt"
+    assert diag["routeErrorCode"] == "TASK_STATE_CORRUPT"
+    server.handle_tool_call(
+        570,
+        {"name": "unreal_agent_plan", "arguments": {"request": "blocked by corrupt"}},
+    )
+    denied = sent[-1]["result"]["structuredContent"]
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "TASK_STATE_CORRUPT"
+    assert denied["errorCode"] != "TOOL_NOT_CALLABLE"
+
+
+def test_hidden_control_plane_remains_hidden(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.delenv("ALLOW_CONTROL_PLANE_TOOLS", raising=False)
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    from tool_exposure import load_stable_manifest
+
+    hidden = set(load_stable_manifest().get("ragHiddenUntilControlPlane") or [])
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    names = {tool["name"] for tool in server.all_tool_definitions()}
+    assert hidden
+    assert names.isdisjoint(hidden)
 
 
 def test_extended_tools_enabled_exposes_refresh_and_compile_loop(monkeypatch, tmp_path):
