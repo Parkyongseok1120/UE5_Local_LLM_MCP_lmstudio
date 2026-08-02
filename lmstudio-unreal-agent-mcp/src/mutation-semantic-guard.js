@@ -6,11 +6,28 @@ const os = require("os");
 const cp = require("child_process");
 const { resolvePythonExe } = require("./validate-write");
 
-function resolveGuardScript() {
-  const root = path.resolve(
-    process.env.UNREAL58_ROOT || path.join(os.homedir(), ".lmstudio", "Unreal58-RAG")
+function candidateGuardScripts() {
+  const candidates = [];
+  const envRoot = String(process.env.UNREAL58_ROOT || "").trim();
+  if (envRoot) {
+    candidates.push(path.join(path.resolve(envRoot), "scripts", "mutation_semantic_guard.py"));
+  }
+  // Repo / portable package layout: lmstudio-unreal-agent-mcp/src -> ../../scripts
+  candidates.push(path.resolve(__dirname, "..", "..", "scripts", "mutation_semantic_guard.py"));
+  candidates.push(
+    path.join(os.homedir(), ".lmstudio", "Unreal58-RAG", "scripts", "mutation_semantic_guard.py")
   );
-  return path.join(root, "scripts", "mutation_semantic_guard.py");
+  return candidates;
+}
+
+function resolveGuardScript() {
+  const candidates = candidateGuardScripts();
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return candidates[0];
 }
 
 function validateMutationSemanticText(text) {
@@ -96,6 +113,7 @@ function probeMutationSemanticGuard() {
 }
 
 module.exports = {
+  candidateGuardScripts,
   resolveGuardScript,
   validateMutationSemanticText,
   probeMutationSemanticGuard,

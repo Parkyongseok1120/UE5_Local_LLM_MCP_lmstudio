@@ -112,15 +112,24 @@ Check "agent MCP startup smoke" {
     $previousEssential = $env:MCP_ESSENTIAL_TOOLS
     $previousStateRoot = $env:AGENT_STATE_ROOT
     $previousSharedConfig = $env:SHARED_UNREAL_CONFIG
+    $previousUnrealRoot = $env:UNREAL58_ROOT
     $verifyRoot = Join-Path $env:TEMP ("unreal-agent-verify-" + [guid]::NewGuid().ToString("N"))
     try {
         $env:MCP_ESSENTIAL_TOOLS = "1"
         $env:AGENT_STATE_ROOT = Join-Path $verifyRoot "state\unreal-agent"
         $env:SHARED_UNREAL_CONFIG = Join-Path $verifyRoot "config\unreal-workspace.json"
+        $env:UNREAL58_ROOT = $ragRoot
         $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify","version":"1.0"}}}'
         $list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
         $input = "$init`n$list`n"
-        $stdout = ($input | & node (Join-Path $agentRoot "src\server.js") 2>$null | Out-String)
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $stdout = ($input | & node (Join-Path $agentRoot "src\server.js") 2>$null | Out-String)
+        }
+        finally {
+            $ErrorActionPreference = $prevEap
+        }
         if ($stdout -notmatch '"tools"') { throw "tools/list did not return tools array" }
         if ($stdout -notmatch 'read_file') { throw "essential tool read_file missing from tools/list" }
     }
@@ -128,6 +137,7 @@ Check "agent MCP startup smoke" {
         if ($null -eq $previousEssential) { Remove-Item Env:MCP_ESSENTIAL_TOOLS -ErrorAction SilentlyContinue } else { $env:MCP_ESSENTIAL_TOOLS = $previousEssential }
         if ($null -eq $previousStateRoot) { Remove-Item Env:AGENT_STATE_ROOT -ErrorAction SilentlyContinue } else { $env:AGENT_STATE_ROOT = $previousStateRoot }
         if ($null -eq $previousSharedConfig) { Remove-Item Env:SHARED_UNREAL_CONFIG -ErrorAction SilentlyContinue } else { $env:SHARED_UNREAL_CONFIG = $previousSharedConfig }
+        if ($null -eq $previousUnrealRoot) { Remove-Item Env:UNREAL58_ROOT -ErrorAction SilentlyContinue } else { $env:UNREAL58_ROOT = $previousUnrealRoot }
         if (Test-Path -LiteralPath $verifyRoot) { Remove-Item -LiteralPath $verifyRoot -Recurse -Force }
     }
 }
