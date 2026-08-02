@@ -89,7 +89,10 @@ test("multiple exact patches for one file apply in listed order", async () => {
 
   assert.strictEqual(result.ok, true);
   assert.strictEqual(fs.readFileSync(target, "utf8"), "ALPHA\nbeta\nGAMMA\n");
-  assert.deepStrictEqual(result.writtenAbs, [fs.realpathSync(target)]);
+  assert.deepStrictEqual(
+    result.writtenAbs.map((abs) => fs.realpathSync(abs)),
+    [fs.realpathSync(target)]
+  );
 });
 
 test("later failed patch on one file rolls all earlier patches back", async () => {

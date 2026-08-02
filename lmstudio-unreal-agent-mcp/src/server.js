@@ -1975,11 +1975,11 @@ function allAgentTools() {
       },
       {
         name: "apply_edit_bundle",
-        description: "Apply a small edit bundle atomically with pre-hash capture, scoped validation, and rollback on failure. For existing files use patches only, each covering at most 60 changed lines; multiple patches for the same file are allowed and applied in listed order. Never put a complete existing file in files/content. The files form is only for bounded brand-new files. Requires ALLOW_WRITE=1 and server-issued taskAuthorization; never fabricate authorization, and call unreal_agent_plan once if none exists.",
+        description: "Apply a small edit bundle atomically with pre-hash capture, scoped validation, and rollback on failure. For existing files use patches only, each covering at most 60 changed lines; multiple patches for the same file are allowed and applied in listed order. never put a complete existing file in files/content. The files form is only for bounded brand-new files. Requires ALLOW_WRITE=1 and server-issued taskAuthorization; never fabricate authorization, and call unreal_agent_plan once if none exists.",
         inputSchema: makeJsonSchema({
           files: {
             type: "array",
-            description: "Bounded brand-new files only; never use content to overwrite an existing path.",
+            description: "brand-new files only; never use content to overwrite an existing path.",
             items: {
               type: "object",
               properties: {
