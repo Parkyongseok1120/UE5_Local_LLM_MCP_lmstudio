@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0 Beta3
+# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC1
 
-> **Beta release:** the portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows, Ubuntu Linux, and macOS. Native Unreal engine discovery, indexing paths, Editor export, and agent build launchers are host-aware; Ubuntu/macOS RAG indexing uses `pwsh`, and live platform certification is pending. Runtime downloads are pinned and SHA-256 verified before bounded safe extraction. See [1.3.0 Beta3 Release Notes](docs/Release_Notes_1_3_0_Beta3.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **Release Candidate:** the portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows, Ubuntu Linux, and macOS. Native Unreal engine discovery, indexing paths, Editor export, and agent build launchers are host-aware; Ubuntu/macOS RAG indexing uses `pwsh`, and live platform certification is pending. Runtime downloads are pinned and SHA-256 verified before bounded safe extraction. See [1.3.0 RC1 Release Notes](docs/Release_Notes_1_3_0_RC1.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -28,15 +28,15 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — July 2026**
 >
-> **Current release: 1.3.0 Beta3.** The 1.3 line now includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, meaning-preserving refactor snapshots and proof gates, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates.
+> **Current release: 1.3.0 RC1.** The 1.3 line now includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, meaning-preserving refactor snapshots and proof gates, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates. RC1 hardens sketch claim validation and blocks known-bad semantic write bypasses.
 >
-> Beta3 has automated repository evidence, not a new live-model score. The latest saved model results below remain the v1.2.5 UE 5.8 baseline and must not be read as a measured Beta3 improvement. Physical Ubuntu/macOS Unreal certification, Ollama support, and the separated runtime/semantic capability scorecards remain in progress.
+> RC1 has automated repository evidence, not a new live-model score. The latest saved model results below remain the v1.2.5 UE 5.8 baseline and must not be read as a measured RC1 improvement. Physical Ubuntu/macOS Unreal certification, Ollama support, and the separated runtime/semantic capability scorecards remain in progress.
 
 ## Documentation Hub
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0_Beta3.md"><img alt="1.3.0 Beta3 Release Notes" src="https://img.shields.io/badge/Release-1.3.0%20Beta3-yellow?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_0_RC1.md"><img alt="1.3.0 RC1 Release Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC1-yellow?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
   <a href="docs/Roadmap_1_3_0.md"><img alt="v1.3.0 Roadmap" src="https://img.shields.io/badge/Roadmap-v1.3.0-orange?logo=gitbook"></a>
@@ -45,7 +45,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 ## Latest Results
 
-These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 Beta3 live rerun has not been completed yet.
+These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 RC1 live rerun has not been completed yet.
 
 | Model / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
@@ -173,7 +173,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 | Topic | File |
 |---|---|
-| 1.3.0 Beta3 release notes | [docs/Release_Notes_1_3_0_Beta3.md](docs/Release_Notes_1_3_0_Beta3.md) |
+| 1.3.0 RC1 release notes | [docs/Release_Notes_1_3_0_RC1.md](docs/Release_Notes_1_3_0_RC1.md) |
 | Detailed project overview | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | Model measurement results | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | Version performance history | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -194,7 +194,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 ## Summary
 
-1.3.0 Beta3 is still a prerelease, but its architecture, installer, and release paths are guarded by broader automated checks.
+1.3.0 RC1 is still a prerelease, but its architecture, installer, and release paths are guarded by broader automated checks.
 
 For narrow UE 5.8 compile-fix work, the current community fine-tuned Qwen 3.6 27B local workflow is strong in live UBT validation (36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B also has a saved compact-model result (35/36 Pass@K, 33/36 Pass@1). Treat these as internal workflow results, not general model equivalence to Claude or GPT-class systems.
 

@@ -62,7 +62,7 @@ const {
   VALIDATE_ON_WRITE_TIMEOUT_MS,
   clearValidated
 } = require("./validate-write.js");
-const { validateMutationSemanticText } = require("./mutation-semantic-guard.js");
+const { validateMutationSemanticText, probeMutationSemanticGuard } = require("./mutation-semantic-guard.js");
 const {
   requireCleanOrFail,
   requireValidationProofOrOverride,
@@ -4333,6 +4333,13 @@ async function main() {
     }
   } catch (err) {
     console.error(`[unreal-agent] transaction recovery scan failed: ${err.message || err}`);
+  }
+  const semanticGuardHealth = probeMutationSemanticGuard();
+  if (!semanticGuardHealth.ok) {
+    console.error(
+      `[unreal-agent] mutation semantic guard unhealthy: ${semanticGuardHealth.reason}`
+      + " (writes that need the guard will fail closed until mutation_semantic_guard.py and unreal_api_denylist.py are present and importable)"
+    );
   }
   const transport = new StdioServerTransport();
   await server.connect(transport);

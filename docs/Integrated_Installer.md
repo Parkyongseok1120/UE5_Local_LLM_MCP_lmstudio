@@ -2,7 +2,7 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release: **1.3.0 Beta3**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest is `2.1.1`.
+Product release: **1.3.0 RC1**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest is `2.1.2`.
 
 ## Requirements
 
@@ -34,7 +34,7 @@ If the downloaded PowerShell binary cannot start because host libraries are miss
 sudo apt-get install -y libicu-dev libssl3 zlib1g
 ```
 
-These are implemented and fixture-tested paths, not a claim of physical Unreal/LM Studio certification on every host. Beta3 still requires clean-machine Windows, macOS, and Ubuntu release runs before broad platform certification.
+These are implemented and fixture-tested paths, not a claim of physical Unreal/LM Studio certification on every host. RC1 still requires clean-machine Windows, macOS, and Ubuntu release runs before broad platform certification.
 
 ## Start
 

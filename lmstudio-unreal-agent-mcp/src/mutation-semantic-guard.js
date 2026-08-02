@@ -16,7 +16,12 @@ function resolveGuardScript() {
 function validateMutationSemanticText(text) {
   const script = resolveGuardScript();
   if (!fs.existsSync(script)) {
-    return { ok: true, skipped: true, reason: "mutation_semantic_guard.py missing" };
+    return {
+      ok: false,
+      infrastructureError: true,
+      reason: "mutation_semantic_guard.py missing",
+      hits: [],
+    };
   }
   const result = cp.spawnSync(resolvePythonExe(), [script], {
     cwd: path.dirname(path.dirname(script)),
@@ -50,7 +55,48 @@ function validateMutationSemanticText(text) {
   }
 }
 
+function probeMutationSemanticGuard() {
+  const script = resolveGuardScript();
+  if (!fs.existsSync(script)) {
+    return {
+      ok: false,
+      present: false,
+      importable: false,
+      pythonProbe: false,
+      reason: "mutation_semantic_guard.py missing",
+    };
+  }
+  const denylist = path.join(path.dirname(script), "unreal_api_denylist.py");
+  if (!fs.existsSync(denylist)) {
+    return {
+      ok: false,
+      present: true,
+      importable: false,
+      pythonProbe: false,
+      reason: "unreal_api_denylist.py missing",
+    };
+  }
+  const result = validateMutationSemanticText("");
+  if (!result.ok && result.infrastructureError) {
+    return {
+      ok: false,
+      present: true,
+      importable: false,
+      pythonProbe: false,
+      reason: result.reason,
+    };
+  }
+  return {
+    ok: true,
+    present: true,
+    importable: true,
+    pythonProbe: true,
+    reason: null,
+  };
+}
+
 module.exports = {
   resolveGuardScript,
   validateMutationSemanticText,
+  probeMutationSemanticGuard,
 };

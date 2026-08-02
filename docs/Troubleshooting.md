@@ -81,7 +81,7 @@ Rerun `python install.py --profile standard --yes` to restore SAFE read-only def
 
 ## AGENT write is reported as blocked after selecting Qwen directly
 
-This is not a macOS Privacy & Security problem when the MCP result is `CONTEXT_COMPACTOR_NOT_ACTIVE`. Beta3 installs the LM Studio context proxy as advisory, so direct Qwen/GPT selection remains write-capable. Re-run the installer or `python scripts/patch_mcp_config.py`, then restart/toggle the MCP servers so `MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=0`, `MCP_CONTEXT_COMPACTOR_ADVISORY=1`, and `MCP_FRONTEND=lmstudio` are loaded.
+This is not a macOS Privacy & Security problem when the MCP result is `CONTEXT_COMPACTOR_NOT_ACTIVE`. RC1 installs the LM Studio context proxy as advisory, so direct Qwen/GPT selection remains write-capable. Re-run the installer or `python scripts/patch_mcp_config.py`, then restart/toggle the MCP servers so `MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=0`, `MCP_CONTEXT_COMPACTOR_ADVISORY=1`, and `MCP_FRONTEND=lmstudio` are loaded.
 
 Only an administrator-set strict LM Studio policy may require selecting `unreal-context-compactor`. Cline, CLI, Ollama, custom, and remote clients must not be blocked by LM Studio proxy telemetry.
 

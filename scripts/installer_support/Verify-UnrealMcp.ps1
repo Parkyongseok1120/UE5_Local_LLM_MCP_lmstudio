@@ -91,7 +91,7 @@ Check "agent-mcp.json search roots" {
 }
 Check "unreal_rag_mcp.py compile" {
     Push-Location (Join-Path $ragRoot "scripts")
-    try { & $py -m py_compile unreal_rag_mcp.py rag_search.py workspace_paths.py }
+    try { & $py -m py_compile unreal_rag_mcp.py rag_search.py workspace_paths.py mutation_semantic_guard.py unreal_api_denylist.py }
     finally { Pop-Location }
 }
 Check "agent server.js" { if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) { throw "missing" } }
@@ -144,6 +144,26 @@ Check "context compactor source" {
 }
 Check "agent write-locks.js" { if (-not (Test-Path (Join-Path $agentRoot "src\write-locks.js"))) { throw "missing write-locks.js (single-flight write guard)" } }
 Check "agent mutation-history.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-history.js"))) { throw "missing mutation-history.js (duplicate-call loop breaker)" } }
+Check "agent mutation-semantic-guard.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-semantic-guard.js"))) { throw "missing mutation-semantic-guard.js (write-path semantic denylist bridge)" } }
+Check "mutation_semantic_guard.py present" { if (-not (Test-Path (Join-Path $ragRoot "scripts\mutation_semantic_guard.py"))) { throw "missing scripts/mutation_semantic_guard.py" } }
+Check "unreal_api_denylist.py present" { if (-not (Test-Path (Join-Path $ragRoot "scripts\unreal_api_denylist.py"))) { throw "missing scripts/unreal_api_denylist.py" } }
+Check "mutation semantic guard python probe" {
+    $previous = $env:PYTHONPATH
+    $scriptsDir = Join-Path $ragRoot "scripts"
+    try {
+        $env:PYTHONPATH = if ($previous) { "$scriptsDir$([IO.Path]::PathSeparator)$previous" } else { $scriptsDir }
+        $out = & $py -c "from unreal_api_denylist import check_denylist; import json; print(json.dumps({'ok': True, 'hits': check_denylist('')}, ensure_ascii=False))" 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "denylist import probe failed: $out" }
+        if ($out -notmatch '"ok"\s*:\s*true') { throw "denylist import probe returned unexpected payload: $out" }
+        $guardScript = Join-Path $scriptsDir "mutation_semantic_guard.py"
+        $guardOut = ("" | & $py $guardScript 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) { throw "mutation_semantic_guard.py probe failed: $guardOut" }
+        if ($guardOut -notmatch '"ok"\s*:\s*true') { throw "mutation_semantic_guard.py probe returned unexpected payload: $guardOut" }
+    }
+    finally {
+        if ($null -eq $previous) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $previous }
+    }
+}
 Check "python version" {
     $out = & $py --version 2>&1 | Out-String
     if ($out -notmatch "Python") { throw $out.Trim() }

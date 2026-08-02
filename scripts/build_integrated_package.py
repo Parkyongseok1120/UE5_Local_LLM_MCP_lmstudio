@@ -44,7 +44,10 @@ LOCAL_CONFIG_NAMES = {
 REQUIRED_RUNTIME_FILES = (
     "scripts/phase_tool_router.py",
     "scripts/approve_feature_intent.py",
+    "scripts/mutation_semantic_guard.py",
+    "scripts/unreal_api_denylist.py",
     "lmstudio-unreal-agent-mcp/src/route-watcher.js",
+    "lmstudio-unreal-agent-mcp/src/mutation-semantic-guard.js",
 )
 
 
