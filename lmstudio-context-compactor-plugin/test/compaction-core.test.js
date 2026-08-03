@@ -42,6 +42,136 @@ test("checkpoint preserves required next tool and exact signature contract", () 
   assert.equal(core.validateCheckpoint(checkpoint), true);
 });
 
+test("latest user message replaces sticky first-turn objective", () => {
+  const messages = [
+    { role: "user", content: "현재 프로젝트 찾고 코드 구조 전체 적으로 확인해줘" },
+    { role: "assistant", content: "structure overview..." },
+    { role: "user", content: "지금 버그있는거 찾기만하고 수정은 하지마." },
+  ];
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.match(checkpoint.objective, /버그있는거 찾기만/);
+  assert.doesNotMatch(checkpoint.objective, /코드 구조 전체/);
+  assert.ok(checkpoint.constraints.some((item) => String(item).startsWith("read_only_findings_only:")));
+});
+
+test("compaction pins latest user goal instead of first user turn", () => {
+  const messages = [
+    { role: "system", content: "rules" },
+    { role: "user", content: "구조 전체 확인" },
+    { role: "assistant", content: "overview" },
+    { role: "user", content: "지금 버그있는거 찾기만하고 수정은 하지마." },
+    { role: "assistant", content: "scanning" },
+  ];
+  const checkpoint = core.buildCheckpoint(messages);
+  const compacted = core.compactSnapshots(messages, checkpoint, { recentCompleteTurns: 0 });
+  const pinnedUsers = compacted.filter((message) => message.role === "user").map((message) => message.text);
+  assert.deepEqual(pinnedUsers, ["지금 버그있는거 찾기만하고 수정은 하지마."]);
+  assert.equal(compacted[0].role, "system");
+  assert.equal(compacted.filter((message) => message.role === "system").length, 1);
+  assert.match(compacted[0].text, /Conversation checkpoint/);
+  assert.match(compacted[0].text, /rules/);
+  assert.match(checkpoint.objective, /버그있는거 찾기만/);
+});
+
+test("compaction emits a single leading system message for chat-template safety", () => {
+  const messages = [
+    { role: "system", content: "base rules" },
+    { role: "system", content: "extra rules" },
+    { role: "user", content: "구조 전체 확인" },
+    { role: "assistant", content: "overview" },
+    { role: "user", content: "시네마틱 관련해서 구현된것들 더 구체적으로 알려줘." },
+  ];
+  const checkpoint = core.buildCheckpoint(messages);
+  const compacted = core.compactSnapshots(messages, checkpoint, { recentCompleteTurns: 0 });
+  const systems = compacted.filter((message) => message.role === "system");
+  assert.equal(systems.length, 1);
+  assert.match(systems[0].text, /base rules/);
+  assert.match(systems[0].text, /extra rules/);
+  assert.match(systems[0].text, /Conversation checkpoint/);
+  assert.match(systems[0].text, /objective=/);
+  assert.equal(compacted.filter((message) => message.role === "user").at(-1).text.includes("시네마틱"), true);
+});
+
+test("LM Studio title prompt does not replace the real objective", () => {
+  const titlePrompt = (
+    "Based on the conversation above, can you please come up with a 2-5 word title "
+    + "for this conversation? Put your answer in <title> tags, like this: <title>Your Title Here</title>.\n\n"
+    + "Do not explain anything. Just return the title in the specified format."
+  );
+  const messages = [
+    { role: "user", content: "현재 프로젝트 찾고 코드 구조 전체 적으로 확인해줘" },
+    { role: "assistant", content: "", toolCalls: [{ id: "a", name: "list_directory", arguments: { path: "Source" } }] },
+    { role: "tool", content: "entries", toolResults: [{ toolCallId: "a", name: "list_directory", content: "Project_MJS" }] },
+    { role: "user", content: titlePrompt },
+  ];
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.match(checkpoint.objective, /코드 구조/);
+  assert.equal(core.isMetaUserMessage(titlePrompt), true);
+  assert.doesNotMatch(checkpoint.objective, /2-5 word title/);
+});
+
+test("title meta prompt is passed through at the end of compacted chat", () => {
+  const titlePrompt = (
+    "Based on the conversation above, can you please come up with a 2-5 word title "
+    + "for this conversation? Put your answer in <title> tags."
+  );
+  const messages = [
+    { role: "user", content: "코드 구조 확인해줘" },
+    { role: "assistant", content: "", toolCalls: [{ id: "a", name: "list_directory", arguments: { path: "Source" } }] },
+    { role: "tool", content: "entries", toolResults: [{ toolCallId: "a", name: "list_directory", content: "Project_MJS" }] },
+    { role: "user", content: titlePrompt },
+  ];
+  const checkpoint = core.buildCheckpoint(messages);
+  const compacted = core.compactSnapshots(messages, checkpoint, {
+    recentCompleteTurns: 0,
+    trailingMetaUser: { role: "user", text: titlePrompt, toolCalls: [], toolResults: [] },
+  });
+  assert.equal(compacted[compacted.length - 1].role, "user");
+  assert.match(compacted[compacted.length - 1].text, /2-5 word title/);
+  assert.equal(compacted.filter((message) => message.role === "user").length, 2);
+  assert.match(checkpoint.objective, /코드 구조/);
+});
+
+test("current-turn overflow trim drops oldest tool pairs only", () => {
+  const messages = [
+    { role: "system", content: "rules" },
+    { role: "user", content: "scan deep" },
+    { role: "assistant", content: "", toolCalls: [{ id: "a", name: "list_directory", arguments: { path: "A" } }] },
+    { role: "tool", content: "a", toolResults: [{ toolCallId: "a", name: "list_directory", content: "A" }] },
+    { role: "assistant", content: "", toolCalls: [{ id: "b", name: "list_directory", arguments: { path: "B" } }] },
+    { role: "tool", content: "b", toolResults: [{ toolCallId: "b", name: "list_directory", content: "B" }] },
+    { role: "assistant", content: "", toolCalls: [{ id: "c", name: "list_directory", arguments: { path: "C" } }] },
+    { role: "tool", content: "c", toolResults: [{ toolCallId: "c", name: "list_directory", content: "C" }] },
+  ];
+  const compacted = core.compactSnapshots(messages, core.buildCheckpoint(messages), {
+    recentCompleteTurns: 0,
+    maxCurrentTurnMessages: 2,
+  });
+  const toolResults = compacted.flatMap((message) => message.toolResults || []);
+  assert.equal(toolResults.some((result) => result.toolCallId === "a"), false);
+  assert.equal(toolResults.some((result) => result.toolCallId === "b"), false);
+  assert.equal(toolResults.some((result) => result.toolCallId === "c"), true);
+  assert.equal(core.isCompleteToolPair(compacted), true);
+});
+
+test("soft compaction keeps the full current turn tool evidence", () => {
+  const messages = [
+    { role: "system", content: "rules" },
+    { role: "user", content: "old goal" },
+    { role: "assistant", content: "old-" + "x".repeat(200) },
+    { role: "user", content: "현재 프로젝트 코드 구조 확인해줘" },
+    { role: "assistant", content: "", toolCalls: [{ id: "a", name: "list_directory", arguments: { path: "Source" } }] },
+    { role: "tool", content: "source", toolResults: [{ toolCallId: "a", name: "list_directory", content: "Project_MJS" }] },
+    { role: "assistant", content: "", toolCalls: [{ id: "b", name: "list_directory", arguments: { path: "Source/Project_MJS/Public" } }] },
+    { role: "tool", content: "public", toolResults: [{ toolCallId: "b", name: "list_directory", content: "Character" }] },
+  ];
+  const compacted = core.compactSnapshots(messages, core.buildCheckpoint(messages), { recentCompleteTurns: 1 });
+  const toolResults = compacted.flatMap((message) => message.toolResults || []);
+  assert.equal(toolResults.some((result) => result.toolCallId === "a"), true);
+  assert.equal(toolResults.some((result) => result.toolCallId === "b"), true);
+  assert.equal(core.isCompleteToolPair(compacted), true);
+});
+
 test("compaction never leaves an orphan tool call in the retained tail", () => {
   const messages = [
     { role: "system", content: "rules" },
@@ -102,8 +232,10 @@ test("zero retained turns keeps only the minimum recent tail", () => {
     { role: "user", content: "latest request" },
   ];
   const compacted = core.compactSnapshots(messages, core.buildCheckpoint(messages), { recentCompleteTurns: 0 });
-  assert.equal(compacted.at(-1).text, "latest request");
+  const users = compacted.filter((message) => message.role === "user").map((message) => message.text);
+  assert.deepEqual(users, ["latest request"]);
   assert.equal(compacted.some((message) => message.text === "old answer"), false);
+  assert.equal(compacted.some((message) => message.text === "objective"), false);
 });
 
 test("session fingerprint salt separates identical prompts in different workspaces", () => {

@@ -9,8 +9,8 @@
     "linuxBaseline": "Ubuntu 22.04/24.04 (glibc)"
   },
   "profiles": {
-    "safe": ["codex", "lmstudio"],
-    "standard": ["codex", "lmstudio", "unreal"],
+    "safe": ["codex", "lmstudio", "context_compactor"],
+    "standard": ["codex", "lmstudio", "unreal", "context_compactor"],
     "full": ["codex", "lmstudio", "unreal", "context_compactor"],
     "custom": []
   },
@@ -26,7 +26,8 @@
     "defaultReadOnly": true,
     "agentModeRequires": ["--enable-agent-mode", "--accept-agent-risk"],
     "interactiveAgentModeSelector": true,
-    "indexTierIsIndependent": true
+    "indexTierIsIndependent": true,
+    "contextCompactorRequiredWithLmStudio": true
   },
   "portablePackage": {
     "launchers": ["INSTALL.bat", "install.sh"],

@@ -11,10 +11,13 @@ exact model key. The existing `mcp/unreal-agent` and `mcp/unreal-rag` plugins re
 Version 0.3.5 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
 before every prediction and buffers model text/tool calls until LM Studio confirms a safe stop.
 Context-limit and max-output truncations are discarded instead of being presented as completed work.
-Strict tool-call rejection remains off by default, so multiple tool calls are preserved. **Select
-`unreal-context-compactor` in the model dropdown for each chat that should use
-the proxy. Selecting the underlying Qwen/GPT model directly bypasses compaction, even though the
-plugin is installed.** Existing chats retain their previously selected model.
+Strict tool-call rejection remains off by default, so multiple tool calls are preserved.
+
+> **Important — you must select this plugin as the chat model**  
+> 1. Load the underlying LLM (e.g. Qwen) once; leave it loaded.  
+> 2. **Create a new chat** (existing chats keep the old selection).  
+> 3. Choose **`unreal-context-compactor`** in that chat’s **model dropdown**.  
+> Selecting the underlying Qwen/GPT model directly **bypasses** compaction even though the plugin is installed.
 
 After sending one message through the proxy, run `npm run status` from this directory on Windows,
 macOS, or Linux. A successful check requires fresh routing evidence (30 minutes by default), and

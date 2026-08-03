@@ -27,6 +27,11 @@ engine or select a custom/source engine folder. The authority choice is:
 AGENT authority requires a second confirmation and the final install summary shows
 the selected authority before any installation work starts.
 
+After installation, multi-turn LM Studio chats that need context compaction must use
+a **new chat** whose model dropdown is set to **`unreal-context-compactor`** (keep the
+underlying Qwen/GPT loaded, but do not select it as the chat model). Install/pin alone
+does not rewrite existing chat model selections.
+
 On macOS and Ubuntu Linux, opt-in indexing requires PowerShell 7 (`pwsh`). Engine discovery uses
 host-native common locations and accepts `UNREAL_ENGINE_ROOT` or `--engine-root`
 for source/custom installs. Unreal builds use the host `Build.sh` (with the UBT DLL

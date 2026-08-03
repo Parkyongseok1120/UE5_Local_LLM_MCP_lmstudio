@@ -88,7 +88,13 @@ cd UE5_Local_LLM_MCP_lmstudio
 
 Windows에서는 루트의 `INSTALL.bat`, Linux와 macOS에서는 `install.sh`를 실행합니다. 둘 다 같은 `install.py`를 호출합니다. SAFE/AGENT/RAG/Cline/컨텍스트 압축기별 설치 파일은 없으며, 통합 설치 화면에서 선택합니다. Unreal 어댑터가 포함되면 `SAFE` 또는 `AGENT` 권한을 번호로 고르고, AGENT는 위험 확인을 한 번 더 거친 뒤 최종 설치 요약에서 다시 확인할 수 있습니다. `installer/`에는 bootstrap runtime 코드와 검증 가능한 매니페스트를 두고, 고급 유지보수·검증 도구는 `scripts/installer_support/`로 분리했습니다.
 
-그 다음 LM Studio에서 모델을 로드하고 Local Server를 시작한 뒤, `unreal-rag` / `unreal-agent` MCP를 활성화하고 index를 빌드합니다. 설치 프로그램은 `unreal-context-compactor`도 함께 설치합니다. 자동 컨텍스트 확장을 쓰려면 기반 LLM을 정확히 하나만 로드하거나 플러그인 설정의 `targetModel`에 정확한 모델 키를 지정한 뒤, **컨텍스트 확장을 쓸 채팅마다 모델 드롭다운에서 `unreal-context-compactor`를 선택하세요. 기존 채팅의 선택 모델은 설치로 자동 변경되지 않으며, Qwen/GPT 기반 모델을 직접 선택하면 설치된 프록시를 우회합니다.** 프록시는 모델에 전달되는 과거 대화만 압축하며, 화면에 보이는 채팅과 기존 MCP 서버는 바꾸지 않습니다.
+> **중요 — 설치 후 채팅 모델로 `unreal-context-compactor`를 선택하세요.**  
+> 1. 기반 LLM(예: Qwen)을 **한 번만 로드**해 둡니다. 컴팩션을 쓸 때는 채팅 모델로 Qwen를 고르지 마세요.  
+> 2. **새 채팅**을 만듭니다 (기존 채팅은 예전 모델 선택이 그대로 남습니다).  
+> 3. 그 채팅의 **모델 드롭다운**에서 **`unreal-context-compactor`** 를 선택합니다.  
+> 설치는 플러그인을 설치·핀만 하며, 기존 채팅의 선택 모델을 바꾸지 않습니다. Qwen/GPT를 직접 고르면 프록시를 **우회**하므로, 2턴 이후 목표 변경·긴 tool 이력이 압축되지 않습니다.
+
+그 다음 LM Studio에서 Local Server를 시작한 뒤, `unreal-rag` / `unreal-agent` MCP를 활성화하고 index를 빌드합니다. 설치 프로그램은 `unreal-context-compactor`도 함께 설치합니다. 기반 LLM을 정확히 하나만 로드하거나 플러그인 설정의 `targetModel`에 정확한 모델 키를 지정하세요. 프록시는 모델에 전달되는 과거 대화만 압축하며, 화면에 보이는 채팅과 기존 MCP 서버는 바꾸지 않습니다.
 
 선택 후 메시지를 한 번 보낸 다음 아래 명령으로 실제 프록시 경유 증거를 확인할 수 있습니다. `PASS` 없이 설치 파일/리비전만 일치하는 상태는 활성화가 아닙니다.
 

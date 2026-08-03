@@ -96,7 +96,13 @@ The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal a
 
 `INSTALL.bat` and `install.sh` are thin platform launchers for the same `install.py` implementation. There are no separate SAFE, AGENT, RAG, Cline, or context-compactor installers. Choose those options inside the integrated installer. `installer/` contains bootstrap runtime code and validated manifests; advanced maintenance tools live under `scripts/installer_support/`.
 
-Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unreal-agent`, and build your index. The installer also installs `unreal-context-compactor`. To enable automatic context expansion, keep exactly one underlying LLM loaded (or set its exact `targetModel` in the plugin settings), then **select `unreal-context-compactor` in the model dropdown for every chat that should use expansion. Installation does not change the model already selected in an existing chat; selecting the underlying Qwen/GPT model directly bypasses the installed proxy.** The proxy compacts only the model-facing history; the visible chat and the existing MCP servers remain unchanged.
+> **Important — after install, select `unreal-context-compactor` as the chat model.**  
+> 1. Load your underlying LLM once (for example Qwen). Leave it loaded; do not pick it as the chat model if you want compaction.  
+> 2. **Create a new chat** (existing chats keep their old model selection).  
+> 3. In that chat’s **model dropdown**, choose **`unreal-context-compactor`**.  
+> Installation installs and pins the plugin, but it does **not** switch the model on existing chats. Selecting Qwen/GPT directly **bypasses** the proxy: multi-turn goal changes and long tool histories will not be compacted.
+
+Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unreal-agent`, and build your index. The installer also installs `unreal-context-compactor`. Keep exactly one underlying LLM loaded (or set its exact `targetModel` in the plugin settings). The proxy compacts only the model-facing history; the visible chat and the existing MCP servers remain unchanged.
 
 After sending one message through that selection, verify actual routing—not just installed files—with:
 

@@ -36,6 +36,21 @@ powershell -File $HOME\.lmstudio\scripts\patch_mcp_runtime_paths.ps1
 
 Restart LM Studio so MCP servers reload.
 
+## 2b. Context compactor (multi-turn chats)
+
+> **Important — select `unreal-context-compactor` as the chat model**  
+> 1. Load the underlying LLM (e.g. Qwen) once and leave it loaded.  
+> 2. **Create a new chat.**  
+> 3. In the **model dropdown**, choose **`unreal-context-compactor`**.  
+> The installer installs the plugin but does not change an existing chat’s model. Selecting Qwen directly bypasses compaction.
+
+Verify after one message:
+
+```powershell
+cd <repo>\lmstudio-context-compactor-plugin
+npm run status
+```
+
 ## 3. System prompt
 
 Base rules: [`prompts/lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_base.md)

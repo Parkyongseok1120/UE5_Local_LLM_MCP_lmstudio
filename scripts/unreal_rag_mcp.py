@@ -3787,6 +3787,9 @@ class McpServer:
                     "Classify task and return evidencePlan, toolPolicy, writeGate, checkpoints, "
                     "stopConditions, retryPolicy, projectContext, and suggestedToolCalls before edits. "
                     "LM Studio chat: call this FIRST after unreal_get_active_project. "
+                    "Pass request as the user's latest verbatim message (not a restated refactor/implementation plan). "
+                    "If the chat already had another goal, also pass latestUserMessage with that same latest user text "
+                    "so invented write/refactor requests cannot override a read-only bug-hunt. "
                     "This is the only source of initial server-issued taskAuthorization; never "
                     "fabricate IDs or tokens. "
                     "Copy suggestedToolCalls args exactly, including projectName/folderHint, and never write "
@@ -3794,7 +3797,17 @@ class McpServer:
                 ),
                 "inputSchema": self._schema(
                     {
-                        "request": {"type": "string"},
+                        "request": {
+                            "type": "string",
+                            "description": "User's latest verbatim goal. Do not rewrite into an implementation plan.",
+                        },
+                        "latestUserMessage": {
+                            "type": "string",
+                            "description": (
+                                "Optional copy of the latest user message. When set, read-only / bug-hunt-only "
+                                "goals override an invented edit/refactor request."
+                            ),
+                        },
                         "mode": {"type": "string", "default": "auto"},
                     },
                     ["request"],
@@ -4937,11 +4950,21 @@ class McpServer:
                 from agent_orchestrator import build_agent_plan
 
                 request = str(arguments.get("request") or "").strip()
+                latest_user_message = str(
+                    arguments.get("latestUserMessage")
+                    or arguments.get("latest_user_message")
+                    or arguments.get("userMessage")
+                    or ""
+                ).strip() or None
                 mode = str(arguments.get("mode") or "auto")
                 if not request:
                     self.tool_result(message_id, "Missing request", is_error=True)
                     return
-                payload = build_agent_plan(request, mode).to_dict()
+                payload = build_agent_plan(
+                    request,
+                    mode,
+                    latest_user_message=latest_user_message,
+                ).to_dict()
                 writes_allowed = (
                     (payload.get("writeGate") or {}).get("writesAllowed") is True
                 )

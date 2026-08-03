@@ -360,7 +360,22 @@ test("tool call stream is identical before and after forced context compaction",
   assert.ok(afterLimit.captured.chats[0].length < afterLimit.originalLength);
   assert.ok(afterLimit.captured.chats[0].some((message) => message.text.includes("Conversation checkpoint")));
   assert.equal(afterLimit.captured.chats[0].at(-1).text, "use two independent read tools");
+  assert.equal(
+    afterLimit.captured.chats[0].filter((message) => message.role === "user" && message.text === "objective").length,
+    0,
+    "obsolete first-turn objective must not remain pinned after mid-chat goal changes",
+  );
+  assert.equal(
+    afterLimit.captured.chats[0].some((message) => String(message.text || "").startsWith("old-0-")),
+    false,
+    "goal-change compaction should drop early assistant dumps",
+  );
   assert.ok(afterLimit.telemetry.some((event) => event.type === "compaction_decision" && event.applied === true));
+  assert.ok(
+    afterLimit.telemetry.some((event) => event.type === "compaction_decision" && (
+      event.effectiveAction === "soft_compact" || event.effectiveAction === "hard_compact"
+    )),
+  );
   assert.equal(beforeLimit.telemetry.some((event) => event.type === "compaction_decision" && event.applied === true), false);
   const routedMeasurement = afterLimit.telemetry.find((event) => event.type === "context_measurement");
   assert.equal(routedMeasurement?.proxyActive, true);

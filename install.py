@@ -49,7 +49,9 @@ LMSTUDIO_CONTEXT_POLICY_ENV = {
     "MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS",
     "MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS",
 }
-BOOTSTRAP_LOCK_TOKEN_ENV = "EVIDENCE_FIRST_BOOTSTRAP_LOCK_TOKEN"
+CONTEXT_COMPACTOR_PLUGIN_ID = "codex/unreal-context-compactor"
+CONTEXT_COMPACTOR_PLUGIN_NAME = "unreal-context-compactor"
+
 INVALID_LOCK_GRACE_SECONDS = 300
 MAX_INSTALLER_JSON_BYTES = 16 * 1024 * 1024
 
@@ -773,9 +775,9 @@ def _prompt_yes_no(question: str, default: bool) -> bool:
 
 def _interactive_profile() -> str:
     print("Install profile:")
-    print("  1. SAFE (recommended: portable Codex + LM Studio, no project adapter)")
-    print("  2. STANDARD (SAFE + read-only Unreal adapter)")
-    print("  3. FULL (STANDARD + LM Studio context compactor; still read-only)")
+    print("  1. SAFE (recommended: portable Codex + LM Studio + required context compactor)")
+    print("  2. STANDARD (SAFE + read-only Unreal adapter; context compactor required)")
+    print("  3. FULL (same required components as STANDARD; kept for compatibility)")
     print("  4. CUSTOM")
     choice = input("Select [1]: ").strip() or "1"
     return {"1": "safe", "2": "standard", "3": "full", "4": "custom"}.get(choice, "safe")
@@ -843,17 +845,19 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         }
         if interactive and not components:
             for component in sorted(ALL_COMPONENTS):
-                if _prompt_yes_no(f"Install {component}?", component in {"codex", "lmstudio"}):
+                if _prompt_yes_no(
+                    f"Install {component}?",
+                    component in {"codex", "lmstudio", "context_compactor"},
+                ):
                     components.add(component)
     else:
         components = set(PROFILE_DEFAULTS[profile])
 
     if interactive:
-        if "unreal" in components:
-            if _prompt_yes_no("Install LM Studio context compactor?", profile == "full"):
-                components.add("context_compactor")
-            else:
-                components.discard("context_compactor")
+        print(
+            "\nLM Studio context compactor is required and will be installed/activated "
+            "whenever LM Studio or Unreal components are selected."
+        )
         if _prompt_yes_no("Install a rule into another coding agent?", False):
             components.add("portable_rule")
             if not args.rule_path:
@@ -885,9 +889,7 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         components.discard("lmstudio")
     if args.no_unreal:
         components.discard("unreal")
-        components.discard("context_compactor")
-    if args.skip_context_compactor:
-        components.discard("context_compactor")
+    _enforce_required_context_compactor(components, args)
     if args.rule_path:
         components.add("portable_rule")
     elif "portable_rule" in components:
@@ -910,6 +912,29 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
     if interactive:
         _confirm_interactive_install(profile, components, args)
     return profile, components
+
+
+def _enforce_required_context_compactor(components: set[str], args: argparse.Namespace) -> None:
+    """Force context_compactor whenever LM Studio integration is present."""
+    needs_compactor = "lmstudio" in components or "unreal" in components
+    if not needs_compactor:
+        components.discard("context_compactor")
+        return
+    allow_skip = bool(getattr(args, "allow_skip_context_compactor", False))
+    if args.skip_context_compactor and not allow_skip:
+        raise ValueError(
+            "Context compactor is required for LM Studio installs. "
+            "--skip-context-compactor is blocked unless you also pass "
+            "--allow-skip-context-compactor (unsupported emergency bypass)."
+        )
+    if args.skip_context_compactor and allow_skip:
+        components.discard("context_compactor")
+        print(
+            "WARNING: skipping required LM Studio context compactor "
+            "(unsupported emergency bypass)."
+        )
+        return
+    components.add("context_compactor")
 
 
 def _merge_mcp_entry(config: dict[str, Any], name: str, entry: dict[str, Any]) -> None:
@@ -997,10 +1022,8 @@ def _unreal_entries(
         },
     }
     if context_compactor_advisory:
-        # The compactor is an optional stability layer, not an authority
-        # boundary.  Directly selecting the underlying model must keep AGENT
-        # writes usable; strict blocking remains an explicit administrator
-        # opt-in through MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1.
+        # Compactor is required for LM Studio installs. Advisory telemetry stays on;
+        # strict write-blocking remains opt-in via MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1.
         rag_entry["env"]["MCP_CONTEXT_COMPACTOR_ADVISORY"] = "1"
         rag_entry["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] = "0"
         rag_entry["env"]["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] = "lmstudio"
@@ -1034,7 +1057,11 @@ def _run(
     dry_run: bool,
     timeout: float | None = None,
 ) -> None:
-    print(("[dry-run] " if dry_run else "") + "run: " + _display_command(command))
+    # Keep progress on stderr so installer stdout remains machine-parseable JSON.
+    print(
+        ("[dry-run] " if dry_run else "") + "run: " + _display_command(command),
+        file=sys.stderr,
+    )
     if dry_run:
         return
     try:
@@ -1062,34 +1089,280 @@ def _powershell_file_command(
     return command
 
 
+def _default_lmstudio_home() -> Path:
+    return Path(os.environ.get("LMSTUDIO_HOME", Path.home() / ".lmstudio")).expanduser()
+
+
+def _context_compactor_install_path(lmstudio_home: Path) -> Path:
+    return (
+        lmstudio_home
+        / "extensions"
+        / "plugins"
+        / "codex"
+        / CONTEXT_COMPACTOR_PLUGIN_NAME
+        / "manifest.json"
+    )
+
+
+def _agent_debug_log(
+    hypothesis_id: str,
+    location: str,
+    message: str,
+    data: dict[str, Any],
+) -> None:
+    # #region agent log
+    try:
+        payload = {
+            "sessionId": "49b048",
+            "runId": "compactor-force",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with (ROOT / "debug-49b048.log").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    # #endregion
+
+
+def _resolve_lms_cli(lmstudio_home: Path) -> str | None:
+    """Locate the LM Studio `lms` CLI on Windows, macOS, and Linux.
+
+    Prefer the CLI next to the target LM Studio home so managed installs do not
+    accidentally use a different host-wide `lms` that writes into another home.
+    """
+    env_override = str(os.environ.get("LMSTUDIO_CLI") or "").strip()
+    if env_override and Path(env_override).exists():
+        # #region agent log
+        _agent_debug_log(
+            "H3",
+            "install.py:_resolve_lms_cli",
+            "resolved lms via LMSTUDIO_CLI",
+            {"lms": env_override, "home": str(lmstudio_home)},
+        )
+        # #endregion
+        return env_override
+    home = lmstudio_home.expanduser()
+    candidates: list[Path] = []
+    if os.name == "nt":
+        candidates.extend(
+            [
+                home / "bin" / "lms.exe",
+                home / "bin" / "lms.cmd",
+                home / "bin" / "lms",
+            ]
+        )
+    else:
+        candidates.append(home / "bin" / "lms")
+    if sys.platform == "darwin":
+        app_roots = [
+            Path("/Applications/LM Studio.app"),
+            Path.home() / "Applications" / "LM Studio.app",
+        ]
+        for app in app_roots:
+            candidates.extend(
+                [
+                    app / "Contents" / "Resources" / "app" / "lms",
+                    app / "Contents" / "MacOS" / "lms",
+                    app / "Contents" / "Resources" / "lms",
+                ]
+            )
+    if sys.platform.startswith("linux"):
+        candidates.extend(
+            [
+                Path.home() / ".local" / "bin" / "lms",
+                Path("/usr/local/bin/lms"),
+                Path("/usr/bin/lms"),
+            ]
+        )
+    for candidate in candidates:
+        if candidate.is_file():
+            resolved = str(candidate.resolve())
+            # #region agent log
+            _agent_debug_log(
+                "H3",
+                "install.py:_resolve_lms_cli",
+                "resolved lms via home/app candidate",
+                {"lms": resolved, "home": str(home)},
+            )
+            # #endregion
+            return resolved
+    found = shutil.which("lms")
+    if found:
+        # #region agent log
+        _agent_debug_log(
+            "H3",
+            "install.py:_resolve_lms_cli",
+            "resolved lms via PATH fallback",
+            {"lms": found, "home": str(home)},
+        )
+        # #endregion
+        return found
+    return None
+
+
+def _copy_context_compactor_tree(source_dir: Path, destination_dir: Path) -> None:
+    """Copy a plugin tree into the managed LM Studio extensions path."""
+    destination_dir.parent.mkdir(parents=True, exist_ok=True)
+    if destination_dir.exists():
+        shutil.rmtree(destination_dir)
+    shutil.copytree(
+        source_dir,
+        destination_dir,
+        ignore=shutil.ignore_patterns(
+            ".git",
+            ".pytest_cache",
+            "__pycache__",
+            "*.pyc",
+            ".DS_Store",
+        ),
+    )
+    _sync_directory(destination_dir)
+
+
+def _ensure_context_compactor_on_disk(
+    *,
+    plugin_src: Path,
+    lmstudio_home: Path,
+) -> dict[str, Any]:
+    """Guarantee the plugin exists under the managed LM Studio home.
+
+    `lms` always installs into the host default LM Studio home. When the
+    installer targets a different home (tests, custom LMSTUDIO_HOME), sync from
+    the default install or materialize from the repository source.
+    """
+    target_manifest = _context_compactor_install_path(lmstudio_home)
+    target_dir = target_manifest.parent
+    detail: dict[str, Any] = {
+        "target": str(target_manifest),
+        "source": None,
+        "copied": False,
+    }
+    if target_manifest.is_file():
+        detail["source"] = "already-present"
+        return detail
+
+    default_home = _default_lmstudio_home().resolve()
+    managed_home = lmstudio_home.expanduser().resolve()
+    default_manifest = _context_compactor_install_path(default_home)
+    if managed_home != default_home and default_manifest.is_file():
+        _copy_context_compactor_tree(default_manifest.parent, target_dir)
+        detail["source"] = "default-lmstudio-home"
+        detail["copied"] = True
+        # #region agent log
+        _agent_debug_log(
+            "H3",
+            "install.py:_ensure_context_compactor_on_disk",
+            "synced plugin from default LM Studio home",
+            {"from": str(default_manifest.parent), "to": str(target_dir)},
+        )
+        # #endregion
+        return detail
+
+    if (plugin_src / "manifest.json").is_file():
+        _copy_context_compactor_tree(plugin_src, target_dir)
+        detail["source"] = "repository-source"
+        detail["copied"] = True
+        # #region agent log
+        _agent_debug_log(
+            "H3",
+            "install.py:_ensure_context_compactor_on_disk",
+            "materialized plugin from repository source",
+            {"from": str(plugin_src), "to": str(target_dir)},
+        )
+        # #endregion
+        return detail
+
+    detail["source"] = "missing"
+    return detail
+
+
+def _activate_context_compactor_in_settings(
+    lmstudio_home: Path,
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Pin the installed plugin and enable development plugins in LM Studio settings."""
+    settings_path = lmstudio_home / "settings.json"
+    result: dict[str, Any] = {
+        "settingsPath": str(settings_path),
+        "pinned": False,
+        "allowDevelopmentPlugins": False,
+        "changed": False,
+    }
+    if dry_run:
+        result["dryRun"] = True
+        return result
+    settings = _load_json(settings_path, {}) if settings_path.exists() else {}
+    if not isinstance(settings, dict):
+        settings = {}
+    chat = settings.get("chat")
+    if not isinstance(chat, dict):
+        chat = {}
+        settings["chat"] = chat
+    pinned = chat.get("pinnedPlugins")
+    if not isinstance(pinned, list):
+        pinned = []
+    if CONTEXT_COMPACTOR_PLUGIN_ID not in pinned:
+        pinned = [*pinned, CONTEXT_COMPACTOR_PLUGIN_ID]
+        chat["pinnedPlugins"] = pinned
+        result["changed"] = True
+    result["pinned"] = CONTEXT_COMPACTOR_PLUGIN_ID in pinned
+    developer = settings.get("developer")
+    if not isinstance(developer, dict):
+        developer = {}
+        settings["developer"] = developer
+    if developer.get("allowDevelopmentPlugins") is not True:
+        developer["allowDevelopmentPlugins"] = True
+        result["changed"] = True
+    result["allowDevelopmentPlugins"] = bool(developer.get("allowDevelopmentPlugins"))
+    if result["changed"]:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        _sync_directory(settings_path.parent)
+    return result
+
+
 def _install_context_compactor(
     args: argparse.Namespace,
     external_actions_started: list[str] | None = None,
-) -> None:
+) -> dict[str, Any]:
     plugin = ROOT / "lmstudio-context-compactor-plugin"
     if not plugin.is_dir():
         raise FileNotFoundError(f"context compactor source missing: {plugin}")
     npm = str(getattr(args, "runtime_npm", None) or "") or shutil.which("npm")
-    lms = shutil.which("lms")
-    if not lms:
-        candidate = args.lmstudio_home / "bin" / ("lms.exe" if os.name == "nt" else "lms")
-        if candidate.exists():
-            lms = str(candidate)
-    if not npm or not lms:
+    lms = _resolve_lms_cli(args.lmstudio_home)
+    if not npm:
         raise FileNotFoundError(
-            "context compactor requires npm and the LM Studio lms CLI. "
-            "Install/start LM Studio once, then retry."
+            "context compactor requires npm on this host. "
+            "Re-run without --skip-runtime-bootstrap so Node.js/npm can be bootstrapped."
         )
-    try:
-        subprocess.run(
-            [lms, "--version"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"LM Studio lms CLI is not executable: {lms}") from exc
+    if not lms:
+        if args.dry_run:
+            lms = "lms"
+        else:
+            raise FileNotFoundError(
+                "context compactor requires the LM Studio lms CLI on this host "
+                f"(os={platform.system()}). Install/start LM Studio once so `lms` exists "
+                f"under {args.lmstudio_home / 'bin'}, or set LMSTUDIO_CLI to the lms binary, then retry."
+            )
+    if not args.dry_run:
+        try:
+            subprocess.run(
+                [lms, "--version"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"LM Studio lms CLI is not executable: {lms}") from exc
     if not args.skip_deps:
         if not args.dry_run and external_actions_started is not None:
             external_actions_started.append("context-compactor-npm-dependencies")
@@ -1103,6 +1376,43 @@ def _install_context_compactor(
     if not args.dry_run and external_actions_started is not None:
         external_actions_started.append("context-compactor-plugin-install")
     _run([lms, "dev", "--install", "-y"], cwd=plugin, dry_run=args.dry_run, timeout=120)
+    installed_manifest = _context_compactor_install_path(args.lmstudio_home)
+    ensure_detail: dict[str, Any] = {"source": "dry-run", "copied": False}
+    if not args.dry_run:
+        ensure_detail = _ensure_context_compactor_on_disk(
+            plugin_src=plugin,
+            lmstudio_home=args.lmstudio_home,
+        )
+        # #region agent log
+        _agent_debug_log(
+            "H3",
+            "install.py:_install_context_compactor",
+            "post-install ensure result",
+            {
+                "lms": lms,
+                "manifestExists": installed_manifest.is_file(),
+                "ensure": ensure_detail,
+                "home": str(args.lmstudio_home),
+            },
+        )
+        # #endregion
+        if not installed_manifest.is_file():
+            raise RuntimeError(
+                "context compactor install finished but the plugin was not found at "
+                f"{installed_manifest}. Confirm LM Studio plugin install succeeded on this OS."
+            )
+    activation = _activate_context_compactor_in_settings(
+        args.lmstudio_home,
+        dry_run=args.dry_run,
+    )
+    return {
+        "lms": lms,
+        "installedManifest": str(installed_manifest),
+        "installed": True if args.dry_run else installed_manifest.is_file(),
+        "ensure": ensure_detail,
+        "activation": activation,
+        "pluginId": CONTEXT_COMPACTOR_PLUGIN_ID,
+    }
 
 
 def _live_server_status(url: str) -> dict[str, Any]:
@@ -1286,9 +1596,7 @@ def install(
                 node_exe,
                 shared_path,
                 agent_path,
-                context_compactor_advisory=(
-                    args.enable_agent_mode and "context_compactor" in components
-                ),
+                context_compactor_advisory=("context_compactor" in components),
             ).items():
                 _merge_mcp_entry(mcp_config, name, entry)
 
@@ -1339,7 +1647,9 @@ def install(
             tx.write_file(args.cline_settings, _json_bytes(cline))
 
         if "context_compactor" in components:
-            _install_context_compactor(args, external_actions_started)
+            report["contextCompactor"] = _install_context_compactor(
+                args, external_actions_started
+            )
 
         if args.build_rag:
             pwsh = str(getattr(args, "runtime_pwsh", None) or "") or shutil.which("pwsh")
@@ -1443,7 +1753,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not download/install Python 3.12, Node.js/npm, or PowerShell (pwsh); use PATH tools only.",
     )
-    parser.add_argument("--skip-context-compactor", action="store_true")
+    parser.add_argument(
+        "--skip-context-compactor",
+        action="store_true",
+        help="Blocked unless paired with --allow-skip-context-compactor (unsupported).",
+    )
+    parser.add_argument(
+        "--allow-skip-context-compactor",
+        action="store_true",
+        help="Unsupported emergency bypass for --skip-context-compactor.",
+    )
     parser.add_argument("--no-codex", action="store_true")
     parser.add_argument("--no-lmstudio", action="store_true")
     parser.add_argument("--no-unreal", action="store_true")

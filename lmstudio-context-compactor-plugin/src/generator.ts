@@ -86,40 +86,144 @@ function plainMessages(history: Chat): ChatMessage[] {
   return history.getMessagesArray();
 }
 
-function buildCompactedChat(history: Chat, checkpoint: any, recentTurns: number): Chat {
-  const source = plainMessages(history);
-  const result = Chat.empty();
-  const nonPinned: ChatMessage[] = [];
-  const systemMessages: ChatMessage[] = [];
-  let firstUserMessage: ChatMessage | null = null;
-  let firstUserKept = false;
+function snapshotToChatContent(snapshot: any): any[] {
+  const role = String(snapshot?.role || "assistant");
+  const text = String(snapshot?.text || "");
+  const toolCalls = Array.isArray(snapshot?.toolCalls) ? snapshot.toolCalls : [];
+  const toolResults = Array.isArray(snapshot?.toolResults) ? snapshot.toolResults : [];
+  if (role === "tool") {
+    return toolResults.map((result: any) => ({
+      type: "toolCallResult",
+      toolCallId: result.toolCallId || null,
+      content: String(result.content || ""),
+    }));
+  }
+  const content: any[] = [];
+  if (text) content.push({ type: "text", text });
+  for (const call of toolCalls) {
+    content.push({
+      type: "toolCallRequest",
+      toolCallRequest: {
+        id: call.id || null,
+        type: "function",
+        name: call.name || "",
+        arguments: call.arguments || {},
+      },
+    });
+  }
+  if (content.length === 0) content.push({ type: "text", text: "" });
+  return content;
+}
 
-  for (const message of source) {
-    const role = message.getRole();
-    if (role === "system") {
-      systemMessages.push(message);
-    } else if (role === "user" && !firstUserKept) {
-      firstUserMessage = message;
-      firstUserKept = true;
+function buildCompactedChat(
+  history: Chat,
+  checkpoint: any,
+  recentTurns: number,
+  options: {
+    trailingMetaUser?: ChatMessage | null;
+    maxCurrentTurnMessages?: number;
+  } = {},
+): Chat {
+  const source = plainMessages(history);
+  const trailingMetaText = options.trailingMetaUser
+    ? String(options.trailingMetaUser.getText() || "").trim()
+    : "";
+  const snapshots = core.compactSnapshots(source, checkpoint, {
+    recentCompleteTurns: recentTurns,
+    maxCurrentTurnMessages: options.maxCurrentTurnMessages,
+    trailingMetaUser: trailingMetaText
+      ? { role: "user", text: trailingMetaText, toolCalls: [], toolResults: [] }
+      : undefined,
+  });
+
+  // LM Studio's applyPromptTemplate/respond IPC only serializes the inbound history
+  // Chat (or an asMutableCopy of it). Chat.empty()/Chat.from() created inside the
+  // generator produce getText()-visible messages but ~10-token empty prompts.
+  const mutableCopy = typeof (history as any).asMutableCopy === "function"
+    ? (history as any).asMutableCopy()
+    : null;
+  const result: Chat = mutableCopy || Chat.empty();
+  while (result.getLength() > 0) result.pop();
+  for (const snapshot of snapshots) {
+    const role = String(snapshot?.role || "assistant");
+    const content = snapshotToChatContent(snapshot);
+    if (role === "tool" && content.length === 0) continue;
+    if ((role === "system" || role === "user" || role === "assistant")
+      && content.every((part: any) => part?.type === "text" && !String(part.text || "").trim())
+      && !content.some((part: any) => part?.type === "toolCallRequest")) {
+      continue;
+    }
+    if (mutableCopy) {
+      result.append({ role, content } as any);
+    } else if (role === "system" || role === "user" || role === "assistant") {
+      const text = content.filter((part: any) => part?.type === "text").map((part: any) => part.text).join("");
+      if (role === "assistant" && content.some((part: any) => part?.type === "toolCallRequest")) {
+        result.append({ role, content } as any);
+      } else {
+        result.append(role, text);
+      }
     } else {
-      nonPinned.push(message);
+      result.append({ role, content } as any);
     }
   }
 
-  const snapshots = core.compactSnapshots(source, checkpoint, { recentCompleteTurns: recentTurns });
-  const checkpointMessage = snapshots.find((message: any) =>
-    message.role === "system" && String(message.text || "").startsWith("Conversation checkpoint"),
-  );
-  const systemSections = systemMessages.map((message) => message.getText()).filter((text) => text.trim());
-  if (checkpointMessage) systemSections.push(checkpointMessage.text);
-  if (systemSections.length > 0) result.append("system", systemSections.join("\n\n"));
-  if (firstUserMessage) result.append(firstUserMessage);
+  // #region agent log
+  try {
+    const users = result.getMessagesArray().filter((m) => m.getRole() === "user");
+    const systems = result.getMessagesArray().filter((m) => m.getRole() === "system");
+    fetch("http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "49b048" },
+      body: JSON.stringify({
+        sessionId: "49b048",
+        runId: "post-fix",
+        hypothesisId: "H18",
+        location: "generator.ts:buildCompactedChat",
+        message: "compacted chat via asMutableCopy",
+        data: {
+          recentTurns,
+          usedMutableCopy: Boolean(mutableCopy),
+          snapshotCount: snapshots.length,
+          resultLength: result.getMessagesArray().length,
+          systemCount: systems.length,
+          systemLen: String(systems[0]?.getText() || "").length,
+          userCount: users.length,
+          latestUserPreview: String(users.at(-1)?.getText() || "").slice(0, 80),
+          latestUserTextLen: String(users.at(-1)?.getText() || "").trim().length,
+          hasTrailingMeta: Boolean(trailingMetaText),
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+  } catch {
+    /* ignore */
+  }
+  // #endregion
 
-  const tailCount = Math.max(1, recentTurns * 2);
-  const tailSnapshots = core.snapshotMessages(nonPinned);
-  const tailStart = core.completeTailStart(tailSnapshots, Math.max(0, tailSnapshots.length - tailCount));
-  for (const message of nonPinned.slice(tailStart)) result.append(message);
   return result;
+}
+
+function measureCurrentTurnLength(history: Chat): number {
+  const source = plainMessages(history);
+  let latestUserIndex = -1;
+  for (let index = 0; index < source.length; index += 1) {
+    const message = source[index];
+    const text = String(message.getText() || "");
+    if (message.getRole() === "user" && text.trim() && !core.isMetaUserMessage(text)) {
+      latestUserIndex = index;
+    }
+  }
+  if (latestUserIndex < 0) return 0;
+  let count = 0;
+  for (let index = latestUserIndex + 1; index < source.length; index += 1) {
+    const message = source[index];
+    const role = message.getRole();
+    const text = String(message.getText() || "");
+    if (role === "system") continue;
+    if (role === "user" && core.isMetaUserMessage(text)) continue;
+    count += 1;
+  }
+  return count;
 }
 
 async function compactToTarget(
@@ -129,23 +233,150 @@ async function compactToTarget(
   config: any,
   contextLength: number,
   reservedTokens: number,
-): Promise<{ chat: Chat; inputTokens: number; remainingTokens: number; retainedTurns: number }> {
+  options: {
+    trailingMetaUser?: ChatMessage | null;
+  } = {},
+): Promise<{ chat: Chat; inputTokens: number; remainingTokens: number; retainedTurns: number; currentTurnCap: number | null }> {
   let retainedTurns = Math.max(0, Math.floor(Number(config.recentCompleteTurns || 0)));
-  let best: { chat: Chat; inputTokens: number; remainingTokens: number; retainedTurns: number } | null = null;
+  let currentTurnCap: number | null = null;
+  let best: {
+    chat: Chat;
+    inputTokens: number;
+    remainingTokens: number;
+    retainedTurns: number;
+    currentTurnCap: number | null;
+  } | null = null;
   const target = Math.max(Number(config.hardRemainingTokens), Number(config.targetRemainingTokensAfterCompaction));
-  while (retainedTurns >= 0) {
-    const chat = buildCompactedChat(history, checkpoint, retainedTurns);
-    const formatted = await model.applyPromptTemplate(chat);
-    const inputTokens = await model.countTokens(formatted);
+  const hard = Number(config.hardRemainingTokens);
+  const currentTurnLength = measureCurrentTurnLength(history);
+
+  while (true) {
+    const chat = buildCompactedChat(history, checkpoint, retainedTurns, {
+      trailingMetaUser: options.trailingMetaUser || null,
+      maxCurrentTurnMessages: currentTurnCap === null ? undefined : currentTurnCap,
+    });
+    let formatted: string;
+    let inputTokens: number;
+    try {
+      formatted = await model.applyPromptTemplate(chat);
+      inputTokens = await model.countTokens(formatted);
+    } catch (error) {
+      // #region agent log
+      try {
+        const fs = require("node:fs") as typeof import("node:fs");
+        const debugLog = process.env.LMS_CONTEXT_COMPACTOR_DEBUG_LOG;
+        if (debugLog) {
+          fs.appendFileSync(debugLog, `${JSON.stringify({
+            sessionId: "49b048",
+            runId: "post-fix",
+            hypothesisId: "H14",
+            location: "generator.ts:compactToTarget",
+            message: "applyPromptTemplate failed",
+            data: {
+              retainedTurns,
+              chatLen: chat.getMessagesArray().length,
+              roles: chat.getMessagesArray().map((m) => m.getRole()),
+              userLen: String(chat.getMessagesArray().filter((m) => m.getRole() === "user").at(-1)?.getText() || "").length,
+              error: String((error as any)?.message || error).slice(0, 300),
+            },
+            timestamp: Date.now(),
+          })}\n`);
+        }
+      } catch { /* ignore */ }
+      // #endregion
+      throw error;
+    }
+    // #region agent log
+    try {
+      const fs = require("node:fs") as typeof import("node:fs");
+      const debugLog = process.env.LMS_CONTEXT_COMPACTOR_DEBUG_LOG;
+      if (debugLog) {
+        fs.appendFileSync(debugLog, `${JSON.stringify({
+          sessionId: "49b048",
+          runId: "post-fix",
+          hypothesisId: "H14",
+          location: "generator.ts:compactToTarget",
+          message: "compact iteration tokens",
+          data: {
+            retainedTurns,
+            inputTokens,
+            chatLen: chat.getMessagesArray().length,
+            systemCount: chat.getMessagesArray().filter((m) => m.getRole() === "system").length,
+            userLen: String(chat.getMessagesArray().filter((m) => m.getRole() === "user").at(-1)?.getText() || "").trim().length,
+            fmtPreview: String(formatted || "").slice(0, 160),
+          },
+          timestamp: Date.now(),
+        })}\n`);
+      }
+    } catch { /* ignore */ }
+    // #endregion
+    const userPreview = String(
+      chat.getMessagesArray().filter((m) => m.getRole() === "user").at(-1)?.getText() || "",
+    ).trim();
+    const promptLostUser = Boolean(
+      userPreview.length >= 8
+      && !String(formatted).includes(userPreview.slice(0, Math.min(16, userPreview.length))),
+    );
+    if (inputTokens < 20 || promptLostUser) {
+      throw new Error(
+        `Context compaction produced an near-empty/desynced model prompt (${inputTokens} tokens`
+        + `${promptLostUser ? ", user text missing from template" : ""}). `
+        + "Refusing to continue with an empty/amnesiac chat.",
+      );
+    }
     const remainingTokens = Number(contextLength) - Number(inputTokens) - Number(reservedTokens);
     if (!best || remainingTokens > best.remainingTokens) {
-      best = { chat, inputTokens, remainingTokens, retainedTurns };
+      best = { chat, inputTokens, remainingTokens, retainedTurns, currentTurnCap };
     }
-    if (remainingTokens >= target || retainedTurns === 0) break;
-    retainedTurns -= 1;
+    // #region agent log
+    try {
+      fetch("http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "49b048" },
+        body: JSON.stringify({
+          sessionId: "49b048",
+          runId: "post-fix-review",
+          hypothesisId: "H8c",
+          location: "generator.ts:compactToTarget",
+          message: "compact iteration",
+          data: {
+            retainedTurns,
+            currentTurnLength,
+            currentTurnCap,
+            inputTokens,
+            remainingTokens,
+            target,
+            hard,
+            chatLen: chat.getMessagesArray().length,
+            hasTrailingMeta: Boolean(options.trailingMetaUser),
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+    } catch {
+      /* ignore */
+    }
+    // #endregion
+    if (remainingTokens >= target) break;
+    if (retainedTurns > 0) {
+      retainedTurns -= 1;
+      continue;
+    }
+    // Cap must be based on in-flight turn length, not full chat length
+    // (systems/checkpoint/user would otherwise make the first trim a no-op).
+    if (currentTurnCap === null) {
+      if (currentTurnLength <= 0) break;
+      currentTurnCap = Math.max(0, currentTurnLength - 2);
+    } else if (currentTurnCap > 0) {
+      currentTurnCap = Math.max(0, currentTurnCap - 2);
+    } else {
+      break;
+    }
+    if (remainingTokens >= hard && currentTurnCap === 0) break;
   }
+
   if (!best) throw new Error("Context compaction could not construct a model-facing chat.");
-  if (best.remainingTokens < Number(config.hardRemainingTokens)) {
+  if (best.remainingTokens < hard) {
     throw new Error(
       `Context remains below the hard safety margin after maximum compaction: ${best.remainingTokens} tokens remain. `
       + "Reduce the system prompt/tool schema or load the model with a larger context length.",
@@ -287,7 +518,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     temperature: finiteNumber(configValue(ctl, "temperature", 0.1), 0.1, 0, 1),
     normalToolResultReserve: finiteNumber(configValue(ctl, "normalToolResultReserve", 3000), 3000),
     buildToolResultReserve: finiteNumber(configValue(ctl, "buildToolResultReserve", 8000), 8000),
-    recentCompleteTurns: Math.floor(finiteNumber(configValue(ctl, "recentCompleteTurns", 4), 4, 0, 100)),
+    recentCompleteTurns: Math.floor(finiteNumber(configValue(ctl, "recentCompleteTurns", 1), 1, 0, 100)),
     minimumTurnsBetweenCompactions: Math.floor(finiteNumber(configValue(ctl, "minimumTurnsBetweenCompactions", 0), 0, 0, 100)),
     targetRemainingTokensAfterCompaction: finiteNumber(
       configValue(ctl, "targetRemainingTokensAfterCompaction", 24000), 24000, hardRemainingTokens,
@@ -325,14 +556,97 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   ) {
     effectiveAction = "deferred";
   }
+
+  // Mid-chat goal switches must compact even when the token budget is still healthy;
+  // otherwise prior structure dumps contaminate bug-hunt / follow-up turns.
+  const priorObjective = String(checkpoint?.objective || "").trim();
+  const latestObjective = String(nextCheckpoint.objective || "").trim();
+  const goalChanged = Boolean(
+    priorObjective
+    && latestObjective
+    && priorObjective !== latestObjective
+    && !core.isMetaUserMessage(latestObjective),
+  );
+  const userGoalCount = messages.filter((message) => {
+    const text = String(message.getText() || "").trim();
+    return message.getRole() === "user" && text && !core.isMetaUserMessage(text);
+  }).length;
+  const hasPriorAssistant = messages.some((message) => message.getRole() === "assistant");
+  const latestIsReadOnly = core.isReadOnlyUserGoal(latestObjective);
+  let trailingMetaUser: ChatMessage | null = null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.getRole() !== "user") continue;
+    const text = String(message.getText() || "").trim();
+    if (!text) continue;
+    if (core.isMetaUserMessage(text)) trailingMetaUser = message;
+    break;
+  }
+  // Force compaction only on a real objective change. Related follow-up questions
+  // still change the objective string, so we compact to drop prior dumps — but the
+  // compacted chat must keep a single merged system + latest user (see compactSnapshots).
+  const goalChangeCompact = Boolean(
+    enabled
+    && !observeOnly
+    && !trailingMetaUser
+    && goalChanged,
+  );
+  // Zero older-tail only on goal change. Never strip the current user/checkpoint;
+  // dual-system chats previously collapsed to ~10 empty-user tokens on Qwen.
+  const zeroRetainedTurns = Boolean(!trailingMetaUser && goalChanged);
+  if (goalChangeCompact && effectiveAction !== "hard_compact") {
+    effectiveAction = "soft_compact";
+  }
+
+  // #region agent log
+  try {
+    fetch("http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "49b048" },
+      body: JSON.stringify({
+        sessionId: "49b048",
+        runId: "post-fix-review",
+        hypothesisId: "H9",
+        location: "generator.ts:generate",
+        message: "goal-change and meta gate",
+        data: {
+          priorObjective: priorObjective.slice(0, 120),
+          latestObjective: latestObjective.slice(0, 120),
+          goalChanged,
+          latestIsReadOnly,
+          answeringMeta: Boolean(trailingMetaUser),
+          userGoalCount,
+          hasPriorAssistant,
+          decisionAction: decision.action,
+          effectiveAction,
+          goalChangeCompact,
+          zeroRetainedTurns,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+  } catch {
+    /* ignore */
+  }
+  // #endregion
+
   const shouldCompact = effectiveAction === "soft_compact" || effectiveAction === "hard_compact";
   let compactedMetrics: any = null;
   if (shouldCompact) {
     nextCheckpoint.compactionGeneration += 1;
     const applied = Boolean(!observeOnly && enabled);
     if (applied) {
+      const compactConfig = zeroRetainedTurns
+        ? { ...config, recentCompleteTurns: 0 }
+        : config;
       compactedMetrics = await compactToTarget(
-        model, history, nextCheckpoint, config, contextLength, decision.reservedTokens,
+        model,
+        history,
+        nextCheckpoint,
+        compactConfig,
+        contextLength,
+        decision.reservedTokens,
+        { trailingMetaUser },
       );
       modelChat = compactedMetrics.chat;
       nextCheckpoint.lastCompactionSourceMessageCount = messages.length;
@@ -343,21 +657,29 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       at: new Date().toISOString(),
       action: decision.action,
       effectiveAction,
+      goalChangeCompact,
+      zeroRetainedTurns,
+      answeringMeta: Boolean(trailingMetaUser),
       applied,
       checkpointGeneration: nextCheckpoint.checkpointGeneration,
       postInputTokens: compactedMetrics?.inputTokens,
       postRemainingTokens: compactedMetrics?.remainingTokens,
       retainedTurns: compactedMetrics?.retainedTurns,
+      currentTurnCap: compactedMetrics?.currentTurnCap,
+      objectivePreview: String(nextCheckpoint.objective || "").slice(0, 160),
     });
-  } else if (effectiveAction === "deferred") {
-    // Record why a soft threshold did not compact this turn.
+  } else {
     await appendEventBestEffort(sessionId, {
       type: "compaction_decision",
       at: new Date().toISOString(),
       action: decision.action,
       effectiveAction,
+      goalChangeCompact,
+      zeroRetainedTurns,
+      answeringMeta: Boolean(trailingMetaUser),
       applied: false,
       messagesSinceLastCompaction,
+      objectivePreview: String(nextCheckpoint.objective || "").slice(0, 160),
     });
   }
   await persistCheckpoint(

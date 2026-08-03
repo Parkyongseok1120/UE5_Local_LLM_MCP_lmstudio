@@ -93,6 +93,61 @@ def test_negated_refactor_does_not_escalate_local_fix():
     assert plan.write_gate["writesAllowed"] is True
 
 
+def test_bug_hunt_without_fix_is_inspect_only():
+    cases = [
+        "지금 버그있는거 찾기만하고 수정은 하지마.",
+        "find bugs only, do not fix",
+        "버그만 찾아줘",
+        "수정하지 말고 버그 찾아줘",
+    ]
+    for prompt in cases:
+        plan = build_agent_plan(prompt, "auto")
+        assert classify_task(prompt, "auto") == "inspect_only", prompt
+        assert plan.task_kind == "inspect_only", prompt
+        assert plan.evidence.writes_allowed is False, prompt
+        assert plan.write_gate["writesAllowed"] is False, prompt
+        assert "replace_in_file" not in plan.tool_policy, prompt
+
+
+def test_invented_refactor_plan_is_suppressed_by_latest_user_bug_hunt():
+    from agent_orchestrator import resolve_plan_request
+
+    invented = (
+        "Refactor enemy combat feedback into a clean architecture:\n"
+        "- Introduce UEnemyPoiseComponent (SuperArmor/Poise/Groggy) with GameplayTags.\n"
+        "- Introduce UEnemyHitReactionComponent (hit montages, knockback, hit flash).\n"
+        "- Introduce UCombatFeedbackSubsystem.\n"
+        "- Thin down AEnemyCharacter::TakeDamage() to delegate to these components/subsystem.\n"
+        "Keep changes focused and backward-compatible; do not remove existing behavior."
+    )
+    latest = "지금 버그있는거 찾기만하고 수정은 하지마."
+    resolved = resolve_plan_request(invented, latest)
+    assert resolved["modelRequestSuppressed"] is True
+    assert resolved["usedLatestUserMessage"] is True
+    assert resolved["request"] == latest
+    plan = build_agent_plan(invented, "auto", latest_user_message=latest)
+    assert plan.task_kind == "inspect_only"
+    assert plan.write_gate["writesAllowed"] is False
+    assert any("overridden" in note.lower() or "invented" in note.lower() for note in plan.notes)
+
+
+def test_invented_implementation_plan_without_latest_user_fails_closed():
+    invented = (
+        "Refactor enemy combat feedback into a clean architecture:\n"
+        "- Introduce UEnemyPoiseComponent\n"
+        "- Introduce UEnemyHitReactionComponent\n"
+        "Thin down TakeDamage and keep changes focused and backward-compatible."
+    )
+    plan = build_agent_plan(invented, "auto")
+    assert plan.task_kind == "inspect_only"
+    assert plan.write_gate["writesAllowed"] is False
+
+
+def test_explicit_fix_still_edit_when_not_negated():
+    assert classify_task("StaminaComponent 버그 수정해줘", "auto") == "edit"
+    assert classify_task("fix the stamina bug", "auto") == "edit"
+
+
 
 def test_cinematic_analysis_plan_source_first():
     plan = build_agent_plan("현재 프로젝트의 시네마틱 시스템 분석", "auto")

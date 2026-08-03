@@ -49,7 +49,26 @@ COMPILE_FIX_GOAL_PATTERNS = (
 BROAD_ERROR_MARKERS = ("에러", "오류", "error", "failure", "failed")
 READ_ONLY_OVERRIDE_MARKERS = (
     "수정하지 말", "분석만", "설명만", "계획만",
-    "don't edit", "do not edit", "read only", "no edits", "analysis only",
+    "찾기만하고", "보고만", "수정 없이", "파일 수정 없이",
+    "don't edit", "do not edit", "don't fix", "do not fix", "dont fix",
+    "read only", "no edits", "no fixes", "analysis only", "report only",
+)
+# Negations that still contain write verbs ("수정", "fix") and must not count as write intent.
+NEGATED_WRITE_PATTERNS = (
+    r"\b(?:do\s+not|don't|dont)\s+(?:fix|edit|patch|change|modify|write)\b",
+    r"\b(?:no|without)\s+(?:fixes|edits|patches|modifications)\b",
+    r"\bfind\s+bugs?\s+only\b",
+    r"수정은\s*하(?:지\s*)?마",
+    r"수정을\s*하(?:지\s*)?마",
+    r"수정하지\s*마",
+    r"고치지\s*마",
+    r"고치지\s*말",
+    r"패치하지\s*마",
+    r"패치하지\s*말",
+    r"찾기만\s*하",
+    r"찾기만하고",
+    r"찾아만\s*하",
+    r"보고만\s*하",
 )
 CREATE_TARGET_MARKERS = (
     ".h", ".cpp", ".cs", "class ", "component", "subsystem", "actor",
@@ -350,8 +369,14 @@ def _insert_tool_before(policy: list[str], tool: str, anchors: tuple[str, ...]) 
     policy.insert(min(positions) if positions else len(policy), tool)
 
 
+def _has_negated_write_intent(text: str) -> bool:
+    return any(re.search(pattern, text) for pattern in NEGATED_WRITE_PATTERNS)
+
+
 def _has_write_intent(text: str) -> bool:
     if any(m in text for m in READ_ONLY_OVERRIDE_MARKERS):
+        return False
+    if _has_negated_write_intent(text):
         return False
     if not any(m in text for m in WRITE_INTENT_MARKERS):
         return False
@@ -420,7 +445,7 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "code_sketch"
     if mode == "api_lookup":
         return "answer_only"
-    if any(m in text for m in READ_ONLY_OVERRIDE_MARKERS):
+    if any(m in text for m in READ_ONLY_OVERRIDE_MARKERS) or _has_negated_write_intent(text):
         return "inspect_only"
     if _is_compile_fix_request(text):
         return "compile_fix"
@@ -451,6 +476,73 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
     if _has_write_intent(text):
         return "edit"
     return "inspect_only"
+
+
+def resolve_plan_request(request: str, latest_user_message: str | None = None) -> dict[str, Any]:
+    """Prefer the user's latest verbatim goal when the model invents a write/refactor request.
+
+    LM Studio often calls unreal_agent_plan with a restated implementation plan after a
+    prior structure-overview turn. If latestUserMessage is read-only / bug-hunt only,
+    classify and plan from that message instead of the invented request.
+    """
+    plan_request = str(request or "").strip()
+    latest = str(latest_user_message or "").strip()
+    result: dict[str, Any] = {
+        "request": plan_request,
+        "usedLatestUserMessage": False,
+        "modelRequestSuppressed": False,
+        "inventedImplementationPlan": False,
+        "modelRequestKind": classify_task(plan_request, "auto") if plan_request else None,
+        "latestUserKind": classify_task(latest, "auto") if latest else None,
+    }
+    if _looks_like_invented_implementation_plan(plan_request):
+        result["inventedImplementationPlan"] = True
+        if latest:
+            result["request"] = latest
+            result["usedLatestUserMessage"] = True
+            result["modelRequestSuppressed"] = True
+            return result
+        # No latest user text available: fail closed to inspect-only wording.
+        result["request"] = (
+            "Find bugs only from current project source evidence. Do not edit files, "
+            "do not invent a refactor/implementation plan, and do not restate a prior "
+            "project-structure overview."
+        )
+        result["modelRequestSuppressed"] = True
+        return result
+    if not latest or not plan_request or latest == plan_request:
+        return result
+    latest_kind = result["latestUserKind"]
+    model_kind = result["modelRequestKind"]
+    latest_is_read_only = (
+        latest_kind in {"answer_only", "inspect_only", "cpp_analysis", "runtime_debug", "code_sketch"}
+        or (not _has_write_intent(latest.lower()))
+        or _has_negated_write_intent(latest.lower())
+    )
+    model_is_mutating = model_kind in {"edit", "refactor", "compile_fix"}
+    if latest_is_read_only and model_is_mutating:
+        result["request"] = latest
+        result["usedLatestUserMessage"] = True
+        result["modelRequestSuppressed"] = True
+    return result
+
+
+def _looks_like_invented_implementation_plan(text: str) -> bool:
+    source = str(text or "")
+    if len(source) < 180:
+        return False
+    markers = (
+        "introduce u",
+        "implementationfiles",
+        "implementationslices",
+        "thin down",
+        "selectedalternative",
+        "component-per-concern",
+        "keep changes focused and backward-compatible",
+    )
+    lower = source.lower()
+    hits = sum(1 for marker in markers if marker in lower)
+    return hits >= 2 or ("refactor" in lower and "introduce u" in lower and len(source) > 250)
 
 
 def choose_edit_strategy(task_kind: TaskKind, request: str, *, file_count_hint: int = 0) -> EditStrategy:
@@ -1072,12 +1164,20 @@ def build_suggested_tool_calls(
     return [{"tool": "unreal_get_active_project", "args": {}}]
 
 
-def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int = 0) -> AgentPlan:
+def build_agent_plan(
+    request: str,
+    mode: str = "auto",
+    *,
+    file_count_hint: int = 0,
+    latest_user_message: str | None = None,
+) -> AgentPlan:
     from load_sampling_preset import profile_agent_policy, resolve_profile_name
     from project_context import resolve_active_project_context
     from rag_search import resolve_mode
     from tool_policy import gates_for_task, tool_sequence_for_task
 
+    resolved = resolve_plan_request(request, latest_user_message)
+    request = str(resolved.get("request") or request)
     policy = profile_agent_policy()
     project_context = resolve_active_project_context()
     resolved_mode = resolve_mode(request, mode)
@@ -1145,6 +1245,20 @@ def build_agent_plan(request: str, mode: str = "auto", *, file_count_hint: int =
         if task_kind == "cpp_analysis" or looks_like_cpp_domain_request(request) or any(m in request.lower() for m in ANALYSIS_MARKERS):
             tool_policy = list(CPP_REVIEW_TOOL_POLICY)
     notes: list[str] = []
+    if resolved.get("modelRequestSuppressed"):
+        notes.append(
+            "Plan request overridden: model invented a write/refactor or implementation plan "
+            "while the active goal is read-only / findings-only (or latestUserMessage was used)."
+        )
+        notes.append(
+            "Do not call unreal_architecture_reasoning or invent implementation slices. "
+            "Deliver findings (Bug|ByDesign|Ambiguous|NeedsRuntimeProof) only."
+        )
+    if resolved.get("inventedImplementationPlan"):
+        notes.append(
+            "Detected invented implementation-plan text in unreal_agent_plan.request; "
+            "re-call with the user's latest verbatim message."
+        )
     module_hints = build_module_hints(request, project_context) if task_kind == "compile_fix" else []
     symbol_graph_hints = build_symbol_graph_hints(request) if task_kind == "compile_fix" else []
     refactor_manager: dict[str, Any] = {}

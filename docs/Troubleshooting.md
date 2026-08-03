@@ -85,6 +85,17 @@ This is not a macOS Privacy & Security problem when the MCP result is `CONTEXT_C
 
 Only an administrator-set strict LM Studio policy may require selecting `unreal-context-compactor`. Cline, CLI, Ollama, custom, and remote clients must not be blocked by LM Studio proxy telemetry.
 
+### Multi-turn chat goes off the rails after turn 1
+
+Usually the chat model is still the underlying Qwen/GPT, so the context-compactor proxy never runs.
+
+1. **Create a new chat.**
+2. Load the underlying LLM once (leave it loaded).
+3. Select **`unreal-context-compactor`** in that chat’s model dropdown.
+4. Send one message, then run `npm --prefix lmstudio-context-compactor-plugin run status` and confirm fresh proxy telemetry / `PASS`.
+
+Selecting Qwen directly bypasses compaction even when the plugin is installed and pinned.
+
 If the error is `TASK_AUTH_INVALID_FORMAT` or `TASK_STATE_MISSING`, the model fabricated or reused invalid capability data. Call `unreal_agent_plan` once and use the returned authorization unchanged; do not fall back to paste-ready code.
 
 ## Oversized Unreal log may hide the original failure

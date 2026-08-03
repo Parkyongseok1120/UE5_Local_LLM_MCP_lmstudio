@@ -1262,7 +1262,8 @@ function cachedReadSuccess(content, options = {}) {
     evidenceStatus: "cached",
     repeatDetected: true,
     doNotRepeatRead: true,
-    stopCurrentWorkflow: options.stopCurrentWorkflow !== false,
+    // Same-path cache hit must not abort multi-file investigations.
+    stopCurrentWorkflow: options.stopCurrentWorkflow === true,
     errorCode,
     retryable: false,
     phase: "evidence_cached",
@@ -1434,10 +1435,13 @@ function applyReadGuard(tool, guard, context) {
         fullyCovered: true,
         coveredBy: guard.coveredBy || [],
         agentInstruction:
-          "Those lines were already returned. Do not re-scan. Finish analysis or call read_symbol for a named function.",
+          "Those lines were already returned. Do not re-scan this range. "
+          + "Read other unread files/symbols if needed, or finish the requested deliverable "
+          + "(bug findings / analysis — not an unsolicited structure overview).",
         nextSteps: [
-          "Use existing evidence, or call read_symbol with an exact C++ symbol name.",
+          "Use existing evidence, or call read_symbol / read_file on a different unread target.",
         ],
+        stopCurrentWorkflow: false,
       });
     }
     return cachedReadSuccess(guard.cachedContent, {

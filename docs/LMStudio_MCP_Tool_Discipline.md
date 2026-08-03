@@ -237,7 +237,7 @@ Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_
 | Model calls `run_javascript` / `js-code-sandbox` | Start a new chat with the bootstrap prompt, remove sandbox auto-approval, and hide/disable the sandbox plugin if available |
 | Hallucinated analysis | Force `read_file` before claims or edits |
 | False logic bugs (early return = "missing") | Read sibling `.h` UENUM/field docs first; classify `ByDesign`/`Ambiguous`; run `unreal_review_claim_validate` |
-| `READ_REPEAT_DETECTED` / `evidenceStatus=cached` | Stop re-reading that path; use returned `content` and finish |
+| `READ_REPEAT_DETECTED` / `evidenceStatus=cached` | Do not re-read that path; continue other unread targets if needed, else finish the requested deliverable |
 | `EVIDENCE_STAGNATION` / `EVIDENCE_STAGNATION_REPEAT` | Stop evidence tools; finish from existing context. Restart `unreal-agent` if Hotfix 3+ is not loaded |
 | `TOOL_REPEAT_BLOCKED` | Identical call failed internally twice — do **not** retry same args; handoff / fresh chat. Distinct from evidence stagnation |
 | Repeated no-op patch / `MUTATION_REPEAT_BLOCKED` | Re-read file, patch only missing current text, set `expectedOccurrences=1` |

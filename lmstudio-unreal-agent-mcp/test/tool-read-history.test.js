@@ -10,6 +10,7 @@ const {
   normalizeReadToolArgs,
   novelLineCount,
   mergeRanges,
+  cachedReadInstruction,
 } = require("../src/tool-read-history");
 
 const CONTEXT = {
@@ -196,4 +197,13 @@ test("covering cache does not leak content across files", () => {
   assert.strictEqual(covered.action, "cache");
   assert.strictEqual(covered.cachedContent, "FILE-B-BODY");
   assert.notStrictEqual(covered.cachedContent, "FILE-A-BODY");
+});
+
+test("READ_REPEAT instruction does not force whole-workflow stop wording", () => {
+  const text = cachedReadInstruction("READ_REPEAT_DETECTED");
+  assert.match(text, /Do not re-read this same path/i);
+  assert.match(text, /Continue with other unread/i);
+  assert.doesNotMatch(text, /Finish the analysis from existing evidence/);
+  const stagnate = cachedReadInstruction("EVIDENCE_STAGNATION");
+  assert.match(stagnate, /Produce the final analysis now/);
 });

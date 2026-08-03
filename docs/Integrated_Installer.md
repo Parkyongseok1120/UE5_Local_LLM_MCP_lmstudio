@@ -7,7 +7,7 @@ Product release: **1.3.0 RC2**. The installer reports the same value with `pytho
 ## Requirements
 
 - A host **Python 3.10+** is required only to start `install.py`. The launcher prints a platform-specific recovery command instead of falling through to a missing or incompatible interpreter.
-- The installer establishes managed **Python 3.12** first. It downloads **Node.js 20+/npm** only for Unreal/context-compactor components and **PowerShell 7 (`pwsh`)** only when `--build-rag` is selected, reducing SAFE-profile failure surface.
+- The installer establishes managed **Python 3.12** first. It downloads **Node.js 20+/npm** for LM Studio context-compactor installs (required whenever LM Studio/Unreal components are selected) and **PowerShell 7 (`pwsh`)** only when `--build-rag` is selected, reducing SAFE-profile failure surface.
 - Runtime archives are pinned by version and SHA-256 for x64/arm64 on Windows, macOS, and Ubuntu/glibc. [`installer/runtime-manifest.json`](../installer/runtime-manifest.json) is the SSOT for URL, filename, platform, architecture, checksum, executable, and probe metadata. Extraction rejects traversal, unsafe links, encrypted ZIP members, special files, and archive bombs before writing the runtime cache.
 - SAFE also needs LM Studio 0.4+ for native MCP API use.
 - FULL context compaction additionally needs the LM Studio `lms` CLI.
@@ -55,14 +55,23 @@ AGENT requires a second confirmation. Declining that confirmation continues safe
 
 | Profile | Installed components | Runtime authority |
 |---|---|---|
-| SAFE | Codex skill, LM Studio preset, read-only evidence-first MCP | No project adapter; known unsafe legacy Unreal flags are normalized to off |
-| STANDARD | SAFE plus Unreal RAG/agent adapters | Read-only |
-| FULL | STANDARD plus LM Studio context compactor | Read-only |
-| CUSTOM | Only explicitly selected components | Read-only by default |
+| SAFE | Codex skill, LM Studio preset, **required** context compactor | No project adapter; known unsafe legacy Unreal flags are normalized to off |
+| STANDARD | SAFE plus Unreal RAG/agent adapters (**context compactor required**) | Read-only |
+| FULL | Same required components as STANDARD (kept for compatibility) | Read-only |
+| CUSTOM | Explicit components; LM Studio/Unreal selections still force context compactor | Read-only by default |
 
 Install profile and RAG indexing depth are independent. Use `--index-tier lite|standard|full`; selecting FULL does not select full indexing and never builds an index unless `--build-rag` is also supplied.
 
 FULL installs the LM Studio context proxy in advisory mode. Direct Qwen/GPT selection remains write-capable after AGENT authority is explicitly enabled. Strict proxy evidence is an administrator opt-in and applies only when `MCP_FRONTEND=lmstudio` matches `MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS`; Cline, CLI, Ollama, custom, and remote frontends require their own continuity policy.
+
+The context compactor is **required** for every LM Studio / Unreal install profile. Interactive installs no longer offer an opt-out. `--skip-context-compactor` is blocked unless paired with `--allow-skip-context-compactor` (unsupported emergency bypass). On Windows, macOS, and Linux the installer resolves the `lms` CLI in this order: `LMSTUDIO_CLI`, `<lmstudio-home>/bin`, OS app/PATH candidates; runs `lms dev --install -y`; ensures the plugin exists under the managed `extensions/plugins/codex/unreal-context-compactor` (syncing from the host default LM Studio home or materializing from the repo when `lms` wrote elsewhere); and pins `codex/unreal-context-compactor` with `developer.allowDevelopmentPlugins=true` in that home's `settings.json`.
+
+> **Important — chat model selection (not optional if you want multi-turn compaction)**  
+> Installing/pinning the plugin is not enough.  
+> 1. Load the underlying LLM (e.g. Qwen) once and leave it loaded.  
+> 2. **Open a new chat** — existing chats keep their previous model.  
+> 3. In the chat **model dropdown**, select **`unreal-context-compactor`**.  
+> Selecting Qwen/GPT directly bypasses the proxy. Mid-chat goal switches and long tool histories will not be compacted.
 
 Interactive Unreal installs first restore the project-indexing picker. Choose a `.uproject` in the native file explorer to set the active project, or choose one or more folders to add project search roots. No typed path is required.
 
@@ -104,7 +113,7 @@ On Windows, `INSTALL.bat` keeps the console open after success or failure and wa
 ```text
 python3 install.py --profile safe --yes
 python3 install.py --profile standard --yes --skip-deps --workspace-root /path/to/projects
-python3 install.py --profile full --yes --skip-context-compactor
+python3 install.py --profile full --yes
 python3 install.py --rollback
 ```
 

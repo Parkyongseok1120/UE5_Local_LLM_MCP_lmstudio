@@ -1,0 +1,442 @@
+[debug] driver boot {"pid":32868,"platform":"win32","node":"v24.17.0","cwd":"c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio","generateTimeoutMs":300000,"maxRounds":12,"startAt":13}
+isolatedState C:\Users\sster\AppData\Local\Temp\compactor-marathon-6YgP5i
+pid 32868
+plugin codex/unreal-context-compactor rev 17
+connecting MCP...
+{"event":"mcp_catalog_initialized","server":"unreal-agent","profile":"essential","registeredToolCount":27,"advertisedToolCount":18,"routeContextStatus":"none","routeErrorCode":"","stateRoot":"C:\\Users\\sster\\.lmstudio\\state\\unreal-agent","activeProject":"C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject"}
+[mcp:unreal-rag] {"event":"mcp_catalog_initialized","server":"unreal-rag","profile":"essential","registeredToolCount":60,"advertisedToolCount":25,"routeContextStatus":"none","routeErrorCode":"","stateRoot":"C:\\Users\\sster\\.lmstudio\\state\\unreal-agent","activeProject":"C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject"}
+[debug] tools ready {"count":8,"names":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"]}
+loaded model qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max
+
+===== TURN 13/17 =====
+로딩 플러그인 쪽의 개선 계획안만 짜고서 수정은 하지말 것.
+[debug] prediction round {"turnIndex":13,"round":1,"historyLen":2,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":13,"round":1,"historyLen":2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=127 context=55040 action=normal
+[debug] generate returned {"turnIndex":13,"round":1,"waitedMs":4750,"fragmentChars":455,"toolRequests":2,"failures":0}
+[debug] tool call {"turnIndex":13,"name":"get_active_project","args":{},"ms":178,"hardError":null,"preview":"{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n    \"projectDir\": \"C:\\\\"}
+[debug] tool call {"turnIndex":13,"name":"list_directory","args":{"path":"."},"ms":156,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"\",\n    \"workspaceRelativePath\": \"\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\",\n    \"activeProject\": \"C:\\\\Users"}
+[debug] prediction round {"turnIndex":13,"round":2,"historyLen":4,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":13,"round":2,"historyLen":4}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=1738 context=55040 action=normal
+[debug] generate returned {"turnIndex":13,"round":2,"waitedMs":3811,"fragmentChars":199,"toolRequests":2,"failures":0}
+[debug] tool call {"turnIndex":13,"name":"list_directory","args":{"path":"Plugins"},"ms":156,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins\",\n    \"workspaceRelativePath\": \"Plugins\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Plugins\",\n    \"act"}
+[debug] tool call {"turnIndex":13,"name":"list_directory","args":{"path":"Source"},"ms":154,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source\",\n    \"workspaceRelativePath\": \"Source\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Source\",\n    \"active"}
+[debug] prediction round {"turnIndex":13,"round":3,"historyLen":6,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":13,"round":3,"historyLen":6}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=2589 context=55040 action=normal
+[debug] generate returned {"turnIndex":13,"round":3,"waitedMs":3354,"fragmentChars":349,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":13,"name":"list_directory","args":{"path":"Plugins/TrueSyncRuntimeLoading"},"ms":154,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading\",\n    \"workspaceRelativePath\": \"Plugins/TrueSyncRuntimeLoading\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\D"}
+[debug] prediction round {"turnIndex":13,"round":4,"historyLen":8,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":13,"round":4,"historyLen":8}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=3078 context=55040 action=normal
+[debug] generate returned {"turnIndex":13,"round":4,"waitedMs":3493,"fragmentChars":249,"toolRequests":2,"failures":0}
+[debug] tool call {"turnIndex":13,"name":"read_file","args":{"path":"Plugins/TrueSyncRuntimeLoading/TrueSyncRuntimeLoading.uplugin"},"ms":158,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/TrueSyncRuntimeLoading.uplugin\",\"workspaceRelativePath\":\"Plugins/TrueSyncRuntimeLoading/TrueSyncRuntimeLoading.up"}
+[debug] tool call {"turnIndex":13,"name":"list_directory","args":{"path":"Plugins/TrueSyncRuntimeLoading/Source"},"ms":232,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source\",\n    \"workspaceRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source\",\n    \"absolutePath\": \"C:\\\\U"}
+[debug] prediction round {"turnIndex":13,"round":5,"historyLen":10,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":13,"round":5,"historyLen":10}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=3678 context=55040 action=normal
+[debug] generate returned {"turnIndex":13,"round":5,"waitedMs":2473,"fragmentChars":223,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":13,"name":"list_directory","args":{"path":"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading"},"ms":222,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading\",\n    \"workspaceRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source/TrueS"}
+[debug] prediction round {"turnIndex":13,"round":6,"historyLen":12,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":13,"round":6,"historyLen":12}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=4110 context=55040 action=normal
+[debug] generate returned {"turnIndex":13,"round":6,"waitedMs":4624,"fragmentChars":198,"toolRequests":3,"failures":0}
+[debug] tool call {"turnIndex":13,"name":"read_file","args":{"path":"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/TrueSyncRuntimeLoading.Build.cs"},"ms":150,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/TrueSyncRuntimeLoading.Build.cs\",\"workspaceRelativePath\":\"Plugins/TrueSyncRuntimeLo"}
+[debug] tool call {"turnIndex":13,"name":"list_directory","args":{"path":"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public"},"ms":152,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public\",\n    \"workspaceRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Sourc"}
+[debug] tool call {"turnIndex":13,"name":"list_directory","args":{"path":"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Private"},"ms":152,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Private\",\n    \"workspaceRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Sour"}
+[debug] prediction round {"turnIndex":13,"round":7,"historyLen":14,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":13,"round":7,"historyLen":14}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=5276 context=55040 action=normal
+[debug] generate returned {"turnIndex":13,"round":7,"waitedMs":5789,"fragmentChars":229,"toolRequests":3,"failures":0}
+[debug] tool call {"turnIndex":13,"name":"read_file","args":{"path":"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadingTypes.h"},"ms":179,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadingTypes.h\",\"workspaceRelativePath\":\"Plugins/TrueSyncRuntimeLoad"}
+[debug] tool call {"turnIndex":13,"name":"read_file","args":{"path":"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadManifest.h"},"ms":149,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadManifest.h\",\"workspaceRelativePath\":\"Plugins/TrueSyncRuntimeLoad"}
+[debug] tool call {"turnIndex":13,"name":"read_file","args":{"path":"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadingSubsystem.h"},"ms":228,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadingSubsystem.h\",\"workspaceRelativePath\":\"Plugins/TrueSyncRuntime"}
+[debug] prediction round {"turnIndex":13,"round":8,"historyLen":16,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":13,"round":8,"historyLen":16}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=6799 context=55040 action=normal
+[debug] generate returned {"turnIndex":13,"round":8,"waitedMs":3479,"fragmentChars":189,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":13,"name":"read_file","args":{"path":"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Private/TrueSyncLoadingSubsystem.cpp"},"ms":154,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Private/TrueSyncLoadingSubsystem.cpp\",\"workspaceRelativePath\":\"Plugins/TrueSyncRunt"}
+[debug] prediction round {"turnIndex":13,"round":9,"historyLen":18,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":13,"round":9,"historyLen":18}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=8608 context=55040 action=normal
+[debug] still awaiting generate() {"turnIndex":13,"round":9,"heartbeatN":1,"waitedMs":30011}
+[debug] still awaiting generate() {"turnIndex":13,"round":9,"heartbeatN":2,"waitedMs":60023}
+[debug] generate returned {"turnIndex":13,"round":9,"waitedMs":69748,"fragmentChars":6540,"toolRequests":0,"failures":0}
+[debug] turn completed {"turnIndex":13,"ms":104128,"chars":6540,"tools":["get_active_project","list_directory","list_directory","list_directory","list_directory","read_file","list_directory","list_directory","read_file","list_directory","list_directory","read_file","read_file","read_file","read_file"],"listDirectory":8,"preview":"Now I have a clear picture of the current TrueSyncRuntimeLoading plugin: - It’s a GameInstanceSubsystem-based async loading wrapper around StreamableManager. - Core concepts: - FTrueSyncLoadRequest: list of soft objects + debug name + bWaitForPSO flag (not fully implemented). - U"}
+
+===== TURN 14/17 =====
+타겟팅 시스템 관련해서 좀더 알고 싶어.
+[debug] prediction round {"turnIndex":14,"round":1,"historyLen":20,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":14,"round":1,"historyLen":20}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=10290 context=55040 action=normal
+[debug] generate returned {"turnIndex":14,"round":1,"waitedMs":5513,"fragmentChars":303,"toolRequests":2,"failures":0}
+[debug] tool call {"turnIndex":14,"name":"get_active_project","args":{},"ms":170,"hardError":null,"preview":"{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n    \"projectDir\": \"C:\\\\"}
+[debug] tool call {"turnIndex":14,"name":"search_files","args":{"query":"Targeting|TargetSystem|TargetComponent|TargetActor|TargetInterface","path":"Source","regex":true,"maxResults":120},"ms":172,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source\",\n    \"workspaceRelativePath\": \"Source\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Source\",\n    \"active"}
+[debug] prediction round {"turnIndex":14,"round":2,"historyLen":22,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":14,"round":2,"historyLen":22}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=18974 context=55040 action=normal
+[debug] generate returned {"turnIndex":14,"round":2,"waitedMs":28090,"fragmentChars":704,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":14,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Player/Component/TargetingComponent.h"},"ms":150,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Component/TargetingComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Player/C"}
+[debug] prediction round {"turnIndex":14,"round":3,"historyLen":24,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":14,"round":3,"historyLen":24}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=21446 context=55040 action=normal
+[debug] generate returned {"turnIndex":14,"round":3,"waitedMs":7355,"fragmentChars":425,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":14,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Player/Component/TargetingTypes.h"},"ms":150,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Component/TargetingTypes.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Player/Compo"}
+[debug] prediction round {"turnIndex":14,"round":4,"historyLen":26,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":14,"round":4,"historyLen":26}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=22146 context=55040 action=normal
+[debug] generate returned {"turnIndex":14,"round":4,"waitedMs":5418,"fragmentChars":369,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":14,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp","startLine":1,"endLine":150},"ms":151,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Componen"}
+[debug] prediction round {"turnIndex":14,"round":5,"historyLen":28,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":14,"round":5,"historyLen":28}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=24035 context=55040 action=normal
+[debug] generate returned {"turnIndex":14,"round":5,"waitedMs":5740,"fragmentChars":244,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":14,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp","startLine":150,"endLine":340},"ms":151,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Componen"}
+[debug] prediction round {"turnIndex":14,"round":6,"historyLen":30,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":14,"round":6,"historyLen":30}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=26191 context=55040 action=normal
+[debug] generate returned {"turnIndex":14,"round":6,"waitedMs":6138,"fragmentChars":236,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":14,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp","startLine":297,"endLine":460},"ms":151,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Componen"}
+[debug] prediction round {"turnIndex":14,"round":7,"historyLen":32,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":14,"round":7,"historyLen":32}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=28394 context=55040 action=normal
+[debug] generate returned {"turnIndex":14,"round":7,"waitedMs":6316,"fragmentChars":241,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":14,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp","startLine":446,"endLine":581},"ms":149,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Componen"}
+[debug] prediction round {"turnIndex":14,"round":8,"historyLen":34,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":14,"round":8,"historyLen":34}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=30682 context=55040 action=soft_compact
+[debug] still awaiting generate() {"turnIndex":14,"round":8,"heartbeatN":1,"waitedMs":30005}
+[debug] generate returned {"turnIndex":14,"round":8,"waitedMs":58715,"fragmentChars":3919,"toolRequests":0,"failures":0}
+[debug] turn completed {"turnIndex":14,"ms":124555,"chars":3919,"tools":["get_active_project","search_files","read_file","read_file","read_file_range","read_file_range","read_file_range","read_file_range"],"listDirectory":0,"preview":"Great. Now I have a clear picture of the targeting system: - UTargetingComponent is central. - Uses TTargetableInterface / UTargetableInterface to identify valid targets. - Has two main concepts: Auto (soft) target and Hard target. - Auto-target selection uses crosshair proximity"}
+
+===== TURN 15/17 =====
+스킬 시스템은 어떻게 돌아가고 있는거야?
+[debug] prediction round {"turnIndex":15,"round":1,"historyLen":36,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":15,"round":1,"historyLen":36}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=31692 context=55040 action=soft_compact
+[debug] generate returned {"turnIndex":15,"round":1,"waitedMs":4437,"fragmentChars":377,"toolRequests":2,"failures":0}
+[debug] tool call {"turnIndex":15,"name":"get_active_project","args":{},"ms":166,"hardError":null,"preview":"{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n    \"projectDir\": \"C:\\\\"}
+[debug] tool call {"turnIndex":15,"name":"list_directory","args":{"path":"Source/Project_MJS/Private/Character/Player/Component"},"ms":153,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private/Character/Player/Component\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private/Character/Player/Compon"}
+[debug] prediction round {"turnIndex":15,"round":2,"historyLen":38,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":15,"round":2,"historyLen":38}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=33452 context=55040 action=soft_compact
+[debug] generate returned {"turnIndex":15,"round":2,"waitedMs":9460,"fragmentChars":203,"toolRequests":2,"failures":0}
+[debug] tool call {"turnIndex":15,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/SkillComponent.cpp"},"ms":223,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Component/SkillComponent.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Private/Character/Player/C"}
+[debug] tool call {"turnIndex":15,"name":"list_directory","args":{"path":"Source/Project_MJS/Public/Character/Player/Component"},"ms":150,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Character/Player/Component\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public/Character/Player/Componen"}
+[debug] prediction round {"turnIndex":15,"round":3,"historyLen":40,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":15,"round":3,"historyLen":40}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=36603 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":15,"round":3,"waitedMs":14740,"fragmentChars":348,"toolRequests":2,"failures":0}
+[debug] tool call {"turnIndex":15,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Player/Component/SkillComponent.h"},"ms":227,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Component/SkillComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Player/Compo"}
+[debug] tool call {"turnIndex":15,"name":"search_files","args":{"query":"USkillDataAsset","maxResults":40},"ms":10144,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"\",\n    \"workspaceRelativePath\": \"\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\",\n    \"activeProject\": \"C:\\\\Users"}
+[debug] prediction round {"turnIndex":15,"round":4,"historyLen":42,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":15,"round":4,"historyLen":42}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=37826 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":15,"round":4,"waitedMs":16198,"fragmentChars":366,"toolRequests":2,"failures":0}
+[debug] tool call {"turnIndex":15,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Player/Data/SkillDataAsset.h"},"ms":151,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Data/SkillDataAsset.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Player/Data/Skill"}
+[debug] tool call {"turnIndex":15,"name":"search_files","args":{"query":"ActivateSkill","maxResults":30},"ms":3291,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"\",\n    \"workspaceRelativePath\": \"\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\",\n    \"activeProject\": \"C:\\\\Users"}
+[debug] prediction round {"turnIndex":15,"round":5,"historyLen":44,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":15,"round":5,"historyLen":44}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=40287 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":15,"round":5,"waitedMs":18445,"fragmentChars":294,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":15,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/CPlayerController.cpp","startLine":1,"endLine":200},"ms":150,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/CPlayerController.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/CPlayerController.c"}
+[debug] prediction round {"turnIndex":15,"round":6,"historyLen":46,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":15,"round":6,"historyLen":46}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=42407 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":15,"round":6,"waitedMs":20906,"fragmentChars":244,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":15,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/CPlayerController.cpp","startLine":340,"endLine":520},"ms":221,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/CPlayerController.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/CPlayerController.c"}
+[debug] prediction round {"turnIndex":15,"round":7,"historyLen":48,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":15,"round":7,"historyLen":48}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=44256 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":15,"round":7,"waitedMs":23261,"fragmentChars":266,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":15,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp","startLine":1,"endLine":200},"ms":151,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp"}
+[debug] prediction round {"turnIndex":15,"round":8,"historyLen":50,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":15,"round":8,"historyLen":50}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=46351 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":15,"round":8,"waitedMs":28607,"fragmentChars":688,"toolRequests":1,"failures":0}
+[debug] tool call {"turnIndex":15,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp","startLine":1,"endLine":200},"ms":228,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Component/A"}
+[debug] prediction round {"turnIndex":15,"round":9,"historyLen":52,"generateTimeoutMs":300000,"pid":32868}
+[debug] await generate() {"turnIndex":15,"round":9,"historyLen":52}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=48601 context=55040 action=hard_compact
+[debug] still awaiting generate() {"turnIndex":15,"round":9,"heartbeatN":1,"waitedMs":30009}
+[debug] still awaiting generate() {"turnIndex":15,"round":9,"heartbeatN":2,"waitedMs":60012}
+[debug] generate failed {"turnIndex":15,"round":9,"error":"Error: \n\n┌ Error ──────────────────────────────────────────────────────────────────────┐\n│                                                                             │\n│   Engine protocol predict stream returned an error:                         │\n│   {\"code\":500,\"message\":\"The model produced output that does not match      │\n│   the expected peg-native format\",\"type\":\"server_error\"}                    │\n│                                                                             │\n│                                                                             │\n│   </> STACK TRACE                                                          
+[debug] turn failed — stop marathon {"turnIndex":15,"hardFail":"TURN_15_GENERATE_FAILED: Error: \n\n┌ Error ──────────────────────────────────────────────────────────────────────┐\n│                                                                             │\n│   Engine protocol predict stream returned an error:                         │\n│   {\"code\":500,\"message\":\"The model produced output that does not match      │\n│   the expected peg-native format\",\"type\":\"server_error\"}                    │\n│                                                                             │\n│                                                                             │\n│   </> STACK TRACE                                        
+[debug] final report {"ok":false,"completedTurns":2,"targetTurns":5,"startAt":13,"hardFail":"TURN_15_GENERATE_FAILED: Error: \n\n┌ Error ──────────────────────────────────────────────────────────────────────┐\n│                                                                             │\n│   Engine protocol predict stream returned an error:                         │\n│   {\"code\":500,\"message\":\"The model produced output that does not match      │\n│   the expected peg-native format\",\"type\":\"server_error\"}                    │\n│                                                                             │\n│                                                                             │\n│   </> STACK T
+{
+  "ok": false,
+  "completedTurns": 2,
+  "targetTurns": 5,
+  "startAt": 13,
+  "hardFail": "TURN_15_GENERATE_FAILED: Error: \n\n┌ Error ──────────────────────────────────────────────────────────────────────┐\n│                                                                             │\n│   Engine protocol predict stream returned an error:                         │\n│   {\"code\":500,\"message\":\"The model produced output that does not match      │\n│   the expected peg-native format\",\"type\":\"server_error\"}                    │\n│                                                                             │\n│                                                                             │\n│   </> STACK TRACE                                                           │\n│                                                                             │\n│   at generate (C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-c   │\n│   ontext-compactor\\dist\\generator.js:660:30)                                │\n│   at async runUserTurn (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lm   │\n│   studio\\scripts\\lmstudio_e2e_driver.js:355:9)                              │\n│   at async main (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\   │\n│   scripts\\lmstudio_e2e_driver.js:609:22)                                    │\n│                                                                             │\n└─────────────────────────────────────────────────────────────────────────────┘",
+  "pluginRevision": 17,
+  "model": "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max",
+  "performance": {
+    "p50Ms": 124555,
+    "p95Ms": 124555,
+    "toolCallTotal": 35,
+    "listDirectoryTotal": 10,
+    "avgListDirectoryPerTurn": 5,
+    "compaction": {
+      "sessionDir": "C:\\Users\\sster\\AppData\\Local\\Temp\\compactor-marathon-6YgP5i\\0048e1c8fbd7f8005e594c192021b461",
+      "applied": 11,
+      "tinyPosts": 2,
+      "answeringMeta": 0,
+      "last": {
+        "type": "compaction_decision",
+        "at": "2026-08-02T21:54:10.136Z",
+        "action": "hard_compact",
+        "effectiveAction": "hard_compact",
+        "goalChangeCompact": false,
+        "zeroRetainedTurns": false,
+        "answeringMeta": false,
+        "applied": true,
+        "checkpointGeneration": 26,
+        "postInputTokens": 17501,
+        "postRemainingTokens": 26686,
+        "retainedTurns": 0,
+        "currentTurnCap": null,
+        "objectivePreview": "스킬 시스템은 어떻게 돌아가고 있는거야?"
+      },
+      "objective": "스킬 시스템은 어떻게 돌아가고 있는거야?"
+    }
+  },
+  "turns": [
+    {
+      "turnIndex": 13,
+      "prompt": "로딩 플러그인 쪽의 개선 계획안만 짜고서 수정은 하지말 것.",
+      "ms": 104128,
+      "chars": 6540,
+      "preview": "Now I have a clear picture of the current TrueSyncRuntimeLoading plugin: - It’s a GameInstanceSubsystem-based async loading wrapper around StreamableManager. - Core concepts: - FTrueSyncLoadRequest: list of soft objects + debug name + bWaitForPSO flag (not fully implemented). - U",
+      "toolCalls": [
+        {
+          "name": "get_active_project",
+          "args": {},
+          "ms": 178,
+          "preview": "{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Projec",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "."
+          },
+          "ms": 156,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"\",\n    \"workspaceRelativePath\": \"\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Proje",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Plugins"
+          },
+          "ms": 156,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins\",\n    \"workspaceRelativePath\": \"Plugins\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documen",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source"
+          },
+          "ms": 154,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source\",\n    \"workspaceRelativePath\": \"Source\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading"
+          },
+          "ms": 154,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading\",\n    \"workspaceRelativePath\": \"Plugins/TrueSyncRuntimeLoading\",\n",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/TrueSyncRuntimeLoading.uplugin"
+          },
+          "ms": 158,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/TrueSyncRuntimeLoading.uplugin\",\"workspaceRelativePath\":\"Plugins/TrueSync",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/Source"
+          },
+          "ms": 232,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source\",\n    \"workspaceRelativePath\": \"Plugins/TrueSyncRuntimeLoa",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading"
+          },
+          "ms": 222,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading\",\n    \"workspaceRelativePath\": \"Plu",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/TrueSyncRuntimeLoading.Build.cs"
+          },
+          "ms": 150,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/TrueSyncRuntimeLoading.Build.cs\",\"workspace",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public"
+          },
+          "ms": 152,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public\",\n    \"workspaceRelativePath",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Private"
+          },
+          "ms": 152,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Private\",\n    \"workspaceRelativePat",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadingTypes.h"
+          },
+          "ms": 179,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadingTypes.h\",\"workspaceRe",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadManifest.h"
+          },
+          "ms": 149,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadManifest.h\",\"workspaceRe",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadingSubsystem.h"
+          },
+          "ms": 228,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Public/TrueSyncLoadingSubsystem.h\",\"workspa",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Private/TrueSyncLoadingSubsystem.cpp"
+          },
+          "ms": 154,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Plugins/TrueSyncRuntimeLoading/Source/TrueSyncRuntimeLoading/Private/TrueSyncLoadingSubsystem.cpp\",\"work",
+          "hardError": null
+        }
+      ],
+      "listDirectory": 8
+    },
+    {
+      "turnIndex": 14,
+      "prompt": "타겟팅 시스템 관련해서 좀더 알고 싶어.",
+      "ms": 124555,
+      "chars": 3919,
+      "preview": "Great. Now I have a clear picture of the targeting system: - UTargetingComponent is central. - Uses TTargetableInterface / UTargetableInterface to identify valid targets. - Has two main concepts: Auto (soft) target and Hard target. - Auto-target selection uses crosshair proximity",
+      "toolCalls": [
+        {
+          "name": "get_active_project",
+          "args": {},
+          "ms": 170,
+          "preview": "{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Projec",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "Targeting|TargetSystem|TargetComponent|TargetActor|TargetInterface",
+            "path": "Source",
+            "regex": true,
+            "maxResults": 120
+          },
+          "ms": 172,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source\",\n    \"workspaceRelativePath\": \"Source\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Player/Component/TargetingComponent.h"
+          },
+          "ms": 150,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Component/TargetingComponent.h\",\"workspaceRelativePath\":\"Sour",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Player/Component/TargetingTypes.h"
+          },
+          "ms": 150,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Component/TargetingTypes.h\",\"workspaceRelativePath\":\"Source/P",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp",
+            "startLine": 1,
+            "endLine": 150
+          },
+          "ms": 151,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Proje",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp",
+            "startLine": 150,
+            "endLine": 340
+          },
+          "ms": 151,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Proje",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp",
+            "startLine": 297,
+            "endLine": 460
+          },
+          "ms": 151,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Proje",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp",
+            "startLine": 446,
+            "endLine": 581
+          },
+          "ms": 149,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Proje",
+          "hardError": null
+        }
+      ],
+      "listDirectory": 0
+    }
+  ]
+}
+EXIT=0 

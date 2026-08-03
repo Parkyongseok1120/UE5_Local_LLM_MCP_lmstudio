@@ -396,8 +396,10 @@ function cachedReadInstruction(reason) {
     );
   }
   return (
-    "The same unchanged evidence was already returned. Do not read it again. "
-    + "Finish the analysis from existing evidence."
+    "The same unchanged evidence was already returned. Do not re-read this same path. "
+    + "Continue with other unread files or symbols if more evidence is still needed; "
+    + "otherwise deliver what the user asked for from existing evidence "
+    + "(for bug hunts: findings with verdicts — not an unsolicited project-structure overview)."
   );
 }
 

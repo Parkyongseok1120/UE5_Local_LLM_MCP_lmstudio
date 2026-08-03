@@ -129,8 +129,8 @@ def test_windows_launcher_manifest_adds_nondefault_engine_location(
 @pytest.mark.parametrize(
     ("answers", "expected_agent_mode"),
     [
-        (["n", "n", "n", "n", "1", "1", "2", "y", "y"], True),
-        (["n", "n", "n", "n", "1", "1", "2", "n", "y"], False),
+        (["n", "n", "n", "1", "1", "2", "y", "y"], True),
+        (["n", "n", "n", "1", "1", "2", "n", "y"], False),
     ],
 )
 def test_interactive_agent_selector_confirms_or_falls_back_to_safe(
@@ -154,6 +154,7 @@ def test_interactive_agent_selector_confirms_or_falls_back_to_safe(
 
     assert profile == "standard"
     assert "unreal" in components
+    assert "context_compactor" in components
     assert args.enable_agent_mode is expected_agent_mode
     assert args.accept_agent_risk is expected_agent_mode
 
@@ -174,7 +175,7 @@ def test_interactive_index_selector_builds_selected_tier(
         def isatty() -> bool:
             return True
 
-    responses = iter(["n", "n", "n", "n", "1", choice, "1", "y"])
+    responses = iter(["n", "n", "n", "1", choice, "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -182,6 +183,7 @@ def test_interactive_index_selector_builds_selected_tier(
     sys.modules.pop("integrated_install", None)
 
     assert "unreal" in components
+    assert "context_compactor" in components
     assert args.build_rag is True
     assert args.index_tier == expected_tier
 
@@ -196,7 +198,7 @@ def test_interactive_cline_selection_uses_default_settings_path(
         def isatty() -> bool:
             return True
 
-    responses = iter(["n", "n", "y", "n", "1", "1", "1", "y"])
+    responses = iter(["n", "y", "n", "1", "1", "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -204,6 +206,7 @@ def test_interactive_cline_selection_uses_default_settings_path(
     sys.modules.pop("integrated_install", None)
 
     assert "cline" in components
+    assert "context_compactor" in components
     assert args.cline_settings == Path.home() / ".cline" / "data" / "settings" / "cline_mcp_settings.json"
 
 
@@ -291,7 +294,9 @@ def test_interactive_project_picker_restores_uproject_and_folder_selection(
     project_file = project_dir / "PickedProject.uproject"
     project_file.write_text("{}", encoding="utf-8")
     selected = project_file if target_kind == "uproject" else project_dir
-    responses = iter(["n", "n", "n", "y", menu_choice, "n", "1", "1", "1", "y"])
+    # portable_rule=n, cline=n, select projects=y, menu, add another=n,
+    # engine=launcher, rag=skip, authority=safe, continue=y
+    responses = iter(["n", "n", "y", menu_choice, "n", "1", "1", "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     monkeypatch.setattr(module, "_pick_indexing_target", lambda kind, initial: selected)
@@ -300,6 +305,7 @@ def test_interactive_project_picker_restores_uproject_and_folder_selection(
     sys.modules.pop("integrated_install", None)
 
     assert "unreal" in components
+    assert "context_compactor" in components
     assert args.workspace_root == [project_dir]
     assert args.active_project == (project_file if target_kind == "uproject" else None)
 
@@ -393,7 +399,69 @@ def test_interactive_engine_selector_rejects_invalid_custom_root(
     sys.modules.pop("integrated_install", None)
 
 
+def _plant_fake_lms(lmstudio_home: Path) -> None:
+    """Provide a no-op LMS CLI that marks the context-compactor plugin as installed."""
+    bindir = lmstudio_home / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    plugin_dir = (
+        lmstudio_home
+        / "extensions"
+        / "plugins"
+        / "codex"
+        / "unreal-context-compactor"
+    )
+    manifest = plugin_dir / "manifest.json"
+    if os.name == "nt":
+        script = bindir / "lms.cmd"
+        script.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    'if /I "%~1"=="--version" (echo lms 0.0.0-test & exit /b 0)',
+                    f'mkdir "{plugin_dir}" >nul 2>nul',
+                    (
+                        "echo {\"type\":\"plugin\",\"runner\":\"node\",\"owner\":\"codex\","
+                        "\"name\":\"unreal-context-compactor\",\"revision\":8} > "
+                        f'"{manifest}"'
+                    ),
+                    "exit /b 0",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        script = bindir / "lms"
+        script.write_text(
+            "\n".join(
+                [
+                    "#!/bin/sh",
+                    'if [ "$1" = "--version" ]; then echo "lms 0.0.0-test"; exit 0; fi',
+                    f'mkdir -p "{plugin_dir}"',
+                    (
+                        "printf '%s\\n' "
+                        "'{\"type\":\"plugin\",\"runner\":\"node\",\"owner\":\"codex\","
+                        "\"name\":\"unreal-context-compactor\",\"revision\":8}' "
+                        f'> "{manifest}"'
+                    ),
+                    "exit 0",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+
+
 def _run(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    lmstudio_home = tmp_path / "lmstudio"
+    extras = list(extra)
+    dry_run = "--dry-run" in extras
+    if not dry_run:
+        lmstudio_home.mkdir(parents=True, exist_ok=True)
+        _plant_fake_lms(lmstudio_home)
+    if "--skip-deps" not in extras and not dry_run:
+        extras.append("--skip-deps")
     return subprocess.run(
         [
             sys.executable,
@@ -403,10 +471,10 @@ def _run(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
             "--codex-home",
             str(tmp_path / "codex"),
             "--lmstudio-home",
-            str(tmp_path / "lmstudio"),
+            str(lmstudio_home),
             "--state-home",
             str(tmp_path / "state"),
-            *extra,
+            *extras,
         ],
         cwd=str(ROOT),
         capture_output=True,
@@ -512,7 +580,10 @@ def test_existing_install_lock_fails_before_managed_targets_are_written(tmp_path
     assert result.returncode == 1
     assert "another installer is active" in result.stdout
     assert not (tmp_path / "codex").exists()
-    assert not (tmp_path / "lmstudio").exists()
+    # Test harness may plant a fake lms under lmstudio/bin before the lock fails.
+    assert not (tmp_path / "lmstudio" / "mcp.json").exists()
+    assert not (tmp_path / "lmstudio" / "settings.json").exists()
+    assert not (tmp_path / "lmstudio" / "config-presets").exists()
 
 
 def test_fresh_partial_install_lock_is_not_stolen(tmp_path: Path) -> None:
@@ -551,7 +622,95 @@ def test_runtime_bootstrap_only_requests_components_that_need_runtimes() -> None
     assert module._runtime_requirements({"codex", "lmstudio"}, build_rag=False) == (False, False)
     assert module._runtime_requirements({"unreal"}, build_rag=False) == (True, False)
     assert module._runtime_requirements({"context_compactor"}, build_rag=False) == (True, False)
+    assert module._runtime_requirements({"codex", "lmstudio", "context_compactor"}, build_rag=False) == (
+        True,
+        False,
+    )
     assert module._runtime_requirements({"unreal"}, build_rag=True) == (True, True)
+    sys.modules.pop("integrated_install", None)
+
+
+def test_context_compactor_is_forced_for_lmstudio_profiles() -> None:
+    module = _load_installer_module()
+    for profile in ("safe", "standard", "full"):
+        args = module.build_parser().parse_args(["--profile", profile, "--yes"])
+        resolved_profile, components = module._resolve_components(args)
+        assert resolved_profile == profile
+        assert "context_compactor" in components
+    sys.modules.pop("integrated_install", None)
+
+
+def test_skip_context_compactor_requires_allow_flag() -> None:
+    module = _load_installer_module()
+    args = module.build_parser().parse_args(
+        ["--profile", "standard", "--yes", "--skip-context-compactor"]
+    )
+    with pytest.raises(ValueError, match="Context compactor is required"):
+        module._resolve_components(args)
+    args = module.build_parser().parse_args(
+        [
+            "--profile",
+            "standard",
+            "--yes",
+            "--skip-context-compactor",
+            "--allow-skip-context-compactor",
+        ]
+    )
+    _, components = module._resolve_components(args)
+    assert "context_compactor" not in components
+    sys.modules.pop("integrated_install", None)
+
+
+def test_resolve_lms_cli_prefers_env_and_platform_binaries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    home = tmp_path / ".lmstudio"
+    binary = home / "bin" / ("lms.exe" if os.name == "nt" else "lms")
+    binary.parent.mkdir(parents=True)
+    binary.write_text("", encoding="utf-8")
+    monkeypatch.delenv("LMSTUDIO_CLI", raising=False)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: str(tmp_path / "path-lms"))
+    (tmp_path / "path-lms").write_text("", encoding="utf-8")
+    assert module._resolve_lms_cli(home) == str(binary.resolve())
+    override = tmp_path / "custom-lms"
+    override.write_text("", encoding="utf-8")
+    monkeypatch.setenv("LMSTUDIO_CLI", str(override))
+    assert module._resolve_lms_cli(home) == str(override)
+    sys.modules.pop("integrated_install", None)
+
+
+def test_activate_context_compactor_pins_plugin_in_settings(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    home = tmp_path / ".lmstudio"
+    home.mkdir()
+    result = module._activate_context_compactor_in_settings(home, dry_run=False)
+    settings = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    assert result["pinned"] is True
+    assert module.CONTEXT_COMPACTOR_PLUGIN_ID in settings["chat"]["pinnedPlugins"]
+    assert settings["developer"]["allowDevelopmentPlugins"] is True
+    sys.modules.pop("integrated_install", None)
+
+
+def test_ensure_context_compactor_materializes_from_source_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    home = tmp_path / "managed-lmstudio"
+    empty_default = tmp_path / "empty-default-lmstudio"
+    empty_default.mkdir()
+    monkeypatch.setattr(module, "_default_lmstudio_home", lambda: empty_default)
+    plugin_src = ROOT / "lmstudio-context-compactor-plugin"
+    detail = module._ensure_context_compactor_on_disk(
+        plugin_src=plugin_src,
+        lmstudio_home=home,
+    )
+    manifest = home / "extensions" / "plugins" / "codex" / "unreal-context-compactor" / "manifest.json"
+    assert detail["copied"] is True
+    assert detail["source"] == "repository-source"
+    assert manifest.is_file()
     sys.modules.pop("integrated_install", None)
 
 
@@ -919,14 +1078,15 @@ def test_rag_build_uses_tier_aware_collection_pipeline(tmp_path: Path, tier: str
         str(tmp_path / "projects"),
     )
     assert result.returncode == 0, result.stderr or result.stdout
-    assert "run_index_pipeline.ps1" in result.stdout
-    assert f"-Tier {tier}" in result.stdout
-    assert "-PythonExe" in result.stdout
-    assert "rag.ps1 build" not in result.stdout
+    combined = f"{result.stdout}\n{result.stderr}"
+    assert "run_index_pipeline.ps1" in combined
+    assert f"-Tier {tier}" in combined
+    assert "-PythonExe" in combined
+    assert "rag.ps1 build" not in combined
     if sys.platform == "win32":
-        assert "-NoProfile -ExecutionPolicy Bypass -File" in result.stdout
+        assert "-NoProfile -ExecutionPolicy Bypass -File" in combined
     else:
-        assert "-ExecutionPolicy" not in result.stdout
+        assert "-ExecutionPolicy" not in combined
 
 
 @pytest.mark.parametrize(

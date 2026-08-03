@@ -12,7 +12,7 @@ const DEFAULT_COMPACTION_CONFIG = Object.freeze({
   safetyMarginTokens: 1024,
   normalToolResultReserve: 3000,
   buildToolResultReserve: 8000,
-  recentCompleteTurns: 4,
+  recentCompleteTurns: 1,
   minimumTurnsBetweenCompactions: 0,
   targetRemainingTokensAfterCompaction: 24000,
   maxCheckpointFacts: 32,
@@ -145,6 +145,53 @@ function collectControlFields(value, state) {
   }
 }
 
+function isReadOnlyUserGoal(text) {
+  const source = String(text || "");
+  const lower = source.toLowerCase();
+  if (
+    /수정은\s*하(?:지\s*)?마/.test(source)
+    || /수정하지\s*말/.test(source)
+    || /찾기만하고/.test(source)
+    || /분석만/.test(source)
+    || /보고만/.test(source)
+  ) {
+    return true;
+  }
+  return (
+    /\b(?:do\s+not|don't|dont)\s+(?:fix|edit|patch|change|modify|write)\b/.test(lower)
+    || /\b(?:no|without)\s+(?:fixes|edits|patches)\b/.test(lower)
+    || /\bfind\s+bugs?\s+only\b/.test(lower)
+    || /\banalysis only\b/.test(lower)
+    || /\breport only\b/.test(lower)
+  );
+}
+
+function isMetaUserMessage(text) {
+  const source = String(text || "");
+  const lower = source.toLowerCase();
+  // LM Studio auto-names chats by injecting a synthetic user prompt mid-turn.
+  // Treating it as a real goal wipe causes zero-tail compaction and tool-loop amnesia.
+  if (/come up with a .{0,80}title for this conversation/i.test(source)) return true;
+  if (/come up with a .{0,80}title\b/i.test(source) && /<title>/i.test(source)) return true;
+  if (/put your answer in\s*<title>/i.test(source)) return true;
+  if (/just return the title in the specified format/i.test(lower)) return true;
+  if (/conversation naming technique/i.test(lower)) return true;
+  if (/^\s*<title>[\s\S]*<\/title>\s*$/i.test(source)) return true;
+  if (/\b2-5 word title\b/i.test(source) && /<\/title>/i.test(source)) return true;
+  return false;
+}
+
+function findLatestRealUserIndex(snapshots) {
+  for (let i = (snapshots || []).length - 1; i >= 0; i -= 1) {
+    const message = snapshots[i];
+    if (message.role !== "user") continue;
+    const text = String(message.text || "").trim();
+    if (!text || isMetaUserMessage(text)) continue;
+    return i;
+  }
+  return -1;
+}
+
 function extractControlState(messages, prior = {}, options = {}) {
   const snapshots = snapshotMessages(messages || []);
   const priorCount = Number(prior.sourceMessageCount || 0);
@@ -169,8 +216,23 @@ function extractControlState(messages, prior = {}, options = {}) {
   };
 
   for (const snapshot of source) {
-    if (!state.objective && snapshot.role === "user" && snapshot.text.trim()) {
-      state.objective = snapshot.text.trim().slice(0, 1200);
+    if (snapshot.role === "user" && snapshot.text.trim()) {
+      if (isMetaUserMessage(snapshot.text)) {
+        continue;
+      }
+      // Latest real user message always wins — pinning the first turn causes goal drift.
+      // Synthetic LM Studio title prompts must not replace the active goal.
+      const userText = snapshot.text.trim();
+      state.objective = userText.slice(0, 1200);
+      state.constraints = state.constraints.filter((item) =>
+        typeof item === "string" && !item.startsWith("active_goal:") && !item.startsWith("read_only_"));
+      state.constraints.push(`active_goal:${userText.slice(0, 400)}`);
+      if (isReadOnlyUserGoal(userText)) {
+        state.constraints.push(
+          "read_only_findings_only: do not edit files; do not invent refactor/implementation plans; "
+          + "do not re-emit a prior project-structure overview unless the latest user asked for it",
+        );
+      }
     }
     for (const payload of parseJsonObjects(snapshot.text)) {
       collectControlFields(payload, state);
@@ -358,7 +420,12 @@ function summarizeOldMessages(messages, checkpoint) {
   }
   if (checkpoint.facts?.length) lines.push(`facts=${checkpoint.facts.join(" | ")}`);
   lines.push(`compactedMessageCount=${(messages || []).length}`);
-  lines.push("Only use this summary for continuity. Re-read current files and trust latest tool results.");
+  lines.push(
+    "Only use this summary for continuity. The checkpoint objective is the latest user goal; "
+    + "do not continue an older structure/overview or refactor plan unless that latest goal asks for it. "
+    + "Do not invent missing classes, modules, or GameFramework paths from memory or prior assistant prose. "
+    + "Re-read current files with tools and trust only latest tool results / verified facts.",
+  );
   return lines.join("\n");
 }
 
@@ -367,23 +434,72 @@ function compactSnapshots(messages, checkpoint, options = {}) {
   const configuredTurns = options.recentCompleteTurns === undefined
     ? DEFAULT_COMPACTION_CONFIG.recentCompleteTurns
     : Number(options.recentCompleteTurns);
-  const tailCount = Math.max(1, configuredTurns * 2);
-  const pinned = [];
-  const rest = [];
-  let firstUserKept = false;
-  for (const message of snapshots) {
-    if (message.role === "system" || (message.role === "user" && !firstUserKept)) {
-      pinned.push(message);
-      if (message.role === "user") firstUserKept = true;
-    } else rest.push(message);
+  // 0 retained turns => systems + latest real user + current-turn tools only (no older tail).
+  const tailCount = configuredTurns <= 0
+    ? 0
+    : Math.max(1, configuredTurns * 2);
+  const latestUserIndex = findLatestRealUserIndex(snapshots);
+  const systems = [];
+  const older = [];
+  const currentTurn = [];
+  let latestUser = null;
+  for (let i = 0; i < snapshots.length; i += 1) {
+    const message = snapshots[i];
+    if (message.role === "system") {
+      systems.push(message);
+      continue;
+    }
+    if (message.role === "user" && isMetaUserMessage(message.text)) {
+      continue;
+    }
+    if (i === latestUserIndex) {
+      latestUser = message;
+      continue;
+    }
+    if (latestUserIndex >= 0 && i > latestUserIndex) {
+      currentTurn.push(message);
+      continue;
+    }
+    older.push(message);
   }
-  const restTailStart = completeTailStart(rest, Math.max(0, rest.length - tailCount));
-  const tail = rest.slice(restTailStart);
-  return [
-    ...pinned,
-    { role: "system", text: summarizeOldMessages(rest.slice(0, restTailStart), checkpoint), toolCalls: [], toolResults: [] },
-    ...tail,
-  ];
+  const olderTailStart = tailCount === 0
+    ? older.length
+    : completeTailStart(older, Math.max(0, older.length - tailCount));
+  const olderTail = older.slice(olderTailStart);
+  let keptCurrentTurn = currentTurn;
+  const maxCurrent = options.maxCurrentTurnMessages;
+  if (Number.isFinite(maxCurrent) && Number(maxCurrent) >= 0 && currentTurn.length > Number(maxCurrent)) {
+    const keepStart = completeTailStart(
+      currentTurn,
+      Math.max(0, currentTurn.length - Number(maxCurrent)),
+    );
+    keptCurrentTurn = currentTurn.slice(keepStart);
+  }
+  // Many chat templates (Qwen/ChatML/Llama) allow only ONE leading system message.
+  // Emitting a second system for the checkpoint makes applyPromptTemplate fail or
+  // collapse to an empty user prompt (~10 tokens) and the model loses the goal.
+  const checkpointText = summarizeOldMessages(older.slice(0, olderTailStart), checkpoint);
+  const systemParts = [];
+  for (const message of systems) {
+    const text = String(message.text || "").trim();
+    if (text) systemParts.push(text);
+  }
+  systemParts.push(checkpointText);
+  const result = [{
+    role: "system",
+    text: systemParts.join("\n\n"),
+    toolCalls: [],
+    toolResults: [],
+  }];
+  result.push(...olderTail);
+  if (latestUser) result.push(latestUser);
+  // Prefer keeping the full in-flight turn; only trim oldest pairs when the
+  // caller hits the hard token margin after older history is already gone.
+  result.push(...keptCurrentTurn);
+  if (options.trailingMetaUser && typeof options.trailingMetaUser === "object") {
+    result.push(options.trailingMetaUser);
+  }
+  return result;
 }
 
 function validateCheckpoint(checkpoint) {
@@ -401,16 +517,24 @@ module.exports = {
   sha256,
   textOf,
   roleOf,
+  toolRequestsOf,
+  toolResultsOf,
   messageSnapshot,
   snapshotMessages,
+  parseJsonObjects,
+  collectControlFields,
+  isReadOnlyUserGoal,
+  isMetaUserMessage,
+  findLatestRealUserIndex,
   extractControlState,
   buildCheckpoint,
   sessionFingerprint,
-  budgetDecision,
-  expectedToolReserve,
   toolNamesMatch,
+  expectedToolReserve,
+  budgetDecision,
   isCompleteToolPair,
-  compactSnapshots,
   completeTailStart,
+  summarizeOldMessages,
+  compactSnapshots,
   validateCheckpoint,
 };
