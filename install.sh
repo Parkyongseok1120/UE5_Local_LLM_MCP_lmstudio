@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
+# Requires host Python 3.10+ on PATH (or PYTHON=/path/to/python3.12) before bootstrap.
+# On a clean macOS install, system /usr/bin/python3 is often 3.9 and is not enough.
 set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INSTALL_PY="$SCRIPT_DIR/install.py"

@@ -57,8 +57,9 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert manifest["portablePackage"]["supportedHosts"] == [
         "windows",
         "ubuntu-linux",
-        "macos",
+        "macos-apple-silicon",
     ]
+    assert manifest["portablePackage"]["releaseReady"] is False
 
 
 @pytest.mark.parametrize(
@@ -270,6 +271,23 @@ def test_macos_picker_falls_back_to_tkinter_when_osascript_fails(
 
     assert selected == folder.resolve()
     assert calls == ["osascript", "tkinter:folder"]
+
+
+def test_intel_macos_blocks_lmstudio_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr(module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(module, "_host_cpu_arch", lambda: "x64")
+    with pytest.raises(RuntimeError, match="Intel macOS"):
+        module._assert_host_component_support({"lmstudio", "context_compactor"})
+    sys.modules.pop("integrated_install", None)
+
+
+def test_intel_macos_allows_cline_only_custom(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr(module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(module, "_host_cpu_arch", lambda: "x64")
+    module._assert_host_component_support({"codex", "portable_rule", "cline"})
+    sys.modules.pop("integrated_install", None)
 
 
 @pytest.mark.parametrize(

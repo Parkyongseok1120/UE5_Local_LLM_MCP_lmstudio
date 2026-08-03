@@ -2,14 +2,16 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release: **1.3.0 RC2**. The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest is `2.1.3`.
+Product release label: **1.3.0 RC3** (prerelease; `portablePackage.releaseReady` is `false` until install validation completes). The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest is `2.1.3`.
 
 ## Requirements
 
-- A host **Python 3.10+** is required only to start `install.py`. The launcher prints a platform-specific recovery command instead of falling through to a missing or incompatible interpreter.
+- A host **Python 3.10+** is required to start `install.py` / `./install.sh`. On a clean Mac without 3.10+, the launcher exits with recovery instructions instead of starting. Set `PYTHON=/path/to/python3.12` when the interpreter is outside PATH.
 - The installer establishes managed **Python 3.12** first. It downloads **Node.js 20+/npm** for LM Studio context-compactor installs (required whenever LM Studio/Unreal components are selected) and **PowerShell 7 (`pwsh`)** only when `--build-rag` is selected, reducing SAFE-profile failure surface.
-- Runtime archives are pinned by version and SHA-256 for x64/arm64 on Windows, macOS, and Ubuntu/glibc. [`installer/runtime-manifest.json`](../installer/runtime-manifest.json) is the SSOT for URL, filename, platform, architecture, checksum, executable, and probe metadata. Extraction rejects traversal, unsafe links, encrypted ZIP members, special files, and archive bombs before writing the runtime cache.
-- SAFE also needs LM Studio 0.4+ for native MCP API use.
+- Runtime archives are pinned by version and SHA-256 for x64/arm64 on Windows, Apple Silicon macOS, and Ubuntu/glibc. [`installer/runtime-manifest.json`](../installer/runtime-manifest.json) is the SSOT for URL, filename, platform, architecture, checksum, executable, and probe metadata. Extraction rejects traversal, unsafe links, encrypted ZIP members, special files, and archive bombs before writing the runtime cache.
+- **Intel macOS:** LM Studio / Unreal / context-compactor installs abort early. Custom Codex / portable_rule / Cline-only installs are allowed.
+- **Apple Silicon macOS:** installer path exists but is not live-certified or notarized.
+- SAFE also needs LM Studio 0.4+ for native MCP API use (unsupported on Intel Mac).
 - FULL context compaction additionally needs the LM Studio `lms` CLI.
 - RAG index generation is a separate opt-in action and uses the bootstrapped `pwsh` plus an installed Unreal Engine.
 

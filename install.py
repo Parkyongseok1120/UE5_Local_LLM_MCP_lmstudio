@@ -41,6 +41,7 @@ PROFILE_DEFAULTS = {
     if name != "custom"
 }
 ALL_COMPONENTS = set(INSTALL_MANIFEST["components"])
+LMSTUDIO_STACK_COMPONENTS = frozenset({"lmstudio", "unreal", "context_compactor"})
 PORTABLE_RULE_FILENAME = "evidence-first-code-audit.md"
 CLINE_SETTINGS_RELATIVE_PATH = Path(".cline") / "data" / "settings" / "cline_mcp_settings.json"
 LMSTUDIO_CONTEXT_POLICY_ENV = {
@@ -433,6 +434,52 @@ def _default_platform() -> str:
     if system == "linux":
         return "Linux"
     raise RuntimeError(f"unsupported host platform: {platform.system()}")
+
+
+def _host_cpu_arch() -> str:
+    """Return 'arm64' or 'x64'. On Apple Silicon prefer hardware arch even under Rosetta."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system == "darwin":
+        try:
+            probe = subprocess.run(
+                ["sysctl", "-n", "hw.optional.arm64"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if probe.returncode == 0 and probe.stdout.strip() == "1":
+                return "arm64"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if machine in {"arm64", "aarch64"}:
+        return "arm64"
+    if machine in {"x86_64", "amd64", "x64"}:
+        return "x64"
+    return machine or "unknown"
+
+
+def _assert_host_component_support(components: set[str]) -> None:
+    """Block LM Studio stack installs on Intel macOS; allow Codex/Cline-only custom installs."""
+    if platform.system().lower() != "darwin":
+        return
+    arch = _host_cpu_arch()
+    needs_lmstudio = bool(components & LMSTUDIO_STACK_COMPONENTS)
+    if arch == "x64" and needs_lmstudio:
+        raise RuntimeError(
+            "Intel macOS (x86_64) cannot install LM Studio-based components. "
+            "LM Studio does not support Intel Mac. Remove lmstudio/unreal/context_compactor "
+            "and use a custom Codex / portable_rule / Cline-only install, "
+            "or run on Apple Silicon macOS / Windows / Ubuntu Linux."
+        )
+    if arch == "arm64" and needs_lmstudio:
+        # Soft notice only: Apple Silicon path exists but is not notarized/certified yet.
+        print(
+            "NOTE: Apple Silicon macOS LM Studio installation is available but not yet "
+            "live-certified (installer signing/notarization not claimed).",
+            file=sys.stderr,
+        )
 
 
 def _process_is_alive(pid: int) -> bool:
@@ -910,6 +957,7 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         raise ValueError("--build-rag requires the unreal component")
     if args.enable_agent_mode and not args.accept_agent_risk:
         raise ValueError("agent mode requires explicit --accept-agent-risk")
+    _assert_host_component_support(components)
     if interactive:
         _confirm_interactive_install(profile, components, args)
     return profile, components

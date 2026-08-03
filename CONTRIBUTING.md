@@ -37,7 +37,7 @@ git restore --staged PORTABLE_ROOT.txt
 ## Pull Request Checklist
 
 - [ ] `pytest --tb=short -q` passes (no new failures)
-- [ ] No personal paths (`C:\Users\<name>\...`) in committed files
+- [ ] No personal home-directory paths in committed files (Windows user profiles, non-Shared macOS user homes, Linux home directories)
 - [ ] No Epic Engine source content in committed files (see [EPIC_NOTICE.md](EPIC_NOTICE.md))
 - [ ] README or relevant docs updated if the change affects setup or usage
 

@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC2
+# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC3
 
-> **Release Candidate:** the portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows, Ubuntu Linux, and macOS. Native Unreal engine discovery, indexing paths, Editor export, and agent build launchers are host-aware; Ubuntu/macOS RAG indexing uses `pwsh`, and live platform certification is pending. Runtime downloads are pinned and SHA-256 verified before bounded safe extraction. See [1.3.0 RC2 Release Notes](docs/Release_Notes_1_3_0_RC2.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **Prerelease (not shippable yet):** product metadata is aligned to **1.3.0 RC3**, but install validation is incomplete and `releaseReady` remains `false`. The portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows and Ubuntu Linux; **Apple Silicon macOS** has an uncertified installer path; **Intel macOS** cannot install LM Studio-based components (custom Codex/Cline-only is allowed). Host **Python 3.10+** is required before `./install.sh` can start. See [1.3.0 RC3 draft notes](docs/Release_Notes_1_3_0_RC3.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -26,17 +26,17 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 ## Project Status
 
-> **Project Status — July 2026**
+> **Project Status — August 2026**
 >
-> **Current release: 1.3.0 RC2.** The 1.3 line now includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, meaning-preserving refactor snapshots and proof gates, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates. RC2 keeps Stable Essential MCP catalogs visible on first launch and fixes macOS Python launcher detection; RC1 sketch/mutation-guard hardening remains.
+> **Current product label: 1.3.0 RC3 (not shippable).** Metadata is aligned across README, manifest, and VERSIONING, but physical install certification is unfinished and distribution remains blocked. The 1.3 line includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, meaning-preserving refactor snapshots and proof gates, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates.
 >
-> RC2 has automated repository evidence for the catalog/installer hotfix, not a new live-model score. The latest saved model results below remain the v1.2.5 UE 5.8 baseline and must not be read as a measured RC2 improvement. Physical Ubuntu/macOS Unreal certification, Ollama support, and the separated runtime/semantic capability scorecards remain in progress.
+> RC3 draft work focuses on release hygiene and install-path clarity (Apple Silicon vs Intel Mac). Do not treat RC3 as deployable until install validation closes and `releaseReady` flips. The latest saved model results below remain the v1.2.5 UE 5.8 baseline.
 
 ## Documentation Hub
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0_RC2.md"><img alt="1.3.0 RC2 Release Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC2-yellow?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_0_RC3.md"><img alt="1.3.0 RC3 Draft Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC3%20draft-lightgrey?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
   <a href="docs/Roadmap_1_3_0.md"><img alt="v1.3.0 Roadmap" src="https://img.shields.io/badge/Roadmap-v1.3.0-orange?logo=gitbook"></a>
@@ -45,7 +45,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 ## Latest Results
 
-These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 RC2 live rerun has not been completed yet.
+These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 RC3 live rerun has not been completed yet.
 
 | Model / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|

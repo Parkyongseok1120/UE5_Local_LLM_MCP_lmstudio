@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC2
+# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC3
 
-> **Release Candidate:** portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows, Ubuntu Linux, macOS에서 하나의 통합 workflow로 설치할 수 있습니다. Unreal engine 탐색·인덱싱 경로·Editor export·agent build launcher는 host별 경로를 사용합니다. Ubuntu/macOS의 RAG indexing은 `pwsh`를 사용하며, 실제 플랫폼 live 인증은 아직 남아 있습니다. Runtime archive는 고정 SHA-256을 확인하고 제한된 안전 추출을 거칩니다. [1.3.0 RC2 릴리스 노트](docs/Release_Notes_1_3_0_RC2.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
+> **프리릴리스 (아직 배포 불가):** 제품 메타데이터는 **1.3.0 RC3**로 맞춰 두었지만 설치 검증이 끝나지 않았고 `releaseReady`는 `false`입니다. portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows·Ubuntu Linux에서 통합 workflow로 설치할 수 있습니다. **Apple Silicon macOS**는 설치기 경로가 있으나 미인증이며, **Intel macOS**는 LM Studio 구성 설치가 초기에 차단됩니다(custom Codex/Cline-only는 허용). `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.0 RC3 초안 노트](docs/Release_Notes_1_3_0_RC3.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
@@ -26,11 +26,11 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 ## 프로젝트 현황
 
-> **프로젝트 현황 — 2026년 7월**
+> **프로젝트 현황 — 2026년 8월**
 >
-> **현재 릴리스는 1.3.0 RC2입니다.** 1.3 라인에는 특정 프로젝트에 종속되지 않는 evidence-first 분석 skill, LM Studio MCP 통합, 프로젝트 전역 symbol/dependency/call/data-flow 분석, fail-closed architecture/change-impact/code-generation contract, 의미 보존 refactor snapshot·proof gate, 장기 작업 checkpoint 복구, 순위 기반 runtime experiment와 patch 후보 비교, risk-tier orchestration, 단일 cross-platform installer, 강화된 release/live-test gate가 포함됩니다. RC2는 최초 실행에서도 Stable Essential MCP catalog가 보이도록 하고 macOS Python launcher 탐지를 고칩니다. RC1의 sketch/mutation-guard hardening은 유지됩니다.
+> **현재 제품 라벨은 1.3.0 RC3이며 아직 배포 가능하지 않습니다.** README·manifest·VERSIONING 버전은 맞춰 두었지만 실제 설치 인증이 끝나지 않아 배포는 차단된 상태입니다. 1.3 라인에는 특정 프로젝트에 종속되지 않는 evidence-first 분석 skill, LM Studio MCP 통합, 프로젝트 전역 symbol/dependency/call/data-flow 분석, fail-closed architecture/change-impact/code-generation contract, 의미 보존 refactor snapshot·proof gate, 장기 작업 checkpoint 복구, 순위 기반 runtime experiment와 patch 후보 비교, risk-tier orchestration, 단일 cross-platform installer, 강화된 release/live-test gate가 포함됩니다.
 >
-> RC2에는 catalog/installer hotfix에 대한 저장소 자동 검증 근거가 있지만 새로운 live-model 점수는 아직 없습니다. 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline이며 RC2의 측정 성능 향상으로 해석하면 안 됩니다. 실제 Ubuntu/macOS Unreal 인증, Ollama 지원, 분리된 runtime/semantic capability scorecard는 계속 진행 중입니다.
+> RC3 초안 작업은 릴리스 위생과 설치 경로 정리(Apple Silicon vs Intel Mac)에 초점을 둡니다. 설치 검증이 끝나고 `releaseReady`가 true가 되기 전에는 RC3를 배포 가능으로 보지 마세요. 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline입니다.
 
 ---
 
@@ -38,7 +38,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0_RC2.md"><img alt="1.3.0 RC2 Release Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC2-yellow?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_0_RC3.md"><img alt="1.3.0 RC3 Draft Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC3%20draft-lightgrey?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
   <a href="docs/Roadmap_1_3_0.md"><img alt="v1.3.0 Roadmap" src="https://img.shields.io/badge/Roadmap-v1.3.0-orange?logo=gitbook"></a>
@@ -47,7 +47,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 ## 최신 결과
 
-아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 RC2 paired live 재측정은 아직 완료되지 않았습니다.
+아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 RC3 paired live 재측정은 아직 완료되지 않았습니다.
 
 | 모델 / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
@@ -159,7 +159,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 | 주제 | 파일 |
 |---|---|
-| 1.3.0 RC2 릴리스 노트 | [docs/Release_Notes_1_3_0_RC2.md](docs/Release_Notes_1_3_0_RC2.md) |
+| 1.3.0 RC3 초안 노트 | [docs/Release_Notes_1_3_0_RC3.md](docs/Release_Notes_1_3_0_RC3.md) |
 | 상세 프로젝트 개요 | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | 모델 측정 결과 | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | 버전별 성능 이력 | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -180,7 +180,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 ## 요약
 
-1.3.0 RC2은 prerelease이지만, 아키텍처·설치·릴리스 경로를 더 넓은 자동 검증으로 보호합니다.
+1.3.0 RC3은 아직 배포 불가 prerelease이며, 아키텍처·설치·릴리스 경로를 더 넓은 자동 검증으로 보호합니다.
 
 좁은 UE 5.8 compile-fix 작업에서는 현재 community fine-tuned Qwen 3.6 27B local workflow가 live UBT validation에서 강한 결과를 냈습니다(36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B도 compact-model 결과를 저장했습니다(35/36 Pass@K, 33/36 Pass@1). 이 결과는 내부 workflow 측정이며, Claude/GPT 계열과의 일반 모델 동등성 주장이 아닙니다.
 

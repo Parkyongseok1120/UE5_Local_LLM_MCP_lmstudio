@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const assert = require("assert");
 const test = require("node:test");
@@ -40,7 +40,7 @@ test("compiler failure is a recoverable build outcome, not an MCP tool error", (
 });
 
 test("compact compiler diagnostics remove machine path and mojibake tail", () => {
-  const raw = "D:\\BuildAgent\\Game\\Source\\StaminaComponent.cpp(93,28): error C2039: 'Empty': 'FGameplayTagContainer'?占쏙옙 깨진 설명";
+  const raw = "D:\\BuildAgent\\Game\\Source\\StaminaComponent.cpp(93,28): error C2039: 'Empty': 'FGameplayTagContainer'??좎룞??源⑥쭊 ?ㅻ챸";
   const compact = compactCompilerDiagnostic(raw);
   assert.strictEqual(
     compact,
@@ -64,14 +64,14 @@ test("compact compiler diagnostics remove machine path and mojibake tail", () =>
 });
 
 test("clang diagnostics keep project-relative coordinates and route to the failing range", () => {
-  const raw = "/Users/example/Game/Source/Demo/GomokuGameState.cpp:109:17: error: too few arguments to function call, single argument 'bForceEnd' was not specified";
+  const raw = "/tmp/example/Game/Source/Demo/GomokuGameState.cpp:109:17: error: too few arguments to function call, single argument 'bForceEnd' was not specified";
   const payload = buildResponsePayload({
     result: { ok: false, exitCode: 6, stdout: raw, stderr: "", error: "" },
     build: { target: "GameEditor", platform: "Mac", configuration: "Development" },
     planResult: { ok: true },
-    projectPath: "/Users/example/Game/Game.uproject",
+    projectPath: "/tmp/example/Game/Game.uproject",
     command: "Build.sh GameEditor Mac Development",
-    logPath: "/Users/example/Game/.agent/logs/latest-build.log",
+    logPath: "/tmp/example/Game/.agent/logs/latest-build.log",
     verbose: false,
   });
 
@@ -160,9 +160,9 @@ test("clang linker blocks preserve undefined symbols and route to the missing de
     result: { ok: false, exitCode: 6, stdout: output, stderr: "", error: "" },
     build: { target: "DemoEditor", platform: "Mac", configuration: "Development" },
     planResult: { ok: true },
-    projectPath: "/Users/example/Demo/Demo.uproject",
+    projectPath: "/tmp/example/Demo/Demo.uproject",
     command: "Build.sh DemoEditor Mac Development",
-    logPath: "/Users/example/Demo/.agent/logs/latest-build.log",
+    logPath: "/tmp/example/Demo/.agent/logs/latest-build.log",
     verbose: false,
   });
 
@@ -180,18 +180,18 @@ test("clang linker blocks preserve undefined symbols and route to the missing de
 
 test("same-file incomplete type recovery includes the source preamble when bounded", () => {
   const output = [
-    "/Users/example/Demo/Source/Demo/Board.cpp:92:51: error: cannot initialize a parameter of type 'const APlayerController *' with an rvalue of type 'ABoard *'",
-    "/Users/example/Demo/Source/Demo/Board.cpp:100:29: error: member access into incomplete type 'ADemoGameState'",
-    "/Users/example/Demo/Source/Demo/Board.cpp:108:12: error: member access into incomplete type 'ADemoGameState'",
+    "/tmp/example/Demo/Source/Demo/Board.cpp:92:51: error: cannot initialize a parameter of type 'const APlayerController *' with an rvalue of type 'ABoard *'",
+    "/tmp/example/Demo/Source/Demo/Board.cpp:100:29: error: member access into incomplete type 'ADemoGameState'",
+    "/tmp/example/Demo/Source/Demo/Board.cpp:108:12: error: member access into incomplete type 'ADemoGameState'",
   ].join("\n");
 
   const payload = buildResponsePayload({
     result: { ok: false, exitCode: 6, stdout: output, stderr: "", error: "" },
     build: { target: "DemoEditor", platform: "Mac", configuration: "Development" },
     planResult: { ok: true },
-    projectPath: "/Users/example/Demo/Demo.uproject",
+    projectPath: "/tmp/example/Demo/Demo.uproject",
     command: "Build.sh DemoEditor Mac Development",
-    logPath: "/Users/example/Demo/.agent/logs/latest-build.log",
+    logPath: "/tmp/example/Demo/.agent/logs/latest-build.log",
     verbose: false,
   });
 

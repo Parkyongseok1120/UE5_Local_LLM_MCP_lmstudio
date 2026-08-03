@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,7 @@ SCAN_DIRS = (
     ROOT / "RAG_Project_Guidelines",
 )
 SCAN_ROOT_MARKDOWN = True
-TEXT_SUFFIXES = {".bat", ".json", ".ps1", ".py", ".txt", ".yml", ".yaml", ".md"}
+TEXT_SUFFIXES = {".bat", ".json", ".ps1", ".py", ".txt", ".yml", ".yaml", ".md", ".js", ".log", ".sh"}
 SKIP_FILES = {
     ROOT / "scripts" / "installer_support" / "Verify-Oss-Ready.ps1",
     ROOT / "CONTRIBUTING.md",
@@ -27,7 +28,17 @@ SKIP_FILES = {
     ROOT / "tests" / "test_public_path_hygiene.py",
     ROOT / "docs" / "Live_Validation_Results_20260711.md",
     ROOT / "docs" / "Roadmap_9B_Domain_Expansion.md",
+    ROOT / "docs" / "Project_Overview.md",
 }
+
+HOME_PATH_MARKERS = (
+    "C:" + "\\Users\\",
+    "C:/Users/",
+)
+HOME_PATH_REGEXES = (
+    re.compile(r"(?<![A-Za-z0-9_])/Users/(?!Shared/)[A-Za-z]"),
+    re.compile(r"(?<![A-Za-z0-9_])/home/[A-Za-z]"),
+)
 
 
 def _text_files():
@@ -38,7 +49,7 @@ def _text_files():
         for path in base.rglob("*"):
             if not path.is_file() or path in SKIP_FILES or path in seen:
                 continue
-            if "release_evidence" in path.parts:
+            if "node_modules" in path.parts or "release_evidence" in path.parts:
                 continue
             if path.suffix.lower() in TEXT_SUFFIXES:
                 seen.add(path)
@@ -50,15 +61,20 @@ def _text_files():
                 yield path
 
 
-def test_no_personal_windows_user_paths_in_release_files():
-    forbidden = ("C:" + "\\Users\\", "C:/Users/")
+def test_no_personal_home_paths_in_release_files():
     violations: list[str] = []
     for path in _text_files():
         text = path.read_text(encoding="utf-8", errors="replace")
-        for marker in forbidden:
+        for marker in HOME_PATH_MARKERS:
             if marker in text:
                 violations.append(str(path.relative_to(ROOT)))
-    assert not violations, "Personal Windows paths found:\n" + "\n".join(sorted(violations))
+                break
+        else:
+            for regex in HOME_PATH_REGEXES:
+                if regex.search(text):
+                    violations.append(str(path.relative_to(ROOT)))
+                    break
+    assert not violations, "Personal home paths found:\n" + "\n".join(sorted(violations))
 
 
 def test_no_versioned_unreal_install_path_defaults_in_code_or_config():

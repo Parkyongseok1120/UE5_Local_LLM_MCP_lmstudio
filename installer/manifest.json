@@ -32,8 +32,13 @@
   "portablePackage": {
     "launchers": ["INSTALL.bat", "install.sh"],
     "indexIncludedByDefault": false,
-    "supportedHosts": ["windows", "ubuntu-linux", "macos"],
+    "supportedHosts": ["windows", "ubuntu-linux", "macos-apple-silicon"],
+    "hostNotes": {
+      "macos-apple-silicon": "Installer available; LM Studio live certification and notarization pending",
+      "macos-intel": "LM Studio configuration unsupported; custom Codex/portable_rule/Cline-only allowed"
+    },
     "runtimeArchiveIntegrity": "pinned-sha256",
-    "safeExtraction": true
+    "safeExtraction": true,
+    "releaseReady": false
   }
 }

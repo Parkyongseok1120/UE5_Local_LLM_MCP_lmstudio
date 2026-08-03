@@ -80,7 +80,16 @@ $forbiddenPathPatterns = @(
     '(^|\\)\.pytest_cache\\',
     '(^|\\)data\\baseline\\',
     '(^|\\)data\\wrapper_runs\\',
-    '(^|\\)data\\scaffold_runs\\'
+    '(^|\\)data\\scaffold_runs\\',
+    '(?i)local_ai_',
+    '(?i)(^|\\)omock_',
+    '(?i)_session\.json$',
+    '(?i)\.out\.log$',
+    '(?i)\.runner\.log$',
+    '(?i)stage_campaign_marathon',
+    '(?i)supervisor_local_ai',
+    '(?i)lmstudio_e2e_driver',
+    '(?i)run_omock_'
 )
 
 $ignoredLocalFiles = @(
@@ -90,22 +99,34 @@ $ignoredLocalFiles = @(
     'lmstudio-unreal-agent-mcp\config\lmstudio-mcp-unreal-agent.json'
 )
 
+# Cross-platform absolute home paths + personal project markers + credentials.
+# /Users/Shared is a system path on macOS and is allowed.
 $forbiddenContentPatterns = @(
-    'tvly-',
-    'C:\\Users\\',
-    'C:/Users/',
-    'C:\\Program Files\\Epic Games\\UE_',
-    'C:/Program Files/Epic Games/UE_',
-    'SoulslikePrototype',
-    '\\Unreal Projects\\SoulslikePrototype',
-    'D:\\Unreal58-RAG-Portable',
-    'D:/Unreal58-RAG-Portable'
+    @{ Name = 'tvly-api-key'; Regex = 'tvly-' },
+    @{ Name = 'win-users-backslash'; Regex = 'C:\\Users\\(?!Public\\)' },
+    @{ Name = 'win-users-slash'; Regex = 'C:/Users/(?!Public/)' },
+    @{ Name = 'unix-users'; Regex = '(?<![A-Za-z0-9_])/Users/(?!Shared/)[A-Za-z]' },
+    @{ Name = 'unix-home'; Regex = '(?<![A-Za-z0-9_])/home/[A-Za-z]' },
+    @{ Name = 'O-Mock'; Regex = '\bO-Mock\b' },
+    @{ Name = 'Project_MJS'; Regex = '\bProject_MJS\b' },
+    @{ Name = 'credential-assignment'; Regex = '(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*["''][^"'']{8,}' },
+    @{ Name = 'epic-ue-path-backslash'; Regex = 'C:\\Program Files\\Epic Games\\UE_' },
+    @{ Name = 'epic-ue-path-slash'; Regex = 'C:/Program Files/Epic Games/UE_' },
+    @{ Name = 'SoulslikePrototype'; Regex = 'SoulslikePrototype' },
+    @{ Name = 'portable-d-drive'; Regex = 'D:[\\/]Unreal58-RAG-Portable' }
+)
+
+# Scan all tracked text-like files, including .log/.json/.txt/.md.
+$scanExtensions = @(
+    '.json', '.md', '.py', '.ps1', '.yaml', '.yml', '.js', '.txt', '.bat', '.sh',
+    '.log', '.csv', '.xml', '.toml', '.ini', '.cfg', '.command'
 )
 
 $scanFiles = Get-ScanFiles $root
 foreach ($file in $scanFiles) {
     $rel = $file.Substring($root.Length).TrimStart('\', '/')
     $relNormalized = $rel.Replace('/', '\')
+    $relPosix = $rel.Replace('\', '/')
     if ($rel -match '(?i)Verify-Oss-Ready\.ps1$') {
         continue
     }
@@ -114,7 +135,7 @@ foreach ($file in $scanFiles) {
     }
     $skipGeneratedPath = $false
     foreach ($pattern in $forbiddenPathPatterns) {
-        if ($rel -match $pattern) {
+        if ($relNormalized -match $pattern -or $relPosix -match $pattern) {
             if ($gitAvailable) {
                 Fail "forbidden tracked/generated path in scan set: $rel"
             }
@@ -145,30 +166,57 @@ foreach ($file in $scanFiles) {
     }
 
     $ext = [System.IO.Path]::GetExtension($file).ToLowerInvariant()
-    if ($ext -in @('.json', '.md', '.py', '.ps1', '.yaml', '.yml', '.js', '.txt', '.bat', '.sh')) {
+    $scanByName = $false
+    if (-not $ext) {
+        # Extensionless text files such as LICENSE / INSTALL helpers.
+        $scanByName = $true
+    }
+    if ($ext -in $scanExtensions -or $scanByName) {
         try {
             $text = Get-Content -LiteralPath $file -Raw -Encoding UTF8 -ErrorAction Stop
         }
         catch {
             continue
         }
-        foreach ($pattern in $forbiddenContentPatterns) {
-            if ($text -match [regex]::Escape($pattern) -or $text -match $pattern) {
-                if ($pattern -eq 'C:\\Users\\' -and $rel -match '(?i)(SECURITY\.md|Verify-Oss-Ready\.ps1)$') {
-                    continue
-                }
-                if ($pattern -eq 'C:\\Users\\' -and $rel -match 'workspace_paths\.py$') {
-                    continue
-                }
-                # Allow documentation files that mention C:\Users\ as an example/warning of what not to do
-                if ($pattern -eq 'C:\\Users\\' -and $rel -match '(?i)(README.*\.md|CONTRIBUTING\.md|README-PORTABLE\.md)$') {
-                    # Only allow if the mention is clearly instructional context (template placeholder or checklist)
-                    if ($text -match '(?i)(avoid|do not|must not|never|example|<name>|<username>|YOUR_NAME)') {
-                        continue
-                    }
-                }
-                Fail "forbidden content '$pattern' in $rel"
+        foreach ($entry in $forbiddenContentPatterns) {
+            $pattern = $entry.Regex
+            $name = $entry.Name
+            if ($text -notmatch $pattern) {
+                continue
             }
+            if ($name -in @('win-users-backslash', 'win-users-slash', 'unix-users', 'unix-home') -and
+                $rel -match '(?i)(SECURITY\.md|Verify-Oss-Ready\.ps1|test_public_path_hygiene\.py|workspace_paths\.py)$') {
+                continue
+            }
+            if ($name -in @('win-users-backslash', 'win-users-slash') -and
+                $rel -match '(?i)(README.*\.md|CONTRIBUTING\.md|README-PORTABLE\.md|PORTABLE-INSTALL\.md)$') {
+                if ($text -match '(?i)(avoid|do not|must not|never|example|<name>|<username>|YOUR_NAME|placeholder)') {
+                    continue
+                }
+            }
+            # Historical docs may mention Project_MJS as a past evaluation target.
+            if ($name -eq 'Project_MJS' -and $relPosix -match '(?i)^docs/') {
+                continue
+            }
+            # Synthetic fixture names inside unit tests.
+            if ($name -eq 'Project_MJS' -and (
+                    $relPosix -match '(?i)(^|/)tests?(/|$)' -or
+                    $relPosix -match '\.test\.js$' -or
+                    $relPosix -match '(?i)test_'
+                )) {
+                continue
+            }
+            # Synthetic placeholder homes used in unit tests.
+            if ($name -eq 'unix-users' -and $text -match '/Users/example/') {
+                continue
+            }
+            # Scanner / builder source that constructs path regexes from parts still may
+            # mention path fragments in comments; allow only self-check scripts.
+            if ($name -in @('win-users-backslash', 'win-users-slash', 'unix-users', 'unix-home') -and
+                $relPosix -match '(?i)(validate_holdout_cases\.py|build_integrated_package\.py)$') {
+                continue
+            }
+            Fail "forbidden content '$name' in $rel"
         }
     }
 }

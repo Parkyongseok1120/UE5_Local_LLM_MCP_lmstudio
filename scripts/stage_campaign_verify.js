@@ -6,13 +6,11 @@
  *
  * Requires STAGE_CAMPAIGN_PROJECT_ROOT or E2E_WORKSPACE (Unreal project root).
  * Optional STAGE_CAMPAIGN_SOURCE_MODULE (C++ module folder under Source/).
- * Optional STAGE_CAMPAIGN_STAGES_PATH (defaults to scripts/stage_campaign_stages.json).
+ * Requires STAGE_CAMPAIGN_STAGES_PATH (JSON campaign definition; not shipped with personal projects).
  */
 
 const fs = require("node:fs");
 const path = require("node:path");
-
-const DEFAULT_STAGES_PATH = path.join(__dirname, "stage_campaign_stages.json");
 
 function resolveProjectRoot() {
   const root = String(
@@ -51,9 +49,14 @@ function detectSourceModule(projectRoot) {
 }
 
 function stagesPath() {
-  return process.env.STAGE_CAMPAIGN_STAGES_PATH
-    ? path.resolve(process.env.STAGE_CAMPAIGN_STAGES_PATH)
-    : DEFAULT_STAGES_PATH;
+  const raw = String(process.env.STAGE_CAMPAIGN_STAGES_PATH || "").trim();
+  if (!raw) {
+    throw new Error(
+      "Set STAGE_CAMPAIGN_STAGES_PATH to a local campaign stages JSON file. "
+      + "Personal campaign definitions are not shipped in this repository."
+    );
+  }
+  return path.resolve(raw);
 }
 
 function loadStages() {

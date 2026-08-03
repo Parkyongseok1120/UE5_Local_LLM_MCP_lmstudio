@@ -1,7 +1,8 @@
 "use strict";
 /**
- * Quarantine stale "running" tasks in shared ~/.lmstudio/state/unreal-agent.
- * Does not touch O-Mock game code. Backs up each state.json before marking cancelled.
+ * Quarantine stale "running" tasks in shared LM Studio unreal-agent state.
+ * Backs up each state.json before marking cancelled. Writes reports under the
+ * state root (never into the product repository).
  */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -10,22 +11,25 @@ const os = require("node:os");
 const STATE_ROOT = path.join(os.homedir(), ".lmstudio", "state", "unreal-agent");
 const TASKS = path.join(STATE_ROOT, "tasks");
 const QUARANTINE = path.join(STATE_ROOT, "quarantine");
-const DEBUG = path.join(__dirname, "..", "debug-821b0f.log");
-const REPORT = path.join(__dirname, "mcp_stale_task_quarantine_report.json");
+const REPORT = path.join(STATE_ROOT, "mcp_stale_task_quarantine_report.json");
 
 function log(message, data, hypothesisId = "H1") {
-  fs.appendFileSync(
-    DEBUG,
-    JSON.stringify({
-      sessionId: "821b0f",
-      runId: "mcp-quarantine",
-      hypothesisId,
-      location: "mcp_quarantine_stale_tasks.js",
-      message,
-      data,
-      timestamp: Date.now(),
-    }) + "\n",
-  );
+  // Optional local debug sink outside the repository checkout.
+  const debugPath = process.env.MCP_QUARANTINE_DEBUG_LOG;
+  if (debugPath) {
+    fs.appendFileSync(
+      debugPath,
+      JSON.stringify({
+        sessionId: "quarantine",
+        runId: "mcp-quarantine",
+        hypothesisId,
+        location: "mcp_quarantine_stale_tasks.js",
+        message,
+        data,
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+  }
   console.log(message, JSON.stringify(data));
 }
 
