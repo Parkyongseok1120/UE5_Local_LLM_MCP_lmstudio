@@ -46,6 +46,17 @@ const PLUGIN_ROOT = path.join(os.homedir(), ".lmstudio", "extensions", "plugins"
 const MAX_ROUNDS = Number(process.env.E2E_MAX_ROUNDS || 16);
 const START_AT = Math.max(1, Number(process.env.E2E_START_AT || 1));
 const GENERATE_TIMEOUT_MS = Number(process.env.E2E_GENERATE_TIMEOUT_MS || 300_000);
+const MAX_LIST_DIRECTORY_PER_TURN = Number(process.env.E2E_MAX_LIST_PER_TURN || 6);
+const MAX_LIST_PATH_DEPTH = Number(process.env.E2E_MAX_LIST_DEPTH || 4);
+const MAX_PARALLEL_TOOLS = Number(process.env.E2E_MAX_PARALLEL_TOOLS || 3);
+const MAX_AVG_LIST_PER_TURN = Number(process.env.E2E_MAX_AVG_LIST || 5);
+const ESSENTIAL_TOOL_NAMES = new Set([
+  "get_active_project",
+  "unreal_get_active_project",
+  "search_files",
+  "read_file",
+  "read_file_range",
+]);
 
 function sessionsRoot() {
   return process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR
@@ -86,9 +97,9 @@ const PROMPTS = [
 
 const SYSTEM_PROMPT = (
   "You are an Unreal Engine 5.x C++ agent. Use MCP tools before claiming project facts. "
-  + "Prefer get_active_project / list_directory / read_file / unreal_rag_search / search_files. "
-  + "For structure overview: list top-level and Source once, then search_files/read_file for specifics. "
-  + "Do NOT recursively list every subdirectory; cap exploration to high-value folders. "
+  + "Prefer get_active_project / search_files / read_file / read_file_range. "
+  + `list_directory is budget-limited (max ${MAX_LIST_DIRECTORY_PER_TURN}/turn, depth<=${MAX_LIST_PATH_DEPTH}). `
+  + "For structure: list '.' and 'Source' once, then search_files/read_file. Never recursively list every child folder. "
   + "When the user forbids edits, never write/modify files. Be concrete with real paths."
 );
 
@@ -259,6 +270,101 @@ function toLlmToolDefs(mcpTools) {
   }));
 }
 
+function listPathDepth(rawPath) {
+  const normalized = String(rawPath || ".")
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+$/, "");
+  if (!normalized || normalized === ".") return 0;
+  return normalized.split("/").filter(Boolean).length;
+}
+
+function softToolResult(errorCode, error, extras = {}) {
+  return JSON.stringify({
+    ok: false,
+    errorCode,
+    error,
+    stopCurrentWorkflow: false,
+    retryable: false,
+    agentInstruction: extras.agentInstruction
+      || "Stop repeating this tool. Prefer search_files/read_file and produce the answer.",
+    ...extras,
+  }, null, 2);
+}
+
+function wrapToolImpls(toolImpls, turnState) {
+  const wrapped = new Map();
+  for (const [name, impl] of toolImpls.entries()) {
+    wrapped.set(name, async (args) => {
+      if (name === "list_directory") {
+        const listPath = String(args?.path || ".");
+        const depth = listPathDepth(listPath);
+        const key = listPath.replace(/\\/g, "/").replace(/\/+$/, "") || ".";
+        // #region agent log
+        debugLog("H-LIST", "list_directory:guard", "list_directory guard check", {
+          path: key,
+          depth,
+          used: turnState.listCount,
+          maxPerTurn: MAX_LIST_DIRECTORY_PER_TURN,
+          maxDepth: MAX_LIST_PATH_DEPTH,
+          seen: [...turnState.listedPaths],
+        });
+        // #endregion
+        if (turnState.listCount >= MAX_LIST_DIRECTORY_PER_TURN) {
+          turnState.listBlocked += 1;
+          return softToolResult(
+            "LIST_DIRECTORY_BUDGET_EXCEEDED",
+            `list_directory budget exceeded (${MAX_LIST_DIRECTORY_PER_TURN}/turn).`,
+            {
+              path: key,
+              agentInstruction:
+                "Do not call list_directory again this turn. Use search_files or read_file, then answer.",
+            },
+          );
+        }
+        if (depth > MAX_LIST_PATH_DEPTH) {
+          turnState.listBlocked += 1;
+          return softToolResult(
+            "LIST_DIRECTORY_DEPTH_EXCEEDED",
+            `list_directory depth ${depth} exceeds max ${MAX_LIST_PATH_DEPTH}.`,
+            {
+              path: key,
+              depth,
+              agentInstruction:
+                "Do not recurse deeper with list_directory. Use search_files under this folder instead.",
+            },
+          );
+        }
+        if (turnState.listedPaths.has(key)) {
+          turnState.listBlocked += 1;
+          return softToolResult(
+            "LIST_DIRECTORY_DUPLICATE",
+            `list_directory already called for path=${key} this turn.`,
+            {
+              path: key,
+              agentInstruction:
+                "Reuse prior listing results. Call search_files/read_file next, or answer now.",
+            },
+          );
+        }
+        turnState.listCount += 1;
+        turnState.listedPaths.add(key);
+      }
+      return impl(args);
+    });
+  }
+  return wrapped;
+}
+
+function toolDefsForAttempt(allDefs, attempt) {
+  if (attempt <= 1) return allDefs;
+  if (attempt === 2) {
+    return allDefs.filter((def) => ESSENTIAL_TOOL_NAMES.has(def.function.name));
+  }
+  // attempt 3+: force text-only answer from existing evidence
+  return [];
+}
+
 function makeController(client, model, config, toolDefinitions, capture) {
   return {
     client,
@@ -272,7 +378,9 @@ function makeController(client, model, config, toolDefinitions, capture) {
     toolCallGenerationStarted() {},
     toolCallGenerationNameReceived() {},
     toolCallGenerationArgumentFragmentGenerated() {},
-    toolCallGenerationEnded(request) { capture.requests.push(request); },
+    toolCallGenerationEnded(request) {
+      capture.requests.push(request);
+    },
     toolCallGenerationFailed(error) { capture.failures.push(error); },
   };
 }
@@ -323,15 +431,23 @@ async function runUserTurn({
   const turnStarted = Date.now();
   const turnTools = [];
   let finalText = "";
+  const turnState = {
+    listCount: 0,
+    listBlocked: 0,
+    listedPaths: new Set(),
+  };
+  const guardedToolImpls = wrapToolImpls(toolImpls, turnState);
 
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
-    const capture = { fragments: [], requests: [], failures: [] };
+    const capture = { fragments: [], requests: [], failures: [], droppedRequests: 0 };
     debugLog("H1", "round:start", "prediction round", {
       turnIndex,
       round,
       historyLen: historyMessages.length,
       generateTimeoutMs: GENERATE_TIMEOUT_MS,
       pid: process.pid,
+      listCount: turnState.listCount,
+      listBlocked: turnState.listBlocked,
     });
 
     try {
@@ -356,7 +472,23 @@ async function runUserTurn({
           capture.fragments.length = 0;
           capture.requests.length = 0;
           capture.failures.length = 0;
-          const controller = makeController(client, model, config, toolDefinitions, capture);
+          capture.droppedRequests = 0;
+          const attemptTools = toolDefsForAttempt(toolDefinitions, attempt);
+          const attemptConfig = {
+            ...config,
+            temperature: attempt === 1 ? config.temperature : Math.min(Number(config.temperature || 0.2), 0.05),
+          };
+          // #region agent log
+          debugLog("H-PEG", "generate:attempt", "generate attempt tool surface", {
+            turnIndex,
+            round,
+            attempt,
+            toolCount: attemptTools.length,
+            toolNames: attemptTools.map((t) => t.function.name),
+            temperature: attemptConfig.temperature,
+          });
+          // #endregion
+          const controller = makeController(client, model, attemptConfig, attemptTools, capture);
           const chat = Chat.from({ messages: historyMessages });
           try {
             await Promise.race([
@@ -383,11 +515,12 @@ async function runUserTurn({
             lastError = error;
             const errText = String(error?.message || error);
             const transient = /peg-native format|server_error|predict stream returned an error|ECONNRESET|socket hang up/i.test(errText);
-            debugLog("H1", "generate:retry", "generate attempt failed", {
+            debugLog("H-PEG", "generate:retry", "generate attempt failed", {
               turnIndex,
               round,
               attempt,
               transient,
+              nextToolCount: toolDefsForAttempt(toolDefinitions, attempt + 1).length,
               error: errText.slice(0, 240),
             });
             if (timeoutHandle) {
@@ -408,6 +541,7 @@ async function runUserTurn({
         waitedMs: Date.now() - genStarted,
         fragmentChars: capture.fragments.join("").length,
         toolRequests: capture.requests.length,
+        droppedRequests: capture.droppedRequests || 0,
         failures: capture.failures.length,
       });
       // #endregion
@@ -447,10 +581,11 @@ async function runUserTurn({
     historyMessages.push({ role: "assistant", content: assistantContent });
 
     const toolContent = [];
+    let parallelIndex = 0;
     for (const req of capture.requests) {
       const name = req.name;
       const args = req.arguments || {};
-      const impl = toolImpls.get(name);
+      const impl = guardedToolImpls.get(name);
       if (!impl) {
         throw new Error(`TURN_${turnIndex}_UNKNOWN_TOOL: ${name}`);
       }
@@ -460,10 +595,34 @@ async function runUserTurn({
       const started = Date.now();
       let resultText;
       try {
-        resultText = await impl(args);
+        if (parallelIndex >= MAX_PARALLEL_TOOLS) {
+          // Always return a result for every model tool call so the compactor
+          // pending-tool checkpoint cannot stall the next prediction.
+          resultText = softToolResult(
+            "PARALLEL_TOOL_BUDGET_EXCEEDED",
+            `Only ${MAX_PARALLEL_TOOLS} tool calls are executed per model round.`,
+            {
+              tool: name,
+              agentInstruction:
+                `This tool was skipped. Re-issue at most ${MAX_PARALLEL_TOOLS} tool calls per round, or answer with current evidence.`,
+            },
+          );
+          // #region agent log
+          debugLog("H-PAR", "tool:parallel_skip", "skipped excess parallel tool", {
+            turnIndex,
+            round,
+            name,
+            parallelIndex,
+            maxParallel: MAX_PARALLEL_TOOLS,
+          });
+          // #endregion
+        } else {
+          resultText = await impl(args);
+        }
       } catch (error) {
         throw new Error(`TURN_${turnIndex}_TOOL_THROW ${name}: ${error?.message || error}`);
       }
+      parallelIndex += 1;
       const hard = toolResultIsHardError(resultText);
       turnTools.push({
         name,
@@ -502,6 +661,15 @@ async function runUserTurn({
     }
   }
 
+  // #region agent log
+  debugLog("H-LIST", "turn:list_stats", "per-turn list_directory stats", {
+    turnIndex,
+    listCount: turnState.listCount,
+    listBlocked: turnState.listBlocked,
+    listedPaths: [...turnState.listedPaths],
+  });
+  // #endregion
+
   return {
     turnIndex,
     prompt,
@@ -509,7 +677,8 @@ async function runUserTurn({
     chars: finalText.length,
     preview: finalText.replace(/\s+/g, " ").slice(0, 280),
     toolCalls: turnTools,
-    listDirectory: turnTools.filter((t) => t.name === "list_directory").length,
+    listDirectory: turnState.listCount,
+    listBlocked: turnState.listBlocked,
   };
 }
 
@@ -526,6 +695,10 @@ async function main() {
     generateTimeoutMs: GENERATE_TIMEOUT_MS,
     maxRounds: MAX_ROUNDS,
     startAt: START_AT,
+    maxListPerTurn: MAX_LIST_DIRECTORY_PER_TURN,
+    maxListDepth: MAX_LIST_PATH_DEPTH,
+    maxParallelTools: MAX_PARALLEL_TOOLS,
+    maxAvgList: MAX_AVG_LIST_PER_TURN,
   });
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     try {
@@ -655,6 +828,7 @@ async function main() {
         chars: result.chars,
         tools: result.toolCalls.map((t) => t.name),
         listDirectory: result.listDirectory,
+        listBlocked: result.listBlocked,
         preview: result.preview,
       });
       if (result.chars < 40 && result.toolCalls.length === 0) {
@@ -666,9 +840,13 @@ async function main() {
         hardFail = `TURN_${turnIndex}_EMPTY_PROMPT_SYMPTOM`;
         break;
       }
-      const listTotal = stats.calls.filter((c) => c.name === "list_directory").length;
+      if (result.listDirectory > MAX_LIST_DIRECTORY_PER_TURN) {
+        hardFail = `TURN_${turnIndex}_LIST_CAP_BREACH list=${result.listDirectory}`;
+        break;
+      }
+      const listTotal = turnResults.reduce((sum, t) => sum + Number(t.listDirectory || 0), 0);
       const avgList = listTotal / turnResults.length;
-      if (turnResults.length >= 4 && avgList > 10) {
+      if (turnResults.length >= 3 && avgList > MAX_AVG_LIST_PER_TURN) {
         hardFail = `TURN_${turnIndex}_RESCAN_LOOP avgList=${avgList.toFixed(2)}`;
         break;
       }
@@ -692,8 +870,12 @@ async function main() {
       p50Ms: percentile(turnResults.map((t) => t.ms), 0.5),
       p95Ms: percentile(turnResults.map((t) => t.ms), 0.95),
       toolCallTotal: stats.calls.length,
-      listDirectoryTotal: stats.calls.filter((c) => c.name === "list_directory").length,
-      avgListDirectoryPerTurn: Number((stats.calls.filter((c) => c.name === "list_directory").length / Math.max(1, turnResults.length)).toFixed(2)),
+      listDirectoryTotal: turnResults.reduce((sum, t) => sum + Number(t.listDirectory || 0), 0),
+      listDirectoryBlocked: turnResults.reduce((sum, t) => sum + Number(t.listBlocked || 0), 0),
+      avgListDirectoryPerTurn: Number((turnResults.reduce((sum, t) => sum + Number(t.listDirectory || 0), 0) / Math.max(1, turnResults.length)).toFixed(2)),
+      maxListDirectoryPerTurn: MAX_LIST_DIRECTORY_PER_TURN,
+      maxListPathDepth: MAX_LIST_PATH_DEPTH,
+      maxParallelTools: MAX_PARALLEL_TOOLS,
       compaction: health,
     },
     turns: turnResults,

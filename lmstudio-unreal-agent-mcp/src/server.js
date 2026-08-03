@@ -1898,10 +1898,11 @@ function allAgentTools() {
       },
       {
         name: "list_directory",
-        description: "List workspace:// or project:// directories. Source/, Plugins/, Config/, and Content/ resolve against activeProject even when it is outside WORKSPACE_ROOT.",
+        description: "List workspace:// or project:// directories. Source/, Plugins/, Config/, and Content/ resolve against activeProject even when it is outside WORKSPACE_ROOT. Prefer shallow paths; deep recursion is rejected.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace, e.g. '.', 'Source'." },
-          maxEntries: { type: "number", description: "Max entries to show. Default 200." }
+          maxEntries: { type: "number", description: "Max entries to show. Default 200." },
+          maxDepth: { type: "number", description: "Max path depth from project/workspace root. Default 4." }
         }, ["path"])
       },
       {
@@ -2502,6 +2503,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const resolution = await resolveReadToolPath(args.path || ".");
       const target = resolution.absolutePath;
       const maxEntries = Math.max(1, Math.min(Number(args.maxEntries || 200), 1000));
+      const maxDepth = Math.max(1, Math.min(Number(args.maxDepth || 4), 12));
+      const relative = String(
+        resolution.projectRelativePath
+        || resolution.workspaceRelativePath
+        || args.path
+        || "."
+      ).replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
+      const depth = !relative || relative === "." ? 0 : relative.split("/").filter(Boolean).length;
+      if (depth > maxDepth) {
+        return fail(
+          `list_directory depth ${depth} exceeds maxDepth ${maxDepth} for path=${relative || "."}`,
+          {
+            errorCode: "LIST_DIRECTORY_DEPTH_EXCEEDED",
+            retryable: false,
+            stopCurrentWorkflow: false,
+            path: pathMetadata(resolution),
+            depth,
+            maxDepth,
+            agentInstruction:
+              "Do not recurse deeper with list_directory. Use search_files/read_file under this folder instead.",
+            nextSteps: [
+              "Call search_files with a focused query under this path.",
+              "Or read specific files you already know about.",
+            ],
+          }
+        );
+      }
       const s = await statSafe(target);
       if (!s) return fail(`not found: ${args.path}`, { path: pathMetadata(resolution) });
       if (!s.isDirectory()) return fail(`not a directory: ${args.path}`, { path: pathMetadata(resolution) });

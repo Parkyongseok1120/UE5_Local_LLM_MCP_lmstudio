@@ -1,0 +1,1623 @@
+[debug] driver boot {"pid":38640,"platform":"win32","node":"v24.17.0","cwd":"c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio","generateTimeoutMs":300000,"maxRounds":12,"startAt":1,"maxListPerTurn":6,"maxListDepth":4,"maxParallelTools":3,"maxAvgList":5}
+isolatedState C:\Users\sster\AppData\Local\Temp\compactor-marathon-KDkIxb
+pid 38640
+plugin codex/unreal-context-compactor rev 17
+connecting MCP...
+{"event":"mcp_catalog_initialized","server":"unreal-agent","profile":"essential","registeredToolCount":27,"advertisedToolCount":18,"routeContextStatus":"none","routeErrorCode":"","stateRoot":"C:\\Users\\sster\\.lmstudio\\state\\unreal-agent","activeProject":"C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject"}
+[mcp:unreal-rag] {"event":"mcp_catalog_initialized","server":"unreal-rag","profile":"essential","registeredToolCount":60,"advertisedToolCount":25,"routeContextStatus":"none","routeErrorCode":"","stateRoot":"C:\\Users\\sster\\.lmstudio\\state\\unreal-agent","activeProject":"C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject"}
+[debug] tools ready {"count":8,"names":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"]}
+loaded model qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max
+
+===== TURN 1/17 =====
+현재 프로젝트 찾고 코드 구조 전체 적으로 확인해줘
+[debug] prediction round {"turnIndex":1,"round":1,"historyLen":2,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":1,"round":1,"historyLen":2}
+[debug] generate attempt tool surface {"turnIndex":1,"round":1,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=121 context=55040 action=normal
+[debug] generate returned {"turnIndex":1,"round":1,"waitedMs":7437,"fragmentChars":283,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":1,"name":"get_active_project","args":{},"ms":347,"hardError":null,"preview":"{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n    \"projectDir\": \"C:\\\\"}
+[debug] prediction round {"turnIndex":1,"round":2,"historyLen":4,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":1,"round":2,"historyLen":4}
+[debug] generate attempt tool surface {"turnIndex":1,"round":2,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=768 context=55040 action=normal
+[debug] generate returned {"turnIndex":1,"round":2,"waitedMs":6220,"fragmentChars":327,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] list_directory guard check {"path":".","depth":0,"used":0,"maxPerTurn":6,"maxDepth":4,"seen":[]}
+[debug] tool call {"turnIndex":1,"name":"list_directory","args":{"path":".","maxEntries":100},"ms":178,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"\",\n    \"workspaceRelativePath\": \"\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\",\n    \"activeProject\": \"C:\\\\Users"}
+[debug] list_directory guard check {"path":"Source","depth":1,"used":1,"maxPerTurn":6,"maxDepth":4,"seen":["."]}
+[debug] tool call {"turnIndex":1,"name":"list_directory","args":{"path":"Source","maxEntries":200},"ms":173,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source\",\n    \"workspaceRelativePath\": \"Source\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Source\",\n    \"active"}
+[debug] prediction round {"turnIndex":1,"round":3,"historyLen":6,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":0}
+[debug] await generate() {"turnIndex":1,"round":3,"historyLen":6}
+[debug] generate attempt tool surface {"turnIndex":1,"round":3,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=2210 context=55040 action=normal
+[debug] generate returned {"turnIndex":1,"round":3,"waitedMs":5914,"fragmentChars":158,"toolRequests":3,"droppedRequests":0,"failures":0}
+[debug] list_directory guard check {"path":"Source/Project_MJS","depth":2,"used":2,"maxPerTurn":6,"maxDepth":4,"seen":[".","Source"]}
+[debug] tool call {"turnIndex":1,"name":"list_directory","args":{"path":"Source/Project_MJS","maxEntries":200},"ms":168,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS\",\n    \"workspaceRelativePath\": \"Source/Project_MJS\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_M"}
+[debug] list_directory guard check {"path":"Plugins","depth":1,"used":3,"maxPerTurn":6,"maxDepth":4,"seen":[".","Source","Source/Project_MJS"]}
+[debug] tool call {"turnIndex":1,"name":"list_directory","args":{"path":"Plugins","maxEntries":100},"ms":163,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins\",\n    \"workspaceRelativePath\": \"Plugins\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Plugins\",\n    \"act"}
+[debug] list_directory guard check {"path":"Config","depth":1,"used":4,"maxPerTurn":6,"maxDepth":4,"seen":[".","Source","Source/Project_MJS","Plugins"]}
+[debug] tool call {"turnIndex":1,"name":"list_directory","args":{"path":"Config","maxEntries":50},"ms":245,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Config\",\n    \"workspaceRelativePath\": \"Config\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Config\",\n    \"active"}
+[debug] prediction round {"turnIndex":1,"round":4,"historyLen":8,"generateTimeoutMs":300000,"pid":38640,"listCount":5,"listBlocked":0}
+[debug] await generate() {"turnIndex":1,"round":4,"historyLen":8}
+[debug] generate attempt tool surface {"turnIndex":1,"round":4,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=3721 context=55040 action=normal
+[debug] generate returned {"turnIndex":1,"round":4,"waitedMs":5201,"fragmentChars":155,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] list_directory guard check {"path":"Source/Project_MJS/Public","depth":3,"used":5,"maxPerTurn":6,"maxDepth":4,"seen":[".","Source","Source/Project_MJS","Plugins","Config"]}
+[debug] tool call {"turnIndex":1,"name":"list_directory","args":{"path":"Source/Project_MJS/Public","maxEntries":200},"ms":167,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\"}
+[debug] list_directory guard check {"path":"Source/Project_MJS/Private","depth":3,"used":6,"maxPerTurn":6,"maxDepth":4,"seen":[".","Source","Source/Project_MJS","Plugins","Config","Source/Project_MJS/Public"]}
+[debug] tool call {"turnIndex":1,"name":"list_directory","args":{"path":"Source/Project_MJS/Private","maxEntries":200},"ms":1,"hardError":null,"preview":"{\n  \"ok\": false,\n  \"errorCode\": \"LIST_DIRECTORY_BUDGET_EXCEEDED\",\n  \"error\": \"list_directory budget exceeded (6/turn).\",\n  \"stopCurrentWorkflow\": false,\n  \"retryable\": false,\n  \"agentInstruction\": \"Do not call list_direc"}
+[debug] prediction round {"turnIndex":1,"round":5,"historyLen":10,"generateTimeoutMs":300000,"pid":38640,"listCount":6,"listBlocked":1}
+[debug] await generate() {"turnIndex":1,"round":5,"historyLen":10}
+[debug] generate attempt tool surface {"turnIndex":1,"round":5,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=4643 context=55040 action=normal
+[debug] generate returned {"turnIndex":1,"round":5,"waitedMs":6428,"fragmentChars":207,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":1,"name":"search_files","args":{"query":".*\\.h$","path":"Source/Project_MJS/Public","regex":true,"maxResults":150},"ms":310,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\"}
+[debug] tool call {"turnIndex":1,"name":"search_files","args":{"query":".*\\.cpp$","path":"Source/Project_MJS/Private","regex":true,"maxResults":150},"ms":243,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents"}
+[debug] prediction round {"turnIndex":1,"round":6,"historyLen":12,"generateTimeoutMs":300000,"pid":38640,"listCount":6,"listBlocked":1}
+[debug] await generate() {"turnIndex":1,"round":6,"historyLen":12}
+[debug] generate attempt tool surface {"turnIndex":1,"round":6,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=5190 context=55040 action=normal
+[debug] generate returned {"turnIndex":1,"round":6,"waitedMs":5619,"fragmentChars":164,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":1,"name":"search_files","args":{"query":"\\.h$","path":"Source/Project_MJS/Public","regex":true,"maxResults":200},"ms":296,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\"}
+[debug] tool call {"turnIndex":1,"name":"search_files","args":{"query":"\\.cpp$","path":"Source/Project_MJS/Private","regex":true,"maxResults":200},"ms":218,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents"}
+[debug] prediction round {"turnIndex":1,"round":7,"historyLen":14,"generateTimeoutMs":300000,"pid":38640,"listCount":6,"listBlocked":1}
+[debug] await generate() {"turnIndex":1,"round":7,"historyLen":14}
+[debug] generate attempt tool surface {"turnIndex":1,"round":7,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=5724 context=55040 action=normal
+[debug] generate returned {"turnIndex":1,"round":7,"waitedMs":6306,"fragmentChars":148,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":1,"name":"search_files","args":{"query":"\\.h$","path":"Source/Project_MJS/Public","regex":true,"matchFileNames":true,"maxResults":200},"ms":210,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\"}
+[debug] tool call {"turnIndex":1,"name":"search_files","args":{"query":"\\.cpp$","path":"Source/Project_MJS/Private","regex":true,"matchFileNames":true,"maxResults":200},"ms":286,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents"}
+[debug] prediction round {"turnIndex":1,"round":8,"historyLen":16,"generateTimeoutMs":300000,"pid":38640,"listCount":6,"listBlocked":1}
+[debug] await generate() {"turnIndex":1,"round":8,"historyLen":16}
+[debug] generate attempt tool surface {"turnIndex":1,"round":8,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=11196 context=55040 action=normal
+[debug] generate returned {"turnIndex":1,"round":8,"waitedMs":18865,"fragmentChars":967,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":1,"name":"read_file","args":{"path":"Source/Project_MJS/Project_MJS.Build.cs"},"ms":250,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Project_MJS.Build.cs\",\"workspaceRelativePath\":\"Source/Project_MJS/Project_MJS.Build.cs\",\"absolutePath\":\"C:\\\\Users\\\\sster\\\\Doc"}
+[debug] prediction round {"turnIndex":1,"round":9,"historyLen":18,"generateTimeoutMs":300000,"pid":38640,"listCount":6,"listBlocked":1}
+[debug] await generate() {"turnIndex":1,"round":9,"historyLen":18}
+[debug] generate attempt tool surface {"turnIndex":1,"round":9,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=12065 context=55040 action=normal
+[debug] still awaiting generate() {"turnIndex":1,"round":9,"heartbeatN":1,"waitedMs":30007}
+[debug] generate returned {"turnIndex":1,"round":9,"waitedMs":52562,"fragmentChars":4457,"toolRequests":0,"droppedRequests":0,"failures":0}
+[debug] per-turn list_directory stats {"turnIndex":1,"listCount":6,"listBlocked":1,"listedPaths":[".","Source","Source/Project_MJS","Plugins","Config","Source/Project_MJS/Public"]}
+[debug] turn completed {"turnIndex":1,"ms":117843,"chars":4457,"tools":["get_active_project","list_directory","list_directory","list_directory","list_directory","list_directory","list_directory","list_directory","search_files","search_files","search_files","search_files","search_files","search_files","read_file"],"listDirectory":6,"listBlocked":1,"preview":"좋습니다. 이제 프로젝트의 전체적인 구조를 파악했습니다. 사용자에게 체계적으로 정리해서 알려드리겠습니다. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__현재 프로젝트와 코드 구조를 전체적으로 분석한 결과입니다. --- ## 📌 프로젝트 기본 정보 - **프로젝트명**: Project_MJS - **엔진 버전**: Unreal Engine 5.8 - **경로**: `C:\\Users\\sster\\D"}
+
+===== TURN 2/17 =====
+지금 버그있는거 찾기만하고 수정은 하지마.
+[debug] prediction round {"turnIndex":2,"round":1,"historyLen":20,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":1,"historyLen":20}
+[debug] generate attempt tool surface {"turnIndex":2,"round":1,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=13020 context=55040 action=normal
+[debug] generate returned {"turnIndex":2,"round":1,"waitedMs":5822,"fragmentChars":410,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"get_active_project","args":{},"ms":250,"hardError":null,"preview":"{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n    \"projectDir\": \"C:\\\\"}
+[debug] list_directory guard check {"path":"Source/Project_MJS/Private","depth":3,"used":0,"maxPerTurn":6,"maxDepth":4,"seen":[]}
+[debug] tool call {"turnIndex":2,"name":"list_directory","args":{"path":"Source/Project_MJS/Private","maxDepth":3},"ms":171,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents"}
+[debug] prediction round {"turnIndex":2,"round":2,"historyLen":22,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":2,"historyLen":22}
+[debug] generate attempt tool surface {"turnIndex":2,"round":2,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=14466 context=55040 action=normal
+[debug] generate returned {"turnIndex":2,"round":2,"waitedMs":27433,"fragmentChars":787,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h","startLine":1,"endLine":200,"detailLevel":"large"},"ms":164,"hardError":null,"preview":"File: project://Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h\",\"wor"}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp","startLine":1,"endLine":300,"detailLevel":"large"},"ms":244,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp"}
+[debug] prediction round {"turnIndex":2,"round":3,"historyLen":24,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":3,"historyLen":24}
+[debug] generate attempt tool surface {"turnIndex":2,"round":3,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=18999 context=55040 action=normal
+[debug] generate returned {"turnIndex":2,"round":3,"waitedMs":11857,"fragmentChars":243,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Public/Character/Player/CPlayerController.h","startLine":1,"endLine":200,"detailLevel":"large"},"ms":244,"hardError":null,"preview":"File: project://Source/Project_MJS/Public/Character/Player/CPlayerController.h\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/CPlayerController.h\",\"w"}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/CPlayerController.cpp","startLine":1,"endLine":300,"detailLevel":"large"},"ms":162,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/CPlayerController.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/CPlayerController.c"}
+[debug] prediction round {"turnIndex":2,"round":4,"historyLen":26,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":4,"historyLen":26}
+[debug] generate attempt tool surface {"turnIndex":2,"round":4,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=24772 context=55040 action=normal
+[debug] generate returned {"turnIndex":2,"round":4,"waitedMs":12486,"fragmentChars":382,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/CPlayerController.cpp","startLine":300,"endLine":657,"detailLevel":"large"},"ms":164,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/CPlayerController.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/CPlayerController.c"}
+[debug] prediction round {"turnIndex":2,"round":5,"historyLen":28,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":5,"historyLen":28}
+[debug] generate attempt tool surface {"turnIndex":2,"round":5,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=29045 context=55040 action=normal
+[debug] generate returned {"turnIndex":2,"round":5,"waitedMs":14597,"fragmentChars":501,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Public/Character/Player/Component/AttackComponent.h","startLine":1,"endLine":200,"detailLevel":"large"},"ms":164,"hardError":null,"preview":"File: project://Source/Project_MJS/Public/Character/Player/Component/AttackComponent.h\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Component/Attac"}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp","startLine":1,"endLine":300,"detailLevel":"large"},"ms":161,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Component/A"}
+[debug] prediction round {"turnIndex":2,"round":6,"historyLen":30,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":6,"historyLen":30}
+[debug] generate attempt tool surface {"turnIndex":2,"round":6,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=34387 context=55040 action=soft_compact
+[debug] generate returned {"turnIndex":2,"round":6,"waitedMs":28550,"fragmentChars":563,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp","startLine":300,"endLine":382,"detailLevel":"large"},"ms":213,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Component/A"}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Public/Character/Player/Component/DodgeComponent.h","startLine":1,"endLine":100,"detailLevel":"large"},"ms":175,"hardError":null,"preview":"File: project://Source/Project_MJS/Public/Character/Player/Component/DodgeComponent.h\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Component/DodgeC"}
+[debug] prediction round {"turnIndex":2,"round":7,"historyLen":32,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":7,"historyLen":32}
+[debug] generate attempt tool surface {"turnIndex":2,"round":7,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=37480 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":2,"round":7,"waitedMs":29525,"fragmentChars":492,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/DodgeComponent.cpp","startLine":1,"endLine":300,"detailLevel":"large"},"ms":162,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/Component/DodgeComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Component/Do"}
+[debug] prediction round {"turnIndex":2,"round":8,"historyLen":34,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":8,"historyLen":34}
+[debug] generate attempt tool surface {"turnIndex":2,"round":8,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=40636 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":2,"round":8,"waitedMs":25981,"fragmentChars":430,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp","startLine":1,"endLine":300,"detailLevel":"large"},"ms":161,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/SharedComponent/Hea"}
+[debug] prediction round {"turnIndex":2,"round":9,"historyLen":36,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":9,"historyLen":36}
+[debug] generate attempt tool surface {"turnIndex":2,"round":9,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=41990 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":2,"round":9,"waitedMs":27201,"fragmentChars":385,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/SharedComponent/StaminaComponent.cpp","startLine":1,"endLine":300,"detailLevel":"large"},"ms":251,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/SharedComponent/StaminaComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/SharedComponent/St"}
+[debug] prediction round {"turnIndex":2,"round":10,"historyLen":38,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":10,"historyLen":38}
+[debug] generate attempt tool surface {"turnIndex":2,"round":10,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=44490 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":2,"round":10,"waitedMs":24571,"fragmentChars":336,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp","startLine":1,"endLine":300,"detailLevel":"large"},"ms":165,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/Componen"}
+[debug] prediction round {"turnIndex":2,"round":11,"historyLen":40,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":11,"historyLen":40}
+[debug] generate attempt tool surface {"turnIndex":2,"round":11,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=48221 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":2,"round":11,"waitedMs":29192,"fragmentChars":292,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp","startLine":1,"endLine":300,"detailLevel":"large"},"ms":167,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsyst"}
+[debug] prediction round {"turnIndex":2,"round":12,"historyLen":42,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":2,"round":12,"historyLen":42}
+[debug] generate attempt tool surface {"turnIndex":2,"round":12,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=52155 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":2,"round":12,"waitedMs":27469,"fragmentChars":297,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":2,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Camera/CameraRigActor.cpp","startLine":1,"endLine":300,"detailLevel":"large"},"ms":209,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Camera/CameraRigActor.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Camera/CameraRigActor.cpp\",\"workspaceRelativePath"}
+[debug] per-turn list_directory stats {"turnIndex":2,"listCount":1,"listBlocked":0,"listedPaths":["Source/Project_MJS/Private"]}
+[debug] turn completed {"turnIndex":2,"ms":267961,"chars":297,"tools":["get_active_project","list_directory","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range","read_file_range"],"listDirectory":1,"listBlocked":0,"preview":"Let me continue scanning more files for bugs. I'll check: 1. CameraRigActor - camera behavior 2. More cinematic system files - race conditions or memory issues Let me continue reading more files systematically. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5"}
+
+===== TURN 3/17 =====
+시네마틱 관련해서 구현된것들 더 구체적으로 알려줘.
+[debug] prediction round {"turnIndex":3,"round":1,"historyLen":45,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":3,"round":1,"historyLen":45}
+[debug] generate attempt tool surface {"turnIndex":3,"round":1,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=52584 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":3,"round":1,"waitedMs":10617,"fragmentChars":1100,"toolRequests":3,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":3,"name":"get_active_project","args":{},"ms":268,"hardError":null,"preview":"{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n    \"projectDir\": \"C:\\\\"}
+[debug] list_directory guard check {"path":"Source/Project_MJS/Private/Cinematic","depth":4,"used":0,"maxPerTurn":6,"maxDepth":4,"seen":[]}
+[debug] tool call {"turnIndex":3,"name":"list_directory","args":{"path":"Source/Project_MJS/Private/Cinematic"},"ms":172,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private/Cinematic\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private/Cinematic\",\n    \"absolutePath\": \"C:\\\\Use"}
+[debug] list_directory guard check {"path":"Source/Project_MJS/Public/Cinematic","depth":4,"used":1,"maxPerTurn":6,"maxDepth":4,"seen":["Source/Project_MJS/Private/Cinematic"]}
+[debug] tool call {"turnIndex":3,"name":"list_directory","args":{"path":"Source/Project_MJS/Public/Cinematic"},"ms":184,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Cinematic\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public/Cinematic\",\n    \"absolutePath\": \"C:\\\\Users"}
+[debug] prediction round {"turnIndex":3,"round":2,"historyLen":47,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":0}
+[debug] await generate() {"turnIndex":3,"round":2,"historyLen":47}
+[debug] generate attempt tool surface {"turnIndex":3,"round":2,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=55656 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":3,"round":2,"waitedMs":15341,"fragmentChars":749,"toolRequests":3,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/CinematicTypes.h","detailLevel":"large"},"ms":165,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicTypes.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicTypes.h\",\"absolutePa"}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/CinematicDirectorSubsystem.h","detailLevel":"medium"},"ms":246,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicDirectorSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicDirector"}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp","detailLevel":"large"},"ms":162,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicDire"}
+[debug] prediction round {"turnIndex":3,"round":3,"historyLen":49,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":0}
+[debug] await generate() {"turnIndex":3,"round":3,"historyLen":49}
+[debug] generate attempt tool surface {"turnIndex":3,"round":3,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=64191 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":3,"round":3,"waitedMs":22722,"fragmentChars":502,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/CinematicInputLockSubsystem.h","detailLevel":"medium"},"ms":243,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicInputLockSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicInputLo"}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Cinematic/CinematicInputLockSubsystem.cpp","detailLevel":"large"},"ms":173,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicInputLockSubsystem.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicInp"}
+[debug] prediction round {"turnIndex":3,"round":4,"historyLen":51,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":0}
+[debug] await generate() {"turnIndex":3,"round":4,"historyLen":51}
+[debug] generate attempt tool surface {"turnIndex":3,"round":4,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=66243 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":3,"round":4,"waitedMs":24069,"fragmentChars":321,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/CinematicParticipant.h","detailLevel":"medium"},"ms":168,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicParticipant.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicParticipant.h\""}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/CinematicParticipantComponent.h","detailLevel":"large"},"ms":162,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicParticipantComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicParti"}
+[debug] prediction round {"turnIndex":3,"round":5,"historyLen":53,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":0}
+[debug] await generate() {"turnIndex":3,"round":5,"historyLen":53}
+[debug] generate attempt tool surface {"turnIndex":3,"round":5,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=67757 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":3,"round":5,"waitedMs":25840,"fragmentChars":284,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/CinematicActionComponent.h","detailLevel":"medium"},"ms":163,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicActionComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicActionComp"}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Cinematic/CinematicTriggerActor.cpp","detailLevel":"large"},"ms":160,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicTriggerActor.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicTriggerAc"}
+[debug] prediction round {"turnIndex":3,"round":6,"historyLen":55,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":0}
+[debug] await generate() {"turnIndex":3,"round":6,"historyLen":55}
+[debug] generate attempt tool surface {"turnIndex":3,"round":6,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=70011 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":3,"round":6,"waitedMs":26549,"fragmentChars":271,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] list_directory guard check {"path":"Source/Project_MJS/Public/Cinematic/Director","depth":5,"used":2,"maxPerTurn":6,"maxDepth":4,"seen":["Source/Project_MJS/Private/Cinematic","Source/Project_MJS/Public/Cinematic"]}
+[debug] tool call {"turnIndex":3,"name":"list_directory","args":{"path":"Source/Project_MJS/Public/Cinematic/Director"},"ms":1,"hardError":null,"preview":"{\n  \"ok\": false,\n  \"errorCode\": \"LIST_DIRECTORY_DEPTH_EXCEEDED\",\n  \"error\": \"list_directory depth 5 exceeds max 4.\",\n  \"stopCurrentWorkflow\": false,\n  \"retryable\": false,\n  \"agentInstruction\": \"Do not recurse deeper with"}
+[debug] prediction round {"turnIndex":3,"round":7,"historyLen":57,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":1}
+[debug] await generate() {"turnIndex":3,"round":7,"historyLen":57}
+[debug] generate attempt tool surface {"turnIndex":3,"round":7,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=70202 context=55040 action=hard_compact
+[debug] still awaiting generate() {"turnIndex":3,"round":7,"heartbeatN":1,"waitedMs":30017}
+[debug] generate returned {"turnIndex":3,"round":7,"waitedMs":31840,"fragmentChars":224,"toolRequests":3,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":3,"name":"search_files","args":{"query":"CinematicParticipantCoordinator.h","path":"Source/Project_MJS/Public/Cinematic/Director","matchFileNames":true},"ms":175,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Cinematic/Director\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public/Cinematic/Director\",\n    \"absolut"}
+[debug] tool call {"turnIndex":3,"name":"search_files","args":{"query":"CinematicPostActionExecutor.h","path":"Source/Project_MJS/Public/Cinematic/Director","matchFileNames":true},"ms":168,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Cinematic/Director\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public/Cinematic/Director\",\n    \"absolut"}
+[debug] tool call {"turnIndex":3,"name":"search_files","args":{"query":"CinematicSequenceDirectorService.h","path":"Source/Project_MJS/Public/Cinematic/Director","matchFileNames":true},"ms":176,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Cinematic/Director\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public/Cinematic/Director\",\n    \"absolut"}
+[debug] prediction round {"turnIndex":3,"round":8,"historyLen":59,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":1}
+[debug] await generate() {"turnIndex":3,"round":8,"historyLen":59}
+[debug] generate attempt tool surface {"turnIndex":3,"round":8,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=71204 context=55040 action=hard_compact
+[debug] still awaiting generate() {"turnIndex":3,"round":8,"heartbeatN":1,"waitedMs":30009}
+[debug] generate returned {"turnIndex":3,"round":8,"waitedMs":30397,"fragmentChars":237,"toolRequests":3,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/Director/CinematicParticipantCoordinator.h","detailLevel":"large"},"ms":181,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/Director/CinematicParticipantCoordinator.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/Dir"}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/Director/CinematicPostActionExecutor.h","detailLevel":"medium"},"ms":160,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/Director/CinematicPostActionExecutor.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/Directo"}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/Director/CinematicSequenceDirectorService.h","detailLevel":"large"},"ms":170,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/Director/CinematicSequenceDirectorService.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/Di"}
+[debug] prediction round {"turnIndex":3,"round":9,"historyLen":61,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":1}
+[debug] await generate() {"turnIndex":3,"round":9,"historyLen":61}
+[debug] generate attempt tool surface {"turnIndex":3,"round":9,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=72560 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":3,"round":9,"waitedMs":26950,"fragmentChars":322,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Cinematic/CinematicParticipantComponent.cpp","detailLevel":"large"},"ms":221,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicParticipantComponent.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicP"}
+[debug] tool call {"turnIndex":3,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Cinematic/CinematicActionComponent.cpp","detailLevel":"medium"},"ms":208,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicActionComponent.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicAction"}
+[debug] prediction round {"turnIndex":3,"round":10,"historyLen":63,"generateTimeoutMs":300000,"pid":38640,"listCount":2,"listBlocked":1}
+[debug] await generate() {"turnIndex":3,"round":10,"historyLen":63}
+[debug] generate attempt tool surface {"turnIndex":3,"round":10,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=76334 context=55040 action=hard_compact
+[debug] still awaiting generate() {"turnIndex":3,"round":10,"heartbeatN":1,"waitedMs":30001}
+[debug] still awaiting generate() {"turnIndex":3,"round":10,"heartbeatN":2,"waitedMs":59993}
+[debug] still awaiting generate() {"turnIndex":3,"round":10,"heartbeatN":3,"waitedMs":89996}
+[debug] generate returned {"turnIndex":3,"round":10,"waitedMs":91323,"fragmentChars":6946,"toolRequests":0,"droppedRequests":0,"failures":0}
+[debug] per-turn list_directory stats {"turnIndex":3,"listCount":2,"listBlocked":1,"listedPaths":["Source/Project_MJS/Private/Cinematic","Source/Project_MJS/Public/Cinematic"]}
+[debug] turn completed {"turnIndex":3,"ms":309410,"chars":6946,"tools":["get_active_project","list_directory","list_directory","read_file","read_file","read_file","read_file","read_file","read_file","read_file","read_file","read_file","list_directory","search_files","search_files","search_files","read_file","read_file","read_file","read_file","read_file"],"listDirectory":2,"listBlocked":1,"preview":"Now I have a solid understanding of the cinematic system. Let me summarize concretely what’s implemented, referencing real classes and behaviors from the codebase. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__현재 프로젝트에서 시네마틱(컷신/시퀀스) 관련으로 구체적으"}
+
+===== TURN 4/17 =====
+플레이어 관련해서 구현된것들  더 구체적으로 알려줘.
+[debug] prediction round {"turnIndex":4,"round":1,"historyLen":65,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":4,"round":1,"historyLen":65}
+[debug] generate attempt tool surface {"turnIndex":4,"round":1,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=78058 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":4,"round":1,"waitedMs":15163,"fragmentChars":1434,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":4,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h","detailLevel":"large"},"ms":165,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Player/CPlayerCharac"}
+[debug] tool call {"turnIndex":4,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp","startLine":1,"endLine":400,"detailLevel":"large"},"ms":161,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp"}
+[debug] prediction round {"turnIndex":4,"round":2,"historyLen":67,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":4,"round":2,"historyLen":67}
+[debug] generate attempt tool surface {"turnIndex":4,"round":2,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=82418 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":4,"round":2,"waitedMs":21083,"fragmentChars":584,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":4,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Player/CPlayerController.h","detailLevel":"large"},"ms":250,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/CPlayerController.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Player/CPlayerContr"}
+[debug] tool call {"turnIndex":4,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/CPlayerController.cpp","startLine":1,"endLine":400,"detailLevel":"large"},"ms":177,"hardError":null,"preview":"{\n  \"summary\": \"ERROR — Requested line range is already covered by prior reads.\",\n  \"ok\": false,\n  \"error\": \"Requested line range is already covered by prior reads.\",\n  \"phase\": \"failed\",\n  \"userMessage\": \"Requested line"}
+[debug] prediction round {"turnIndex":4,"round":3,"historyLen":69,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":4,"round":3,"historyLen":69}
+[debug] generate attempt tool surface {"turnIndex":4,"round":3,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=84265 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":4,"round":3,"waitedMs":23741,"fragmentChars":560,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":4,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Player/Component/AttackComponent.h","detailLevel":"large"},"ms":173,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Component/AttackComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Player/Comp"}
+[debug] tool call {"turnIndex":4,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp","startLine":1,"endLine":260,"detailLevel":"large"},"ms":245,"hardError":null,"preview":"{\n  \"ok\": true,\n  \"cached\": true,\n  \"evidenceStatus\": \"cached\",\n  \"repeatDetected\": true,\n  \"doNotRepeatRead\": true,\n  \"stopCurrentWorkflow\": false,\n  \"errorCode\": \"READ_REPEAT_DETECTED\",\n  \"retryable\": false,\n  \"phase\":"}
+[debug] prediction round {"turnIndex":4,"round":4,"historyLen":71,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":4,"round":4,"historyLen":71}
+[debug] generate attempt tool surface {"turnIndex":4,"round":4,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=89760 context=55040 action=hard_compact
+[debug] still awaiting generate() {"turnIndex":4,"round":4,"heartbeatN":1,"waitedMs":30007}
+[debug] still awaiting generate() {"turnIndex":4,"round":4,"heartbeatN":2,"waitedMs":60015}
+[debug] still awaiting generate() {"turnIndex":4,"round":4,"heartbeatN":3,"waitedMs":90018}
+[debug] generate returned {"turnIndex":4,"round":4,"waitedMs":97965,"fragmentChars":6357,"toolRequests":0,"droppedRequests":0,"failures":0}
+[debug] per-turn list_directory stats {"turnIndex":4,"listCount":0,"listBlocked":0,"listedPaths":[]}
+[debug] turn completed {"turnIndex":4,"ms":159137,"chars":6357,"tools":["read_file","read_file_range","read_file","read_file_range","read_file","read_file_range"],"listDirectory":0,"listBlocked":0,"preview":"Now I have: - CPlayerCharacter.h/.cpp - CPlayerController.h (and earlier context for .cpp) - AttackComponent.h/.cpp - DodgeComponent (from prior context) - Health/Stamina components (from prior context) - Targeting component (from prior context) - Cinematic integration with playe"}
+
+===== TURN 5/17 =====
+적 캐릭터 관련해서 구현된것들 더 구체적으로 알려줘.
+[debug] prediction round {"turnIndex":5,"round":1,"historyLen":73,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":5,"round":1,"historyLen":73}
+[debug] generate attempt tool surface {"turnIndex":5,"round":1,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=91447 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":1,"waitedMs":7111,"fragmentChars":756,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"get_active_project","args":{},"ms":189,"hardError":null,"preview":"{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n    \"projectDir\": \"C:\\\\"}
+[debug] prediction round {"turnIndex":5,"round":2,"historyLen":75,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":5,"round":2,"historyLen":75}
+[debug] generate attempt tool surface {"turnIndex":5,"round":2,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=94038 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":2,"waitedMs":18621,"fragmentChars":610,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] list_directory guard check {"path":"Source/Project_MJS/Public/Character","depth":4,"used":0,"maxPerTurn":6,"maxDepth":4,"seen":[]}
+[debug] tool call {"turnIndex":5,"name":"list_directory","args":{"path":"Source/Project_MJS/Public/Character","maxEntries":40},"ms":192,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Character\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public/Character\",\n    \"absolutePath\": \"C:\\\\Users"}
+[debug] prediction round {"turnIndex":5,"round":3,"historyLen":77,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":0}
+[debug] await generate() {"turnIndex":5,"round":3,"historyLen":77}
+[debug] generate attempt tool surface {"turnIndex":5,"round":3,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=94676 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":3,"waitedMs":17106,"fragmentChars":227,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] list_directory guard check {"path":"Source/Project_MJS/Public/Character/Enemy","depth":5,"used":1,"maxPerTurn":6,"maxDepth":4,"seen":["Source/Project_MJS/Public/Character"]}
+[debug] tool call {"turnIndex":5,"name":"list_directory","args":{"path":"Source/Project_MJS/Public/Character/Enemy","maxEntries":40},"ms":1,"hardError":null,"preview":"{\n  \"ok\": false,\n  \"errorCode\": \"LIST_DIRECTORY_DEPTH_EXCEEDED\",\n  \"error\": \"list_directory depth 5 exceeds max 4.\",\n  \"stopCurrentWorkflow\": false,\n  \"retryable\": false,\n  \"agentInstruction\": \"Do not recurse deeper with"}
+[debug] prediction round {"turnIndex":5,"round":4,"historyLen":79,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":1}
+[debug] await generate() {"turnIndex":5,"round":4,"historyLen":79}
+[debug] generate attempt tool surface {"turnIndex":5,"round":4,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=94876 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":4,"waitedMs":18167,"fragmentChars":247,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"search_files","args":{"query":"EnemyCharacter|EnemyAIController|EnemyBase|AEnemy","path":"Source/Project_MJS/Public","regex":true,"maxResults":60},"ms":203,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\"}
+[debug] prediction round {"turnIndex":5,"round":5,"historyLen":81,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":1}
+[debug] await generate() {"turnIndex":5,"round":5,"historyLen":81}
+[debug] generate attempt tool surface {"turnIndex":5,"round":5,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=95449 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":5,"waitedMs":18203,"fragmentChars":245,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Enemy/EnemyCharacter.h","detailLevel":"large"},"ms":173,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Enemy/EnemyCharacter.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Enemy/EnemyCharacter.h\""}
+[debug] prediction round {"turnIndex":5,"round":6,"historyLen":83,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":1}
+[debug] await generate() {"turnIndex":5,"round":6,"historyLen":83}
+[debug] generate attempt tool surface {"turnIndex":5,"round":6,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=96348 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":6,"waitedMs":19317,"fragmentChars":244,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Enemy/EnemyFSMComponent.h","detailLevel":"large"},"ms":243,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Enemy/EnemyFSMComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Enemy/EnemyFSMCompon"}
+[debug] prediction round {"turnIndex":5,"round":7,"historyLen":85,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":1}
+[debug] await generate() {"turnIndex":5,"round":7,"historyLen":85}
+[debug] generate attempt tool surface {"turnIndex":5,"round":7,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=97006 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":7,"waitedMs":21170,"fragmentChars":280,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp","startLine":1,"endLine":260,"detailLevel":"large"},"ms":165,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp"}
+[debug] prediction round {"turnIndex":5,"round":8,"historyLen":87,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":1}
+[debug] await generate() {"turnIndex":5,"round":8,"historyLen":87}
+[debug] generate attempt tool surface {"turnIndex":5,"round":8,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=100315 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":8,"waitedMs":25933,"fragmentChars":357,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp","startLine":260,"endLine":278,"detailLevel":"large"},"ms":230,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp"}
+[debug] prediction round {"turnIndex":5,"round":9,"historyLen":89,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":1}
+[debug] await generate() {"turnIndex":5,"round":9,"historyLen":89}
+[debug] generate attempt tool surface {"turnIndex":5,"round":9,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=100857 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":9,"waitedMs":26567,"fragmentChars":322,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp","startLine":1,"endLine":260,"detailLevel":"large"},"ms":166,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp\",\"wor"}
+[debug] prediction round {"turnIndex":5,"round":10,"historyLen":91,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":1}
+[debug] await generate() {"turnIndex":5,"round":10,"historyLen":91}
+[debug] generate attempt tool surface {"turnIndex":5,"round":10,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=104401 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":10,"waitedMs":22202,"fragmentChars":440,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"read_file_range","args":{"path":"Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp","startLine":260,"endLine":290,"detailLevel":"large"},"ms":242,"hardError":null,"preview":"File: project://Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp\",\"wor"}
+[debug] prediction round {"turnIndex":5,"round":11,"historyLen":93,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":1}
+[debug] await generate() {"turnIndex":5,"round":11,"historyLen":93}
+[debug] generate attempt tool surface {"turnIndex":5,"round":11,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=105125 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":11,"waitedMs":21621,"fragmentChars":287,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"search_files","args":{"query":"EnemyActionDataAsset\\.h|GroupCombatSubsystem\\.h","path":"Source/Project_MJS/Public","regex":true,"maxResults":20},"ms":203,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\"}
+[debug] prediction round {"turnIndex":5,"round":12,"historyLen":95,"generateTimeoutMs":300000,"pid":38640,"listCount":1,"listBlocked":1}
+[debug] await generate() {"turnIndex":5,"round":12,"historyLen":95}
+[debug] generate attempt tool surface {"turnIndex":5,"round":12,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=105438 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":5,"round":12,"waitedMs":21664,"fragmentChars":216,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":5,"name":"search_files","args":{"query":"EnemyActionDataAsset","path":"Source/Project_MJS/Public","matchFileNames":true,"maxResults":20},"ms":202,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\"}
+[debug] per-turn list_directory stats {"turnIndex":5,"listCount":1,"listBlocked":1,"listedPaths":["Source/Project_MJS/Public/Character"]}
+[debug] turn completed {"turnIndex":5,"ms":239933,"chars":216,"tools":["get_active_project","list_directory","list_directory","search_files","read_file","read_file","read_file_range","read_file_range","read_file_range","read_file_range","search_files","search_files"],"listDirectory":1,"listBlocked":1,"preview":"The regex search didn’t match due to escaping. Let’s do a simpler search for EnemyActionDataAsset and GroupCombatSubsystem by name. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__"}
+
+===== TURN 6/17 =====
+서브시스템들의 대해서 구현된것들 더 구체적으로 알려줘.
+[debug] prediction round {"turnIndex":6,"round":1,"historyLen":98,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":6,"round":1,"historyLen":98}
+[debug] generate attempt tool surface {"turnIndex":6,"round":1,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=105372 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":6,"round":1,"waitedMs":10527,"fragmentChars":826,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":6,"name":"search_files","args":{"query":"UGameInstanceSubsystem|UWorldSubsystem|ULocalPlayer::Subsystem","path":"Source/Project_MJS","regex":true,"maxResults":80},"ms":263,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS\",\n    \"workspaceRelativePath\": \"Source/Project_MJS\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_M"}
+[debug] tool call {"turnIndex":6,"name":"search_files","args":{"query":"class.*Subsystem","path":"Source/Project_MJS/Public","regex":true,"maxResults":80},"ms":222,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\"}
+[debug] prediction round {"turnIndex":6,"round":2,"historyLen":100,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":6,"round":2,"historyLen":100}
+[debug] generate attempt tool surface {"turnIndex":6,"round":2,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=106864 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":6,"round":2,"waitedMs":11517,"fragmentChars":756,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":6,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/CinematicDirectorSubsystem.h","detailLevel":"large"},"ms":239,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicDirectorSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicDirector"}
+[debug] tool call {"turnIndex":6,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp","detailLevel":"large"},"ms":176,"hardError":null,"preview":"{\n  \"ok\": true,\n  \"cached\": true,\n  \"evidenceStatus\": \"cached\",\n  \"repeatDetected\": true,\n  \"doNotRepeatRead\": true,\n  \"stopCurrentWorkflow\": false,\n  \"errorCode\": \"READ_REPEAT_DETECTED\",\n  \"retryable\": false,\n  \"phase\":"}
+[debug] prediction round {"turnIndex":6,"round":3,"historyLen":102,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":6,"round":3,"historyLen":102}
+[debug] generate attempt tool surface {"turnIndex":6,"round":3,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=111210 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":6,"round":3,"waitedMs":14462,"fragmentChars":385,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":6,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Cinematic/CinematicInputLockSubsystem.h","detailLevel":"large"},"ms":164,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicInputLockSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicInputLo"}
+[debug] tool call {"turnIndex":6,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Cinematic/CinematicInputLockSubsystem.cpp","detailLevel":"large"},"ms":242,"hardError":null,"preview":"{\n  \"ok\": true,\n  \"cached\": true,\n  \"evidenceStatus\": \"cached\",\n  \"repeatDetected\": true,\n  \"doNotRepeatRead\": true,\n  \"stopCurrentWorkflow\": false,\n  \"errorCode\": \"READ_REPEAT_DETECTED\",\n  \"retryable\": false,\n  \"phase\":"}
+[debug] prediction round {"turnIndex":6,"round":4,"historyLen":104,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":6,"round":4,"historyLen":104}
+[debug] generate attempt tool surface {"turnIndex":6,"round":4,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=113581 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":6,"round":4,"waitedMs":16569,"fragmentChars":268,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":6,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Character/Enemy/GroupCombatSubsystem.h","detailLevel":"large"},"ms":164,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Enemy/GroupCombatSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Character/Enemy/GroupCombat"}
+[debug] tool call {"turnIndex":6,"name":"read_file","args":{"path":"Source/Project_MJS/Public/System/Audio/SoundManagerSubsystem.h","detailLevel":"large"},"ms":161,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/System/Audio/SoundManagerSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/System/Audio/SoundManagerSubs"}
+[debug] prediction round {"turnIndex":6,"round":5,"historyLen":106,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":6,"round":5,"historyLen":106}
+[debug] generate attempt tool surface {"turnIndex":6,"round":5,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=115971 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":6,"round":5,"waitedMs":19228,"fragmentChars":250,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":6,"name":"read_file","args":{"path":"Source/Project_MJS/Public/System/Combat/CombatTimeDilationSubsystem.h","detailLevel":"large"},"ms":261,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/System/Combat/CombatTimeDilationSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/System/Combat/CombatTi"}
+[debug] tool call {"turnIndex":6,"name":"read_file","args":{"path":"Source/Project_MJS/Public/System/Debug/DevConsoleSubsystem.h","detailLevel":"large"},"ms":166,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/System/Debug/DevConsoleSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/System/Debug/DevConsoleSubsyste"}
+[debug] prediction round {"turnIndex":6,"round":6,"historyLen":108,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":6,"round":6,"historyLen":108}
+[debug] generate attempt tool surface {"turnIndex":6,"round":6,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=117402 context=55040 action=hard_compact
+[debug] still awaiting generate() {"turnIndex":6,"round":6,"heartbeatN":1,"waitedMs":30004}
+[debug] still awaiting generate() {"turnIndex":6,"round":6,"heartbeatN":2,"waitedMs":60006}
+[debug] generate returned {"turnIndex":6,"round":6,"waitedMs":81745,"fragmentChars":6496,"toolRequests":0,"droppedRequests":0,"failures":0}
+[debug] per-turn list_directory stats {"turnIndex":6,"listCount":0,"listBlocked":0,"listedPaths":[]}
+[debug] turn completed {"turnIndex":6,"ms":156130,"chars":6496,"tools":["search_files","search_files","read_file","read_file","read_file","read_file","read_file","read_file","read_file","read_file"],"listDirectory":0,"listBlocked":0,"preview":"Good. I now have concrete details for all 6 subsystems in the project: 1. UCinematicDirectorSubsystem (UWorldSubsystem) - Cinematic playback director 2. UCinematicInputLockSubsystem (UWorldSubsystem) - Input locking during cinematics 3. UGroupCombatSubsystem (UWorldSubsystem) - E"}
+
+===== TURN 7/17 =====
+카메라 시스템 관련해서 구현된것들 더 구체적으로 알려줘.
+[debug] prediction round {"turnIndex":7,"round":1,"historyLen":110,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":1,"historyLen":110}
+[debug] generate attempt tool surface {"turnIndex":7,"round":1,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=118897 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":1,"waitedMs":6097,"fragmentChars":417,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"search_files","args":{"query":"Camera","path":"Source/Project_MJS","matchFileNames":true,"maxResults":80},"ms":246,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS\",\n    \"workspaceRelativePath\": \"Source/Project_MJS\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_M"}
+[debug] prediction round {"turnIndex":7,"round":2,"historyLen":112,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":2,"historyLen":112}
+[debug] generate attempt tool surface {"turnIndex":7,"round":2,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=124887 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":2,"waitedMs":17036,"fragmentChars":492,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Camera/CameraDirectingComponent.h","detailLevel":"large"},"ms":161,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Camera/CameraDirectingComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Camera/CameraDirectingComponent."}
+[debug] prediction round {"turnIndex":7,"round":3,"historyLen":114,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":3,"historyLen":114}
+[debug] generate attempt tool surface {"turnIndex":7,"round":3,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=126171 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":3,"waitedMs":16680,"fragmentChars":195,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Camera/CameraMoveComponent.h","detailLevel":"large"},"ms":168,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Camera/CameraMoveComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Camera/CameraMoveComponent.h\",\"absolu"}
+[debug] prediction round {"turnIndex":7,"round":4,"historyLen":116,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":4,"historyLen":116}
+[debug] generate attempt tool surface {"turnIndex":7,"round":4,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=127905 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":4,"waitedMs":18728,"fragmentChars":172,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Camera/CameraRigActor.h","detailLevel":"large"},"ms":166,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Camera/CameraRigActor.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Camera/CameraRigActor.h\",\"absolutePath\":\"C"}
+[debug] prediction round {"turnIndex":7,"round":5,"historyLen":118,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":5,"historyLen":118}
+[debug] generate attempt tool surface {"turnIndex":7,"round":5,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=128506 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":5,"waitedMs":20054,"fragmentChars":268,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Camera/CameraRigActor.cpp","detailLevel":"large"},"ms":174,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Camera/CameraRigActor.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Private/Camera/CameraRigActor.cpp\",\"absolutePa"}
+[debug] prediction round {"turnIndex":7,"round":6,"historyLen":120,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":6,"historyLen":120}
+[debug] generate attempt tool surface {"turnIndex":7,"round":6,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=129499 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":6,"waitedMs":21099,"fragmentChars":191,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Camera/CameraDirectingComponent.cpp","detailLevel":"large"},"ms":163,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Camera/CameraDirectingComponent.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Private/Camera/CameraDirectingCompon"}
+[debug] prediction round {"turnIndex":7,"round":7,"historyLen":122,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":7,"historyLen":122}
+[debug] generate attempt tool surface {"turnIndex":7,"round":7,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=131549 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":7,"waitedMs":23302,"fragmentChars":179,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Private/Camera/CameraMoveComponent.cpp","detailLevel":"large"},"ms":166,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Camera/CameraMoveComponent.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Private/Camera/CameraMoveComponent.cpp\",\""}
+[debug] prediction round {"turnIndex":7,"round":8,"historyLen":124,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":8,"historyLen":124}
+[debug] generate attempt tool surface {"turnIndex":7,"round":8,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=133694 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":8,"waitedMs":26530,"fragmentChars":241,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Camera/CameraDirectingComponentFinder.h","detailLevel":"large"},"ms":166,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Camera/CameraDirectingComponentFinder.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Camera/CameraDirectingComp"}
+[debug] prediction round {"turnIndex":7,"round":9,"historyLen":126,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":9,"historyLen":126}
+[debug] generate attempt tool surface {"turnIndex":7,"round":9,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=133996 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":9,"waitedMs":26569,"fragmentChars":178,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotify_CameraFOV.h","detailLevel":"large"},"ms":249,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotify_CameraFOV.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Animation/Notify/Ca"}
+[debug] prediction round {"turnIndex":7,"round":10,"historyLen":128,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":10,"historyLen":128}
+[debug] generate attempt tool surface {"turnIndex":7,"round":10,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=134667 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":10,"waitedMs":27733,"fragmentChars":183,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotifyState_CameraFOV.h","detailLevel":"large"},"ms":166,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotifyState_CameraFOV.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Animation/Noti"}
+[debug] prediction round {"turnIndex":7,"round":11,"historyLen":130,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":11,"historyLen":130}
+[debug] generate attempt tool surface {"turnIndex":7,"round":11,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=135334 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":11,"waitedMs":24280,"fragmentChars":183,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"read_file","args":{"path":"Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotify_CameraShake.h","detailLevel":"large"},"ms":244,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotify_CameraShake.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Animation/Notify/"}
+[debug] prediction round {"turnIndex":7,"round":12,"historyLen":132,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":7,"round":12,"historyLen":132}
+[debug] generate attempt tool surface {"turnIndex":7,"round":12,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=135846 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":7,"round":12,"waitedMs":25732,"fragmentChars":233,"toolRequests":1,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":7,"name":"search_files","args":{"query":"CameraRig|EnsureCameraRig|SetCameraTarget","path":"Source/Project_MJS/Public/Gameplay/Controller/MainMenuPlayerController.h","maxResults":40},"ms":163,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Gameplay/Controller/MainMenuPlayerController.h\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public/Gamep"}
+[debug] per-turn list_directory stats {"turnIndex":7,"listCount":0,"listBlocked":0,"listedPaths":[]}
+[debug] turn completed {"turnIndex":7,"ms":256118,"chars":233,"tools":["search_files","read_file","read_file","read_file","read_file","read_file","read_file","read_file","read_file","read_file","read_file","search_files"],"listDirectory":0,"listBlocked":0,"preview":"Now I have a good understanding of the camera system. Let me also check how it's used in the player controller and character to see the integration. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__"}
+
+===== TURN 8/17 =====
+UI 관련해서 구현된것들 더 구체적으로 알려줘.
+[debug] prediction round {"turnIndex":8,"round":1,"historyLen":135,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":8,"round":1,"historyLen":135}
+[debug] generate attempt tool surface {"turnIndex":8,"round":1,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=135717 context=55040 action=hard_compact
+[debug] generate returned {"turnIndex":8,"round":1,"waitedMs":8465,"fragmentChars":303,"toolRequests":2,"droppedRequests":0,"failures":0}
+[debug] tool call {"turnIndex":8,"name":"search_files","args":{"query":"UUserWidget|Slate|UMG|UI|HUD|WidgetBlueprint|WidgetComponent","path":"Source/Project_MJS/Public","regex":true,"maxResults":150},"ms":206,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\"}
+[debug] tool call {"turnIndex":8,"name":"search_files","args":{"query":"UUserWidget|Slate|UMG|UI|HUD|WidgetBlueprint|WidgetComponent","path":"Source/Project_MJS/Private","regex":true,"maxResults":150},"ms":203,"hardError":null,"preview":"{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents"}
+[debug] prediction round {"turnIndex":8,"round":2,"historyLen":137,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":8,"round":2,"historyLen":137}
+[debug] generate attempt tool surface {"turnIndex":8,"round":2,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[unreal-context-compactor] Proxy active: target=qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max input=150424 context=55040 action=hard_compact
+[debug] still awaiting generate() {"turnIndex":8,"round":2,"heartbeatN":1,"waitedMs":30002}
+[debug] generate returned {"turnIndex":8,"round":2,"waitedMs":30206,"fragmentChars":518,"toolRequests":3,"droppedRequests":2,"failures":0}
+[debug] tool call {"turnIndex":8,"name":"read_file","args":{"path":"Source/Project_MJS/Public/UI/MainMenuHUD.h","detailLevel":"large"},"ms":164,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/UI/MainMenuHUD.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/UI/MainMenuHUD.h\",\"absolutePath\":\"C:\\\\Users\\\\sste"}
+[debug] tool call {"turnIndex":8,"name":"read_file","args":{"path":"Source/Project_MJS/Public/UI/MainMenuWidget.h","detailLevel":"large"},"ms":166,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/UI/MainMenuWidget.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/UI/MainMenuWidget.h\",\"absolutePath\":\"C:\\\\Users"}
+[debug] tool call {"turnIndex":8,"name":"read_file","args":{"path":"Source/Project_MJS/Public/UI/GamePlayWidget.h","detailLevel":"large"},"ms":246,"hardError":null,"preview":"[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/UI/GamePlayWidget.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/UI/GamePlayWidget.h\",\"absolutePath\":\"C:\\\\Users"}
+[debug] prediction round {"turnIndex":8,"round":3,"historyLen":139,"generateTimeoutMs":300000,"pid":38640,"listCount":0,"listBlocked":0}
+[debug] await generate() {"turnIndex":8,"round":3,"historyLen":139}
+[debug] generate attempt tool surface {"turnIndex":8,"round":3,"attempt":1,"toolCount":8,"toolNames":["get_workspace_info","get_active_project","list_directory","read_file","read_file_range","search_files","unreal_rag_search","unreal_get_active_project"],"temperature":0.2}
+[debug] generate attempt failed {"turnIndex":8,"round":3,"attempt":1,"transient":false,"nextToolCount":5,"error":"Generation is paused because 2 prior tool call(s) still lack a result. Wait for LM Studio to record the tool result, or resolve/cancel the failed tool call before sending another message."}
+[debug] generate failed {"turnIndex":8,"round":3,"error":"Error: Generation is paused because 2 prior tool call(s) still lack a result. Wait for LM Studio to record the tool result, or resolve/cancel the failed tool call before sending another message.\n    at generate (C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\dist\\generator.js:454:15)\n    at async runUserTurn (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\scripts\\lmstudio_e2e_driver.js:498:13)\n    at async main (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\scripts\\lmstudio_e2e_driver.js:790:22)"}
+[debug] turn failed — stop marathon {"turnIndex":8,"hardFail":"TURN_8_GENERATE_FAILED: Error: Generation is paused because 2 prior tool call(s) still lack a result. Wait for LM Studio to record the tool result, or resolve/cancel the failed tool call before sending another message.\n    at generate (C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\dist\\generator.js:454:15)\n    at async runUserTurn (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\scripts\\lmstudio_e2e_driver.js:498:13)\n    at async main (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\scripts\\lmstudio_e2e_driver.js:790:22)"}
+[debug] final report {"ok":false,"completedTurns":7,"targetTurns":17,"startAt":1,"hardFail":"TURN_8_GENERATE_FAILED: Error: Generation is paused because 2 prior tool call(s) still lack a result. Wait for LM Studio to record the tool result, or resolve/cancel the failed tool call before sending another message.\n    at generate (C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\dist\\generator.js:454:15)\n    at async runUserTurn (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\scripts\\lmstudio_e2e_driver.js:498:13)\n    at async main (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\scripts\\lmstudio_e2e_driver.js:790:22)","pluginRevision":17,"model":"
+{
+  "ok": false,
+  "completedTurns": 7,
+  "targetTurns": 17,
+  "startAt": 1,
+  "hardFail": "TURN_8_GENERATE_FAILED: Error: Generation is paused because 2 prior tool call(s) still lack a result. Wait for LM Studio to record the tool result, or resolve/cancel the failed tool call before sending another message.\n    at generate (C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\dist\\generator.js:454:15)\n    at async runUserTurn (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\scripts\\lmstudio_e2e_driver.js:498:13)\n    at async main (c:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\scripts\\lmstudio_e2e_driver.js:790:22)",
+  "pluginRevision": 17,
+  "model": "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max",
+  "performance": {
+    "p50Ms": 239933,
+    "p95Ms": 309410,
+    "toolCallTotal": 98,
+    "listDirectoryTotal": 10,
+    "listDirectoryBlocked": 3,
+    "avgListDirectoryPerTurn": 1.43,
+    "maxListDirectoryPerTurn": 6,
+    "maxListPathDepth": 4,
+    "maxParallelTools": 3,
+    "compaction": {
+      "sessionDir": "C:\\Users\\sster\\AppData\\Local\\Temp\\compactor-marathon-KDkIxb\\d64e4ba3ca5d82a426b585bbd2ef581a",
+      "applied": 54,
+      "tinyPosts": 7,
+      "answeringMeta": 0,
+      "last": {
+        "type": "compaction_decision",
+        "at": "2026-08-03T05:40:51.376Z",
+        "action": "hard_compact",
+        "effectiveAction": "hard_compact",
+        "goalChangeCompact": false,
+        "zeroRetainedTurns": false,
+        "answeringMeta": false,
+        "applied": true,
+        "checkpointGeneration": 67,
+        "postInputTokens": 15893,
+        "postRemainingTokens": 28263,
+        "retainedTurns": 1,
+        "currentTurnCap": null,
+        "objectivePreview": "UI 관련해서 구현된것들 더 구체적으로 알려줘."
+      },
+      "objective": "UI 관련해서 구현된것들 더 구체적으로 알려줘."
+    }
+  },
+  "turns": [
+    {
+      "turnIndex": 1,
+      "prompt": "현재 프로젝트 찾고 코드 구조 전체 적으로 확인해줘",
+      "ms": 117843,
+      "chars": 4457,
+      "preview": "좋습니다. 이제 프로젝트의 전체적인 구조를 파악했습니다. 사용자에게 체계적으로 정리해서 알려드리겠습니다. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__현재 프로젝트와 코드 구조를 전체적으로 분석한 결과입니다. --- ## 📌 프로젝트 기본 정보 - **프로젝트명**: Project_MJS - **엔진 버전**: Unreal Engine 5.8 - **경로**: `C:\\Users\\sster\\D",
+      "toolCalls": [
+        {
+          "name": "get_active_project",
+          "args": {},
+          "ms": 347,
+          "preview": "{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Projec",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": ".",
+            "maxEntries": 100
+          },
+          "ms": 178,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"\",\n    \"workspaceRelativePath\": \"\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Proje",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source",
+            "maxEntries": 200
+          },
+          "ms": 173,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source\",\n    \"workspaceRelativePath\": \"Source\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source/Project_MJS",
+            "maxEntries": 200
+          },
+          "ms": 168,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS\",\n    \"workspaceRelativePath\": \"Source/Project_MJS\",\n    \"absolutePath\": \"C:\\",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Plugins",
+            "maxEntries": 100
+          },
+          "ms": 163,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Plugins\",\n    \"workspaceRelativePath\": \"Plugins\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documen",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Config",
+            "maxEntries": 50
+          },
+          "ms": 245,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Config\",\n    \"workspaceRelativePath\": \"Config\",\n    \"absolutePath\": \"C:\\\\Users\\\\sster\\\\Documents",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source/Project_MJS/Public",
+            "maxEntries": 200
+          },
+          "ms": 167,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absol",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source/Project_MJS/Private",
+            "maxEntries": 200
+          },
+          "ms": 1,
+          "preview": "{\n  \"ok\": false,\n  \"errorCode\": \"LIST_DIRECTORY_BUDGET_EXCEEDED\",\n  \"error\": \"list_directory budget exceeded (6/turn).\",\n  \"stopCurrentWorkflow\": false,\n  \"retryable\": false,\n  \"ag",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": ".*\\.h$",
+            "path": "Source/Project_MJS/Public",
+            "regex": true,
+            "maxResults": 150
+          },
+          "ms": 310,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absol",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": ".*\\.cpp$",
+            "path": "Source/Project_MJS/Private",
+            "regex": true,
+            "maxResults": 150
+          },
+          "ms": 243,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private\",\n    \"abs",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "\\.h$",
+            "path": "Source/Project_MJS/Public",
+            "regex": true,
+            "maxResults": 200
+          },
+          "ms": 296,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absol",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "\\.cpp$",
+            "path": "Source/Project_MJS/Private",
+            "regex": true,
+            "maxResults": 200
+          },
+          "ms": 218,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private\",\n    \"abs",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "\\.h$",
+            "path": "Source/Project_MJS/Public",
+            "regex": true,
+            "matchFileNames": true,
+            "maxResults": 200
+          },
+          "ms": 210,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absol",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "\\.cpp$",
+            "path": "Source/Project_MJS/Private",
+            "regex": true,
+            "matchFileNames": true,
+            "maxResults": 200
+          },
+          "ms": 286,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private\",\n    \"abs",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Project_MJS.Build.cs"
+          },
+          "ms": 250,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Project_MJS.Build.cs\",\"workspaceRelativePath\":\"Source/Project_MJS/Project_MJS.Build.c",
+          "hardError": null
+        }
+      ],
+      "listDirectory": 6,
+      "listBlocked": 1
+    },
+    {
+      "turnIndex": 2,
+      "prompt": "지금 버그있는거 찾기만하고 수정은 하지마.",
+      "ms": 267961,
+      "chars": 297,
+      "preview": "Let me continue scanning more files for bugs. I'll check: 1. CameraRigActor - camera behavior 2. More cinematic system files - race conditions or memory issues Let me continue reading more files systematically. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5",
+      "toolCalls": [
+        {
+          "name": "get_active_project",
+          "args": {},
+          "ms": 250,
+          "preview": "{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Projec",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source/Project_MJS/Private",
+            "maxDepth": 3
+          },
+          "ms": 171,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private\",\n    \"abs",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h",
+            "startLine": 1,
+            "endLine": 200,
+            "detailLevel": "large"
+          },
+          "ms": 164,
+          "preview": "File: project://Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/C",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp",
+            "startLine": 1,
+            "endLine": 300,
+            "detailLevel": "large"
+          },
+          "ms": 244,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Priva",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Player/CPlayerController.h",
+            "startLine": 1,
+            "endLine": 200,
+            "detailLevel": "large"
+          },
+          "ms": 244,
+          "preview": "File: project://Source/Project_MJS/Public/Character/Player/CPlayerController.h\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/CPlayerController.cpp",
+            "startLine": 1,
+            "endLine": 300,
+            "detailLevel": "large"
+          },
+          "ms": 162,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/CPlayerController.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Priv",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/CPlayerController.cpp",
+            "startLine": 300,
+            "endLine": 657,
+            "detailLevel": "large"
+          },
+          "ms": 164,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/CPlayerController.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Priv",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Player/Component/AttackComponent.h",
+            "startLine": 1,
+            "endLine": 200,
+            "detailLevel": "large"
+          },
+          "ms": 164,
+          "preview": "File: project://Source/Project_MJS/Public/Character/Player/Component/AttackComponent.h\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp",
+            "startLine": 1,
+            "endLine": 300,
+            "detailLevel": "large"
+          },
+          "ms": 161,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp",
+            "startLine": 300,
+            "endLine": 382,
+            "detailLevel": "large"
+          },
+          "ms": 213,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Player/Component/DodgeComponent.h",
+            "startLine": 1,
+            "endLine": 100,
+            "detailLevel": "large"
+          },
+          "ms": 175,
+          "preview": "File: project://Source/Project_MJS/Public/Character/Player/Component/DodgeComponent.h\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/Component/DodgeComponent.cpp",
+            "startLine": 1,
+            "endLine": 300,
+            "detailLevel": "large"
+          },
+          "ms": 162,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/Component/DodgeComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_M",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp",
+            "startLine": 1,
+            "endLine": 300,
+            "detailLevel": "large"
+          },
+          "ms": 161,
+          "preview": "File: project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_M",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/SharedComponent/StaminaComponent.cpp",
+            "startLine": 1,
+            "endLine": 300,
+            "detailLevel": "large"
+          },
+          "ms": 251,
+          "preview": "File: project://Source/Project_MJS/Private/Character/SharedComponent/StaminaComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp",
+            "startLine": 1,
+            "endLine": 300,
+            "detailLevel": "large"
+          },
+          "ms": 165,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/Component/TargetingComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Proje",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp",
+            "startLine": 1,
+            "endLine": 300,
+            "detailLevel": "large"
+          },
+          "ms": 167,
+          "preview": "File: project://Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Pr",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Camera/CameraRigActor.cpp",
+            "startLine": 1,
+            "endLine": 300,
+            "detailLevel": "large"
+          },
+          "ms": 209,
+          "preview": "File: project://Source/Project_MJS/Private/Camera/CameraRigActor.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Camera/Ca",
+          "hardError": null
+        }
+      ],
+      "listDirectory": 1,
+      "listBlocked": 0
+    },
+    {
+      "turnIndex": 3,
+      "prompt": "시네마틱 관련해서 구현된것들 더 구체적으로 알려줘.",
+      "ms": 309410,
+      "chars": 6946,
+      "preview": "Now I have a solid understanding of the cinematic system. Let me summarize concretely what’s implemented, referencing real classes and behaviors from the codebase. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__현재 프로젝트에서 시네마틱(컷신/시퀀스) 관련으로 구체적으",
+      "toolCalls": [
+        {
+          "name": "get_active_project",
+          "args": {},
+          "ms": 268,
+          "preview": "{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Projec",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source/Project_MJS/Private/Cinematic"
+          },
+          "ms": 172,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Private/Cinematic\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Private/",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic"
+          },
+          "ms": 184,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Cinematic\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public/Ci",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/CinematicTypes.h",
+            "detailLevel": "large"
+          },
+          "ms": 165,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicTypes.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/CinematicDirectorSubsystem.h",
+            "detailLevel": "medium"
+          },
+          "ms": 246,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicDirectorSubsystem.h\",\"workspaceRelativePath\":\"Source/Projec",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp",
+            "detailLevel": "large"
+          },
+          "ms": 162,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp\",\"workspaceRelativePath\":\"Source/Pro",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/CinematicInputLockSubsystem.h",
+            "detailLevel": "medium"
+          },
+          "ms": 243,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicInputLockSubsystem.h\",\"workspaceRelativePath\":\"Source/Proje",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Cinematic/CinematicInputLockSubsystem.cpp",
+            "detailLevel": "large"
+          },
+          "ms": 173,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicInputLockSubsystem.cpp\",\"workspaceRelativePath\":\"Source/Pr",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/CinematicParticipant.h",
+            "detailLevel": "medium"
+          },
+          "ms": 168,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicParticipant.h\",\"workspaceRelativePath\":\"Source/Project_MJS/",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/CinematicParticipantComponent.h",
+            "detailLevel": "large"
+          },
+          "ms": 162,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicParticipantComponent.h\",\"workspaceRelativePath\":\"Source/Pro",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/CinematicActionComponent.h",
+            "detailLevel": "medium"
+          },
+          "ms": 163,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicActionComponent.h\",\"workspaceRelativePath\":\"Source/Project_",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Cinematic/CinematicTriggerActor.cpp",
+            "detailLevel": "large"
+          },
+          "ms": 160,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicTriggerActor.cpp\",\"workspaceRelativePath\":\"Source/Project_",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/Director"
+          },
+          "ms": 1,
+          "preview": "{\n  \"ok\": false,\n  \"errorCode\": \"LIST_DIRECTORY_DEPTH_EXCEEDED\",\n  \"error\": \"list_directory depth 5 exceeds max 4.\",\n  \"stopCurrentWorkflow\": false,\n  \"retryable\": false,\n  \"agentI",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "CinematicParticipantCoordinator.h",
+            "path": "Source/Project_MJS/Public/Cinematic/Director",
+            "matchFileNames": true
+          },
+          "ms": 175,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Cinematic/Director\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "CinematicPostActionExecutor.h",
+            "path": "Source/Project_MJS/Public/Cinematic/Director",
+            "matchFileNames": true
+          },
+          "ms": 168,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Cinematic/Director\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "CinematicSequenceDirectorService.h",
+            "path": "Source/Project_MJS/Public/Cinematic/Director",
+            "matchFileNames": true
+          },
+          "ms": 176,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Cinematic/Director\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/Director/CinematicParticipantCoordinator.h",
+            "detailLevel": "large"
+          },
+          "ms": 181,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/Director/CinematicParticipantCoordinator.h\",\"workspaceRelativePath\":",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/Director/CinematicPostActionExecutor.h",
+            "detailLevel": "medium"
+          },
+          "ms": 160,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/Director/CinematicPostActionExecutor.h\",\"workspaceRelativePath\":\"Sou",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/Director/CinematicSequenceDirectorService.h",
+            "detailLevel": "large"
+          },
+          "ms": 170,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/Director/CinematicSequenceDirectorService.h\",\"workspaceRelativePath\"",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Cinematic/CinematicParticipantComponent.cpp",
+            "detailLevel": "large"
+          },
+          "ms": 221,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicParticipantComponent.cpp\",\"workspaceRelativePath\":\"Source/",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Cinematic/CinematicActionComponent.cpp",
+            "detailLevel": "medium"
+          },
+          "ms": 208,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Cinematic/CinematicActionComponent.cpp\",\"workspaceRelativePath\":\"Source/Proje",
+          "hardError": null
+        }
+      ],
+      "listDirectory": 2,
+      "listBlocked": 1
+    },
+    {
+      "turnIndex": 4,
+      "prompt": "플레이어 관련해서 구현된것들  더 구체적으로 알려줘.",
+      "ms": 159137,
+      "chars": 6357,
+      "preview": "Now I have: - CPlayerCharacter.h/.cpp - CPlayerController.h (and earlier context for .cpp) - AttackComponent.h/.cpp - DodgeComponent (from prior context) - Health/Stamina components (from prior context) - Targeting component (from prior context) - Cinematic integration with playe",
+      "toolCalls": [
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h",
+            "detailLevel": "large"
+          },
+          "ms": 165,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h\",\"workspaceRelativePath\":\"Source/Project_M",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp",
+            "startLine": 1,
+            "endLine": 400,
+            "detailLevel": "large"
+          },
+          "ms": 161,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Priva",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Player/CPlayerController.h",
+            "detailLevel": "large"
+          },
+          "ms": 250,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/CPlayerController.h\",\"workspaceRelativePath\":\"Source/Project_",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/CPlayerController.cpp",
+            "startLine": 1,
+            "endLine": 400,
+            "detailLevel": "large"
+          },
+          "ms": 177,
+          "preview": "{\n  \"summary\": \"ERROR — Requested line range is already covered by prior reads.\",\n  \"ok\": false,\n  \"error\": \"Requested line range is already covered by prior reads.\",\n  \"phase\": \"f",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Player/Component/AttackComponent.h",
+            "detailLevel": "large"
+          },
+          "ms": 173,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Player/Component/AttackComponent.h\",\"workspaceRelativePath\":\"Source/",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Player/Component/AttackComponent.cpp",
+            "startLine": 1,
+            "endLine": 260,
+            "detailLevel": "large"
+          },
+          "ms": 245,
+          "preview": "{\n  \"ok\": true,\n  \"cached\": true,\n  \"evidenceStatus\": \"cached\",\n  \"repeatDetected\": true,\n  \"doNotRepeatRead\": true,\n  \"stopCurrentWorkflow\": false,\n  \"errorCode\": \"READ_REPEAT_DET",
+          "hardError": null
+        }
+      ],
+      "listDirectory": 0,
+      "listBlocked": 0
+    },
+    {
+      "turnIndex": 5,
+      "prompt": "적 캐릭터 관련해서 구현된것들 더 구체적으로 알려줘.",
+      "ms": 239933,
+      "chars": 216,
+      "preview": "The regex search didn’t match due to escaping. Let’s do a simpler search for EnemyActionDataAsset and GroupCombatSubsystem by name. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__",
+      "toolCalls": [
+        {
+          "name": "get_active_project",
+          "args": {},
+          "ms": 189,
+          "preview": "{\n  \"activeProject\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\n  \"details\": {\n    \"projectPath\": \"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Projec",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character",
+            "maxEntries": 40
+          },
+          "ms": 192,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Character\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public/Ch",
+          "hardError": null
+        },
+        {
+          "name": "list_directory",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Enemy",
+            "maxEntries": 40
+          },
+          "ms": 1,
+          "preview": "{\n  \"ok\": false,\n  \"errorCode\": \"LIST_DIRECTORY_DEPTH_EXCEEDED\",\n  \"error\": \"list_directory depth 5 exceeds max 4.\",\n  \"stopCurrentWorkflow\": false,\n  \"retryable\": false,\n  \"agentI",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "EnemyCharacter|EnemyAIController|EnemyBase|AEnemy",
+            "path": "Source/Project_MJS/Public",
+            "regex": true,
+            "maxResults": 60
+          },
+          "ms": 203,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absol",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Enemy/EnemyCharacter.h",
+            "detailLevel": "large"
+          },
+          "ms": 173,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Enemy/EnemyCharacter.h\",\"workspaceRelativePath\":\"Source/Project_MJS/",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Enemy/EnemyFSMComponent.h",
+            "detailLevel": "large"
+          },
+          "ms": 243,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Enemy/EnemyFSMComponent.h\",\"workspaceRelativePath\":\"Source/Project_M",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp",
+            "startLine": 1,
+            "endLine": 260,
+            "detailLevel": "large"
+          },
+          "ms": 165,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Priva",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp",
+            "startLine": 260,
+            "endLine": 278,
+            "detailLevel": "large"
+          },
+          "ms": 230,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Enemy/EnemyFSMComponent.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Priva",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp",
+            "startLine": 1,
+            "endLine": 260,
+            "detailLevel": "large"
+          },
+          "ms": 166,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/",
+          "hardError": null
+        },
+        {
+          "name": "read_file_range",
+          "args": {
+            "path": "Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp",
+            "startLine": 260,
+            "endLine": 290,
+            "detailLevel": "large"
+          },
+          "ms": 242,
+          "preview": "File: project://Source/Project_MJS/Private/Character/Enemy/EnemyCharacter.cpp\nPath-Metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "EnemyActionDataAsset\\.h|GroupCombatSubsystem\\.h",
+            "path": "Source/Project_MJS/Public",
+            "regex": true,
+            "maxResults": 20
+          },
+          "ms": 203,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absol",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "EnemyActionDataAsset",
+            "path": "Source/Project_MJS/Public",
+            "matchFileNames": true,
+            "maxResults": 20
+          },
+          "ms": 202,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absol",
+          "hardError": null
+        }
+      ],
+      "listDirectory": 1,
+      "listBlocked": 1
+    },
+    {
+      "turnIndex": 6,
+      "prompt": "서브시스템들의 대해서 구현된것들 더 구체적으로 알려줘.",
+      "ms": 156130,
+      "chars": 6496,
+      "preview": "Good. I now have concrete details for all 6 subsystems in the project: 1. UCinematicDirectorSubsystem (UWorldSubsystem) - Cinematic playback director 2. UCinematicInputLockSubsystem (UWorldSubsystem) - Input locking during cinematics 3. UGroupCombatSubsystem (UWorldSubsystem) - E",
+      "toolCalls": [
+        {
+          "name": "search_files",
+          "args": {
+            "query": "UGameInstanceSubsystem|UWorldSubsystem|ULocalPlayer::Subsystem",
+            "path": "Source/Project_MJS",
+            "regex": true,
+            "maxResults": 80
+          },
+          "ms": 263,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS\",\n    \"workspaceRelativePath\": \"Source/Project_MJS\",\n    \"absolutePath\": \"C:\\",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "class.*Subsystem",
+            "path": "Source/Project_MJS/Public",
+            "regex": true,
+            "maxResults": 80
+          },
+          "ms": 222,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public\",\n    \"workspaceRelativePath\": \"Source/Project_MJS/Public\",\n    \"absol",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/CinematicDirectorSubsystem.h",
+            "detailLevel": "large"
+          },
+          "ms": 239,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicDirectorSubsystem.h\",\"workspaceRelativePath\":\"Source/Projec",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Cinematic/CinematicDirectorSubsystem.cpp",
+            "detailLevel": "large"
+          },
+          "ms": 176,
+          "preview": "{\n  \"ok\": true,\n  \"cached\": true,\n  \"evidenceStatus\": \"cached\",\n  \"repeatDetected\": true,\n  \"doNotRepeatRead\": true,\n  \"stopCurrentWorkflow\": false,\n  \"errorCode\": \"READ_REPEAT_DET",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Cinematic/CinematicInputLockSubsystem.h",
+            "detailLevel": "large"
+          },
+          "ms": 164,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Cinematic/CinematicInputLockSubsystem.h\",\"workspaceRelativePath\":\"Source/Proje",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Cinematic/CinematicInputLockSubsystem.cpp",
+            "detailLevel": "large"
+          },
+          "ms": 242,
+          "preview": "{\n  \"ok\": true,\n  \"cached\": true,\n  \"evidenceStatus\": \"cached\",\n  \"repeatDetected\": true,\n  \"doNotRepeatRead\": true,\n  \"stopCurrentWorkflow\": false,\n  \"errorCode\": \"READ_REPEAT_DET",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Character/Enemy/GroupCombatSubsystem.h",
+            "detailLevel": "large"
+          },
+          "ms": 164,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Character/Enemy/GroupCombatSubsystem.h\",\"workspaceRelativePath\":\"Source/Projec",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/System/Audio/SoundManagerSubsystem.h",
+            "detailLevel": "large"
+          },
+          "ms": 161,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/System/Audio/SoundManagerSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/System/Combat/CombatTimeDilationSubsystem.h",
+            "detailLevel": "large"
+          },
+          "ms": 261,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/System/Combat/CombatTimeDilationSubsystem.h\",\"workspaceRelativePath\":\"Source/P",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/System/Debug/DevConsoleSubsystem.h",
+            "detailLevel": "large"
+          },
+          "ms": 166,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/System/Debug/DevConsoleSubsystem.h\",\"workspaceRelativePath\":\"Source/Project_MJ",
+          "hardError": null
+        }
+      ],
+      "listDirectory": 0,
+      "listBlocked": 0
+    },
+    {
+      "turnIndex": 7,
+      "prompt": "카메라 시스템 관련해서 구현된것들 더 구체적으로 알려줘.",
+      "ms": 256118,
+      "chars": 233,
+      "preview": "Now I have a good understanding of the camera system. Let me also check how it's used in the player controller and character to see the integration. __LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__",
+      "toolCalls": [
+        {
+          "name": "search_files",
+          "args": {
+            "query": "Camera",
+            "path": "Source/Project_MJS",
+            "matchFileNames": true,
+            "maxResults": 80
+          },
+          "ms": 246,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS\",\n    \"workspaceRelativePath\": \"Source/Project_MJS\",\n    \"absolutePath\": \"C:\\",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Camera/CameraDirectingComponent.h",
+            "detailLevel": "large"
+          },
+          "ms": 161,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Camera/CameraDirectingComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Camera/CameraMoveComponent.h",
+            "detailLevel": "large"
+          },
+          "ms": 168,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Camera/CameraMoveComponent.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Publ",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Camera/CameraRigActor.h",
+            "detailLevel": "large"
+          },
+          "ms": 166,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Camera/CameraRigActor.h\",\"workspaceRelativePath\":\"Source/Project_MJS/Public/Ca",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Camera/CameraRigActor.cpp",
+            "detailLevel": "large"
+          },
+          "ms": 174,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Camera/CameraRigActor.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/Privat",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Camera/CameraDirectingComponent.cpp",
+            "detailLevel": "large"
+          },
+          "ms": 163,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Camera/CameraDirectingComponent.cpp\",\"workspaceRelativePath\":\"Source/Project_",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Private/Camera/CameraMoveComponent.cpp",
+            "detailLevel": "large"
+          },
+          "ms": 166,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Private/Camera/CameraMoveComponent.cpp\",\"workspaceRelativePath\":\"Source/Project_MJS/P",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Camera/CameraDirectingComponentFinder.h",
+            "detailLevel": "large"
+          },
+          "ms": 166,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Camera/CameraDirectingComponentFinder.h\",\"workspaceRelativePath\":\"Source/Proje",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotify_CameraFOV.h",
+            "detailLevel": "large"
+          },
+          "ms": 249,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotify_CameraFOV.h\",\"workspaceRelativePath\":\"Sourc",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotifyState_CameraFOV.h",
+            "detailLevel": "large"
+          },
+          "ms": 166,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotifyState_CameraFOV.h\",\"workspaceRelativePath\":\"",
+          "hardError": null
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotify_CameraShake.h",
+            "detailLevel": "large"
+          },
+          "ms": 244,
+          "preview": "[path-metadata: {\"resolvedRootType\":\"active_project\",\"projectRelativePath\":\"Source/Project_MJS/Public/Animation/Notify/Camera/AnimNotify_CameraShake.h\",\"workspaceRelativePath\":\"Sou",
+          "hardError": null
+        },
+        {
+          "name": "search_files",
+          "args": {
+            "query": "CameraRig|EnsureCameraRig|SetCameraTarget",
+            "path": "Source/Project_MJS/Public/Gameplay/Controller/MainMenuPlayerController.h",
+            "maxResults": 40
+          },
+          "ms": 163,
+          "preview": "{\n  \"path\": {\n    \"resolvedRootType\": \"active_project\",\n    \"projectRelativePath\": \"Source/Project_MJS/Public/Gameplay/Controller/MainMenuPlayerController.h\",\n    \"workspaceRelativ",
+          "hardError": null
+        }
+      ],
+      "listDirectory": 0,
+      "listBlocked": 0
+    }
+  ]
+}
+EXIT=0 
