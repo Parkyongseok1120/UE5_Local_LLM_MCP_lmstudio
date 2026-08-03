@@ -441,15 +441,14 @@ def _npm_is_usable(node: Path, npm: Path) -> bool:
     env["PATH"] = os.pathsep.join(
         [str(node.parent), env.get("PATH", "")]
     ).rstrip(os.pathsep)
-    command = [str(npm), "--version"]
+    # On Windows, .cmd/.bat shims must go through cmd.exe. Avoid list2cmdline +
+    # "cmd /S /C" quoting, which breaks paths under "Program Files".
     if os.name == "nt" and npm.suffix.lower() in {".cmd", ".bat"}:
-        command = [
-            os.environ.get("COMSPEC", "cmd.exe"),
-            "/d",
-            "/s",
-            "/c",
-            subprocess.list2cmdline(command),
-        ]
+        command = f'"{npm}" --version'
+        run_kwargs: dict = {"shell": True}
+    else:
+        command = [str(npm), "--version"]
+        run_kwargs = {"shell": False}
     try:
         completed = subprocess.run(
             command,
@@ -457,6 +456,7 @@ def _npm_is_usable(node: Path, npm: Path) -> bool:
             text=True,
             check=True,
             env=env,
+            **run_kwargs,
         )
     except (OSError, subprocess.CalledProcessError):
         return False

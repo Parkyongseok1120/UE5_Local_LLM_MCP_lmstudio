@@ -1,0 +1,21 @@
+Apply these remaining Stage4/compile fixes with MCP. One replace_in_file at a time. read_file_range first. Continue until all done, then stop with summary.
+
+DONE already (skip): PlayerId->GomokuPlayerId; IsValidPlayerId removed; GetLifetimeReplicatedProps removed; MatchEventLog LastOrDefault fixed; HUD.h DrawHUD; HUD.cpp DrawHUD body; Engine/Engine.h include.
+
+STILL TODO:
+
+1) GomokuHUD.cpp — append OnTickPlayerTime implementation at EOF (declared in .h, missing in .cpp).
+
+2) GomokuPlayerController.h — declare OnMouseMoveX(float), OnMouseMoveY(float) in private section.
+
+3) GomokuPlayerController.cpp — #include "EngineUtils.h"; fix GetMousePosition to float out-params; ClearHoveredCell -> SetHoveredCell(FIntPoint(-1,-1)).
+
+4) GomokuGameMode.h — remove BoardTemplate UPROPERTY + ApplyBoardTemplate + BoardTemplateDataAsset include; add DefaultHotseatPlayers EditDefaultsOnly int32=2.
+
+5) GomokuGameMode.cpp BeginPlay — clamp DefaultHotseatPlayers 2..4 for Config.MaxPlayers and InitializeForLocalHotseat.
+
+6) GomokuGameState.cpp EndCurrentTurn — round complete only if every GetActivePlayerIndices() index is in PlayersCompletedThisRound (not Num()>=ActiveCount).
+
+7) GomokuGameState.cpp — add RequestAbandonCurrentPlayer_Implementation using AbandonPlayer, purge completed set, sole-active win, else StartNewTurn.
+
+Do all of the above.

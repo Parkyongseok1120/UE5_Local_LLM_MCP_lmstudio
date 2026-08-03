@@ -77,7 +77,7 @@ do
 done
 
 # PATH may still only expose Apple /usr/bin/python3 (3.9). Probe common
-# user-managed installs (uv, evidence-first, Codex, LM Studio) without brew.
+# user-managed installs (uv, evidence-first, Codex, LM Studio, Homebrew) without requiring brew in PATH.
 HOME_DIR=${HOME:-}
 if [ -n "$HOME_DIR" ]; then
   for minor in 14 13 12 11 10; do
@@ -85,11 +85,15 @@ if [ -n "$HOME_DIR" ]; then
       "$HOME_DIR/.local/share/uv/python" \
       "$HOME_DIR/.evidence-first/runtimes/python" \
       "$HOME_DIR/.cache/codex-runtimes/codex-primary-runtime/dependencies/python" \
-      "$HOME_DIR/.lmstudio/extensions/backends/vendor/_amphibian"
+      "$HOME_DIR/.lmstudio/extensions/backends/vendor/_amphibian" \
+      "/opt/homebrew/opt/python@3.${minor}" \
+      "/usr/local/opt/python@3.${minor}" \
+      "/Library/Frameworks/Python.framework/Versions/3.${minor}"
     do
       [ -d "$root" ] || continue
       for candidate in \
         "$root/bin/python3.${minor}" \
+        "$root/bin/python3" \
         "$root"/cpython-3."${minor}"*/bin/python3."${minor}" \
         "$root"/cpython3."${minor}"*/bin/python3."${minor}" \
         "$root"/*/bin/python3."${minor}"

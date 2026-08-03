@@ -1,0 +1,26 @@
+STAGE 7 START — Five playable items + inventory/energy rules. MCP only. Use Stage6 CanUse/Validate/Execute framework. Do NOT rewrite Stage4–6 tests unless forced.
+
+## Item effects (must implement in ExecuteItem / RuleEngine helpers)
+1) SealStone — empty cell → Blocked (SetCellBlocked)
+2) Pull — pull adjacent stone toward target (implement minimal adjacent move if RemoveStoneAt/ForcePlace exists; read APIs first)
+3) Steal — ChangeCellOwnership / reassign opponent stone to current player
+4) SkipTurn — SetPlayerSkipNextTurn on target player
+5) GuardianBarrier — mark cell protected so Steal/Pull fail against it (add flag/set on board or player data)
+
+Rename/extend EGomokuItemType to include SealStone, Pull, Steal, SkipTurn, GuardianBarrier (replace Stage6 placeholders if needed). Provide FItemData registry lookup by ItemId.
+
+## Inventory / energy rules
+- On turn start (GameState StartNewTurn already adds energy): also gain 1 item/turn max inventory 2; tag new items bGainedThisTurn / not usable until next turn (add fields on FGomokuPlayerStateData if missing: bItemUsableThisTurn map or parallel arrays)
+- MaxEnergy=5 (ItemLibrary::MaxEnergy)
+- 1 item use per turn
+- ExecuteItem: CanUse + Validate + ConsumeEnergy(EnergyCost) + apply effect + remove item
+
+## Also
+- Wire PC click: if targeting, ExecuteItem then Cancel
+- Add Automation `Source/O_Mock/Tests/GomokuStage7Items.spec.cpp` with at least:
+  - Gomoku.Stage7.SealStoneBlocksCell
+  - Gomoku.Stage7.SkipTurnFlagsPlayer
+  - Gomoku.Stage7.NewItemNotUsableSameTurn (grant with bGainedThisTurn; CanUse false until cleared)
+  - Gomoku.Stage7.EnergyCostConsumed
+
+Read existing code first. Prefer small patches. Partial progress OK if you stop mid-way — implement types+Execute stubs with SealStone+SkipTurn first if context tight.

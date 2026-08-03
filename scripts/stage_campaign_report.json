@@ -1,0 +1,198 @@
+{
+  "ok": true,
+  "workspace": "C:\\Users\\sster\\Documents\\Git\\O-Mock",
+  "stage13Attempted": true,
+  "completedStages": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13
+  ],
+  "lastError": null,
+  "strict": true,
+  "maxHours": 1,
+  "elapsedMs": 46,
+  "pluginRevision": 18,
+  "model": "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max",
+  "toolCallTotal": 0,
+  "stages": [
+    {
+      "id": 2,
+      "name": "Local 2P Hotseat Core",
+      "verify": {
+        "ok": true,
+        "stageId": 2,
+        "stageName": "Local 2P Hotseat Core",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 3,
+      "name": "Turn and Time System",
+      "verify": {
+        "ok": true,
+        "stageId": 3,
+        "stageName": "Turn and Time System",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 4,
+      "name": "3-4 Player Turn Order",
+      "verify": {
+        "ok": true,
+        "stageId": 4,
+        "stageName": "3-4 Player Turn Order",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 5,
+      "name": "Board Templates",
+      "verify": {
+        "ok": true,
+        "stageId": 5,
+        "stageName": "Board Templates",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 6,
+      "name": "Item Framework",
+      "verify": {
+        "ok": true,
+        "stageId": 6,
+        "stageName": "Item Framework",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 7,
+      "name": "Five Playable Items",
+      "verify": {
+        "ok": true,
+        "stageId": 7,
+        "stageName": "Five Playable Items",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 8,
+      "name": "Match Event Log",
+      "verify": {
+        "ok": true,
+        "stageId": 8,
+        "stageName": "Match Event Log",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 9,
+      "name": "Network Authority",
+      "verify": {
+        "ok": true,
+        "stageId": 9,
+        "stageName": "Network Authority",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 10,
+      "name": "Lobby and Custom Room",
+      "verify": {
+        "ok": true,
+        "stageId": 10,
+        "stageName": "Lobby and Custom Room",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 11,
+      "name": "Minigame Framework",
+      "verify": {
+        "ok": true,
+        "stageId": 11,
+        "stageName": "Minigame Framework",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 12,
+      "name": "UI Polish",
+      "verify": {
+        "ok": true,
+        "stageId": 12,
+        "stageName": "UI Polish",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    },
+    {
+      "id": 13,
+      "name": "Bots and Automated Tests",
+      "verify": {
+        "ok": true,
+        "stageId": 13,
+        "stageName": "Bots and Automated Tests",
+        "missingFiles": [],
+        "missingSignatures": [],
+        "forbiddenHits": [],
+        "notes": []
+      },
+      "completed": true
+    }
+  ],
+  "attempts": [],
+  "compaction": null
+}

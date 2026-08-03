@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "lms dev",
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test test/compaction-core.test.js test/checkpoint-store.test.js test/generator-compat.test.cjs test/status.test.cjs test/inflight-tool-retention.test.cjs test/title-meta-retention.test.cjs",
+    "test": "npm run build && node --test test/compaction-core.test.js test/checkpoint-store.test.js test/checkpoint-fork.test.js test/generator-compat.test.cjs test/status.test.cjs test/inflight-tool-retention.test.cjs test/title-meta-retention.test.cjs",
     "test:active": "npm run build && node test/active-generator-smoke.cjs",
     "test:active:tool": "npm run build && node test/active-tool-generator-smoke.cjs",
     "status": "node scripts/status.cjs"

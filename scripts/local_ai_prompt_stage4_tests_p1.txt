@@ -1,0 +1,18 @@
+PART 1/4 — Create Stage 4 automation skeleton + turn-cycle tests via MCP.
+
+write_file NEW path exactly:
+`Source/O_Mock/Tests/GomokuStage4Behavior.spec.cpp`
+
+Content requirements for THIS part only (keep file short):
+- `#if WITH_DEV_AUTOMATION_TESTS` open
+- includes: Misc/AutomationTest.h, Engine/World.h, ../GomokuRuleEngine.h, ../GomokuGameState.h, ../GomokuTypes.h
+- namespace helper MakeEngine(MaxPlayers, BoardSize=15) using NewObject + InitializeMatch
+- helper CollectTurnCycle
+- Tests ONLY:
+  - Gomoku.Stage4.TurnCycle2Players → [0,1,0,1]
+  - Gomoku.Stage4.TurnCycle3Players → [0,1,2,0,1,2]
+  - Gomoku.Stage4.TurnCycle4Players → [0,1,2,3,0,1,2,3]
+- Flags: EditorContext | EngineFilter
+- End with `#endif` for now (later parts will insert before #endif)
+
+Read RuleEngine.h first if needed. write_file then stop.

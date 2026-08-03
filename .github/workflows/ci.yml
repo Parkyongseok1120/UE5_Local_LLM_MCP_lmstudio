@@ -169,9 +169,17 @@ jobs:
         shell: pwsh
         working-directory: lmstudio-unreal-agent-mcp
 
-      - name: npm test
+      - name: npm test (agent mcp)
         run: npm.cmd test
         working-directory: lmstudio-unreal-agent-mcp
+
+      - name: npm ci (context compactor)
+        run: npm.cmd ci --no-fund --no-audit
+        working-directory: lmstudio-context-compactor-plugin
+
+      - name: npm test (context compactor)
+        run: npm.cmd test
+        working-directory: lmstudio-context-compactor-plugin
 
   oss-ready:
     name: OSS readiness check

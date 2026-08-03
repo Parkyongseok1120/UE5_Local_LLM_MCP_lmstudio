@@ -1,0 +1,82 @@
+STAGE 7 FINAL p3a — ONLY ValidateTarget + ExecuteItem in GomokuItemLibrary.cpp via SMALL replace_in_file. Fresh session. Do NOT write_file whole files. Do NOT rewrite tests yet.
+
+SetLastItemWinResult already exists on RuleEngine. Use Engine->SetLastItemWinResult(...).
+
+## Patch 1 — ValidateTarget Steal + Pull (exact)
+Read ValidateTarget switch Cell cases. Replace Steal case and default break with:
+
+```
+		case EGomokuItemType::Steal:
+		{
+			if (Engine->IsCellGuardianProtected(TargetCell.X, TargetCell.Y)) return false;
+			const auto C = Engine->GetBoardCell(TargetCell.X, TargetCell.Y);
+			if (C.State == ECellState::Empty || C.State == ECellState::Blocked) return false;
+			const int32 OwnerId = UGomokuRuleEngine::CellStateToPlayerId(C.State);
+			if (OwnerId <= 0) return false;
+			break;
+		}
+		case EGomokuItemType::Pull:
+		{
+			const auto Dest = Engine->GetBoardCell(TargetCell.X, TargetCell.Y);
+			if (Dest.State != ECellState::Empty) return false;
+			static const int32 DXs[4] = {0,1,0,-1};
+			static const int32 DYs[4] = {1,0,-1,0};
+			bool bFound = false;
+			for (int32 i = 0; i < 4; ++i)
+			{
+				const int32 SX = TargetCell.X + DXs[i];
+				const int32 SY = TargetCell.Y + DYs[i];
+				if (!Engine->IsValidCoordinate(SX, SY)) continue;
+				if (Engine->IsCellGuardianProtected(SX, SY)) continue;
+				const auto S = Engine->GetBoardCell(SX, SY);
+				if (S.State == ECellState::Empty || S.State == ECellState::Blocked) continue;
+				const int32 OwnerId = UGomokuRuleEngine::CellStateToPlayerId(S.State);
+				if (OwnerId > 0) { bFound = true; break; }
+			}
+			if (!bFound) return false;
+			break;
+		}
+		case EGomokuItemType::GuardianBarrier:
+```
+(keep existing GuardianBarrier body). Remove `default: break` for Pull.
+
+## Patch 2 — ExecuteItem consume-last
+Replace ENTIRE function body starting at `if (!Engine->ConsumePlayerEnergy` through final `return true;` with consume-LAST version:
+
+- Remove early ConsumePlayerEnergy
+- Apply effects in switch including Pull implementation (NESW search, RemoveStoneAt, ForcePlaceStone(OwnerId, Target), SetLastItemWinResult(CheckWinAt))
+- Steal: ChangeCellOwnership then SetLastItemWinResult(CheckWinAt(Target))
+- If switch case returns false mid-effect, return false WITHOUT consume
+- After successful switch: if (!ConsumePlayerEnergy) return false; // rare — ideally check energy BEFORE apply: add pre-check GetPlayerStateData(PlayerId).Energy >= Def->EnergyCost before apply
+- Better order: after ValidateTarget, if Energy < cost return false; then apply; then Consume; RemoveItem; SetUsed; return true
+
+Pre-check energy WITHOUT consume:
+`if (Engine->GetPlayerStateData(PlayerId).Energy < Def->EnergyCost) return false;`
+
+Pull case concrete:
+```
+	case EGomokuItemType::Pull:
+	{
+		int32 SrcX=-1,SrcY=-1,OwnerId=0;
+		static const int32 DXs[4]={0,1,0,-1}; static const int32 DYs[4]={1,0,-1,0};
+		for (int32 i=0;i<4;++i){
+			const int32 SX=TargetCell.X+DXs[i], SY=TargetCell.Y+DYs[i];
+			if (!Engine->IsValidCoordinate(SX,SY)) continue;
+			if (Engine->IsCellGuardianProtected(SX,SY)) continue;
+			const auto S=Engine->GetBoardCell(SX,SY);
+			if (S.State==ECellState::Empty||S.State==ECellState::Blocked) continue;
+			OwnerId=UGomokuRuleEngine::CellStateToPlayerId(S.State);
+			if (OwnerId<=0) continue;
+			SrcX=SX; SrcY=SY; break;
+		}
+		if (SrcX<0) return false;
+		if (!Engine->RemoveStoneAt(SrcX,SrcY)) return false;
+		if (!Engine->ForcePlaceStone(OwnerId, TargetCell.X, TargetCell.Y)) return false;
+		Engine->SetLastItemWinResult(Engine->CheckWinAt(TargetCell));
+		break;
+	}
+```
+
+If Remove succeeds but ForcePlace fails, board is corrupted — ForcePlace should not fail if dest empty; if it fails try ForcePlace only after verifying empty. Keep dest empty check.
+
+MAX 6 replace_in_file. Read ranges before each. Stop when ExecuteItem has no early Consume and Pull is implemented.

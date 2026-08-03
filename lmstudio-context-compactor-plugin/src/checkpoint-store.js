@@ -153,7 +153,12 @@ async function cleanupSessions(root = defaultRoot(), options = {}) {
   let entries;
   try {
     entries = (await fs.readdir(resolvedRoot, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .filter((entry) => (
+        entry.isDirectory()
+        && !entry.isSymbolicLink()
+        && !String(entry.name || "").startsWith(".")
+        && String(entry.name || "") !== "_base"
+      ))
       .slice(0, maxSessions);
   } catch (error) {
     if (error?.code === "ENOENT") {
@@ -302,6 +307,113 @@ async function saveCheckpoint(sessionId, checkpoint, root = defaultRoot()) {
   maybeCleanupSessions(root, sessionId);
 }
 
+async function readJsonSafe(filePath, fallback = null) {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function forkIndexRoot(root = defaultRoot()) {
+  return `${path.resolve(root)}__forks`;
+}
+
+function baseIndexDir(baseKey, root = defaultRoot()) {
+  return path.join(forkIndexRoot(root), safeSessionId(baseKey));
+}
+
+async function resolveSessionFork({
+  baseKey,
+  lineage = [],
+  envSessionId = "",
+  root = defaultRoot(),
+} = {}) {
+  const explicit = String(envSessionId || "").trim();
+  const key = safeSessionId(baseKey);
+  if (explicit) {
+    return {
+      sessionId: safeSessionId(explicit),
+      reason: "env",
+      minted: false,
+      baseKey: key,
+    };
+  }
+  try {
+    const indexPath = path.join(baseIndexDir(key, root), "forks.json");
+    const payload = await readJsonSafe(indexPath, { forks: [] });
+    const forks = Array.isArray(payload?.forks) ? payload.forks : [];
+    const { lineageContinues } = require("./compaction-core.js");
+    for (let index = forks.length - 1; index >= 0; index -= 1) {
+      const fork = forks[index];
+      const prior = Array.isArray(fork?.lineage) ? fork.lineage : [];
+      if (lineageContinues(prior, lineage)) {
+        fork.lineage = lineage;
+        fork.updatedAt = new Date().toISOString();
+        await atomicWrite(indexPath, { forks, updatedAt: fork.updatedAt });
+        return {
+          sessionId: safeSessionId(fork.sessionId),
+          reason: "lineage",
+          minted: false,
+          baseKey: key,
+        };
+      }
+    }
+    const sessionId = forks.length === 0
+      ? key
+      : crypto.createHash("sha256")
+        .update(`${key}\n${Date.now()}\n${crypto.randomBytes(8).toString("hex")}`, "utf8")
+        .digest("hex")
+        .slice(0, 32);
+    forks.push({
+      sessionId,
+      lineage: Array.isArray(lineage) ? lineage : [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    await atomicWrite(indexPath, { forks, updatedAt: new Date().toISOString() });
+    return {
+      sessionId: safeSessionId(sessionId),
+      reason: forks.length === 1 ? "primary" : "fork",
+      minted: true,
+      baseKey: key,
+    };
+  } catch {
+    return {
+      sessionId: key,
+      reason: "fallback",
+      minted: true,
+      baseKey: key,
+    };
+  }
+}
+
+async function touchSessionFork(baseKey, sessionId, lineage = [], root = defaultRoot()) {
+  try {
+    const key = safeSessionId(baseKey);
+    const indexPath = path.join(baseIndexDir(key, root), "forks.json");
+    const payload = await readJsonSafe(indexPath, { forks: [] });
+    const forks = Array.isArray(payload?.forks) ? payload.forks : [];
+    const id = safeSessionId(sessionId);
+    let found = forks.find((fork) => safeSessionId(fork?.sessionId) === id);
+    if (!found) {
+      found = {
+        sessionId: id,
+        lineage: [],
+        createdAt: new Date().toISOString(),
+      };
+      forks.push(found);
+    }
+    found.lineage = Array.isArray(lineage) ? lineage : [];
+    found.updatedAt = new Date().toISOString();
+    await atomicWrite(indexPath, { forks, updatedAt: found.updatedAt });
+    return found;
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   defaultRoot,
   safeSessionId,
@@ -311,4 +423,6 @@ module.exports = {
   loadCheckpoint,
   markSessionStatus,
   saveCheckpoint,
+  resolveSessionFork,
+  touchSessionFork,
 };

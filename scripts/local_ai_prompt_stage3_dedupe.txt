@@ -1,0 +1,11 @@
+COMPILE FIX Stage3 — MCP only.
+
+GomokuGameState.h now has DUPLICATE declarations of TickTimeSystem and ApplyEndOfRoundRecovery (public AND private). Remove the private copies; keep a single public declaration of each. AutoMoveOnTimeout may stay private.
+
+Also for Gomoku.Stage3.PauseStopsTick: TickTimeSystem does NOT use DeltaSeconds for PersonalRemaining — it sets TurnElapsedThisTurn from World GetTimeSeconds()-TurnStartTime. So after unpause, advancing may require either:
+- advancing world time, OR
+- asserting only that paused path leaves values unchanged AND that MatchPhase==Playing and IsGameActive (already required for tick).
+
+If PauseStopsTick will flake because world time doesn't move in CreateWorld tests, simplify unpause assertion to: after SetTimePaused(false), call TickTimeSystem again and at least verify it does not crash and bTimePaused is false; OR set TurnStartTime indirectly if public. Prefer making the paused-unchanged assertions strong; for unpause, TestTrue that TickTimeSystem was callable (e.g. TurnElapsedThisTurn >= 0) without requiring >0.5 change if world clock is frozen.
+
+Read header, remove duplicates with replace_in_file. Stop when header has each function declared once (public).

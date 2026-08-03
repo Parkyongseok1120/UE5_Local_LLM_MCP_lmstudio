@@ -1,0 +1,623 @@
+{
+  "logCount": 23,
+  "stageBuckets": {
+    "4": {
+      "sessions": 10,
+      "totalMutations": 0,
+      "zeroMutationSessions": [
+        "local_ai_stage4_runtime.out.log",
+        "local_ai_stage4_tests_mcp.out.log",
+        "local_ai_stage4_tests_p1.out.log",
+        "local_ai_stage4_tests_p1fix.out.log",
+        "local_ai_stage4_tests_p2.out.log",
+        "local_ai_stage4_tests_p2b.out.log",
+        "local_ai_stage4_tests_p3.out.log",
+        "local_ai_stage4_tests_p3b.out.log",
+        "local_ai_stage4_tests_p3c.out.log",
+        "local_ai_stage4_tests_p3d.out.log"
+      ],
+      "mutatedPaths": [],
+      "activeProjects": [],
+      "errorTotals": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      }
+    },
+    "5": {
+      "sessions": 3,
+      "totalMutations": 0,
+      "zeroMutationSessions": [
+        "local_ai_stage5_p1.out.log",
+        "local_ai_stage5_p2.out.log",
+        "local_ai_stage5_tests_p1.out.log"
+      ],
+      "mutatedPaths": [],
+      "activeProjects": [],
+      "errorTotals": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      }
+    },
+    "6": {
+      "sessions": 5,
+      "totalMutations": 0,
+      "zeroMutationSessions": [
+        "local_ai_stage6_p1.out.log",
+        "local_ai_stage6_p2.out.log",
+        "local_ai_stage6_p3.out.log",
+        "local_ai_stage6_p4.out.log",
+        "local_ai_stage6_p5.out.log"
+      ],
+      "mutatedPaths": [],
+      "activeProjects": [],
+      "errorTotals": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      }
+    },
+    "7": {
+      "sessions": 5,
+      "totalMutations": 0,
+      "zeroMutationSessions": [
+        "local_ai_stage7_p1.out.log",
+        "local_ai_stage7_p2.out.log",
+        "local_ai_stage7_p3.out.log",
+        "local_ai_stage7_p4.out.log",
+        "local_ai_stage7_p5.out.log"
+      ],
+      "mutatedPaths": [],
+      "activeProjects": [],
+      "errorTotals": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      }
+    }
+  },
+  "rows": [
+    {
+      "file": "local_ai_stage4_runtime.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage4_tests_mcp.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage4_tests_p1.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage4_tests_p1fix.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage4_tests_p2.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage4_tests_p2b.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage4_tests_p3.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage4_tests_p3b.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage4_tests_p3c.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage4_tests_p3d.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage5_p1.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage5_p2.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage5_tests_p1.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage6_p1.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage6_p2.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage6_p3.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage6_p4.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage6_p5.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage7_p1.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage7_p2.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage7_p3.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage7_p4.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    },
+    {
+      "file": "local_ai_stage7_p5.out.log",
+      "mutationCount": 0,
+      "mutations": [],
+      "toolCounts": {
+        "reads": 0,
+        "writes": 0,
+        "mutOkTrue": 0,
+        "mutOkFalseWrites": 0,
+        "totalToolLines": 0
+      },
+      "activeProjects": [],
+      "workspaceHits": [],
+      "errors": {
+        "http400": 0,
+        "boundedPatch": 0,
+        "stagnation": 0,
+        "generateError": 0,
+        "trim": 0,
+        "trimNoUser": 0
+      },
+      "lastPreview": ""
+    }
+  ]
+}

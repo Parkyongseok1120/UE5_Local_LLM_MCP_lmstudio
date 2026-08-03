@@ -312,15 +312,90 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
   };
 }
 
-function sessionFingerprint(messages, salt = "") {
+const SESSION_MARKER_RE = /<!--\s*ucc-session:([a-f0-9]{16,64})\s*-->/i;
+
+function extractSessionMarker(messages) {
+  for (const snapshot of snapshotMessages(messages || [])) {
+    const match = String(snapshot.text || "").match(SESSION_MARKER_RE);
+    if (match) return String(match[1] || "").toLowerCase();
+  }
+  return null;
+}
+
+function formatSessionMarker(sessionId) {
+  const id = String(sessionId || "").replace(/[^a-f0-9]/gi, "").toLowerCase().slice(0, 32);
+  if (id.length < 16) return "";
+  return `<!-- ucc-session:${id} -->`;
+}
+
+function messageLineageFingerprints(messages) {
+  return snapshotMessages(messages || []).map((message) => {
+    const toolIds = (message.toolCalls || [])
+      .map((call) => String(call.id || ""))
+      .filter(Boolean)
+      .join(",");
+    return sha256(`${message.role}:${String(message.text || "").slice(0, 500)}:${toolIds}`).slice(0, 16);
+  });
+}
+
+function lineageContinues(previous, current) {
+  if (!Array.isArray(previous) || !Array.isArray(current)) return false;
+  if (previous.length === 0) return current.length >= 0;
+  if (previous.length > current.length) return false;
+  return previous.every((hash, index) => hash === current[index]);
+}
+
+function baseSessionKey(messages, salt = "") {
   const snapshots = snapshotMessages(messages || []);
   const firstSystem = snapshots.find((message) => message.role === "system");
-  const firstUser = snapshots.find((message) => message.role === "user");
+  const firstUser = snapshots.find(
+    (message) => message.role === "user" && String(message.text || "").trim() && !isMetaUserMessage(message.text),
+  );
   const seed = [firstSystem, firstUser]
     .filter(Boolean)
     .map((message) => `${message.role}:${message.text}`)
     .join("\n");
   return sha256(`${salt}\n${seed || "empty-session"}`).slice(0, 32);
+}
+
+function sessionFingerprint(messages, salt = "", options = {}) {
+  const marker = String(
+    options.sessionMarker
+    || options.explicitSessionId
+    || extractSessionMarker(messages)
+    || "",
+  ).trim().toLowerCase();
+  if (marker) {
+    return sha256(`${salt}\nmarker:${marker}`).slice(0, 32);
+  }
+  return baseSessionKey(messages, salt);
+}
+
+function isMajorGoalChange(priorObjective, latestObjective) {
+  const prior = String(priorObjective || "").trim();
+  const latest = String(latestObjective || "").trim();
+  if (!prior || !latest || prior === latest) return false;
+  if (isMetaUserMessage(latest)) return false;
+  const priorReadOnly = isReadOnlyUserGoal(prior);
+  const latestReadOnly = isReadOnlyUserGoal(latest);
+  if (priorReadOnly !== latestReadOnly) return true;
+  const goalBucket = (text) => {
+    if (isReadOnlyUserGoal(text)) return "readonly";
+    if (/\b(implement|refactor|fix|patch|edit|write|compile|build|구현|수정|리팩터)\b/i.test(text)) {
+      return "write";
+    }
+    if (/\b(analyze|review|find|structure|구조|분석|버그|조사|찾아)\b/i.test(text)) {
+      return "inspect";
+    }
+    return "other";
+  };
+  const priorBucket = goalBucket(prior);
+  const latestBucket = goalBucket(latest);
+  return Boolean(
+    priorBucket !== "other"
+    && latestBucket !== "other"
+    && priorBucket !== latestBucket,
+  );
 }
 
 function toolNamesMatch(expected, actual) {
@@ -528,7 +603,14 @@ module.exports = {
   findLatestRealUserIndex,
   extractControlState,
   buildCheckpoint,
+  SESSION_MARKER_RE,
+  extractSessionMarker,
+  formatSessionMarker,
+  messageLineageFingerprints,
+  lineageContinues,
+  baseSessionKey,
   sessionFingerprint,
+  isMajorGoalChange,
   toolNamesMatch,
   expectedToolReserve,
   budgetDecision,

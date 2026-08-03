@@ -98,10 +98,110 @@ const PROMPTS = [
 const SYSTEM_PROMPT = (
   "You are an Unreal Engine 5.x C++ agent. Use MCP tools before claiming project facts. "
   + "Prefer get_active_project / search_files / read_file / read_file_range. "
-  + `list_directory is budget-limited (max ${MAX_LIST_DIRECTORY_PER_TURN}/turn, depth<=${MAX_LIST_PATH_DEPTH}). `
+  + `list_directory is budget-limited (max ${MAX_LIST_DIRECTORY_PER_TURN}/turn, no duplicate paths). `
   + "For structure: list '.' and 'Source' once, then search_files/read_file. Never recursively list every child folder. "
-  + "When the user forbids edits, never write/modify files. Be concrete with real paths."
+  + "When the user forbids edits, never write/modify files. Be concrete with real paths. "
+  + "Each user turn must end with a complete Korean answer that directly satisfies the request. "
+  + "Do not stop on intermediate status lines such as '다음 round에서 계속' or '확인해보겠습니다' alone."
 );
+
+/** Per-turn answer requirements: every `anyOf` group needs ≥1 match in final chat text. */
+const TURN_ANSWER_CHECKS = {
+  1: {
+    minChars: 280,
+    requireTools: true,
+    anyOf: [
+      [/Project_MJS|\.uproject/i, /Source/i, /Plugins|Config|Content/i],
+    ],
+  },
+  2: {
+    minChars: 200,
+    requireTools: true,
+    anyOf: [[/버그|결함|위험|문제|issue|bug|crash|null|잘못된/i]],
+    noneOf: [/수정했|파일을 썼|write_file|replace_in_file|패치 적용/i],
+  },
+  3: { minChars: 220, requireTools: true, anyOf: [[/시네마틱|Cinematic|LevelSequence|Sequencer/i]] },
+  4: { minChars: 220, requireTools: true, anyOf: [[/플레이어|Player|Character|Pawn/i]] },
+  5: { minChars: 220, requireTools: true, anyOf: [[/적|Enemy|AI|NPC/i]] },
+  6: { minChars: 220, requireTools: true, anyOf: [[/서브시스템|Subsystem|UGameInstanceSubsystem|UWorldSubsystem/i]] },
+  7: { minChars: 220, requireTools: true, anyOf: [[/카메라|Camera|SpringArm|CineCamera/i]] },
+  8: { minChars: 220, requireTools: true, anyOf: [[/UI|UMG|Widget|HUD|Slate/i]] },
+  9: { minChars: 260, requireTools: true, anyOf: [[/Plugins|플러그인/i]] },
+  10: { minChars: 220, requireTools: true, anyOf: [[/셰이더|Shader|Material|HLSL/i]] },
+  11: { minChars: 220, requireTools: true, anyOf: [[/로딩|Loading|LoadScreen|Streaming/i]] },
+  12: { minChars: 220, requireTools: false, anyOf: [[/개선|방향|병목|최적화|제안/i]] },
+  13: {
+    minChars: 220,
+    requireTools: false,
+    anyOf: [[/계획|단계|로드맵|개선/i]],
+    noneOf: [/수정했|파일을 썼|write_file|replace_in_file/i],
+  },
+  14: { minChars: 220, requireTools: true, anyOf: [[/타겟|Target|LockOn|조준/i]] },
+  15: { minChars: 220, requireTools: true, anyOf: [[/스킬|Skill|Ability|GAS|GameplayAbility/i]] },
+  16: {
+    minChars: 220,
+    requireTools: false,
+    anyOf: [[/GameInstance|게임\s*인스턴스|확장/i]],
+    noneOf: [/수정했|파일을 썼|write_file|replace_in_file/i],
+  },
+  17: { minChars: 260, requireTools: true, anyOf: [[/컴뱃|Combat|Damage|Attack|전투/i]] },
+};
+
+const INCOMPLETE_ANSWER_RE = (
+  /다음\s*(?:round|라운드)|계속\s*(?:읽|확인|조사)|확인해보겠습니다\.?\s*$|나머지\s*파일|How can I help you/i
+);
+const INTERNAL_MARKER_RE = /__LM_STUDIO_INTERNAL_[A-Z0-9_]+__|<think>[\s\S]*?<\/think>|redacted_reasoning/gi;
+
+function extractVisibleAnswer(text) {
+  const raw = String(text || "");
+  const parts = raw.split(/__LM_STUDIO_INTERNAL_[A-Z0-9_]+__/);
+  let candidate = (parts.length > 1 ? parts[parts.length - 1] : raw)
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/redacted_reasoning/gi, "")
+    .trim();
+  const hangulIdx = candidate.search(/[가-힣]/);
+  if (hangulIdx > 80) {
+    const afterHangul = candidate.slice(hangulIdx).trim();
+    if (afterHangul.length >= 160) candidate = afterHangul;
+  }
+  return candidate;
+}
+
+function evaluateAnswerQuality(turnIndex, prompt, finalText, toolCalls) {
+  const text = extractVisibleAnswer(finalText);
+  const failures = [];
+  const spec = TURN_ANSWER_CHECKS[turnIndex] || { minChars: 160, anyOf: [] };
+  if (text.length < Number(spec.minChars || 160)) {
+    failures.push(`too_short:${text.length}<${spec.minChars}`);
+  }
+  if (INCOMPLETE_ANSWER_RE.test(text)) {
+    failures.push("incomplete_progress_only");
+  }
+  if (/__LM_STUDIO_INTERNAL_[A-Z0-9_]+__/i.test(String(finalText || ""))
+    && text.length < Number(spec.minChars || 160)) {
+    failures.push("internal_marker_without_visible_answer");
+  }
+  if (spec.requireTools && (!Array.isArray(toolCalls) || toolCalls.length === 0)) {
+    const hasConcretePaths = /Source\/[A-Za-z0-9_./\\-]+\.(?:h|cpp|cs)/i.test(text);
+    if (!hasConcretePaths) failures.push("no_tools_or_paths");
+  }
+  for (const group of spec.anyOf || []) {
+    const ok = group.some((re) => re.test(text));
+    if (!ok) {
+      failures.push(`missing_required_topic:${group.map((re) => String(re)).join("|")}`);
+    }
+  }
+  for (const re of spec.noneOf || []) {
+    if (re.test(text)) failures.push(`forbidden_claim:${String(re)}`);
+  }
+  return {
+    ok: failures.length === 0,
+    failures,
+    chars: text.length,
+    prompt,
+    visiblePreview: text.replace(/\s+/g, " ").slice(0, 280),
+  };
+}
 
 const ALLOW_TOOLS = new Set([
   "unreal_get_active_project",
@@ -306,7 +406,6 @@ function wrapToolImpls(toolImpls, turnState) {
           depth,
           used: turnState.listCount,
           maxPerTurn: MAX_LIST_DIRECTORY_PER_TURN,
-          maxDepth: MAX_LIST_PATH_DEPTH,
           seen: [...turnState.listedPaths],
         });
         // #endregion
@@ -319,19 +418,6 @@ function wrapToolImpls(toolImpls, turnState) {
               path: key,
               agentInstruction:
                 "Do not call list_directory again this turn. Use search_files or read_file, then answer.",
-            },
-          );
-        }
-        if (depth > MAX_LIST_PATH_DEPTH) {
-          turnState.listBlocked += 1;
-          return softToolResult(
-            "LIST_DIRECTORY_DEPTH_EXCEEDED",
-            `list_directory depth ${depth} exceeds max ${MAX_LIST_PATH_DEPTH}.`,
-            {
-              path: key,
-              depth,
-              agentInstruction:
-                "Do not recurse deeper with list_directory. Use search_files under this folder instead.",
             },
           );
         }
@@ -670,16 +756,163 @@ async function runUserTurn({
   });
   // #endregion
 
+  let qualityProbe = evaluateAnswerQuality(turnIndex, prompt, finalText, turnTools);
+  if (!qualityProbe.ok) {
+    debugLog("E2E", "turn:nudge", "answer incomplete — one completion nudge", {
+      turnIndex,
+      failures: qualityProbe.failures,
+      chars: finalText.length,
+      visibleChars: qualityProbe.chars,
+    });
+    const needsEvidence = qualityProbe.failures.some((f) => f.startsWith("no_tools") || f.startsWith("missing_required"));
+    historyMessages.push({
+      role: "user",
+      content: [{
+        type: "text",
+        text: needsEvidence
+          ? "직전 답변 근거가 부족합니다. search_files 또는 read_file로 관련 소스를 확인한 뒤, 수정하지 말고 한국어 최종 답변만 완성하세요."
+          : "도구 호출 없이, 지금까지 확인한 근거만으로 내 직전 요청에 대한 최종 답변을 한국어로 완성해서 출력하세요. 중간 진행 문장만 쓰지 마세요.",
+      }],
+    });
+    const capture = { fragments: [], requests: [], failures: [], droppedRequests: 0 };
+    const nudgeTools = needsEvidence ? toolDefsForAttempt(toolDefinitions, 2) : [];
+    const controller = makeController(
+      client,
+      model,
+      { ...config, temperature: 0.05 },
+      nudgeTools,
+      capture,
+    );
+    const chat = Chat.from({ messages: historyMessages });
+    try {
+      await Promise.race([
+        generate(controller, chat),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("NUDGE_TIMEOUT")), GENERATE_TIMEOUT_MS)),
+      ]);
+      if (capture.requests.length > 0) {
+        for (const req of capture.requests.slice(0, MAX_PARALLEL_TOOLS)) {
+          const name = String(req.name || "");
+          const args = req.arguments || {};
+          const impl = guardedToolImpls.get(name);
+          const toolCallId = req.id || `nudge-${turnIndex}-${name}`;
+          let resultText = softToolResult("UNKNOWN_TOOL", `unknown tool: ${name}`, {});
+          if (impl) {
+            try { resultText = await impl(args); } catch (error) {
+              resultText = softToolResult("TOOL_THROW", String(error?.message || error), { tool: name });
+            }
+            turnTools.push({
+              name,
+              args,
+              ms: 0,
+              preview: String(resultText).slice(0, 180),
+              hardError: null,
+            });
+          }
+          historyMessages.push({
+            role: "assistant",
+            content: [{
+              type: "toolCallRequest",
+              toolCallRequest: { type: "function", id: toolCallId, name, arguments: args },
+            }],
+          });
+          historyMessages.push({
+            role: "tool",
+            content: [{ type: "toolCallResult", toolCallId, content: String(resultText) }],
+          });
+        }
+        const capture2 = { fragments: [], requests: [], failures: [], droppedRequests: 0 };
+        const controller2 = makeController(client, model, { ...config, temperature: 0.05 }, [], capture2);
+        const chat2 = Chat.from({ messages: historyMessages });
+        await Promise.race([
+          generate(controller2, chat2),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("NUDGE2_TIMEOUT")), GENERATE_TIMEOUT_MS)),
+        ]);
+        const nudged = capture2.fragments.join("").trim();
+        if (nudged) {
+          finalText = nudged;
+          historyMessages.push({ role: "assistant", content: [{ type: "text", text: nudged }] });
+        }
+      } else {
+        const nudged = capture.fragments.join("").trim();
+        if (nudged) {
+          finalText = nudged;
+          historyMessages.push({ role: "assistant", content: [{ type: "text", text: nudged }] });
+        }
+      }
+    } catch (error) {
+      debugLog("E2E", "turn:nudge_fail", "completion nudge failed", {
+        turnIndex,
+        error: String(error?.message || error).slice(0, 400),
+      });
+    }
+  }
+
+  const visible = extractVisibleAnswer(finalText);
   return {
     turnIndex,
     prompt,
     ms: Date.now() - turnStarted,
-    chars: finalText.length,
-    preview: finalText.replace(/\s+/g, " ").slice(0, 280),
+    chars: visible.length || finalText.length,
+    text: visible || finalText,
+    rawText: finalText,
+    preview: (visible || finalText).replace(/\s+/g, " ").slice(0, 280),
     toolCalls: turnTools,
     listDirectory: turnState.listCount,
     listBlocked: turnState.listBlocked,
   };
+}
+
+async function runMultiChatIsolationProbe({
+  generate,
+  client,
+  model,
+  config,
+  toolDefinitions,
+  primarySessionHint,
+}) {
+  const store = require(path.join(REPO, "lmstudio-context-compactor-plugin", "src", "checkpoint-store.js"));
+  const core = require(path.join(REPO, "lmstudio-context-compactor-plugin", "src", "compaction-core.js"));
+  const opener = PROMPTS[0];
+  const salt = `${WORKSPACE}\n${model.identifier}`;
+  const sessionsBefore = listSessions().map((s) => s.name);
+  const primaryBefore = primarySessionHint
+    ? await store.loadCheckpoint(primarySessionHint).catch(() => null)
+    : null;
+
+  const historyB = [
+    { role: "system", content: [{ type: "text", text: SYSTEM_PROMPT }] },
+    { role: "user", content: [{ type: "text", text: opener }] },
+  ];
+  const capture = { fragments: [], requests: [], failures: [], droppedRequests: 0 };
+  const controller = makeController(client, model, { ...config, temperature: 0.05 }, [], capture);
+  const chat = Chat.from({ messages: historyB });
+  await Promise.race([
+    generate(controller, chat),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("ISOLATION_GENERATE_TIMEOUT")), 120_000)),
+  ]);
+
+  const sessionsAfter = listSessions();
+  const newest = sessionsAfter.find((s) => !sessionsBefore.includes(s.name)) || sessionsAfter[0];
+  const checkpointB = newest ? await store.loadCheckpoint(newest.name).catch(() => null) : null;
+  const baseKey = core.baseSessionKey(
+    [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: opener }],
+    salt,
+  );
+  const differentSession = Boolean(newest && primarySessionHint && newest.name !== primarySessionHint);
+  const result = {
+    ok: Boolean(differentSession && newest),
+    baseKey: String(baseKey).slice(0, 12),
+    primarySession: primarySessionHint || null,
+    secondarySession: newest?.name || null,
+    differentSession,
+    sessionsBeforeCount: sessionsBefore.length,
+    sessionsAfterCount: sessionsAfter.length,
+    primaryObjectivePreview: String(primaryBefore?.objective || "").slice(0, 80),
+    secondaryObjectivePreview: String(checkpointB?.objective || "").slice(0, 80),
+    answerPreview: capture.fragments.join("").replace(/\s+/g, " ").slice(0, 200),
+  };
+  debugLog("H-SESSION", "isolation:probe", "multi-chat isolation after turn 8", result);
+  return result;
 }
 
 async function main() {
@@ -801,6 +1034,8 @@ async function main() {
   ];
   const turnResults = [];
   let hardFail = null;
+  let isolationProbe = null;
+  let primarySessionHint = null;
 
   for (let i = START_AT - 1; i < PROMPTS.length; i += 1) {
     const turnIndex = i + 1;
@@ -821,6 +1056,8 @@ async function main() {
         stats,
         sinceMs,
       });
+      const quality = evaluateAnswerQuality(turnIndex, prompt, result.text || result.preview, result.toolCalls);
+      result.quality = quality;
       turnResults.push(result);
       debugLog("E2E", "turn:done", "turn completed", {
         turnIndex,
@@ -829,8 +1066,13 @@ async function main() {
         tools: result.toolCalls.map((t) => t.name),
         listDirectory: result.listDirectory,
         listBlocked: result.listBlocked,
+        quality,
         preview: result.preview,
       });
+      logLine(`quality turn ${turnIndex}`, quality.ok ? "PASS" : `FAIL ${quality.failures.join(",")}`, `chars=${result.chars}`);
+      if (!primarySessionHint) {
+        primarySessionHint = listSessions()[0]?.name || null;
+      }
       if (result.chars < 40 && result.toolCalls.length === 0) {
         hardFail = `TURN_${turnIndex}_EMPTY_RESPONSE`;
         break;
@@ -838,6 +1080,10 @@ async function main() {
       if (/user has sent an empty message|How can I help you/i.test(result.preview)
         && !/구조|시네마틱|플레이어|플러그인|타겟|스킬|컴뱃|버그/i.test(result.preview)) {
         hardFail = `TURN_${turnIndex}_EMPTY_PROMPT_SYMPTOM`;
+        break;
+      }
+      if (!quality.ok) {
+        hardFail = `TURN_${turnIndex}_ANSWER_INCOMPLETE:${quality.failures.join(",")}`;
         break;
       }
       if (result.listDirectory > MAX_LIST_DIRECTORY_PER_TURN) {
@@ -850,6 +1096,22 @@ async function main() {
         hardFail = `TURN_${turnIndex}_RESCAN_LOOP avgList=${avgList.toFixed(2)}`;
         break;
       }
+      if (turnIndex === 8 && !isolationProbe) {
+        logLine("\n===== MULTI-CHAT ISOLATION PROBE (after turn 8) =====");
+        isolationProbe = await runMultiChatIsolationProbe({
+          generate,
+          client,
+          model,
+          config,
+          toolDefinitions,
+          primarySessionHint,
+        });
+        logLine("isolation", JSON.stringify(isolationProbe));
+        if (!isolationProbe.ok) {
+          hardFail = "MULTI_CHAT_ISOLATION_FAILED";
+          break;
+        }
+      }
     } catch (error) {
       hardFail = String(error?.message || error);
       debugLog("E2E", "turn:fail", "turn failed — stop marathon", { turnIndex, hardFail: hardFail.slice(0, 1000) });
@@ -858,12 +1120,15 @@ async function main() {
   }
 
   const health = sessionHealth(listSessions()[0]?.full, sinceMs);
+  const answerPassCount = turnResults.filter((t) => t.quality?.ok).length;
   const report = {
-    ok: !hardFail && turnResults.length === PROMPTS.length - (START_AT - 1),
+    ok: !hardFail && turnResults.length === PROMPTS.length - (START_AT - 1) && answerPassCount === turnResults.length,
     completedTurns: turnResults.length,
     targetTurns: PROMPTS.length - (START_AT - 1),
+    answerPassCount,
     startAt: START_AT,
     hardFail,
+    isolationProbe,
     pluginRevision: manifest.revision,
     model: model.identifier,
     performance: {
@@ -878,7 +1143,18 @@ async function main() {
       maxParallelTools: MAX_PARALLEL_TOOLS,
       compaction: health,
     },
-    turns: turnResults,
+    turns: turnResults.map((t) => ({
+      turnIndex: t.turnIndex,
+      prompt: t.prompt,
+      ms: t.ms,
+      chars: t.chars,
+      preview: t.preview,
+      quality: t.quality,
+      toolCalls: t.toolCalls,
+      listDirectory: t.listDirectory,
+      listBlocked: t.listBlocked,
+      text: t.text,
+    })),
   };
 
   fs.writeFileSync(REPORT_JSON, `${JSON.stringify(report, null, 2)}\n`, "utf8");

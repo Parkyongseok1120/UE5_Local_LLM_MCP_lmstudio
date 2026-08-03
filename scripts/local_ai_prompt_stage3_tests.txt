@@ -1,0 +1,22 @@
+STAGE 3 — Automation tests ONLY via MCP. Implementation already exists (MaxPersonalTime, TickTimeSystem, bTimePaused, AutoMoveOnTimeout, ApplyEndOfRoundRecovery). Do NOT rewrite game code unless a test proves a compile/API gap.
+
+Create `Source/O_Mock/Tests/GomokuStage3TimeSystem.spec.cpp`.
+
+Read first:
+- Source/O_Mock/GomokuGameState.h / .cpp (public APIs)
+- Source/O_Mock/Tests/GomokuStage4Behavior.spec.cpp (UWorld::CreateWorld pattern, how GS is spawned)
+
+## Required tests
+1) Gomoku.Stage3.TimeDefaults
+   Spawn minimal world + GameState (match Stage4 pattern). Assert MaxPersonalTime==120, MaxTurnTime==25, PersonalRecoveryRate ~0.35 (read actual field name).
+
+2) Gomoku.Stage3.PauseStopsTick
+   Init time system / match so PlayerTimes exist. Note PersonalRemaining + TurnElapsed. SetTimePaused(true); TickTimeSystem(1.0f); assert times unchanged. SetTimePaused(false); TickTimeSystem(1.0f); assert current player time progressed (TurnElapsed increased or Personal decreased per implementation).
+
+3) Gomoku.Stage3.EndOfRoundRecovery
+   If you can call ApplyEndOfRoundRecovery after lowering PersonalRemaining below MaxPersonalTime, assert recovered ≈ deficit * PersonalRecoveryRate (tolerance 0.01). Prefer public/testable path only.
+
+4) Gomoku.Stage3.OnlyCurrentPlayerTicks (optional if easy)
+   With 2 players, Tick while not paused; only current player's TurnElapsed/Personal changes.
+
+Use EditorContext | EngineFilter. Includes like Stage4. Bounded write_file. Stop when at least tests 1–3 exist and are compile-ready.

@@ -28,3 +28,17 @@ docs/internal/
 lmstudio-context-compactor-plugin/dist/
 .agent/
 .DS_Store
+
+# Debug / marathon runtime artifacts (never commit personal paths or chat dumps)
+debug-*.log
+.cursor/debug-*.log
+scripts/marathon*.log
+scripts/marathon*.out.log
+scripts/marathon*.shell.log
+scripts/lmstudio_marathon_report*.json
+scripts/omock_stage_*.log
+scripts/omock_stage_report.json
+scripts/omock_stage_state.json
+scripts/lmstudio_e2e_driver.out.log
+scripts/ci_*.out.log
+scripts/ci_*.shell.log

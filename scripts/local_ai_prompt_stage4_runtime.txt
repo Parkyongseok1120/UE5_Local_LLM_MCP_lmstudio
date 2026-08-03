@@ -1,0 +1,18 @@
+RUNTIME TEST BLOCKED — fix game code via MCP, then stop. Do not expand features.
+
+## Crash (prevents all Stage 4 behavior tests)
+When launching UnrealEditor-Cmd for Automation `Gomoku.Stage4.*`, editor fatal errors during GameMode CDO construct:
+
+```
+Fatal error: NewObject with empty name can't be used to create default subobjects
+(inside of UObject derived class constructor)
+AGomokuGameMode::AGomokuGameMode() [GomokuGameMode.cpp:14]
+RuleEngine = NewObject<UGomokuRuleEngine>(this);
+```
+
+Expected: In AActor/AGameMode constructors use `CreateDefaultSubobject<UGomokuRuleEngine>(TEXT("RuleEngine"))`, OR create the engine in BeginPlay with a named NewObject — not nameless NewObject(this) in the constructor.
+
+## After fix
+Supervisor will rebuild and re-run Stage 4 automation covering: 2/3/4 turn cycle, abandon exclude, skip, reverse, round membership, inactive exclude, Stage3 timers for 3/4p, 21x21 4p.
+
+Read GomokuGameMode.cpp/.h, apply a bounded replace_in_file, summarize.

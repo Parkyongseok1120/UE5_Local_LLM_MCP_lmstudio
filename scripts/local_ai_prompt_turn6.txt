@@ -1,0 +1,26 @@
+Do exactly 5 replace_in_file patches. read_file_range first each time.
+
+1) GomokuHUD.cpp — after includes add `#include "Engine/Engine.h"`
+
+2) GomokuHUD.cpp — APPEND at end of file the missing function:
+```
+void AGomokuHUD::OnTickPlayerTime(int32 PlayerIndex, const FGomokuPlayerTimeState& TimeState)
+{
+	if (PlayerIndex < 0) return;
+	if (PlayerTimeStrings.Num() <= PlayerIndex) { PlayerTimeStrings.SetNum(PlayerIndex + 1); }
+	PlayerTimeStrings[PlayerIndex] = FString::Printf(TEXT("P%d Personal:%.1f Turn:%.1f"), PlayerIndex + 1, TimeState.PersonalRemaining, TimeState.TurnElapsedThisTurn);
+}
+```
+(Use replace_in_file with oldText = last HandleRestartKey closing brace block uniquely, newText = that block + new function)
+
+3) GomokuPlayerController.h — before closing `};` of class, add:
+```
+	void OnMouseMoveX(float Value);
+	void OnMouseMoveY(float Value);
+```
+
+4) GomokuPlayerController.cpp — after `#include "GomokuGameMode.h"` add `#include "EngineUtils.h"`
+
+5) GomokuPlayerController.cpp — replace `const FVector2D MousePos = GetMousePosition();` with float MX/MY GetMousePosition version; and replace `ClearHoveredCell();` with `SetHoveredCell(FIntPoint(-1,-1));`
+
+Stop.

@@ -1,0 +1,18 @@
+{
+  "currentStage": 7,
+  "completedStages": [3, 4, 5, 6, 7],
+  "campaignClosedAtStage": 7,
+  "lastError": null,
+  "updatedAt": "2026-08-03T16:37:30.000Z",
+  "stageResults": {
+    "3": { "status": "PASSED_FINAL", "automation": "3/3", "report": "scripts/omock_automation_Stage3_final.report.json" },
+    "4": { "status": "PASSED_FINAL", "automation": "11/11", "report": "scripts/omock_automation_Stage4_final.report.json" },
+    "5": { "status": "PASSED_FINAL", "automation": "4/4", "report": "scripts/omock_automation_Stage5_final.report.json" },
+    "6": { "status": "PASSED_FINAL", "automation": "3/3", "report": "scripts/omock_automation_Stage6_final.report.json" },
+    "7": { "status": "PASSED_FINAL", "automation": "9/9", "report": "scripts/omock_automation_Stage7_final.report.json" }
+  },
+  "grokOMockEdits": 0,
+  "doNotStartStage8": true,
+  "infraBacklog": "scripts/INFRA_STALE_TASK_GC.md",
+  "finalReport": "scripts/STAGE3_7_FINAL_REPORT.md"
+}

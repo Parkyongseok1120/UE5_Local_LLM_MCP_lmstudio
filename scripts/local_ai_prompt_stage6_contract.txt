@@ -1,0 +1,49 @@
+O-Mock Stage 6 FRAMEWORK CONTRACT FIX (not a one-line ItemId swap).
+
+Active project must be O-Mock. Use MCP read_file / read_file_range / replace_in_file / write_file only under Source/O_Mock/.
+
+## Failure evidence (Automation)
+Gomoku.Stage6.CanUseValidateExecuteSeparated FAILED:
+  Expected 'ValidateTarget on empty cell' to be true
+  at Tests/GomokuStage6ItemFramework.spec.cpp(79)
+Root cause observed:
+  - Test used ItemId=101
+  - AddItemToInventory(101) SUCCEEDED (unregistered id allowed)
+  - CanUseItem(101) became true after add (no registry check; IsItemUsableNow inventory-only)
+  - ValidateTarget failed because anonymous GetItemData(101)==nullptr
+
+## Contract decisions you MUST implement
+1) Unregistered ItemId MUST NOT enter inventory.
+   - AddItemToInventory (RuleEngine) must reject ids not in the static registry (ids 1..5).
+   - Prefer: expose UGomokuItemLibrary::IsRegisteredItemId(int32) (or equivalent public helper) and call it from AddItemToInventory in GomokuRuleEngine.cpp (include ItemLibrary.h in the .cpp only).
+2) CanUseItem MUST reject unregistered items (check IsRegisteredItemId before / with IsItemUsableNow).
+3) ValidateTarget and ExecuteItem already require GetItemData — keep that; do not remove registry checks there.
+4) Tests must verify BOTH contracts:
+   A) Registered ItemId=1 SealStone (Cell, empty cell):
+      - Add success
+      - CanUse success
+      - ValidateTarget(0,0) success
+      - ExecuteItem success
+      - Energy cost consumed (cost 1) and item removed from inventory
+      - CanUse after execute false
+   B) Unregistered ItemId=101:
+      - AddItemToInventory fails OR if somehow present CanUse false
+      - ValidateTarget false
+      - ExecuteItem false
+      - Energy unchanged after failed Execute attempt
+   Update ItemTypesExist: stop asserting stub FItemData(101,...). Assert registry contract for id 1 (via public API / behavior), or rename/repurpose that test.
+
+## Files to read first
+- Source/O_Mock/GomokuItemLibrary.h / .cpp
+- Source/O_Mock/GomokuRuleEngine.h / .cpp (AddItemToInventory, IsItemUsableNow)
+- Source/O_Mock/Tests/GomokuStage6ItemFramework.spec.cpp
+
+## Constraints
+- Bounded patches (newText <= 60 lines). Read before replace.
+- Do NOT invent taskSessionId.
+- Do NOT touch other projects.
+- Keep SelectCancelTargeting working (ItemId 5 is fine for PC select/cancel).
+- Prefer multiple small replace_in_file over huge rewrites.
+- After edits, summarize changed files and the contract you enforced.
+
+Stop when: IsRegisteredItemId (or equivalent) exists, Add+CanUse reject 101, SealStone path works, Stage6 tests cover registered + unregistered.

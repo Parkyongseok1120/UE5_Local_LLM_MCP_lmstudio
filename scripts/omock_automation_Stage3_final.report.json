@@ -1,0 +1,55 @@
+{
+  "filter": "Gomoku.Stage3.",
+  "status": 0,
+  "error": null,
+  "found": 3,
+  "pass": 3,
+  "fail": 0,
+  "expect": 3,
+  "list": [
+    {
+      "name": "Gomoku.Stage3.EndOfRoundRecovery",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage3.PauseStopsTick",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage3.TimeDefaults",
+      "result": "Success"
+    }
+  ],
+  "sampleLines": [
+    "[2026.08.03-16.35.32:438][  0]LogModuleManager: InternalLoadLibrary: 'AutomationController' ('C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-AutomationController.dll')",
+    "[2026.08.03-16.35.35:878][  0]Cmd: Automation RunTests Gomoku.Stage3.; Quit",
+    "[2026.08.03-16.35.35:881][  0]Automation: RunTests='Gomoku.Stage3.' Queued.",
+    "[2026.08.03-16.35.41:204][595]LogAutomationController: Received FindWorkersResponseMessage from 2B4323D1403ED3EC5EB0ED829F0CA75F",
+    "[2026.08.03-16.35.41:204][595]LogAutomationController: Requesting test list from 2B4323D1403ED3EC5EB0ED829F0CA75F",
+    "[2026.08.03-16.35.41:319][596]LogAutomationController: Received RequestTestsReplyCompleteMessage from 2B4323D1403ED3EC5EB0ED829F0CA75F",
+    "[2026.08.03-16.35.41:322][596]LogAutomationController: 6971 tests available on 2B4323D1403ED3EC5EB0ED829F0CA75F",
+    "[2026.08.03-16.35.41:349][596]LogAutomationCommandLine: Display: Found 3 automation tests based on 'Gomoku.Stage3.'",
+    "[2026.08.03-16.35.41:349][596]LogAutomationCommandLine: Display: \tGomoku.Stage3.EndOfRoundRecovery",
+    "[2026.08.03-16.35.41:349][596]LogAutomationCommandLine: Display: \tGomoku.Stage3.PauseStopsTick",
+    "[2026.08.03-16.35.41:349][596]LogAutomationCommandLine: Display: \tGomoku.Stage3.TimeDefaults",
+    "[2026.08.03-16.35.41:350][596]LogAutomationController: Sending StopTests to 2B4323D1403ED3EC5EB0ED829F0CA75F",
+    "[2026.08.03-16.35.41:353][596]LogAutomationController: Sending StartTestSession to 2B4323D1403ED3EC5EB0ED829F0CA75F",
+    "[2026.08.03-16.35.41:353][596]LogAutomationController: Display: Clearing ../../../../../../Users/sster/Documents/Git/O-Mock/Saved/Automation/Logs/ and ../../../../../../Users/sster/Documents/Git/O-Mock/Saved/Automation/Tmp/",
+    "[2026.08.03-16.35.41:355][596]LogAutomationController: Sending RunTest EndOfRoundRecovery to 2B4323D1403ED3EC5EB0ED829F0CA75F",
+    "[2026.08.03-16.35.41:355][597]LogAutomationController: Display: Test Started. Name={EndOfRoundRecovery} Path={Gomoku.Stage3.EndOfRoundRecovery}",
+    "[2026.08.03-16.35.41:376][599]LogAutomationController: Display: Test Completed. Result={Success} Name={EndOfRoundRecovery} Path={Gomoku.Stage3.EndOfRoundRecovery}",
+    "[2026.08.03-16.35.41:376][599]LogAutomationController: BeginEvents: Gomoku.Stage3.EndOfRoundRecovery",
+    "[2026.08.03-16.35.41:376][599]LogAutomationController: EndEvents: Gomoku.Stage3.EndOfRoundRecovery",
+    "[2026.08.03-16.35.41:377][599]LogAutomationController: Sending RunTest PauseStopsTick to 2B4323D1403ED3EC5EB0ED829F0CA75F",
+    "[2026.08.03-16.35.41:377][600]LogAutomationController: Display: Test Started. Name={PauseStopsTick} Path={Gomoku.Stage3.PauseStopsTick}",
+    "[2026.08.03-16.35.41:400][602]LogAutomationController: Display: Test Completed. Result={Success} Name={PauseStopsTick} Path={Gomoku.Stage3.PauseStopsTick}",
+    "[2026.08.03-16.35.41:400][602]LogAutomationController: BeginEvents: Gomoku.Stage3.PauseStopsTick",
+    "[2026.08.03-16.35.41:400][602]LogAutomationController: EndEvents: Gomoku.Stage3.PauseStopsTick",
+    "[2026.08.03-16.35.41:400][602]LogAutomationController: Sending RunTest TimeDefaults to 2B4323D1403ED3EC5EB0ED829F0CA75F",
+    "[2026.08.03-16.35.41:400][603]LogAutomationController: Display: Test Started. Name={TimeDefaults} Path={Gomoku.Stage3.TimeDefaults}",
+    "[2026.08.03-16.35.41:425][605]LogAutomationController: Display: Test Completed. Result={Success} Name={TimeDefaults} Path={Gomoku.Stage3.TimeDefaults}",
+    "[2026.08.03-16.35.41:425][605]LogAutomationController: BeginEvents: Gomoku.Stage3.TimeDefaults",
+    "[2026.08.03-16.35.41:425][605]LogAutomationController: EndEvents: Gomoku.Stage3.TimeDefaults",
+    "[2026.08.03-16.35.41:426][605]LogAutomationController: Sending StopTestSession to 2B4323D1403ED3EC5EB0ED829F0CA75F"
+  ]
+}

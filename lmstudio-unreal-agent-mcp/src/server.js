@@ -157,10 +157,55 @@ const {
   recordReadStagnation,
   normalizeReadToolArgs,
   cachedReadInstruction,
-  clearReadSuccessHistory
+  clearReadSuccessHistory,
+  getFileCoverage,
 } = require("./tool-read-history");
+
+// #region agent log
+const AGENT_DEBUG_LOG = path.join(__dirname, "..", "..", "debug-821b0f.log");
+const AGENT_DEBUG_INGEST = "http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c";
+function agentDebugLog(hypothesisId, location, message, data) {
+  const payload = {
+    sessionId: "821b0f",
+    runId: "stage4-mcp-deadlock",
+    hypothesisId,
+    location,
+    message,
+    data: data || {},
+    timestamp: Date.now(),
+  };
+  try { fs.appendFileSync(AGENT_DEBUG_LOG, `${JSON.stringify(payload)}\n`, "utf8"); } catch { /* ignore */ }
+  try {
+    fetch(AGENT_DEBUG_INGEST, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "821b0f" },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  } catch { /* ignore */ }
+}
+/** path -> { reason, at } — guides stagnation messages during mutation recovery */
+const mutationRecoveryHints = new Map();
+function markMutationRecoveryHint(fileAbsPath, reason) {
+  if (!fileAbsPath) return;
+  mutationRecoveryHints.set(path.resolve(String(fileAbsPath)), {
+    reason: String(reason || ""),
+    at: Date.now(),
+  });
+}
+function consumeMutationRecoveryHint(fileAbsPath) {
+  if (!fileAbsPath) return null;
+  const key = path.resolve(String(fileAbsPath));
+  const hint = mutationRecoveryHints.get(key) || null;
+  if (hint && Date.now() - hint.at > 10 * 60 * 1000) {
+    mutationRecoveryHints.delete(key);
+    return null;
+  }
+  return hint;
+}
+// #endregion
 const { runUnrealBuildFromPlan } = require("./build-executor");
 const { readUtf8Range, readUtf8Tail } = require("./bounded-read");
+const { createListDirectoryBudget } = require("./list-directory-budget");
 const { beginBuild, finishBuild, beginValidation, finishValidationAndClear, recordMutation, recordDeletion, readMutationState } = require("./mutation-generation");
 const {
   recordValidationFailure,
@@ -187,6 +232,11 @@ const CONFIG_PATH = path.resolve(
   process.env.AGENT_MCP_CONFIG
   || path.join(__dirname, "..", "config", "agent-mcp.json")
 );
+const LIST_DIRECTORY_BUDGET = createListDirectoryBudget({
+  windowMs: numberEnv("LIST_DIRECTORY_WINDOW_MS", 5 * 60 * 1000, 10_000),
+  maxCallsPerWindow: numberEnv("LIST_DIRECTORY_MAX_CALLS", 24, 1),
+  maxCallsPerPath: numberEnv("LIST_DIRECTORY_MAX_PER_PATH", 2, 1),
+});
 const ALLOW_WRITE = process.env.ALLOW_WRITE === "1" || process.env.ALLOW_WRITE === "true";
 const ALLOW_COMMANDS = process.env.ALLOW_COMMANDS === "1" || process.env.ALLOW_COMMANDS === "true";
 const ALLOW_UNREAL_BUILD = process.env.ALLOW_UNREAL_BUILD === "1" || process.env.ALLOW_UNREAL_BUILD === "true";
@@ -444,6 +494,41 @@ async function bumpProjectMutationGeneration(targetPath, content) {
 }
 
 function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = null) {
+  // Plan-auth off: skip Python continuity checkpoint. Models often still pass a
+  // fabricated taskSessionId; task_api would then fail every write for any project.
+  if (!REQUIRE_TASK_AUTH_FOR_WRITES) {
+    // #region agent log
+    try {
+      const debugLogPath = path.join(__dirname, "..", "..", "debug-49b048.log");
+      fs.appendFileSync(
+        debugLogPath,
+        `${JSON.stringify({
+          sessionId: "49b048",
+          runId: "post-fix",
+          hypothesisId: "H9",
+          location: "server.js:recordAutomaticContinuityCheckpoint",
+          message: "skip continuity checkpoint (plan-auth disabled)",
+          data: {
+            modifiedCount: Array.isArray(modifiedFiles) ? modifiedFiles.length : 0,
+            hadTaskSessionId: Boolean(requiredFields(args || {}).taskSessionId),
+          },
+          timestamp: Date.now(),
+        })}\n`,
+        "utf8"
+      );
+    } catch {
+      // ignore debug log failures
+    }
+    // #endregion
+    return {
+      ok: true,
+      skipped: true,
+      reason: "plan_auth_disabled",
+      checkpointHash: "",
+      phase: "executor",
+      modifiedFiles: Array.isArray(modifiedFiles) ? modifiedFiles : [],
+    };
+  }
   const checkpoint = checkpointMutationViaPython(WORKSPACE_ROOT, args, modifiedFiles, {
     requiredNextAction: "continue_active_slice_then_validate",
     validation: validation || {},
@@ -715,6 +800,36 @@ function routeAuthorizationFailureOptions(result = {}, toolName = "") {
 }
 
 function commitMutationRouteBudget(args, toolName) {
+  // Plan-auth off (MCP_REQUIRE_PLAN_AUTH=0): do not consume route budget even if
+  // the model still passes a fabricated/stale taskSessionId. Otherwise every
+  // project write fails with TASK_STATE_MISSING / "Task state disappeared…".
+  // Default (plan-auth on) keeps the existing route ledger contract.
+  if (!REQUIRE_TASK_AUTH_FOR_WRITES) {
+    // #region agent log
+    try {
+      const debugLogPath = path.join(__dirname, "..", "..", "debug-49b048.log");
+      fs.appendFileSync(
+        debugLogPath,
+        `${JSON.stringify({
+          sessionId: "49b048",
+          runId: "post-fix",
+          hypothesisId: "H8",
+          location: "server.js:commitMutationRouteBudget",
+          message: "skip route budget (plan-auth disabled)",
+          data: {
+            toolName: String(toolName || ""),
+            hadTaskSessionId: Boolean(requiredFields(args || {}).taskSessionId),
+          },
+          timestamp: Date.now(),
+        })}\n`,
+        "utf8"
+      );
+    } catch {
+      // ignore debug log failures
+    }
+    // #endregion
+    return null;
+  }
   const fields = requiredFields(args || {});
   if (!fields.taskSessionId) {
     return null;
@@ -1281,6 +1396,50 @@ function cachedReadSuccess(content, options = {}) {
 function evidenceStagnationFail(tool, guard, options = {}) {
   const errorCode = guard.reason || "EVIDENCE_STAGNATION";
   recordReadStagnation(tool, guard.normalizedArgs, options.context || {});
+  const recoveryHint = consumeMutationRecoveryHint(options.context?.fileAbsPath);
+  // #region agent log
+  const cov = getFileCoverage(options.context || {});
+  agentDebugLog("H2", "server.js:evidenceStagnationFail", "evidence stagnation hard-stop", {
+    tool,
+    errorCode,
+    attempts: guard.attempts,
+    pingPong: Boolean(guard.pingPong),
+    fullyCovered: Boolean(guard.fullyCovered),
+    path: String(guard.normalizedArgs?.path || options.context?.fileAbsPath || "").slice(-120),
+    recoveryHint: recoveryHint || null,
+    coverage: cov ? {
+      rangeCount: (cov.ranges || []).length,
+      ranges: (cov.ranges || []).slice(0, 6),
+      nonRangeCount: cov.nonRangeCount || 0,
+      coveredRepeatCount: cov.coveredRepeatCount || 0,
+      stagnationCount: cov.stagnationCount || 0,
+    } : null,
+  });
+  // #endregion
+  if (recoveryHint) {
+    return fail(
+      "Evidence re-read blocked after a bounded mutation rejection. Use existing evidence and emit a smaller replace_in_file.",
+      {
+        errorCode,
+        retryable: true,
+        stopCurrentWorkflow: false,
+        doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
+        nextAction: "replace_in_file",
+        agentInstruction:
+          "Do not call another evidence tool. Reuse the file content already in context and apply a bounded "
+          + `replace_in_file (newText <= ${MAX_PATCH_CHANGED_LINES} lines, oldText+newText <= ${MAX_PATCH_ARGUMENT_CHARS} chars).`,
+        userMessage:
+          "Re-read blocked. Continue with a smaller replace_in_file using evidence already returned.",
+        nextSteps: [
+          "Do not call another evidence tool.",
+          "Apply one bounded replace_in_file using exact text already in context.",
+        ],
+        readAttempts: guard.attempts,
+        pingPong: Boolean(guard.pingPong),
+        recoveryReason: recoveryHint.reason,
+      }
+    );
+  }
   return fail(
     errorCode === "EVIDENCE_STAGNATION_REPEAT"
       ? `identical ${tool} evidence call blocked after stagnation.`
@@ -1898,11 +2057,10 @@ function allAgentTools() {
       },
       {
         name: "list_directory",
-        description: "List workspace:// or project:// directories. Source/, Plugins/, Config/, and Content/ resolve against activeProject even when it is outside WORKSPACE_ROOT. Prefer shallow paths; deep recursion is rejected.",
+        description: "List immediate children of a workspace:// or project:// directory (non-recursive). Prefer shallow discovery; repeated/same-path listing is budget-limited. Prefer search_files for deep lookup.",
         inputSchema: makeJsonSchema({
           path: { type: "string", description: "Relative path inside workspace, e.g. '.', 'Source'." },
-          maxEntries: { type: "number", description: "Max entries to show. Default 200." },
-          maxDepth: { type: "number", description: "Max path depth from project/workspace root. Default 4." }
+          maxEntries: { type: "number", description: "Max entries to show. Default 200." }
         }, ["path"])
       },
       {
@@ -2503,26 +2661,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const resolution = await resolveReadToolPath(args.path || ".");
       const target = resolution.absolutePath;
       const maxEntries = Math.max(1, Math.min(Number(args.maxEntries || 200), 1000));
-      const maxDepth = Math.max(1, Math.min(Number(args.maxDepth || 4), 12));
       const relative = String(
         resolution.projectRelativePath
         || resolution.workspaceRelativePath
         || args.path
         || "."
       ).replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
-      const depth = !relative || relative === "." ? 0 : relative.split("/").filter(Boolean).length;
-      if (depth > maxDepth) {
+      const activeProject = getActiveProject(CONFIG_PATH);
+      const budgetScope = String(activeProject || WORKSPACE_ROOT || "workspace");
+      const budgetCheck = LIST_DIRECTORY_BUDGET.check(budgetScope, relative || ".");
+      if (!budgetCheck.ok) {
         return fail(
-          `list_directory depth ${depth} exceeds maxDepth ${maxDepth} for path=${relative || "."}`,
+          `list_directory blocked (${budgetCheck.errorCode}) for path=${budgetCheck.path}`,
           {
-            errorCode: "LIST_DIRECTORY_DEPTH_EXCEEDED",
+            errorCode: budgetCheck.errorCode,
             retryable: false,
             stopCurrentWorkflow: false,
             path: pathMetadata(resolution),
-            depth,
-            maxDepth,
-            agentInstruction:
-              "Do not recurse deeper with list_directory. Use search_files/read_file under this folder instead.",
+            calls: budgetCheck.calls,
+            maxCallsPerWindow: budgetCheck.maxCallsPerWindow,
+            pathCount: budgetCheck.pathCount,
+            maxCallsPerPath: budgetCheck.maxCallsPerPath,
+            agentInstruction: budgetCheck.agentInstruction,
             nextSteps: [
               "Call search_files with a focused query under this path.",
               "Or read specific files you already know about.",
@@ -2547,6 +2707,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           modified: st ? st.mtime.toISOString() : null
         });
       }
+      LIST_DIRECTORY_BUDGET.commit(budgetScope, relative || ".");
       const budgetFail = commitDeferredBudgetOrFail();
       if (budgetFail) return budgetFail;
       return text(JSON.stringify({ path: pathMetadata(resolution), entries: rows }, null, 2));
@@ -3233,13 +3394,90 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         combinedPatchChars > MAX_PATCH_ARGUMENT_CHARS
         || changedLineCount > MAX_PATCH_CHANGED_LINES
       ) {
+        // #region agent log
+        let priorCov = null;
+        try {
+          const mutationGeneration = await resolveMutationGenerationForRead(writeResolution, target);
+          const patchEvidenceCtx = buildReadEvidenceContext(target, s, writeResolution, {
+            mutationGeneration,
+          });
+          priorCov = getFileCoverage(patchEvidenceCtx);
+        } catch { /* ignore coverage probe errors */ }
+        const freshEvidence = hasFreshReadEvidence(target, s);
+        const hasPriorEvidence = Boolean(
+          freshEvidence
+          || (
+            priorCov
+            && (
+              (priorCov.nonRangeCount || 0) > 0
+              || ((priorCov.ranges || []).length > 0)
+              || (priorCov.coveredRepeatCount || 0) > 0
+              || (priorCov.stagnationCount || 0) > 0
+            )
+          )
+        );
+        const display = displayPath(writeResolution);
+        agentDebugLog("H1", "server.js:replace_in_file", "BOUNDED_PATCH_REQUIRED rejected", {
+          path: display,
+          combinedPatchChars,
+          changedLineCount,
+          maxCombinedPatchChars: MAX_PATCH_ARGUMENT_CHARS,
+          maxChangedLines: MAX_PATCH_CHANGED_LINES,
+          charsOver: Math.max(0, combinedPatchChars - MAX_PATCH_ARGUMENT_CHARS),
+          linesOver: Math.max(0, changedLineCount - MAX_PATCH_CHANGED_LINES),
+          priorCoverage: priorCov ? {
+            rangeCount: (priorCov.ranges || []).length,
+            ranges: (priorCov.ranges || []).slice(0, 6),
+            nonRangeCount: priorCov.nonRangeCount || 0,
+            coveredRepeatCount: priorCov.coveredRepeatCount || 0,
+            stagnationCount: priorCov.stagnationCount || 0,
+          } : null,
+          freshEvidence,
+          recoveryWillSuggestRead: !hasPriorEvidence,
+          likelyDeadlock: hasPriorEvidence,
+          recoveryMode: hasPriorEvidence ? "split_from_existing_evidence" : "narrow_read_then_split",
+        });
+        // #endregion
+        // When the file was already read, directing the model back to read_file_range
+        // causes EVIDENCE_STAGNATION / READ_REPEAT and a large-patch retry loop.
+        if (hasPriorEvidence) {
+          markMutationRecoveryHint(target, "BOUNDED_PATCH_REQUIRED");
+          return fail("replace_in_file patch is too large for a reliable LM Studio tool call.", {
+            errorCode: "BOUNDED_PATCH_REQUIRED",
+            retryable: true,
+            stopCurrentWorkflow: false,
+            doNotRetry: ["read_file", "read_file_range"],
+            nextAction: "replace_in_file",
+            nextActionArgs: {
+              path: display,
+              oldText: "<exact contiguous excerpt already in context, <=60 lines>",
+              newText: "<replacement for that excerpt only>",
+              expectedOccurrences: 1,
+            },
+            limits: {
+              maxCombinedPatchChars: MAX_PATCH_ARGUMENT_CHARS,
+              maxChangedLines: MAX_PATCH_CHANGED_LINES,
+              observedCombinedPatchChars: combinedPatchChars,
+              observedChangedLines: changedLineCount,
+            },
+            agentInstruction:
+              "Do NOT re-read this file — evidence is already in context. "
+              + "Emit a smaller replace_in_file now (newText <= " + String(MAX_PATCH_CHANGED_LINES) + " lines and "
+              + "oldText+newText <= " + String(MAX_PATCH_ARGUMENT_CHARS) + " chars). "
+              + "Split the remaining work across additional bounded patches. Do not stop or cancel.",
+            nextSteps: [
+              "Reuse exact text already returned by prior read_file/read_file_range.",
+              "Apply one bounded replace_in_file, then continue with the next region.",
+            ],
+          });
+        }
         return fail("replace_in_file patch is too large for a reliable LM Studio tool call.", {
           errorCode: "BOUNDED_PATCH_REQUIRED",
           retryable: true,
           stopCurrentWorkflow: false,
           nextAction: "read_file_range",
           nextActionArgs: {
-            path: displayPath(writeResolution),
+            path: display,
             startLine: 1,
             endLine: 120,
             detailLevel: "compact",
@@ -3247,8 +3485,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           limits: {
             maxCombinedPatchChars: MAX_PATCH_ARGUMENT_CHARS,
             maxChangedLines: MAX_PATCH_CHANGED_LINES,
+            observedCombinedPatchChars: combinedPatchChars,
+            observedChangedLines: changedLineCount,
           },
-          agentInstruction: "Read one narrower target range, then replace only that exact region. Split the change across additional bounded patches; never duplicate the complete file as oldText/newText and do not stop or cancel the task.",
+          agentInstruction:
+            "Read one narrower target range, then replace only that exact region. "
+            + "Split the change across additional bounded patches; never duplicate the complete file as oldText/newText.",
         });
       }
 
@@ -3288,11 +3530,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } else {
             hint = "\n\nHint: the first line of oldText was not found anywhere in the file. Use read_file or search_files to verify the exact content before retrying.";
           }
+          const hadFresh = hasFreshReadEvidence(target, s);
+          if (hadFresh) {
+            markMutationRecoveryHint(target, "OLD_TEXT_NOT_FOUND");
+          }
           return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`, {
             errorCode: "OLD_TEXT_NOT_FOUND",
-            retryable: false,
-            doNotRetry: ["replace_in_file"],
-            nextSteps: ["Call read_file_range for the target lines, then retry replace_in_file with corrected oldText."],
+            retryable: true,
+            doNotRetry: hadFresh ? ["read_file", "read_file_range", "replace_in_file"] : ["replace_in_file"],
+            nextAction: hadFresh ? "replace_in_file" : "read_file_range",
+            nextActionArgs: hadFresh
+              ? {
+                path: displayPath(writeResolution),
+                oldText: "<exact contiguous excerpt from prior read evidence>",
+                newText: "<replacement for that excerpt only>",
+                expectedOccurrences: 1,
+              }
+              : {
+                path: displayPath(writeResolution),
+                startLine: 1,
+                endLine: 120,
+                detailLevel: "compact",
+              },
+            agentInstruction: hadFresh
+              ? "Do NOT re-read. Reuse the exact file text already returned in this conversation, correct oldText to match it byte-for-byte (LF), then call replace_in_file once with a bounded patch."
+              : "Call read_file_range for the target lines, then retry replace_in_file with corrected oldText.",
+            nextSteps: hadFresh
+              ? [
+                "Copy exact oldText from prior read evidence (preserve tabs/spaces/LF).",
+                "Retry one bounded replace_in_file; do not re-read the same file.",
+              ]
+              : ["Call read_file_range for the target lines, then retry replace_in_file with corrected oldText."],
           });
         }
         const isSourcePath = [".h", ".hpp", ".cpp", ".c", ".cc", ".cs"].includes(path.extname(target).toLowerCase());

@@ -10,7 +10,11 @@ const core = require("../src/compaction-core");
 
 function activeCheckpoint(stateRoot) {
   const sessionDirs = fs.readdirSync(stateRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory());
+    .filter((entry) => (
+      entry.isDirectory()
+      && !String(entry.name || "").startsWith(".")
+      && String(entry.name || "") !== "_base"
+    ));
   assert.equal(sessionDirs.length, 1, "Expected one isolated compactor session");
   return JSON.parse(fs.readFileSync(
     path.join(stateRoot, sessionDirs[0].name, "active-checkpoint.json"),

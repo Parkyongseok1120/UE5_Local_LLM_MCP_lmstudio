@@ -1,0 +1,17 @@
+STAGE 7 BUILD FAIL — fix via MCP. Do not expand features until this compiles.
+
+## Errors (UBT)
+```
+GomokuRuleEngine.cpp(603): C2556/C2371 SetCellGuardianProtected return type mismatch
+  .cpp has bool but .h declares void (or vice versa) — make BOTH bool and return true/false
+GomokuRuleEngine.cpp: 'GuardianProtectedCells' undeclared
+  Add private member TSet<FIntPoint> GuardianProtectedCells; to GomokuRuleEngine.h
+C4390 empty statement — fix broken if bodies around SetCellGuardianProtected
+```
+
+## Also complete after compile
+- Wire ExecuteItem for SealStone/SkipTurn/Steal/Pull/Guardian using helpers
+- GameState StartNewTurn: PromoteGainedItems / grant item / clear bUsedItemThisTurn
+- Stage7 automation tests
+
+First priority: make O_MockEditor build Succeeded. replace_in_file RuleEngine.h/.cpp.

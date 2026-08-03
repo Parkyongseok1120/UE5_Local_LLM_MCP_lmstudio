@@ -1,0 +1,80 @@
+{
+  "reverifyAt": "2026-08-03T14:29:33Z",
+  "authoredBy": "local-AI-MCP",
+  "grokOMockEditsThisSession": 0,
+  "build": {
+    "status": 0,
+    "succeeded": true,
+    "log": "scripts/omock_stage4_reverify_build.out.log",
+    "ubtAt": "2026-08-03T14:29:06Z"
+  },
+  "automation": {
+    "found": 11,
+    "pass": 11,
+    "fail": 0,
+    "list": [
+      {
+        "result": "Success",
+        "name": "AbandonExcludesPlayer",
+        "path": "Gomoku.Stage4.AbandonExcludesPlayer"
+      },
+      {
+        "result": "Success",
+        "name": "Board21x21FourPlayers",
+        "path": "Gomoku.Stage4.Board21x21FourPlayers"
+      },
+      {
+        "result": "Success",
+        "name": "InactiveExcludedFromRound",
+        "path": "Gomoku.Stage4.InactiveExcludedFromRound"
+      },
+      {
+        "result": "Success",
+        "name": "ReverseTurnOrder",
+        "path": "Gomoku.Stage4.ReverseTurnOrder"
+      },
+      {
+        "result": "Success",
+        "name": "RoundIncrementsOnlyAfterAllActive",
+        "path": "Gomoku.Stage4.RoundIncrementsOnlyAfterAllActive"
+      },
+      {
+        "result": "Success",
+        "name": "RoundNoDuplicateCompletion",
+        "path": "Gomoku.Stage4.RoundNoDuplicateCompletion"
+      },
+      {
+        "result": "Success",
+        "name": "SkipNextPlayer",
+        "path": "Gomoku.Stage4.SkipNextPlayer"
+      },
+      {
+        "result": "Success",
+        "name": "TimeSystem3And4Players",
+        "path": "Gomoku.Stage4.TimeSystem3And4Players"
+      },
+      {
+        "result": "Success",
+        "name": "TurnCycle2Players",
+        "path": "Gomoku.Stage4.TurnCycle2Players"
+      },
+      {
+        "result": "Success",
+        "name": "TurnCycle3Players",
+        "path": "Gomoku.Stage4.TurnCycle3Players"
+      },
+      {
+        "result": "Success",
+        "name": "TurnCycle4Players",
+        "path": "Gomoku.Stage4.TurnCycle4Players"
+      }
+    ],
+    "log": "scripts/omock_stage4_automation.out.log"
+  },
+  "authorship": {
+    "testFileUntracked": true,
+    "mcpWriteEvidence": "scripts/local_ai_stage4_tests_p1.out.log write_file mutOk=true",
+    "grokRunnerRemoved": true,
+    "mcpMutationTotal": 22
+  }
+}

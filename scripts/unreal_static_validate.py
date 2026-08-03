@@ -1371,7 +1371,8 @@ def validate_enhanced_input(path: Path, text: str, root: Path, build_text: str) 
                 rel,
                 line_number(text, match.start()),
                 "DIRECT_BIND_ACTION",
-                "Enhanced Input code must cast to UEnhancedInputComponent and bind with ETriggerEvent.",
+                "Do not call InputComponent->BindAction. For legacy input use InputComponent->BindKey / "
+                "BindAxis; for Enhanced Input cast to UEnhancedInputComponent and BindAction with ETriggerEvent.",
             )
         )
     uses_enhanced = any(

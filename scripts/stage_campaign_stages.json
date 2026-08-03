@@ -1,0 +1,474 @@
+[
+  {
+    "id": 2,
+    "name": "Local 2P Hotseat Core",
+    "goal": "로컬 2인 핫시트 오목 핵심 루프: BoardActor ISM 돌, 마우스 선택 착수, 현재 플레이어 표시, 돌 배치 애니메이션, 승리 시 게임 종료, 재시작 버튼. GameMode/GameState/BoardActor/PlayerController/HUD 클래스 연결. / Local 2P hotseat: ISM stones, mouse select, current player HUD, stone anim, win ends game, restart button via GameMode/GameState/BoardActor/PlayerController/HUD.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuPlayerController.h",
+      "Source/O_Mock/GomokuPlayerController.cpp",
+      "Source/O_Mock/GomokuHUD.h",
+      "Source/O_Mock/GomokuHUD.cpp"
+    ],
+    "codeSignatures": [
+      "AGomokuPlayerController",
+      "AGomokuHUD",
+      "SetupInputComponent",
+      "HandlePrimaryClick",
+      "OnScreenClick",
+      "RestartGame",
+      "RestartMatch",
+      "IsGameActive",
+      "OnStonePlaced",
+      "OnMatchRestarted",
+      "OnMatchEnded",
+      "StoneInstances",
+      "InstancedStaticMeshComponent",
+      "HandlePlaceStone",
+      "CheckWinAt"
+    ],
+    "forbiddenPatterns": [
+      "SpawnActor.*Stone",
+      "625",
+      "TArray<AActor\\*>"
+    ],
+    "implementationPrompt": "O-Mock 오목 프로젝트 Stage 2만 구현하세요. MCP read_file/write_file/replace_in_file로 O-Mock 프로젝트의 Source/O_Mock 경로를 직접 읽고 수정하세요. 기존 UGomokuRuleEngine, AGomokuGameMode, AGomokuGameState, AGomokuBoardActor를 확장·연결하고 RuleEngine 로직은 재작성하지 마세요.\n\n필수 작업:\n1) AGomokuPlayerController: 마우스 클릭을 AGomokuBoardActor::OnScreenClick 또는 WorldToGrid→HandlePlaceStone 경로로 전달. 승리 후(IsGameActive=false) 추가 클릭 무시. SetupInputComponent에서는 InputComponent->BindKey(EKeys::LeftMouseButton, ...) 사용 — InputComponent->BindAction 금지(DIRECT_BIND_ACTION).\n2) AGomokuHUD: 현재 턴 플레이어, 승리 메시지 표시. R 키 또는 UI 버튼으로 AGomokuGameMode::RestartGame→GameState::RestartMatch 호출.\n3) AGomokuBoardActor: OnStonePlaced 델리게이트 구독, AddStoneAt에서 InstancedStaticMesh(StoneInstances)로 작은 스케일 추가 후 Tick/타이머로 스케일 업 애니메이션. OnMatchRestarted에서 ClearStones.\n4) AGomokuGameMode: PlayerControllerClass/HUDClass 설정, BeginPlay에서 RuleEngine+GameState+BoardActor 초기화 유지.\n5) 15x15 보드, 클릭 좌표==착수 좌표, 승리 후 착수 불가, 재시작 시 보드·턴·승자 완전 리셋.\n\n625개 셀 Actor를 만들지 말고 UInstancedStaticMeshComponent(StoneInstances)만 사용하세요.",
+    "verifyPrompt": "Stage 2 완료 기준 검증: GomokuPlayerController·GomokuHUD 파일 존재, 15x15 2P, 클릭→좌표→착수→승리 잠금→재시작 리셋 코드 경로, InstancedStaticMesh 사용, 625 Actor 패턴 없음. 누락 항목을 파일 경로와 심볼로 나열하세요.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.h",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs"
+    ]
+  },
+  {
+    "id": 3,
+    "name": "Turn and Time System",
+    "goal": "개인 시간 120초, 턴 제한 25초, 사용 시간 차감, 라운드 종료 시 부족분 35% 회복. 개인 타이머와 턴 타이머 분리. 타임아웃 시 호버 셀 자동 착수, 없으면 중앙 근처. 미니게임/VFX용 일시정지 훅 준비. / Personal 120s, turn max 25s, deduct used time, 35% round recovery, separate timers, timeout auto-place hover else near center, pause hook for minigame/VFX.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuGameState.h",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuPlayerController.cpp",
+      "Source/O_Mock/GomokuHUD.h",
+      "Source/O_Mock/GomokuHUD.cpp"
+    ],
+    "codeSignatures": [
+      "MaxPersonalTime",
+      "MaxTurnTime",
+      "PersonalRecoveryRate",
+      "TickTimeSystem",
+      "OnTickPlayerTime",
+      "SetHoveredCell",
+      "HoveredCell",
+      "AutoMoveOnTimeout",
+      "bTimePaused",
+      "bHasTimeSystem",
+      "PersonalRemaining",
+      "TurnElapsedThisTurn",
+      "ApplyEndOfRoundRecovery",
+      "StartNewTurn",
+      "EndCurrentTurn"
+    ],
+    "implementationPrompt": "O-Mock Stage 3: 턴·시간 시스템만 구현하세요. MCP로 O-Mock Source/O_Mock를 읽고 수정하세요. UGomokuRuleEngine은 유지합니다.\n\n1) AGomokuGameState: MaxPersonalTime=120, MaxTurnTime=25, PersonalRecoveryRate=0.35. TickTimeSystem에서 현재 턴 플레이어만 PersonalRemaining·TurnElapsedThisTurn 감소. bTimePaused=true면 시간 정지.\n2) 턴 종료 시 사용한 턴 시간을 개인 시간에서 차감. 라운드 종료(모든 활성 플레이어 1회 행동 후) ApplyEndOfRoundRecovery로 부족분 35% 회복.\n3) 턴 타임아웃 시 AutoMoveOnTimeout: HoveredCell 유효하면 해당 셀, 아니면 중앙 근처 빈 칸에 자동 착수. 타임아웃 후 게임이 멈추지 않도록 EndCurrentTurn→다음 플레이어 전환.\n4) AGomokuPlayerController: 호버 시 WorldToGrid→GameState::SetHoveredCell.\n5) AGomokuHUD: OnTickPlayerTime 바인딩으로 개인·턴 시간 표시, 일시정지 상태 표시.\n\n미니게임/VFX용 bTimePaused 플래그만 노출하고 전체 재설계는 하지 마세요.",
+    "verifyPrompt": "Stage 3: 현재 플레이어만 시간 흐름, bTimePaused 정지, 다음 플레이어 정확 전환, 라운드 회복 35%, 타임아웃 자동착수·멈춤 없음, HUD 시간 표시를 검증하고 gap 목록을 작성하세요.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs",
+      "Source/O_Mock/GomokuPlayerController.h"
+    ]
+  },
+  {
+    "id": 4,
+    "name": "3-4 Player Turn Order",
+    "goal": "3~4인 플레이: CurrentPlayerIndex 순환, 플레이어별 색·시간·아이템 슬롯, 포기(Abandon) 제외, 턴 스킵, 턴 방향 반전. 라운드=모든 활성 플레이어 1회 행동(TSet PlayersCompletedThisRound). / 3-4 player array turn order, colors/times/item slots, abandon exclude, skip, reverse turn, round via PlayersCompletedThisRound.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuGameState.h",
+      "Source/O_Mock/GomokuHUD.h"
+    ],
+    "codeSignatures": [
+      "ActivePlayerIndices",
+      "AdvanceTurnIndex",
+      "InitializeActivePlayerIndices",
+      "PlayersCompletedThisRound",
+      "CurrentRoundIndex",
+      "LocalPlayerCount",
+      "MaxPlayers",
+      "TurnDirection",
+      "ReverseTurnDirection",
+      "bSkipNextTurn",
+      "SetPlayerSkipNextTurn",
+      "bHasAbandoned",
+      "ItemIds"
+    ],
+    "implementationPrompt": "O-Mock Stage 4: 3~4인 턴 순서·라운드·포기·스킵·역방만 구현하세요. MCP로 Source/O_Mock를 수정하고 RuleEngine 핵심 착수/승리 로직은 유지합니다.\n\n1) UGomokuRuleEngine::AdvanceTurn/ActivePlayerIndices/AdvanceTurnIndex로 CurrentPlayerIndex=(i+1)%ActivePlayers.Num() 순환. TurnDirection ±1, ReverseTurnDirection 지원.\n2) bSkipNextTurn 처리: AdvanceTurn에서 스킵 플레이어 건너뛰기.\n3) AbandonPlayer API: bHasAbandoned=true 후 InitializeActivePlayerIndices 재계산. 활성 1명만 남으면 승리 처리.\n4) AGomokuGameState: PlayersCompletedThisRound TSet으로 라운드 추적. 모든 활성 플레이어가 1회 행동하면 CurrentRoundIndex++ 및 PlayersCompletedThisRound 비우기.\n5) InitializeForLocalHotseat(2/3/4) 동일 코드 경로. HUD에 플레이어 색·순서·아이템 슬롯 placeholder.\n6) 21x21 보드 크기도 RuleEngine Config로 동작 가능하게 유지. InstancedStaticMesh 유지, 625 Actor 금지.",
+    "verifyPrompt": "Stage 4: 2/3/4인 동일 코드, Abandon 후 순서 유지, 21x21 OK, 라운드는 전원 행동 후 증가, 스킵·역방 동작을 검증하고 gap을 나열하세요.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs",
+      "Source/O_Mock/GomokuPlayerController.h",
+      "Source/O_Mock/GomokuPlayerController.cpp",
+      "Source/O_Mock/GomokuHUD.cpp"
+    ]
+  },
+  {
+    "id": 5,
+    "name": "Board Templates",
+    "goal": "FBoardTemplateData {TemplateId, Width, Height, BlockedCells} 및 15/17/19/21/23 크기 DataAsset. 설정 변경 시 보드 크기·카메라·UI 좌표 일치. / Board template DataAsset with configurable sizes and blocked cells; win/camera/UI coords match all sizes.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuBoardTemplateTypes.h",
+      "Source/O_Mock/GomokuBoardTemplateDataAsset.h",
+      "Source/O_Mock/GomokuBoardTemplateDataAsset.cpp",
+      "Source/O_Mock/GomokuBoardActor.h"
+    ],
+    "codeSignatures": [
+      "FBoardTemplateData",
+      "TemplateId",
+      "BlockedCells",
+      "UGomokuBoardTemplateDataAsset",
+      "BoardSizeX",
+      "BoardSizeY",
+      "WorldToGrid",
+      "GridToWorld",
+      "CellSize",
+      "InitializeMatch"
+    ],
+    "implementationPrompt": "O-Mock Stage 5: 보드 템플릿만 구현하세요. MCP로 Source/O_Mock를 읽고 수정하세요. RuleEngine InitializeMatch/CheckWinAt은 유지·확장합니다.\n\n1) FBoardTemplateData struct: TemplateId, Width, Height, TArray<FIntPoint> BlockedCells.\n2) UGomokuBoardTemplateDataAsset(UDataAsset): 15/17/19/21/23 프리셋 또는 에디터 설정.\n3) GameMode/GameState BeginPlay에서 선택된 템플릿으로 RuleEngine::InitializeMatch(FGomokuMatchConfig) 호출. BlockedCells는 ECellState::Blocked로 설정.\n4) AGomokuBoardActor: BoardSizeX/Y 동기화, WorldToGrid/GridToWorld/CellSize로 클릭 좌표 일치. 보드 크기에 맞게 카메라 또는 보드 스케일 조정.\n5) 모든 크기에서 CheckWinAt 승리 판정 동작 확인.\n\n625 Actor 금지, InstancedStaticMesh 유지.",
+    "verifyPrompt": "Stage 5: 템플릿 변경 시 보드 크기 변경, 모든 크기 승리 판정, 카메라 fit, UI/클릭 좌표 일치를 검증하고 gap 목록 작성.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.h",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs",
+      "Source/O_Mock/GomokuPlayerController.h",
+      "Source/O_Mock/GomokuPlayerController.cpp",
+      "Source/O_Mock/GomokuHUD.h",
+      "Source/O_Mock/GomokuHUD.cpp"
+    ]
+  },
+  {
+    "id": 6,
+    "name": "Item Framework",
+    "goal": "EItemTargetType, FItemData, 아이템 사용 흐름: 선택→타겟→CanUse→Validate→Execute→비용→이벤트→UI. CanUseItem/ValidateTarget/ExecuteItem 분리. / Item framework with separate CanUse/Validate/Execute pipeline and target types.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuItemTypes.h",
+      "Source/O_Mock/GomokuItemLibrary.h",
+      "Source/O_Mock/GomokuItemLibrary.cpp"
+    ],
+    "codeSignatures": [
+      "EItemTargetType",
+      "FItemData",
+      "CanUseItem",
+      "ValidateTarget",
+      "ExecuteItem",
+      "ItemIds",
+      "EGomokuItemType",
+      "EnergyCost",
+      "SelectItem",
+      "CancelItemTargeting"
+    ],
+    "implementationPrompt": "O-Mock Stage 6: 아이템 프레임워크 기반만 구현하세요. MCP로 Source/O_Mock를 수정하고 RuleEngine 착수/승리 로직은 대규모 변경하지 마세요.\n\n1) GomokuItemTypes.h: EItemTargetType(None/Cell/Player/Self 등), EGomokuItemType enum, FItemData(Id, DisplayName, EnergyCost, TargetType).\n2) UGomokuItemLibrary 또는 RuleEngine 확장: CanUseItem(PlayerId, ItemId), ValidateTarget(PlayerId, ItemId, Target), ExecuteItem(PlayerId, ItemId, Target) 분리.\n3) PlayerController/HUD: 아이템 선택→타겟 모드→확인 시 ExecuteItem 호출→비용 차감→이벤트 브로드캐스트 훅.\n4) FGomokuPlayerStateData::ItemIds와 연동. HUD에 아이템 슬롯·타겟 모드 placeholder.\n\n실제 5종 아이템 효과는 Stage 7에서 구현합니다.",
+    "verifyPrompt": "Stage 6: EItemTargetType/FItemData 정의, CanUseItem/ValidateTarget/ExecuteItem 분리, 선택→타겟→실행 UI 흐름 존재 여부를 검증하고 gap 나열.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.h",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs",
+      "Source/O_Mock/GomokuPlayerController.h",
+      "Source/O_Mock/GomokuPlayerController.cpp",
+      "Source/O_Mock/GomokuHUD.h",
+      "Source/O_Mock/GomokuHUD.cpp"
+    ]
+  },
+  {
+    "id": 7,
+    "name": "Five Playable Items",
+    "goal": "5종 아이템: SealStone, Pull, Steal, SkipTurn, GuardianBarrier. 에너지 비용·인벤토리 규칙(턴당 획득 1·최대 2, 에너지 턴당 +1·최대 5, 턴당 사용 1회, 신규 획득은 다음 턴부터 사용). / Five items with energy/inventory rules: gain 1 item/turn max 2, energy +1/turn max 5, 1 use/turn, new items usable next turn.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuItemTypes.h",
+      "Source/O_Mock/GomokuItemLibrary.cpp",
+      "Source/O_Mock/GomokuRuleEngine.cpp"
+    ],
+    "codeSignatures": [
+      "SealStone",
+      "Pull",
+      "Steal",
+      "SkipTurn",
+      "GuardianBarrier",
+      "GainItemPerTurn",
+      "MaxItemInventory",
+      "MaxEnergy",
+      "bItemUsableThisTurn",
+      "bGainedThisTurn",
+      "ConsumeEnergy",
+      "SetPlayerSkipNextTurn",
+      "RemoveStoneAt",
+      "ChangeCellOwnership"
+    ],
+    "implementationPrompt": "O-Mock Stage 7: 5종 아이템과 에너지·인벤토리 규칙만 구현하세요. MCP로 Source/O_Mock를 수정하고 Stage 6 프레임워크(CanUse/Validate/Execute)를 사용하세요. RuleEngine은 유지합니다.\n\n아이템 효과:\n- SealStone: 빈 칸 봉인(Blocked)\n- Pull: 인접 돌 끌어당기기\n- Steal: 상대 돌 소유 변경(ChangeCellOwnership)\n- SkipTurn: SetPlayerSkipNextTurn\n- GuardianBarrier: 셀 보호(Steal/Pull 무효)\n\n인벤토리·에너지 규칙:\n- 턴 시작 시 아이템 1개 획득(최대 2), 에너지 +1(최대 5)\n- 턴당 아이템 1회 사용, 이번 턴에 획득한 아이템(bGainedThisTurn)은 다음 턴부터 사용 가능\n- ExecuteItem 시 EnergyCost 차감, BoardActor InstancedStaticMesh 동기화\n\nHUD/PlayerController에서 각 아이템 사용 UI 연결.",
+    "verifyPrompt": "Stage 7: 5종 아이템 Execute 경로, 에너지/인벤토리 규칙(획득·최대·턴당 1회·신규 다음 턴), 보드 시각 동기화를 검증하고 gap 목록.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.h",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs",
+      "Source/O_Mock/GomokuPlayerController.h",
+      "Source/O_Mock/GomokuPlayerController.cpp",
+      "Source/O_Mock/GomokuHUD.h",
+      "Source/O_Mock/GomokuHUD.cpp",
+      "Source/O_Mock/GomokuItemLibrary.h"
+    ]
+  },
+  {
+    "id": 8,
+    "name": "Match Event Log",
+    "goal": "FMatchEvent: SequenceId, EventType, Instigator, Target, Cell, ItemId. TurnStarted/StonePlaced/ItemUsed 등 이벤트 기록·재생 훅. / Structured match event log with sequence IDs and event types for replay/UI.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuMatchEventLog.h",
+      "Source/O_Mock/GomokuMatchEventLog.cpp",
+      "Source/O_Mock/GomokuGameState.h"
+    ],
+    "codeSignatures": [
+      "FMatchEvent",
+      "SequenceId",
+      "EventType",
+      "Instigator",
+      "EMatchEventType",
+      "TurnStarted",
+      "StonePlaced",
+      "ItemUsed",
+      "MatchEnded",
+      "AppendEvent",
+      "GetEvents",
+      "OnMatchEvent"
+    ],
+    "implementationPrompt": "O-Mock Stage 8: 매치 이벤트 로그만 구현하세요. MCP로 Source/O_Mock를 수정하고 RuleEngine 로직은 유지합니다.\n\n1) GomokuMatchEventLog.h: EMatchEventType enum(TurnStarted, StonePlaced, ItemUsed, PlayerAbandoned, RoundEnded, MatchEnded 등), FMatchEvent(SequenceId, EventType, InstigatorPlayerId, TargetPlayerId, Cell, ItemId, Timestamp).\n2) UGomokuMatchEventLog 또는 GameState 내 TArray<FMatchEvent>: AppendEvent, GetEvents, monotonic SequenceId.\n3) GameState/RuleEngine 훅: HandlePlaceStone→StonePlaced, ExecuteItem→ItemUsed, StartNewTurn→TurnStarted, 승리→MatchEnded.\n4) OnMatchEvent 델리게이트로 HUD 리플레이·디버그 패널 연동 가능하게.\n5) RestartMatch 시 이벤트 로그 클리어.\n\n네트워크 복제는 Stage 9에서 처리합니다.",
+    "verifyPrompt": "Stage 8: FMatchEvent 필드, SequenceId 단조 증가, TurnStarted/StonePlaced/ItemUsed 기록, 재시작 클리어를 검증하고 gap 나열.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs"
+    ]
+  },
+  {
+    "id": 9,
+    "name": "Network Authority",
+    "goal": "서버 권한 GameMode, GameState 보드/턴 복제, 플레이어별 PlayerState, PlayerController Server_RequestPlaceStone/Server_RequestUseItem RPC. / Server-authoritative GameMode, replicated GameState, per-player PlayerState, place/use RPCs.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuPlayerState.h",
+      "Source/O_Mock/GomokuPlayerState.cpp",
+      "Source/O_Mock/GomokuPlayerController.h",
+      "Source/O_Mock/GomokuGameState.h"
+    ],
+    "codeSignatures": [
+      "AGomokuPlayerState",
+      "Server_RequestPlaceStone",
+      "Server_RequestUseItem",
+      "UFUNCTION\\(Server",
+      "GetLifetimeReplicatedProps",
+      "DOREPLIFETIME",
+      "HasAuthority",
+      "CurrentPlayerIndex",
+      "Replicated"
+    ],
+    "implementationPrompt": "O-Mock Stage 9: 네트워크 권한·RPC만 구현하세요. MCP로 Source/O_Mock를 수정하고 RuleEngine은 서버에서만 실행합니다.\n\n1) AGomokuPlayerState: PlayerId, Energy, ItemIds, RemainingTime 등 플레이어 데이터 복제.\n2) AGomokuGameState: CurrentPlayerIndex, 보드 상태(또는 RuleEngine 스냅샷), 라운드/승자 복제. GetLifetimeReplicatedProps.\n3) AGomokuPlayerController: Server_RequestPlaceStone(Cell), Server_RequestUseItem(ItemId, Target) UFUNCTION(Server, Reliable). 클라이언트 입력은 RPC만 호출.\n4) AGomokuGameMode: 서버에서 RuleEngine InitializeMatch, HandlePlaceStone, ExecuteItem 권한 검증.\n5) 로컬 핫시트(Stage 2~8) 동작 회귀 없이 유지.\n\n625 Actor 금지.",
+    "verifyPrompt": "Stage 9: Server RPC 존재, GameState/PlayerState 복제, 서버 권한 착수·아이템, 클라이언트 직접 RuleEngine 변경 없음을 검증하고 gap 목록.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs",
+      "Source/O_Mock/GomokuPlayerController.cpp"
+    ]
+  },
+  {
+    "id": 10,
+    "name": "Lobby and Custom Room",
+    "goal": "로비: 방 생성·참가·준비·호스트 시작. 설정: 인원/템플릿/시간/아이템/미니게임/비밀번호. / Lobby with create/join/ready/host-start and match settings (players, template, times, items, minigame, password).",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuLobbySubsystem.h",
+      "Source/O_Mock/GomokuLobbySubsystem.cpp",
+      "Source/O_Mock/GomokuLobbyTypes.h",
+      "Source/O_Mock/GomokuGameMode.h"
+    ],
+    "codeSignatures": [
+      "UGomokuLobbySubsystem",
+      "CreateRoom",
+      "JoinRoom",
+      "SetReady",
+      "StartMatch",
+      "FLobbyRoomSettings",
+      "Password",
+      "TemplateId",
+      "bMinigameEnabled",
+      "MaxPlayers",
+      "TravelToMatch"
+    ],
+    "implementationPrompt": "O-Mock Stage 10: 로비·커스텀 룸만 구현하세요. MCP로 Source/O_Mock를 수정하고 RuleEngine/GameState는 Stage 9 구조를 유지합니다.\n\n1) FLobbyRoomSettings: MaxPlayers, TemplateId, PersonalTime, TurnTime, bItemsEnabled, bMinigameEnabled, Password.\n2) UGomokuLobbySubsystem(GameInstanceSubsystem): CreateRoom, JoinRoom(RoomId/Password), SetReady(PlayerId), StartMatch(호스트만).\n3) 준비 완료 인원으로 FGomokuMatchConfig 구성 후 서버 Travel/InitializeMatch.\n4) 로비 UI(HUD 또는 UMG 위젯) placeholder: 방 목록, 준비 토글, 설정 패널.\n5) 비밀번호 불일치·인원 초과 검증.\n\n로컬 핫시트 빠른 시작 경로는 유지하세요.",
+    "verifyPrompt": "Stage 10: Create/Join/Ready/Start 흐름, 설정(인원·템플릿·시간·아이템·미니게임·비밀번호) 적용, 호스트 권한 시작을 검증하고 gap 나열.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.h",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs"
+    ]
+  },
+  {
+    "id": 11,
+    "name": "Minigame Framework",
+    "goal": "EMatchPhase, 라운드 5 이후 7x7 find-winning-move 첫 미니게임. 미니게임 중 bTimePaused. / EMatchPhase and 7x7 find-winning-move minigame after round 5 with time pause.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuMinigameTypes.h",
+      "Source/O_Mock/GomokuMinigameSubsystem.h",
+      "Source/O_Mock/GomokuMinigameSubsystem.cpp",
+      "Source/O_Mock/GomokuGameState.h"
+    ],
+    "codeSignatures": [
+      "EMatchPhase",
+      "Minigame",
+      "FindWinningMove",
+      "StartMinigame",
+      "EndMinigame",
+      "bTimePaused",
+      "CurrentRoundIndex",
+      "MinigameBoardSize",
+      "OnMinigameEnded"
+    ],
+    "implementationPrompt": "O-Mock Stage 11: 미니게임 프레임워크와 첫 미니게임만 구현하세요. MCP로 Source/O_Mock를 수정하고 RuleEngine 오목 로직은 유지합니다.\n\n1) EMatchPhase enum: NormalPlay, Minigame, MatchEnd 등.\n2) UGomokuMinigameSubsystem: StartMinigame(Type), EndMinigame(Result). GameState EMatchPhase 전환, bTimePaused=true.\n3) 첫 미니게임: CurrentRoundIndex>=5 후 다음 라운드 시작 전 FindWinningMove(7x7 보드, 한 수 승리 찾기). 정답 시 보상(에너지/아이템) 훅.\n4) 미니게임 종료 시 bTimePaused=false, NormalPlay 복귀.\n5) Stage 3 bTimePaused와 연동 확인.\n\n로비 bMinigameEnabled 설정 반영.",
+    "verifyPrompt": "Stage 11: EMatchPhase 전환, 라운드 5 후 미니게임 트리거, 7x7 FindWinningMove, 미니게임 중 시간 정지·복귀를 검증하고 gap 목록.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp",
+      "Source/O_Mock/O_Mock.Build.cs"
+    ]
+  },
+  {
+    "id": 12,
+    "name": "UI Polish",
+    "goal": "HUD/UI: 현재 플레이어, 순서, 시간, 에너지, 아이템, 타겟 모드, 이펙트, 다음 미니게임 라운드, 승리 위협 표시, 아이템 프리뷰 UX. / Full HUD polish: player order, timers, energy, items, target mode, effects, minigame countdown, win threats, item preview.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuHUD.h",
+      "Source/O_Mock/GomokuHUD.cpp",
+      "Source/O_Mock/GomokuBoardActor.cpp"
+    ],
+    "codeSignatures": [
+      "DrawHUD",
+      "OnTurnChanged",
+      "OnTickPlayerTime",
+      "OnMatchEvent",
+      "DrawPlayerOrder",
+      "DrawEnergy",
+      "DrawItemSlots",
+      "bTargetingMode",
+      "DrawWinThreat",
+      "NextMinigameRound",
+      "ItemPreview",
+      "OnStonePlaced"
+    ],
+    "implementationPrompt": "O-Mock Stage 12: UI 폴리시만 구현하세요. MCP로 Source/O_Mock를 수정하고 게임 로직 변경은 최소화합니다. RuleEngine 유지.\n\n1) AGomokuHUD: 현재 플레이어·턴 순서·개인/턴 시간·에너지·아이템 슬롯 표시.\n2) 타겟 모드 UI(선택 아이템, 취소, 유효/무효 타겟 하이라이트). 아이템 프리뷰(설명·비용·타겟 타입).\n3) 승리 위협(4목 등) 힌트: RuleEngine 보드 스캔 또는 휴리스틱.\n4) 다음 미니게임까지 남은 라운드 표시(CurrentRoundIndex vs 5).\n5) AGomokuBoardActor: 착수·아이템 이펙트(스케일 애니, 간단 파티클/머티리얼 플래시). ClearStones/Restart 일관성.\n6) OnMatchEvent·OnTurnChanged 델리게이트 바인딩으로 실시간 갱신.\n\nInstancedStaticMesh만 사용.",
+    "verifyPrompt": "Stage 12: 플레이어/순서/시간/에너지/아이템/타겟모드/미니게임 카운트/승리위협/아이템프리뷰 UI 존재, 이펙트·재시작 일관성을 검증하고 gap 나열.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.h",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/O_Mock.Build.cs",
+      "Source/O_Mock/GomokuPlayerController.cpp"
+    ]
+  },
+  {
+    "id": 13,
+    "name": "Bots and Automated Tests",
+    "goal": "간단 봇 정책, 2/3/4인 자동 시뮬레이션 루프, 엣지 케이스(스킵/마지막 칸/아이템 승리/보호 Steal/포기/승리 전 미니게임) 테스트. / Simple bot AI, automated multi-player simulation, edge-case test harness.",
+    "requiredFiles": [
+      "Source/O_Mock/GomokuBotController.h",
+      "Source/O_Mock/GomokuBotController.cpp",
+      "Source/O_Mock/GomokuAutomationTests.cpp",
+      "Source/O_Mock/O_Mock.Build.cs"
+    ],
+    "codeSignatures": [
+      "AGomokuBotController",
+      "ChooseMove",
+      "RunSimulation",
+      "AutomationTest",
+      "IMPLEMENT_SIMPLE_AUTOMATION_TEST",
+      "SkipTurn",
+      "GuardianBarrier",
+      "bHasAbandoned",
+      "FindWinningMove",
+      "PublicDependencyModuleNames"
+    ],
+    "implementationPrompt": "O-Mock Stage 13: 봇·자동 테스트·빌드 통합만 구현하세요. MCP로 Source/O_Mock를 수정하고 Stage 2~12 기능 회귀 없이 유지합니다. RuleEngine 유지.\n\n1) AGomokuBotController: 간단 정책(랜덤 빈 칸, 즉시 승리 수 우선, 방어 4목). Server_RequestPlaceStone/UseItem 경로 사용.\n2) GomokuAutomationTests.cpp: IMPLEMENT_SIMPLE_AUTOMATION_TEST로 2/3/4인 시뮬레이션 루프(착수·턴 전환·승리).\n3) 엣지 케이스 테스트: SkipTurn 연속, 마지막 칸 착수, 아이템으로 승리, GuardianBarrier下 Steal 무효, Abandon 후 순서, 승리 직전 미니게임 트리거.\n4) O_Mock.Build.cs: AutomationTest, UMG 등 필요 모듈. include·GENERATED_BODY 정리.\n5) compile/unreal_build 가능 시 실행 후 이 스테이지 범위 오류 수정.\n\nInstancedStaticMesh·배열 턴 순서 유지.",
+    "verifyPrompt": "Stage 13: BotController 정책, 2/3/4인 자동 테스트, 엣지 케이스 테스트 존재, Build.cs 의존성, 컴파일 가능 여부를 검증하고 gap 목록.",
+    "allowedWritePaths": [
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+      "Source/O_Mock/GomokuGameState.h",
+      "Source/O_Mock/GomokuGameState.cpp",
+      "Source/O_Mock/GomokuBoardActor.h",
+      "Source/O_Mock/GomokuBoardActor.cpp"
+    ]
+  }
+]

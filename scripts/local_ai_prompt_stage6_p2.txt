@@ -1,0 +1,37 @@
+STAGE 6 CONTINUATION — fix compile blockers + finish PC/HUD/tests. MCP only.
+
+## Review: will NOT compile as-is
+`GomokuItemLibrary.cpp` calls APIs that DO NOT EXIST:
+- `AGomokuGameState::GetPlayerStateData`
+- `AGomokuGameState::GetPlayerMutableItems`
+
+Also `UGomokuRuleEngine::RemoveItemFromInventory` is declared in .h but NOT implemented in .cpp.
+
+`GetFirstLocalPlayerController(nullptr)` is fragile for Automation tests.
+
+## Required redesign (minimal)
+Prefer RuleEngine-facing APIs (players live there):
+1) Implement on UGomokuRuleEngine:
+   - bool PlayerHasItem(int32 PlayerId, int32 ItemId) const
+   - bool RemoveItemFromInventory(int32 PlayerId, int32 ItemId)  // complete .cpp
+   - optional GetPlayerStateData already may exist — read header
+2) Rewrite UGomokuItemLibrary CanUseItem/ValidateTarget/ExecuteItem to take `UGomokuRuleEngine* Engine` OR look up via GameState->GetRuleEngine() if that exists. Prefer:
+   ```
+   static bool CanUseItem(UGomokuRuleEngine* Engine, int32 PlayerId, int32 ItemId);
+   static bool ValidateTarget(...);
+   static bool ExecuteItem(UGomokuRuleEngine* Engine, ...); // stub: validate+remove item, return true; no Stage7 effects
+   ```
+   Update .generated UFUNCTION signatures accordingly (BlueprintCallable can take UObject*).
+3) Include `GomokuItemTypes.h` from ItemLibrary.h if needed.
+
+## PC / HUD
+- AGomokuPlayerController: SelectItem(int32 ItemId), CancelItemTargeting(), bool bItemTargetingActive, int32 SelectedItemId
+- AGomokuHUD: draw placeholders for SelectedItemId / targeting mode text
+
+## Tests
+Create `Source/O_Mock/Tests/GomokuStage6ItemFramework.spec.cpp`:
+1) Gomoku.Stage6.ItemTypesExist — construct FItemData with TargetType
+2) Gomoku.Stage6.CanUseValidateExecuteSeparated — MakeEngine; add ItemId to player via RuleEngine mutable access OR temporary test helper; CanUse true/false; ValidateTarget; ExecuteItem removes item
+3) Gomoku.Stage6.SelectCancelTargeting — NewObject/spawn PC if needed OR test PC methods on NewObject<AGomokuPlayerController> in world
+
+Read RuleEngine FindPlayerMutable patterns. Small patches. Stop when build-ready.

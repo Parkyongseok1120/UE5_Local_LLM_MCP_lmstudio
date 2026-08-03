@@ -1,0 +1,36 @@
+STAGE 6 Part3 — finish remaining gaps. MCP only.
+
+## Still missing (supervisor review)
+1) `AGomokuPlayerController::SelectItem` / `CancelItemTargeting` declared in .h but NOT implemented in .cpp → linker error.
+2) HUD has no item/targeting placeholder text.
+3) No Stage6 Automation tests file yet.
+4) Tests need a way to grant items: add `bool AddItemToInventory(int32 PlayerId, int32 ItemId)` on UGomokuRuleEngine (mirror RemoveItemFromInventory).
+
+## Implement
+### PlayerController.cpp
+```
+void AGomokuPlayerController::SelectItem(int32 ItemId) {
+  SelectedItemId = ItemId;
+  bItemTargetingActive = ItemId > 0;
+}
+void AGomokuPlayerController::CancelItemTargeting() {
+  SelectedItemId = 0;
+  bItemTargetingActive = false;
+}
+```
+
+### HUD DrawHUD
+If targeting active (read from PC Cast) OR show "ItemSlots: placeholder" / SelectedItemId text. Keep minimal.
+
+### RuleEngine
+AddItemToInventory: FindPlayerMutable, ItemIds.AddUnique(ItemId), return true.
+
+### Tests file write_file
+`Source/O_Mock/Tests/GomokuStage6ItemFramework.spec.cpp`
+- Gomoku.Stage6.ItemTypesExist
+- Gomoku.Stage6.CanUseValidateExecuteSeparated: MakeEngine 2p; AddItemToInventory(1, 101); CanUse true; ValidateTarget with cell (0,0); ExecuteItem removes; CanUse false after
+- Gomoku.Stage6.SelectCancelTargeting: UWorld::CreateWorld + SpawnActor PC; SelectItem(5); assert flags; Cancel; assert cleared
+
+Also fix any GameState callers of old CanUseItem signature if they exist (search_files).
+
+Stop when compile-ready.

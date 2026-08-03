@@ -1,0 +1,9 @@
+Using bundled DotNet SDK version: 10.0 win-x64
+Running UnrealBuildTool: dotnet "..\..\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll" O_MockEditor Win64 Development -Project=C:\Users\sster\Documents\Git\O-Mock\O_Mock.uproject -WaitMutex -FromMsBuild -Clean
+Cleaning O_MockEditor binaries...
+Available x64 toolchains (1):
+ * C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231
+    (Family=14.51.36231, FamilyRank=2, Version=14.51.36248, HostArchitecture=x64, ReleaseChannel=Latest, Architecture=x64)
+Visual Studio compiler version 14.51.36248 is newer than latest preferred version 14.50.35717. Please use caution as this compiler has not been heavily tested
+Trace written to file C:\Users\sster\AppData\Local\UnrealBuildTool\Trace.uba with size 585b
+

@@ -256,6 +256,51 @@ test("session fingerprint remains stable as later turns are appended", () => {
   assert.equal(core.sessionFingerprint(initial, "workspace"), core.sessionFingerprint(later, "workspace"));
 });
 
+test("session markers isolate identical first prompts across chats", () => {
+  const chatA = [
+    { role: "system", content: "rules\n<!-- ucc-session:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->" },
+    { role: "user", content: "현재 프로젝트 구조 분석해줘" },
+  ];
+  const chatB = [
+    { role: "system", content: "rules\n<!-- ucc-session:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->" },
+    { role: "user", content: "현재 프로젝트 구조 분석해줘" },
+  ];
+  assert.notEqual(
+    core.sessionFingerprint(chatA, "workspace\nmodel"),
+    core.sessionFingerprint(chatB, "workspace\nmodel"),
+  );
+  assert.equal(core.extractSessionMarker(chatA), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+});
+
+test("lineageContinues matches growing chats but not sibling chats", () => {
+  const first = core.messageLineageFingerprints([
+    { role: "system", content: "rules" },
+    { role: "user", content: "analyze" },
+  ]);
+  const grew = core.messageLineageFingerprints([
+    { role: "system", content: "rules" },
+    { role: "user", content: "analyze" },
+    { role: "assistant", content: "ok" },
+  ]);
+  const sibling = core.messageLineageFingerprints([
+    { role: "system", content: "rules" },
+    { role: "user", content: "analyze" },
+  ]);
+  assert.equal(core.lineageContinues(first, grew), true);
+  assert.equal(core.lineageContinues(grew, sibling), false);
+});
+
+test("isMajorGoalChange ignores minor follow-ups but catches mode flips", () => {
+  assert.equal(
+    core.isMajorGoalChange("프로젝트 구조 분석해줘", "프로젝트 구조에서 Source 폴더만 더 자세히 봐줘"),
+    false,
+  );
+  assert.equal(
+    core.isMajorGoalChange("프로젝트 구조 분석해줘", "버그 찾기만하고 수정은 하지마"),
+    true,
+  );
+});
+
 test("required next tool clears after its matching call is present", () => {
   const prior = core.buildCheckpoint([
     { role: "user", content: "fix" },

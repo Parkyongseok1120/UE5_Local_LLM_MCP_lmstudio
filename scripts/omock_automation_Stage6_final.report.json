@@ -1,0 +1,56 @@
+{
+  "filter": "Gomoku.Stage6.",
+  "status": 0,
+  "error": null,
+  "found": 3,
+  "pass": 3,
+  "fail": 0,
+  "expect": 3,
+  "list": [
+    {
+      "name": "Gomoku.Stage6.CanUseValidateExecuteSeparated",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage6.ItemTypesExist",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage6.SelectCancelTargeting",
+      "result": "Success"
+    }
+  ],
+  "sampleLines": [
+    "[2026.08.03-16.36.28:970][  0]LogModuleManager: InternalLoadLibrary: 'AutomationController' ('C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-AutomationController.dll')",
+    "[2026.08.03-16.36.32:001][  0]LogAutomationController: Ignoring very large delta of 16862750.81 seconds in calls to FAutomationControllerManager::Tick() and not penalizing unresponsive tests",
+    "[2026.08.03-16.36.32:210][  0]Cmd: Automation RunTests Gomoku.Stage6.; Quit",
+    "[2026.08.03-16.36.32:211][  0]Automation: RunTests='Gomoku.Stage6.' Queued.",
+    "[2026.08.03-16.36.37:737][590]LogAutomationController: Received FindWorkersResponseMessage from 7A9630D2469FCBD5807600AEECAADBD4",
+    "[2026.08.03-16.36.37:737][590]LogAutomationController: Requesting test list from 7A9630D2469FCBD5807600AEECAADBD4",
+    "[2026.08.03-16.36.37:811][591]LogAutomationController: Received RequestTestsReplyCompleteMessage from 7A9630D2469FCBD5807600AEECAADBD4",
+    "[2026.08.03-16.36.37:814][591]LogAutomationController: 6971 tests available on 7A9630D2469FCBD5807600AEECAADBD4",
+    "[2026.08.03-16.36.37:842][591]LogAutomationCommandLine: Display: Found 3 automation tests based on 'Gomoku.Stage6.'",
+    "[2026.08.03-16.36.37:842][591]LogAutomationCommandLine: Display: \tGomoku.Stage6.CanUseValidateExecuteSeparated",
+    "[2026.08.03-16.36.37:842][591]LogAutomationCommandLine: Display: \tGomoku.Stage6.ItemTypesExist",
+    "[2026.08.03-16.36.37:842][591]LogAutomationCommandLine: Display: \tGomoku.Stage6.SelectCancelTargeting",
+    "[2026.08.03-16.36.37:843][591]LogAutomationController: Sending StopTests to 7A9630D2469FCBD5807600AEECAADBD4",
+    "[2026.08.03-16.36.37:845][591]LogAutomationController: Sending StartTestSession to 7A9630D2469FCBD5807600AEECAADBD4",
+    "[2026.08.03-16.36.37:845][591]LogAutomationController: Display: Clearing ../../../../../../Users/sster/Documents/Git/O-Mock/Saved/Automation/Logs/ and ../../../../../../Users/sster/Documents/Git/O-Mock/Saved/Automation/Tmp/",
+    "[2026.08.03-16.36.37:846][591]LogAutomationController: Sending RunTest CanUseValidateExecuteSeparated to 7A9630D2469FCBD5807600AEECAADBD4",
+    "[2026.08.03-16.36.37:846][592]LogAutomationController: Display: Test Started. Name={CanUseValidateExecuteSeparated} Path={Gomoku.Stage6.CanUseValidateExecuteSeparated}",
+    "[2026.08.03-16.36.37:856][593]LogAutomationController: Display: Test Completed. Result={Success} Name={CanUseValidateExecuteSeparated} Path={Gomoku.Stage6.CanUseValidateExecuteSeparated}",
+    "[2026.08.03-16.36.37:856][593]LogAutomationController: BeginEvents: Gomoku.Stage6.CanUseValidateExecuteSeparated",
+    "[2026.08.03-16.36.37:856][593]LogAutomationController: EndEvents: Gomoku.Stage6.CanUseValidateExecuteSeparated",
+    "[2026.08.03-16.36.37:856][593]LogAutomationController: Sending RunTest ItemTypesExist to 7A9630D2469FCBD5807600AEECAADBD4",
+    "[2026.08.03-16.36.37:856][594]LogAutomationController: Display: Test Started. Name={ItemTypesExist} Path={Gomoku.Stage6.ItemTypesExist}",
+    "[2026.08.03-16.36.37:872][595]LogAutomationController: Display: Test Completed. Result={Success} Name={ItemTypesExist} Path={Gomoku.Stage6.ItemTypesExist}",
+    "[2026.08.03-16.36.37:872][595]LogAutomationController: BeginEvents: Gomoku.Stage6.ItemTypesExist",
+    "[2026.08.03-16.36.37:872][595]LogAutomationController: EndEvents: Gomoku.Stage6.ItemTypesExist",
+    "[2026.08.03-16.36.37:873][595]LogAutomationController: Sending RunTest SelectCancelTargeting to 7A9630D2469FCBD5807600AEECAADBD4",
+    "[2026.08.03-16.36.37:873][595]LogAutomationController: Display: Test Started. Name={SelectCancelTargeting} Path={Gomoku.Stage6.SelectCancelTargeting}",
+    "[2026.08.03-16.36.37:901][598]LogAutomationController: Display: Test Completed. Result={Success} Name={SelectCancelTargeting} Path={Gomoku.Stage6.SelectCancelTargeting}",
+    "[2026.08.03-16.36.37:901][598]LogAutomationController: BeginEvents: Gomoku.Stage6.SelectCancelTargeting",
+    "[2026.08.03-16.36.37:901][598]LogAutomationController: EndEvents: Gomoku.Stage6.SelectCancelTargeting",
+    "[2026.08.03-16.36.37:902][598]LogAutomationController: Sending StopTestSession to 7A9630D2469FCBD5807600AEECAADBD4"
+  ]
+}

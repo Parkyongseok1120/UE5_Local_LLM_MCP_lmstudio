@@ -1,0 +1,30 @@
+STAGE 7 Part5 — Automation tests ONLY via MCP. Do not redesign Stage 4–6.
+
+Create `Source/O_Mock/Tests/GomokuStage7Items.spec.cpp` (write_file or replace if partial exists).
+
+Mirror Stage6 includes / MakeEngine helper (NewObject RuleEngine, InitializeMatch 2p 15). InitialEnergyPerPlayer=10 is fine.
+
+## Required tests (exact names)
+1) Gomoku.Stage7.SealStoneBlocksCell
+   - PlayerId=1, ItemId=1 (SealStone)
+   - AddItemToInventory(1,1) — do NOT MarkItemGainedThisTurn
+   - Ensure CanUse true; ExecuteItem on empty cell (5,5), TargetPlayerIndex=-1
+   - Assert cell blocked / not empty (GetBoardCell or GetCellState)
+
+2) Gomoku.Stage7.SkipTurnFlagsPlayer
+   - ItemId=4 SkipTurn, PlayerId=1
+   - AddItem without MarkGained
+   - ExecuteItem with TargetPlayerIndex matching ACTIVE player index for player 2
+   - Read ExecuteItem SkipTurn: it uses (TargetPlayerIndex + 1) as PlayerId — so for PlayerId 2 pass TargetPlayerIndex=1
+   - Assert GetPlayerStateData(2).bSkipNextTurn == true (field name: read header)
+
+3) Gomoku.Stage7.NewItemNotUsableSameTurn
+   - AddItem(1,1); MarkItemGainedThisTurn(1,1); TestFalse CanUseItem
+   - ClearTurnItemLocksForPlayer(1) (or equivalent API — read RuleEngine.h); TestTrue CanUseItem
+
+4) Gomoku.Stage7.EnergyCostConsumed
+   - Add SealStone; record Energy; Execute on empty cell; Energy decreased by 1; item removed
+
+If an API is missing, read RuleEngine.h first and use existing helpers only. Prefer RuleEngine-only tests (no World) like Stage6 CanUse test.
+
+Bounded patches. After write, summarize. Stop when all 4 IMPLEMENT_SIMPLE_AUTOMATION_TEST names exist and compile-ready.

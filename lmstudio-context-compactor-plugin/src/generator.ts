@@ -22,6 +22,63 @@ function finiteNumber(value: unknown, fallback: number, minimum = 0, maximum = N
   return Math.min(maximum, Math.max(minimum, parsed));
 }
 
+function debugAgentLog(hypothesisId: string, location: string, message: string, data: Record<string, unknown>) {
+  // #region agent log
+  try {
+    if (process.env.LMS_CONTEXT_COMPACTOR_DEBUG_INGEST !== "1") return;
+    const fs = require("node:fs") as typeof import("node:fs");
+    const payload = {
+      sessionId: "49b048",
+      runId: String(process.env.LMS_CONTEXT_COMPACTOR_DEBUG_RUN || "release-harden"),
+      hypothesisId,
+      location,
+      message,
+      data,
+      timestamp: Date.now(),
+    };
+    const debugLog = process.env.LMS_CONTEXT_COMPACTOR_DEBUG_LOG;
+    if (debugLog) {
+      fs.appendFileSync(debugLog, `${JSON.stringify(payload)}\n`);
+    }
+    fetch("http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "49b048" },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  } catch {
+    /* ignore */
+  }
+  // #endregion
+}
+
+function tryInjectSessionMarker(history: Chat, marker: string): boolean {
+  const tag = core.formatSessionMarker(marker);
+  if (!tag) return false;
+  try {
+    const messages = history.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const text = String(message.getText() || "");
+      if (core.SESSION_MARKER_RE.test(text)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${tag}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${text}\n${tag}`);
+        return true;
+      }
+    }
+    if (typeof (history as any).append === "function") {
+      (history as any).append("system", tag);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 async function loadCheckpointBestEffort(sessionId: string): Promise<any | null> {
   try {
     const checkpoint = await store.loadCheckpoint(sessionId);
@@ -167,38 +224,19 @@ function buildCompactedChat(
     }
   }
 
-  // #region agent log
-  try {
-    const users = result.getMessagesArray().filter((m) => m.getRole() === "user");
-    const systems = result.getMessagesArray().filter((m) => m.getRole() === "system");
-    fetch("http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "49b048" },
-      body: JSON.stringify({
-        sessionId: "49b048",
-        runId: "post-fix",
-        hypothesisId: "H18",
-        location: "generator.ts:buildCompactedChat",
-        message: "compacted chat via asMutableCopy",
-        data: {
-          recentTurns,
-          usedMutableCopy: Boolean(mutableCopy),
-          snapshotCount: snapshots.length,
-          resultLength: result.getMessagesArray().length,
-          systemCount: systems.length,
-          systemLen: String(systems[0]?.getText() || "").length,
-          userCount: users.length,
-          latestUserPreview: String(users.at(-1)?.getText() || "").slice(0, 80),
-          latestUserTextLen: String(users.at(-1)?.getText() || "").trim().length,
-          hasTrailingMeta: Boolean(trailingMetaText),
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-  } catch {
-    /* ignore */
-  }
-  // #endregion
+  const users = result.getMessagesArray().filter((m) => m.getRole() === "user");
+  const systems = result.getMessagesArray().filter((m) => m.getRole() === "system");
+  debugAgentLog("H18", "generator.ts:buildCompactedChat", "compacted chat via asMutableCopy", {
+    recentTurns,
+    usedMutableCopy: Boolean(mutableCopy),
+    snapshotCount: snapshots.length,
+    resultLength: result.getMessagesArray().length,
+    systemCount: systems.length,
+    systemLen: String(systems[0]?.getText() || "").length,
+    userCount: users.length,
+    latestUserTextLen: String(users.at(-1)?.getText() || "").trim().length,
+    hasTrailingMeta: Boolean(trailingMetaText),
+  });
 
   return result;
 }
@@ -261,55 +299,23 @@ async function compactToTarget(
       formatted = await model.applyPromptTemplate(chat);
       inputTokens = await model.countTokens(formatted);
     } catch (error) {
-      // #region agent log
-      try {
-        const fs = require("node:fs") as typeof import("node:fs");
-        const debugLog = process.env.LMS_CONTEXT_COMPACTOR_DEBUG_LOG;
-        if (debugLog) {
-          fs.appendFileSync(debugLog, `${JSON.stringify({
-            sessionId: "49b048",
-            runId: "post-fix",
-            hypothesisId: "H14",
-            location: "generator.ts:compactToTarget",
-            message: "applyPromptTemplate failed",
-            data: {
-              retainedTurns,
-              chatLen: chat.getMessagesArray().length,
-              roles: chat.getMessagesArray().map((m) => m.getRole()),
-              userLen: String(chat.getMessagesArray().filter((m) => m.getRole() === "user").at(-1)?.getText() || "").length,
-              error: String((error as any)?.message || error).slice(0, 300),
-            },
-            timestamp: Date.now(),
-          })}\n`);
-        }
-      } catch { /* ignore */ }
-      // #endregion
+      debugAgentLog("H14", "generator.ts:compactToTarget", "applyPromptTemplate failed", {
+        retainedTurns,
+        chatLen: chat.getMessagesArray().length,
+        roles: chat.getMessagesArray().map((m) => m.getRole()),
+        userLen: String(chat.getMessagesArray().filter((m) => m.getRole() === "user").at(-1)?.getText() || "").length,
+        error: String((error as any)?.message || error).slice(0, 300),
+      });
       throw error;
     }
-    // #region agent log
-    try {
-      const fs = require("node:fs") as typeof import("node:fs");
-      const debugLog = process.env.LMS_CONTEXT_COMPACTOR_DEBUG_LOG;
-      if (debugLog) {
-        fs.appendFileSync(debugLog, `${JSON.stringify({
-          sessionId: "49b048",
-          runId: "post-fix",
-          hypothesisId: "H14",
-          location: "generator.ts:compactToTarget",
-          message: "compact iteration tokens",
-          data: {
-            retainedTurns,
-            inputTokens,
-            chatLen: chat.getMessagesArray().length,
-            systemCount: chat.getMessagesArray().filter((m) => m.getRole() === "system").length,
-            userLen: String(chat.getMessagesArray().filter((m) => m.getRole() === "user").at(-1)?.getText() || "").trim().length,
-            fmtPreview: String(formatted || "").slice(0, 160),
-          },
-          timestamp: Date.now(),
-        })}\n`);
-      }
-    } catch { /* ignore */ }
-    // #endregion
+    debugAgentLog("H14", "generator.ts:compactToTarget", "compact iteration tokens", {
+      retainedTurns,
+      inputTokens,
+      chatLen: chat.getMessagesArray().length,
+      systemCount: chat.getMessagesArray().filter((m) => m.getRole() === "system").length,
+      userLen: String(chat.getMessagesArray().filter((m) => m.getRole() === "user").at(-1)?.getText() || "").trim().length,
+      fmtPreview: String(formatted || "").slice(0, 160),
+    });
     const userPreview = String(
       chat.getMessagesArray().filter((m) => m.getRole() === "user").at(-1)?.getText() || "",
     ).trim();
@@ -328,35 +334,17 @@ async function compactToTarget(
     if (!best || remainingTokens > best.remainingTokens) {
       best = { chat, inputTokens, remainingTokens, retainedTurns, currentTurnCap };
     }
-    // #region agent log
-    try {
-      fetch("http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "49b048" },
-        body: JSON.stringify({
-          sessionId: "49b048",
-          runId: "post-fix-review",
-          hypothesisId: "H8c",
-          location: "generator.ts:compactToTarget",
-          message: "compact iteration",
-          data: {
-            retainedTurns,
-            currentTurnLength,
-            currentTurnCap,
-            inputTokens,
-            remainingTokens,
-            target,
-            hard,
-            chatLen: chat.getMessagesArray().length,
-            hasTrailingMeta: Boolean(options.trailingMetaUser),
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-    } catch {
-      /* ignore */
-    }
-    // #endregion
+    debugAgentLog("H8c", "generator.ts:compactToTarget", "compact iteration", {
+      retainedTurns,
+      currentTurnLength,
+      currentTurnCap,
+      inputTokens,
+      remainingTokens,
+      target,
+      hard,
+      chatLen: chat.getMessagesArray().length,
+      hasTrailingMeta: Boolean(options.trailingMetaUser),
+    });
     if (remainingTokens >= target) break;
     if (retainedTurns > 0) {
       retainedTurns -= 1;
@@ -434,7 +422,41 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     autoSelected = true;
   }
 
-  const sessionId = core.sessionFingerprint(messages, `${workingDirectory}\n${resolvedTargetModel}`);
+  const salt = `${workingDirectory}\n${resolvedTargetModel}`;
+  const lineage = core.messageLineageFingerprints(messages);
+  const baseKey = core.baseSessionKey(messages, salt);
+  const envSessionId = String(process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID || "").trim();
+  const marker = core.extractSessionMarker(messages) || envSessionId;
+  let sessionResolution: any;
+  if (marker) {
+    sessionResolution = {
+      sessionId: core.sessionFingerprint(messages, salt, { sessionMarker: marker }),
+      reason: envSessionId ? "env" : "marker",
+      minted: false,
+      baseKey,
+    };
+  } else {
+    sessionResolution = await (store as any).resolveSessionFork({
+      baseKey,
+      lineage,
+      envSessionId,
+    });
+  }
+  const sessionId = String(sessionResolution.sessionId);
+  if (!marker && sessionResolution.minted) {
+    tryInjectSessionMarker(history, sessionId);
+  } else if (marker) {
+    tryInjectSessionMarker(history, marker);
+  }
+  await (store as any).touchSessionFork(baseKey, sessionId, lineage).catch(() => undefined);
+  debugAgentLog("H-SESSION", "generator.ts:generate", "session resolved", {
+    reason: sessionResolution.reason,
+    minted: Boolean(sessionResolution.minted),
+    baseKey: String(baseKey).slice(0, 12),
+    sessionId: String(sessionId).slice(0, 12),
+    lineageLen: lineage.length,
+    hasMarker: Boolean(marker),
+  });
   let checkpoint = await loadCheckpointBestEffort(sessionId);
   if (autoSelected) {
     await appendEventBestEffort(sessionId, {
@@ -557,16 +579,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     effectiveAction = "deferred";
   }
 
-  // Mid-chat goal switches must compact even when the token budget is still healthy;
-  // otherwise prior structure dumps contaminate bug-hunt / follow-up turns.
+  // Mid-chat major goal switches may compact when budget is already soft/hard.
+  // Ordinary follow-ups must not wipe retained turns solely because the objective string changed.
   const priorObjective = String(checkpoint?.objective || "").trim();
   const latestObjective = String(nextCheckpoint.objective || "").trim();
-  const goalChanged = Boolean(
-    priorObjective
-    && latestObjective
-    && priorObjective !== latestObjective
-    && !core.isMetaUserMessage(latestObjective),
-  );
+  const goalChanged = core.isMajorGoalChange(priorObjective, latestObjective);
   const userGoalCount = messages.filter((message) => {
     const text = String(message.getText() || "").trim();
     return message.getRole() === "user" && text && !core.isMetaUserMessage(text);
@@ -582,53 +599,34 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     if (core.isMetaUserMessage(text)) trailingMetaUser = message;
     break;
   }
-  // Force compaction only on a real objective change. Related follow-up questions
-  // still change the objective string, so we compact to drop prior dumps — but the
-  // compacted chat must keep a single merged system + latest user (see compactSnapshots).
+  const budgetPressed = decision.action === "soft_compact" || decision.action === "hard_compact";
+  // Major mode flips may soft-compact even when the budget is healthy, but ordinary
+  // objective-string churn must not. Retained turns are never zeroed by goal change alone.
   const goalChangeCompact = Boolean(
     enabled
     && !observeOnly
     && !trailingMetaUser
     && goalChanged,
   );
-  // Zero older-tail only on goal change. Never strip the current user/checkpoint;
-  // dual-system chats previously collapsed to ~10 empty-user tokens on Qwen.
-  const zeroRetainedTurns = Boolean(!trailingMetaUser && goalChanged);
-  if (goalChangeCompact && effectiveAction !== "hard_compact") {
+  const zeroRetainedTurns = false;
+  if (goalChangeCompact && effectiveAction === "normal") {
     effectiveAction = "soft_compact";
   }
 
-  // #region agent log
-  try {
-    fetch("http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "49b048" },
-      body: JSON.stringify({
-        sessionId: "49b048",
-        runId: "post-fix-review",
-        hypothesisId: "H9",
-        location: "generator.ts:generate",
-        message: "goal-change and meta gate",
-        data: {
-          priorObjective: priorObjective.slice(0, 120),
-          latestObjective: latestObjective.slice(0, 120),
-          goalChanged,
-          latestIsReadOnly,
-          answeringMeta: Boolean(trailingMetaUser),
-          userGoalCount,
-          hasPriorAssistant,
-          decisionAction: decision.action,
-          effectiveAction,
-          goalChangeCompact,
-          zeroRetainedTurns,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-  } catch {
-    /* ignore */
-  }
-  // #endregion
+  debugAgentLog("H9", "generator.ts:generate", "goal-change and meta gate", {
+    priorObjectiveLen: priorObjective.length,
+    latestObjectiveLen: latestObjective.length,
+    goalChanged,
+    latestIsReadOnly,
+    answeringMeta: Boolean(trailingMetaUser),
+    userGoalCount,
+    hasPriorAssistant,
+    decisionAction: decision.action,
+    effectiveAction,
+    goalChangeCompact,
+    zeroRetainedTurns,
+    budgetPressed,
+  });
 
   const shouldCompact = effectiveAction === "soft_compact" || effectiveAction === "hard_compact";
   let compactedMetrics: any = null;
@@ -700,6 +698,33 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       + "Enable the context compactor and disable observe-only mode before continuing.",
     );
   }
+
+  // Qwen multi_step_tool Jinja raises:
+  //   raise_exception('No user query found in messages.')
+  // which surfaces as applyPromptTemplate HTTP 400. Never send a user-less chat.
+  const chatHasRealUser = (chat: Chat): boolean => chat.getMessagesArray().some((message) => {
+    if (message.getRole() !== "user") return false;
+    const text = String(message.getText() || "").trim();
+    return Boolean(text) && !core.isMetaUserMessage(text);
+  });
+  if (!chatHasRealUser(modelChat)) {
+    if (chatHasRealUser(history)) {
+      console.warn(
+        "[unreal-context-compactor] Compacted/model chat lost the user query; "
+        + "falling back to inbound history to avoid Jinja 400.",
+      );
+      modelChat = history;
+      debugAgentLog("H-userless", "generator.ts:before_respond", "fallback inbound history", {
+        compactedLostUser: true,
+      });
+    } else {
+      throw new Error(
+        "Chat history has no user query. Qwen/Jinja templates require a user message "
+        + "(applyPromptTemplate 400: No user query found in messages).",
+      );
+    }
+  }
+
   const events: any[] = [];
   const requests: any[] = [];
   const strictToolControlPlane = Boolean(config.strictToolControlPlane);

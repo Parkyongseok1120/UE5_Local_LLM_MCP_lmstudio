@@ -1,0 +1,32 @@
+STAGE 7 Part4 — ExecuteItem effects + Automation. MCP only. Build currently Succeeds.
+
+## Implement ExecuteItem switch (GomokuItemLibrary.cpp)
+Map ItemId→EGomokuItemType via a small GetItemData(ItemId) table:
+1=SealStone cost1 Cell; 2=Pull; 3=Steal; 4=SkipTurn Player; 5=GuardianBarrier Cell.
+
+CanUseItem must use Engine->IsItemUsableNow (not just PlayerHasItem).
+
+ExecuteItem flow:
+- IsItemUsableNow
+- ValidateTarget by TargetType
+- ConsumePlayerEnergy(EnergyCost)
+- apply effect:
+  - SealStone: SetCellBlocked(cell,true) if empty
+  - SkipTurn: SetPlayerSkipNextTurn(targetPlayerId,true)  // TargetPlayerIndex+1
+  - Steal: if !IsCellGuardianProtected then ChangeCellOwnership
+  - Pull: minimal — RemoveStoneAt neighbor toward player or ForcePlace; if too hard, implement Steal+Seal+Skip+Guardian first and stub Pull returning false
+  - GuardianBarrier: SetCellGuardianProtected(cell,true)
+- RemoveItemFromInventory; SetUsedItemThisTurn
+
+## GameState StartNewTurn
+For previous player: ClearTurnItemLocksForPlayer (promote gained→usable) already by clearing gained set
+For new player: ResetUsedItemThisTurn; if ItemIds.Num()<2 AddItemToInventory(random 1..5) + MarkItemGainedThisTurn
+
+## Tests write_file Source/O_Mock/Tests/GomokuStage7Items.spec.cpp
+- Gomoku.Stage7.SealStoneBlocksCell
+- Gomoku.Stage7.SkipTurnFlagsPlayer
+- Gomoku.Stage7.NewItemNotUsableSameTurn
+- Gomoku.Stage7.EnergyCostConsumed
+
+Use AddItemToInventory WITHOUT MarkItemGainedThisTurn for usable items in tests (except NewItemNotUsableSameTurn which marks gained).
+Stop when tests exist and look compile-ready.

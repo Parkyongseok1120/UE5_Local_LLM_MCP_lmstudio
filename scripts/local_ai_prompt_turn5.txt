@@ -1,0 +1,125 @@
+ONLY these two areas. Keep patches small.
+
+## A) write_file entire Source/O_Mock/GomokuHUD.cpp with this simplified Stage4 HUD (exact content OK):
+```cpp
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#include "GomokuHUD.h"
+#include "Engine/Canvas.h"
+#include "Engine/Font.h"
+#include "Kismet/GameplayStatics.h"
+#include "GomokuGameMode.h"
+
+AGomokuHUD::AGomokuHUD()
+{
+}
+
+void AGomokuHUD::BeginPlay()
+{
+	Super::BeginPlay();
+	if (UWorld* World = GetWorld())
+	{
+		GomokuGameState = Cast<AGomokuGameState>(World->GetGameState());
+		if (GomokuGameState)
+		{
+			GomokuGameState->OnTurnChanged.AddDynamic(this, &AGomokuHUD::HandleTurnChanged);
+			GomokuGameState->OnMatchEnded.AddDynamic(this, &AGomokuHUD::HandleMatchEnded);
+			GomokuGameState->OnMatchRestarted.AddDynamic(this, &AGomokuHUD::HandleMatchRestarted);
+			GomokuGameState->OnTickPlayerTime.AddDynamic(this, &AGomokuHUD::OnTickPlayerTime);
+		}
+	}
+	bShowGameOver = false;
+	GameOverText = TEXT("");
+	CurrentTurnText = TEXT("Player 1's Turn");
+	PlayerTimeStrings.Reset();
+}
+
+void AGomokuHUD::DrawHUD()
+{
+	Super::DrawHUD();
+	if (!Canvas) return;
+	UFont* Font = GEngine ? GEngine->GetSmallFont() : nullptr;
+	const FString TextToDraw = bShowGameOver ? GameOverText : CurrentTurnText;
+	if (!TextToDraw.IsEmpty())
+	{
+		DrawText(TextToDraw, FLinearColor::White, 40.f, 65.f, Font, 1.2f, false);
+	}
+	if (bShowGameOver)
+	{
+		DrawText(TEXT("Press R to restart"), FLinearColor::Yellow, 40.f, 105.f, Font, 1.0f, false);
+	}
+	float Y = 140.f;
+	for (int32 i = 0; i < PlayerTimeStrings.Num(); ++i)
+	{
+		if (!PlayerTimeStrings[i].IsEmpty())
+		{
+			DrawText(PlayerTimeStrings[i], FLinearColor::White, 40.f, Y, Font, 1.0f, false);
+			Y += 22.f;
+		}
+	}
+}
+
+void AGomokuHUD::HandleTurnChanged(int32 PlayerIndex, int32 /*RoundIndex*/)
+{
+	bShowGameOver = false;
+	GameOverText = TEXT("");
+	CurrentTurnText = (PlayerIndex >= 0)
+		? FString::Printf(TEXT("Player %d's Turn"), PlayerIndex + 1)
+		: TEXT("Waiting...");
+}
+
+void AGomokuHUD::HandleMatchEnded(const FGomokuWinResult& WinResult)
+{
+	bShowGameOver = true;
+	GameOverText = (WinResult.IsWin && WinResult.WinnerPlayerIndex != INDEX_NONE)
+		? FString::Printf(TEXT("Game Over! Player %d Wins!"), WinResult.WinnerPlayerIndex + 1)
+		: TEXT("Game Over! Draw!");
+}
+
+void AGomokuHUD::HandleMatchRestarted()
+{
+	bShowGameOver = false;
+	GameOverText = TEXT("");
+	CurrentTurnText = TEXT("Game Restarted");
+}
+
+void AGomokuHUD::HandleRestartKey()
+{
+	if (UWorld* World = GetWorld())
+	{
+		if (AGomokuGameMode* GM = Cast<AGomokuGameMode>(World->GetAuthGameMode()))
+		{
+			GM->RestartGame();
+		}
+	}
+}
+
+void AGomokuHUD::OnTickPlayerTime(int32 PlayerIndex, const FGomokuPlayerTimeState& TimeState)
+{
+	if (PlayerIndex < 0) return;
+	if (PlayerTimeStrings.Num() <= PlayerIndex)
+	{
+		PlayerTimeStrings.SetNum(PlayerIndex + 1);
+	}
+	PlayerTimeStrings[PlayerIndex] = FString::Printf(
+		TEXT("P%d Personal:%.1f Turn:%.1f"),
+		PlayerIndex + 1,
+		TimeState.PersonalRemaining,
+		TimeState.TurnElapsedThisTurn);
+}
+```
+
+## B) PlayerController fixes via replace_in_file after read:
+1) GomokuPlayerController.h — add private methods:
+   void OnMouseMoveX(float Value);
+   void OnMouseMoveY(float Value);
+2) GomokuPlayerController.cpp — add `#include "EngineUtils.h"` after other includes
+3) Replace `const FVector2D MousePos = GetMousePosition();` with:
+```
+float MX=0.f, MY=0.f;
+GetMousePosition(MX, MY);
+const FVector2D MousePos(MX, MY);
+```
+4) Replace `GomokuGSState->ClearHoveredCell();` with `GomokuGSState->SetHoveredCell(FIntPoint(-1,-1));`
+
+Stop after A+B. Do not edit GameMode/GameState this turn.

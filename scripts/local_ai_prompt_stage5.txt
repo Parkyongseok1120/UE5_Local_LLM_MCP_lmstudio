@@ -1,0 +1,19 @@
+STAGE 5 START — Board Templates. MCP-only edits under Source/O_Mock. Keep RuleEngine place/win core.
+
+## Goal
+Wire existing FBoardTemplateData / UGomokuBoardTemplateDataAsset into match init so size + BlockedCells apply, board actor + camera sync.
+
+## Already present (read first)
+- GomokuBoardTemplateTypes.h (FBoardTemplateData)
+- GomokuBoardTemplateDataAsset.h/.cpp
+- AGomokuGameMode::BoardTemplate + ApplyBoardTemplate() STUB
+- AGomokuBoardActor::ApplyBoardSize / WorldToGrid / GridToWorld / FitCameraToBoard
+
+## Required work
+1) FGomokuMatchConfig: add TArray<FIntPoint> BlockedCells (or apply blocked after InitializeMatch). Prefer config field + InitializeMatch applies ECellState::Blocked for each in-bounds cell.
+2) AGomokuGameMode::ApplyBoardTemplate: if BoardTemplate valid, set Config BoardSizeX/Y from Width/Height, copy BlockedCells, InitializeMatch, ApplyBoardSize on BoardActor, FitCamera. Call from BeginPlay (replace hardcoded 15x15 when template set). If no template, keep 15x15 default.
+3) CreatePresetForSize: support sizes 15,17,19,21,23 (odd). Invalid sizes clamp to nearest allowed or keep clamp 15..23.
+4) Ensure TryPlaceStone / IsValidEmpty reject Blocked cells (should already if GetCellState==Blocked).
+5) Do NOT rewrite Stage 4 tests. Optional: small Stage5 automation later — skip unless asked.
+
+Read files with MCP, then small replace_in_file patches. Stop when ApplyBoardTemplate is non-stub and InitializeMatch applies blocked cells.

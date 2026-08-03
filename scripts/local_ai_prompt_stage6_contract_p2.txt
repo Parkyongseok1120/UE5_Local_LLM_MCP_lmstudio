@@ -1,0 +1,34 @@
+CONTINUE Stage 6 contract test fix ONLY via MCP. Framework code (IsRegisteredItemId, Add reject, CanUse reject) is mostly done — finish the broken test.
+
+## Compile bug in Tests/GomokuStage6ItemFramework.spec.cpp
+Line ~95 uses undefined `ItemId`. Must use `SealStoneId`.
+
+Current broken tail of CanUseValidateExecuteSeparated:
+```
+	bool ExecutedSeal = UGomokuItemLibrary::ExecuteItem(...);
+	if (!TestTrue(TEXT("A-ExecuteItem succeeds for 1"), ExecutedSeal))
+		return false;
+
+	if (!TestFalse(TEXT("CanUseItem after execute is false"), UGomokuItemLibrary::CanUseItem(Engine, PlayerId, ItemId)))
+		return false;
+
+	return true;
+}
+```
+
+## Replace that tail with (exact contract)
+After successful ExecuteItem for SealStoneId=1:
+1) EnergyAfter = GetPlayerStateData(PlayerId).Energy; TestTrue EnergyAfter == EnergyBefore - 1 (SealStone cost 1)
+2) TestFalse CanUseItem(..., SealStoneId)
+3) TestFalse PlayerHasItem if available, or CanUse false is enough
+4) B) Unregistered 101:
+   - TestFalse AddItemToInventory(PlayerId, 101)
+   - TestFalse CanUseItem(..., 101)
+   - TestFalse ValidateTarget(..., 101, TargetCell, -1)
+   - const int32 EnergyBefore101 = GetPlayerStateData(PlayerId).Energy
+   - TestFalse ExecuteItem(..., 101, ...)
+   - TestEqual Energy still EnergyBefore101
+5) return true
+
+Keep ItemTypesExist and SelectCancelTargeting as-is if already correct.
+Read the file before replace_in_file. Bounded patch. Stop when test compiles logically and covers A+B.

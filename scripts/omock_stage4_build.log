@@ -1,0 +1,150 @@
+Using bundled DotNet SDK version: 10.0 win-x64
+Running UnrealBuildTool: dotnet "..\..\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll" O_MockEditor Win64 Development -Project=C:\Users\sster\Documents\Git\O-Mock\O_Mock.uproject -WaitMutex -FromMsBuild
+Log file: C:\Users\sster\AppData\Local\UnrealBuildTool\Log.txt
+Determining max actions to execute in parallel (12 physical cores, 24 logical cores)
+  Executing up to 12 processes, one per physical core
+Using 'git status' to determine working set for adaptive non-unity build (C:\Users\sster\Documents\Git\O-Mock).
+UbaServer - Listening on 0.0.0.0:1345
+Available x64 toolchains (1):
+ * C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231
+    (Family=14.51.36231, FamilyRank=2, Version=14.51.36248, HostArchitecture=x64, ReleaseChannel=Latest, Architecture=x64)
+Visual Studio compiler version 14.51.36248 is newer than latest preferred version 14.50.35717. Please use caution as this compiler has not been heavily tested
+Building O_MockEditor...
+===== Toolchain Information =====
+Using ISPC compiler (C:\Program Files\Epic Games\UE_5.8\Engine\Source\ThirdParty\Intel\ISPC\bin\Windows\ispc.exe)
+  Intel(r) Implicit SPMD Program Compiler (Intel(r) ISPC), 1.24.0 (build commit  @ 20250404, LLVM 18.1.2) 
+Using Visual Studio 14.51.36248 toolchain (C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231) and Windows 10.0.26100.0 SDK (C:\Program Files (x86)\Windows Kits\10).
+Warning: Visual Studio compiler 14.51.36248 is not a preferred version
+[Adaptive Build] Excluded from O_Mock unity file: GomokuBoardActor.cpp, GomokuBoardTemplateDataAsset.cpp, GomokuGameMode.cpp, GomokuGameState.cpp, GomokuHUD.cpp, GomokuItemLibrary.cpp, GomokuPlayerController.cpp, GomokuPlayerState.cpp, GomokuRuleEngine.cpp, GomokuStage3TimeSystem.spec.cpp, GomokuStage4Behavior.spec.cpp, GomokuStage5BoardTemplate.spec.cpp, GomokuStage6ItemFramework.spec.cpp, GomokuStage7Items.spec.cpp
+=================================
+Using Unreal Build Accelerator local executor to run 5 action(s)
+  CPU 12 physical cores, 24 logical cores
+  Memory 31.15 GB physical, 55.88 GB/63.14 GB committed
+  UBA Storage capacity 40 GB
+UbaSessionServer - Killed process GomokuStage7Items.spec.cpp (Compile [x64]) (253ms) - Low on memory (65.3gb/67.8gb). Kill threshold is 64.4gb
+[1/5] Compile [x64] GomokuStage4Behavior.spec.cpp
+[2/5] Compile [x64] GomokuStage7Items.spec.cpp
+[3/5] Link [x64] UnrealEditor-O_Mock.lib
+   C:/Users/sster/Documents/Git/O-Mock/Intermediate/Build/Win64/x64/UnrealEditor/Development/O_Mock/UnrealEditor-O_Mock.lib ���̺귯�� �� C:/Users/sster/Documents/Git/O-Mock/Intermediate/Build/Win64/x64/UnrealEditor/Development/O_Mock/UnrealEditor-O_Mock.exp ��ü�� �����ϰ� �ֽ��ϴ�.
+[4/5] Link [x64] UnrealEditor-O_Mock.dll
+[5/5] WriteMetadata O_MockEditor.target [NoUba]
+
+Total time in Unreal Build Accelerator local executor: 4.60 seconds
+Output binary: C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
+
+Result: Succeeded
+Total execution time: 5.71 seconds
+Trace written to file C:\Users\sster\AppData\Local\UnrealBuildTool\Trace.uba with size 6.1kb
+
+
+----- UBT Log.txt -----
+Log started at 08/04/2026 01:35:08 (2026-08-03T16:35:08Z)
+Resolved project argument C:\Users\sster\Documents\Git\O-Mock\O_Mock.uproject to C:\Users\sster\Documents\Git\O-Mock\O_Mock.uproject
+No config file at C:\ProgramData\Unreal Engine\UnrealBuildTool\BuildConfiguration.xml
+No config file at C:\Users\sster\AppData\Local\Unreal Engine\UnrealBuildTool\BuildConfiguration.xml
+No config file at C:\Users\sster\Documents\Unreal Engine\UnrealBuildTool\BuildConfiguration.xml
+Configuration will be read from:
+  C:\Users\sster\AppData\Roaming\Unreal Engine\UnrealBuildTool\BuildConfiguration.xml
+Reading configuration file from cache (C:\Users\sster\Documents\Git\O-Mock\Intermediate\Build\XmlConfigCache.bin): C:\Users\sster\AppData\Roaming\Unreal Engine\UnrealBuildTool\BuildConfiguration.xml
+Reading configuration file from cache (C:\Users\sster\Documents\Git\O-Mock\Intermediate\Build\XmlConfigCache.bin): C:\Users\sster\Documents\Git\O-Mock\Saved\UnrealBuildTool\BuildConfiguration.xml
+Reading configuration file from cache (C:\Users\sster\Documents\Git\O-Mock\Intermediate\Build\XmlConfigCache.bin): C:\Users\sster\AppData\Local\UnrealEngine\Intermediate\Build\UnrealBuildTool.Env.BuildConfiguration.xml
+Setting temp directory to 'C:\Users\sster\AppData\Local\Temp\UnrealBuildTool\eb6d2d82'
+    Registering build platform: UnrealBuildTool.AndroidPlatformFactory
+    Registering build platform: UnrealBuildTool.IOSPlatformFactory
+    Registering build platform: UnrealBuildTool.LinuxPlatformFactory
+    Registering build platform: UnrealBuildTool.MacPlatformFactory
+    Registering build platform: UnrealBuildTool.TVOSPlatformFactory
+    Registering build platform: UnrealBuildTool.WindowsPlatformFactory
+Found Windows 10 SDK root at C:\Program Files (x86)\Windows Kits\10 (1)
+Found Windows 10 SDK root at C:\Program Files (x86)\Windows Kits\10 (2)
+Found Windows 10 SDK version 10.0.26100.0 at C:\Program Files (x86)\Windows Kits\10
+Found Universal CRT version 10.0.26100.0 at C:\Program Files (x86)\Windows Kits\10
+Win64 Installed SDK(s): MinVersion_Sdk=10.0.19041.0, MaxVersion_Sdk=10.9.99999.0, CurrentVersion_Sdk=10.0.26100.0, Version_AutoSdk=10.0.22621.0, CurrentVersion_AutoSdk=
+        Registering build platform: Win64 - buildable: True
+    Registering build platform: UnrealBuildTool.VisionOSPlatformFactory
+Command line: "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll" O_MockEditor Win64 Development -Project=C:\Users\sster\Documents\Git\O-Mock\O_Mock.uproject -WaitMutex -FromMsBuild
+Log file: C:\Users\sster\AppData\Local\UnrealBuildTool\Log.txt
+Deleting old log file: C:\Users\sster\AppData\Local\UnrealBuildTool\Log-backup-2026.06.08-17.01.31.json
+
+Determining max actions to execute in parallel (12 physical cores, 24 logical cores)
+  Executing up to 12 processes, one per physical core
+Using 'git status' to determine working set for adaptive non-unity build (C:\Users\sster\Documents\Git\O-Mock).
+UbaStorageServer - Database loaded from C:\ProgramData\Epic\UnrealBuildAccelerator\cas\casdb (v32) in <1ms (contained 0 entries estimated to 0b)
+UbaServer - Listening on 0.0.0.0:1345
+Skipping C:\Program Files\Epic Games\UE_5.8\Engine\Intermediate\Build\BuildRules\UE5Rules.dll: File is installed
+Skipping C:\Program Files\Epic Games\UE_5.8\Engine\Intermediate\Build\BuildRules\UE5ProgramRules.dll: File is installed
+Available x64 toolchains (1):
+ * C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231
+    (Family=14.51.36231, FamilyRank=2, Version=14.51.36248, HostArchitecture=x64, ReleaseChannel=Latest, Architecture=x64)
+Visual Studio compiler version 14.51.36248 is newer than latest preferred version 14.50.35717. Please use caution as this compiler has not been heavily tested
+Building UnrealEditor - O_MockEditor - Win64 - Development
+Generated code is up to date.
+Checking for live coding mutex: Global\LiveCoding_C++Program Files+Epic Games+UE_5.8+Engine+Binaries+Win64+UnrealEditor.exe
+Building O_MockEditor...
+===== Toolchain Information =====
+Using ISPC compiler (C:\Program Files\Epic Games\UE_5.8\Engine\Source\ThirdParty\Intel\ISPC\bin\Windows\ispc.exe)
+  Intel(r) Implicit SPMD Program Compiler (Intel(r) ISPC), 1.24.0 (build commit  @ 20250404, LLVM 18.1.2) 
+Using Visual Studio 14.51.36248 toolchain (C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231) and Windows 10.0.26100.0 SDK (C:\Program Files (x86)\Windows Kits\10).
+Warning: Visual Studio compiler 14.51.36248 is not a preferred version
+[Adaptive Build] Excluded from O_Mock unity file: GomokuBoardActor.cpp, GomokuBoardTemplateDataAsset.cpp, GomokuGameMode.cpp, GomokuGameState.cpp, GomokuHUD.cpp, GomokuItemLibrary.cpp, GomokuPlayerController.cpp, GomokuPlayerState.cpp, GomokuRuleEngine.cpp, GomokuStage3TimeSystem.spec.cpp, GomokuStage4Behavior.spec.cpp, GomokuStage5BoardTemplate.spec.cpp, GomokuStage6ItemFramework.spec.cpp, GomokuStage7Items.spec.cpp
+=================================
+Using Unreal Build Accelerator local executor to run 5 action(s)
+  CPU 12 physical cores, 24 logical cores
+  Memory 31.15 GB physical, 55.88 GB/63.14 GB committed
+  UBA Storage capacity 40 GB
+  UBA RootDir C:\ProgramData\Epic\UnrealBuildAccelerator
+Cache bucket 2891835537 used. Action: Compile [x64] GomokuStage4Behavior.spec.cpp ()
+Cache bucket 416513229 used. Action: Link [x64] UnrealEditor-O_Mock.dll ()
+All processes queued
+UbaSessionServer - Killed process GomokuStage7Items.spec.cpp (Compile [x64]) (253ms) - Low on memory (65.3gb/67.8gb). Kill threshold is 64.4gb
+[1/5] Compile [x64] GomokuStage4Behavior.spec.cpp
+[2/5] Compile [x64] GomokuStage7Items.spec.cpp
+[3/5] Link [x64] UnrealEditor-O_Mock.lib
+   C:/Users/sster/Documents/Git/O-Mock/Intermediate/Build/Win64/x64/UnrealEditor/Development/O_Mock/UnrealEditor-O_Mock.lib 라이브러리 및 C:/Users/sster/Documents/Git/O-Mock/Intermediate/Build/Win64/x64/UnrealEditor/Development/O_Mock/UnrealEditor-O_Mock.exp 개체를 생성하고 있습니다.
+[4/5] Link [x64] UnrealEditor-O_Mock.dll
+[5/5] WriteMetadata O_MockEditor.target [NoUba]
+
+Total time in Unreal Build Accelerator local executor: 4.60 seconds
+Output binary: C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
+UbaStorageServer - Database saved in <1ms (0 file entries, 0 cas entries. deleted 0 dropped cas files)
+WriteFileIfChanged() wrote 0 changed files of 1 requested writes.
+
+Timeline:
+[  0.000]  +0.208 Main
+   0.012          [  0.012]  +0.063 Apply XmlConfig
+   0.077          [  0.077]  +0.029 AddTelemetry
+   0.116          [  0.116]  +0.092 RegisterPlatforms
+[  0.231]  +0.027 ParseCommandLine
+[  0.370]  +0.102 LoadMakefile
+[  0.481]  +0.003 FindPlugins
+   0.481          [  0.000]  +0.024 EngineRulesPlugins
+   0.490             0.009          [  0.009]  +0.054 MakefileValid
+[  0.484]  +0.288 <unknown>
+[  0.773]  +0.002 CppDependencyCache
+[  0.785]  +0.135 O_MockEditor Win64 Development
+[  0.921]  +0.016 UHTWait
+   0.923          [  0.001]  +0.013 UHTManifest
+   0.936          [  0.015]  +0.012 UHTTimestamps
+[  0.953]  +0.000 CppDependencyCache
+[  0.954]  +0.077 Preparing ActionGraph
+   0.967          [  0.013]  +0.003 LinkActions
+   0.971             0.016          [  0.003]  +0.000 DetectActionGraphCycles
+   0.971          [  0.017]  +0.000 GatherPrerequisiteActions
+   0.972          [  0.018]  +0.000 CppDependencyCacheWait
+   0.973          [  0.018]  +0.046 GatherOutdatedActions
+   1.022          [  0.067]  +0.005 LinkActions
+   1.022             0.067          [  0.000]  +0.000 DetectActionGraphCycles
+   1.029          [  0.075]  +0.000 DeleteOutdatedProducedItems
+   1.029          [  0.075]  +0.000 SaveActionHistory
+   1.031          [  0.076]  +0.000 CreateDirectoriesForProducedItems
+[  1.041]  +0.078 GarbageCollect
+[  1.120]  +4.523 <unknown>
+[  5.643]  +0.000 Deploying targets
+[  5.644]  +0.000 DisconnectCache
+[  5.647]  +0.009 SaveCasTable
+[  5.659]  +0.044 Saving caches
+[  5.704]  +0.002 TelemetryService.FlushEvents
+[  5.707]
+
+Result: Succeeded
+Total execution time: 5.71 seconds

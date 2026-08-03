@@ -1,0 +1,22 @@
+PART 2/4 — Continue same session. MCP edit `Source/O_Mock/Tests/GomokuStage4Behavior.spec.cpp` only.
+
+## Fix includes first
+Replace flat includes with:
+#include "../GomokuRuleEngine.h"
+#include "../GomokuGameState.h"
+#include "../GomokuTypes.h"
+Also keep `#include "Engine/World.h"` (needed later).
+
+## Insert BEFORE `#endif` these three IMPLEMENT_SIMPLE_AUTOMATION_TEST tests:
+
+### Gomoku.Stage4.AbandonExcludesPlayer
+MakeEngine(4); AbandonPlayer(2); active must not Contain index 1; SetCurrentPlayerIndex(0); Advance → 2; Advance → 3; Advance → 0.
+
+### Gomoku.Stage4.SkipNextPlayer
+COMMENT REQUIRED: PlayerId=index+1, so SetPlayerSkipNextTurn(2) skips index 1.
+Start index 0; AdvanceTurn once → expect index 2; Advance → 3.
+
+### Gomoku.Stage4.ReverseTurnOrder
+MakeEngine(4); SetCurrentPlayerIndex(1); ReverseTurnDirection; TurnDirection==-1; Advance→0; Advance→3.
+
+Use read_file_range then bounded replace_in_file (insert before #endif). Stop after these three.

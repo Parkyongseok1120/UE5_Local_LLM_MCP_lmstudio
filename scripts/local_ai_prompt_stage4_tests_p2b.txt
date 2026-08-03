@@ -1,0 +1,12 @@
+PART 2b FIX — MCP only on `Source/O_Mock/Tests/GomokuStage4Behavior.spec.cpp`.
+
+## Must fix (compile/logic)
+1) Includes → use `../GomokuRuleEngine.h`, `../GomokuGameState.h`, `../GomokuTypes.h` plus Engine/World.h
+2) There is NO `GetActivePlayers()`. Use `GetActivePlayerIndices()` and assert it does NOT Contain **index 1** (not id 2).
+3) `SetPlayerSkipNextTurn(2, true)` — second bool required.
+4) Reverse test MISSING — insert before `#endif`:
+   Gomoku.Stage4.ReverseTurnOrder: SetCurrentPlayerIndex(1); ReverseTurnDirection; TestEqual TurnDirection -1; Advance→ expect index 0; Advance→ expect 3.
+
+Abandon/Skip expectations [0,2,3] and [0,2] with record-then-Advance are OK if APIs fixed.
+
+read_file_range then replace_in_file. Stop when compile-ready for these tests.

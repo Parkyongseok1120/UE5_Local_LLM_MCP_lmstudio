@@ -1,0 +1,14 @@
+방금 Stage 구현의 Unreal 빌드가 실패했다. 이 오류는 게임 코드 문제로 분류된다.
+네가 MCP를 통해 관련 파일을 다시 읽고 직접 수정해야 한다. 설명만 하고 끝내지 마라.
+
+빌드 오류:
+C:\Users\sster\Documents\Git\O-Mock\Source\O_Mock\GomokuPlayerState.h(17): Error: Member variable declaration: 'PlayerId' cannot be defined in 'AGomokuPlayerState' as it is already defined in scope 'APlayerState' (shadowing is not allowed)
+
+요구사항:
+1) get_active_project으로 활성 프로젝트가 O-Mock인지 확인
+2) read_file로 Source/O_Mock/GomokuPlayerState.h 전체를 다시 읽는다
+3) APlayerState에 이미 PlayerId가 있으므로 AGomokuPlayerState의 중복 UPROPERTY PlayerId를 제거하거나, 프로젝트에서 쓰는 의미의 식별자면 다른 이름(예: GomokuPlayerId)으로 바꾸고 참조 호출부도 함께 수정한다
+4) search_files로 PlayerState.PlayerId / GomokuPlayerState::PlayerId 참조를 찾아 선언·정의·사용을 일치시킨다
+5) 실제 replace_in_file 또는 write_file을 수행한다 (코드 블록만 출력 금지)
+6) Stage 4 턴/라운드 로직을 깨지 말 것. Stage 5+ 기능을 새로 넣지 말 것
+7) 수정 후 변경 파일과 이유를 짧게 보고한다

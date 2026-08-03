@@ -1,0 +1,27 @@
+STAGE 5 — MCP only. Do NOT edit Stage 4 tests except if build breaks them (prefer leave alone).
+
+## Supervisor review gaps (fix these)
+1) BeginPlay calls ApplyBoardTemplate BEFORE BoardActor spawn, so FitCamera inside ApplyBoardTemplate is often a no-op. After spawning BoardActor, BeginPlay already ApplyBoardSize (which fits camera) — OK for first load. Ensure ApplyBoardTemplate when BoardActor already exists still ApplyBoardSize+FitCamera (already present).
+2) Need Automation proof for Stage 5 (not static signatures).
+
+## Create file via MCP write_file
+`Source/O_Mock/Tests/GomokuStage5BoardTemplate.spec.cpp`
+
+Use IMPLEMENT_SIMPLE_AUTOMATION_TEST + EditorContext|EngineFilter like Stage4 file. Includes: Misc/AutomationTest.h, Engine/World.h, ../ or bare module headers (Build.cs has PrivateIncludePaths ModuleDirectory).
+
+### Required tests (exact names)
+1) Gomoku.Stage5.PresetSizes1517192123
+   - For each size in {15,17,19,21,23}: CreatePresetForSize(Size); assert Width/Height==Size; ToBoardTemplateData matches; build FGomokuMatchConfig with those sizes; InitializeMatch; GetMatchConfig BoardSizeX/Y == Size; IsValidEmpty(0,0) and (Size-1,Size-1) true; IsValidEmpty(Size,0) false.
+
+2) Gomoku.Stage5.BlockedCellsRejectPlacement
+   - MakeEngine-like: Config 15x15 MaxPlayers=2, BlockedCells={(7,7)}; InitializeMatch; TestFalse IsValidEmpty(7,7); TestFalse TryPlaceStone(1,7,7); TestTrue IsValidEmpty(0,0); TestTrue TryPlaceStone(1,0,0).
+
+3) Gomoku.Stage5.ApplyBoardTemplateUpdatesConfig
+   - NewObject UGomokuBoardTemplateDataAsset OR CreatePresetForSize(21); set one BlockedCells={(1,1)};
+   - Prefer testing RuleEngine path without full GameMode if authority issues: copy Width/Height/Blocked into Config and InitializeMatch — OR spawn GameMode if feasible.
+   - Assert after init: BoardSize 21, blocked (1,1) not empty-valid, empty corner valid.
+
+4) Gomoku.Stage5.WinCheckWorksOnLargerBoard
+   - InitializeMatch 21x21 MaxPlayers=2 WinLength=5; place 5 in a row for player 1 on open cells (not blocked); CheckWinAt returns win for that player. Read CheckWinAt / TryPlaceStone APIs first.
+
+Read headers with MCP. Prefer small patches. Stop when all 4 Automation names exist and compile-ready.

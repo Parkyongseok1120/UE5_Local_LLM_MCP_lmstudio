@@ -49,6 +49,7 @@ LMSTUDIO_CONTEXT_POLICY_ENV = {
     "MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS",
     "MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS",
 }
+BOOTSTRAP_LOCK_TOKEN_ENV = "EVIDENCE_FIRST_BOOTSTRAP_LOCK_TOKEN"
 CONTEXT_COMPACTOR_PLUGIN_ID = "codex/unreal-context-compactor"
 CONTEXT_COMPACTOR_PLUGIN_NAME = "unreal-context-compactor"
 
@@ -1038,15 +1039,12 @@ def _display_command(command: list[str]) -> str:
     return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
 
 
-def _native_subprocess_command(command: list[str]) -> list[str]:
+def _native_subprocess_command(command: list[str]) -> list[str] | str:
     if os.name == "nt" and Path(command[0]).suffix.lower() in {".cmd", ".bat"}:
-        return [
-            os.environ.get("COMSPEC", "cmd.exe"),
-            "/d",
-            "/s",
-            "/c",
-            subprocess.list2cmdline(command),
-        ]
+        # Do not wrap through cmd.exe argv list: Python's Windows CreateProcess
+        # requotes the /C payload and breaks "Program Files" .cmd paths.
+        # shell=True with a single command line preserves npm.cmd resolution.
+        return subprocess.list2cmdline(command)
     return command
 
 
@@ -1064,12 +1062,15 @@ def _run(
     )
     if dry_run:
         return
+    native = _native_subprocess_command(command)
     try:
         subprocess.run(
-            _native_subprocess_command(command),
+            native,
             cwd=str(cwd),
             check=True,
             timeout=timeout,
+            shell=isinstance(native, str),
+            stdout=sys.stderr,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
@@ -1111,6 +1112,8 @@ def _agent_debug_log(
     data: dict[str, Any],
 ) -> None:
     # #region agent log
+    if os.environ.get("LMS_CONTEXT_COMPACTOR_DEBUG_INGEST") != "1":
+        return
     try:
         payload = {
             "sessionId": "49b048",
@@ -1121,7 +1124,8 @@ def _agent_debug_log(
             "data": data,
             "timestamp": int(time.time() * 1000),
         }
-        with (ROOT / "debug-49b048.log").open("a", encoding="utf-8") as handle:
+        log_path = Path(os.environ.get("LMS_CONTEXT_COMPACTOR_DEBUG_LOG") or (ROOT / "debug-49b048.log"))
+        with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
     except OSError:
         pass
@@ -1153,6 +1157,9 @@ def _resolve_lms_cli(lmstudio_home: Path) -> str | None:
                 home / "bin" / "lms.exe",
                 home / "bin" / "lms.cmd",
                 home / "bin" / "lms",
+                Path(os.environ.get("LOCALAPPDATA", "")) / "LM Studio" / "lms.exe",
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "LM Studio" / "lms.exe",
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "LM Studio" / "resources" / "app" / "lms.exe",
             ]
         )
     else:
@@ -1166,8 +1173,10 @@ def _resolve_lms_cli(lmstudio_home: Path) -> str | None:
             candidates.extend(
                 [
                     app / "Contents" / "Resources" / "app" / "lms",
+                    app / "Contents" / "Resources" / "app" / "bin" / "lms",
                     app / "Contents" / "MacOS" / "lms",
                     app / "Contents" / "Resources" / "lms",
+                    app / "Contents" / "Resources" / "bin" / "lms",
                 ]
             )
     if sys.platform.startswith("linux"):

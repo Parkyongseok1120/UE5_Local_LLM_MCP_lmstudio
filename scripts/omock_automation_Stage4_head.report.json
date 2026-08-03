@@ -1,0 +1,135 @@
+{
+  "filter": "Gomoku.Stage4.",
+  "status": 0,
+  "error": null,
+  "found": 11,
+  "pass": 11,
+  "fail": 0,
+  "expect": 11,
+  "list": [
+    {
+      "name": "Gomoku.Stage4.AbandonExcludesPlayer",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.Board21x21FourPlayers",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.InactiveExcludedFromRound",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.ReverseTurnOrder",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.RoundIncrementsOnlyAfterAllActive",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.RoundNoDuplicateCompletion",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.SkipNextPlayer",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.TimeSystem3And4Players",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.TurnCycle2Players",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.TurnCycle3Players",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage4.TurnCycle4Players",
+      "result": "Success"
+    }
+  ],
+  "sampleLines": [
+    "[2026.08.03-15.57.06:031][  0]LogModuleManager: InternalLoadLibrary: 'AutomationController' ('C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-AutomationController.dll')",
+    "[2026.08.03-15.57.07:786][  0]Cmd: Automation RunTests Gomoku.Stage4.; Quit",
+    "[2026.08.03-15.57.07:787][  0]Automation: RunTests='Gomoku.Stage4.' Queued.",
+    "[2026.08.03-15.57.13:099][597]LogAutomationController: Received FindWorkersResponseMessage from 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:099][597]LogAutomationController: Requesting test list from 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:170][598]LogAutomationController: Received RequestTestsReplyCompleteMessage from 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:173][598]LogAutomationController: 6966 tests available on 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: Found 11 automation tests based on 'Gomoku.Stage4.'",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.AbandonExcludesPlayer",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.Board21x21FourPlayers",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.InactiveExcludedFromRound",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.ReverseTurnOrder",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.RoundIncrementsOnlyAfterAllActive",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.RoundNoDuplicateCompletion",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.SkipNextPlayer",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.TimeSystem3And4Players",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.TurnCycle2Players",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.TurnCycle3Players",
+    "[2026.08.03-15.57.13:200][598]LogAutomationCommandLine: Display: \tGomoku.Stage4.TurnCycle4Players",
+    "[2026.08.03-15.57.13:201][598]LogAutomationController: Sending StopTests to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:203][598]LogAutomationController: Sending StartTestSession to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:203][598]LogAutomationController: Display: Clearing ../../../../../../Users/sster/Documents/Git/O-Mock/Saved/Automation/Logs/ and ../../../../../../Users/sster/Documents/Git/O-Mock/Saved/Automation/Tmp/",
+    "[2026.08.03-15.57.13:204][598]LogAutomationController: Sending RunTest AbandonExcludesPlayer to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:204][598]LogAutomationController: Display: Test Started. Name={AbandonExcludesPlayer} Path={Gomoku.Stage4.AbandonExcludesPlayer}",
+    "[2026.08.03-15.57.13:222][601]LogAutomationController: Display: Test Completed. Result={Success} Name={AbandonExcludesPlayer} Path={Gomoku.Stage4.AbandonExcludesPlayer}",
+    "[2026.08.03-15.57.13:222][601]LogAutomationController: BeginEvents: Gomoku.Stage4.AbandonExcludesPlayer",
+    "[2026.08.03-15.57.13:222][601]LogAutomationController: EndEvents: Gomoku.Stage4.AbandonExcludesPlayer",
+    "[2026.08.03-15.57.13:222][601]LogAutomationController: Sending RunTest Board21x21FourPlayers to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:222][602]LogAutomationController: Display: Test Started. Name={Board21x21FourPlayers} Path={Gomoku.Stage4.Board21x21FourPlayers}",
+    "[2026.08.03-15.57.13:239][603]LogAutomationController: Display: Test Completed. Result={Success} Name={Board21x21FourPlayers} Path={Gomoku.Stage4.Board21x21FourPlayers}",
+    "[2026.08.03-15.57.13:239][603]LogAutomationController: BeginEvents: Gomoku.Stage4.Board21x21FourPlayers",
+    "[2026.08.03-15.57.13:239][603]LogAutomationController: EndEvents: Gomoku.Stage4.Board21x21FourPlayers",
+    "[2026.08.03-15.57.13:239][603]LogAutomationController: Sending RunTest InactiveExcludedFromRound to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:239][604]LogAutomationController: Display: Test Started. Name={InactiveExcludedFromRound} Path={Gomoku.Stage4.InactiveExcludedFromRound}",
+    "[2026.08.03-15.57.13:258][605]LogAutomationController: Display: Test Completed. Result={Success} Name={InactiveExcludedFromRound} Path={Gomoku.Stage4.InactiveExcludedFromRound}",
+    "[2026.08.03-15.57.13:258][605]LogAutomationController: BeginEvents: Gomoku.Stage4.InactiveExcludedFromRound",
+    "[2026.08.03-15.57.13:258][605]LogAutomationController: EndEvents: Gomoku.Stage4.InactiveExcludedFromRound",
+    "[2026.08.03-15.57.13:258][605]LogAutomationController: Sending RunTest ReverseTurnOrder to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:259][606]LogAutomationController: Display: Test Started. Name={ReverseTurnOrder} Path={Gomoku.Stage4.ReverseTurnOrder}",
+    "[2026.08.03-15.57.13:272][607]LogAutomationController: Display: Test Completed. Result={Success} Name={ReverseTurnOrder} Path={Gomoku.Stage4.ReverseTurnOrder}",
+    "[2026.08.03-15.57.13:272][607]LogAutomationController: BeginEvents: Gomoku.Stage4.ReverseTurnOrder",
+    "[2026.08.03-15.57.13:272][607]LogAutomationController: EndEvents: Gomoku.Stage4.ReverseTurnOrder",
+    "[2026.08.03-15.57.13:272][607]LogAutomationController: Sending RunTest RoundIncrementsOnlyAfterAllActive to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:272][608]LogAutomationController: Display: Test Started. Name={RoundIncrementsOnlyAfterAllActive} Path={Gomoku.Stage4.RoundIncrementsOnlyAfterAllActive}",
+    "[2026.08.03-15.57.13:299][610]LogAutomationController: Display: Test Completed. Result={Success} Name={RoundIncrementsOnlyAfterAllActive} Path={Gomoku.Stage4.RoundIncrementsOnlyAfterAllActive}",
+    "[2026.08.03-15.57.13:299][610]LogAutomationController: BeginEvents: Gomoku.Stage4.RoundIncrementsOnlyAfterAllActive",
+    "[2026.08.03-15.57.13:299][610]LogAutomationController: EndEvents: Gomoku.Stage4.RoundIncrementsOnlyAfterAllActive",
+    "[2026.08.03-15.57.13:299][610]LogAutomationController: Sending RunTest RoundNoDuplicateCompletion to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:299][610]LogAutomationController: Display: Test Started. Name={RoundNoDuplicateCompletion} Path={Gomoku.Stage4.RoundNoDuplicateCompletion}",
+    "[2026.08.03-15.57.13:313][612]LogAutomationController: Display: Test Completed. Result={Success} Name={RoundNoDuplicateCompletion} Path={Gomoku.Stage4.RoundNoDuplicateCompletion}",
+    "[2026.08.03-15.57.13:313][612]LogAutomationController: BeginEvents: Gomoku.Stage4.RoundNoDuplicateCompletion",
+    "[2026.08.03-15.57.13:313][612]LogAutomationController: EndEvents: Gomoku.Stage4.RoundNoDuplicateCompletion",
+    "[2026.08.03-15.57.13:314][612]LogAutomationController: Sending RunTest SkipNextPlayer to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:314][613]LogAutomationController: Display: Test Started. Name={SkipNextPlayer} Path={Gomoku.Stage4.SkipNextPlayer}",
+    "[2026.08.03-15.57.13:338][615]LogAutomationController: Display: Test Completed. Result={Success} Name={SkipNextPlayer} Path={Gomoku.Stage4.SkipNextPlayer}",
+    "[2026.08.03-15.57.13:338][615]LogAutomationController: BeginEvents: Gomoku.Stage4.SkipNextPlayer",
+    "[2026.08.03-15.57.13:338][615]LogAutomationController: EndEvents: Gomoku.Stage4.SkipNextPlayer",
+    "[2026.08.03-15.57.13:339][615]LogAutomationController: Sending RunTest TimeSystem3And4Players to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:339][616]LogAutomationController: Display: Test Started. Name={TimeSystem3And4Players} Path={Gomoku.Stage4.TimeSystem3And4Players}",
+    "[2026.08.03-15.57.13:366][618]LogAutomationController: Display: Test Completed. Result={Success} Name={TimeSystem3And4Players} Path={Gomoku.Stage4.TimeSystem3And4Players}",
+    "[2026.08.03-15.57.13:366][618]LogAutomationController: BeginEvents: Gomoku.Stage4.TimeSystem3And4Players",
+    "[2026.08.03-15.57.13:366][618]LogAutomationController: EndEvents: Gomoku.Stage4.TimeSystem3And4Players",
+    "[2026.08.03-15.57.13:367][618]LogAutomationController: Sending RunTest TurnCycle2Players to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:367][619]LogAutomationController: Display: Test Started. Name={TurnCycle2Players} Path={Gomoku.Stage4.TurnCycle2Players}",
+    "[2026.08.03-15.57.13:380][620]LogAutomationController: Display: Test Completed. Result={Success} Name={TurnCycle2Players} Path={Gomoku.Stage4.TurnCycle2Players}",
+    "[2026.08.03-15.57.13:380][620]LogAutomationController: BeginEvents: Gomoku.Stage4.TurnCycle2Players",
+    "[2026.08.03-15.57.13:380][620]LogAutomationController: EndEvents: Gomoku.Stage4.TurnCycle2Players",
+    "[2026.08.03-15.57.13:381][620]LogAutomationController: Sending RunTest TurnCycle3Players to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:381][621]LogAutomationController: Display: Test Started. Name={TurnCycle3Players} Path={Gomoku.Stage4.TurnCycle3Players}",
+    "[2026.08.03-15.57.13:405][623]LogAutomationController: Display: Test Completed. Result={Success} Name={TurnCycle3Players} Path={Gomoku.Stage4.TurnCycle3Players}",
+    "[2026.08.03-15.57.13:405][623]LogAutomationController: BeginEvents: Gomoku.Stage4.TurnCycle3Players",
+    "[2026.08.03-15.57.13:405][623]LogAutomationController: EndEvents: Gomoku.Stage4.TurnCycle3Players",
+    "[2026.08.03-15.57.13:406][623]LogAutomationController: Sending RunTest TurnCycle4Players to 65FA2F4C4F1501E6C99B35888CD3483B",
+    "[2026.08.03-15.57.13:406][623]LogAutomationController: Display: Test Started. Name={TurnCycle4Players} Path={Gomoku.Stage4.TurnCycle4Players}",
+    "[2026.08.03-15.57.13:430][626]LogAutomationController: Display: Test Completed. Result={Success} Name={TurnCycle4Players} Path={Gomoku.Stage4.TurnCycle4Players}",
+    "[2026.08.03-15.57.13:430][626]LogAutomationController: BeginEvents: Gomoku.Stage4.TurnCycle4Players",
+    "[2026.08.03-15.57.13:430][626]LogAutomationController: EndEvents: Gomoku.Stage4.TurnCycle4Players",
+    "[2026.08.03-15.57.13:431][626]LogAutomationController: Sending StopTestSession to 65FA2F4C4F1501E6C99B35888CD3483B"
+  ]
+}

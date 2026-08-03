@@ -1,0 +1,65 @@
+{
+  "filter": "Gomoku.Stage5.",
+  "status": 0,
+  "error": null,
+  "found": 4,
+  "pass": 4,
+  "fail": 0,
+  "expect": 4,
+  "list": [
+    {
+      "name": "Gomoku.Stage5.ApplyBoardTemplateUpdatesConfig",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage5.BlockedCellsRejectPlacement",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage5.PresetSizes1517192123",
+      "result": "Success"
+    },
+    {
+      "name": "Gomoku.Stage5.WinCheckWorksOnLargerBoard",
+      "result": "Success"
+    }
+  ],
+  "sampleLines": [
+    "[2026.08.03-14.37.17:695][  0]LogModuleManager: InternalLoadLibrary: 'AutomationController' ('C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-AutomationController.dll')",
+    "[2026.08.03-14.37.19:497][  0]Cmd: Automation RunTests Gomoku.Stage5.; Quit",
+    "[2026.08.03-14.37.19:498][  0]Automation: RunTests='Gomoku.Stage5.' Queued.",
+    "[2026.08.03-14.37.24:807][596]LogAutomationController: Received FindWorkersResponseMessage from 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:807][596]LogAutomationController: Requesting test list from 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:879][597]LogAutomationController: Received RequestTestsReplyCompleteMessage from 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:882][597]LogAutomationController: 6956 tests available on 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:909][597]LogAutomationCommandLine: Display: Found 4 automation tests based on 'Gomoku.Stage5.'",
+    "[2026.08.03-14.37.24:909][597]LogAutomationCommandLine: Display: \tGomoku.Stage5.ApplyBoardTemplateUpdatesConfig",
+    "[2026.08.03-14.37.24:909][597]LogAutomationCommandLine: Display: \tGomoku.Stage5.BlockedCellsRejectPlacement",
+    "[2026.08.03-14.37.24:909][597]LogAutomationCommandLine: Display: \tGomoku.Stage5.PresetSizes1517192123",
+    "[2026.08.03-14.37.24:909][597]LogAutomationCommandLine: Display: \tGomoku.Stage5.WinCheckWorksOnLargerBoard",
+    "[2026.08.03-14.37.24:909][597]LogAutomationController: Sending StopTests to 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:911][597]LogAutomationController: Sending StartTestSession to 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:911][597]LogAutomationController: Display: Clearing ../../../../../../Users/sster/Documents/Git/O-Mock/Saved/Automation/Logs/ and ../../../../../../Users/sster/Documents/Git/O-Mock/Saved/Automation/Tmp/",
+    "[2026.08.03-14.37.24:912][597]LogAutomationController: Sending RunTest ApplyBoardTemplateUpdatesConfig to 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:913][597]LogAutomationController: Display: Test Started. Name={ApplyBoardTemplateUpdatesConfig} Path={Gomoku.Stage5.ApplyBoardTemplateUpdatesConfig}",
+    "[2026.08.03-14.37.24:922][599]LogAutomationController: Display: Test Completed. Result={Success} Name={ApplyBoardTemplateUpdatesConfig} Path={Gomoku.Stage5.ApplyBoardTemplateUpdatesConfig}",
+    "[2026.08.03-14.37.24:922][599]LogAutomationController: BeginEvents: Gomoku.Stage5.ApplyBoardTemplateUpdatesConfig",
+    "[2026.08.03-14.37.24:922][599]LogAutomationController: EndEvents: Gomoku.Stage5.ApplyBoardTemplateUpdatesConfig",
+    "[2026.08.03-14.37.24:923][599]LogAutomationController: Sending RunTest BlockedCellsRejectPlacement to 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:923][599]LogAutomationController: Display: Test Started. Name={BlockedCellsRejectPlacement} Path={Gomoku.Stage5.BlockedCellsRejectPlacement}",
+    "[2026.08.03-14.37.24:947][602]LogAutomationController: Display: Test Completed. Result={Success} Name={BlockedCellsRejectPlacement} Path={Gomoku.Stage5.BlockedCellsRejectPlacement}",
+    "[2026.08.03-14.37.24:947][602]LogAutomationController: BeginEvents: Gomoku.Stage5.BlockedCellsRejectPlacement",
+    "[2026.08.03-14.37.24:947][602]LogAutomationController: EndEvents: Gomoku.Stage5.BlockedCellsRejectPlacement",
+    "[2026.08.03-14.37.24:947][602]LogAutomationController: Sending RunTest PresetSizes1517192123 to 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:947][603]LogAutomationController: Display: Test Started. Name={PresetSizes1517192123} Path={Gomoku.Stage5.PresetSizes1517192123}",
+    "[2026.08.03-14.37.24:972][605]LogAutomationController: Display: Test Completed. Result={Success} Name={PresetSizes1517192123} Path={Gomoku.Stage5.PresetSizes1517192123}",
+    "[2026.08.03-14.37.24:972][605]LogAutomationController: BeginEvents: Gomoku.Stage5.PresetSizes1517192123",
+    "[2026.08.03-14.37.24:972][605]LogAutomationController: EndEvents: Gomoku.Stage5.PresetSizes1517192123",
+    "[2026.08.03-14.37.24:972][605]LogAutomationController: Sending RunTest WinCheckWorksOnLargerBoard to 1E613C8D487038D21BB86B9D2B612193",
+    "[2026.08.03-14.37.24:972][605]LogAutomationController: Display: Test Started. Name={WinCheckWorksOnLargerBoard} Path={Gomoku.Stage5.WinCheckWorksOnLargerBoard}",
+    "[2026.08.03-14.37.24:996][608]LogAutomationController: Display: Test Completed. Result={Success} Name={WinCheckWorksOnLargerBoard} Path={Gomoku.Stage5.WinCheckWorksOnLargerBoard}",
+    "[2026.08.03-14.37.24:996][608]LogAutomationController: BeginEvents: Gomoku.Stage5.WinCheckWorksOnLargerBoard",
+    "[2026.08.03-14.37.24:996][608]LogAutomationController: EndEvents: Gomoku.Stage5.WinCheckWorksOnLargerBoard",
+    "[2026.08.03-14.37.24:997][608]LogAutomationController: Sending StopTestSession to 1E613C8D487038D21BB86B9D2B612193"
+  ]
+}
