@@ -18,6 +18,8 @@ FORBIDDEN = (
 )
 ALLOWLIST = (
     "test_no_project_hardcode.py",
+    # Deny-list definitions for OSS readiness; not product hardcoding.
+    "Verify-Oss-Ready.ps1",
 )
 
 

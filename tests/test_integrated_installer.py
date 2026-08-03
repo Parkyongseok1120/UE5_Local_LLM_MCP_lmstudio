@@ -371,6 +371,7 @@ def test_launcher_selection_ignores_saved_custom_engine(
     for engine in (stale_engine, detected_engine):
         (engine / "Engine" / "Source").mkdir(parents=True)
     (lmstudio / "config").mkdir(parents=True)
+    _plant_fake_lms(lmstudio)
     (lmstudio / "config" / "unreal-workspace.json").write_text(
         json.dumps({"defaultEngineRoot": str(stale_engine)}),
         encoding="utf-8",
@@ -382,6 +383,7 @@ def test_launcher_selection_ignores_saved_custom_engine(
             "standard",
             "--yes",
             "--skip-deps",
+            "--skip-runtime-bootstrap",
             "--codex-home",
             str(tmp_path / "codex"),
             "--lmstudio-home",
