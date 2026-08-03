@@ -1,83 +1,54 @@
-# 1.3.0 RC1 Release Notes
+# 1.3.0 RC1 — draft / not shippable
 
-[English](#english) | [한국어](#korean)
+**Status: NOT RELEASE-READY.** Product label is aligned to **1.3.0 RC1** (this draft was briefly staged as RC3 before earlier published RC1/RC2 labels were renamed to Beta4/Beta5). This candidate is **not** approved for public distribution until Windows physical install validation and the remaining blockers below are closed. `installer/manifest.json` → `portablePackage.releaseReady` remains **`false`**.
 
-## English
-
-**Status:** Release Candidate  
-**Product label:** `1.3.0 RC1`  
-**SemVer/tag form:** `1.3.0-rc.1` / `v1.3.0-rc.1`
-
-RC1 advances the 1.3 line from Beta3 with hardened code-sketch claim validation and a write-path mutation semantic guard so a validated sketch cannot be replaced by a known-bad implementation at apply time. It remains a release candidate: automated repository evidence is required before tagging, while a new 1.3 live-model benchmark and physical Ubuntu/macOS Unreal certification are still pending.
-
-### Highlights
-
-- Treat common untyped `TArray` / `TMap` / `TSet` operations (`Add`, `Num`, `Reset`, and related stable members) as safe container claims so concise sketches stop looping on receiver-type false positives.
-- Extend the shared Unreal API denylist for reverse-turn `FMath::Max(0, …)` / `Max(Next, 0)` clamps that break circular player traversal.
-- Run the same denylist on prospective `write_file` / `replace_in_file` / `apply_edit_bundle` content through `mutation_semantic_guard.py`, and fail closed when the guard script is missing.
-- Package and installer verification now require the mutation semantic guard artifacts, with a startup presence/Python probe on the Node agent MCP.
-- Harden sketch-gate recovery guidance, phase-tool routing, and build-recovery task authorization so `known_bad` / weak failures steer a corrected revalidation instead of a no-op retry.
-
-### Compatibility and component versions
+## Component versions (aligned)
 
 | Component | Version |
-|---|---|
-| Product | 1.3.0 RC1 |
-| Node agent MCP | 0.3.3 |
-| Context compactor | 0.3.5 / revision 8 |
-| Portable manifest | 2.1.2 |
+|-----------|---------|
+| Product | 1.3.0 RC1 (`1.3.0-rc.1`) |
+| Portable manifest | 2.1.3 |
+| Node agent MCP | 0.3.4 |
+| Context compactor | 0.3.5 / revision 18 |
 
-Python 3.10+, Node.js 20+, and LM Studio 0.4+ are required according to the selected installer profile. Unreal Engine 5.x support uses a user-built index; UE 5.8 remains the primary validated knowledge target.
+## Hygiene focus in this draft
 
-### Evidence boundary
+- Removed personal campaign dumps (local AI prompts/sessions, private project automation reports, marathon logs) from the product tree.
+- Portable package builder switched to an **allowlist** of ship directories/files with forbidden-inventory assertion; forbidden marker escapes and exact-name unit tests were hardened.
+- OSS scanner covers tracked `.log` / `.json` / `.txt` / `.md` and cross-platform absolute home paths.
+- Tracked text BOM/encoding gates cover `.js`, `.json`, `.md`, `.py`, `.ps1`, `.sh`, `.yml`, `.yaml`.
+- macOS support split: **Apple Silicon FULL install verified on physical hardware**; Intel Mac blocks LM Studio stack early; custom Codex/Cline-only remains allowed.
+- `install.sh` continues to require host **Python 3.10+** before bootstrap (documented as an explicit prerequisite).
 
-- The latest saved live-model measurements remain the v1.2.5 UE 5.8 holdouts: Qwen 3.6 27B community fine-tune at 36/36 Pass@K and 36/36 Pass@1, and the saved Qwen 3.5 9B runs.
-- Those results are historical baselines, not a measured 1.3.0 RC1 performance uplift.
-- RC1 sketch, mutation-guard, routing, installer, and release changes currently have automated test evidence. A fresh paired live-model benchmark is required before publishing model-quality improvement percentages.
-- Fixture-tested Ubuntu/macOS paths are not equivalent to live certification on physical Unreal installations.
+## Apple Silicon macOS FULL install (physical log)
 
-### Known RC limitations
+**Result: PASS** (`installer result ok: true`). Host: darwin-arm64.
 
-- Architecture graphs are conservative static evidence; virtual dispatch, reflection-driven behavior, runtime asset state, and dynamic Blueprint behavior may require Editor metadata or live inspection.
-- AGENT authority remains opt-in and must only be enabled for trusted projects.
-- Ollama frontend support, frontend-parity measurements, advanced runtime behavior oracles, and physical Ubuntu/macOS certification remain roadmap work.
+| Check | Result |
+|-------|--------|
+| darwin-arm64 runtime detection | PASS |
+| Python 3.12 / Node 20 / npm / PowerShell 7 bootstrap | PASS |
+| Context Compactor suite | PASS (45/45) |
+| LM Studio plugin install and activation | PASS |
+| UE 5.8 auto-discovery | PASS |
+| Full RAG indexing | PASS (88,829 chunks) |
+| Evidence-first MCP smoke | PASS |
+| Final installer result | `ok: true` |
 
-## Korean
+## Known limitations (separate from Apple Silicon install PASS)
 
-**상태:** Release Candidate  
-**제품 표기:** `1.3.0 RC1`  
-**SemVer/tag 표기:** `1.3.0-rc.1` / `v1.3.0-rc.1`
+| Item | Status |
+|------|--------|
+| Unreal Editor asset metadata headless export | **FAIL** |
+| LM Studio API server connectivity | **UNVERIFIED** — API server was not running during the test |
+| Windows physical install | **not yet verified** |
+| Installer signing / notarization | **not claimed** |
 
-RC1은 Beta3 이후 code-sketch claim 검증을 강화하고, 검증된 시안이 적용 시점에 known-bad 구현으로 바뀌지 않도록 write-path mutation semantic guard를 추가합니다. Release Candidate이며, 태그 전에 저장소 CI Green이 필요하고 1.3 전용 live-model benchmark와 실제 Ubuntu/macOS Unreal 인증은 아직 남아 있습니다.
+## Still blocking distribution
 
-### 주요 변경
+- Windows physical install certification incomplete.
+- Remaining limitation gates above (headless asset export; LM Studio API connectivity when the server is running).
+- No claim of measured live-model uplift for RC1.
+- Git history may still contain personal path / private campaign artifacts on older Develop tips; history rewrite is out of scope for this hygiene track.
 
-- 수신자 타입이 생략된 일반 `TArray` / `TMap` / `TSet` 연산(`Add`, `Num`, `Reset` 등)을 safe container claim으로 처리해 sketch가 오탐 심볼 조회로 루프하지 않게 했습니다.
-- 원형 턴 순회를 깨는 reverse-turn `FMath::Max(0, …)` / `Max(Next, 0)` clamp 패턴을 공유 denylist에 추가했습니다.
-- `write_file` / `replace_in_file` / `apply_edit_bundle`의 예상 결과에 동일 denylist를 `mutation_semantic_guard.py`로 적용하고, guard 스크립트가 없으면 fail-closed로 차단합니다.
-- 패키지/설치 검증이 mutation semantic guard 산출물을 필수로 요구하며, Node agent MCP 시작 시 존재·Python probe를 수행합니다.
-- sketch-gate recovery, phase-tool routing, build-recovery task authorization을 강화해 `known_bad`/weak 실패가 무변경 재시도 대신 수정된 재검증으로 이어지게 했습니다.
-
-### 호환성과 컴포넌트 버전
-
-| 컴포넌트 | 버전 |
-|---|---|
-| 제품 | 1.3.0 RC1 |
-| Node agent MCP | 0.3.3 |
-| Context compactor | 0.3.5 / revision 8 |
-| Portable manifest | 2.1.2 |
-
-선택한 설치 profile에 따라 Python 3.10+, Node.js 20+, LM Studio 0.4+가 필요합니다. Unreal Engine 5.x 지식은 사용자가 직접 구축한 index를 사용하며, UE 5.8이 주 검증 대상입니다.
-
-### 근거 범위
-
-- 최신 저장 live-model 측정치는 여전히 v1.2.5 UE 5.8 holdout입니다. Qwen 3.6 27B community fine-tune은 36/36 Pass@K와 36/36 Pass@1을 기록했고 Qwen 3.5 9B 측정도 저장되어 있습니다.
-- 이 결과는 과거 baseline이며 1.3.0 RC1의 성능 향상 측정치가 아닙니다.
-- RC1의 sketch, mutation-guard, routing, 설치기, 릴리스 변경에는 현재 자동 테스트 근거가 있습니다. 모델 품질 개선률을 공개하려면 새로운 paired live-model benchmark가 필요합니다.
-- fixture에서 검증한 Ubuntu/macOS 경로는 실제 Unreal 설치 환경의 live 인증과 동일하지 않습니다.
-
-### RC 제한사항
-
-- Architecture graph는 보수적인 static evidence입니다. virtual dispatch, reflection 기반 동작, runtime asset state, 동적 Blueprint 동작은 Editor metadata나 live inspection이 필요할 수 있습니다.
-- AGENT 권한은 계속 opt-in이며 신뢰하는 프로젝트에서만 활성화해야 합니다.
-- Ollama frontend, frontend parity 측정, advanced runtime behavior oracle, 실제 Ubuntu/macOS 인증은 roadmap에 남아 있습니다.
+Do not advertise RC1 as deployable until `installer/manifest.json` → `portablePackage.releaseReady` is set `true` after Windows physical verification and the remaining release gates pass.

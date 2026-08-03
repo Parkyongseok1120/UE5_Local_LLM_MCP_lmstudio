@@ -1,14 +1,15 @@
-# 1.3.0 RC2 Release Notes
+# 1.3.0 Beta5 Release Notes
 
 [English](#english) | [한국어](#korean)
 
 ## English
 
-**Status:** Release Candidate  
-**Product label:** `1.3.0 RC2`  
-**SemVer/tag form:** `1.3.0-rc.2` / `v1.3.0-rc.2`
+**Status:** Beta  
+**Product label:** `1.3.0 Beta5`  
+**SemVer/tag form:** `1.3.0-beta.5` / preferred `v1.3.0-beta.5`  
+**Historical publish alias:** GitHub previously shipped this milestone as `1.3.0 RC2` / `v1.3.0-rc.2` (tag kept; label renamed to Beta5).
 
-RC2 is a startup/install hotfix on top of RC1. It does not rewrite or move the existing `v1.3.0-rc.1` tag. The focus is keeping Stable Essential MCP catalogs visible on first launch and fixing macOS Python launcher detection.
+Beta5 is a startup/install hotfix on top of Beta4. It does not rewrite or move existing published tags. The focus is keeping Stable Essential MCP catalogs visible on first launch and fixing macOS Python launcher detection.
 
 ### Highlights
 
@@ -21,7 +22,7 @@ RC2 is a startup/install hotfix on top of RC1. It does not rewrite or move the e
 
 | Component | Version |
 |---|---|
-| Product | 1.3.0 RC2 |
+| Product | 1.3.0 Beta5 |
 | Node agent MCP | 0.3.4 |
 | Context compactor | 0.3.5 / revision 8 |
 | Portable manifest | 2.1.3 |
@@ -30,21 +31,22 @@ Python 3.10+, Node.js 20+, and LM Studio 0.4+ remain required according to the s
 
 ### Evidence boundary
 
-- Live-model scores remain the historical v1.2.5 baselines; RC2 does not claim a new paired model-quality uplift.
+- Live-model scores remain the historical v1.2.5 baselines; Beta5 does not claim a new paired model-quality uplift.
 - Catalog/authorization and installer launcher changes are covered by automated tests.
 - Physical Ubuntu/macOS Unreal certification remains pending.
 
-### Known RC limitations
+### Known Beta limitations
 
-- Same RC1 limitations remain: conservative architecture graphs, opt-in AGENT authority, and pending Ollama/frontend-parity/physical host certification.
+- Same Beta4 limitations remain: conservative architecture graphs, opt-in AGENT authority, and pending Ollama/frontend-parity/physical host certification.
 
 ## Korean
 
-**상태:** Release Candidate  
-**제품 표기:** `1.3.0 RC2`  
-**SemVer/tag 표기:** `1.3.0-rc.2` / `v1.3.0-rc.2`
+**상태:** Beta  
+**제품 표기:** `1.3.0 Beta5`  
+**SemVer/tag 표기:** `1.3.0-beta.5` / 권장 `v1.3.0-beta.5`  
+**과거 배포 별칭:** GitHub에는 이 마일스톤이 `1.3.0 RC2` / `v1.3.0-rc.2`로 게시된 적이 있습니다(태그는 유지, 표기는 Beta5로 변경).
 
-RC2는 RC1 위의 startup/install hotfix입니다. 기존 `v1.3.0-rc.1` 태그는 재작성하거나 옮기지 않습니다. 목표는 최초 실행에서도 Stable Essential MCP catalog가 보이고, macOS Python launcher 탐지를 고치는 것입니다.
+Beta5는 Beta4 위의 startup/install hotfix입니다. 기존 배포 태그는 재작성하거나 옮기지 않습니다. 목표는 최초 실행에서도 Stable Essential MCP catalog가 보이고, macOS Python launcher 탐지를 고치는 것입니다.
 
 ### 주요 변경
 
@@ -57,7 +59,7 @@ RC2는 RC1 위의 startup/install hotfix입니다. 기존 `v1.3.0-rc.1` 태그�
 
 | 컴포넌트 | 버전 |
 |---|---|
-| 제품 | 1.3.0 RC2 |
+| 제품 | 1.3.0 Beta5 |
 | Node agent MCP | 0.3.4 |
 | Context compactor | 0.3.5 / revision 8 |
 | Portable manifest | 2.1.3 |

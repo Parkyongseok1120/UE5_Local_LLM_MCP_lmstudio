@@ -4,7 +4,7 @@
 
 ## English
 
-The v1.3 line is now active at **1.3.0 RC1**. This document separates what Beta3 and RC1 already ship from the evidence and capability work still required for a stable 1.3.0.
+The v1.3 line is now active at **1.3.0 RC1** (draft / not shippable; this draft was briefly called RC3). Earlier published **RC1/RC2** labels were renamed to **Beta4/Beta5**. This document separates what Beta3–Beta5 already ship from the evidence and capability work still required for a stable 1.3.0.
 
 ## v1.2.5 Completed Baseline
 
@@ -35,7 +35,9 @@ These rails are repository-tested workflow capability. Physical Unreal PIE/Autom
 | Version | Target Window | Scope |
 |---|---|---|
 | 1.3.0 Beta3 | Prior prerelease | Evidence-first architecture/codegen foundation, integrated installer, orchestration, and release hardening. |
-| 1.3.0 RC1 | Current release candidate | Sketch claim hardening, shared denylist write-path semantic guard, sketch-gate recovery, and component version alignment. |
+| 1.3.0 Beta4 | Prior prerelease (was published as RC1) | Sketch claim hardening, shared denylist write-path semantic guard, sketch-gate recovery, and component version alignment. |
+| 1.3.0 Beta5 | Prior prerelease (was published as RC2) | Startup/install hotfix: Stable Essential MCP catalog visibility and macOS Python launcher detection. |
+| 1.3.0 RC1 | Current draft release candidate | Release hygiene, Apple Silicon physical FULL install evidence, portable package allowlist; `releaseReady` still false pending Windows physical install. |
 | v1.3.0 stable | After RC exit gates | Fresh separated live scorecards, beta/RC regression closure, and evidence-backed release documentation. Ollama and frontend-parity work must be reported as delivered or explicitly deferred. |
 | v1.3.1 | After v1.3.0 stabilization | Polish for additional frontends, installer cleanup, docs, and failure-memory improvements. |
 | v1.3.2 | Later 1.3.x | Certify the implemented Ubuntu/macOS native paths with platform-specific live Unreal install, indexing, build, and evaluation runs. |
@@ -158,7 +160,7 @@ v1.3.0 should report field-level scores, not one combined score. Compile-fix, se
 
 ## Korean
 
-v1.3 라인은 이제 **1.3.0 RC1**로 활성화되었습니다. 이 문서는 Beta3와 RC1에 이미 포함된 기능과 stable 1.3.0 전에 필요한 근거·capability 작업을 분리합니다.
+v1.3 라인은 이제 **1.3.0 RC1**(초안 / 배포 불가; 잠시 RC3로 불리던 초안)로 활성화되었습니다. 과거에 게시된 **RC1/RC2** 표기는 **Beta4/Beta5**로 이름을 바꿨습니다. 이 문서는 Beta3–Beta5에 이미 포함된 기능과 stable 1.3.0 전에 필요한 근거·capability 작업을 분리합니다.
 
 ## v1.2.5 완료 기준선
 
@@ -189,7 +191,9 @@ v1.3.0은 아래의 완료된 기준선에서 시작합니다. 이 항목들은 
 | 버전 | 목표 시점 | 범위 |
 |---|---|---|
 | 1.3.0 Beta3 | 이전 prerelease | Evidence-first architecture/codegen 기반, 통합 설치기, orchestration, release hardening. |
-| 1.3.0 RC1 | 현재 release candidate | Sketch claim hardening, shared denylist write-path semantic guard, sketch-gate recovery, component version alignment. |
+| 1.3.0 Beta4 | 이전 prerelease (과거 RC1 표기) | Sketch claim hardening, shared denylist write-path semantic guard, sketch-gate recovery, component version alignment. |
+| 1.3.0 Beta5 | 이전 prerelease (과거 RC2 표기) | Startup/install hotfix: Stable Essential MCP catalog 가시성, macOS Python launcher 탐지. |
+| 1.3.0 RC1 | 현재 draft release candidate | 릴리스 위생, Apple Silicon 실기 FULL 설치 근거, portable package allowlist; Windows 실기 전까지 `releaseReady` false. |
 | v1.3.0 stable | RC 종료 gate 통과 후 | 새로운 분리 live scorecard, Beta/RC regression 종료, 근거 기반 release 문서. Ollama와 frontend parity는 완료 또는 명시적 연기로 보고. |
 | v1.3.1 | v1.3.0 안정화 이후 | 추가 frontend polish, installer 정리, docs, failure-memory 개선. |
 | v1.3.2 | 이후 1.3.x | 구현된 Ubuntu/macOS native path를 실제 플랫폼의 Unreal 설치·인덱싱·빌드·평가 run으로 인증. |
