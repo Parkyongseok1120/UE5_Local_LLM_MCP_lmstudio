@@ -20,6 +20,6 @@ This repository uses **independent version numbers** per component. They are not
 
 For every prerelease or stable tag, record all component versions in the release notes. They may differ (for RC3: product 1.3.0 RC3, node 0.3.4, context compactor revision 18, portable manifest 2.1.3) as long as the release notes explain the relationship.
 
-The human-facing label is `1.3.0 RC3`. Use the SemVer-compatible identifier `1.3.0-rc.3` in tags or systems that do not accept spaces; the recommended Git tag is `v1.3.0-rc.3` **only after** `installer/manifest.json` → `portablePackage.releaseReady` is `true` and install validation is complete. Do not rewrite or move earlier RC tags. Until then, treat RC3 as a draft label, not a shippable release.
+The human-facing label is `1.3.0 RC3`. Use the SemVer-compatible identifier `1.3.0-rc.3` in tags or systems that do not accept spaces; the recommended Git tag is `v1.3.0-rc.3` **only after** `installer/manifest.json` → `portablePackage.releaseReady` is `true` (Windows physical install verified and remaining release gates closed). Do not rewrite or move earlier RC tags. Until then, treat RC3 as a draft label, not a shippable release. Apple Silicon physical FULL install status is recorded in [`docs/Release_Notes_1_3_0_RC3.md`](Release_Notes_1_3_0_RC3.md).
 
 See also [`docs/Version_Performance_History.md`](Version_Performance_History.md) for evaluation history tied to product versions.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import zipfile
@@ -16,6 +17,60 @@ def _legacy_stdout_env() -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "cp1252"
     return env
+
+
+def _plant_fake_lms(lmstudio_home: Path) -> None:
+    """Hermetic LMS stub so package smoke installs do not require a real LM Studio app."""
+    bindir = lmstudio_home / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    plugin_dir = (
+        lmstudio_home
+        / "extensions"
+        / "plugins"
+        / "codex"
+        / "unreal-context-compactor"
+    )
+    manifest = plugin_dir / "manifest.json"
+    if os.name == "nt":
+        script = bindir / "lms.cmd"
+        script.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    'if /I "%~1"=="--version" (echo lms 0.0.0-test & exit /b 0)',
+                    f'mkdir "{plugin_dir}" >nul 2>nul',
+                    (
+                        "echo {\"type\":\"plugin\",\"runner\":\"node\",\"owner\":\"codex\","
+                        "\"name\":\"unreal-context-compactor\",\"revision\":8} > "
+                        f'"{manifest}"'
+                    ),
+                    "exit /b 0",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        script = bindir / "lms"
+        script.write_text(
+            "\n".join(
+                [
+                    "#!/bin/sh",
+                    'if [ "$1" = "--version" ]; then echo "lms 0.0.0-test"; exit 0; fi',
+                    f'mkdir -p "{plugin_dir}"',
+                    (
+                        "printf '%s\\n' "
+                        "'{\"type\":\"plugin\",\"runner\":\"node\",\"owner\":\"codex\","
+                        "\"name\":\"unreal-context-compactor\",\"revision\":8}' "
+                        f'> "{manifest}"'
+                    ),
+                    "exit 0",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def _build(tmp_path: Path, name: str, *, legacy_stdout: bool = False) -> tuple[Path, Path]:
@@ -118,6 +173,9 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     assert any(name.endswith("/install.sh") for name in names)
     assert not any(name.endswith("/INSTALL.command") for name in names)
     assert not any("node_modules" in name or "/.git/" in name for name in names)
+    lmstudio_home = tmp_path / "isolated lmstudio"
+    lmstudio_home.mkdir(parents=True, exist_ok=True)
+    _plant_fake_lms(lmstudio_home)
     installed = subprocess.run(
         [
             sys.executable,
@@ -125,10 +183,12 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
             "--profile",
             "safe",
             "--yes",
+            "--skip-deps",
+            "--skip-runtime-bootstrap",
             "--codex-home",
             str(tmp_path / "isolated codex"),
             "--lmstudio-home",
-            str(tmp_path / "isolated lmstudio"),
+            str(lmstudio_home),
             "--state-home",
             str(tmp_path / "isolated state"),
         ],

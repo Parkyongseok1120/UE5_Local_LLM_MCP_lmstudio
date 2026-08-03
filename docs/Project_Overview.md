@@ -8,7 +8,7 @@ This page holds the detailed project status and usage notes that used to live in
 
 ## Current Status
 
-The current product label is **1.3.0 RC3** (prerelease; not shippable until install validation closes). It advances the 1.3 prerelease line with portable evidence-first analysis, deeper architecture/code-generation guardrails, cross-platform integrated installation, stability-focused task/context recovery, hardened sketch claim validation, and write-path mutation semantic guards.
+The current product label is **1.3.0 RC3** (prerelease; not shippable until Windows physical install validation and remaining release gates close; `releaseReady` remains false). Apple Silicon physical FULL install is recorded as PASS in [RC3 notes](Release_Notes_1_3_0_RC3.md). It advances the 1.3 prerelease line with portable evidence-first analysis, deeper architecture/code-generation guardrails, cross-platform integrated installation, stability-focused task/context recovery, hardened sketch claim validation, and write-path mutation semantic guards.
 
 The latest measured live-model results remain the v1.2.5 baseline. RC3 draft notes record release-hygiene work only; do not claim a measured model-quality uplift.
 

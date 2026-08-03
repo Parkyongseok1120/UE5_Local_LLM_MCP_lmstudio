@@ -474,10 +474,10 @@ def _assert_host_component_support(components: set[str]) -> None:
             "or run on Apple Silicon macOS / Windows / Ubuntu Linux."
         )
     if arch == "arm64" and needs_lmstudio:
-        # Soft notice only: Apple Silicon path exists but is not notarized/certified yet.
+        # Soft notice: physical FULL install is verified; signing/notarization is still not claimed.
         print(
-            "NOTE: Apple Silicon macOS LM Studio installation is available but not yet "
-            "live-certified (installer signing/notarization not claimed).",
+            "NOTE: Apple Silicon macOS LM Studio FULL install is verified on physical hardware; "
+            "installer signing/notarization is not claimed.",
             file=sys.stderr,
         )
 

@@ -293,11 +293,15 @@ def _write_launchers(staging: Path) -> None:
         "## Host support\n\n"
         "- **Windows**: supported for LM Studio and Unreal-integrated profiles.\n"
         "- **Ubuntu 22.04/24.04 with glibc**: supported; musl/Alpine is not.\n"
-        "- **Apple Silicon macOS**: installer available; LM Studio live certification is still pending "
-        "(unsigned/notarization not claimed).\n"
+        "- **Apple Silicon macOS**: physical FULL install verified on darwin-arm64 "
+        "(runtimes, context compactor, LM Studio plugin activation, UE 5.8 auto-detect, "
+        "full RAG, evidence-first MCP smoke). Signing/notarization is not claimed; "
+        "see docs/Release_Notes_1_3_0_RC3.md for known limitations.\n"
         "- **Intel macOS (x86_64)**: LM Studio is not supported by LM Studio upstream. "
         "LM Studio / Unreal / context-compactor installs abort early. "
-        "Custom Codex / portable-rule / Cline-only installs remain allowed.\n\n"
+        "Custom Codex / portable-rule / Cline-only installs remain allowed.\n"
+        "- **Windows**: fixture/CI install paths exist; physical Windows install is not "
+        "yet verified and keeps releaseReady false.\n\n"
         "## Launch\n\n"
         "- Windows: `INSTALL.bat`\n"
         "- Ubuntu Linux and Apple Silicon macOS: `./install.sh`\n\n"
@@ -327,8 +331,9 @@ def _manifest(staging: Path, *, include_index: bool) -> dict[str, object]:
         "portable": True,
         "supportedHosts": ["windows", "linux", "macos-apple-silicon"],
         "hostNotes": {
-            "macos-apple-silicon": "LM Studio installer path uncertified; Python 3.10+ required to bootstrap",
+            "macos-apple-silicon": "Physical FULL install PASS on darwin-arm64; signing/notarization not claimed; Python 3.10+ required to bootstrap",
             "macos-intel": "LM Studio configuration unsupported; custom/Cline-only allowed",
+            "windows": "Physical Windows install not yet verified; blocks releaseReady",
         },
         "defaultProfile": "safe",
         "indexIncluded": include_index,

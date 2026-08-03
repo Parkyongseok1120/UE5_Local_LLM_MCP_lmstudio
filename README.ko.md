@@ -3,7 +3,7 @@
 
 # UE5_Local_LLM_MCP_lmstudio 1.3.0 RC3
 
-> **프리릴리스 (아직 배포 불가):** 제품 메타데이터는 **1.3.0 RC3**로 맞춰 두었지만 설치 검증이 끝나지 않았고 `releaseReady`는 `false`입니다. portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows·Ubuntu Linux에서 통합 workflow로 설치할 수 있습니다. **Apple Silicon macOS**는 설치기 경로가 있으나 미인증이며, **Intel macOS**는 LM Studio 구성 설치가 초기에 차단됩니다(custom Codex/Cline-only는 허용). `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.0 RC3 초안 노트](docs/Release_Notes_1_3_0_RC3.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
+> **프리릴리스 (아직 배포 불가):** 제품 메타데이터는 **1.3.0 RC3**로 맞춰 두었고, Windows 실기 설치와 남은 릴리스 게이트가 끝날 때까지 `releaseReady`는 `false`입니다. portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows·Ubuntu Linux에서 통합 workflow로 설치할 수 있습니다. **Apple Silicon macOS** 실기 FULL 설치는 **PASS**입니다(RC3 노트 참고). **Intel macOS**는 LM Studio 구성 설치가 초기에 차단됩니다(custom Codex/Cline-only는 허용). `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.0 RC3 초안 노트](docs/Release_Notes_1_3_0_RC3.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
@@ -28,9 +28,9 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 > **프로젝트 현황 — 2026년 8월**
 >
-> **현재 제품 라벨은 1.3.0 RC3이며 아직 배포 가능하지 않습니다.** README·manifest·VERSIONING 버전은 맞춰 두었지만 실제 설치 인증이 끝나지 않아 배포는 차단된 상태입니다. 1.3 라인에는 특정 프로젝트에 종속되지 않는 evidence-first 분석 skill, LM Studio MCP 통합, 프로젝트 전역 symbol/dependency/call/data-flow 분석, fail-closed architecture/change-impact/code-generation contract, 의미 보존 refactor snapshot·proof gate, 장기 작업 checkpoint 복구, 순위 기반 runtime experiment와 patch 후보 비교, risk-tier orchestration, 단일 cross-platform installer, 강화된 release/live-test gate가 포함됩니다.
+> **현재 제품 라벨은 1.3.0 RC3이며 아직 배포 가능하지 않습니다.** README·manifest·VERSIONING 버전은 맞춰 두었습니다. Apple Silicon 실기 FULL 설치는 PASS로 기록했고, Windows 실기 설치는 아직 미검증이라 배포는 차단되며 `releaseReady`는 false입니다. 1.3 라인에는 특정 프로젝트에 종속되지 않는 evidence-first 분석 skill, LM Studio MCP 통합, 프로젝트 전역 symbol/dependency/call/data-flow 분석, fail-closed architecture/change-impact/code-generation contract, 의미 보존 refactor snapshot·proof gate, 장기 작업 checkpoint 복구, 순위 기반 runtime experiment와 patch 후보 비교, risk-tier orchestration, 단일 cross-platform installer, 강화된 release/live-test gate가 포함됩니다.
 >
-> RC3 초안 작업은 릴리스 위생과 설치 경로 정리(Apple Silicon vs Intel Mac)에 초점을 둡니다. 설치 검증이 끝나고 `releaseReady`가 true가 되기 전에는 RC3를 배포 가능으로 보지 마세요. 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline입니다.
+> RC3 초안 작업은 릴리스 위생과 설치 경로 정리(Apple Silicon 검증 완료 vs Intel Mac 차단, Windows 실기 대기)에 초점을 둡니다. Windows 검증과 남은 게이트가 끝나고 `releaseReady`가 true가 되기 전에는 RC3를 배포 가능으로 보지 마세요. 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline입니다.
 
 ---
 

@@ -3,7 +3,7 @@
 
 # UE5_Local_LLM_MCP_lmstudio 1.3.0 RC3
 
-> **Prerelease (not shippable yet):** product metadata is aligned to **1.3.0 RC3**, but install validation is incomplete and `releaseReady` remains `false`. The portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows and Ubuntu Linux; **Apple Silicon macOS** has an uncertified installer path; **Intel macOS** cannot install LM Studio-based components (custom Codex/Cline-only is allowed). Host **Python 3.10+** is required before `./install.sh` can start. See [1.3.0 RC3 draft notes](docs/Release_Notes_1_3_0_RC3.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **Prerelease (not shippable yet):** product metadata is aligned to **1.3.0 RC3**, and `releaseReady` remains `false` until Windows physical install and remaining release gates pass. The portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows and Ubuntu Linux; **Apple Silicon macOS** physical FULL install is **PASS** (see RC3 notes); **Intel macOS** cannot install LM Studio-based components (custom Codex/Cline-only is allowed). Host **Python 3.10+** is required before `./install.sh` can start. See [1.3.0 RC3 draft notes](docs/Release_Notes_1_3_0_RC3.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -28,9 +28,9 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — August 2026**
 >
-> **Current product label: 1.3.0 RC3 (not shippable).** Metadata is aligned across README, manifest, and VERSIONING, but physical install certification is unfinished and distribution remains blocked. The 1.3 line includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, meaning-preserving refactor snapshots and proof gates, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates.
+> **Current product label: 1.3.0 RC3 (not shippable).** Metadata is aligned across README, manifest, and VERSIONING. Apple Silicon physical FULL install is recorded as PASS; Windows physical install is still unverified, so distribution remains blocked and `releaseReady` stays false. The 1.3 line includes a project-independent evidence-first analysis skill, LM Studio MCP integration, project-wide symbol/dependency/call/data-flow analysis, fail-closed architecture/change-impact/code-generation contracts, meaning-preserving refactor snapshots and proof gates, long-task checkpoint recovery, ranked runtime experiments and patch-candidate comparison, risk-tiered orchestration, one cross-platform installer, and stronger release/live-test gates.
 >
-> RC3 draft work focuses on release hygiene and install-path clarity (Apple Silicon vs Intel Mac). Do not treat RC3 as deployable until install validation closes and `releaseReady` flips. The latest saved model results below remain the v1.2.5 UE 5.8 baseline.
+> RC3 draft work focuses on release hygiene and install-path clarity (Apple Silicon verified vs Intel Mac blocked; Windows physical pending). Do not treat RC3 as deployable until Windows validation and remaining gates close and `releaseReady` flips. The latest saved model results below remain the v1.2.5 UE 5.8 baseline.
 
 ## Documentation Hub
 

@@ -44,13 +44,64 @@ jobs:
       - name: SAFE dry-run performs no target writes
         run: >
           python install.py --profile safe --yes --dry-run
+          --skip-runtime-bootstrap
           --codex-home "${{ runner.temp }}/codex-dry"
           --lmstudio-home "${{ runner.temp }}/lmstudio-dry"
           --state-home "${{ runner.temp }}/state-dry"
 
+      - name: Plant hermetic LMS stub for SAFE install
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, stat
+          from pathlib import Path
+          home = Path(os.environ["RUNNER_TEMP"]) / "lmstudio"
+          bindir = home / "bin"
+          plugin = home / "extensions" / "plugins" / "codex" / "unreal-context-compactor"
+          bindir.mkdir(parents=True, exist_ok=True)
+          plugin.mkdir(parents=True, exist_ok=True)
+          manifest = plugin / "manifest.json"
+          payload = (
+              '{"type":"plugin","runner":"node","owner":"codex",'
+              '"name":"unreal-context-compactor","revision":8}'
+          )
+          if os.name == "nt":
+              (bindir / "lms.cmd").write_text(
+                  "\r\n".join(
+                      [
+                          "@echo off",
+                          'if /I "%~1"=="--version" (echo lms 0.0.0-ci & exit /b 0)',
+                          f'mkdir "{plugin}" >nul 2>nul',
+                          f'echo {payload} > "{manifest}"',
+                          "exit /b 0",
+                          "",
+                      ]
+                  ),
+                  encoding="utf-8",
+              )
+          else:
+              script = bindir / "lms"
+              script.write_text(
+                  "\n".join(
+                      [
+                          "#!/bin/sh",
+                          'if [ "$1" = "--version" ]; then echo "lms 0.0.0-ci"; exit 0; fi',
+                          f'mkdir -p "{plugin}"',
+                          f"printf '%s\\n' '{payload}' > \"{manifest}\"",
+                          "exit 0",
+                          "",
+                      ]
+                  ),
+                  encoding="utf-8",
+              )
+              script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+          print(f"planted lms under {bindir}")
+          PY
+
       - name: SAFE isolated install and MCP stdio smoke
         run: >
           python install.py --profile safe --yes
+          --skip-deps --skip-runtime-bootstrap
           --codex-home "${{ runner.temp }}/codex"
           --lmstudio-home "${{ runner.temp }}/lmstudio"
           --state-home "${{ runner.temp }}/state"

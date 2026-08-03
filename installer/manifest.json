@@ -34,8 +34,9 @@
     "indexIncludedByDefault": false,
     "supportedHosts": ["windows", "ubuntu-linux", "macos-apple-silicon"],
     "hostNotes": {
-      "macos-apple-silicon": "Installer available; LM Studio live certification and notarization pending",
-      "macos-intel": "LM Studio configuration unsupported; custom Codex/portable_rule/Cline-only allowed"
+      "macos-apple-silicon": "Physical FULL install PASS on darwin-arm64 (runtimes, context compactor 45/45, LM Studio plugin activate, UE 5.8 auto-detect, full RAG 88829 chunks, evidence-first MCP smoke, ok:true). Limitations: headless Unreal asset metadata export FAIL; LM Studio API connectivity UNVERIFIED when server was down; installer signing/notarization not claimed. releaseReady stays false until Windows physical install and remaining release gates pass.",
+      "macos-intel": "LM Studio configuration unsupported; custom Codex/portable_rule/Cline-only allowed",
+      "windows": "CI/fixture install paths exercised; physical Windows install not yet verified — blocks releaseReady"
     },
     "runtimeArchiveIntegrity": "pinned-sha256",
     "safeExtraction": true,
