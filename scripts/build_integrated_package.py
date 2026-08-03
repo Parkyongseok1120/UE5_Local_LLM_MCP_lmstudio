@@ -92,12 +92,16 @@ SCRIPTS_NAME_DENY = re.compile(
     r")$"
 )
 
+# Path-wide denylist (posix relative paths). Use single-backslash escapes in raw
+# strings so "\.out\.log" matches a literal ".out.log" suffix — not "\\." (backslash + any char).
 FORBIDDEN_PACKAGE_MARKERS = re.compile(
     r"(?ix)("
-    r"local_ai_prompt_"
+    r"(^|/)local_ai_"
+    r"|(^|/)omock_"
     r"|_session\.json$"
-    r"|\\.out\\.log$"
-    r"|omock_"
+    r"|\.out\.log$"
+    r"|\.runner\.log$"
+    r"|\.shell\.log$"
     r"|stage_campaign_marathon"
     r"|marathon17"
     r")"
@@ -131,8 +135,9 @@ FORBIDDEN_INVENTORY_RE = re.compile(
     r"(^|/)local_ai_"
     r"|(^|/)omock_"
     r"|_session\.json$"
-    r"|\\.out\\.log$"
-    r"|\\.runner\\.log$"
+    r"|\.out\.log$"
+    r"|\.runner\.log$"
+    r"|\.shell\.log$"
     r"|stage_campaign_marathon"
     r"|supervisor_local_ai"
     r"|lmstudio_e2e_driver"

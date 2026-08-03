@@ -1,4 +1,4 @@
-﻿# Material Graph Porting Workflow
+# Material Graph Porting Workflow
 
 ## Purpose
 

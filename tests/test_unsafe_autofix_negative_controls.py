@@ -26,6 +26,24 @@ def test_no_python_bom_in_scripts_and_tests() -> None:
     assert not issues, f"UTF-8 BOM detected: {issues}"
 
 
+def test_no_utf8_bom_in_tracked_text_extensions() -> None:
+    import subprocess
+
+    suffixes = {".js", ".json", ".md", ".py", ".ps1", ".sh", ".yml", ".yaml"}
+    tracked = subprocess.check_output(["git", "-C", str(ROOT), "ls-files", "-z"], text=False)
+    issues: list[str] = []
+    for item in tracked.split(b"\0"):
+        if not item:
+            continue
+        relative = Path(item.decode("utf-8"))
+        if relative.suffix.lower() not in suffixes:
+            continue
+        path = ROOT / relative
+        if path.is_file() and path.read_bytes().startswith(b"\xef\xbb\xbf"):
+            issues.append(str(relative))
+    assert not issues, f"UTF-8 BOM detected in tracked text files: {issues}"
+
+
 def test_editor_runtime_autofix_preserves_source(tmp_path: Path) -> None:
     cpp = tmp_path / "Source" / "Demo" / "Private" / "EditorBoundary.cpp"
     cpp.parent.mkdir(parents=True)

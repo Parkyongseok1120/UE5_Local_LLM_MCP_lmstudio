@@ -76,22 +76,28 @@ jobs:
       - name: Install dev dependencies
         run: python -m pip install -r requirements-dev.txt
 
-      - name: Fail on UTF-8 BOM in scripts/tests Python files
+      - name: Fail on UTF-8 BOM in tracked text files
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $suffixes = @('.js', '.json', '.md', '.py', '.ps1', '.sh', '.yml', '.yaml')
           $bomFiles = @()
-          Get-ChildItem scripts,tests -Filter *.py -Recurse | ForEach-Object {
-            $bytes = Get-Content -LiteralPath $_.FullName -AsByteStream -TotalCount 3
+          $tracked = git ls-files -z
+          if ($LASTEXITCODE -ne 0) { throw "git ls-files failed" }
+          foreach ($rel in ($tracked -split "`0" | Where-Object { $_ })) {
+            $ext = [System.IO.Path]::GetExtension($rel).ToLowerInvariant()
+            if ($suffixes -notcontains $ext) { continue }
+            if (-not (Test-Path -LiteralPath $rel -PathType Leaf)) { continue }
+            $bytes = Get-Content -LiteralPath $rel -AsByteStream -TotalCount 3
             if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-              $bomFiles += $_.FullName
+              $bomFiles += $rel
             }
           }
           if ($bomFiles.Count -gt 0) {
             Write-Error ("UTF-8 BOM detected:`n" + ($bomFiles -join "`n"))
           }
 
-      - name: Verify UTF-8 encoding (scripts/tests/docs)
+      - name: Verify UTF-8 encoding (tracked text extensions)
         run: python scripts/verify_encoding.py
 
       - name: Set up Node.js 20
