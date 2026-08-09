@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any
 
 from task_autonomy_supervisor import autonomy_blockers
@@ -109,6 +110,14 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
     completed_gates = dict(state.get("completedGates") or {})
     runtime_session = dict(state.get("runtimeDebugSession") or {})
     continuity = dict(state.get("continuity") or {})
+    checkpoint = dict(continuity.get("checkpoint") or {})
+    checkpoint_next_action = str(checkpoint.get("requiredNextAction") or "").strip()
+    if checkpoint_next_action and not re.fullmatch(
+        r"[a-z][a-z0-9_]*(?::[a-z0-9_-]+)?", checkpoint_next_action
+    ):
+        # Checkpoints are durable handoffs, but prose such as "apply patch"
+        # must not be presented as if it were an MCP tool name.
+        checkpoint_next_action = ""
     feature_intent = (
         state.get("featureIntent")
         if isinstance(state.get("featureIntent"), dict)
@@ -223,7 +232,16 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
                 supervisor.get("nextAction") or "replan_autonomous_strategy"
             )
         else:
-            next_action = pending_gates[0] if pending_gates else str(payload.get("resumeAction") or "")
+            # A recorded checkpoint is the server's durable handoff between
+            # tool calls. Prefer its concrete next tool over the generic
+            # cancel/resume affordance returned for a running task; otherwise
+            # compact models poll unreal_task_status forever after a mutation
+            # or validation result has already named the next step.
+            next_action = (
+                pending_gates[0]
+                if pending_gates
+                else checkpoint_next_action or str(payload.get("resumeAction") or "")
+            )
 
         continuity_ready = (
             lease.get("active") is True

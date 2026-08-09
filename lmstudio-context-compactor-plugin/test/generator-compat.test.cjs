@@ -111,6 +111,133 @@ test("default mode preserves multiple tool calls and fragment metadata", async (
   }
 });
 
+test("RAG search tool calls receive a stable compactor session id", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-rag-session-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let sawArchitectureGate = false;
+    let architectureMaxTokens = 0;
+    const model = {
+      identifier: "rag-session-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        architectureMaxTokens = opts.maxTokens;
+        sawArchitectureGate = _history.getMessagesArray().some(
+          (message) => message.getRole() === "system"
+            && message.getText().includes("[UNREAL_ARCHITECTURE_VALIDATION_GATE]"),
+        );
+        opts.onToolCallRequestStart(1, { toolCallId: "rag-1" });
+        opts.onToolCallRequestNameReceived(1, "unreal_rag_search");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"query":"lobby"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "rag-1",
+            type: "function",
+            name: "unreal_rag_search",
+            arguments: { query: "lobby" },
+          },
+        });
+        opts.onToolCallRequestStart(2, { toolCallId: "architecture-1" });
+        opts.onToolCallRequestNameReceived(2, "unreal_architecture_reasoning");
+        opts.onToolCallRequestArgumentFragmentGenerated(2, '{"proposal":{"decision":"lobby"}}');
+        opts.onToolCallRequestEnd(2, {
+          toolCallRequest: {
+            id: "architecture-1",
+            type: "function",
+            name: "unreal_architecture_reasoning",
+            arguments: { proposal: { decision: "lobby" } },
+          },
+        });
+        return { async result() { return {}; } };
+      },
+    };
+    const config = {
+      enabled: true,
+      observeOnly: false,
+      strictToolControlPlane: false,
+      targetModel: "",
+    };
+    const tools = ["unreal_rag_search", "unreal_architecture_reasoning"].map((name) => ({
+      type: "function",
+      function: {
+        name,
+        parameters: { type: "object", properties: { query: { type: "string" }, sessionId: { type: "string" } } },
+      },
+    }));
+    const controller = controllerFor(model, config, stateRoot, emitted, tools);
+    const history = Chat.empty();
+    history.append("system", "rules");
+    history.append("user", "investigate the lobby architecture");
+
+    await generate(controller, history);
+
+    const ends = emitted.filter((event) => event.kind === "end");
+    assert.equal(ends.length, 2);
+    assert.ok(ends[0].request.arguments.sessionId);
+    assert.equal(ends[0].request.arguments.query, "lobby");
+    assert.equal(ends[1].request.arguments.sessionId, ends[0].request.arguments.sessionId);
+    const args = emitted.filter((event) => event.kind === "args");
+    assert.equal(JSON.parse(args[0].content).sessionId, ends[0].request.arguments.sessionId);
+    assert.equal(JSON.parse(args[1].content).sessionId, ends[0].request.arguments.sessionId);
+    assert.equal(sawArchitectureGate, true);
+    assert.equal(architectureMaxTokens, 8192);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("recovery checkpoint bypasses a stale required work-tool gate", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-recovery-control-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const model = {
+      identifier: "recovery-control-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onToolCallRequestStart(1, { toolCallId: "checkpoint-1" });
+        opts.onToolCallRequestNameReceived(1, "unreal_task_checkpoint");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"action":"record"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "checkpoint-1",
+            type: "function",
+            name: "unreal_task_checkpoint",
+            arguments: { action: "record" },
+          },
+        });
+        return { async result() { return {}; } };
+      },
+    };
+    const controller = controllerFor(
+      model,
+      { strictToolControlPlane: false },
+      stateRoot,
+      emitted,
+      [{ type: "function", function: { name: "unreal_task_checkpoint" } }],
+    );
+    const history = Chat.empty();
+    history.append("user", "continue");
+    history.append("assistant", JSON.stringify({ requiredNextTool: "read_file" }));
+
+    await generate(controller, history);
+
+    assert.equal(emitted.filter((event) => event.kind === "end").length, 1);
+    assert.equal(emitted.filter((event) => event.kind === "failure").length, 0);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 for (const stopReason of ["contextLengthReached", "maxPredictedTokensReached"]) {
   test(`unsafe prediction stop ${stopReason} discards buffered output`, async () => {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-stop-"));

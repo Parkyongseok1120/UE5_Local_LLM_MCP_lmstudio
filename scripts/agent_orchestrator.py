@@ -407,13 +407,68 @@ def _is_compile_fix_request(text: str) -> bool:
     return False
 
 
+def _is_feature_implementation_request(text: str) -> bool:
+    """Treat build-and-fix language as acceptance when feature work is primary."""
+    feature_markers = (
+        "feature", "prototype", "finish the remaining", "complete the remaining",
+        "implement the remaining", "support a complete", "add gameplay",
+        "real implementation", "implementation and verification", "implement the roadmap",
+        "gameplay roadmap", "original gameplay roadmap", "stages 0 through",
+        "stage 0:", "stage 1:", "match loop", "lobby", "minigame", "bots",
+    )
+    concrete_compile_diagnostics = (
+        "c1083", "lnk2019", "lnk2001", "uht error", "unresolved external symbol",
+        "undefined reference to", "fatal error c", "error c2", "error lnk",
+    )
+    diagnostic_line = re.search(
+        r"(?:\.h|\.cpp|\.cs)\s*\(?\d+(?::\d+)?\)?\s*:\s*(?:fatal\s+)?error\b",
+        text,
+    )
+    return (
+        any(marker in text for marker in feature_markers)
+        and _has_write_intent(text)
+        and "no new feature" not in text
+        and not any(marker in text for marker in concrete_compile_diagnostics)
+        and diagnostic_line is None
+    )
+
+
 def _is_runtime_symptom_analysis(text: str) -> bool:
     """Runtime bug/symptom analysis (not structure inventory)."""
-    runtime_symptom = (
+    runtime_symptoms = (
         "bug", "버그", "crash", "assert", "wrong", "broken", "fail", "issue",
         "되돌아", "복원", "안됨", "안 됨", "문제",
     )
-    return any(m in text for m in runtime_symptom) and any(m in text for m in RUNTIME_MARKERS)
+    value = str(text or "").casefold()
+    if not value:
+        return False
+    # A crash is inherently runtime evidence. Other words such as GameMode,
+    # log, assert, broken, and fail are common in long implementation/test
+    # specifications, so a document-wide cross product creates false runtime
+    # debug gates without an observed symptom or reproduction.
+    if re.search(r"\bcrash(?:es|ed|ing)?\b", value):
+        return True
+    proximity = 120
+    causal_runtime_markers = tuple(
+        marker
+        for marker in RUNTIME_MARKERS
+        if marker not in {"gamemode", "input mapping", "assert", "log"}
+    )
+    runtime_positions = [
+        (match.start(), marker)
+        for marker in causal_runtime_markers
+        for match in re.finditer(re.escape(marker.casefold()), value)
+    ]
+    symptom_positions = [
+        (match.start(), marker)
+        for marker in runtime_symptoms
+        for match in re.finditer(re.escape(marker.casefold()), value)
+    ]
+    return any(
+        abs(runtime_at - symptom_at) <= proximity
+        for runtime_at, _runtime_marker in runtime_positions
+        for symptom_at, _symptom_marker in symptom_positions
+    )
 
 
 def _is_project_specific(text: str) -> bool:
@@ -447,6 +502,8 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "answer_only"
     if any(m in text for m in READ_ONLY_OVERRIDE_MARKERS) or _has_negated_write_intent(text):
         return "inspect_only"
+    if _is_feature_implementation_request(text):
+        return "edit"
     if _is_compile_fix_request(text):
         return "compile_fix"
     if _has_sketch_intent(text):
@@ -950,6 +1007,8 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
         "If write/replace returns static validation findings, fix them before build_unreal_project.",
         "If cleanup requires deleting files, finish edits first; deletion tools are Extended-only "
         "(propose_file_deletions / delete_file). In Essential mode report the duplicate path and stop for user approval.",
+        "For broad multi-feature work whose initial plan has no concrete files, finish bounded discovery, then call "
+        "unreal_task_define_slices once with every known executable 1-4 file slice before the first write.",
         "For more than 2 files in Essential mode, patch sequentially and run build_unreal_project after each slice; "
         "prefer unreal_start_compile_loop only when that tool appears in tools/list (Extended).",
         "Do not use run_javascript/js-code-sandbox/Deno file APIs for project file I/O; use unreal-agent file tools.",

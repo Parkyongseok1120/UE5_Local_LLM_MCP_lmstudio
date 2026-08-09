@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -54,7 +55,8 @@ QUALIFIED_FUNCTION_DEFINITION_RE = re.compile(
     r"(?:\r?\n[ \t]*)?\{"
 )
 VARIABLE_TYPE_RE = re.compile(
-    r"\b(?P<type>[AUFSI][A-Z][A-Za-z0-9_:]*)\s*(?:[*&]\s*)?"
+    r"\b(?P<type>(?:[AUFSI][A-Z][A-Za-z0-9_:]*|bool|u?int(?:8|16|32|64)|float|double))"
+    r"(?:\s*[*&]\s*|\s+)"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
 )
 TEMPLATE_VARIABLE_TYPE_RE = re.compile(
@@ -386,6 +388,430 @@ def extract_member_call_claims(
     return claims
 
 
+def _call_argument_count(text: str, open_paren: int) -> int | None:
+    if open_paren < 0 or open_paren >= len(text) or text[open_paren] != "(":
+        return None
+    paren = bracket = brace = angle = 0
+    has_token = False
+    commas = 0
+    for char in text[open_paren + 1 :]:
+        if char == "(" :
+            paren += 1
+        elif char == ")":
+            if paren:
+                paren -= 1
+            elif not bracket and not brace:
+                return commas + 1 if has_token else 0
+        elif char == "[":
+            bracket += 1
+        elif char == "]" and bracket:
+            bracket -= 1
+        elif char == "{":
+            brace += 1
+        elif char == "}" and brace:
+            brace -= 1
+        elif char == "<":
+            angle += 1
+        elif char == ">" and angle:
+            angle -= 1
+        elif char == "," and not paren and not bracket and not brace and not angle:
+            commas += 1
+        elif not char.isspace():
+            has_token = True
+    return None
+
+
+def _call_argument_text(text: str, open_paren: int) -> str | None:
+    if open_paren < 0 or open_paren >= len(text) or text[open_paren] != "(":
+        return None
+    depth = 0
+    for index in range(open_paren + 1, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth:
+                depth -= 1
+            else:
+                return text[open_paren + 1 : index]
+    return None
+
+
+def _split_cpp_arguments(value: str) -> list[str]:
+    parts: list[str] = []
+    start = 0
+    paren = bracket = brace = angle = 0
+    for index, char in enumerate(value):
+        if char == "(":
+            paren += 1
+        elif char == ")" and paren:
+            paren -= 1
+        elif char == "[":
+            bracket += 1
+        elif char == "]" and bracket:
+            bracket -= 1
+        elif char == "{":
+            brace += 1
+        elif char == "}" and brace:
+            brace -= 1
+        elif char == "<":
+            angle += 1
+        elif char == ">" and angle:
+            angle -= 1
+        elif char == "," and not paren and not bracket and not brace and not angle:
+            parts.append(value[start:index].strip())
+            start = index + 1
+    tail = value[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _normalized_cpp_type(value: str) -> str:
+    cleaned = re.sub(r"\s*=.*$", "", str(value or "")).strip()
+    cleaned = re.sub(r"\b(?:const|volatile|class|struct)\b", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # A declaration parameter ends in its identifier; preserve pointer/reference
+    # tokens while dropping only that final name.
+    cleaned = re.sub(r"\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^]]*\])?$", "", cleaned)
+    cleaned = re.sub(r"\s*([*&])\s*", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def _project_signature_contract(row: dict[str, Any], symbol: str) -> dict[str, Any] | None:
+    path = Path(str(row.get("file_path") or ""))
+    line_number = int(row.get("line_start") or 0)
+    if not path.is_file() or line_number < 1:
+        return None
+    try:
+        lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError:
+        return None
+    if line_number > len(lines):
+        return None
+    source_line = lines[line_number - 1]
+    match = re.match(
+        rf"^\s*(?P<return>.*?)\b(?:(?:[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)::)?"
+        rf"{re.escape(symbol)}\s*\((?P<params>[^)]*)\)",
+        source_line,
+    )
+    if not match:
+        return None
+    return_type = re.sub(
+        r"^(?:(?:virtual|static|inline|constexpr|FORCEINLINE)\s+)+",
+        "",
+        match.group("return").strip(),
+    )
+    params = _split_cpp_arguments(match.group("params"))
+    if len(params) == 1 and params[0] == "void":
+        params = []
+    required = sum(1 for param in params if "=" not in param)
+    return {
+        "returnType": return_type,
+        "requiredArgumentCount": required,
+        "maximumArgumentCount": len(params),
+        "parameterTypes": [_normalized_cpp_type(param) for param in params],
+        "source": "project_source_signature",
+        "locator": f"{path}:{line_number}",
+    }
+
+
+def _project_contract_rows(
+    graph: dict[str, Any] | None,
+    claims: list[dict[str, str]],
+) -> dict[str, list[dict[str, Any]]]:
+    wanted = {
+        f"{str(claim.get('receiverType') or '').casefold()}::{str(claim.get('member') or '').casefold()}"
+        for claim in claims
+        if claim.get("receiverType") and claim.get("member")
+    }
+    rows: dict[str, list[dict[str, Any]]] = {}
+    for raw in (graph or {}).get("symbols") or []:
+        if not isinstance(raw, dict) or raw.get("symbol_kind") != "function":
+            continue
+        symbol = str(raw.get("symbol_name") or "")
+        owner = _row_qualified_owner(raw, symbol)
+        key = f"{owner.casefold()}::{symbol.casefold()}"
+        if key not in wanted:
+            continue
+        contract = _project_signature_contract(raw, symbol)
+        if not contract:
+            continue
+        decorated = dict(raw)
+        decorated["signatures"] = [contract]
+        decorated["evidence_source"] = "project_source_signature"
+        rows.setdefault(key, []).append(decorated)
+    return rows
+
+
+def _call_contract_issues(
+    text: str,
+    declaration_context: str,
+    rows_by_claim: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    masked = _mask_comments_and_literals(text)
+    context = _mask_comments_and_literals(declaration_context)
+    variable_types: dict[str, str] = {}
+    for source in (context, masked):
+        for match in VARIABLE_TYPE_RE.finditer(source or ""):
+            variable_types[match.group("name")] = match.group("type").split("::")[-1]
+        for match in TEMPLATE_VARIABLE_TYPE_RE.finditer(source or ""):
+            variable_types[match.group("name")] = match.group("type").split("::")[-1]
+
+    definition_starts = {
+        match.start("receiver")
+        for match in QUALIFIED_FUNCTION_DEFINITION_RE.finditer(masked)
+    }
+    occurrences: list[tuple[re.Match[str], str, str]] = []
+    for match in MEMBER_CALL_CLAIM_RE.finditer(masked):
+        owner = variable_types.get(
+            match.group("receiver"),
+            KNOWN_RECEIVER_NAME_TYPES.get(match.group("receiver"), ""),
+        )
+        if owner:
+            occurrences.append((match, owner, match.group("member")))
+    for match in STATIC_CALL_CLAIM_RE.finditer(masked):
+        if match.start("receiver") not in definition_starts:
+            occurrences.append((match, match.group("receiver"), match.group("member")))
+
+    issues: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    definitions = list(QUALIFIED_FUNCTION_DEFINITION_RE.finditer(masked))
+
+    def infer_expression_type(expression: str, position: int) -> str:
+        value = expression.strip()
+        if value in variable_types:
+            return variable_types[value]
+        if value == "this":
+            enclosing = [item for item in definitions if item.start() <= position]
+            return enclosing[-1].group("receiver") if enclosing else ""
+        constructed = re.match(r"^(?P<type>[AUFSI][A-Za-z0-9_]*)\s*[({]", value)
+        if constructed:
+            return constructed.group("type")
+        if re.match(r"^[+-]?\d+$", value):
+            return "int32"
+        if value in {"true", "false"}:
+            return "bool"
+        return ""
+
+    def base_type(value: str) -> str:
+        return _normalized_cpp_type(value).replace("*", "").replace("&", "").strip()
+    assignment = re.compile(
+        r"(?P<target>[A-Za-z_][A-Za-z0-9_:]*)\s*(?P<pointer>\*)?\s*"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*=\s*$"
+    )
+    for match, owner, symbol in occurrences:
+        key = f"{owner.casefold()}::{symbol.casefold()}"
+        rows = rows_by_claim.get(key, [])
+        contracts = [
+            contract
+            for row in rows
+            for contract in (row.get("signatures") or [])
+            if isinstance(contract, dict)
+        ]
+        if not contracts:
+            continue
+        argument_count = _call_argument_count(masked, match.end() - 1)
+        sources = {
+            str(contract.get("source") or "engine_header_exact")
+            for contract in contracts
+        }
+        source_prefix = "PROJECT" if "project_source_signature" in sources else "ENGINE"
+        if argument_count is not None and not any(
+            int(contract.get("requiredArgumentCount", 0))
+            <= argument_count
+            <= int(contract.get("maximumArgumentCount", 0))
+            for contract in contracts
+        ):
+            accepted = sorted(
+                {
+                    (int(contract.get("requiredArgumentCount", 0)), int(contract.get("maximumArgumentCount", 0)))
+                    for contract in contracts
+                }
+            )
+            issue_key = (key, "ARGUMENT_COUNT_MISMATCH", str(argument_count))
+            if issue_key not in seen:
+                seen.add(issue_key)
+                issues.append(
+                    {
+                        "symbol": symbol,
+                        "receiverType": owner,
+                        "verdict": "known_bad",
+                        "errorCode": f"{source_prefix}_ARGUMENT_COUNT_MISMATCH",
+                        "evidence": [],
+                        "note": (
+                            f"{owner}::{symbol} is called with {argument_count} argument(s), "
+                            f"but the version-matched header accepts {accepted}."
+                        ),
+                    }
+                )
+
+        argument_text = _call_argument_text(masked, match.end() - 1)
+        arguments = _split_cpp_arguments(argument_text or "") if argument_text is not None else []
+        actual_types = [infer_expression_type(argument, match.start()) for argument in arguments]
+        typed_contracts: list[list[str]] = []
+        for contract in contracts:
+            raw_types = contract.get("parameterTypes") or contract.get("parameters") or []
+            if isinstance(raw_types, list):
+                typed_contracts.append([base_type(str(item)) for item in raw_types])
+        comparable = bool(actual_types) and any(actual_types) and typed_contracts
+        if comparable:
+            compatible_contract = any(
+                len(expected) == len(actual_types)
+                and all(
+                    not actual or not wanted or base_type(actual) == wanted
+                    for actual, wanted in zip(actual_types, expected)
+                )
+                for expected in typed_contracts
+            )
+            if not compatible_contract:
+                mismatch_pairs = [
+                    f"arg{index + 1}={actual or 'unknown'} expected {expected}"
+                    for expected_types in typed_contracts[:1]
+                    for index, (actual, expected) in enumerate(zip(actual_types, expected_types))
+                    if actual and expected and base_type(actual) != expected
+                ]
+                if mismatch_pairs:
+                    issue_key = (key, "PARAMETER_TYPE_MISMATCH", "|".join(actual_types))
+                    if issue_key not in seen:
+                        seen.add(issue_key)
+                        issues.append(
+                            {
+                                "symbol": symbol,
+                                "receiverType": owner,
+                                "verdict": "known_bad",
+                                "errorCode": f"{source_prefix}_PARAMETER_TYPE_MISMATCH",
+                                "evidence": [],
+                                "note": (
+                                    f"{owner}::{symbol} argument types do not match the "
+                                    f"source declaration: {', '.join(mismatch_pairs)}."
+                                ),
+                            }
+                        )
+
+        prefix = masked[max(0, match.start() - 160) : match.start()]
+        assigned = assignment.search(prefix)
+        if not assigned:
+            continue
+        target_type = assigned.group("target")
+        target_pointer = bool(assigned.group("pointer"))
+        return_contracts = {
+            (
+                _normalized_cpp_type(str(contract.get("returnType") or "")).replace("*", ""),
+                "*" in _normalized_cpp_type(str(contract.get("returnType") or "")),
+            )
+            for contract in contracts
+            if str(contract.get("returnType") or "").strip()
+        }
+        incompatible = return_contracts and all(
+            (
+                returned_pointer != target_pointer
+                or (
+                    returned != target_type
+                    and (not returned or not target_type or returned[0] != target_type[0])
+                )
+            )
+            for returned, returned_pointer in return_contracts
+        )
+        if incompatible:
+            displayed_returns = sorted(
+                f"{name}{'*' if pointer else ''}"
+                for name, pointer in return_contracts
+            )
+            issue_key = (key, "RETURN_TYPE_MISMATCH", target_type)
+            if issue_key not in seen:
+                seen.add(issue_key)
+                issues.append(
+                    {
+                        "symbol": symbol,
+                        "receiverType": owner,
+                        "verdict": "known_bad",
+                        "errorCode": f"{source_prefix}_RETURN_TYPE_MISMATCH",
+                        "evidence": [],
+                        "note": (
+                            f"{owner}::{symbol} returns "
+                            f"{displayed_returns}, "
+                            f"which cannot be assigned directly to unrelated "
+                            f"{target_type}{'*' if target_pointer else ''}."
+                        ),
+                    }
+                )
+    return issues
+
+
+def _project_declaration_contract_issues(
+    text: str,
+    graph: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    class_macros: dict[str, set[str]] = {}
+    bases: dict[str, str] = {}
+    for row in (graph or {}).get("symbols") or []:
+        if not isinstance(row, dict) or row.get("symbol_kind") not in {"class", "struct"}:
+            continue
+        name = str(row.get("symbol_name") or "")
+        macro = str(row.get("api_macro") or "")
+        base = str(row.get("base_class") or "")
+        if name and macro:
+            class_macros.setdefault(name.casefold(), set()).add(macro)
+        if name and base:
+            bases[name.casefold()] = base
+
+    for match in re.finditer(
+        r"\b(?:class|struct)\s+(?P<macro>[A-Z][A-Z0-9_]*_API)\s+"
+        r"(?P<name>[AUFSI][A-Za-z0-9_]*)\b",
+        _mask_comments_and_literals(text),
+    ):
+        expected = class_macros.get(match.group("name").casefold(), set())
+        if expected and match.group("macro") not in expected:
+            issues.append(
+                {
+                    "symbol": match.group("macro"),
+                    "verdict": "known_bad",
+                    "errorCode": "PROJECT_API_MACRO_MISMATCH",
+                    "evidence": [],
+                    "note": (
+                        f"{match.group('name')} is exported with {sorted(expected)}, not "
+                        f"{match.group('macro')}."
+                    ),
+                    "replacement": sorted(expected)[0],
+                }
+            )
+
+    assignment_re = re.compile(
+        r"\b(?P<target>[AUFSI][A-Za-z0-9_]*)\s*\*\s*[A-Za-z_]\w*\s*=\s*"
+        r"[^;\n]*?GetGameState\s*<\s*(?P<returned>[AUFSI][A-Za-z0-9_]*)\s*>\s*\(\s*\)"
+    )
+
+    def derives_from(child: str, parent: str) -> bool:
+        current = child
+        seen: set[str] = set()
+        while current and current.casefold() not in seen:
+            if current == parent:
+                return True
+            seen.add(current.casefold())
+            current = bases.get(current.casefold(), "")
+        return False
+
+    for match in assignment_re.finditer(_mask_comments_and_literals(text)):
+        target = match.group("target")
+        returned = match.group("returned")
+        if target != returned and not derives_from(returned, target):
+            issues.append(
+                {
+                    "symbol": "GetGameState",
+                    "verdict": "known_bad",
+                    "errorCode": "TEMPLATE_RETURN_TYPE_MISMATCH",
+                    "evidence": [],
+                    "note": (
+                        f"GetGameState<{returned}>() yields {returned}*, which cannot be "
+                        f"assigned directly to unrelated {target}*."
+                    ),
+                }
+            )
+    return issues
+
+
 def extract_local_declarations(text: str) -> set[str]:
     """Return symbols introduced by the sketch itself, not claimed as engine APIs."""
     text = _mask_comments_and_literals(text)
@@ -650,6 +1076,7 @@ def _classify_symbol(
             "title": r.get("title"),
             "locator": r.get("locator"),
             "source": r.get("evidence_source") or "rag_index",
+            **({"signatures": r.get("signatures")} if r.get("signatures") else {}),
         }
         for r in (exact or prefix)[:3]
     ]
@@ -679,6 +1106,7 @@ def validate_sketch(
     top_k: int = 5,
     graph: dict[str, Any] | None = None,
     declaration_context: str = "",
+    engine_root: str | Path | None = None,
 ) -> dict[str, Any]:
     from unreal_api_denylist import check_denylist
 
@@ -753,6 +1181,43 @@ def validate_sketch(
         lookup_symbols,
         top_k=top_k,
     ) if index_exists else ({}, "", 0)
+    from engine_header_evidence import lookup_engine_header_evidence
+
+    engine_claims: list[dict[str, str]] = [
+        {
+            "symbol": symbol,
+            "receiverType": "",
+            # A full SDK declaration scan is the final evidence tier, not a
+            # generic fuzzy search for every invented token. Enable it only
+            # when the project graph/index already proves that the engine
+            # symbol occurs somewhere but lacks its declaration header.
+            "allowDeclarationScan": bool(
+                exact_rows.get(symbol.casefold())
+                or _graph_lookup(graph, symbol, top_k=1, symbol_index=graph_index)
+            ),
+        }
+        for symbol in candidates
+        if symbol in lookup_symbols
+    ]
+    engine_claims.extend(
+        {
+            "symbol": claim["member"],
+            "receiverType": claim.get("receiverType", ""),
+        }
+        for claim in member_claims
+        if claim["member"] in lookup_symbols and claim.get("receiverType")
+    )
+    resolved_engine_root = engine_root or os.environ.get("UNREAL_ENGINE_ROOT", "")
+    engine_lookup = lookup_engine_header_evidence(resolved_engine_root, engine_claims)
+    engine_rows_by_claim = engine_lookup.get("results") or {}
+    project_rows_by_claim = _project_contract_rows(graph, member_claims)
+    contract_rows_by_claim: dict[str, list[dict[str, Any]]] = {
+        str(key): list(value)
+        for key, value in engine_rows_by_claim.items()
+        if isinstance(value, list)
+    }
+    for key, value in project_rows_by_claim.items():
+        contract_rows_by_claim.setdefault(key, []).extend(value)
 
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -805,16 +1270,6 @@ def validate_sketch(
                     }
                 )
                 return
-        if not index_exists and not graph_available:
-            results.append(
-                {
-                    "symbol": symbol,
-                    "verdict": "unverified",
-                    "evidence": [],
-                    "note": "RAG index not found; cannot verify. Confirm against the actual header.",
-                }
-            )
-            return
         graph_rows = _graph_lookup(
             graph,
             symbol,
@@ -822,13 +1277,19 @@ def validate_sketch(
             symbol_index=graph_index,
         )
         rag_rows = exact_rows.get(symbol.casefold(), [])
-        rows = graph_rows + [
+        engine_key = (
+            f"{receiver_type.casefold()}::{symbol.casefold()}"
+            if is_member and receiver_type
+            else symbol.casefold()
+        )
+        engine_rows = list(engine_rows_by_claim.get(engine_key, []))
+        rows = graph_rows + engine_rows + [
             row for row in rag_rows
             if not any(
                 str(existing.get("symbol_name") or "").casefold() == str(row.get("symbol_name") or "").casefold()
                 and str(existing.get("qualified_name") or "").casefold()
                 == str(row.get("qualified_name") or "").casefold()
-                for existing in graph_rows
+                for existing in [*graph_rows, *engine_rows]
             )
         ]
         verdict, evidence = _classify_symbol(
@@ -840,8 +1301,9 @@ def validate_sketch(
         note = ""
         if verdict == "unverified":
             note = (
-                "No exact symbol evidence in the project graph or index. Do not present as a real API; "
-                "confirm against the engine header or mark UNKNOWN."
+                "No exact symbol evidence was found in the project graph, index, or bounded engine-header "
+                "lookup. This is an index/source coverage miss, not proof that the API is absent; keep it "
+                "UNKNOWN until the version-matched header or compiler proves the contract."
             )
         elif verdict == "weak":
             note = "Only a prefix or owner-less match found; confirm the exact receiver and signature before use."
@@ -858,12 +1320,26 @@ def validate_sketch(
             )
         elif is_member and verdict != "verified":
             note = note or "Member/method call not confirmed on the receiver type; verify the exact signature."
+        coverage_status = (
+            "engine_header_verified"
+            if any(row.get("evidence_source") == "engine_header_exact" for row in rows)
+            and verdict == "verified"
+            else "indexed_verified"
+            if verdict == "verified"
+            else "engine_root_unavailable"
+            if engine_lookup.get("status") == "engine_root_unavailable"
+            else "index_source_coverage_missing"
+        )
+        verified_engine_evidence = [
+            item for item in evidence if item.get("source") == "engine_header_exact"
+        ]
         results.append(
             {
                 "symbol": symbol,
                 **({"receiver": receiver, "receiverType": receiver_type} if is_member else {}),
                 "verdict": verdict,
-                "evidence": [] if verdict == "verified" else evidence,
+                "coverageStatus": coverage_status,
+                "evidence": verified_engine_evidence if verdict == "verified" else evidence,
                 "note": note,
             }
         )
@@ -877,6 +1353,47 @@ def validate_sketch(
             receiver_type=claim["receiverType"],
             receiver=claim["receiver"],
             call_kind=claim.get("callKind", ""),
+        )
+
+    results.extend(
+        _call_contract_issues(
+            analysis_text,
+            declaration_context,
+            contract_rows_by_claim,
+        )
+    )
+    results.extend(_project_declaration_contract_issues(analysis_text, graph))
+
+    combined_declarations = _mask_comments_and_literals(
+        f"{declaration_context}\n{sketch}"
+    )
+    game_state_class = re.search(
+        r"\bclass\s+(?:\w+_API\s+)?(?P<name>A\w+)\s*:\s*public\s+A(?:GameStateBase|GameState)\b",
+        combined_declarations,
+    )
+    # Ownership blockers must describe the proposed sketch, not stale declarations
+    # from the file that the sketch is about to replace.  Using the combined
+    # declaration context here made removal of an existing GameState RPC
+    # impossible: the pre-write gate kept rediscovering the old declaration even
+    # after the draft removed it.
+    sketch_declarations = _mask_comments_and_literals(sketch)
+    if game_state_class and re.search(
+        r"\bUFUNCTION\s*\([^)]*\bServer\b[^)]*\)", sketch_declarations
+    ):
+        results.append(
+            {
+                "symbol": "ServerRpcOnGameState",
+                "verdict": "known_bad",
+                "evidence": [],
+                "note": (
+                    f"{game_state_class.group('name')} is not client-owned; a client-to-server "
+                    "request RPC declared on GameState cannot be invoked by ordinary clients."
+                ),
+                "replacement": (
+                    "Declare the request RPC on the owning PlayerController, Pawn, or another "
+                    "client-owned Actor, then perform the authoritative GameState mutation on the server."
+                ),
+            }
         )
 
     known_bad = sum(1 for r in results if r["verdict"] == "known_bad")
@@ -916,6 +1433,17 @@ def validate_sketch(
         "indexLookupMode": "exact_batch" if index_exists else "index_unavailable",
         "indexLookupSymbolCount": len(lookup_symbols),
         "indexLookupQueryCount": index_lookup_queries,
+        "engineHeaderLookup": {
+            "status": str(engine_lookup.get("status") or "not_started"),
+            "engineRoot": str(engine_lookup.get("engineRoot") or ""),
+            "catalogFileCount": int(engine_lookup.get("catalogFileCount") or 0),
+            "inspectedFileCount": int(engine_lookup.get("inspectedFileCount") or 0),
+            "verifiedClaimCount": sum(
+                1
+                for result in results
+                if result.get("coverageStatus") == "engine_header_verified"
+            ),
+        },
         "guidance": (
             "Replace every known_bad item using its replacement, downgrade unverified or weak "
             "symbols to UNKNOWN, then validate receiver types and exact signatures before presenting it. "

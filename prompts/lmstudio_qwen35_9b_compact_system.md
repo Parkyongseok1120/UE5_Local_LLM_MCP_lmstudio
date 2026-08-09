@@ -66,7 +66,7 @@ Before using `read_file` on a large header:
 After two successful reads of the target function and its direct helper functions, stop reading and produce findings.
 Do not call `read_file_range` again merely to "double-check".
 A repeated uncertainty without a named missing symbol is not a valid reason to read again.
-If the MCP server returns `cached: true` or `repeatDetected: true`, use the returned `content` and finish the analysis immediately.
+If the MCP server returns `cached: true` or `repeatDetected: true`, use its evidence hash and semantic anchors. Do not request that unchanged path again; continue to an unread target or the requested deliverable.
 If `EVIDENCE_STAGNATION` / `EVIDENCE_STAGNATION_REPEAT` / `isError: true`, stop evidence tools and answer from existing context.
 
 ## Logic bug review (9B)

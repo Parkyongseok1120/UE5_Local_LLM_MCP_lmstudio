@@ -28,7 +28,7 @@ function debugAgentLog(hypothesisId: string, location: string, message: string, 
     if (process.env.LMS_CONTEXT_COMPACTOR_DEBUG_INGEST !== "1") return;
     const fs = require("node:fs") as typeof import("node:fs");
     const payload = {
-      sessionId: "49b048",
+      sessionId: String(process.env.LMS_CONTEXT_COMPACTOR_DEBUG_SESSION_ID || "context-compactor"),
       runId: String(process.env.LMS_CONTEXT_COMPACTOR_DEBUG_RUN || "release-harden"),
       hypothesisId,
       location,
@@ -40,11 +40,14 @@ function debugAgentLog(hypothesisId: string, location: string, message: string, 
     if (debugLog) {
       fs.appendFileSync(debugLog, `${JSON.stringify(payload)}\n`);
     }
-    fetch("http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "49b048" },
-      body: JSON.stringify(payload),
-    }).catch(() => {});
+    const endpoint = String(process.env.LMS_CONTEXT_COMPACTOR_DEBUG_INGEST_URL || "").trim();
+    if (endpoint) {
+      fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": payload.sessionId },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    }
   } catch {
     /* ignore */
   }
@@ -380,10 +383,120 @@ function toolNamesMatch(expected: string, actual: string): boolean {
   return core.toolNamesMatch(expected, actual);
 }
 
+const ARCHITECTURE_GATE_MARKER = "[UNREAL_ARCHITECTURE_VALIDATION_GATE]";
+
+function latestUserGoalText(messages: ChatMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.getRole() !== "user") continue;
+    const value = String(message.getText() || "").trim();
+    if (value && !core.isMetaUserMessage(value)) return value;
+  }
+  return "";
+}
+
+function requiresArchitectureValidation(goal: string, toolDefinitions: any[]): boolean {
+  const hasTool = (toolDefinitions || []).some((tool: any) => {
+    const name = tool?.function?.name || tool?.name || "";
+    return toolNamesMatch("unreal_architecture_reasoning", name);
+  });
+  if (!hasTool) return false;
+  const textValue = String(goal || "");
+  return /templates_lobby|authoritative\s+multiplayer|architecture|architectural|structure\s+design|design\s+validation|구조\s*설계|설계\s*검증|아키텍처/i.test(textValue);
+}
+
+function injectArchitectureValidationRule(chat: Chat): boolean {
+  const rule = (
+    `${ARCHITECTURE_GATE_MARKER}\n`
+    + "For an architecture/design-validation objective, investigate direct project source first, then submit the "
+    + "self-derived proposal to unreal_architecture_reasoning. Do not provide the final design until "
+    + "proposalValidation.ok is true. If validation fails, materially revise the rejected ownership, concrete "
+    + "caller-to-authority path, truth-source inventory, lifecycle recovery, validation matrix, or slice contract "
+    + "and validate once more. Prove that a client-originated Server RPC is invoked on an actor/component actually "
+    + "owned by that client's connection, and ground every claimed existing participant/roster truth source in "
+    + "direct project or inherited framework evidence. Apply every proposalValidation.repairRequirements entry "
+    + "at its exact jsonPath in the next proposal object; do not bury a required field in another prose property. "
+    + "After rejection, prefer the returned repairSubmission.argumentShape: call the tool with baseProposalRevision "
+    + "and proposalRepairs containing one exact {jsonPath,value} entry per required path. Keep the paths unchanged "
+    + "and derive only the replacement values yourself. For an array path, put the complete replacement array in one "
+    + "entry; never repeat a jsonPath for individual rows. Use proposalPatch only when no exact repairSubmission is returned. "
+    + "Keep private reasoning brief and submit a compact proposal: one concise sentence per scalar field and only "
+    + "the evidence needed for the contract, targeting under 2500 output tokens before the tool call completes. "
+    + "Never replace a concrete callable path with an unresolved 'RPC or local call' option."
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(ARCHITECTURE_GATE_MARKER)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    if (typeof (chat as any).append === "function") {
+      (chat as any).append("system", rule);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+const SESSION_SCOPED_ANALYSIS_TOOLS = [
+  "unreal_rag_search",
+  "unreal_agent_session",
+  "unreal_architecture_reasoning",
+];
+
+function enrichToolRequestSession(request: any, sessionId: string): any {
+  const name = requestedToolName(request);
+  if (!SESSION_SCOPED_ANALYSIS_TOOLS.some((tool) => toolNamesMatch(tool, name))) return request;
+  const args = request?.arguments && typeof request.arguments === "object"
+    ? request.arguments
+    : {};
+  if (String(args.sessionId || args.session_id || "").trim()) return request;
+  return {
+    ...request,
+    arguments: { ...args, sessionId },
+  };
+}
+
+function replaceBufferedArgumentFragments(events: any[], callId: number, args: any): void {
+  const matches = events.filter((event) => event.kind === "args" && event.callId === callId);
+  if (matches.length === 0) return;
+  matches[0].content = JSON.stringify(args || {});
+  for (const event of matches.slice(1)) event.content = "";
+}
+
+const RECOVERY_CONTROL_TOOLS = [
+  "unreal_task_checkpoint",
+  "unreal_task_status",
+  "unreal_task_recover_active",
+  "unreal_task_cancel",
+  "unreal_task_cancel_active",
+];
+
+function isRecoveryControlTool(name: string): boolean {
+  return RECOVERY_CONTROL_TOOLS.some((control) => toolNamesMatch(control, name));
+}
+
 function validateToolRequest(request: any, checkpoint: any): { ok: boolean; reason?: string } {
   const required = checkpoint?.requiredNextTool?.name;
-  if (required && !toolNamesMatch(required, requestedToolName(request))) {
-    return { ok: false, reason: `requiredNextTool=${required}; received=${requestedToolName(request)}` };
+  const actual = requestedToolName(request);
+  if (
+    required
+    && !core.isNonToolNextAction(required)
+    && !toolNamesMatch(required, actual)
+    && !isRecoveryControlTool(actual)
+  ) {
+    return { ok: false, reason: `requiredNextTool=${required}; received=${actual}` };
   }
   const completed = new Set(checkpoint?.completedToolCallIds || []);
   if (request?.id && completed.has(request.id)) {
@@ -523,9 +636,22 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const inputTokens = await model.countTokens(currentFormatted);
   const contextLength = await model.getContextLength();
   const toolDefinitions = ctl.getToolDefinitions();
+  const architectureValidationRequired = requiresArchitectureValidation(
+    latestUserGoalText(messages), toolDefinitions,
+  );
+  if (architectureValidationRequired) {
+    injectArchitectureValidationRule(history);
+  }
   const toolSchemaTokens = await model.countTokens(JSON.stringify(toolDefinitions));
-  const nextToolName = checkpoint?.requiredNextTool?.name || "";
+  const persistedNextToolName = checkpoint?.requiredNextTool?.name || "";
+  const nextToolName = core.isNonToolNextAction(persistedNextToolName) ? "" : persistedNextToolName;
   const hardRemainingTokens = finiteNumber(configValue(ctl, "hardRemainingTokens", 8000), 8000);
+  const configuredOutputReserve = finiteNumber(
+    configValue(ctl, "maxOutputReserve", 4096), 4096, 1,
+  );
+  const architectureOutputReserve = finiteNumber(
+    configValue(ctl, "architectureMaxOutputReserve", 8192), 8192, configuredOutputReserve,
+  );
   const config = {
     enabled,
     observeOnly,
@@ -535,7 +661,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     requireCheckpointPersistence,
     softRemainingTokens: finiteNumber(configValue(ctl, "softRemainingTokens", 14000), 14000, hardRemainingTokens),
     hardRemainingTokens,
-    maxOutputReserve: finiteNumber(configValue(ctl, "maxOutputReserve", 4096), 4096, 1),
+    maxOutputReserve: architectureValidationRequired
+      ? Math.max(configuredOutputReserve, architectureOutputReserve)
+      : configuredOutputReserve,
     safetyMarginTokens: finiteNumber(configValue(ctl, "safetyMarginTokens", 1024), 1024),
     temperature: finiteNumber(configValue(ctl, "temperature", 0.1), 0.1, 0, 1),
     normalToolResultReserve: finiteNumber(configValue(ctl, "normalToolResultReserve", 3000), 3000),
@@ -728,6 +856,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const events: any[] = [];
   const requests: any[] = [];
   const strictToolControlPlane = Boolean(config.strictToolControlPlane);
+  // A persisted requiredNextTool is a safety gate even when the optional
+  // strict mode is disabled. Otherwise a model can emit an unrelated tool
+  // call and the checkpoint would record progress that never happened.
+  const requiredToolGateActive = Boolean(
+    nextCheckpoint?.requiredNextTool?.name
+    && !core.isNonToolNextAction(nextCheckpoint.requiredNextTool.name),
+  );
+  const toolControlPlaneEnforced = strictToolControlPlane || requiredToolGateActive;
   const bufferUntilPredictionComplete = Boolean(config.bufferUntilPredictionComplete)
     || requireCheckpointPersistence
     || Boolean(config.rejectTruncatedPredictions);
@@ -740,7 +876,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     else if (event.kind === "failure") ctl.toolCallGenerationFailed(new Error(event.error));
   };
   const recordEvent = (event: any) => {
-    if (strictToolControlPlane || bufferUntilPredictionComplete) events.push(event);
+    if (toolControlPlaneEnforced || bufferUntilPredictionComplete) events.push(event);
     else emitEvent(event);
   };
   const prediction = model.respond(modelChat, {
@@ -766,7 +902,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       recordEvent({ kind: "args", callId, content });
     },
     onToolCallRequestEnd(callId: number, info: any) {
-      const request = info?.toolCallRequest || {};
+      const rawRequest = info?.toolCallRequest || {};
+      const request = enrichToolRequestSession(rawRequest, sessionId);
+      if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
+        replaceBufferedArgumentFragments(events, callId, request.arguments);
+      }
       requests.push({ callId, request });
       recordEvent({ kind: "end", callId, request });
     },
@@ -789,7 +929,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     outputCommitPending: !truncated,
   });
   if (truncated) {
-    const safelyBuffered = strictToolControlPlane || bufferUntilPredictionComplete;
+    const safelyBuffered = toolControlPlaneEnforced || bufferUntilPredictionComplete;
     throw new Error(
       `Model prediction was discarded because it did not complete safely (stopReason=${stopReason}). `
       + (safelyBuffered
@@ -800,7 +940,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
 
   const verdictByCallId = new Map<number, { ok: boolean; reason?: string }>();
   for (const entry of requests) {
-    const verdict = strictToolControlPlane
+    const verdict = toolControlPlaneEnforced
       ? validateToolRequest(entry.request, nextCheckpoint)
       : { ok: true };
     verdictByCallId.set(entry.callId, verdict);
@@ -842,7 +982,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     );
   }
 
-  if (strictToolControlPlane || bufferUntilPredictionComplete) {
+  if (toolControlPlaneEnforced || bufferUntilPredictionComplete) {
     for (const event of events) {
       if (event.kind !== "end") {
         emitEvent(event);

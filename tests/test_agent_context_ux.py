@@ -260,6 +260,8 @@ def test_slim_write_success_payload_surfaces_skipped_validator_failure() -> None
         "{operation:'create', path:'Source/A.h'})"
     )
     summary = payload["validationSummary"]
+    assert payload["validationPassed"] is False
+    assert payload["workflowComplete"] is False
     assert summary["skipped"] is True
     assert summary["infrastructureError"] is True
     assert summary["blockingErrorCount"] == 0

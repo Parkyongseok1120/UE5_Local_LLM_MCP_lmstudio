@@ -1537,6 +1537,51 @@ public:
     assert not any("UFirst::InterfaceOnly" in message for message in missing_messages)
     assert not any("UFirst::TEXT" in message for message in missing_messages)
 
+
+def test_cpp_definition_check_ignores_doxygen_sentences(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Public" / "ItemLibrary.h"
+    cpp = project / "Source" / "Demo" / "Private" / "ItemLibrary.cpp"
+    _write(
+        header,
+        """#pragma once
+#include "CoreMinimal.h"
+#include "ItemLibrary.generated.h"
+
+UCLASS()
+class UItemLibrary : public UObject
+{
+    GENERATED_BODY()
+
+public:
+    /**
+     * Check if a player can use an item (has it in inventory and is registered).
+     */
+    UFUNCTION(BlueprintPure)
+    static bool CanUseItem(int32 PlayerId, int32 ItemId);
+};
+""",
+    )
+    _write(
+        cpp,
+        '#include "ItemLibrary.h"\n'
+        'bool UItemLibrary::CanUseItem(int32 PlayerId, int32 ItemId)\n'
+        '{\n'
+        '    return PlayerId > 0 && ItemId > 0;\n'
+        '}\n',
+    )
+
+    findings = validate_unreal_readiness(project, skip_include_path_checks=True)
+
+    assert not any(
+        item.code == "CPP_DEFINITION_MISSING" and "::item" in item.message
+        for item in findings
+    )
+    assert not any(
+        item.code == "CPP_DEFINITION_MISSING" and "CanUseItem" in item.message
+        for item in findings
+    )
+
 def test_bool_member_numeric_parameter_is_advisory(tmp_path: Path) -> None:
     project = tmp_path / "Demo"
     header = project / "Source" / "Demo" / "Public" / "StaminaComponent.h"

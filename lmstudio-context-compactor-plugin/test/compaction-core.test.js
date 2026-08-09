@@ -42,6 +42,38 @@ test("checkpoint preserves required next tool and exact signature contract", () 
   assert.equal(core.validateCheckpoint(checkpoint), true);
 });
 
+test("checkpoint recovery nextAction outranks its post-checkpoint requiredNextAction", () => {
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "continue" },
+    { role: "tool", content: JSON.stringify({
+      ok: false,
+      errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+      nextAction: "unreal_task_checkpoint",
+      nextActionArgs: {
+        action: "record",
+        requiredNextAction: "read_file",
+      },
+    }) },
+  ]);
+
+  assert.equal(checkpoint.requiredNextTool?.name, "unreal_task_checkpoint");
+  assert.equal(checkpoint.requiredNextTool?.args?.requiredNextAction, "read_file");
+});
+
+test("checkpoint validation rejects malformed pending tool state", () => {
+  assert.equal(core.validateCheckpoint({
+    schemaVersion: 1,
+    checkpointGeneration: 1,
+    completedToolCallIds: [],
+    pendingToolCalls: [{ id: "pending-1" }],
+  }), false);
+  assert.equal(core.validateCheckpoint({
+    schemaVersion: 1,
+    checkpointGeneration: 1,
+    completedToolCallIds: [42],
+  }), false);
+});
+
 test("latest user message replaces sticky first-turn objective", () => {
   const messages = [
     { role: "user", content: "현재 프로젝트 찾고 코드 구조 전체 적으로 확인해줘" },
@@ -301,7 +333,7 @@ test("isMajorGoalChange ignores minor follow-ups but catches mode flips", () => 
   );
 });
 
-test("required next tool clears after its matching call is present", () => {
+test("required next tool clears only after its matching successful result", () => {
   const prior = core.buildCheckpoint([
     { role: "user", content: "fix" },
     { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
@@ -315,6 +347,318 @@ test("required next tool clears after its matching call is present", () => {
   assert.equal(next.requiredNextTool, null);
 });
 
+test("required next tool remains pending after call dispatch without a result", () => {
+  const prior = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
+  ]);
+  const next = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
+    { role: "assistant", content: "", toolCalls: [{ id: "lookup-1", name: "mcp_unreal_symbol_lookup" }] },
+  ], prior);
+  assert.equal(next.requiredNextTool?.name, "unreal_symbol_lookup");
+});
+
+test("failed matching tool result does not clear required next tool", () => {
+  const prior = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
+  ]);
+  const next = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
+    { role: "assistant", content: "", toolCalls: [{ id: "lookup-1", name: "mcp_unreal_symbol_lookup" }] },
+    { role: "tool", content: JSON.stringify({ ok: false, errorCode: "LOOKUP_FAILED" }), toolResults: [{ toolCallId: "lookup-1", content: "{\"ok\":false}" }] },
+  ], prior);
+  assert.equal(next.requiredNextTool?.name, "unreal_symbol_lookup");
+});
+
+test("checkpoint preserves slice, invariants, coverage, pending Automation, and sanitized failures", () => {
+  const payload = {
+    requiredNextTool: "run_unreal_automation_tests",
+    requiredNextToolArgs: { testFilter: "Gomoku" },
+    toolRoute: {
+      routeHash: "route-automation",
+      phase: "verifier",
+      activeTools: ["run_unreal_automation_tests", "read_file"],
+      selectedSlice: { sliceId: "network", files: ["Source/Demo/Network.cpp"] },
+    },
+    sliceProgress: {
+      activeSliceId: "network",
+      completedSlices: ["rules"],
+      pendingSlices: ["network"],
+    },
+    buildVerification: {
+      status: "pending_automation",
+      mutationGeneration: 4,
+      testFilter: "Gomoku",
+    },
+    invariants: ["server owns move acceptance", "clients request only"],
+    automationCoverage: { count: 30, suggestedFilter: "Gomoku" },
+  };
+  const messages = [
+    { role: "user", content: "finish the active implementation" },
+    { role: "tool", content: JSON.stringify(payload) },
+    { role: "assistant", content: "", toolCalls: [{ id: "auto-1", name: "run_unreal_automation_tests" }] },
+    {
+      role: "tool",
+      content: JSON.stringify({ ok: false, errorCode: "AUTOMATION_TEST_FAILED", error: "one test failed", taskAuthorization: { authToken: "secret" } }),
+      toolResults: [{ toolCallId: "auto-1", content: JSON.stringify({ ok: false, errorCode: "AUTOMATION_TEST_FAILED", error: "one test failed", taskAuthorization: { authToken: "secret" } }) }],
+    },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  const summary = core.summarizeOldMessages(messages, checkpoint);
+
+  assert.equal(checkpoint.requiredNextTool?.name, "run_unreal_automation_tests");
+  assert.equal(checkpoint.sliceProgress.activeSliceId, "network");
+  assert.equal(checkpoint.buildVerification.status, "pending_automation");
+  assert.deepEqual(checkpoint.invariants, ["server owns move acceptance", "clients request only"]);
+  assert.equal(checkpoint.coverageEvidence.at(-1).automationCoverage.count, 30);
+  assert.deepEqual(checkpoint.failedToolResults.at(-1), {
+    tool: "run_unreal_automation_tests",
+    errorCode: "AUTOMATION_TEST_FAILED",
+    detail: "one test failed",
+  });
+  assert.match(summary, /pending_automation/);
+  assert.match(summary, /AUTOMATION_TEST_FAILED/);
+  assert.doesNotMatch(summary, /secret/);
+});
+
+test("checkpoint preserves compact route ownership without exposing authToken", () => {
+  const messages = [
+    { role: "user", content: "continue the active task" },
+    {
+      role: "tool",
+      content: JSON.stringify({
+        toolRoute: { routeHash: "route-1", phase: "executor", activeTools: ["unreal_symbol_lookup"] },
+        taskAuthorization: {
+          taskSessionId: "task-1",
+          authToken: "must-not-survive",
+          ownerCapability: "owner-capability-1",
+          routeHash: "route-1",
+          routePhase: "executor",
+        },
+      }),
+    },
+  ];
+  const checkpoint = core.buildCheckpoint(messages);
+  const summary = core.summarizeOldMessages(messages, checkpoint);
+  assert.deepEqual(checkpoint.taskRouteOwnership, {
+    taskSessionId: "task-1",
+    ownerCapability: "owner-capability-1",
+  });
+  assert.match(summary, /owner-capability-1/);
+  assert.doesNotMatch(summary, /must-not-survive/);
+  assert.match(summary, /Do not recover, cancel, or replace/);
+});
+
+test("legacy active-route checkpoint rescans history to recover compact ownership", () => {
+  const messages = [
+    { role: "user", content: "continue" },
+    {
+      role: "tool",
+      content: JSON.stringify({
+        toolRoute: { routeHash: "route-legacy", phase: "executor" },
+        taskAuthorization: { taskSessionId: "task-legacy", ownerCapability: "owner-legacy" },
+      }),
+    },
+  ];
+  const prior = core.buildCheckpoint(messages);
+  delete prior.taskRouteOwnership;
+  const next = core.buildCheckpoint([...messages, { role: "user", content: "look up the symbol" }], prior);
+  assert.deepEqual(next.taskRouteOwnership, {
+    taskSessionId: "task-legacy",
+    ownerCapability: "owner-legacy",
+  });
+});
+
+test("checkpoint normalizes LM Studio content blocks and preserves negative discovery evidence", () => {
+  const activePayload = {
+    activeProject: "C:\\Projects\\O-Mock\\O_Mock.uproject",
+    details: { projectName: "O_Mock", projectDir: "C:\\Projects\\O-Mock" },
+  };
+  const searchPayload = {
+    path: { displayPath: "project://Source" },
+    results: [],
+    fileNameResults: [],
+    filesSeen: 33,
+    searchComplete: true,
+  };
+  const messages = [
+    { role: "user", content: "finish stages zero through thirteen" },
+    { role: "assistant", toolCalls: [{ id: "active-1", name: "unreal_get_active_project", arguments: {} }] },
+    {
+      role: "tool",
+      getToolCallResults() {
+        return [{
+          toolCallId: "active-1",
+          name: "unreal_get_active_project",
+          content: JSON.stringify([{ type: "text", text: JSON.stringify(activePayload) }]),
+        }];
+      },
+    },
+    {
+      role: "assistant",
+      toolCalls: [{
+        id: "search-1",
+        name: "search_files",
+        arguments: { query: "GomokuMinigameSubsystem.h", path: "project://Source", matchFileNames: true },
+      }],
+    },
+    {
+      role: "tool",
+      getToolCallResults() {
+        return [{
+          toolCallId: "search-1",
+          name: "search_files",
+          content: JSON.stringify([{ type: "text", text: JSON.stringify(searchPayload) }]),
+        }];
+      },
+    },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  const summary = core.summarizeOldMessages(messages, checkpoint);
+
+  assert.equal(checkpoint.activeProject, "C:\\Projects\\O-Mock\\O_Mock.uproject");
+  assert.equal(checkpoint.activeProjectName, "O_Mock");
+  const search = checkpoint.evidenceFacts.find((fact) => fact.tool === "search_files");
+  assert.deepEqual(search, {
+    tool: "search_files",
+    query: "GomokuMinigameSubsystem.h",
+    path: "project://Source",
+    resultCount: 0,
+    fileNameResultCount: 0,
+    searchComplete: true,
+    matchedFiles: [],
+  });
+  assert.match(summary, /GomokuMinigameSubsystem\.h/);
+  assert.match(summary, /resultCount":0/);
+});
+
+test("checkpoint retains bounded semantic anchors from LM Studio read_file source results", () => {
+  const source = `[path-metadata: {"projectRelativePath":"Source/O_Mock/GomokuGameState.h"}]\n`
+    + `[line-endings: CRLF]\n`
+    + `#pragma once\n`
+    + `UCLASS()\n`
+    + `class AGomokuGameState : public AGameStateBase\n`
+    + `{\npublic:\n`
+    + `UPROPERTY(ReplicatedUsing=OnRep_Board)\n`
+    + `TArray<int32> Board;\n`
+    + `UFUNCTION(Server, Reliable)\n`
+    + `void ServerPlaceStone(int32 X, int32 Y);\n`
+    + `void OnRep_Board();\n`
+    + `};\n`;
+  const messages = [
+    { role: "user", content: "audit the networking code" },
+    {
+      role: "assistant",
+      toolCalls: [{ id: "read-1", name: "read_file", arguments: { path: "Source/O_Mock/GomokuGameState.h" } }],
+    },
+    {
+      role: "tool",
+      getToolCallResults() {
+        return [{
+          toolCallId: "read-1",
+          name: "read_file",
+          content: JSON.stringify([{ type: "text", text: source }]),
+        }];
+      },
+    },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  const read = checkpoint.evidenceFacts.find((fact) => fact.tool === "read_file");
+  assert.equal(read.path, "Source/O_Mock/GomokuGameState.h");
+  assert.ok(read.lineCount >= 12);
+  assert.match(read.evidenceHash, /^[a-f0-9]{64}$/);
+  assert.ok(read.semanticAnchors.some((line) => line.includes("UFUNCTION(Server, Reliable)")));
+  assert.ok(read.semanticAnchors.some((line) => line.includes("ServerPlaceStone")));
+  assert.match(core.summarizeOldMessages(messages, checkpoint), /ServerPlaceStone/);
+});
+
+test("cached repeat reads keep semantic anchors and emit an explicit no-reread ledger", () => {
+  const path = "Source/O_Mock/GomokuGameState.cpp";
+  const source = "AGomokuGameState::AGomokuGameState()\n{\n}\nvoid AGomokuGameState::OnRep_Board()\n{\n}\n";
+  const repeatPayload = {
+    ok: true,
+    cached: true,
+    repeatDetected: true,
+    doNotRepeatRead: true,
+    errorCode: "READ_REPEAT_DETECTED",
+    content: source,
+    readAttempts: 2,
+  };
+  const messages = [
+    { role: "user", content: "audit networking" },
+    { role: "assistant", toolCalls: [{ id: "read-1", name: "read_file", arguments: { path } }] },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "read-1",
+        name: "read_file",
+        content: JSON.stringify([{ type: "text", text: source }]),
+      }],
+    },
+    { role: "assistant", toolCalls: [{ id: "read-2", name: "read_file", arguments: { path } }] },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "read-2",
+        name: "read_file",
+        content: JSON.stringify([{ type: "text", text: JSON.stringify(repeatPayload) }]),
+      }],
+    },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  const reads = checkpoint.evidenceFacts.filter((fact) => fact.path === path);
+  assert.equal(reads.length, 1);
+  assert.equal(reads[0].repeatDetected, true);
+  assert.equal(reads[0].readAttempts, 2);
+  assert.ok(reads[0].semanticAnchors.some((line) => line.includes("OnRep_Board")));
+  const summary = core.summarizeOldMessages(messages, checkpoint);
+  assert.match(summary, /discoveryLedger=already-read unchanged files/);
+  assert.match(summary, /Do not re-read these paths merely to remember them/);
+});
+
+test("unrelated complete payload does not clear required next tool", () => {
+  const prior = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
+  ]);
+  const next = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
+    { role: "assistant", content: "", toolCalls: [{ id: "other-1", name: "mcp_read_file" }] },
+    { role: "tool", content: JSON.stringify({ ok: true, phase: "complete" }), toolResults: [{ toolCallId: "other-1", name: "mcp_read_file", content: "{\"ok\":true,\"phase\":\"complete\"}" }] },
+  ], prior);
+  assert.equal(next.requiredNextTool?.name, "unreal_symbol_lookup");
+});
+
+test("anonymous tool result compaction retains its matching call", () => {
+  const messages = [
+    { role: "system", content: "rules" },
+    { role: "user", content: "objective" },
+    { role: "assistant", content: "", toolCalls: [{ name: "read_file", arguments: {} }] },
+    { role: "tool", content: "result", toolResults: [{ name: "read_file", content: "result" }] },
+    { role: "user", content: "continue" },
+  ];
+  const compacted = core.compactSnapshots(messages, core.buildCheckpoint(messages), { recentCompleteTurns: 1 });
+  assert.equal(core.isCompleteToolPair(compacted), true);
+  assert.ok(compacted.some((message) => message.toolCalls?.some((call) => call.name === "read_file")));
+});
+
+test("anonymous result before call expands the retained tail", () => {
+  const snapshots = [
+    { role: "assistant", content: "", toolCalls: [{ name: "read_file", arguments: {} }] },
+    { role: "tool", content: "result", toolResults: [{ name: "read_file", content: "result" }] },
+  ];
+  assert.equal(core.completeTailStart(snapshots, 1), 0);
+});
+
 test("explicit null required next tool clears stale state", () => {
   const prior = core.buildCheckpoint([
     { role: "user", content: "fix" },
@@ -326,4 +670,215 @@ test("explicit null required next tool clears stale state", () => {
     { role: "tool", content: JSON.stringify({ requiredNextTool: null }) },
   ], prior);
   assert.equal(next.requiredNextTool, null);
+});
+
+test("active-route sentinel clears an exact tool gate instead of becoming a fake tool", () => {
+  const prior = core.buildCheckpoint([
+    { role: "user", content: "build the project" },
+    { role: "tool", content: JSON.stringify({ requiredNextTool: "build_unreal_project" }) },
+  ]);
+  const next = core.buildCheckpoint([
+    { role: "user", content: "build the project" },
+    { role: "tool", content: JSON.stringify({ requiredNextTool: "build_unreal_project" }) },
+    {
+      role: "tool",
+      content: JSON.stringify({
+        nextAction: "use_active_route_tool",
+        nextActionArgs: { ignored: true },
+      }),
+    },
+  ], prior);
+  assert.equal(next.requiredNextTool, null);
+});
+
+test("resuming a legacy checkpoint drops a persisted active-route sentinel", () => {
+  const messages = [{ role: "user", content: "build the project" }];
+  const prior = core.buildCheckpoint(messages);
+  prior.requiredNextTool = {
+    name: "use_active_route_tool",
+    reference: { sourceField: "nextAction", value: "use_active_route_tool" },
+    args: { stale: true },
+  };
+  const next = core.buildCheckpoint([
+    ...messages,
+    { role: "user", content: "retry the exact build" },
+  ], prior);
+  assert.equal(next.requiredNextTool, null);
+});
+
+test("legacy authorization recovery sentinels do not become exact tool gates", () => {
+  for (const nextAction of [
+    "continue_with_current_tool_route",
+    "request_fresh_authorization_or_replan",
+    "retry_same_tool_with_returned_taskAuthorization",
+    "start_agent_edit_task_to_apply_changes",
+    "replan_autonomous_strategy",
+    "quarantine_corrupt_task",
+  ]) {
+    const checkpoint = core.buildCheckpoint([
+      { role: "user", content: "continue" },
+      { role: "tool", content: JSON.stringify({ nextAction }) },
+    ]);
+    assert.equal(checkpoint.requiredNextTool, null, nextAction);
+  }
+});
+
+test("protocol marker clears arbitrary instructional next actions", () => {
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "continue" },
+    {
+      role: "tool",
+      content: JSON.stringify({
+        nextAction: "future_server_instruction",
+        nextActionIsTool: false,
+      }),
+    },
+  ]);
+  assert.equal(checkpoint.requiredNextTool, null);
+});
+
+test("architecture repair continuity survives hard compaction without repeating a patch", () => {
+  const repairRequirements = [
+    {
+      jsonPath: "networking.requestPath",
+      constraint: "requestPath must contain three concrete source-backed hops",
+    },
+    {
+      jsonPath: "stateInventory",
+      constraint: "participant roster must reconcile AGameStateBase::PlayerArray",
+    },
+  ];
+  const proposalPatch = {
+    networking: {
+      rpcOwner: "APlayerController",
+      requestPath: ["client", "rpc"],
+    },
+    stateInventory: [{ state: "Lobby membership", owner: "AGameMode", source: "new" }],
+  };
+  const messages = [
+    { role: "user", content: "validate the lobby architecture" },
+    {
+      role: "assistant",
+      toolCalls: [{
+        id: "arch-1",
+        name: "unreal_architecture_reasoning",
+        arguments: { baseProposalRevision: "r1", proposalPatch },
+      }],
+    },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "arch-1",
+        name: "unreal_architecture_reasoning",
+        content: JSON.stringify({
+          ok: false,
+          errorCode: "ARCHITECTURE_PROPOSAL_INVALID",
+          proposalRevision: "r2",
+          proposalPatchApplied: true,
+          proposalValidation: { ok: false, repairRequirements },
+          requiredNextAction: "revise_architecture_proposal",
+          nextActionIsTool: false,
+        }),
+      }],
+    },
+    {
+      role: "assistant",
+      toolCalls: [{
+        id: "arch-2",
+        name: "unreal_architecture_reasoning",
+        arguments: { baseProposalRevision: "r2", proposalPatch },
+      }],
+    },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "arch-2",
+        name: "unreal_architecture_reasoning",
+        content: JSON.stringify({
+          ok: false,
+          errorCode: "ARCHITECTURE_PROPOSAL_UNCHANGED",
+          proposalRevision: "r2",
+          repairSubmission: {
+            mode: "proposalRepairs",
+            requiredJsonPaths: ["networking.requestPath", "stateInventory"],
+          },
+          requiredNextAction: "revise_architecture_proposal",
+          nextActionIsTool: false,
+        }),
+      }],
+    },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.equal(checkpoint.architectureProposal.revision, "r2");
+  assert.deepEqual(checkpoint.architectureProposal.repairRequirements, repairRequirements);
+  assert.deepEqual(checkpoint.architectureProposal.lastPatchFields, ["networking", "stateInventory"]);
+  assert.equal(checkpoint.architectureProposal.unchangedPatchAttempts, 1);
+  assert.equal(checkpoint.architectureProposal.repairMode, "proposalRepairs");
+  assert.deepEqual(
+    checkpoint.architectureProposal.requiredRepairPaths,
+    ["networking.requestPath", "stateInventory"],
+  );
+  assert.equal(checkpoint.architectureProposal.lastPatchPreview.networking.requestPath.length, 2);
+  const summary = core.summarizeOldMessages(messages, checkpoint);
+  assert.match(summary, /architectureProposalContinuation=/);
+  assert.match(summary, /AGameStateBase::PlayerArray/);
+  assert.match(summary, /never resubmit the same patch digest/);
+  assert.match(summary, /one \{jsonPath,value\} entry per requiredRepairPaths item/);
+});
+
+test("architecture exact-path repairs survive hard compaction", () => {
+  const proposalRepairs = [
+    {
+      jsonPath: "networking.requestPath",
+      value: ["client input", "owned controller RPC", "server authority"],
+    },
+    { jsonPath: "migrationPlan", value: ["add compatible request path"] },
+  ];
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "continue architecture repair" },
+    {
+      role: "assistant",
+      toolCalls: [{
+        id: "repair-1",
+        name: "unreal_architecture_reasoning",
+        arguments: { baseProposalRevision: "r2", proposalRepairs },
+      }],
+    },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "repair-1",
+        name: "unreal_architecture_reasoning",
+        content: JSON.stringify({
+          ok: false,
+          errorCode: "ARCHITECTURE_PROPOSAL_INVALID",
+          proposalRevision: "r3",
+          proposalRepairsApplied: true,
+          proposalValidation: {
+            ok: false,
+            repairRequirements: [{
+              jsonPath: "stateInventory",
+              constraint: "remove the duplicate truth source",
+            }],
+          },
+          repairSubmission: {
+            mode: "proposalRepairs",
+            requiredJsonPaths: ["stateInventory"],
+          },
+        }),
+      }],
+    },
+  ]);
+
+  assert.deepEqual(
+    checkpoint.architectureProposal.lastPatchFields,
+    ["networking.requestPath", "migrationPlan"],
+  );
+  assert.equal(
+    checkpoint.architectureProposal.lastPatchPreview[0].jsonPath,
+    "networking.requestPath",
+  );
+  assert.equal(checkpoint.architectureProposal.repairMode, "proposalRepairs");
+  assert.deepEqual(checkpoint.architectureProposal.requiredRepairPaths, ["stateInventory"]);
 });

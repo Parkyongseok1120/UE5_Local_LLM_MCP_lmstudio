@@ -120,6 +120,18 @@ def test_node_route_requires_capability_for_scoped_tasks(
         arguments={"taskAuthorization": started["taskAuthorization"]},
     )
     assert allowed["ok"] is True
+    assert allowed["taskAuthorization"] == started["taskAuthorization"]
+
+    stale = dict(started["taskAuthorization"])
+    stale["authToken"] = "stale-after-rebase"
+    stale["routeHash"] = "stale-route"
+    refreshed = authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={"taskAuthorization": stale},
+    )
+    assert refreshed["ok"] is True
+    assert refreshed["taskAuthorization"] == started["taskAuthorization"]
 
 
 def test_multi_chat_tools_list_exposes_route_union(tmp_path: Path, monkeypatch) -> None:

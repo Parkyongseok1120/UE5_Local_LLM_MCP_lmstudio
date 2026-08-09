@@ -215,6 +215,9 @@ test("build output decoder preserves UTF-8 and decodes Korean Windows output", (
   );
   assert.strictEqual(localeOutputEncoding("ko-KR"), "euc-kr");
   assert.strictEqual(localeOutputEncoding("ja-JP"), "shift_jis");
+  assert.strictEqual(localeOutputEncoding("en-US", "win32"), "windows-1252");
+  assert.strictEqual(localeOutputEncoding("ko-KR", "linux"), "utf-8");
+  assert.strictEqual(localeOutputEncoding("ja-JP", "darwin"), "utf-8");
 });
 
 test("runUnrealBuildFromPlan reports timedOut", async () => {

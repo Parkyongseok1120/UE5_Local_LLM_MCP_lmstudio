@@ -149,7 +149,8 @@ def test_agent_mcp_subprocess_tools_list_stable_essential(tmp_path: Path) -> Non
         definitions = {tool["name"]: tool for tool in tools}
         for mutation_tool in ("write_file", "replace_in_file"):
             schema = definitions[mutation_tool]["inputSchema"]
-            assert "taskAuthorization" in schema["required"]
+            assert "taskAuthorization" not in schema["required"]
+            assert "taskAuthorization" in schema["properties"]
             assert "ownerCapability" in schema["properties"]["taskAuthorization"]["required"]
         invalid = client.request("tools/call", {"name": "read_file", "arguments": {}}, req_id=3)
         invalid_result = invalid["result"]
@@ -385,18 +386,14 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             1,
         )
         client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        unauthorized = client.request(
+        out_of_slice = client.request(
             "tools/call",
             {"name": "write_file", "arguments": {"path": "Source/DemoGame/Public/Blocked.h", "content": "blocked\n"}},
             2,
         )
-        assert unauthorized["result"].get("isError") is True
-        unauthorized_text = unauthorized["result"]["content"][0]["text"]
-        assert (
-            "taskAuthorization is required" in unauthorized_text
-            or "TASK_ROUTE_OWNERSHIP_REQUIRED" in unauthorized_text
-            or "ownerCapability" in unauthorized_text
-        ), unauthorized_text
+        assert out_of_slice["result"].get("isError") is True
+        out_of_slice_text = out_of_slice["result"]["content"][0]["text"]
+        assert "TASK_SLICE_TARGET_MISMATCH" in out_of_slice_text, out_of_slice_text
         assert not (source_dir / "Blocked.h").exists()
         plan_denied = client.request(
             "tools/call",
@@ -417,7 +414,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
 
         created = client.request(
             "tools/call",
-            {"name": "write_file", "arguments": {"taskAuthorization": create_auth, "path": "Source/DemoGame/Public/NewThing.h", "content": "int alpha = 1;\n"}},
+            {"name": "write_file", "arguments": {"path": "Source/DemoGame/Public/NewThing.h", "content": "int alpha = 1;\n"}},
             2,
         )
         assert created["result"].get("isError") is not True, created
@@ -834,7 +831,12 @@ def test_agent_successful_read_repeat_returns_cached(tmp_path: Path) -> None:
         assert payload.get("repeatDetected") is True
         assert payload.get("doNotRepeatRead") is True
         assert payload.get("errorCode") == "READ_REPEAT_DETECTED"
-        assert "UDemo::BeginPlay" in payload.get("content", "")
+        assert payload.get("contentSuppressed") is True
+        assert payload.get("cachedContentBytes", 0) > 0
+        assert payload.get("cachedLineCount", 0) > 0
+        assert len(payload.get("evidenceHash", "")) == 64
+        assert any("UDemo::BeginPlay" in anchor for anchor in payload.get("semanticAnchors", []))
+        assert "content" not in payload
     finally:
         client.close()
 
@@ -1208,11 +1210,15 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
         assert payload["errorCode"] == "STATIC_VALIDATION_FAILED"
         assert payload["validatedGeneration"] == 2
         assert payload["mutationGeneration"] == 2
-        assert payload["buildAllowedForValidatedGeneration"] is True
-        assert payload["validationOverrideAvailable"] is False
+        assert payload["buildAllowedForValidatedGeneration"] is False
+        assert payload["validationOverrideAvailable"] is True
+        assert payload["validationPassed"] is False
+        assert payload["validationStatus"] == "failed"
 
         mutation = json.loads((state_dir / "mutation.json").read_text(encoding="utf-8"))
         assert mutation["validatedGeneration"] == 2
+        assert mutation["validationPassed"] is False
+        assert mutation["validationStatus"] == "failed"
 
         logs = client.request(
             "tools/call",

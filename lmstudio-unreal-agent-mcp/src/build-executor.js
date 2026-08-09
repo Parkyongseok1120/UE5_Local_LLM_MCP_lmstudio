@@ -112,13 +112,14 @@ function normalizeOutputEncoding(value) {
   return aliases[label] || label;
 }
 
-function localeOutputEncoding(locale = "") {
+function localeOutputEncoding(locale = "", hostPlatform = process.platform) {
+  if (hostPlatform !== "win32") return "utf-8";
   const normalized = String(locale || "").toLowerCase();
   if (normalized.startsWith("ko")) return "euc-kr";
   if (normalized.startsWith("ja")) return "shift_jis";
   if (normalized.startsWith("zh-tw") || normalized.startsWith("zh-hk")) return "big5";
   if (normalized.startsWith("zh")) return "gb18030";
-  return "euc-kr";
+  return "windows-1252";
 }
 
 function sanitizeBrokenCompilerLocalization(text) {
@@ -150,11 +151,13 @@ function decodeBuildOutput(chunks, options = {}) {
     try { locale = Intl.DateTimeFormat().resolvedOptions().locale; } catch { locale = ""; }
   }
   const requested = normalizeOutputEncoding(
-    options.encoding || process.env.MCP_BUILD_OUTPUT_ENCODING || localeOutputEncoding(locale)
+    options.encoding
+      || process.env.MCP_BUILD_OUTPUT_ENCODING
+      || localeOutputEncoding(locale, options.hostPlatform || process.platform)
   );
   try {
     return sanitizeBrokenCompilerLocalization(
-      new TextDecoder(requested || "euc-kr").decode(buffer)
+      new TextDecoder(requested || "utf-8").decode(buffer)
     );
   } catch {
     return sanitizeBrokenCompilerLocalization(buffer.toString("utf8"));
@@ -180,7 +183,7 @@ function defaultBuildPlatform(hostPlatform = process.platform) {
   return "Linux";
 }
 
-function spawnBuildProcess({ executable, kind, args, workspaceRoot }) {
+function spawnBuildProcess({ executable, kind, args, workspaceRoot, hostPlatform = process.platform }) {
   const spec = buildSpawnSpec({ executable, kind, args });
   return spawn(spec.command, spec.args, {
     cwd: workspaceRoot,
@@ -188,13 +191,13 @@ function spawnBuildProcess({ executable, kind, args, workspaceRoot }) {
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
     env: buildProcessEnv(),
-    detached: process.platform !== "win32",
+    detached: hostPlatform !== "win32",
   });
 }
 
-function killProcessTree(pid) {
+function killProcessTree(pid, hostPlatform = process.platform) {
   return new Promise((resolve) => {
-    if (process.platform === "win32") {
+    if (hostPlatform === "win32") {
       const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
       killer.on("close", () => resolve());
       killer.on("error", () => resolve());
@@ -261,7 +264,7 @@ async function runUnrealBuildFromPlan(options = {}) {
   });
 
   return await new Promise((resolve) => {
-    const child = spawnBuildProcess({ executable, kind, args, workspaceRoot });
+    const child = spawnBuildProcess({ executable, kind, args, workspaceRoot, hostPlatform });
     const stdoutChunks = [];
     const stderrChunks = [];
     let settled = false;
@@ -272,9 +275,9 @@ async function runUnrealBuildFromPlan(options = {}) {
         return;
       }
       settled = true;
-      await killProcessTree(child.pid);
-      const stdout = decodeBuildOutput(stdoutChunks);
-      const stderr = decodeBuildOutput(stderrChunks);
+      await killProcessTree(child.pid, hostPlatform);
+      const stdout = decodeBuildOutput(stdoutChunks, { hostPlatform });
+      const stderr = decodeBuildOutput(stderrChunks, { hostPlatform });
       const fullLog = `${stdout}\n${stderr}`.trim();
       let savedLogPath = logPath;
       if (savedLogPath) {
@@ -308,8 +311,8 @@ async function runUnrealBuildFromPlan(options = {}) {
       }
       settled = true;
       clearTimeout(timer);
-      const stdout = decodeBuildOutput(stdoutChunks);
-      const stderr = decodeBuildOutput(stderrChunks);
+      const stdout = decodeBuildOutput(stdoutChunks, { hostPlatform });
+      const stderr = decodeBuildOutput(stderrChunks, { hostPlatform });
       const fullLog = `${stdout}\n${stderr}`.trim();
       let savedLogPath = logPath;
       if (savedLogPath) {
@@ -367,6 +370,7 @@ module.exports = {
   resolveBuildScriptPaths,
   resolveBuildExecutable,
   spawnBuildProcess,
+  killProcessTree,
   buildSpawnSpec,
   buildProcessEnv,
   decodeBuildOutput,

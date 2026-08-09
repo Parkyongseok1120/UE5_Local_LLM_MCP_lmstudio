@@ -10,6 +10,9 @@ const {
   resolveSearchRoots,
   findEngineInstalls,
   defaultPlatform,
+  pathIdentity,
+  splitSearchRoots,
+  uniquePaths,
 } = require("../src/unreal-detect");
 
 function createProject(root, name, engineAssociation) {
@@ -103,6 +106,50 @@ test("host platform maps macOS to Mac instead of Linux", () => {
   assert.strictEqual(defaultPlatform("win32"), "Win64");
   assert.strictEqual(defaultPlatform("darwin"), "Mac");
   assert.strictEqual(defaultPlatform("linux"), "Linux");
+});
+
+test("search root environment values use the host path-list delimiter", () => {
+  assert.deepStrictEqual(splitSearchRoots("C:\\One;D:\\Two", "win32"), ["C:\\One", "D:\\Two"]);
+  assert.deepStrictEqual(splitSearchRoots("/srv/One:/srv/Two", "linux"), ["/srv/One", "/srv/Two"]);
+  assert.deepStrictEqual(splitSearchRoots("/Volumes/One:/Volumes/Two", "darwin"), ["/Volumes/One", "/Volumes/Two"]);
+});
+
+test("path identity folds case only on Windows hosts", () => {
+  assert.strictEqual(pathIdentity("CaseSensitive/Project", "win32"), pathIdentity("casesensitive/project", "win32"));
+  assert.notStrictEqual(pathIdentity("CaseSensitive/Project", "linux"), pathIdentity("casesensitive/project", "linux"));
+  assert.notStrictEqual(pathIdentity("CaseSensitive/Project", "darwin"), pathIdentity("casesensitive/project", "darwin"));
+});
+
+test("unique project roots preserve case-distinct POSIX directories", () => {
+  const linuxRoots = uniquePaths(["CaseProject", "caseproject"], "linux");
+  const windowsRoots = uniquePaths(["CaseProject", "caseproject"], "win32");
+  assert.strictEqual(linuxRoots.length, 2);
+  assert.strictEqual(windowsRoots.length, 1);
+});
+
+test("resolveSearchRoots accepts injected host environment without machine defaults", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-host-roots-"));
+  const workspaceRoot = path.join(root, "workspace");
+  const localConfig = path.join(root, "agent-mcp.json");
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  fs.writeFileSync(localConfig, "{}", "utf8");
+  const previousSharedConfig = process.env.SHARED_UNREAL_CONFIG;
+  process.env.SHARED_UNREAL_CONFIG = path.join(root, "missing-shared.json");
+  try {
+    // Relative roots keep this host-independent while exercising the POSIX
+    // list delimiter on a Windows CI runner.
+    const first = "PortableRootOne";
+    const second = "PortableRootTwo";
+    const { roots } = resolveSearchRoots(workspaceRoot, localConfig, {
+      hostPlatform: "linux",
+      env: { PROJECT_SEARCH_ROOTS: `${first}:${second}` },
+      homeDirectory: path.join(root, "home"),
+    });
+    assert.deepStrictEqual(roots, [path.resolve(workspaceRoot), path.resolve(first), path.resolve(second)]);
+  } finally {
+    if (previousSharedConfig === undefined) delete process.env.SHARED_UNREAL_CONFIG;
+    else process.env.SHARED_UNREAL_CONFIG = previousSharedConfig;
+  }
 });
 
 test("engine discovery accepts native Mac and Linux Build.sh layouts", async () => {

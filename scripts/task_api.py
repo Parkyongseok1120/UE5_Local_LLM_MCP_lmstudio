@@ -76,6 +76,7 @@ SCOPE_SUPPORTING_GATES = frozenset(
         "unreal_architecture_reasoning",
     }
 )
+GATE_POLICY_VERSION = 2
 
 
 class TaskStateReadError(RuntimeError):
@@ -216,6 +217,7 @@ def _auth_refresh_failure(
                 "activeSliceId": context["activeSliceId"],
             },
             "nextAction": "request_fresh_authorization_or_replan",
+            "nextActionIsTool": False,
         }
         if mismatched_fields:
             payload["mismatchedFields"] = list(mismatched_fields)
@@ -225,6 +227,7 @@ def _auth_refresh_failure(
         **result,
         "taskAuthorization": task_authorization_for_state(state),
         "nextAction": "retry_same_tool_with_returned_taskAuthorization",
+        "nextActionIsTool": False,
     }
 
 
@@ -241,6 +244,7 @@ def _strip_plan_only_authorization(payload: dict[str, Any]) -> dict[str, Any]:
     payload.pop("taskAuthorization", None)
     payload["taskAuthorizationRequiredForWrites"] = False
     payload["nextAction"] = "start_agent_edit_task_to_apply_changes"
+    payload["nextActionIsTool"] = False
     tool_route = dict(payload.get("toolRoute") or {})
     if tool_route:
         tool_route["activeTools"] = [
@@ -326,9 +330,53 @@ def _invalidate_selection_dependent_gates(
     state["writeGate"] = write_gate
 
 
+def _migrate_gate_policy(state: dict[str, Any]) -> bool:
+    version = int(state.get("gatePolicyVersion") or 1)
+    if version >= GATE_POLICY_VERSION:
+        return False
+    narrowed = False
+    required = [str(item) for item in state.get("requiredBeforeWrite") or []]
+    if "unreal_runtime_debug_session" in required:
+        from agent_orchestrator import _is_runtime_symptom_analysis
+
+        mode = str(state.get("mode") or "").strip().casefold()
+        request = str(state.get("request") or "")
+        runtime_causal_task = mode == "runtime_debug" or _is_runtime_symptom_analysis(
+            request.casefold()
+        )
+        if not runtime_causal_task:
+            required = [
+                gate for gate in required if gate != "unreal_runtime_debug_session"
+            ]
+            state["requiredBeforeWrite"] = required
+            completed = (
+                dict(state.get("completedGates") or {})
+                if isinstance(state.get("completedGates"), dict)
+                else {}
+            )
+            completed.pop("unreal_runtime_debug_session", None)
+            state["completedGates"] = completed
+            state["pendingGates"] = [
+                gate for gate in required if gate not in completed
+            ]
+            write_gate = dict(state.get("writeGate") or {})
+            write_gate["requiredBeforeWrite"] = required
+            write_gate["completedBeforeWrite"] = sorted(completed)
+            write_gate["pendingBeforeWrite"] = list(state["pendingGates"])
+            state["writeGate"] = write_gate
+            # This is a narrowing migration, so preserve still-valid completed
+            # gate records instead of treating the expected set change as
+            # evidence tampering.
+            state["requiredGateSetHash"] = ""
+            narrowed = True
+    state["gatePolicyVersion"] = GATE_POLICY_VERSION
+    return narrowed
+
+
 def _refresh_server_owned_state(state: dict[str, Any]) -> dict[str, Any]:
     """Refresh selection bindings and the route after every persisted transition."""
 
+    gate_set_narrowed = _migrate_gate_policy(state)
     state.setdefault("selectedHypothesisId", "")
     state.setdefault("selectedCandidateId", "")
     state["selectedTargetSnapshots"] = normalized_selection_snapshots(
@@ -343,6 +391,15 @@ def _refresh_server_owned_state(state: dict[str, Any]) -> dict[str, Any]:
         project_file=str(state.get("projectFile") or ""),
         required_gates=required,
     )
+    if gate_set_narrowed:
+        completed = (
+            state.get("completedGates")
+            if isinstance(state.get("completedGates"), dict)
+            else {}
+        )
+        for gate, record in completed.items():
+            if gate in required and isinstance(record, dict):
+                record["gateSetHash"] = expected_gate_hash
     if (
         state.get("requiredGateSetHash")
         and str(state.get("requiredGateSetHash")) != expected_gate_hash
@@ -1067,6 +1124,15 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
     public = dict(state)
     public.pop("authToken", None)
     public.pop("ownerCapability", None)
+    # expiryTransition contains a speculative future route, including a phase
+    # that may intentionally hide the current executor/build tools. Exposing
+    # that internal fallback through task_status made compact models reason
+    # about a future planner route and repeatedly call task_status instead of
+    # following the current route's next action. The response already carries
+    # the current compact route at the top level, so keep the state projection
+    # equally compact and server-actionable.
+    if isinstance(public.get("toolRoute"), dict):
+        public["toolRoute"] = compact_tool_route(public["toolRoute"])
     return public
 
 
@@ -1178,6 +1244,38 @@ def _capture_plan_scope(plan_payload: dict[str, Any]) -> dict[str, Any]:
         "overflow": declared_count > MAX_CHECKPOINT_FILES,
         "fileLimit": MAX_CHECKPOINT_FILES,
     }
+
+
+def _requires_runtime_slice_plan(
+    request: str,
+    task_kind: str,
+    plan_scope: dict[str, Any],
+) -> bool:
+    if task_kind.casefold() not in {"edit", "refactor"}:
+        return False
+    declared_slices = plan_scope.get("slices") or []
+    has_concrete_slices = bool(declared_slices) and all(
+        isinstance(item, dict)
+        and bool(_path_values(item.get("files")))
+        and all(
+            not _is_logical_or_placeholder_path(path)
+            and str(path).replace("\\", "/").removeprefix("project://").casefold().startswith(
+                ("source/", "plugins/", "config/")
+            )
+            for path in _path_values(item.get("files"))
+        )
+        for item in declared_slices
+    )
+    if has_concrete_slices:
+        return False
+    text = str(request or "").casefold()
+    broad_markers = (
+        "remaining feature", "prototype feature", "multiple feature",
+        "complete multiplayer", "complete match", "across the project",
+        "all relevant", "room and lobby", "minigame", "mini-game",
+        "roadmap", "stages 0 through", "stage 0", "lobby/room",
+    )
+    return len(text) >= 240 and any(marker in text for marker in broad_markers)
 
 
 def _is_logical_or_placeholder_path(raw_path: str) -> bool:
@@ -1344,6 +1442,11 @@ def _checkpoint_path_union(
         for item in (checkpoint.get("modifiedFiles") or [])
         if str(item).strip()
     ]
+    prior_git_paths = [
+        str(item)
+        for item in (checkpoint.get("gitChangedFiles") or [])
+        if str(item).strip()
+    ]
     git = _discover_git_changed_files(root) if include_git_changes else {
         "available": False,
         "files": [],
@@ -1357,6 +1460,7 @@ def _checkpoint_path_union(
         ("plan", _active_plan_files(state)),
     )
     relative_paths: list[str] = []
+    caller_relative_paths: list[str] = []
     warnings = [str(item) for item in (git.get("warnings") or [])]
     issues = [str(item) for item in (git.get("issues") or [])]
     for source, paths in sources:
@@ -1372,6 +1476,8 @@ def _checkpoint_path_union(
                 continue
             if relative and relative not in relative_paths:
                 relative_paths.append(relative)
+            if source == "caller" and relative and relative not in caller_relative_paths:
+                caller_relative_paths.append(relative)
             if len(relative_paths) > MAX_CHECKPOINT_FILES:
                 issues.append(
                     "checkpoint file set exceeds limit "
@@ -1380,9 +1486,17 @@ def _checkpoint_path_union(
                 break
         if issues:
             break
+    expected_git_changes = list(git.get("files") or [])
+    if not include_git_changes:
+        # Skip discovery of unrelated worktree changes, but retain the accepted
+        # baseline and files explicitly mutated by this task. Otherwise the next
+        # recovery misclassifies task-created edits as external new_git_change.
+        expected_git_changes = list(
+            dict.fromkeys([*prior_git_paths, *caller_relative_paths])
+        )
     return {
         "paths": relative_paths,
-        "gitChangedFiles": list(git.get("files") or []),
+        "gitChangedFiles": expected_git_changes,
         "gitAvailable": bool(git.get("available")),
         "warnings": list(dict.fromkeys(warnings)),
         "issues": list(dict.fromkeys(issues)),
@@ -1586,6 +1700,81 @@ def _advance_authorized_mutation_snapshots(
     return sorted(set(advanced))
 
 
+def _carry_forward_unchanged_feature_checkpoint_binding(
+    workspace: Path,
+    state: dict[str, Any],
+) -> bool:
+    """Keep a resolved feature gate valid across evidence-only checkpoints.
+
+    A checkpoint record changes the continuity hash even when it only resets a
+    phase budget after reads.  The feature-intent gate is bound to that hash, so
+    blindly changing it makes every long verifier loop repeat the gate.  Carry
+    the binding forward only when every gate target still has the exact SHA-1
+    captured by the gate.  Any source change remains fail-closed.
+    """
+
+    completed = (
+        dict(state.get("completedGates") or {})
+        if isinstance(state.get("completedGates"), dict)
+        else {}
+    )
+    record = (
+        dict(completed.get("unreal_feature_intent_resolve") or {})
+        if isinstance(completed.get("unreal_feature_intent_resolve"), dict)
+        else {}
+    )
+    snapshots = [
+        dict(item)
+        for item in record.get("targetSnapshots") or []
+        if isinstance(item, dict)
+    ]
+    if not snapshots:
+        return False
+
+    root = _continuity_project_root(workspace, state)
+    for snapshot in snapshots:
+        raw_relative = str(
+            snapshot.get("path") or snapshot.get("relativePath") or ""
+        ).strip()
+        relative, issue = _resolve_checkpoint_relative_path(root, raw_relative)
+        if issue or not relative:
+            return False
+        candidate = (root / relative).resolve()
+        try:
+            exists = candidate.is_file()
+            digest = hashlib.sha1(candidate.read_bytes()).hexdigest() if exists else ""
+        except OSError:
+            return False
+        if exists is not bool(snapshot.get("exists")):
+            return False
+        if digest != str(snapshot.get("fileHash") or ""):
+            return False
+
+    continuity = dict(state.get("continuity") or {})
+    checkpoint = dict(continuity.get("checkpoint") or {})
+    checkpoint_hash = str(
+        checkpoint.get("checkpointHash")
+        or continuity.get("planIdentityHash")
+        or ""
+    )
+    if not checkpoint_hash:
+        return False
+
+    from feature_intent_contract import target_snapshot_hash
+
+    snapshot_hash = target_snapshot_hash(snapshots)
+    record["checkpointHash"] = checkpoint_hash
+    record["targetSnapshotHash"] = snapshot_hash
+    completed["unreal_feature_intent_resolve"] = record
+    state["completedGates"] = completed
+    feature_state = dict(state.get("featureIntent") or {})
+    feature_state["checkpointHash"] = checkpoint_hash
+    feature_state["targetSnapshotHash"] = snapshot_hash
+    state["featureIntent"] = feature_state
+    state["selectionBinding"] = selection_binding(state)
+    return True
+
+
 def task_record_build_recovery(
     workspace: Path,
     *,
@@ -1672,13 +1861,14 @@ def task_complete_after_successful_build(
     proof_level: str = "",
     mutation_generation: int | None = None,
     build_log_path: str = "",
+    proof_kind: str = "build",
 ) -> dict[str, Any]:
-    """Release a routed edit task after its authoritative build succeeds.
+    """Complete the active slice after a build and release only at plan end.
 
-    A successful terminal build is the normal end of an agent edit request. If
-    the task remains ``running``, a fresh conversation is forced onto the old
-    route and selected slice. Completing it here keeps task ownership aligned
-    with the build result that the server already returned to the model.
+    Multi-slice plans must not be marked complete after their first successful
+    build. The build is recorded as authoritative proof for the current slice;
+    the next declared slice receives a fresh gate identity and route. A task is
+    released only when no declared slice remains.
     """
 
     authorization = task_authorization if isinstance(task_authorization, dict) else {}
@@ -1726,18 +1916,137 @@ def task_complete_after_successful_build(
             }
             return None
 
+        if state.get("slicePlanningRequired") is True:
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "running",
+                "errorCode": "SLICE_PLAN_REQUIRED",
+                "error": (
+                    "This broad feature task has no registered executable slices; "
+                    "a successful build cannot complete it."
+                ),
+                "nextAction": "unreal_task_define_slices",
+                "agentInstruction": (
+                    "Register all discovered concrete 1-4 file slices, then continue "
+                    "from the first slice with the returned taskAuthorization."
+                ),
+                "taskSessionId": task_session_id,
+            }
+            return state
+
         completed_at = _utc_now()
-        state["status"] = "completed"
-        state["completedAt"] = completed_at
-        state["completionNote"] = "authoritative Unreal build succeeded"
-        state["completionEvidence"] = {
-            "kind": "build",
+        plan_scope = state.get("planScope") if isinstance(state.get("planScope"), dict) else {}
+        slice_ids = [
+            str(item.get("sliceId") or item.get("slice_id") or "").strip()
+            for item in (plan_scope.get("slices") or [])
+            if isinstance(item, dict)
+            and str(item.get("sliceId") or item.get("slice_id") or "").strip()
+        ]
+        active_slice_id = str(state.get("activeSliceId") or "task").strip() or "task"
+        progress = state.get("sliceProgress") if isinstance(state.get("sliceProgress"), dict) else {}
+        completed_slices = list(
+            dict.fromkeys(
+                [
+                    str(item).strip()
+                    for item in (progress.get("completedSlices") or [])
+                    if str(item).strip()
+                ]
+                + ([active_slice_id] if active_slice_id in slice_ids else [])
+            )
+        )
+        pending_slices = [item for item in slice_ids if item not in completed_slices]
+        evidence = {
+            "kind": str(proof_kind or "build"),
+            "sliceId": active_slice_id,
             "proofLevel": str(proof_level or "Built"),
             "mutationGeneration": int(mutation_generation or 0),
             "buildLogPath": str(build_log_path or ""),
             "recordedAt": completed_at,
         }
+        history = list(state.get("buildProofHistory") or [])
+        history.append(evidence)
+        state["buildProofHistory"] = history[-256:]
+        state["sliceProgress"] = {
+            "activeSliceId": pending_slices[0] if pending_slices else active_slice_id,
+            "completedSlices": completed_slices,
+            "pendingSlices": pending_slices,
+        }
         state.pop("buildRecovery", None)
+        state.pop("buildVerification", None)
+
+        if pending_slices:
+            next_slice_id = pending_slices[0]
+            state["activeSliceId"] = next_slice_id
+            state["authToken"] = uuid.uuid4().hex
+            required = [
+                str(item).strip()
+                for item in (state.get("requiredBeforeWrite") or [])
+                if str(item).strip()
+            ]
+            state["requiredGateSetHash"] = required_gate_set_hash(
+                task_session_id=task_session_id,
+                plan_id=str(state.get("planId") or ""),
+                plan_revision=str(state.get("planRevision") or ""),
+                active_slice_id=next_slice_id,
+                project_file=str(state.get("projectFile") or ""),
+                required_gates=required,
+            )
+            state["completedGates"] = {}
+            state["pendingGates"] = list(required)
+            write_gate = dict(state.get("writeGate") or {})
+            write_gate["completedBeforeWrite"] = []
+            write_gate["pendingBeforeWrite"] = list(required)
+            state["writeGate"] = write_gate
+            for key, empty in (
+                ("selectedHypothesisId", ""),
+                ("selectedCandidateId", ""),
+                ("selectedIntentId", ""),
+                ("intentContractHash", ""),
+                ("selectedTargetSnapshots", []),
+                ("featureTargetSnapshots", []),
+                ("selectionBinding", {}),
+            ):
+                state[key] = empty
+            continuity = initialize_continuity(
+                task_session_id=task_session_id,
+                plan_id=str(state.get("planId") or ""),
+                plan_revision=str(state.get("planRevision") or ""),
+                active_slice_id=next_slice_id,
+            )
+            state["continuity"] = continuity
+            state["toolRouteUsage"] = {
+                "routeHash": "",
+                "phase": "",
+                "roleSession": "",
+                "count": 0,
+                "calls": [],
+                "resetReason": "successful_slice_build",
+            }
+            state["completionEvidence"] = evidence
+            state["updatedAt"] = completed_at
+            _append_log(
+                workspace,
+                task_session_id,
+                f"Slice {active_slice_id} built; advanced to {next_slice_id}",
+            )
+            outcome = {
+                "ok": True,
+                "active": True,
+                "status": "running",
+                "taskSessionId": task_session_id,
+                "sliceAdvanced": True,
+                "completedSliceId": active_slice_id,
+                "activeSliceId": next_slice_id,
+                "pendingSlices": pending_slices,
+                "completionEvidence": evidence,
+            }
+            return state
+
+        state["status"] = "completed"
+        state["completedAt"] = completed_at
+        state["completionNote"] = "authoritative Unreal build succeeded"
+        state["completionEvidence"] = evidence
         continuity = dict(state.get("continuity") or {})
         lease = dict(continuity.get("lease") or {})
         if lease:
@@ -1757,6 +2066,106 @@ def task_complete_after_successful_build(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
+    if outcome.get("active") is True and result.get("ok") is True:
+        try:
+            current = _read_state(workspace, task_session_id)
+        except TaskStateReadError:
+            current = None
+        if current:
+            outcome["taskAuthorization"] = task_authorization_for_state(current)
+            outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
+    return outcome or result
+
+
+def task_require_automation_after_build(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    mutation_generation: int,
+    build_log_path: str,
+    test_filter: str,
+    declared_tests: list[str] | None = None,
+) -> dict[str, Any]:
+    """Persist the post-build Automation exit gate for the current slice."""
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId")
+        or authorization.get("task_session_id")
+        or ""
+    ).strip()
+    if not task_session_id:
+        return {"ok": True, "active": False}
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                },
+                state,
+                mismatched_fields=mismatches,
+            )
+            return None
+        if str(state.get("status") or "") != "running":
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_NOT_WRITABLE",
+                "error": "Automation gate requires a running task",
+            }
+            return None
+        state["buildVerification"] = {
+            "status": "pending_automation",
+            "activeSliceId": str(state.get("activeSliceId") or ""),
+            "mutationGeneration": int(mutation_generation or 0),
+            "buildLogPath": str(build_log_path or ""),
+            "testFilter": str(test_filter or ""),
+            "declaredTests": [str(item) for item in (declared_tests or [])][:256],
+            "recordedAt": _utc_now(),
+        }
+        build_history = list(state.get("buildProofHistory") or [])
+        build_history.append(
+            {
+                "kind": "build",
+                "sliceId": str(state.get("activeSliceId") or ""),
+                "proofLevel": "Built",
+                "mutationGeneration": int(mutation_generation or 0),
+                "buildLogPath": str(build_log_path or ""),
+                "recordedAt": _utc_now(),
+            }
+        )
+        state["buildProofHistory"] = build_history[-256:]
+        state["updatedAt"] = _utc_now()
+        outcome = {
+            "ok": True,
+            "active": True,
+            "status": "pending_automation",
+            "taskSessionId": task_session_id,
+            "activeSliceId": str(state.get("activeSliceId") or ""),
+            "testFilter": str(test_filter or ""),
+            "declaredTestCount": len(declared_tests or []),
+        }
+        _append_log(
+            workspace,
+            task_session_id,
+            f"Build passed; Automation gate pending for filter {test_filter}",
+        )
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if outcome.get("ok") is True and result.get("ok") is True:
+        try:
+            current = _read_state(workspace, task_session_id)
+        except TaskStateReadError:
+            current = None
+        if current:
+            outcome["taskAuthorization"] = task_authorization_for_state(current)
+            outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
     return outcome or result
 
 
@@ -2141,6 +2550,11 @@ def task_start(
         if candidate:
             active_slice_id = candidate
             break
+    slice_ids = [
+        str(item.get("sliceId") or "").strip()
+        for item in slices
+        if isinstance(item, dict) and str(item.get("sliceId") or "").strip()
+    ]
 
     task_session_id = uuid.uuid4().hex[:16]
     auth_token = uuid.uuid4().hex
@@ -2191,6 +2605,7 @@ def task_start(
         "writesAllowed": writes_allowed,
         "requiredBeforeWrite": required_before_write,
         "requiredGateSetHash": gate_set_hash,
+        "gatePolicyVersion": GATE_POLICY_VERSION,
         "completedGates": {},
         "pendingGates": list(required_before_write),
         "maxFilesPerEdit": min(
@@ -2200,6 +2615,16 @@ def task_start(
         "taskKind": str(plan_payload.get("taskKind") or ""),
         "editStrategy": str(plan_payload.get("editStrategy") or ""),
         "planScope": plan_scope,
+        "slicePlanningRequired": _requires_runtime_slice_plan(
+            request,
+            str(plan_payload.get("taskKind") or ""),
+            plan_scope,
+        ),
+        "sliceProgress": {
+            "activeSliceId": active_slice_id,
+            "completedSlices": [],
+            "pendingSlices": [item for item in slice_ids if item != active_slice_id],
+        },
         "selectedHypothesisId": "",
         "selectedCandidateId": "",
         "selectedTargetSnapshots": [],
@@ -3905,6 +4330,11 @@ def task_replan(
             ),
             "task",
         )
+        slice_ids = [
+            str(item.get("sliceId") or "").strip()
+            for item in slices
+            if isinstance(item, dict) and str(item.get("sliceId") or "").strip()
+        ]
         prior_revision = str(state.get("planRevision") or "1")
         try:
             next_revision = str(int(prior_revision) + 1)
@@ -3978,6 +4408,13 @@ def task_replan(
                 "taskKind": task_kind,
                 "editStrategy": str(plan_payload.get("editStrategy") or ""),
                 "planScope": plan_scope,
+                "sliceProgress": {
+                    "activeSliceId": active_slice_id,
+                    "completedSlices": [],
+                    "pendingSlices": [
+                        item for item in slice_ids if item != active_slice_id
+                    ],
+                },
                 "selectedHypothesisId": "",
                 "selectedCandidateId": "",
                 "selectedIntentId": "",
@@ -4112,6 +4549,184 @@ def task_replan(
             outcome["status"] = str(completed_state.get("status") or "completed")
             outcome["planOnlyCompleted"] = True
             outcome = _strip_plan_only_authorization(outcome)
+    return outcome
+
+
+def task_define_slices(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    slices: list[dict[str, Any]],
+    active_slice_id: str = "",
+) -> dict[str, Any]:
+    """Register concrete bounded slices discovered after the initial plan."""
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId") or authorization.get("task_session_id") or ""
+    ).strip()
+    if not task_session_id:
+        return {
+            "ok": False,
+            "errorCode": "TASK_SESSION_REQUIRED",
+            "error": "taskAuthorization.taskSessionId is required",
+        }
+    if not isinstance(slices, list) or not slices:
+        return {
+            "ok": False,
+            "errorCode": "SLICE_PLAN_REQUIRED",
+            "error": "At least one concrete slice is required",
+        }
+
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                },
+                state,
+                mismatched_fields=mismatches,
+            )
+            return None
+        if str(state.get("status") or "") != "running":
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_NOT_WRITABLE",
+                "error": "Task is not running",
+            }
+            return None
+        progress = state.get("sliceProgress") if isinstance(state.get("sliceProgress"), dict) else {}
+        if progress.get("completedSlices") or state.get("buildProofHistory"):
+            outcome = {
+                "ok": False,
+                "errorCode": "SLICE_PLAN_ALREADY_EXECUTING",
+                "error": "Slices must be defined before the first slice is completed.",
+            }
+            return None
+
+        project_root = _continuity_project_root(workspace, state)
+        normalized: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        declared_files: set[str] = set()
+        for item in slices:
+            if not isinstance(item, dict):
+                outcome = {"ok": False, "errorCode": "INVALID_SLICE", "error": "Each slice must be an object."}
+                return None
+            slice_id = str(item.get("sliceId") or item.get("slice_id") or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", slice_id):
+                outcome = {"ok": False, "errorCode": "INVALID_SLICE_ID", "error": f"Invalid sliceId: {slice_id}"}
+                return None
+            if slice_id in seen_ids:
+                outcome = {"ok": False, "errorCode": "DUPLICATE_SLICE_ID", "error": f"Duplicate sliceId: {slice_id}"}
+                return None
+            raw_files = _path_values(item.get("files"))
+            if not 1 <= len(raw_files) <= MAX_FILES_PER_SLICE:
+                outcome = {
+                    "ok": False,
+                    "errorCode": "PLAN_SLICE_TOO_LARGE" if len(raw_files) > MAX_FILES_PER_SLICE else "SLICE_FILES_REQUIRED",
+                    "error": f"Slice {slice_id} must contain 1-{MAX_FILES_PER_SLICE} files.",
+                }
+                return None
+            files: list[str] = []
+            slice_files: set[str] = set()
+            for raw_path in raw_files:
+                relative, issue = _resolve_checkpoint_relative_path(project_root, str(raw_path))
+                if issue:
+                    outcome = {"ok": False, "errorCode": "INVALID_SLICE_PATH", "error": issue}
+                    return None
+                first = relative.split("/", 1)[0].casefold()
+                if first not in {"source", "plugins", "config"}:
+                    outcome = {
+                        "ok": False,
+                        "errorCode": "INVALID_SLICE_PATH",
+                        "error": f"Slice paths must be under Source, Plugins, or Config: {relative}",
+                    }
+                    return None
+                if relative in slice_files:
+                    outcome = {
+                        "ok": False,
+                        "errorCode": "DUPLICATE_SLICE_FILE",
+                        "error": f"A file may appear only once within slice {slice_id}: {relative}",
+                    }
+                    return None
+                files.append(relative)
+                slice_files.add(relative)
+                declared_files.add(relative)
+            seen_ids.add(slice_id)
+            normalized.append({"sliceId": slice_id, "files": files})
+
+        if len(declared_files) > MAX_CHECKPOINT_FILES:
+            outcome = {
+                "ok": False,
+                "errorCode": "PLAN_SCOPE_OVERFLOW",
+                "error": f"Slice plan exceeds {MAX_CHECKPOINT_FILES} files.",
+            }
+            return None
+        selected = str(active_slice_id or normalized[0]["sliceId"]).strip()
+        if selected not in seen_ids:
+            outcome = {
+                "ok": False,
+                "errorCode": "ACTIVE_SLICE_UNKNOWN",
+                "error": f"activeSliceId is not declared: {selected}",
+            }
+            return None
+
+        scope = dict(state.get("planScope") or {})
+        scope["slices"] = normalized
+        scope["declaredFileCount"] = len(declared_files) + len(scope.get("impactContractFiles") or [])
+        scope["overflow"] = False
+        state["planScope"] = scope
+        state["slicePlanningRequired"] = False
+        state["activeSliceId"] = selected
+        state["sliceProgress"] = {
+            "activeSliceId": selected,
+            "completedSlices": [],
+            "pendingSlices": [item["sliceId"] for item in normalized if item["sliceId"] != selected],
+        }
+        state["authToken"] = uuid.uuid4().hex
+        state["completedGates"] = {}
+        state["pendingGates"] = list(state.get("requiredBeforeWrite") or [])
+        write_gate = dict(state.get("writeGate") or {})
+        write_gate["completedBeforeWrite"] = []
+        write_gate["pendingBeforeWrite"] = list(state["pendingGates"])
+        state["writeGate"] = write_gate
+        state["continuity"] = initialize_continuity(
+            task_session_id=task_session_id,
+            plan_id=str(state.get("planId") or ""),
+            plan_revision=str(state.get("planRevision") or ""),
+            active_slice_id=selected,
+        )
+        state["updatedAt"] = _utc_now()
+        outcome = {
+            "ok": True,
+            "taskSessionId": task_session_id,
+            "activeSliceId": selected,
+            "slices": normalized,
+            "pendingSlices": list(state["sliceProgress"]["pendingSlices"]),
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if not outcome:
+        return result
+    if result.get("ok"):
+        # `_mutate_task_state` returns the public task response, whose state
+        # intentionally redacts authToken and ownerCapability.  Slice
+        # registration rotates the token, so deriving the continuation
+        # authorization from that public state strands the caller with empty
+        # credentials.  Read the just-persisted server state instead.
+        try:
+            current = _read_state(workspace, task_session_id) or {}
+        except TaskStateReadError:
+            current = result.get("state") or {}
+        outcome["taskAuthorization"] = task_authorization_for_state(current)
+        outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
     return outcome
 
 
@@ -4318,6 +4933,11 @@ def task_checkpoint(
                             str(item.get("relativePath") or "")
                             for item in snapshots
                         ],
+                    )
+                else:
+                    _carry_forward_unchanged_feature_checkpoint_binding(
+                        workspace,
+                        state,
                     )
             except ValueError as exc:
                 mutation_result = {
@@ -4564,6 +5184,9 @@ def task_checkpoint(
     return result
 
 
+DEFAULT_GATE_TTL_SECONDS = 2 * 60 * 60
+
+
 def task_record_gate(
     workspace: Path,
     *,
@@ -4573,7 +5196,7 @@ def task_record_gate(
     evidence: dict[str, Any],
     target_snapshots: list[dict[str, Any]] | None = None,
     intent_binding: dict[str, Any] | None = None,
-    ttl_seconds: int = 1800,
+    ttl_seconds: int = DEFAULT_GATE_TTL_SECONDS,
 ) -> dict[str, Any]:
     """Record one successful pre-write gate against its exact plan and evidence."""
 
@@ -4752,6 +5375,10 @@ def task_record_gate(
                     return None
         if feature_binding:
             previous_intent_id = str(state.get("selectedIntentId") or "")
+            previous_feature_state = dict(state.get("featureIntent") or {})
+            previous_oracle_hash = str(
+                previous_feature_state.get("acceptanceOracleHash") or ""
+            )
             state["selectedIntentId"] = feature_binding["selectedIntentId"]
             state["intentContractHash"] = feature_binding["intentContractHash"]
             state["featureTargetSnapshots"] = normalized_selection_snapshots(
@@ -4772,8 +5399,33 @@ def task_record_gate(
                 }
             )
             state["featureIntent"] = feature_state
-            if not previous_intent_id:
-                state["selectionBinding"] = selection_binding(state)
+            semantic_selection_changed = bool(
+                previous_intent_id
+                and (
+                    previous_intent_id != feature_binding["selectedIntentId"]
+                    or (
+                        previous_oracle_hash
+                        and previous_oracle_hash
+                        != feature_binding["acceptanceOracleHash"]
+                    )
+                )
+            )
+            if semantic_selection_changed:
+                _invalidate_selection_dependent_gates(
+                    state,
+                    keep_gates={gate},
+                )
+                state["completedGates"][gate] = record
+                state["pendingGates"] = [
+                    item
+                    for item in required
+                    if item not in state["completedGates"]
+                ]
+                pending = state["pendingGates"]
+            # The feature gate itself establishes the new binding. Refreshing
+            # with the old binding would immediately invalidate the record we
+            # just wrote (notably when only the rationale changed).
+            state["selectionBinding"] = selection_binding(state)
         write_gate = dict(state.get("writeGate") or {})
         write_gate["completedBeforeWrite"] = sorted(state["completedGates"])
         write_gate["pendingBeforeWrite"] = pending
@@ -5131,6 +5783,24 @@ def authorize_task_tool(
                 state,
                 mismatched_fields=mismatches,
             )
+        if (
+            state.get("slicePlanningRequired") is True
+            and tool_name not in CONTROL_PLANE_TOOLS
+        ):
+            current_authorization = task_authorization_for_state(state)
+            return {
+                "ok": False,
+                "errorCode": "SLICE_PLAN_REQUIRED",
+                "error": "Concrete executable slices must be registered before routed work continues.",
+                "taskAuthorization": current_authorization,
+                "nextAction": "unreal_task_define_slices",
+                "nextActionArgs": {"taskAuthorization": current_authorization},
+                "retryable": True,
+                "agentInstruction": (
+                    "Call unreal_task_define_slices now with every discovered concrete 1-4 file "
+                    "slice. Replace placeholder/template paths and continue with the returned authorization."
+                ),
+            }
         route = (
             state.get("toolRoute")
             if isinstance(state.get("toolRoute"), dict)
@@ -5290,6 +5960,16 @@ def authorize_task_tool(
             return failure
 
         if consume_budget and tool_name not in CONTROL_PLANE_TOOLS:
+            continuity = (
+                dict(state.get("continuity") or {})
+                if isinstance(state.get("continuity"), dict)
+                else {}
+            )
+            if continuity and lease_health(continuity).get("active") is True:
+                state["continuity"] = renew_lease(
+                    continuity,
+                    reason="route_tool_activity",
+                )
             usage = (
                 dict(state.get("toolRouteUsage") or {})
                 if isinstance(state.get("toolRouteUsage"), dict)
@@ -5323,7 +6003,8 @@ def authorize_task_tool(
                         "phase": str(route.get("phase") or "working"),
                         "requiredNextAction": tool_name,
                         "includeGitChanges": False,
-                        "taskAuthorization": checkpoint_authorization,
+                        "taskSessionId": checkpoint_authorization["taskSessionId"],
+                        "ownerCapability": checkpoint_authorization["ownerCapability"],
                     },
                     "nextActions": [
                         "unreal_task_checkpoint",
@@ -5510,13 +6191,16 @@ def authorize_active_task_tool(
             "replanSurface": True,
             "countsAgainstPhaseBudget": False,
         }
-    return authorize_task_tool(
+    result = authorize_task_tool(
         workspace,
         tool_name=tool_name,
         task_authorization=task_authorization_for_state(state),
         arguments=arguments,
         consume_budget=True,
     )
+    if result.get("ok") and not result.get("legacy"):
+        result["taskAuthorization"] = task_authorization_for_state(state)
+    return result
 
 
 def task_set_runtime_session(

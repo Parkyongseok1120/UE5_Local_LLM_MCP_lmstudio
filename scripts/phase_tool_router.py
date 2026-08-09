@@ -31,6 +31,7 @@ CONTROL_PLANE_TOOLS = frozenset(
         "unreal_task_quarantine_corrupt",
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
+        "unreal_task_define_slices",
         "unreal_task_approve",
         "unreal_task_cancel",
         "unreal_task_resume",
@@ -45,6 +46,8 @@ ALWAYS_DISCOVERABLE_CONTROL_TOOLS = frozenset(
         "unreal_task_quarantine_corrupt",
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
+        "unreal_task_define_slices",
+        "unreal_task_resume",
         "unreal_task_cancel",
     }
 )
@@ -275,6 +278,14 @@ def _phase_and_role(
     if status != "running":
         return "verifier", "verifier"
 
+    build_verification = (
+        state.get("buildVerification")
+        if isinstance(state.get("buildVerification"), dict)
+        else {}
+    )
+    if str(build_verification.get("status") or "") == "pending_automation":
+        return "verifier", "verifier"
+
     runtime = (
         state.get("runtimeDebugSession")
         if isinstance(state.get("runtimeDebugSession"), dict)
@@ -352,6 +363,7 @@ def _active_tools(
     pending_gates: list[str],
     selected_slice: dict[str, Any],
     has_runtime_session: bool,
+    automation_pending: bool = False,
 ) -> list[str]:
     if phase == "runtime_analysis":
         tools = [
@@ -422,6 +434,11 @@ def _active_tools(
             "build_unreal_project",
             *_gate_tools(pending_gates),
         ]
+        # A successful UBT build with declared project Automation tests is not
+        # terminal. Keep the editor test runner as the sole authoritative exit
+        # proof while retaining bounded diagnostic reads.
+        if automation_pending:
+            tools.insert(0, "run_unreal_automation_tests")
         if has_runtime_session or task_kind in {"runtime", "runtime_edit", "runtime_debug"}:
             tools.insert(2, "unreal_runtime_debug_session")
     else:
@@ -530,7 +547,36 @@ def derive_tool_route(
         selected_slice=selected_slice,
         has_runtime_session=isinstance(state.get("runtimeDebugSession"), dict)
         and bool(state.get("runtimeDebugSession")),
+        automation_pending=str(
+            (
+                state.get("buildVerification")
+                if isinstance(state.get("buildVerification"), dict)
+                else {}
+            ).get("status")
+            or ""
+        ) == "pending_automation",
     )
+    checkpoint = state.get("continuity", {}).get("checkpoint")
+    checkpoint_next_action = (
+        str(checkpoint.get("requiredNextAction") or "").strip()
+        if isinstance(checkpoint, dict)
+        else ""
+    )
+    if phase == "executor" and checkpoint_next_action == "build_unreal_project":
+        # A passed static validation records build as the durable handoff. The
+        # executor list is otherwise 11 items long for edit tasks, so the
+        # global ten-tool cap used to truncate build_unreal_project (the last
+        # item) and make task_status advertise a tool that route auth rejected.
+        # Preserve the proof handoff and discard the least-specific create-file
+        # affordance first; existing source edits still have apply/replace.
+        active_tools = list(active_tools)
+        if checkpoint_next_action not in active_tools:
+            active_tools.append(checkpoint_next_action)
+        for candidate in ("write_file", "unreal_rag_search", "list_directory"):
+            if len(active_tools) <= MAX_ACTIVE_TOOLS:
+                break
+            if candidate in active_tools and candidate != checkpoint_next_action:
+                active_tools.remove(candidate)
     max_calls = {
         # An existing multi-class feature commonly needs a directory listing,
         # both sides of two declaration/definition pairs, and one gate attempt.

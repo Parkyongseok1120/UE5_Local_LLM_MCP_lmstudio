@@ -71,10 +71,9 @@ When the user asks for logic / design / bug analysis of project C++ (not a compi
 
 ## Write safety and flow
 
-- **Task authorization (complete server object):** copy every returned field unchanged as one nested object, including `taskSessionId`, `authToken`, `ownerCapability`, `conversationId`, `planId`, `planRevision`, `activeSliceId`, `routeHash`, and `routePhase`. Never reconstruct a shorter object from this list.
-- **Server-issued only:** never invent, shorten, repair, or use placeholder `taskAuthorization` values. If no server-issued authorization exists in this chat, call `unreal_agent_plan` once with the original user request before any write.
-- **Auth refresh:** after `unreal_code_sketch_claim_validate`, `unreal_task_checkpoint`, or any gate tool, use **`gateCompletion.taskAuthorization`** (or `taskAuthorization` from a stale-auth error), **not** the original `unreal_agent_plan` object.
-- **On `TASK_ROUTE_STALE`:** retry the same write tool once with returned `taskAuthorization`. Do **not** call `unreal_agent_plan` again.
+- **Task authorization is server-bound:** omit `taskAuthorization` during the normal single-active-task flow. The server resolves the exact active project route and refreshes slice authorization internally.
+- **Ambiguous route only:** when the server reports multiple active tasks or explicitly returns `requiresCompleteTaskAuthorization`, reuse the complete returned object unchanged. Never invent, shorten, repair, or use placeholder authorization values.
+- **On `TASK_ROUTE_STALE`:** retry the same tool once; include the complete returned authorization only when the error explicitly requests it. Do **not** call `unreal_agent_plan` again.
 - **On `REPLAN_BUDGET_EXHAUSTED` or `nextAction=unreal_task_checkpoint`:** call `unreal_task_checkpoint` with `action=record` using the latest authorization before any plan call. A checkpoint resets continuity/budget only; it cannot complete `requiredBeforeWrite` gates. Resume exactly the returned `requiredNextAction`.
 - **On `GATE_VALIDATION_FAILED`:** keep the gate pending, apply the returned replacement/recovery guidance, shrink to the active slice if requested, and revalidate once. Never report a gate complete through checkpoint notes or validation text.
 - **Brand-new files:** pass concrete `targetFiles` to `unreal_code_sketch_claim_validate` before writing. Use `changeKind=new_file` for exactly one new target; use `changeKind=multifile` for a new `.h`/`.cpp` pair.
@@ -93,7 +92,8 @@ When the user asks for logic / design / bug analysis of project C++ (not a compi
 - After roughly every 3 files in a multi-file task, emit one line in the form `[2/5] Source/.../Foo.cpp patched` and keep going — this re-anchors tool-call formatting without interrupting the user.
 - If a write response says `rollback skipped ... (conflict)`, another operation changed the file: stop, `read_file` the current content, reconcile, then continue.
 - If validation returns `validation skipped (time budget)`, run `static_validate_project` before `build_unreal_project`.
-- If `static_validate_project` reports findings, its completed scan is fresh for that mutation generation. Never rerun it unchanged and never add `validationOverride` merely because findings remain. Fix the first finding, or call `build_unreal_project` exactly once without an override for authoritative UBT errors; then stop on any build failure.
+- If `static_validate_project` reports blocking findings, the scan is fresh but is **not** a passing build proof. Never rerun it unchanged and never treat `ok`/`phase` on the operation response as full workflow completion. Fix the first finding, mutate the source, and rerun validation. Use `validationOverride=true` only with a concrete audit note when authoritative UBT evidence is explicitly required.
+- UHT/generated-header and Tier A/B structural failures block build without an override; any explicit validation override must carry a concrete audit note and still requires authoritative UBT evidence.
 - The server rejects byte-identical repeated `write_file`/`replace_in_file` calls (loop guard). If you see `identical ... call already attempted`, do **not** send the same call again: `read_file` the current state, change your patch, or stop and summarize for the user. During build-fix loops, never re-edit a file without re-reading it first.
 
 ## Shader / Material / Blueprint analysis

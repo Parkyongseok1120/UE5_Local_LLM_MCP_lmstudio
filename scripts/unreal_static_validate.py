@@ -1690,11 +1690,18 @@ def validate_cpp_definitions_missing(
         if class_definition is None:
             continue
         class_text, class_offset = class_definition
-        for match in method_decl_re.finditer(class_text):
+        # Match declarations against a comment/string-masked copy.  The previous
+        # regex ran over raw Doxygen text, so a sentence such as
+        # "Check if a player can use an item (has it ...);" could be parsed as a
+        # method named ``item`` and block an otherwise valid full-project scan.
+        # mask_comments_and_strings preserves offsets, so finding line numbers
+        # against the original header remains correct.
+        masked_class_text = mask_comments_and_strings(class_text)
+        for match in method_decl_re.finditer(masked_class_text):
             func_name = match.group("func")
             if func_name.startswith("~") or func_name in UE_DECLARATION_MACROS:
                 continue
-            window = class_text[max(0, match.start() - 240) : match.start()]
+            window = masked_class_text[max(0, match.start() - 240) : match.start()]
             if "BlueprintImplementableEvent" in window:
                 continue
             impl_name = func_name

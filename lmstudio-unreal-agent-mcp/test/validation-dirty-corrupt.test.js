@@ -43,10 +43,22 @@ test("explicit override permits one audited build with stale proof", () => {
 
 test("fresh validation proof does not report override", () => {
   const gate = requireValidationProofOrOverride(
-    { mutationGeneration: 3, validatedGeneration: 3 },
+    { mutationGeneration: 3, validatedGeneration: 3, validationPassed: true, validationStatus: "passed" },
     { override: true, auditNote: "unused" }
   );
   assert.equal(gate.ok, true);
   assert.equal(gate.overridden, false);
   assert.equal(gate.auditNote, "");
+});
+
+test("same-generation failed validation proof blocks without override", () => {
+  const gate = requireValidationProofOrOverride({
+    mutationGeneration: 3,
+    validatedGeneration: 3,
+    validationPassed: false,
+    validationStatus: "failed",
+  });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.errorCode, "VALIDATION_PROOF_FAILED");
+  assert.equal(gate.stopCurrentWorkflow, false);
 });

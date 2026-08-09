@@ -48,17 +48,9 @@ def test_node_syntax_check() -> None:
 
 
 def test_node_build_proof_unit() -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    command = [npm, "test"]
-    if sys.platform == "win32" and Path(npm).suffix.lower() in {".cmd", ".bat"}:
-        command = [
-            os.environ.get("COMSPEC", "cmd.exe"),
-            "/d",
-            "/s",
-            "/c",
-            subprocess.list2cmdline(command),
-        ]
+    node = shutil.which("node")
+    assert node is not None
+    command = [node, "test/run-tests.js"]
     result = subprocess.run(
         command,
         cwd=ROOT / "lmstudio-unreal-agent-mcp",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
@@ -383,6 +384,463 @@ def test_architecture_analysis_generates_bounded_candidate_portfolio(
     )
     assert all(item["ownerEvidence"]["required"] for item in portfolio["candidates"])
     assert all(item["proofLevel"] == "Proposed" for item in portfolio["candidates"])
+
+
+def _unreal_lobby_fixture(root: Path) -> None:
+    source = root / "Source" / "Lobby"
+    source.mkdir(parents=True)
+    (source / "LobbyGameState.h").write_text(
+        """
+#include "GameFramework/GameStateBase.h"
+class ALobbyGameState : public AGameStateBase {};
+""",
+        encoding="utf-8",
+    )
+    (source / "LobbyGameMode.h").write_text(
+        """
+#include "GameFramework/GameModeBase.h"
+class ALobbyGameMode : public AGameModeBase
+{
+    void SetReady();
+};
+""",
+        encoding="utf-8",
+    )
+    (source / "LobbyGameMode.cpp").write_text(
+        '#include "LobbyGameMode.h"\nvoid ALobbyGameMode::SetReady() {}\n',
+        encoding="utf-8",
+    )
+    (source / "LobbyPlayerController.h").write_text(
+        """
+#include "GameFramework/PlayerController.h"
+class ALobbyPlayerController : public APlayerController {};
+""",
+        encoding="utf-8",
+    )
+    (source / "LobbyPlayerController.cpp").write_text(
+        '#include "LobbyPlayerController.h"\n',
+        encoding="utf-8",
+    )
+
+
+def test_networked_proposal_rejects_vague_rpc_and_missing_lifecycle_contract(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    proposal = {
+        "decision": "Use an authoritative multiplayer lobby with replicated ready state",
+        "invariants": ["Only the server changes ready state"],
+        "impactedSurfaces": ["Source/Game/Private/Worker.cpp", "AOwnedController"],
+        "validationPlan": ["static validation", "build", "automation"],
+        "alternatives": ["reuse current owners", "add a manager"],
+        "ownership": {
+            "stateOwner": "server rules owner",
+            "dataOwner": "replicated state owner",
+            "lifecycleOwner": "server lifecycle owner",
+            "failurePolicy": "reject invalid requests",
+            "recoveryPolicy": "reset on disconnect",
+        },
+        "networking": {
+            "authorityOwner": "server rules owner",
+            "clientInitiated": True,
+            "requestPath": ["client", "RPC or local call", "server"],
+            "replicatedState": ["ready"],
+        },
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert validation["ok"] is False
+    assert validation["designContract"]["networkedProposal"] is True
+    assert validation["designContract"]["rpcPathConcrete"] is False
+    assert any("callable RPC ownership contract" in item for item in validation["issues"])
+    assert any("stateInventory" in item for item in validation["issues"])
+    assert any("lifecycleTransitions" in item for item in validation["issues"])
+
+
+def test_networked_proposal_accepts_concrete_rpc_state_and_lifecycle_contract(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    proposal = {
+        "decision": "Use a server-authoritative network flow with one replicated state owner",
+        "invariants": ["Only the authority commits state"],
+        "impactedSurfaces": ["Source/Game/Private/Worker.cpp", "AOwnedController"],
+        "validationPlan": [
+            "static validation",
+            "build/compile",
+            "automation regression",
+            "RPC ownership and owning connection callability",
+        ],
+        "alternatives": ["reuse current owner", "add a service"],
+        "ownership": {
+            "stateOwner": "AReplicatedState",
+            "dataOwner": "AReplicatedState",
+            "lifecycleOwner": "AServerRules",
+            "failurePolicy": "reject before commit",
+            "recoveryPolicy": "restore the pre-event state",
+        },
+        "networking": {
+            "authorityOwner": "AServerRules",
+            "clientInitiated": True,
+            "requestPath": [
+                "owning client input",
+                "AOwnedController::Server_RequestAction",
+                "AServerRules::ValidateAndCommit",
+            ],
+            "rpcOwner": "AOwnedController",
+            "owningConnection": "the invoking client's owning connection",
+            "serverValidation": "validate identity and current phase before commit",
+            "replicatedState": ["AReplicatedState::Phase"],
+        },
+        "stateInventory": [
+            {
+                "state": "Phase",
+                "owner": "AReplicatedState",
+                "lifetime": "world",
+                "authority": "server authoritative",
+                "source": "existing",
+                "cleanup": "reset during world restart",
+            }
+        ],
+        "lifecycleTransitions": [
+            {
+                "event": "client action",
+                "owner": "AServerRules",
+                "preconditions": ["valid owning connection"],
+                "commitPoint": "after server validation",
+                "failureRecovery": "leave state unchanged",
+                "cleanup": "clear pending request",
+            }
+        ],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert validation["ok"] is True, validation["issues"]
+    contract = validation["designContract"]
+    assert contract["networkingComplete"] is True
+    assert contract["rpcPathConcrete"] is True
+    assert contract["duplicateTruthSources"] == []
+
+    server_owned_rpc = copy.deepcopy(proposal)
+    server_owned_rpc["networking"]["rpcOwner"] = "AGomokuGameMode::Server_SetReady"
+    rejected_rpc = analyze_architecture(
+        tmp_path, proposal=server_owned_rpc
+    )["proposalValidation"]
+    assert rejected_rpc["ok"] is False
+    assert any("server-only/server-owned" in item for item in rejected_rpc["issues"])
+    assert any(
+        row["jsonPath"] == "networking.rpcOwner"
+        for row in rejected_rpc["repairRequirements"]
+    )
+
+    bad_connection = copy.deepcopy(proposal)
+    bad_connection["networking"]["owningConnection"] = (
+        "APlayerController->GetWorld()->GetAuthGameMode()"
+    )
+    rejected_connection = analyze_architecture(
+        tmp_path, proposal=bad_connection
+    )["proposalValidation"]
+    assert any("does not prove" in item for item in rejected_connection["issues"])
+
+    missing_rpc_surface = copy.deepcopy(proposal)
+    missing_rpc_surface["impactedSurfaces"] = ["Source/Game/Private/Worker.cpp"]
+    rejected_surface = analyze_architecture(
+        tmp_path, proposal=missing_rpc_surface
+    )["proposalValidation"]
+    assert any("absent from impacted surfaces" in item for item in rejected_surface["issues"])
+
+    ambiguous_owner = copy.deepcopy(proposal)
+    ambiguous_owner["stateInventory"][0]["owner"] = "AServerRules + AReplicatedState"
+    rejected_owner = analyze_architecture(
+        tmp_path, proposal=ambiguous_owner
+    )["proposalValidation"]
+    assert any("multiple/ambiguous owners" in item for item in rejected_owner["issues"])
+
+    ungrounded_roster = copy.deepcopy(proposal)
+    ungrounded_roster["stateInventory"][0]["state"] = "Lobby membership"
+    rejected_roster = analyze_architecture(
+        tmp_path, proposal=ungrounded_roster
+    )["proposalValidation"]
+    assert any("sourceEvidence" in item for item in rejected_roster["issues"])
+
+    hidden_tracking = copy.deepcopy(proposal)
+    hidden_tracking["stateInventory"][0].update({
+        "state": "Lobby membership",
+        "sourceEvidence": "AGameStateBase::PlayerArray",
+    })
+    hidden_tracking["lifecycleTransitions"][0]["commitPoint"] = (
+        "add player to lobby tracking after validation"
+    )
+    rejected_tracking = analyze_architecture(
+        tmp_path, proposal=hidden_tracking
+    )["proposalValidation"]
+    assert any("separate mutable participant" in item for item in rejected_tracking["issues"])
+
+    missing_identity_state = copy.deepcopy(proposal)
+    missing_identity_state["invariants"].append(
+        "Participant identity and identifier must remain unique"
+    )
+    rejected_identity = analyze_architecture(
+        tmp_path, proposal=missing_identity_state
+    )["proposalValidation"]
+    assert any("absent from stateInventory" in item for item in rejected_identity["issues"])
+
+
+def test_network_lifecycle_event_detection_handles_inflections_and_not_bare_map(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    transition = {
+        "owner": "AServerRules",
+        "preconditions": ["authority"],
+        "commitPoint": "after validation",
+        "failureRecovery": "leave state unchanged",
+        "cleanup": "clear pending state",
+    }
+    proposal = {
+        "decision": "Support players who join, leave, and restart in authoritative multiplayer",
+        "invariants": ["Players join, leave, and restart safely"],
+        "impactedSurfaces": ["Source/Game/Private/Worker.cpp", "AOwnedController"],
+        "validationPlan": ["build", "RPC ownership and owning connection callability"],
+        "alternatives": ["reuse", "replace"],
+        "networking": {
+            "authorityOwner": "AServerRules",
+            "clientInitiated": True,
+            "requestPath": ["client input", "AOwnedController RPC", "AServerRules commit"],
+            "rpcOwner": "AOwnedController",
+            "owningConnection": "invoking client's owning connection",
+            "serverValidation": "validate authority and identity",
+            "replicatedState": ["phase"],
+        },
+        "stateInventory": [{
+            "state": "phase", "owner": "AReplicatedState", "lifetime": "world",
+            "authority": "server authoritative", "source": "new", "cleanup": "reset",
+        }],
+        "lifecycleTransitions": [
+            {"event": "Player joins lobby", **transition},
+            {"event": "Player leaves lobby", **transition},
+            {"event": "RestartGame", **transition},
+        ],
+    }
+    accepted = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+    assert not any("lifecycleTransitions missing" in item for item in accepted["issues"])
+
+    travel = copy.deepcopy(proposal)
+    travel["decision"] += " and performs game transition travel"
+    travel["lifecycleTransitions"] = [{"event": "Player joins lobby map", **transition}]
+    rejected = analyze_architecture(tmp_path, proposal=travel)["proposalValidation"]
+    assert any("travel" in item for item in rejected["issues"])
+    assert any(
+        row["jsonPath"] == "lifecycleTransitions"
+        for row in rejected["repairRequirements"]
+    )
+
+    unsafe_commit = copy.deepcopy(proposal)
+    unsafe_commit["decision"] += " and performs ServerTravel"
+    unsafe_commit["lifecycleTransitions"].append({
+        "event": "ServerTravel",
+        "owner": "AServerRules",
+        "preconditions": ["authority"],
+        "commitPoint": "mark match started before travel",
+        "failureRecovery": "no rollback",
+        "cleanup": "none",
+    })
+    rejected_commit = analyze_architecture(
+        tmp_path, proposal=unsafe_commit
+    )["proposalValidation"]
+    assert any("without rollback" in item for item in rejected_commit["issues"])
+    assert any("seamless/non-seamless" in item for item in rejected_commit["issues"])
+
+
+def test_unreal_lobby_rejects_duplicate_framework_roster_and_hidden_identity_index(
+    tmp_path: Path,
+) -> None:
+    _unreal_lobby_fixture(tmp_path)
+    proposal = {
+        "decision": "Use an authoritative multiplayer lobby without duplicate truth",
+        "invariants": [
+            "Only the server mutates lobby state",
+            "Participant identifier is unique in [0..3] and safely reused",
+        ],
+        "impactedSurfaces": [
+            "ALobbyGameMode",
+            "ALobbyGameState",
+            "ALobbyPlayerController",
+        ],
+        "validationPlan": ["build", "RPC ownership and owning connection callability"],
+        "alternatives": ["reuse framework state", "add lobby state"],
+        "networking": {
+            "authorityOwner": "ALobbyGameMode",
+            "clientInitiated": True,
+            "requestPath": [
+                "client input",
+                "ALobbyPlayerController::Server_SetReady",
+                "ALobbyGameMode::SetReady",
+            ],
+            "rpcOwner": "ALobbyPlayerController",
+            "owningConnection": "owned by the requesting client's owning connection",
+            "serverValidation": "authority, membership, and phase",
+            "replicatedState": ["TArray<APlayerState*> LobbyParticipants"],
+        },
+        "stateInventory": [
+            {
+                "state": "Lobby participant set",
+                "owner": "ALobbyGameMode",
+                "lifetime": "join through restart",
+                "authority": "server authoritative",
+                "source": "new",
+                "cleanup": "remove on leave and clear on restart",
+            },
+            {
+                "state": "Participant identifier",
+                "owner": "APlayerState",
+                "lifetime": "connection",
+                "authority": "server authoritative",
+                "source": "existing",
+                "cleanup": "reset to 0 and remove from TSet<int32> OccupiedIds",
+            },
+        ],
+        "lifecycleTransitions": [{
+            "event": "join leave restart",
+            "owner": "ALobbyGameMode",
+            "preconditions": ["authority"],
+            "commitPoint": "update LobbyParticipants and OccupiedIds",
+            "failureRecovery": "leave canonical state unchanged",
+            "cleanup": "clear stale entries",
+        }],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert validation["ok"] is False
+    assert any("AGameStateBase::PlayerArray" in item for item in validation["issues"])
+    assert any("OccupiedIds" in item and "stateInventory" in item for item in validation["issues"])
+    assert any("validValues" in item for item in validation["issues"])
+    assert any("valid identifier range" in item for item in validation["issues"])
+    assert any("owner-qualified" in item for item in validation["issues"])
+
+
+def test_unreal_lobby_requires_membership_truth_source_in_state_inventory(
+    tmp_path: Path,
+) -> None:
+    _unreal_lobby_fixture(tmp_path)
+    proposal = {
+        "decision": "Keep authoritative lobby participant tracking in the existing flow",
+        "invariants": ["Join and logout clean membership safely"],
+        "impactedSurfaces": ["ALobbyGameMode", "ALobbyGameState"],
+        "validationPlan": ["build"],
+        "alternatives": ["reuse", "add manager"],
+        "networking": {
+            "authorityOwner": "ALobbyGameMode",
+            "clientInitiated": False,
+            "replicatedState": ["ALobbyGameState::Phase"],
+        },
+        "stateInventory": [{
+            "state": "Phase", "owner": "ALobbyGameState", "lifetime": "world",
+            "authority": "server authoritative", "source": "existing", "cleanup": "reset",
+        }],
+        "lifecycleTransitions": [{
+            "event": "PostLogin and Logout", "owner": "ALobbyGameMode",
+            "preconditions": ["authority"], "commitPoint": "update participant tracking",
+            "failureRecovery": "leave state unchanged", "cleanup": "remove player",
+        }],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert any(
+        "membership/roster" in item and "AGameStateBase::PlayerArray" in item
+        for item in validation["issues"]
+    )
+
+
+def test_unreal_request_path_requires_missing_method_implementation_surfaces(
+    tmp_path: Path,
+) -> None:
+    _unreal_lobby_fixture(tmp_path)
+    proposal = {
+        "decision": "Route a client lobby command through server authority",
+        "invariants": ["Only authority commits state"],
+        "impactedSurfaces": ["ALobbyPlayerController", "ALobbyGameMode", "ALobbyGameState"],
+        "validationPlan": ["RPC ownership and owning connection callability"],
+        "alternatives": ["route through controller", "server-only command"],
+        "implementationFiles": ["Source/Lobby/LobbyPlayerController.h"],
+        "networking": {
+            "authorityOwner": "ALobbyGameMode",
+            "clientInitiated": True,
+            "requestPath": [
+                "ALobbyPlayerController::Server_SetReady",
+                "ALobbyGameMode::SetReady",
+                "ALobbyGameState::OnAllPlayersReady",
+            ],
+            "rpcOwner": "ALobbyPlayerController",
+            "owningConnection": "controller is owned by the requesting client's owning connection",
+            "serverValidation": "authority and membership",
+            "replicatedState": ["ALobbyGameState::Phase"],
+        },
+        "stateInventory": [{
+            "state": "Phase", "owner": "ALobbyGameState", "lifetime": "world",
+            "authority": "server authoritative", "source": "existing", "cleanup": "reset",
+        }],
+        "lifecycleTransitions": [{
+            "event": "ready request", "owner": "ALobbyGameMode", "preconditions": ["authority"],
+            "commitPoint": "after validation", "failureRecovery": "no mutation", "cleanup": "none",
+        }],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert validation["ok"] is False
+    assert any("ALobbyPlayerController::Server_SetReady" in item for item in validation["issues"])
+    assert any("LobbyPlayerController.cpp" in item for item in validation["issues"])
+    assert any("ALobbyGameState::OnAllPlayersReady" in item for item in validation["issues"])
+    assert any("LobbyGameState.h" in item for item in validation["issues"])
+
+
+def test_unreal_nonseamless_travel_requires_reconstruction_contract_and_rejects_streaming_mix(
+    tmp_path: Path,
+) -> None:
+    _unreal_lobby_fixture(tmp_path)
+    transition = {
+        "event": "ServerTravel",
+        "owner": "ALobbyGameMode",
+        "preconditions": ["all players ready"],
+        "commitPoint": "after ServerTravel call",
+        "failureRecovery": "keep lobby state if ServerTravel fails",
+        "cleanup": "reconstruct players in the new world",
+        "travelMode": "non-seamless",
+    }
+    proposal = {
+        "decision": "Start an authoritative match using ServerTravel",
+        "invariants": ["Travel preserves or reconstructs required state"],
+        "impactedSurfaces": ["ALobbyGameMode", "ALobbyGameState"],
+        "validationPlan": ["build"],
+        "alternatives": ["seamless", "non-seamless"],
+        "networking": {
+            "authorityOwner": "ALobbyGameMode", "clientInitiated": False,
+            "replicatedState": ["ALobbyGameState::Phase"],
+        },
+        "stateInventory": [{
+            "state": "Phase", "owner": "ALobbyGameState", "lifetime": "world",
+            "authority": "server authoritative", "source": "existing", "cleanup": "reset",
+        }],
+        "lifecycleTransitions": [transition],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+    assert any("reconstructionSource" in item for item in validation["issues"])
+    assert any("completionSignal" in item for item in validation["issues"])
+
+    mixed = copy.deepcopy(proposal)
+    mixed["lifecycleTransitions"][0].update({
+        "cleanup": "non-seamless level streaming reconstructs players",
+        "reconstructionSource": "server-owned session data",
+        "completionSignal": "post-load world initialization",
+    })
+    rejected_mixed = analyze_architecture(tmp_path, proposal=mixed)["proposalValidation"]
+    assert any("level streaming" in item for item in rejected_mixed["issues"])
 
 
 def test_staged_architecture_proposal_rejects_unscored_or_ambiguous_selection(

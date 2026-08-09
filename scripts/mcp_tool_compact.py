@@ -564,6 +564,17 @@ def compact_asset_graph_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sample_nested_rows(rows: Any, *, row_limit: int, nested_limit: int) -> list[Any]:
+    def compact_evidence(value: Any) -> Any:
+        if isinstance(value, list):
+            return [compact_evidence(item) for item in value[:nested_limit]]
+        if not isinstance(value, dict):
+            return value
+        allowed = (
+            "kind", "location", "filePath", "projectRelativePath", "lineStart",
+            "lineEnd", "symbol", "confidence",
+        )
+        return {key: value.get(key) for key in allowed if value.get(key) is not None}
+
     sampled: list[Any] = []
     for item in list(rows or [])[:row_limit]:
         if not isinstance(item, dict):
@@ -573,8 +584,37 @@ def _sample_nested_rows(rows: Any, *, row_limit: int, nested_limit: int) -> list
         for key in ("files", "evidence", "members", "paths", "edges"):
             if isinstance(row.get(key), list):
                 row[key] = row[key][:nested_limit]
+        if "evidence" in row:
+            row["evidence"] = compact_evidence(row.get("evidence"))
         sampled.append(row)
     return sampled
+
+
+def _compact_candidate_portfolio(value: Any) -> dict[str, Any]:
+    portfolio = value if isinstance(value, dict) else {}
+    candidates = []
+    for row in list(portfolio.get("candidates") or [])[:4]:
+        if not isinstance(row, dict):
+            continue
+        candidates.append(
+            {
+                key: row.get(key)
+                for key in (
+                    "candidateId", "name", "patternIds", "eligible", "issues",
+                    "scores", "utilityScore", "proofLevel",
+                )
+                if row.get(key) is not None
+            }
+        )
+    return {
+        key: portfolio.get(key)
+        for key in (
+            "version", "candidateCount", "implementationReady", "nextAction",
+            "recommendedCandidateId", "selectedCandidateId", "selectionIssues",
+            "proofBoundary",
+        )
+        if portfolio.get(key) is not None
+    } | {"candidates": candidates}
 
 
 def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "compact") -> dict[str, Any]:
@@ -582,15 +622,12 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
     level = str(detail_level or "compact").strip().lower()
     if level not in {"compact", "standard", "full"}:
         level = "compact"
-    if level == "full" or not payload.get("ok"):
-        result = dict(payload)
-        result["detailLevel"] = level
-        result["truncated"] = False
-        return result
-
     limits = {
         "compact": (8, 8, 12, 12, 3),
-        "standard": (16, 16, 30, 30, 6),
+        "standard": (12, 12, 16, 16, 5),
+        # Full means the largest bounded evidence sample, never an unbounded
+        # project graph dump into a local model's context window.
+        "full": (24, 24, 8, 16, 6),
     }
     owner_limit, dependency_limit, flow_limit, transition_limit, nested_limit = limits[level]
     topology = payload.get("topology") if isinstance(payload.get("topology"), dict) else {}
@@ -624,6 +661,21 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
         ),
         "focus": payload.get("focus") or {},
         "graphEvidence": payload.get("graphEvidence") or {},
+        "proposalRevision": payload.get("proposalRevision"),
+        "proposalPatchApplied": payload.get("proposalPatchApplied"),
+        "proposalRepairsApplied": payload.get("proposalRepairsApplied"),
+        "repairSubmission": payload.get("repairSubmission"),
+        # Put fail-closed decisions before sampled evidence so a host-side
+        # character limit can never hide the reason a proposal was rejected.
+        "proposalValidation": payload.get("proposalValidation"),
+        "implementationGate": payload.get("implementationGate"),
+        "gateCompletion": payload.get("gateCompletion"),
+        "errorCode": payload.get("errorCode"),
+        "retryable": payload.get("retryable"),
+        "stopCurrentWorkflow": payload.get("stopCurrentWorkflow"),
+        "requiredNextAction": payload.get("requiredNextAction"),
+        "nextActionIsTool": payload.get("nextActionIsTool"),
+        "agentInstruction": payload.get("agentInstruction"),
         "summary": {
             "ownerCount": len(owners),
             "dependencyCount": len(dependencies),
@@ -643,7 +695,8 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
                 nested_limit=nested_limit,
             ),
             # Cycles affect safety and are never silently sampled.
-            "sourceDependencyCycles": cycles,
+            "sourceDependencyCycles": cycles[:20],
+            "sourceDependencyCyclesOmitted": max(0, len(cycles) - 20),
         },
         "dataFlow": {
             key: value
@@ -687,23 +740,27 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
         row_limit=transition_limit,
         nested_limit=nested_limit,
     )
-    # Cleanup-pair gaps affect safety and are not sampled away.
-    compact["lifecycle"]["pairingGaps"] = lifecycle_gaps
+    # Keep explicit omitted counts so hard bounds never masquerade as full coverage.
+    compact["lifecycle"]["pairingGaps"] = lifecycle_gaps[:20]
+    compact["lifecycle"]["pairingGapsOmitted"] = max(0, len(lifecycle_gaps) - 20)
     for key in (
-        "candidatePortfolio",
-        "proposalValidation",
-        "implementationGate",
         "warnings",
         "nextActions",
         "performance",
-        "gateCompletion",
     ):
         if key in payload:
             compact[key] = payload[key]
+    if "candidatePortfolio" in payload:
+        compact["candidatePortfolio"] = _compact_candidate_portfolio(
+            payload.get("candidatePortfolio")
+        )
+    compact = {key: value for key, value in compact.items() if value is not None}
     if compact["truncated"]:
-        compact["nextDetailLevel"] = "standard" if level == "compact" else "full"
+        if level != "full":
+            compact["nextDetailLevel"] = "standard" if level == "compact" else "full"
         compact["contextHint"] = (
-            "Request the next detailLevel or narrow symbols when more evidence is needed."
+            "Narrow symbols or use direct source reads when more evidence is needed; "
+            "full responses remain hard-bounded."
         )
     return compact
 

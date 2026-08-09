@@ -113,8 +113,18 @@ function clearValidated(projectRoot) {
 function requireValidationProofOrOverride(mutation, { override = false, auditNote = "" } = {}) {
   const validatedGeneration = Number(mutation && mutation.validatedGeneration || 0);
   const mutationGeneration = Number(mutation && mutation.mutationGeneration || 0);
-  if (validatedGeneration === mutationGeneration) {
-    return { ok: true, overridden: false, validatedGeneration, mutationGeneration, auditNote: "" };
+  const validationPassed = mutation && mutation.validationPassed === true;
+  const validationStatus = String(mutation && mutation.validationStatus || "unknown");
+  if (validatedGeneration === mutationGeneration && validationPassed) {
+    return {
+      ok: true,
+      overridden: false,
+      validatedGeneration,
+      mutationGeneration,
+      validationPassed: true,
+      validationStatus,
+      auditNote: "",
+    };
   }
   if (override) {
     return {
@@ -122,7 +132,26 @@ function requireValidationProofOrOverride(mutation, { override = false, auditNot
       overridden: true,
       validatedGeneration,
       mutationGeneration,
+      validationPassed,
+      validationStatus,
       auditNote: String(auditNote || "Explicit validationOverride=true"),
+    };
+  }
+  if (validatedGeneration === mutationGeneration && !validationPassed) {
+    return {
+      ok: false,
+      overridden: false,
+      validatedGeneration,
+      mutationGeneration,
+      validationPassed: false,
+      validationStatus,
+      error: "build blocked: static validation did not pass for the current mutation generation.",
+      errorCode: "VALIDATION_PROOF_FAILED",
+      retryable: false,
+      stopCurrentWorkflow: false,
+      nextSteps: [
+        "Fix the blocking static-validation finding, then run static_validate_project again before building.",
+      ],
     };
   }
   return {
@@ -130,6 +159,8 @@ function requireValidationProofOrOverride(mutation, { override = false, auditNot
     overridden: false,
     validatedGeneration,
     mutationGeneration,
+    validationPassed,
+    validationStatus,
     error: "build blocked: validation proof stale.",
     errorCode: "VALIDATION_PROOF_STALE",
     retryable: false,

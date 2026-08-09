@@ -38,6 +38,8 @@ RAG_ESSENTIAL = {
     "unreal_task_quarantine_corrupt",
     "unreal_task_retry_job_cancel",
     "unreal_task_checkpoint",
+    "unreal_task_define_slices",
+    "unreal_task_resume",
     "unreal_task_cancel",
 }
 
@@ -54,6 +56,7 @@ AGENT_ESSENTIAL = {
     "search_files",
     "static_validate_project",
     "build_unreal_project",
+    "run_unreal_automation_tests",
     "read_unreal_logs",
     "write_session_handoff",
     "record_bootstrap_step",
@@ -98,6 +101,146 @@ def test_essential_tools_enabled_filters_rag_tools(monkeypatch, tmp_path):
     assert names == set(mod.ESSENTIAL_TOOL_NAMES)
     assert names == RAG_ESSENTIAL
     assert "unreal_rag_refresh" not in names
+
+
+def test_feature_intent_schema_is_compact_for_local_tool_calling(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    tool = next(
+        item
+        for item in server.all_tool_definitions()
+        if item["name"] == "unreal_feature_intent_resolve"
+    )
+    schema = tool["inputSchema"]
+    properties = schema["properties"]
+
+    assert schema["required"] == ["taskAuthorization"]
+    assert set(properties) == {
+        "selectedIntentId",
+        "selectionRationale",
+        "taskAuthorization",
+    }
+    assert properties["taskAuthorization"]["additionalProperties"] is False
+
+
+def test_checkpoint_uses_compact_server_resolved_authorization(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    tool = next(
+        item
+        for item in server.all_tool_definitions()
+        if item["name"] == "unreal_task_checkpoint"
+    )
+
+    checkpoint_auth = tool["inputSchema"]["properties"]["taskAuthorization"]
+    assert set(checkpoint_auth["properties"]) == {
+        "taskSessionId",
+        "ownerCapability",
+    }
+    assert checkpoint_auth["required"] == ["taskSessionId", "ownerCapability"]
+    assert checkpoint_auth["additionalProperties"] is False
+    feature_tool = next(
+        item
+        for item in server.all_tool_definitions()
+        if item["name"] == "unreal_feature_intent_resolve"
+    )
+    revision = feature_tool["inputSchema"]["properties"]["taskAuthorization"][
+        "properties"
+    ]["planRevision"]
+    assert revision["type"] == ["string", "integer"]
+    validation = tool["inputSchema"]["properties"]["validation"]
+    assert validation["additionalProperties"] is False
+    assert set(validation["properties"]) == {
+        "status",
+        "summary",
+        "artifacts",
+        "errors",
+    }
+
+
+def test_rag_evidence_tools_advertise_compact_route_ownership(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    tools = {item["name"]: item for item in server.all_tool_definitions()}
+
+    for name in (
+        "unreal_rag_search",
+        "unreal_symbol_lookup",
+        "unreal_feature_intent_resolve",
+        "unreal_architecture_reasoning",
+        "unreal_code_sketch_claim_validate",
+    ):
+        auth = tools[name]["inputSchema"]["properties"]["taskAuthorization"]
+        assert auth["required"] == ["taskSessionId", "ownerCapability"]
+
+    evidence_auth = tools["unreal_rag_search"]["inputSchema"]["properties"][
+        "taskAuthorization"
+    ]
+    assert set(evidence_auth["properties"]) == {"taskSessionId", "ownerCapability"}
+
+    gate_auth = tools["unreal_feature_intent_resolve"]["inputSchema"]["properties"][
+        "taskAuthorization"
+    ]
+    assert {
+        "taskSessionId",
+        "authToken",
+        "ownerCapability",
+        "conversationId",
+        "planId",
+        "planRevision",
+        "activeSliceId",
+        "routeHash",
+        "routePhase",
+    } == set(gate_auth["properties"])
+
+    assert mod._has_complete_task_authorization(
+        {"taskSessionId": "t", "ownerCapability": "cap"}
+    ) is False
+    assert mod._has_complete_task_authorization(
+        {
+            "taskSessionId": "t",
+            "authToken": "token",
+            "ownerCapability": "cap",
+            "planId": "p",
+            "planRevision": 1,
+            "activeSliceId": "slice",
+            "routeHash": "route",
+            "routePhase": "executor",
+        }
+    ) is True
+
+
+def test_route_authorization_refresh_replaces_stale_full_arguments():
+    mod = _load_rag_mcp_module()
+    arguments = {
+        "taskAuthorization": {
+            "taskSessionId": "task",
+            "authToken": "stale",
+            "ownerCapability": "owner",
+            "planId": "plan",
+            "planRevision": "1",
+            "activeSliceId": "slice",
+            "routeHash": "stale-route",
+            "routePhase": "planner",
+        }
+    }
+    current = {
+        **arguments["taskAuthorization"],
+        "authToken": "current",
+        "routeHash": "current-route",
+    }
+
+    mod._refresh_argument_task_authorization(
+        arguments, {"ok": True, "taskAuthorization": current}
+    )
+
+    assert arguments["taskAuthorization"] == current
 
 
 RAG_EXTENDED_ONLY = {
@@ -790,6 +933,153 @@ def test_code_sketch_tool_exposes_project_generation_contract(monkeypatch, tmp_p
         "memory_verified",
         "persistent_verified",
     }
+
+
+def test_active_task_advertises_compact_code_sketch_schema(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "Demo"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (project / "Demo.uproject").write_text("{}", encoding="utf-8")
+    (source / "DemoPlayerController.h").write_text(
+        "class ADemoPlayerController {};\n", encoding="utf-8"
+    )
+    (source / "DemoPlayerController.cpp").write_text(
+        '#include "DemoPlayerController.h"\n', encoding="utf-8"
+    )
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(
+        json.dumps({"activeProject": str(project / "Demo.uproject")}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+
+    from task_api import task_start
+
+    task_start(
+        tmp_path,
+        request="Add an authoritative move request RPC to the player controller",
+        project_file=str(project / "Demo.uproject"),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [
+                {
+                    "sliceId": "rep_contract",
+                    "files": [
+                        "Source/Demo/DemoPlayerController.h",
+                        "Source/Demo/DemoPlayerController.cpp",
+                    ],
+                }
+            ],
+        },
+    )
+
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    tool = next(
+        item
+        for item in server.all_tool_definitions()
+        if item["name"] == "unreal_code_sketch_claim_validate"
+    )
+
+    assert set(tool["inputSchema"]["properties"]) == {
+        "sketch",
+        "validationPlan",
+        "taskAuthorization",
+    }
+    assert tool["inputSchema"]["required"] == ["sketch", "taskAuthorization"]
+
+
+def test_active_task_code_sketch_derives_generation_contract(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "Demo"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (project / "Demo.uproject").write_text("{}", encoding="utf-8")
+    (source / "DemoPlayerController.h").write_text(
+        "class ADemoPlayerController {};\n", encoding="utf-8"
+    )
+    (source / "DemoPlayerController.cpp").write_text(
+        '#include "DemoPlayerController.h"\n', encoding="utf-8"
+    )
+
+    from task_api import task_start
+
+    started = task_start(
+        tmp_path,
+        request="Add an authoritative move request RPC to the player controller",
+        project_file=str(project / "Demo.uproject"),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"],
+            },
+            "executablePlanSlices": [
+                {
+                    "sliceId": "rep_contract",
+                    "files": [
+                        "Source/Demo/DemoPlayerController.h",
+                        "Source/Demo/DemoPlayerController.cpp",
+                    ],
+                }
+            ],
+        },
+    )
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+    captured_contract_args: dict = {}
+    original_build_generation_contract = mod.build_generation_contract
+
+    def capture_generation_contract(request, **kwargs):
+        captured_contract_args["request"] = request
+        captured_contract_args.update(kwargs)
+        return original_build_generation_contract(request, **kwargs)
+
+    monkeypatch.setattr(mod, "build_generation_contract", capture_generation_contract)
+
+    server.handle_tool_call(
+        172,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": (
+                    "UFUNCTION(Server, Reliable)\n"
+                    "void ServerRequestMove(int32 X, int32 Y);"
+                ),
+                "validationPlan": ["UnrealHeaderTool", "build", "RPC ownership review"],
+                "taskAuthorization": started["taskAuthorization"],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    contract = payload["generationContract"]
+    assert contract["mode"] == "project_specific"
+    assert contract["changeKind"] == "multifile"
+    assert [target["path"] for target in contract["targets"]] == [
+        "Source/Demo/DemoPlayerController.h",
+        "Source/Demo/DemoPlayerController.cpp",
+    ]
+    assert all(target["exists"] is True for target in contract["targets"])
+    assert captured_contract_args["request"] == (
+        "Add an authoritative move request RPC to the player controller"
+    )
+    assert Path(captured_contract_args["project_root"]) == project
+    assert captured_contract_args["target_files"] == [
+        "Source/Demo/DemoPlayerController.h",
+        "Source/Demo/DemoPlayerController.cpp",
+    ]
 
 
 def test_failed_prewrite_gate_explicitly_forbids_checkpoint_completion(monkeypatch, tmp_path):
@@ -1929,6 +2219,235 @@ def test_architecture_reasoning_rejects_non_object_proposal(monkeypatch, tmp_pat
     payload = sent[-1]["result"]["structuredContent"]
     assert payload["proposalValidation"]["ok"] is False
     assert payload["proposalValidation"]["implementationGate"]["writesAllowed"] is False
+
+
+def test_architecture_reasoning_blocks_unchanged_proposal_across_server_memory(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "Worker.cpp").write_text(
+        "void Run() { CurrentState = 1; }\n", encoding="utf-8"
+    )
+    proposal = {
+        "decision": "preserve the AGomokuGameMode worker boundary",
+        "invariants": ["worker behavior remains stable"],
+        "impactedSurfaces": ["Source/Demo/Worker.cpp"],
+        "validationPlan": ["static validation", "build", "targeted regression"],
+        "alternatives": [
+            {
+                "name": "keep boundary",
+                "rationale": "minimal change",
+                "scores": {
+                    "complexity": 1,
+                    "maintainability": 4,
+                    "performance": 4,
+                    "risk": 1,
+                },
+            },
+            {
+                "name": "split boundary",
+                "rationale": "new abstraction",
+                "scores": {
+                    "complexity": 4,
+                    "maintainability": 2,
+                    "performance": 3,
+                    "risk": 4,
+                },
+            },
+        ],
+    }
+    sent: list[dict] = []
+    server.send = sent.append
+    request = {
+        "name": "unreal_architecture_reasoning",
+        "arguments": {
+            "projectRoot": str(project),
+            "proposal": proposal,
+            "sessionId": "stable-architecture-chat",
+        },
+    }
+
+    server.handle_tool_call(25, request)
+    first_payload = sent[-1]["result"]["structuredContent"]
+    assert first_payload.get("errorCode") != (
+        "ARCHITECTURE_PROPOSAL_UNCHANGED"
+    )
+    assert first_payload["proposalRevision"]
+
+    # Clear process-local history to model an MCP host restart; durable state remains.
+    import read_query_history as history
+
+    history._HISTORY.clear()
+    history._HISTORY_ORDER.clear()
+    history._SEMANTIC_INDEX.clear()
+    history._TOPIC_INDEX.clear()
+    history._CONTINUATION_TOKENS.clear()
+    server.handle_tool_call(26, request)
+
+    repeated = sent[-1]["result"]["structuredContent"]
+    assert repeated["ok"] is False
+    assert repeated["errorCode"] == "ARCHITECTURE_PROPOSAL_UNCHANGED"
+    assert repeated["nextActionIsTool"] is False
+
+    patch_request = {
+        "name": "unreal_architecture_reasoning",
+        "arguments": {
+            "projectRoot": str(project),
+            "sessionId": "stable-architecture-chat",
+            "baseProposalRevision": first_payload["proposalRevision"],
+            "proposalPatch": {
+                "decision": "preserve the AGomokuGameMode worker boundary with compact patch repair",
+            },
+        },
+    }
+    server.handle_tool_call(27, patch_request)
+    patched = sent[-1]["result"]["structuredContent"]
+    assert patched.get("errorCode") != "ARCHITECTURE_PROPOSAL_UNCHANGED"
+    assert patched["proposalPatchApplied"] is True
+    assert patched["proposalRevision"] != first_payload["proposalRevision"]
+
+    revised_request = {
+        "name": "unreal_architecture_reasoning",
+        "arguments": {
+            **request["arguments"],
+            "proposal": {
+                **proposal,
+                "decision": "preserve the AGomokuGameMode worker boundary with revised lifecycle cleanup",
+            },
+        },
+    }
+    server.handle_tool_call(28, revised_request)
+    revised = sent[-1]["result"]["structuredContent"]
+    assert revised.get("errorCode") != "ARCHITECTURE_PROPOSAL_UNCHANGED"
+
+
+def test_architecture_reasoning_applies_exact_path_repairs(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    worker = source / "Worker.cpp"
+    worker.write_text("void Run() { CurrentState = 1; }\n", encoding="utf-8")
+    header = source / "Worker.h"
+    header.write_text("void Run();\n", encoding="utf-8")
+    invariant = "worker behavior remains stable"
+    proposal = {
+        "decision": "preserve the worker boundary",
+        "invariants": [invariant],
+        "impactedSurfaces": ["Source/Demo/Worker.cpp", "Source/Demo/Worker.h"],
+        "validationPlan": ["static validation", "build", "targeted regression"],
+        "validationMatrix": [{"invariant": invariant, "checks": ["targeted regression"]}],
+        "alternatives": [
+            {
+                "name": "keep boundary",
+                "rationale": "minimal change",
+                "scores": {
+                    "complexity": 1,
+                    "maintainability": 4,
+                    "performance": 4,
+                    "risk": 1,
+                },
+            },
+            {
+                "name": "split boundary",
+                "rationale": "new abstraction",
+                "scores": {
+                    "complexity": 4,
+                    "maintainability": 2,
+                    "performance": 3,
+                    "risk": 4,
+                },
+            },
+        ],
+        "implementationFiles": ["Source/Demo/Worker.cpp", "Source/Demo/Worker.h"],
+        "implementationSlices": [
+            {
+                "sliceId": "worker",
+                "files": ["Source/Demo/Worker.cpp", "Source/Demo/Worker.h"],
+                "invariants": [invariant],
+                "validation": ["build", "targeted regression"],
+            }
+        ],
+    }
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        30,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project),
+                "proposal": proposal,
+                "sessionId": "repair-chat",
+            },
+        },
+    )
+    first = sent[-1]["result"]["structuredContent"]
+    assert any(
+        row["jsonPath"] == "migrationPlan"
+        for row in first["proposalValidation"]["repairRequirements"]
+    )
+    assert first["repairSubmission"]["mode"] == "proposalRepairs"
+    assert first["repairSubmission"]["requiredRepairs"][0]["expectedType"] == "array"
+    assert set(first["repairSubmission"]["requiredJsonPaths"]) == {
+        "migrationPlan",
+        "selectedAlternative",
+    }
+
+    server.handle_tool_call(
+        31,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project),
+                "sessionId": "repair-chat",
+                "baseProposalRevision": first["proposalRevision"],
+                    "proposalRepairs": [
+                        {"jsonPath": "migrationPlan", "value": ["first partial value"]},
+                        {"jsonPath": "migrationPlan", "value": {"wrong": "type"}},
+                ],
+            },
+        },
+    )
+    rejected = sent[-1]["result"]["structuredContent"]
+    assert rejected["errorCode"] == "ARCHITECTURE_PROPOSAL_REPAIR_PATH_MISMATCH"
+    assert rejected["proposalRevision"] == first["proposalRevision"]
+    assert rejected["duplicateJsonPaths"] == ["migrationPlan"]
+    assert rejected["valueTypeErrors"] == [
+        {"jsonPath": "migrationPlan", "expectedType": "array", "actualType": "dict"}
+    ]
+
+    server.handle_tool_call(
+        32,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project),
+                "sessionId": "repair-chat",
+                "baseProposalRevision": first["proposalRevision"],
+                    "proposalRepairs": [
+                        {
+                            "jsonPath": "migrationPlan",
+                            "value": ["add compatible worker behavior before moving call sites"],
+                        },
+                        {"jsonPath": "selectedAlternative", "value": "keep boundary"},
+                    ],
+            },
+        },
+    )
+    repaired = sent[-1]["result"]["structuredContent"]
+    assert repaired.get("errorCode") != "ARCHITECTURE_PROPOSAL_REPAIR_PATH_MISMATCH"
+    assert repaired["proposalRepairsApplied"] is True
+    assert repaired["proposalRevision"] != first["proposalRevision"]
 
 
 def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatch, tmp_path):

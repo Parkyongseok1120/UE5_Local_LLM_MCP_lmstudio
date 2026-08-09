@@ -161,6 +161,10 @@ def test_agent_mutation_tools_advertise_bounded_payload_contract(tmp_path: Path)
         assert "at most 60 changed lines" in by_name["replace_in_file"]["description"]
         assert "never put a complete existing file" in by_name["apply_edit_bundle"]["description"]
         assert "brand-new files only" in by_name["apply_edit_bundle"]["inputSchema"]["properties"]["files"]["description"]
+        revision_schema = by_name["replace_in_file"]["inputSchema"]["properties"][
+            "taskAuthorization"
+        ]["properties"]["planRevision"]
+        assert revision_schema["type"] == ["string", "integer"]
     finally:
         client.close()
 

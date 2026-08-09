@@ -23,7 +23,16 @@ function validationStatePath(projectRoot) {
 }
 
 function defaultState() {
-  return { mutationGeneration: 0, paths: {}, validatedGeneration: 0, updatedAt: new Date().toISOString() };
+  return {
+    mutationGeneration: 0,
+    paths: {},
+    validatedGeneration: 0,
+    validationPassed: true,
+    validationStatus: "baseline",
+    validationBlockingErrorCount: 0,
+    validationProofLevel: "Baseline",
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 function mutationStateCorruptError(cause) {
@@ -39,7 +48,16 @@ async function readMutationState(projectRoot) {
     return defaultState();
   }
   try {
-    return { ...defaultState(), ...JSON.parse(await fsp.readFile(file, "utf8")) };
+    const parsed = JSON.parse(await fsp.readFile(file, "utf8"));
+    const state = { ...defaultState(), ...parsed };
+    // Older mutation files had no pass/fail proof field. A non-zero legacy
+    // generation must be revalidated instead of inheriting the baseline true.
+    if (!Object.prototype.hasOwnProperty.call(parsed, "validationPassed") && int(state.mutationGeneration) > 0) {
+      state.validationPassed = false;
+      state.validationStatus = "legacy_unverified";
+      state.validationProofLevel = "NeedsStaticValidation";
+    }
+    return state;
   } catch (err) {
     throw mutationStateCorruptError(err);
   }
@@ -72,6 +90,10 @@ async function recordMutation(projectRoot, relPath, content) {
   return withMutationLock(projectRoot, async () => {
     const state = await readMutationState(projectRoot);
     state.mutationGeneration = int(state.mutationGeneration) + 1;
+    state.validationPassed = false;
+    state.validationStatus = "pending";
+    state.validationBlockingErrorCount = 0;
+    state.validationProofLevel = "NeedsStaticValidation";
     state.paths[String(relPath).replace(/\\/g, "/")] = sha256Text(String(content ?? ""));
     await writeMutationState(projectRoot, state);
     return { mutationGeneration: state.mutationGeneration };
@@ -88,7 +110,17 @@ async function beginValidation(projectRoot) {
   return { startGeneration: int(state.mutationGeneration), state };
 }
 
-async function finishValidation(projectRoot, startGeneration) {
+function validationProofMetadata(options = {}) {
+  const passed = options.passed === true;
+  return {
+    validationPassed: passed,
+    validationStatus: passed ? "passed" : "failed",
+    validationBlockingErrorCount: Math.max(0, int(options.blockingErrorCount || 0)),
+    validationProofLevel: String(options.proofLevel || (passed ? "StaticVerified" : "StaticFailed")),
+  };
+}
+
+async function finishValidation(projectRoot, startGeneration, options = {}) {
   return withMutationLock(projectRoot, async () => {
     const state = await readMutationState(projectRoot);
     const current = int(state.mutationGeneration);
@@ -96,12 +128,18 @@ async function finishValidation(projectRoot, startGeneration) {
       return { validationStale: true, validatedGeneration: null, mutationGeneration: current };
     }
     state.validatedGeneration = current;
+    Object.assign(state, validationProofMetadata(options));
     await writeMutationState(projectRoot, state);
-    return { validationStale: false, validatedGeneration: current, mutationGeneration: current };
+    return {
+      validationStale: false,
+      validatedGeneration: current,
+      mutationGeneration: current,
+      ...validationProofMetadata(options),
+    };
   });
 }
 
-async function finishValidationAndClear(projectRoot, startGeneration) {
+async function finishValidationAndClear(projectRoot, startGeneration, options = {}) {
   return withMutationLock(projectRoot, async () => {
     const state = await readMutationState(projectRoot);
     const current = int(state.mutationGeneration);
@@ -109,6 +147,7 @@ async function finishValidationAndClear(projectRoot, startGeneration) {
       return { validationStale: true, validatedGeneration: null, mutationGeneration: current };
     }
     state.validatedGeneration = current;
+    Object.assign(state, validationProofMetadata(options));
     await writeMutationState(projectRoot, state);
     const validationFile = validationStatePath(projectRoot);
     try {
@@ -118,7 +157,12 @@ async function finishValidationAndClear(projectRoot, startGeneration) {
     } catch {
       // Best-effort cleanup under the same lock scope.
     }
-    return { validationStale: false, validatedGeneration: current, mutationGeneration: current };
+    return {
+      validationStale: false,
+      validatedGeneration: current,
+      mutationGeneration: current,
+      ...validationProofMetadata(options),
+    };
   });
 }
 
@@ -126,6 +170,10 @@ async function recordDeletion(projectRoot, relPath) {
   return withMutationLock(projectRoot, async () => {
     const state = await readMutationState(projectRoot);
     state.mutationGeneration = int(state.mutationGeneration) + 1;
+    state.validationPassed = false;
+    state.validationStatus = "pending";
+    state.validationBlockingErrorCount = 0;
+    state.validationProofLevel = "NeedsStaticValidation";
     const normalized = String(relPath || "").replace(/\\/g, "/");
     if (normalized && state.paths) {
       delete state.paths[normalized];

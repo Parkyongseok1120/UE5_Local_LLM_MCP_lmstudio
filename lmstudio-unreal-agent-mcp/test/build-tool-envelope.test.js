@@ -178,6 +178,30 @@ test("clang linker blocks preserve undefined symbols and route to the missing de
   assert.ok(!payload.nextSteps.some((step) => step.includes("No actionable")));
 });
 
+test("MSVC LNK2019 routes the quoted unresolved method to symbol lookup", () => {
+  const output = [
+    "[6/7] Link [x64] UnrealEditor-O_Mock.dll [NoUba]",
+    'Module.O_Mock.gen.cpp.obj : error LNK2019: "public: bool __cdecl AGomokuGameMode::SetPlayerReady(class APlayerController *,bool)" (?SetPlayerReady@AGomokuGameMode@@QEAA_NPEAVAPlayerController@@_N@Z) "public: static void __cdecl AGomokuGameMode::execSetPlayerReady(class UObject *,struct FFrame &,void * const)"',
+    "C:\\Game\\Binaries\\Win64\\UnrealEditor-O_Mock.dll : fatal error LNK1120: 1",
+    "Result: Failed (OtherCompilationError)",
+  ].join("\n");
+
+  const payload = buildResponsePayload({
+    result: { ok: false, exitCode: 6, stdout: output, stderr: "", error: "" },
+    build: { target: "O_MockEditor", platform: "Win64", configuration: "Development" },
+    planResult: { ok: true },
+    projectPath: "C:\\Game\\O_Mock.uproject",
+    command: "UnrealBuildTool.exe O_MockEditor Win64 Development",
+    logPath: "C:\\Game\\.agent\\logs\\latest-build.log",
+    verbose: false,
+  });
+
+  assert.strictEqual(payload.recovery.category, "linker_missing_definition");
+  assert.strictEqual(payload.requiredNextTool, "unreal_symbol_lookup");
+  assert.strictEqual(payload.requiredNextToolArgs.query, "SetPlayerReady");
+  assert.ok(payload.recovery.requiredSequence.includes("unreal_code_sketch_claim_validate"));
+});
+
 test("same-file incomplete type recovery includes the source preamble when bounded", () => {
   const output = [
     "/tmp/example/Demo/Source/Demo/Board.cpp:92:51: error: cannot initialize a parameter of type 'const APlayerController *' with an rvalue of type 'ABoard *'",

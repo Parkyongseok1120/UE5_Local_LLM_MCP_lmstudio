@@ -64,6 +64,36 @@ function toolResultsOf(message) {
   return [];
 }
 
+function toolResultContent(result) {
+  const raw = result?.content ?? result?.structuredContent ?? result?.result ?? "";
+  if (typeof raw === "string") {
+    const source = raw.trim();
+    if ((source.startsWith("[") || source.startsWith("{")) && source.length > 1) {
+      try {
+        const parsed = JSON.parse(source);
+        const isTransportBlock = Array.isArray(parsed)
+          ? parsed.some((block) => block && typeof block === "object" && ["text", "resource"].includes(block.type))
+          : parsed && typeof parsed === "object" && ["text", "resource"].includes(parsed.type);
+        if (isTransportBlock) return toolResultContent({ content: parsed });
+      } catch { /* ordinary source/text result */ }
+    }
+    return raw;
+  }
+  if (Array.isArray(raw)) {
+    return raw.map((block) => {
+      if (typeof block === "string") return block;
+      if (typeof block?.text === "string") return block.text;
+      if (typeof block?.content === "string") return block.content;
+      try { return JSON.stringify(block); } catch { return ""; }
+    }).filter(Boolean).join("\n");
+  }
+  if (raw && typeof raw === "object") {
+    if (typeof raw.text === "string") return raw.text;
+    try { return JSON.stringify(raw); } catch { return ""; }
+  }
+  return String(raw || "");
+}
+
 function messageSnapshot(message) {
   return {
     role: roleOf(message),
@@ -76,7 +106,8 @@ function messageSnapshot(message) {
     toolResults: toolResultsOf(message).map((result) => ({
       toolCallId: result.toolCallId || null,
       name: result.name || "",
-      content: String(result.content || ""),
+      content: toolResultContent(result),
+      isError: result.isError === true,
     })),
   };
 }
@@ -87,45 +118,172 @@ function snapshotMessages(messages) {
 
 function parseJsonObjects(text) {
   const values = [];
-  const source = String(text || "").trim();
-  if (!source) return values;
-  try {
-    const parsed = JSON.parse(source);
-    if (parsed && typeof parsed === "object") values.push(parsed);
-  } catch {
-    const matches = source.match(/\{[\s\S]*\}/g) || [];
-    for (const match of matches.slice(-4)) {
-      try {
-        const parsed = JSON.parse(match);
-        if (parsed && typeof parsed === "object") values.push(parsed);
-      } catch { /* text is not JSON; keep the raw message */ }
+  const parseNested = (candidate, depth = 0) => {
+    if (depth > 4 || candidate == null) return;
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) parseNested(item, depth + 1);
+      return;
+    }
+    if (candidate && typeof candidate === "object") {
+      // LM Studio persists MCP text blocks as a JSON-encoded array inside the
+      // tool result's content string. The block is transport, not evidence;
+      // recursively parse its text to recover the actual MCP payload.
+      if (candidate.type === "text" && typeof candidate.text === "string") {
+        parseNested(candidate.text, depth + 1);
+        return;
+      }
+      values.push(candidate);
+      return;
+    }
+    const source = String(candidate || "").trim();
+    if (!source) return;
+    try {
+      parseNested(JSON.parse(source), depth + 1);
+    } catch {
+      const matches = source.match(/\{[\s\S]*\}/g) || [];
+      for (const match of matches.slice(-4)) {
+        try {
+          parseNested(JSON.parse(match), depth + 1);
+        } catch { /* text is not JSON; keep the raw message */ }
+      }
+    }
+  };
+  parseNested(text);
+  return values;
+}
+
+function toolResultSucceeded(result) {
+  if (result?.isError === true) return false;
+  const payloads = parseJsonObjects(result?.content);
+  for (const payload of payloads) {
+    if (
+      payload.isError === true
+      || payload.ok === false
+      || payload.toolExecutionSucceeded === false
+      || payload.phase === "failed"
+      || payload.validationProofPassed === false
+      || payload.validationPassed === false
+      || payload.buildAllowedForValidatedGeneration === false
+    ) {
+      return false;
+    }
+    const validationSummary = payload.validationSummary;
+    if (validationSummary && (validationSummary.ok === false || validationSummary.skipped === true)) {
+      return false;
+    }
+    if (typeof payload.buildOutcome === "string" && /fail|error/i.test(payload.buildOutcome)) {
+      return false;
     }
   }
-  return values;
+  // Plain-text tool results are successful unless the transport or structured
+  // payload explicitly marks them as failed. This preserves compatibility with
+  // MCP tools that return human-readable output instead of JSON.
+  return true;
+}
+
+const NON_TOOL_NEXT_ACTIONS = new Set([
+  "use_active_route_tool",
+  "continue_with_current_tool_route",
+  "request_fresh_authorization_or_replan",
+  "retry_same_tool_with_returned_taskAuthorization",
+  "start_agent_edit_task_to_apply_changes",
+  "replan_autonomous_strategy",
+  "quarantine_corrupt_task",
+]);
+
+function isNonToolNextAction(value) {
+  return NON_TOOL_NEXT_ACTIONS.has(String(value || "").trim());
+}
+
+function compactTaskRouteOwnership(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const taskSessionId = String(value.taskSessionId || "").trim();
+  const ownerCapability = String(value.ownerCapability || "").trim();
+  if (!taskSessionId || !ownerCapability) return null;
+  return { taskSessionId, ownerCapability };
+}
+
+function boundedArchitecturePatchPreview(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const allowed = [
+    "networking",
+    "stateInventory",
+    "lifecycleTransitions",
+    "impactedSurfaces",
+    "implementationFiles",
+    "migrationPlan",
+  ];
+  const bound = (child, depth = 0) => {
+    if (typeof child === "string") return child.slice(0, 300);
+    if (typeof child === "number" || typeof child === "boolean" || child == null) return child;
+    if (depth >= 4) return "[depth-truncated]";
+    if (Array.isArray(child)) return child.slice(0, 10).map((item) => bound(item, depth + 1));
+    if (typeof child === "object") {
+      return Object.fromEntries(
+        Object.entries(child).slice(0, 16).map(([key, item]) => [key, bound(item, depth + 1)]),
+      );
+    }
+    return String(child).slice(0, 300);
+  };
+  const selected = Object.fromEntries(
+    allowed.filter((key) => Object.hasOwn(value, key)).map((key) => [key, bound(value[key])]),
+  );
+  return Object.keys(selected).length ? selected : null;
 }
 
 function collectControlFields(value, state) {
   if (!value || typeof value !== "object") return;
+  if (typeof value.proposalRevision === "string" && value.proposalRevision.trim()) {
+    const previous = state.architectureProposal || {};
+    const validation = value.proposalValidation && typeof value.proposalValidation === "object"
+      ? value.proposalValidation
+      : null;
+    const repairs = validation && Array.isArray(validation.repairRequirements)
+      ? validation.repairRequirements.slice(0, 24).map((row) => ({
+        jsonPath: String(row?.jsonPath || "proposal").slice(0, 160),
+        constraint: String(row?.constraint || "").slice(0, 500),
+      }))
+      : (previous.repairRequirements || []);
+    state.architectureProposal = {
+      ...previous,
+      revision: value.proposalRevision.trim(),
+      validationOk: validation ? validation.ok === true : previous.validationOk,
+      proposalPatchApplied: value.proposalPatchApplied === true,
+      repairRequirements: repairs,
+      lastErrorCode: String(value.errorCode || previous.lastErrorCode || "").slice(0, 120),
+      requiredNextAction: String(
+        value.requiredNextAction || previous.requiredNextAction || ""
+      ).slice(0, 160),
+      repairMode: String(value.repairSubmission?.mode || previous.repairMode || "").slice(0, 80),
+      requiredRepairPaths: Array.isArray(value.repairSubmission?.requiredJsonPaths)
+        ? value.repairSubmission.requiredJsonPaths.slice(0, 24).map((path) => String(path).slice(0, 160))
+        : (previous.requiredRepairPaths || []),
+    };
+  }
+  const directActionIsTool = value.nextActionIsTool !== false
+    && value.requiredNextActionIsTool !== false;
+  let directRequiredNextToolSeen = false;
+  let directRequiredNextTool = null;
+  let directAction = "";
+  let directActionField = "";
+  let directArgs = null;
   for (const [key, child] of Object.entries(value)) {
     if (key === "requiredNextTool") {
-      if (child === null || child === false || child === "") {
-        state.requiredNextTool = null;
-        state.requiredNextToolRef = null;
-        state.requiredNextToolArgs = null;
-      } else if (typeof child === "string") {
-        state.requiredNextTool = child;
-        state.requiredNextToolRef = null;
-      } else if (child && typeof child === "object") {
-        const name = typeof child.name === "string"
-          ? child.name
-          : (typeof child.tool === "string" ? child.tool : "");
-        if (name) {
-          state.requiredNextTool = name;
-          state.requiredNextToolRef = child;
+      directRequiredNextToolSeen = true;
+      directRequiredNextTool = child;
+    } else if (["requiredNextAction", "nextAction"].includes(key) && typeof child === "string") {
+      const candidate = child.trim();
+      if (/^[a-z][a-z0-9_]{2,}(?::[a-z0-9_-]+)?$/.test(candidate)) {
+        if (!directAction || key === "nextAction") {
+          directAction = candidate;
+          directActionField = key;
         }
       }
-    } else if (key === "requiredNextToolArgs" && child && typeof child === "object") {
-      state.requiredNextToolArgs = child;
+    } else if (["requiredNextToolArgs", "nextActionArgs"].includes(key) && child && typeof child === "object") {
+      if (!directArgs || key === "nextActionArgs") directArgs = child;
+    } else if (["taskAuthorization", "routeAuthorization"].includes(key)) {
+      const ownership = compactTaskRouteOwnership(child);
+      if (ownership) state.taskRouteOwnership = ownership;
     } else if (key === "constraints" && Array.isArray(child)) {
       state.constraints.push(...child.filter((item) => typeof item === "string"));
     } else if (["diagnosticCode", "errorCode", "errorKey", "errorSubkind", "firstError"].includes(key) && child != null) {
@@ -134,15 +292,165 @@ function collectControlFields(value, state) {
       state.exactSignatureContracts.push(child);
     } else if (["path", "file", "projectRelative", "projectPath"].includes(key) && typeof child === "string") {
       state.touchedPaths.push(child.replaceAll("\\", "/"));
-    } else if (["activeProject", "projectName"].includes(key) && typeof child === "string") {
+    } else if (["activeProject", "uprojectPath", "projectFile"].includes(key) && typeof child === "string" && /\.uproject$/i.test(child)) {
       state.activeProject = child;
+    } else if (key === "projectName" && typeof child === "string") {
+      state.activeProjectName = child;
     } else if (key === "mutationGeneration" && Number.isFinite(Number(child))) {
       state.mutationGeneration = Math.max(state.mutationGeneration, Number(child));
     } else if (key === "buildOutcome" || key === "proofLevel" || key === "phase") {
       state.buildState[key] = child;
+    } else if (key === "selectedSlice" && child && typeof child === "object") {
+      state.selectedSlice = child;
+    } else if (key === "sliceProgress" && child && typeof child === "object") {
+      state.sliceProgress = child;
+    } else if (key === "buildVerification" && child && typeof child === "object") {
+      state.buildVerification = child;
+    } else if (key === "toolRoute" && child && typeof child === "object") {
+      state.toolRoute = {
+        routeHash: child.routeHash || "",
+        phase: child.phase || "",
+        activeTools: Array.isArray(child.activeTools) ? child.activeTools.slice(0, 16) : [],
+        selectedSlice: child.selectedSlice || null,
+      };
+    } else if (["invariants", "acceptanceCriteria", "postconditions"].includes(key) && Array.isArray(child)) {
+      state.invariants.push(...child.filter((item) => typeof item === "string"));
+    } else if (["automationCoverage", "engineHeaderLookup", "coverageStatus", "coverage"].includes(key)) {
+      state.coverageEvidence.push({ [key]: child });
     }
     collectControlFields(child, state);
   }
+  // Parent control fields describe the action that must happen now. Reapply
+  // them after recursion so nextActionArgs.requiredNextAction (the action
+  // after a recovery checkpoint) cannot overwrite nextAction itself.
+  if (directRequiredNextToolSeen) {
+    if (directRequiredNextTool === null || directRequiredNextTool === false || directRequiredNextTool === "") {
+      state.requiredNextTool = null;
+      state.requiredNextToolRef = null;
+      state.requiredNextToolArgs = null;
+    } else if (typeof directRequiredNextTool === "string") {
+      if (isNonToolNextAction(directRequiredNextTool)) {
+        state.requiredNextTool = null;
+        state.requiredNextToolRef = null;
+        state.requiredNextToolArgs = null;
+      } else {
+        state.requiredNextTool = directRequiredNextTool;
+        state.requiredNextToolRef = null;
+      }
+    } else if (directRequiredNextTool && typeof directRequiredNextTool === "object") {
+      const name = typeof directRequiredNextTool.name === "string"
+        ? directRequiredNextTool.name
+        : (typeof directRequiredNextTool.tool === "string" ? directRequiredNextTool.tool : "");
+      if (isNonToolNextAction(name)) {
+        state.requiredNextTool = null;
+        state.requiredNextToolRef = null;
+        state.requiredNextToolArgs = null;
+      } else if (name) {
+        state.requiredNextTool = name;
+        state.requiredNextToolRef = directRequiredNextTool;
+      }
+    }
+  } else if (directAction) {
+    if (!directActionIsTool || isNonToolNextAction(directAction)) {
+      // This is a server routing sentinel, not an MCP tool name. It means the
+      // prior exact-tool gate is no longer applicable and any currently active
+      // route tool may be selected.
+      state.requiredNextTool = null;
+      state.requiredNextToolRef = null;
+      state.requiredNextToolArgs = null;
+    } else {
+      state.requiredNextTool = directAction.split(":", 1)[0];
+      state.requiredNextToolRef = { sourceField: directActionField, value: directAction };
+    }
+  }
+  if (directArgs && state.requiredNextTool) state.requiredNextToolArgs = directArgs;
+}
+
+function semanticAnchors(content) {
+  const lines = String(content || "").replace(/^\[path-metadata:[^\n]*\]\r?\n?/, "")
+    .replace(/^\[line-endings:[^\n]*\]\r?\n?/, "")
+    .split(/\r?\n/);
+  const ranked = [];
+  const add = (index, score, line) => {
+    const normalized = String(line || "").trim().replace(/\s+/g, " ");
+    if (!normalized || normalized.startsWith("//")) return;
+    ranked.push({ index, score, text: normalized.slice(0, 220) });
+  };
+  lines.forEach((line, index) => {
+    const value = line.trim().replace(/^\d+\|/, "").trim();
+    if (/IMPLEMENT_(?:SIMPLE|COMPLEX)_AUTOMATION_TEST|BEGIN_DEFINE_SPEC|END_DEFINE_SPEC|Describe\s*\(|It\s*\(/.test(value)) add(index, 110, value);
+    else if (/^U(?:CLASS|STRUCT|ENUM|INTERFACE|FUNCTION)\b/.test(value)) add(index, 100, value);
+    else if (/^(?:class|struct|enum(?:\s+class)?)\s+[A-Za-z_]/.test(value)) add(index, 95, value);
+    else if (/^[A-Za-z_][\w:<>,*&\s]*::[~A-Za-z_]\w*\s*\(/.test(value)) add(index, 90, value);
+    else if (/DOREPLIFETIME|HasAuthority\s*\(|_Implementation\s*\(|OnRep_|Server[A-Za-z_]*\s*\(/.test(value)) add(index, 85, value);
+    else if (/^[A-Za-z_][\w:<>,*&\s]*\([^;{}]*\)\s*(?:const\s*)?;\s*$/.test(value)) add(index, 80, value);
+    else if (/^UPROPERTY\b/.test(value)) add(index, 70, value);
+    else if (/^(?:case\s+E\w+|return\s+E\w+|switch\s*\()/.test(value)) add(index, 65, value);
+    else if (/^[A-Za-z_][\w:<>,*&\s]+\s+[A-Za-z_]\w*\s*(?:=\s*[^;]+)?;\s*$/.test(value)) add(index, 45, value);
+  });
+  const selected = ranked.sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 12);
+  selected.sort((a, b) => a.index - b.index);
+  return selected.map((row) => `L${row.index + 1}: ${row.text}`);
+}
+
+function compactToolEvidence(call, payload, resultContent = "") {
+  const name = String(call?.name || "");
+  const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
+  const normalized = name.toLowerCase();
+  if (normalized.endsWith("get_active_project") || normalized === "get_workspace_info") {
+    const activeProject = String(
+      payload?.activeProject || payload?.uprojectPath || payload?.projectFile
+      || payload?.details?.projectFile || ""
+    );
+    return activeProject ? {
+      tool: name,
+      activeProject,
+      projectName: String(payload?.projectName || payload?.details?.projectName || ""),
+      projectDir: String(payload?.projectDir || payload?.details?.projectDir || ""),
+    } : null;
+  }
+  if (normalized.endsWith("search_files")) {
+    const matches = [
+      ...(Array.isArray(payload?.results) ? payload.results : []),
+      ...(Array.isArray(payload?.fileNameResults) ? payload.fileNameResults : []),
+    ];
+    return {
+      tool: name,
+      query: String(args.query || "").slice(0, 160),
+      path: String(args.path || payload?.path?.displayPath || payload?.path || "").slice(0, 260),
+      resultCount: Array.isArray(payload?.results) ? payload.results.length : 0,
+      fileNameResultCount: Array.isArray(payload?.fileNameResults) ? payload.fileNameResults.length : 0,
+      searchComplete: payload?.searchComplete === true,
+      matchedFiles: [...new Set(matches.map((row) => String(row?.file || "")).filter(Boolean))].slice(0, 12),
+    };
+  }
+  if (normalized.endsWith("list_directory")) {
+    const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+    return {
+      tool: name,
+      path: String(args.path || payload?.path?.displayPath || payload?.path || "").slice(0, 260),
+      entryCount: entries.length,
+      entries: entries.map((row) => String(row?.name || row?.path || row || "")).filter(Boolean).slice(0, 32),
+    };
+  }
+  if (normalized.endsWith("read_file") || normalized.endsWith("read_file_range")) {
+    const source = String(payload?.content || resultContent || "");
+    const suppliedAnchors = Array.isArray(payload?.semanticAnchors)
+      ? payload.semanticAnchors.filter((line) => typeof line === "string").slice(0, 16)
+      : [];
+    return {
+      tool: name,
+      path: String(args.path || payload?.path?.displayPath || payload?.path || "").slice(0, 260),
+      startLine: Number(args.startLine || args.start || 0),
+      endLine: Number(args.endLine || args.end || 0),
+      lineCount: Number(payload?.cachedLineCount || (source ? source.split(/\r?\n/).length : 0)),
+      evidenceHash: String(payload?.evidenceHash || payload?.contentHash || (source ? sha256(source) : "")).slice(0, 80),
+      semanticAnchors: suppliedAnchors.length ? suppliedAnchors : semanticAnchors(source),
+      repeatDetected: payload?.repeatDetected === true,
+      readAttempts: Number(payload?.readAttempts || 1),
+    };
+  }
+  return null;
 }
 
 function isReadOnlyUserGoal(text) {
@@ -195,25 +503,52 @@ function findLatestRealUserIndex(snapshots) {
 function extractControlState(messages, prior = {}, options = {}) {
   const snapshots = snapshotMessages(messages || []);
   const priorCount = Number(prior.sourceMessageCount || 0);
+  const priorHasActiveTaskRoute = Boolean(prior.toolRoute?.routeHash);
+  const priorHasRouteOwnership = Boolean(compactTaskRouteOwnership(prior.taskRouteOwnership));
   const canResume = priorCount > 0
     && priorCount <= snapshots.length
-    && prior.sourceHistoryHash === sha256(stableStringify(snapshots.slice(0, priorCount)));
+    && prior.sourceHistoryHash === sha256(stableStringify(snapshots.slice(0, priorCount)))
+    // Revision 22 migration: old checkpoints discarded ownerCapability. When
+    // an active task route is present, rescan the bounded conversation once so
+    // compact route ownership can be recovered from an earlier tool result.
+    && (!priorHasActiveTaskRoute || priorHasRouteOwnership);
   const source = canResume ? snapshots.slice(priorCount) : snapshots;
   const state = {
     schemaVersion: COMPACTION_SCHEMA_VERSION,
     objective: canResume ? (prior.objective || "") : "",
     constraints: canResume && Array.isArray(prior.constraints) ? [...prior.constraints] : [],
     activeProject: canResume ? (prior.activeProject || null) : null,
+    activeProjectName: canResume ? (prior.activeProjectName || "") : "",
     touchedPaths: canResume && Array.isArray(prior.modifiedFiles) ? [...prior.modifiedFiles] : [],
     lastDiagnostics: canResume && Array.isArray(prior.diagnostics) ? [...prior.diagnostics] : [],
     exactSignatureContracts: canResume && Array.isArray(prior.exactSignatureContracts) ? [...prior.exactSignatureContracts] : [],
-    requiredNextTool: canResume ? (prior.requiredNextTool?.name || null) : null,
-    requiredNextToolRef: canResume ? (prior.requiredNextTool?.reference || null) : null,
-    requiredNextToolArgs: canResume ? (prior.requiredNextTool?.args || null) : null,
+    requiredNextTool: canResume && !isNonToolNextAction(prior.requiredNextTool?.name)
+      ? (prior.requiredNextTool?.name || null)
+      : null,
+    requiredNextToolRef: canResume && !isNonToolNextAction(prior.requiredNextTool?.name)
+      ? (prior.requiredNextTool?.reference || null)
+      : null,
+    requiredNextToolArgs: canResume && !isNonToolNextAction(prior.requiredNextTool?.name)
+      ? (prior.requiredNextTool?.args || null)
+      : null,
     mutationGeneration: canResume ? Number(prior.mutationGeneration || 0) : 0,
     buildState: canResume ? { ...(prior.buildState || {}) } : {},
+    selectedSlice: canResume ? (prior.selectedSlice || null) : null,
+    sliceProgress: canResume ? (prior.sliceProgress || null) : null,
+    buildVerification: canResume ? (prior.buildVerification || null) : null,
+    toolRoute: canResume ? (prior.toolRoute || null) : null,
+    taskRouteOwnership: canResume ? compactTaskRouteOwnership(prior.taskRouteOwnership) : null,
+    invariants: canResume && Array.isArray(prior.invariants) ? [...prior.invariants] : [],
+    coverageEvidence: canResume && Array.isArray(prior.coverageEvidence) ? [...prior.coverageEvidence] : [],
+    architectureProposal: canResume && prior.architectureProposal
+      ? { ...prior.architectureProposal }
+      : null,
+    failedToolResults: canResume && Array.isArray(prior.failedToolResults) ? [...prior.failedToolResults] : [],
     facts: canResume && Array.isArray(prior.facts) ? [...prior.facts] : [],
+    evidenceFacts: canResume && Array.isArray(prior.evidenceFacts) ? [...prior.evidenceFacts] : [],
   };
+  const toolCallsById = new Map();
+  const anonymousToolCalls = [];
 
   for (const snapshot of source) {
     if (snapshot.role === "user" && snapshot.text.trim()) {
@@ -236,32 +571,74 @@ function extractControlState(messages, prior = {}, options = {}) {
     }
     for (const payload of parseJsonObjects(snapshot.text)) {
       collectControlFields(payload, state);
-      if (payload.ok === true && (payload.phase === "complete" || payload.buildOutcome === "succeeded")) {
-        state.requiredNextTool = null;
-        state.requiredNextToolRef = null;
-        state.requiredNextToolArgs = null;
-      }
-    }
-    for (const result of snapshot.toolResults) {
-      for (const payload of parseJsonObjects(result.content)) {
-        collectControlFields(payload, state);
-        if (payload.ok === true && (payload.phase === "complete" || payload.buildOutcome === "succeeded")) {
-          state.requiredNextTool = null;
-          state.requiredNextToolRef = null;
-          state.requiredNextToolArgs = null;
-        }
-      }
     }
     for (const call of snapshot.toolCalls) {
       state.facts.push(`tool:${call.name}`);
+      if (call.id) toolCallsById.set(call.id, call);
+      else anonymousToolCalls.push(call);
       const normalizedName = String(call.name || "").toLowerCase();
-      if (state.requiredNextTool && toolNamesMatch(state.requiredNextTool, call.name)) {
-        state.requiredNextTool = null;
-        state.requiredNextToolRef = null;
-        state.requiredNextToolArgs = null;
-      }
       if (["replace_in_file", "write_file"].some((name) => normalizedName === name || normalizedName.endsWith(`_${name}`))) {
         state.mutationGeneration += 1;
+      }
+    }
+    for (const result of snapshot.toolResults) {
+      const matchedCall = result.toolCallId
+        ? (toolCallsById.get(result.toolCallId) || { name: result.name, arguments: {} })
+        : (anonymousToolCalls.shift() || { name: result.name, arguments: {} });
+      const matchedCallName = matchedCall.name || result.name;
+      const normalizedCallName = String(matchedCallName || "").toLowerCase();
+      if (
+        normalizedCallName.endsWith("unreal_architecture_reasoning")
+        && (matchedCall.arguments?.proposalPatch || matchedCall.arguments?.proposalRepairs)
+      ) {
+        const patch = matchedCall.arguments.proposalPatch || matchedCall.arguments.proposalRepairs;
+        const patchDigest = sha256(stableStringify(patch));
+        const previousDigest = state.architectureProposal?.lastPatchDigest || "";
+        const repairPaths = Array.isArray(matchedCall.arguments?.proposalRepairs)
+          ? matchedCall.arguments.proposalRepairs.map((row) => String(row?.jsonPath || "")).filter(Boolean)
+          : [];
+        state.architectureProposal = {
+          ...(state.architectureProposal || {}),
+          lastPatchDigest: patchDigest,
+          lastPatchFields: repairPaths.length ? repairPaths.slice(0, 24) : Object.keys(patch).slice(0, 20),
+          lastPatchPreview: repairPaths.length
+            ? matchedCall.arguments.proposalRepairs.slice(0, 24).map((row) => ({
+              jsonPath: String(row?.jsonPath || "").slice(0, 160),
+              value: String(stableStringify(row?.value)).slice(0, 500),
+            }))
+            : boundedArchitecturePatchPreview(patch),
+          unchangedPatchAttempts: previousDigest === patchDigest
+            ? Number(state.architectureProposal?.unchangedPatchAttempts || 0) + 1
+            : 0,
+        };
+      }
+      const resultPayloads = parseJsonObjects(result.content);
+      for (const payload of resultPayloads) {
+        collectControlFields(payload, state);
+      }
+      if (toolResultSucceeded(result)) {
+        const evidence = compactToolEvidence(matchedCall, resultPayloads.slice(-1)[0] || {}, result.content);
+        if (evidence) state.evidenceFacts.push(evidence);
+      }
+      if (!toolResultSucceeded(result)) {
+        const failurePayload = parseJsonObjects(result.content).slice(-1)[0] || {};
+        state.failedToolResults.push({
+          tool: String(matchedCallName || result.name || ""),
+          errorCode: String(failurePayload.errorCode || ""),
+          detail: String(
+            failurePayload.error
+            || failurePayload.userMessage
+            || "tool result marked failed"
+          ).slice(0, 400),
+        });
+      }
+      // A generated call is only intent. Keep the required tool gate until the
+      // paired result is observed and is explicitly non-failing.
+      if (
+        state.requiredNextTool
+        && toolNamesMatch(state.requiredNextTool, matchedCallName)
+        && toolResultSucceeded(result)
+      ) {
         state.requiredNextTool = null;
         state.requiredNextToolRef = null;
         state.requiredNextToolArgs = null;
@@ -277,6 +654,31 @@ function extractControlState(messages, prior = {}, options = {}) {
     state.exactSignatureContracts.map((contract) => [stableStringify(contract), contract]),
   ).values()].slice(-cap);
   state.facts = [...new Set(state.facts)].slice(-cap);
+  state.invariants = [...new Set(state.invariants)].slice(-cap);
+  state.coverageEvidence = state.coverageEvidence.slice(-cap);
+  state.failedToolResults = state.failedToolResults.slice(-cap);
+  const evidenceByKey = new Map();
+  for (const fact of state.evidenceFacts) {
+      const tool = String(fact?.tool || "").toLowerCase();
+      let key = stableStringify(fact);
+      if (tool.endsWith("read_file") || tool.endsWith("read_file_range")) key = `read:${fact.path}`;
+      else if (tool.endsWith("list_directory")) key = `list:${fact.path}`;
+      else if (tool.endsWith("search_files")) key = `search:${fact.path}:${fact.query}`;
+      else if (tool.endsWith("get_active_project") || tool === "get_workspace_info") key = `project:${tool}`;
+      const priorFact = evidenceByKey.get(key);
+      if (priorFact && (tool.endsWith("read_file") || tool.endsWith("read_file_range"))) {
+        const merged = { ...priorFact, ...fact };
+        if (!fact.evidenceHash) merged.evidenceHash = priorFact.evidenceHash;
+        if (!fact.lineCount) merged.lineCount = priorFact.lineCount;
+        if (!Array.isArray(fact.semanticAnchors) || fact.semanticAnchors.length === 0) {
+          merged.semanticAnchors = priorFact.semanticAnchors || [];
+        }
+        evidenceByKey.set(key, merged);
+      } else {
+        evidenceByKey.set(key, fact);
+      }
+  }
+  state.evidenceFacts = [...evidenceByKey.values()].slice(-cap);
   return state;
 }
 
@@ -291,9 +693,19 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     objective: control.objective,
     constraints: control.constraints,
     activeProject: control.activeProject,
+    activeProjectName: control.activeProjectName,
     modifiedFiles: control.touchedPaths,
     mutationGeneration: control.mutationGeneration,
     buildState: control.buildState,
+    selectedSlice: control.selectedSlice,
+    sliceProgress: control.sliceProgress,
+    buildVerification: control.buildVerification,
+    toolRoute: control.toolRoute,
+    taskRouteOwnership: control.taskRouteOwnership,
+    invariants: control.invariants,
+    coverageEvidence: control.coverageEvidence,
+    architectureProposal: control.architectureProposal,
+    failedToolResults: control.failedToolResults,
     requiredNextTool: control.requiredNextTool ? {
       name: control.requiredNextTool,
       reference: control.requiredNextToolRef,
@@ -302,6 +714,7 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     exactSignatureContracts: control.exactSignatureContracts,
     diagnostics: control.lastDiagnostics,
     facts: control.facts,
+    evidenceFacts: control.evidenceFacts,
     pendingToolCall: prior.pendingToolCall || null,
     pendingToolCalls: Array.isArray(prior.pendingToolCalls) ? [...prior.pendingToolCalls] : [],
     completedToolCallIds: Array.isArray(prior.completedToolCallIds) ? [...prior.completedToolCallIds].slice(-256) : [],
@@ -439,20 +852,30 @@ function budgetDecision({ contextLength, inputTokens, nextToolName, config = {},
 function isCompleteToolPair(messages) {
   const pending = new Set();
   const known = new Set();
+  const completed = new Set();
+  let anonymousPending = 0;
   for (const message of messages || []) {
     for (const call of messageSnapshot(message).toolCalls) {
       if (call.id) {
         known.add(call.id);
         pending.add(call.id);
-      }
+      } else anonymousPending += 1;
     }
     for (const result of messageSnapshot(message).toolResults) {
       if (result.toolCallId && !known.has(result.toolCallId)) return false;
-      if (result.toolCallId) pending.delete(result.toolCallId);
+      if (result.toolCallId) {
+        if (completed.has(result.toolCallId)) return false;
+        completed.add(result.toolCallId);
+        pending.delete(result.toolCallId);
+      }
+      else {
+        anonymousPending -= 1;
+        if (anonymousPending < 0) return false;
+      }
     }
     // Tool results are validated in the loop above.
   }
-  return pending.size === 0;
+  return pending.size === 0 && anonymousPending === 0;
 }
 
 function completeTailStart(snapshots, startIndex) {
@@ -460,11 +883,19 @@ function completeTailStart(snapshots, startIndex) {
   while (start > 0) {
     const tail = snapshots.slice(start);
     const callIds = new Set();
+    let anonymousBalance = 0;
     let orphanResult = false;
     for (const message of tail) {
-      for (const call of message.toolCalls || []) if (call.id) callIds.add(call.id);
+      for (const call of message.toolCalls || []) {
+        if (call.id) callIds.add(call.id);
+        else anonymousBalance += 1;
+      }
       for (const result of message.toolResults || []) {
         if (result.toolCallId && !callIds.has(result.toolCallId)) orphanResult = true;
+        if (!result.toolCallId) {
+          anonymousBalance -= 1;
+          if (anonymousBalance < 0) orphanResult = true;
+        }
       }
     }
     if (!orphanResult) return start;
@@ -481,9 +912,39 @@ function summarizeOldMessages(messages, checkpoint) {
   if (checkpoint.modifiedFiles?.length) lines.push(`modifiedFiles=${checkpoint.modifiedFiles.join(", ")}`);
   if (checkpoint.constraints?.length) lines.push(`constraints=${checkpoint.constraints.join(" | ")}`);
   if (checkpoint.activeProject) lines.push(`activeProject=${checkpoint.activeProject}`);
+  if (checkpoint.activeProjectName) lines.push(`activeProjectName=${checkpoint.activeProjectName}`);
   lines.push(`mutationGeneration=${Number(checkpoint.mutationGeneration || 0)}`);
   if (checkpoint.buildState && Object.keys(checkpoint.buildState).length) {
     lines.push(`buildState=${JSON.stringify(checkpoint.buildState)}`);
+  }
+  if (checkpoint.selectedSlice) lines.push(`selectedSlice=${JSON.stringify(checkpoint.selectedSlice)}`);
+  if (checkpoint.sliceProgress) lines.push(`sliceProgress=${JSON.stringify(checkpoint.sliceProgress)}`);
+  if (checkpoint.buildVerification) lines.push(`buildVerification=${JSON.stringify(checkpoint.buildVerification)}`);
+  if (checkpoint.toolRoute) lines.push(`toolRoute=${JSON.stringify(checkpoint.toolRoute)}`);
+  if (checkpoint.taskRouteOwnership) {
+    lines.push(`taskAuthorization=${JSON.stringify(checkpoint.taskRouteOwnership)}`);
+    lines.push(
+      "routeOwnershipInstruction=Use the compact taskAuthorization above for active routed tools. "
+      + "Do not recover, cancel, or replace the healthy task merely because authToken is omitted.",
+    );
+  }
+  if (checkpoint.invariants?.length) lines.push(`invariants=${checkpoint.invariants.join(" | ")}`);
+  if (checkpoint.coverageEvidence?.length) {
+    lines.push(`coverageEvidence=${JSON.stringify(checkpoint.coverageEvidence)}`);
+  }
+  if (checkpoint.architectureProposal) {
+    lines.push(`architectureProposalContinuation=${JSON.stringify(checkpoint.architectureProposal)}`);
+    lines.push(
+      "architectureProposalInstruction=Use the exact proposal revision above. Resolve each retained repair "
+      + "requirement by changing the corresponding values. Compare against lastPatchPreview and never resubmit "
+      + "the same patch digest; when repairMode is proposalRepairs, call unreal_architecture_reasoning with "
+      + "baseProposalRevision plus one {jsonPath,value} entry per requiredRepairPaths item. Keep each path exact, "
+      + "fill values from your own design, and do not regenerate or resend the prior proposalPatch. For an array "
+      + "path, send one complete replacement array rather than repeating that jsonPath per item.",
+    );
+  }
+  if (checkpoint.failedToolResults?.length) {
+    lines.push(`failedToolResults=${JSON.stringify(checkpoint.failedToolResults)}`);
   }
   if (checkpoint.diagnostics?.length) lines.push(`diagnostics=${checkpoint.diagnostics.join(" | ")}`);
   if (checkpoint.requiredNextTool?.name) {
@@ -494,12 +955,26 @@ function summarizeOldMessages(messages, checkpoint) {
     lines.push(`exactSignatureContracts=${JSON.stringify(checkpoint.exactSignatureContracts)}`);
   }
   if (checkpoint.facts?.length) lines.push(`facts=${checkpoint.facts.join(" | ")}`);
+  if (checkpoint.evidenceFacts?.length) {
+    const readPaths = checkpoint.evidenceFacts
+      .filter((fact) => /read_file(?:_range)?$/i.test(String(fact?.tool || "")) && fact?.path)
+      .map((fact) => fact.path);
+    if (readPaths.length) {
+      lines.push(
+        `discoveryLedger=already-read unchanged files (${readPaths.length}): ${readPaths.join(", ")}. `
+        + "Do not re-read these paths merely to remember them; use their semanticAnchors below. "
+        + "Read again only after a mutation, when a required edit needs an exact range absent from the anchors, "
+        + "or when the tool reports changed evidence.",
+      );
+    }
+    lines.push(`evidenceFacts=${JSON.stringify(checkpoint.evidenceFacts)}`);
+  }
   lines.push(`compactedMessageCount=${(messages || []).length}`);
   lines.push(
     "Only use this summary for continuity. The checkpoint objective is the latest user goal; "
     + "do not continue an older structure/overview or refactor plan unless that latest goal asks for it. "
     + "Do not invent missing classes, modules, or GameFramework paths from memory or prior assistant prose. "
-    + "Re-read current files with tools and trust only latest tool results / verified facts.",
+    + "Trust verified evidenceFacts and semanticAnchors for unchanged files; use tools for unread, changed, or exact-range evidence.",
   );
   return lines.join("\n");
 }
@@ -580,8 +1055,42 @@ function compactSnapshots(messages, checkpoint, options = {}) {
 function validateCheckpoint(checkpoint) {
   if (!checkpoint || checkpoint.schemaVersion !== COMPACTION_SCHEMA_VERSION) return false;
   if (!Number.isFinite(Number(checkpoint.checkpointGeneration))) return false;
-  if (checkpoint.requiredNextTool && typeof checkpoint.requiredNextTool.name !== "string") return false;
+  if (
+    checkpoint.requiredNextTool
+    && (
+      typeof checkpoint.requiredNextTool !== "object"
+      || Array.isArray(checkpoint.requiredNextTool)
+      || typeof checkpoint.requiredNextTool.name !== "string"
+      || !checkpoint.requiredNextTool.name.trim()
+    )
+  ) return false;
   if (!Array.isArray(checkpoint.completedToolCallIds)) return false;
+  if (!checkpoint.completedToolCallIds.every((id) => typeof id === "string" && id.length > 0)) return false;
+  if (checkpoint.pendingToolCall !== undefined && checkpoint.pendingToolCall !== null) {
+    if (typeof checkpoint.pendingToolCall !== "object" || Array.isArray(checkpoint.pendingToolCall)) return false;
+    if (typeof checkpoint.pendingToolCall.name !== "string" || !checkpoint.pendingToolCall.name.trim()) return false;
+  }
+  if (checkpoint.pendingToolCalls !== undefined) {
+    if (!Array.isArray(checkpoint.pendingToolCalls)) return false;
+    if (checkpoint.pendingToolCalls.some((call) => (
+      !call
+      || typeof call !== "object"
+      || Array.isArray(call)
+      || typeof call.name !== "string"
+      || !call.name.trim()
+    ))) return false;
+  }
+  if (checkpoint.sourceMessageCount !== undefined) {
+    const count = Number(checkpoint.sourceMessageCount);
+    if (!Number.isFinite(count) || count < 0) return false;
+  }
+  if (checkpoint.sourceHistoryHash !== undefined && typeof checkpoint.sourceHistoryHash !== "string") return false;
+  if (checkpoint.evidenceFacts !== undefined && !Array.isArray(checkpoint.evidenceFacts)) return false;
+  if (
+    checkpoint.taskRouteOwnership !== undefined
+    && checkpoint.taskRouteOwnership !== null
+    && !compactTaskRouteOwnership(checkpoint.taskRouteOwnership)
+  ) return false;
   return true;
 }
 
@@ -597,6 +1106,9 @@ module.exports = {
   messageSnapshot,
   snapshotMessages,
   parseJsonObjects,
+  toolResultSucceeded,
+  isNonToolNextAction,
+  compactTaskRouteOwnership,
   collectControlFields,
   isReadOnlyUserGoal,
   isMetaUserMessage,

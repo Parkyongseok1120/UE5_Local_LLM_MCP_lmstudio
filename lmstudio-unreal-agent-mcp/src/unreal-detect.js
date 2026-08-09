@@ -187,6 +187,7 @@ async function setActiveProject(workspaceRoot, configPath, options = {}) {
 async function listUnrealProjects(workspaceRoot, configPath, options = {}) {
   const discovery = await discoverProjects(workspaceRoot, configPath, options);
   const activeProject = getActiveProject(configPath);
+  const hostPlatform = options.hostPlatform || process.platform;
   return {
     activeProject,
     searchRoots: discovery.roots,
@@ -199,19 +200,35 @@ async function listUnrealProjects(workspaceRoot, configPath, options = {}) {
       engineAssociation: project.engineAssociation,
       modifiedAt: project.modifiedAt,
       isActive: activeProject
-        ? project.projectPath.toLowerCase() === String(activeProject).toLowerCase()
+        ? pathIdentity(project.projectPath, hostPlatform) === pathIdentity(activeProject, hostPlatform)
         : false
     }))
   };
 }
 
-function uniquePaths(paths) {
+function pathIdentity(value, hostPlatform = process.platform) {
+  const resolved = path.resolve(String(value || "")).normalize("NFC");
+  return hostPlatform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function searchRootDelimiter(hostPlatform = process.platform) {
+  return hostPlatform === "win32" ? ";" : ":";
+}
+
+function splitSearchRoots(value, hostPlatform = process.platform) {
+  return String(value || "")
+    .split(searchRootDelimiter(hostPlatform))
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function uniquePaths(paths, hostPlatform = process.platform) {
   const seen = new Set();
   const out = [];
   for (const p of paths) {
     if (!p || typeof p !== "string") continue;
     const resolved = path.resolve(p);
-    const key = resolved.toLowerCase();
+    const key = pathIdentity(resolved, hostPlatform);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(resolved);
@@ -219,26 +236,27 @@ function uniquePaths(paths) {
   return out;
 }
 
-function resolveSearchRoots(workspaceRoot, configPath) {
+function resolveSearchRoots(workspaceRoot, configPath, options = {}) {
+  const hostPlatform = options.hostPlatform || process.platform;
+  const env = options.env || process.env;
+  const homeDirectory = options.homeDirectory || os.homedir();
   const config = loadMergedConfig(configPath);
-  const fromEnv = String(process.env.PROJECT_SEARCH_ROOTS || "")
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const fromEnv = splitSearchRoots(env.PROJECT_SEARCH_ROOTS, hostPlatform);
   const fromConfig = Array.isArray(config.projectSearchRoots) ? config.projectSearchRoots : [];
   const explicitRoots = [...fromEnv, ...fromConfig];
   const fallbackRoots = explicitRoots.length === 0
     ? [
-      path.join(os.homedir(), "Documents", "Git"),
-      path.join(os.homedir(), "Documents", "Unreal Projects")
+      path.join(homeDirectory, "Documents", "Git"),
+      path.join(homeDirectory, "Documents", "Unreal Projects"),
+      path.join(homeDirectory, "Unreal Projects"),
     ]
     : [];
   const roots = uniquePaths([
     workspaceRoot,
-    process.env.ACTIVE_PROJECT ? path.dirname(path.resolve(process.env.ACTIVE_PROJECT)) : "",
+    env.ACTIVE_PROJECT ? path.dirname(path.resolve(env.ACTIVE_PROJECT)) : "",
     ...explicitRoots,
     ...fallbackRoots
-  ]);
+  ], hostPlatform);
   return { config, roots };
 }
 
@@ -326,7 +344,7 @@ function defaultEngineLocations(
       env.ProgramFiles ? path.join(env.ProgramFiles, "Epic Games") : "",
       env["ProgramFiles(x86)"] ? path.join(env["ProgramFiles(x86)"], "Epic Games") : "",
       DEFAULT_EPIC_ROOT,
-    ]);
+    ], hostPlatform);
   }
   if (hostPlatform === "darwin") {
     return ["/Users/Shared/Epic Games", "/Applications/Epic Games"];
@@ -336,7 +354,7 @@ function defaultEngineLocations(
     path.join(homeDirectory, "Epic Games"),
     "/opt/UnrealEngine",
     "/opt/Epic Games",
-  ]);
+  ], hostPlatform);
 }
 
 async function findEngineInstalls(options = {}) {
@@ -563,20 +581,23 @@ async function walkForUProjects(root, maxDepth, depth = 0, results = []) {
   return results;
 }
 
-function scoreProjectMatch(candidate, hint, workspaceRoot) {
+function scoreProjectMatch(candidate, hint, workspaceRoot, options = {}) {
+  const hostPlatform = options.hostPlatform || process.platform;
+  const env = options.env || process.env;
   const lowerHint = String(hint || "").trim().toLowerCase();
   let score = 0;
-  const projectDir = candidate.projectDir.toLowerCase();
+  const projectDir = pathIdentity(candidate.projectDir, hostPlatform);
   const projectFile = candidate.projectFile.toLowerCase();
   const projectName = candidate.projectName.toLowerCase();
 
-  if (workspaceRoot && projectDir.startsWith(path.resolve(workspaceRoot).toLowerCase())) {
+  const workspaceIdentity = workspaceRoot ? pathIdentity(workspaceRoot, hostPlatform) : "";
+  if (workspaceIdentity && (projectDir === workspaceIdentity || projectDir.startsWith(`${workspaceIdentity}${path.sep}`))) {
     score += 20;
   }
 
-  if (process.env.ACTIVE_PROJECT) {
-    const active = path.resolve(process.env.ACTIVE_PROJECT).toLowerCase();
-    if (candidate.projectPath.toLowerCase() === active) score += 100;
+  if (env.ACTIVE_PROJECT) {
+    const active = pathIdentity(env.ACTIVE_PROJECT, hostPlatform);
+    if (pathIdentity(candidate.projectPath, hostPlatform) === active) score += 100;
   }
 
   if (lowerHint) {
@@ -592,7 +613,8 @@ function scoreProjectMatch(candidate, hint, workspaceRoot) {
 }
 
 async function discoverProjects(workspaceRoot, configPath, options = {}) {
-  const { config, roots } = resolveSearchRoots(workspaceRoot, configPath);
+  const hostPlatform = options.hostPlatform || process.platform;
+  const { config, roots } = resolveSearchRoots(workspaceRoot, configPath, options);
   const maxDepth = Number(options.maxDepth || process.env.PROJECT_SEARCH_MAX_DEPTH || 4);
   const found = new Map();
 
@@ -600,7 +622,7 @@ async function discoverProjects(workspaceRoot, configPath, options = {}) {
     if (!(await exists(root))) continue;
     const matches = await walkForUProjects(root, maxDepth);
     for (const uprojectPath of matches) {
-      found.set(path.resolve(uprojectPath), uprojectPath);
+      found.set(pathIdentity(uprojectPath, hostPlatform), uprojectPath);
     }
   }
 
@@ -661,7 +683,7 @@ async function discoverProjects(workspaceRoot, configPath, options = {}) {
 async function resolveProjectSelection(workspaceRoot, configPath, options = {}) {
   const explicitProject = String(options.project || "").trim();
   const hint = String(options.hint || "").trim();
-  const { config, roots } = resolveSearchRoots(workspaceRoot, configPath);
+  const { config, roots } = resolveSearchRoots(workspaceRoot, configPath, options);
 
   async function projectFromPath(projectPath, score = 1000) {
     const activePath = path.resolve(projectPath);
@@ -729,7 +751,7 @@ async function resolveProjectSelection(workspaceRoot, configPath, options = {}) 
 
   const scored = projects.map((project) => ({
     ...project,
-    score: scoreProjectMatch(project, hint, workspaceRoot)
+    score: scoreProjectMatch(project, hint, workspaceRoot, options)
   }));
 
   scored.sort((a, b) => {
@@ -931,7 +953,10 @@ function buildProjectBrowsePaths(activeProjectPath, workspaceRoot) {
   const exportDir = path.join(projectDir, "Saved", "LmStudioMetadataExports");
   let browseAvailable = false;
   try {
-    browseAvailable = projectDir.toLowerCase().startsWith(workspace.toLowerCase());
+    const projectIdentity = pathIdentity(projectDir);
+    const workspaceIdentity = pathIdentity(workspace);
+    browseAvailable = projectIdentity === workspaceIdentity
+      || projectIdentity.startsWith(`${workspaceIdentity}${path.sep}`);
   } catch {
     browseAvailable = false;
   }
@@ -971,6 +996,10 @@ module.exports = {
   getActiveProject,
   setActiveProject,
   listUnrealProjects,
+  pathIdentity,
+  searchRootDelimiter,
+  splitSearchRoots,
+  uniquePaths,
   resolveSearchRoots,
   defaultEngineLocations,
   engineBuildToolCandidates,

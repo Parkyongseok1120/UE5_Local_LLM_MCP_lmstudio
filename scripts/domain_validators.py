@@ -304,6 +304,26 @@ def validate_replication_ownership_conservative(
         return []
     rel = _rel(path, root)
     masked = mask_comments_and_strings(text)
+    game_state_class = re.search(
+        r"\bclass\s+(?:\w+_API\s+)?(?P<name>A\w+)\s*:\s*public\s+A(?:GameStateBase|GameState)\b",
+        masked,
+    )
+    server_rpc = re.search(r"\bUFUNCTION\s*\([^)]*\bServer\b[^)]*\)", masked)
+    if game_state_class and server_rpc:
+        return [
+            Finding(
+                "error",
+                rel,
+                line_number(text, server_rpc.start()),
+                "SERVER_RPC_ON_NON_OWNED_GAMESTATE",
+                (
+                    f"{game_state_class.group('name')} is a GameState and is not owned by a "
+                    "client connection, so a client cannot use its Server RPC as a request "
+                    "entry point. Put the request RPC on the owning PlayerController, Pawn, "
+                    "or another client-owned Actor and update GameState on the server."
+                ),
+            )
+        ]
     if re.search(r"\bUFUNCTION\s*\(\s*Server\b", masked) and "GetOwner()" not in masked:
         return [
             Finding(

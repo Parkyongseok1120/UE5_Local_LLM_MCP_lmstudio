@@ -1103,3 +1103,353 @@ def test_project_graph_accepts_member_declared_on_local_base_class():
     method = next(item for item in result["results"] if item["symbol"] == "SetState")
     assert method["verdict"] == "verified"
     assert result["ok"] is True
+
+
+def test_engine_header_fallback_verifies_exact_type_and_owned_method(tmp_path):
+    header = (
+        tmp_path
+        / "UE_5.8"
+        / "Engine"
+        / "Plugins"
+        / "FX"
+        / "Niagara"
+        / "Source"
+        / "Niagara"
+        / "Public"
+        / "NiagaraComponent.h"
+    )
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        """
+#pragma once
+class NIAGARA_API UNiagaraComponent : public UFXSystemComponent
+{
+public:
+    void SetVariableFloat(FName InVariableName, float InValue);
+};
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = validate_sketch(
+        "UNiagaraComponent* Comp; Comp->SetVariableFloat(Name, Value);",
+        NO_INDEX,
+        graph={"symbols": []},
+        engine_root=tmp_path / "UE_5.8",
+    )
+
+    component = next(
+        item for item in result["results"] if item["symbol"] == "UNiagaraComponent"
+    )
+    method = next(
+        item for item in result["results"] if item["symbol"] == "SetVariableFloat"
+    )
+    assert component["verdict"] == "verified"
+    assert component["coverageStatus"] == "engine_header_verified"
+    assert method["verdict"] == "verified"
+    assert method["receiverType"] == "UNiagaraComponent"
+    assert method["coverageStatus"] == "engine_header_verified"
+    assert method["evidence"][0]["source"] == "engine_header_exact"
+    assert result["engineHeaderLookup"]["status"] == "ready"
+    assert result["engineHeaderLookup"]["verifiedClaimCount"] == 2
+    assert result["ok"] is True
+
+
+def test_engine_header_fallback_finds_type_in_differently_named_header(tmp_path):
+    header = (
+        tmp_path
+        / "UE_5.8"
+        / "Engine"
+        / "Source"
+        / "Runtime"
+        / "CoreUObject"
+        / "Public"
+        / "UObject"
+        / "CoreNet.h"
+    )
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "class COREUOBJECT_API FLifetimeProperty { public: int32 RepIndex; };",
+        encoding="utf-8",
+    )
+
+    result = validate_sketch(
+        "TArray<FLifetimeProperty> LifetimeProps;",
+        NO_INDEX,
+        graph={
+            "symbols": [
+                {
+                    "symbol_name": "FLifetimeProperty",
+                    "symbol_kind": "usage",
+                    "qualified_name": "FLifetimeProperty",
+                    "file_path": "Source/Demo/Replicated.cpp",
+                    "line_start": 4,
+                }
+            ]
+        },
+        engine_root=tmp_path / "UE_5.8",
+    )
+
+    lifetime = next(
+        item for item in result["results"] if item["symbol"] == "FLifetimeProperty"
+    )
+    assert lifetime["verdict"] == "verified"
+    assert lifetime["coverageStatus"] == "engine_header_verified"
+    assert "CoreNet.h" in lifetime["evidence"][0]["locator"]
+    assert result["ok"] is True
+
+
+def test_game_state_server_rpc_is_known_bad_even_when_it_compiles():
+    result = validate_sketch(
+        "UFUNCTION(Server, Reliable) void ServerPlaceStone(int32 PlayerIndex);",
+        NO_INDEX,
+        declaration_context="class ABoardState : public AGameStateBase {};",
+    )
+    bad = next(
+        item for item in result["results"]
+        if item["symbol"] == "ServerRpcOnGameState"
+    )
+    assert bad["verdict"] == "known_bad"
+    assert "PlayerController" in bad["replacement"]
+    assert result["ok"] is False
+
+
+def test_existing_game_state_server_rpc_does_not_block_a_removal_sketch():
+    result = validate_sketch(
+        "int32 CurrentPlayerIndex = -1;",
+        NO_INDEX,
+        declaration_context=(
+            "class ABoardState : public AGameStateBase { "
+            "UFUNCTION(Server, Reliable) void ServerPlaceStone(int32 PlayerIndex); "
+            "};"
+        ),
+    )
+
+    assert not any(
+        item["symbol"] == "ServerRpcOnGameState"
+        for item in result["results"]
+    )
+
+
+def test_engine_header_miss_is_reported_as_coverage_miss_not_absence(tmp_path):
+    engine_source = tmp_path / "UE_5.8" / "Engine" / "Source" / "Runtime"
+    engine_source.mkdir(parents=True)
+
+    result = validate_sketch(
+        "UImaginarySubsystem* System; System->PerformImaginaryAction();",
+        NO_INDEX,
+        graph={"symbols": []},
+        engine_root=tmp_path / "UE_5.8",
+    )
+
+    method = next(
+        item
+        for item in result["results"]
+        if item["symbol"] == "PerformImaginaryAction"
+    )
+    assert method["verdict"] == "unverified"
+    assert method["coverageStatus"] == "index_source_coverage_missing"
+    assert "not proof that the API is absent" in method["note"]
+    assert result["engineHeaderLookup"]["status"] == "ready"
+    assert result["ok"] is False
+
+
+def test_engine_header_contract_rejects_wrong_argument_count(tmp_path):
+    header = (
+        tmp_path
+        / "UE_5.8"
+        / "Engine"
+        / "Plugins"
+        / "FX"
+        / "Niagara"
+        / "Source"
+        / "Niagara"
+        / "Public"
+        / "NiagaraFunctionLibrary.h"
+    )
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        """
+class NIAGARA_API UNiagaraFunctionLibrary : public UBlueprintFunctionLibrary
+{
+public:
+    static UNiagaraComponent* SpawnSystemAtLocation(
+        const UObject* WorldContextObject,
+        FVector Location,
+        FRotator Rotation = FRotator::ZeroRotator);
+};
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = validate_sketch(
+        "UNiagaraFunctionLibrary::SpawnSystemAtLocation();",
+        NO_INDEX,
+        graph={"symbols": []},
+        engine_root=tmp_path / "UE_5.8",
+    )
+
+    mismatch = next(
+        item
+        for item in result["results"]
+        if item.get("errorCode") == "ENGINE_ARGUMENT_COUNT_MISMATCH"
+    )
+    assert mismatch["receiverType"] == "UNiagaraFunctionLibrary"
+    assert "called with 0 argument" in mismatch["note"]
+    assert result["knownBadCount"] >= 1
+    assert result["ok"] is False
+
+
+def test_engine_header_contract_rejects_unrelated_unreal_pointer_assignment(tmp_path):
+    header = (
+        tmp_path
+        / "UE_5.8"
+        / "Engine"
+        / "Plugins"
+        / "FX"
+        / "Niagara"
+        / "Source"
+        / "Niagara"
+        / "Public"
+        / "NiagaraFunctionLibrary.h"
+    )
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        """
+class NIAGARA_API UNiagaraFunctionLibrary : public UBlueprintFunctionLibrary
+{
+public:
+    static UNiagaraComponent* SpawnSystemAtLocation(
+        const UObject* WorldContextObject,
+        FVector Location);
+};
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = validate_sketch(
+        "AActor* Spawned = UNiagaraFunctionLibrary::SpawnSystemAtLocation(World, Location);",
+        NO_INDEX,
+        graph={"symbols": []},
+        engine_root=tmp_path / "UE_5.8",
+    )
+
+    mismatch = next(
+        item
+        for item in result["results"]
+        if item.get("errorCode") == "ENGINE_RETURN_TYPE_MISMATCH"
+    )
+    assert mismatch["receiverType"] == "UNiagaraFunctionLibrary"
+    assert "AActor*" in mismatch["note"]
+    assert result["knownBadCount"] >= 1
+    assert result["ok"] is False
+
+
+def test_project_source_contract_rejects_observed_qwen_api_mixing(tmp_path):
+    source = tmp_path / "Source" / "O_Mock"
+    source.mkdir(parents=True)
+    header = source / "Contracts.h"
+    header.write_text(
+        """
+class O_MOCK_API AGomokuPlayerController : public APlayerController
+{
+};
+
+class O_MOCK_API AGomokuBoardActor : public AActor
+{
+public:
+    bool WorldToGrid(const FVector& WorldLocation, int32& OutX, int32& OutY) const;
+};
+
+class O_MOCK_API AGomokuGameState : public AGameStateBase
+{
+public:
+    void HandlePlaceStone(int32 PlayerIndex, const FIntPoint& Cell);
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    from build_symbol_graph import build_symbol_graph
+
+    graph = build_symbol_graph(tmp_path / "Source")
+    result = validate_sketch(
+        """
+class GOMOKU_API AGomokuPlayerController : public APlayerController {};
+AGomokuBoardActor* BoardActor;
+FIntPoint GridPos = BoardActor->WorldToGrid(HitLocation);
+UGameInstance* GI = GetWorld()->GetGameState<AGomokuGameState>();
+AGomokuGameState* GS;
+GS->HandlePlaceStone(GridPos, this);
+""",
+        NO_INDEX,
+        graph=graph,
+    )
+
+    error_codes = {
+        item.get("errorCode")
+        for item in result["results"]
+        if item.get("errorCode")
+    }
+    assert {
+        "PROJECT_API_MACRO_MISMATCH",
+        "PROJECT_ARGUMENT_COUNT_MISMATCH",
+        "PROJECT_PARAMETER_TYPE_MISMATCH",
+        "PROJECT_RETURN_TYPE_MISMATCH",
+        "TEMPLATE_RETURN_TYPE_MISMATCH",
+    }.issubset(error_codes)
+    assert result["knownBadCount"] >= 5
+    assert result["ok"] is False
+
+
+def test_project_source_contract_accepts_exact_arity_return_and_template_type(tmp_path):
+    source = tmp_path / "Source" / "O_Mock"
+    source.mkdir(parents=True)
+    (source / "Contracts.h").write_text(
+        """
+class O_MOCK_API AGomokuBoardActor : public AActor
+{
+public:
+    bool WorldToGrid(const FVector& WorldLocation, int32& OutX, int32& OutY) const;
+};
+
+class O_MOCK_API AGomokuGameState : public AGameStateBase
+{
+public:
+    void HandlePlaceStone(int32 PlayerIndex, const FIntPoint& Cell);
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    from build_symbol_graph import build_symbol_graph
+
+    graph = build_symbol_graph(tmp_path / "Source")
+    result = validate_sketch(
+        """
+AGomokuBoardActor* BoardActor;
+int32 X, Y;
+bool bMapped = BoardActor->WorldToGrid(HitLocation, X, Y);
+AGomokuGameState* GS = GetWorld()->GetGameState<AGomokuGameState>();
+GS->HandlePlaceStone(0, FIntPoint(X, Y));
+""",
+        NO_INDEX,
+        graph=graph,
+        declaration_context="""
+UFUNCTION()
+void OnMouseMoveY(float Value);
+UPROPERTY(VisibleAnywhere)
+TObjectPtr<AGomokuBoardActor> BoardActor;
+void AGomokuPlayerController::OnMouseMoveX(float Value) {}
+""",
+    )
+
+    contract_errors = {
+        item.get("errorCode")
+        for item in result["results"]
+        if item.get("errorCode")
+    }
+    assert not {
+        "PROJECT_ARGUMENT_COUNT_MISMATCH",
+        "PROJECT_PARAMETER_TYPE_MISMATCH",
+        "PROJECT_RETURN_TYPE_MISMATCH",
+        "TEMPLATE_RETURN_TYPE_MISMATCH",
+    } & contract_errors

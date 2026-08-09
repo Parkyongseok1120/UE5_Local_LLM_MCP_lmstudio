@@ -9,7 +9,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from task_api import task_cancel, task_record_gate, task_root, task_start, task_status  # noqa: E402
+from task_api import (  # noqa: E402
+    authorize_task_tool,
+    task_cancel,
+    task_complete_after_successful_build,
+    task_define_slices,
+    task_record_gate,
+    task_root,
+    task_start,
+    task_status,
+)
 from task_phase import task_phase_from_state  # noqa: E402
 from wrapper_job_manager import create_job, job_path, read_job, write_job  # noqa: E402
 
@@ -38,6 +47,89 @@ def test_task_start_and_status_phase_fields(tmp_path: Path) -> None:
     status = task_status(tmp_path, task_id)
     assert status["phase"] == "planning"
     assert (task_root(tmp_path, task_id) / "logs" / "task.log").is_file()
+
+
+def test_task_status_hides_future_expiry_route_from_public_state(tmp_path: Path) -> None:
+    started = task_start(tmp_path, request="Improve Demo.cpp", start_background_job=False)
+    task_id = started["taskSessionId"]
+    state_path = task_root(tmp_path, task_id) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    current_route = dict(state["toolRoute"])
+    current_route["expiryTransition"] = {
+        "at": "2099-01-01T00:00:00+00:00",
+        "route": {
+            "phase": "planner",
+            "activeTools": ["unreal_agent_plan"],
+            "routeHash": "future-route",
+        },
+    }
+    state["toolRoute"] = current_route
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    status = task_status(tmp_path, task_id)
+
+    assert status["toolRoute"]["phase"] == current_route["phase"]
+    assert "expiryTransition" not in status["toolRoute"]
+    assert "expiryTransition" not in status["state"]["toolRoute"]
+
+
+def test_legacy_feature_task_drops_spurious_runtime_debug_gate(tmp_path: Path) -> None:
+    started = task_start(
+        tmp_path,
+        request=(
+            "Implement the Gomoku roadmap, fix broken networking, update GameMode, "
+            "add event logs, run failing tests, and verify their assertions."
+        ),
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {
+                "requiredBeforeWrite": [
+                    "unreal_architecture_reasoning",
+                    "unreal_code_sketch_claim_validate",
+                    "unreal_runtime_debug_session",
+                ]
+            },
+        },
+    )
+    task_id = started["taskSessionId"]
+    state_path = task_root(tmp_path, task_id) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.pop("gatePolicyVersion", None)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    status = task_status(tmp_path, task_id)
+
+    refreshed = status["state"]
+    assert refreshed["gatePolicyVersion"] == 2
+    assert "unreal_runtime_debug_session" not in refreshed["requiredBeforeWrite"]
+    assert "unreal_runtime_debug_session" not in refreshed["pendingGates"]
+    assert "unreal_code_sketch_claim_validate" in refreshed["requiredBeforeWrite"]
+
+
+def test_legacy_runtime_bug_task_keeps_runtime_debug_gate(tmp_path: Path) -> None:
+    started = task_start(
+        tmp_path,
+        request="Fix the PIE runtime bug where GameMode restores the wrong turn.",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_runtime_debug_session"]
+            },
+        },
+    )
+    task_id = started["taskSessionId"]
+    state_path = task_root(tmp_path, task_id) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.pop("gatePolicyVersion", None)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    status = task_status(tmp_path, task_id)
+
+    assert "unreal_runtime_debug_session" in status["state"]["requiredBeforeWrite"]
 
 
 def test_task_cancel_stops_background_job(tmp_path: Path, monkeypatch) -> None:
@@ -280,6 +372,71 @@ def test_non_refactor_task_does_not_inject_semantic_guard(tmp_path: Path) -> Non
 
     assert "unreal_semantic_refactor_guard" not in started["state"][
         "requiredBeforeWrite"
+    ]
+
+
+def test_broad_feature_task_requires_and_registers_runtime_slices(tmp_path: Path) -> None:
+    for relative in ("Source/Demo/Lobby.h", "Source/Demo/Lobby.cpp", "Source/Demo/Match.cpp"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("// demo\n", encoding="utf-8")
+    request = (
+        "Finish the remaining prototype features across the project, including the room and lobby, "
+        "a complete multiplayer match, minigame rewards, player-facing status, and all relevant "
+        "automation coverage. Inspect the existing implementation and preserve working behavior. "
+        "Run a real build and fix any failures after all coherent implementation slices are done."
+    )
+    started = task_start(
+        tmp_path,
+        request=request,
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "template_header", "files": ["<actor>.h"]},
+                {"sliceId": "template_pair", "files": ["<actor>.h", "<actor>.cpp"]},
+            ],
+        },
+    )
+    assert started["state"]["slicePlanningRequired"] is True
+    auth = started["taskAuthorization"]
+    blocked_gate = authorize_task_tool(
+        tmp_path,
+        tool_name="unreal_feature_intent_resolve",
+        task_authorization=auth,
+        arguments={"targetFiles": ["Source/Demo/Lobby.h"]},
+    )
+    assert blocked_gate["ok"] is False
+    assert blocked_gate["errorCode"] == "SLICE_PLAN_REQUIRED"
+    assert blocked_gate["nextAction"] == "unreal_task_define_slices"
+    premature = task_complete_after_successful_build(
+        tmp_path, task_authorization=auth, proof_level="Built"
+    )
+    assert premature["ok"] is False
+    assert premature["errorCode"] == "SLICE_PLAN_REQUIRED"
+
+    defined = task_define_slices(
+        tmp_path,
+        task_authorization=auth,
+        slices=[
+            {"sliceId": "lobby", "files": ["Source/Demo/Lobby.h", "Source/Demo/Lobby.cpp"]},
+            {"sliceId": "match", "files": ["Source/Demo/Lobby.cpp", "Source/Demo/Match.cpp"]},
+        ],
+    )
+    assert defined["ok"] is True
+    assert defined["activeSliceId"] == "lobby"
+    assert defined["taskAuthorization"]["authToken"]
+    assert defined["taskAuthorization"]["authToken"] != auth["authToken"]
+    assert defined["taskAuthorization"]["ownerCapability"] == auth["ownerCapability"]
+    assert defined["taskAuthorization"]["activeSliceId"] == "lobby"
+    assert defined["taskAuthorization"]["routeHash"]
+    current = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert current["slicePlanningRequired"] is False
+    assert current["sliceProgress"]["pendingSlices"] == ["match"]
+    assert current["planScope"]["slices"][1]["files"] == [
+        "Source/Demo/Lobby.cpp",
+        "Source/Demo/Match.cpp",
     ]
 
 

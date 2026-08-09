@@ -251,3 +251,59 @@ def test_architecture_full_detail_is_not_sampled():
     assert full["topology"]["owners"] == list(range(20))
     assert full["truncated"] is False
 
+
+def test_architecture_full_detail_remains_hard_bounded_for_large_graphs():
+    payload = {
+        "ok": True,
+        "topology": {
+            "owners": [
+                {
+                    "name": f"Owner{index}",
+                    "evidence": {
+                        "kind": "project_source",
+                        "location": f"Source/Game/File{index}.cpp:10",
+                        "fileHash": "x" * 40,
+                    },
+                }
+                for index in range(200)
+            ]
+        },
+    }
+
+    full = compact_architecture_payload(payload, "full")
+
+    assert len(full["topology"]["owners"]) == 24
+    assert full["truncated"] is True
+    assert "nextDetailLevel" not in full
+    assert "fileHash" not in full["topology"]["owners"][0]["evidence"]
+
+
+def test_architecture_rejection_precedes_sampled_evidence_in_serialized_output():
+    payload = {
+        "ok": False,
+        "errorCode": "ARCHITECTURE_PROPOSAL_INVALID",
+        "retryable": True,
+        "stopCurrentWorkflow": False,
+        "requiredNextAction": "revise_architecture_proposal",
+        "nextActionIsTool": False,
+        "proposalValidation": {
+            "ok": False,
+            "issues": ["select one callable RPC ownership path"],
+            "implementationGate": {"writesAllowed": False},
+        },
+        "dataFlow": {"flows": [{"symbol": str(index)} for index in range(500)]},
+        "candidatePortfolio": {
+            "candidateCount": 500,
+            "candidates": [{"name": f"candidate-{index}"} for index in range(500)],
+        },
+    }
+
+    compact = compact_architecture_payload(payload, "full")
+    encoded = json.dumps(compact)
+
+    assert compact["errorCode"] == "ARCHITECTURE_PROPOSAL_INVALID"
+    assert encoded.index("proposalValidation") < encoded.index("dataFlow")
+    assert len(compact["dataFlow"]["flows"]) == 8
+    assert len(compact["candidatePortfolio"]["candidates"]) == 4
+    assert len(encoded) < 20_000
+

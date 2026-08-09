@@ -18,7 +18,15 @@ class MutationStateCorruptError(RuntimeError):
 
 
 def default_state() -> dict:
-    return {"mutationGeneration": 0, "paths": {}, "validatedGeneration": 0}
+    return {
+        "mutationGeneration": 0,
+        "paths": {},
+        "validatedGeneration": 0,
+        "validationPassed": True,
+        "validationStatus": "baseline",
+        "validationBlockingErrorCount": 0,
+        "validationProofLevel": "Baseline",
+    }
 
 
 def read_state(project_root: Path) -> dict:
@@ -26,7 +34,13 @@ def read_state(project_root: Path) -> dict:
     if not path.is_file():
         return default_state()
     try:
-        return {**default_state(), **json.loads(path.read_text(encoding="utf-8"))}
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        state = {**default_state(), **parsed}
+        if "validationPassed" not in parsed and int(state.get("mutationGeneration") or 0) > 0:
+            state["validationPassed"] = False
+            state["validationStatus"] = "legacy_unverified"
+            state["validationProofLevel"] = "NeedsStaticValidation"
+        return state
     except Exception as exc:
         raise MutationStateCorruptError(f"mutation state corrupt: {path}") from exc
 
@@ -58,6 +72,10 @@ def record_mutation(project_root: Path, rel_path: str, content_hash: str) -> int
     def action() -> int:
         state = read_state(project_root)
         state["mutationGeneration"] = int(state.get("mutationGeneration") or 0) + 1
+        state["validationPassed"] = False
+        state["validationStatus"] = "pending"
+        state["validationBlockingErrorCount"] = 0
+        state["validationProofLevel"] = "NeedsStaticValidation"
         state.setdefault("paths", {})[rel_path.replace("\\", "/")] = content_hash
         write_state(project_root, state)
         return int(state["mutationGeneration"])
@@ -70,14 +88,33 @@ def begin_validation(project_root: Path) -> dict:
     return {"startGeneration": int(state.get("mutationGeneration") or 0)}
 
 
-def finish_validation(project_root: Path, start_generation: int) -> dict:
+def finish_validation(
+    project_root: Path,
+    start_generation: int,
+    *,
+    passed: bool = False,
+    blocking_error_count: int = 0,
+    proof_level: str | None = None,
+) -> dict:
     def action() -> dict:
         state = read_state(project_root)
         current = int(state.get("mutationGeneration") or 0)
         if current != int(start_generation):
             return {"validationStale": True, "validatedGeneration": None, "mutationGeneration": current}
         state["validatedGeneration"] = current
+        state["validationPassed"] = bool(passed)
+        state["validationStatus"] = "passed" if passed else "failed"
+        state["validationBlockingErrorCount"] = max(0, int(blocking_error_count or 0))
+        state["validationProofLevel"] = proof_level or ("StaticVerified" if passed else "StaticFailed")
         write_state(project_root, state)
-        return {"validationStale": False, "validatedGeneration": current, "mutationGeneration": current}
+        return {
+            "validationStale": False,
+            "validatedGeneration": current,
+            "mutationGeneration": current,
+            "validationPassed": bool(passed),
+            "validationStatus": state["validationStatus"],
+            "validationBlockingErrorCount": state["validationBlockingErrorCount"],
+            "validationProofLevel": state["validationProofLevel"],
+        }
 
     return _with_mutation_lock(project_root, action)

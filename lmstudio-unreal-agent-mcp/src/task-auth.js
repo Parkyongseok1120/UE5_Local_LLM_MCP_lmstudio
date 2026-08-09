@@ -516,6 +516,7 @@ function authRefreshFailure(result, state, mismatchedFields = null) {
         activeSliceId: context.activeSliceId,
       },
       nextAction: "request_fresh_authorization_or_replan",
+      nextActionIsTool: false,
     };
     if (Array.isArray(mismatchedFields) && mismatchedFields.length) {
       payload.mismatchedFields = mismatchedFields.map(String);
@@ -526,6 +527,7 @@ function authRefreshFailure(result, state, mismatchedFields = null) {
     ...result,
     taskAuthorization: taskAuthorizationForState(state),
     nextAction: "retry_same_tool_with_returned_taskAuthorization",
+    nextActionIsTool: false,
   };
 }
 
@@ -688,6 +690,35 @@ function reservationTtlMs(toolName) {
   return ROUTE_RESERVATION_TTL_BY_TOOL_MS[key] || ROUTE_RESERVATION_TTL_DEFAULT_MS;
 }
 
+function renewContinuityLeaseForActivity(state, nowMs = Date.now()) {
+  const continuity = state?.continuity && typeof state.continuity === "object"
+    ? { ...state.continuity }
+    : null;
+  const lease = continuity?.lease && typeof continuity.lease === "object"
+    ? { ...continuity.lease }
+    : null;
+  if (!lease || String(lease.status || "") !== "active") return false;
+  const expiryMs = Date.parse(String(lease.expiresAt || ""));
+  if (!Number.isFinite(expiryMs) || expiryMs <= nowMs) return false;
+  const rawTtl = Number(lease.ttlSeconds || 1800);
+  const ttlSeconds = Math.max(
+    60,
+    Math.min(86400, Number.isFinite(rawTtl) ? rawTtl : 1800)
+  );
+  const heartbeatAt = new Date(nowMs).toISOString();
+  continuity.lease = {
+    ...lease,
+    status: "active",
+    ttlSeconds,
+    heartbeatAt,
+    expiresAt: new Date(nowMs + ttlSeconds * 1000).toISOString(),
+    renewalReason: "route_tool_activity",
+  };
+  if (!continuity.lease.acquiredAt) continuity.lease.acquiredAt = heartbeatAt;
+  state.continuity = continuity;
+  return true;
+}
+
 function purgeExpiredReservations(usage, nowMs = Date.now()) {
   const list = Array.isArray(usage.reservations)
     ? usage.reservations.filter((entry) => {
@@ -769,11 +800,14 @@ function mutateRouteBudget(
     const reservations = purgeExpiredReservations(usage);
     const count = Number(usage.count || 0);
     const reserved = reservations.length;
-    // Keep the write server aligned with the Python route contract. Planner
-    // routes may expose eight bounded evidence calls, while executor routes
-    // remain at six. Clamping every route to six made the server advertise an
-    // 8-call route and then reject call 7 as "6/6".
+    // Keep the write server aligned with the Python route contract. The
+    // current planner/executor cap is eight, while narrower analysis/verifier
+    // routes may advertise lower limits. Never silently clamp a server-issued
+    // route to a different budget than the route returned to the model.
     const limit = Math.max(2, Math.min(8, Number(route.maxToolCallsPerPhase || 2)));
+    // A routed tool call is active task work. Renew the cross-platform task
+    // lease in the same atomic state write as its route-budget mutation.
+    renewContinuityLeaseForActivity(current);
     if (mode === "rollback") {
       const targetId = String(reservationId || "").trim();
       if (!targetId) {
@@ -884,7 +918,8 @@ function mutateRouteBudget(
           phase: String(route.phase || "working"),
           requiredNextAction: String(toolName || ""),
           includeGitChanges: false,
-          taskAuthorization: checkpointAuthorization,
+          taskSessionId: checkpointAuthorization.taskSessionId,
+          ownerCapability: checkpointAuthorization.ownerCapability,
         },
         nextActions: [
           "unreal_task_checkpoint",
@@ -1731,7 +1766,7 @@ function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], opti
     "import json, sys",
     "from pathlib import Path",
     `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
-    "from task_api import task_cancel, task_cancel_active, task_checkpoint, task_quarantine_corrupt, task_record_build_recovery, task_mark_build_recovery_evidence, task_complete_after_successful_build",
+    "from task_api import task_cancel, task_cancel_active, task_checkpoint, task_quarantine_corrupt, task_record_build_recovery, task_mark_build_recovery_evidence, task_complete_after_successful_build, task_require_automation_after_build",
     stdinPayload
       ? "_stdin = json.load(sys.stdin)"
       : "_stdin = {}",
@@ -1866,7 +1901,8 @@ function completeTaskAfterBuildViaPython(workspaceRoot, args, buildEvidence = {}
       + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
       + "proof_level=str((_stdin or {}).get('proofLevel') or ''), "
       + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0), "
-      + "build_log_path=str((_stdin or {}).get('buildLogPath') or ''))"
+      + "build_log_path=str((_stdin or {}).get('buildLogPath') or ''), "
+      + "proof_kind=str((_stdin or {}).get('proofKind') or 'build'))"
     ),
     [],
     {
@@ -1875,6 +1911,39 @@ function completeTaskAfterBuildViaPython(workspaceRoot, args, buildEvidence = {}
         proofLevel: String(buildEvidence.proofLevel || "Built"),
         mutationGeneration: Number(buildEvidence.mutationGeneration || 0),
         buildLogPath: String(buildEvidence.buildLogPath || ""),
+      },
+    }
+  );
+}
+
+function requireAutomationAfterBuildViaPython(workspaceRoot, args, buildEvidence = {}) {
+  const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : {};
+  if (!nested.taskSessionId) {
+    return { ok: true, active: false };
+  }
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_require_automation_after_build(Path(sys.argv[1]), "
+      + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
+      + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0), "
+      + "build_log_path=str((_stdin or {}).get('buildLogPath') or ''), "
+      + "test_filter=str((_stdin or {}).get('testFilter') or ''), "
+      + "declared_tests=list((_stdin or {}).get('declaredTests') or []))"
+    ),
+    [],
+    {
+      stdinPayload: {
+        taskAuthorization: nested,
+        mutationGeneration: Number(buildEvidence.mutationGeneration || 0),
+        buildLogPath: String(buildEvidence.buildLogPath || ""),
+        proofKind: String(buildEvidence.proofKind || "build"),
+        testFilter: String(buildEvidence.testFilter || ""),
+        declaredTests: Array.isArray(buildEvidence.declaredTests)
+          ? buildEvidence.declaredTests.map(String)
+          : [],
       },
     }
   );
@@ -2098,13 +2167,18 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
     || args.conversation_id
     || ""
   ).trim();
+  const hasExplicitOwnership = Boolean(ownerCapability || conversationId);
   const active = discoverActiveTaskContext(
     workspaceRoot,
     String(options.activeProject || ""),
     {
       ownerCapability,
       conversationId,
-      requireOwnerCapability: true,
+      // LM Studio does not reliably echo opaque auth objects on every tool
+      // call.  When no ownership selector was supplied, an exact single
+      // project-scoped route is safe to bind server-side. Ambiguous routes
+      // still fail closed, while an explicitly supplied selector must match.
+      requireOwnerCapability: hasExplicitOwnership,
     }
   );
   if (active.status === "none") return { ok: true, legacy: true };
@@ -2151,7 +2225,13 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
     };
   }
   if (options.consumeBudget === false) {
-    return { ok: true, taskSessionId: active.taskSessionId, toolRoute: route };
+    return {
+      ok: true,
+      taskSessionId: active.taskSessionId,
+      toolRoute: route,
+      taskAuthorization: taskAuthorizationForState(active.state),
+      authorizationBinding: hasExplicitOwnership ? "explicit" : "single_active_route",
+    };
   }
   return consumeRouteCall(
     workspaceRoot,
@@ -2163,6 +2243,97 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
     args,
     toolName
   );
+}
+
+function expandCompactTaskAuthorization(workspaceRoot, toolName, args = {}, options = {}) {
+  const auth = args.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : args.task_authorization && typeof args.task_authorization === "object"
+      ? args.task_authorization
+      : {};
+  const taskSessionId = String(
+    auth.taskSessionId || auth.task_session_id || args.taskSessionId || args.task_session_id || ""
+  ).trim();
+  const ownerCapability = String(
+    auth.ownerCapability || auth.owner_capability || args.ownerCapability || args.owner_capability || ""
+  ).trim();
+  const fields = requiredFields(args);
+  const complete = [
+    "taskSessionId",
+    "authToken",
+    "planId",
+    "planRevision",
+    "activeSliceId",
+    "routeHash",
+    "routePhase",
+  ].every((key) => String(fields[key] || "").trim());
+  if (complete || !taskSessionId || !ownerCapability) {
+    return { ok: true, expanded: false, args };
+  }
+  const authorized = authorizeActiveRouteTool(
+    workspaceRoot,
+    toolName,
+    args,
+    {
+      ...options,
+      ownerCapability,
+      consumeBudget: false,
+    }
+  );
+  if (!authorized.ok) return authorized;
+  if (String(authorized.taskSessionId || "") !== taskSessionId) {
+    return {
+      ok: false,
+      errorCode: "TASK_ROUTE_CAPABILITY_MISMATCH",
+      error: "Compact taskAuthorization taskSessionId does not match ownerCapability.",
+    };
+  }
+  if (!authorized.taskAuthorization || typeof authorized.taskAuthorization !== "object") {
+    return {
+      ok: false,
+      errorCode: "TASK_AUTH_REFRESH_UNAVAILABLE",
+      error: "Server could not expand compact taskAuthorization.",
+    };
+  }
+  return {
+    ok: true,
+    expanded: true,
+    args: {
+      ...args,
+      taskAuthorization: authorized.taskAuthorization,
+    },
+    taskSessionId,
+    taskAuthorization: authorized.taskAuthorization,
+    authorizationBinding: "compact_owner_capability",
+  };
+}
+
+function discardTaskAuthorizationWithoutActiveRoute(
+  workspaceRoot,
+  args = {},
+  options = {}
+) {
+  const context = listToolsRouteContext(
+    workspaceRoot,
+    String(options.activeProject || "")
+  );
+  if (context.status !== "none") {
+    return { args, discarded: false, routeStatus: context.status };
+  }
+  const sanitized = { ...args };
+  for (const key of [
+    "taskAuthorization",
+    "task_authorization",
+    "taskSessionId",
+    "task_session_id",
+    "ownerCapability",
+    "owner_capability",
+    "conversationId",
+    "conversation_id",
+  ]) {
+    delete sanitized[key];
+  }
+  return { args: sanitized, discarded: true, routeStatus: "none" };
 }
 
 function authorizeTaskRouteTool(
@@ -2389,6 +2560,19 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       taskSessionId: sanitized.taskSessionId,
     }, state, mismatches);
   }
+  if (state.slicePlanningRequired === true) {
+    const taskAuthorization = taskAuthorizationForState(state);
+    return {
+      ok: false,
+      errorCode: "SLICE_PLAN_REQUIRED",
+      error: "Concrete executable slices must be registered before project mutation.",
+      taskSessionId: sanitized.taskSessionId,
+      taskAuthorization,
+      nextAction: "unreal_task_define_slices",
+      nextActionArgs: { taskAuthorization },
+      retryable: true,
+    };
+  }
   const toolName = String(options.toolName || "");
   const routeValidation = validateToolRoute(state, fields, args, toolName);
   if (!routeValidation.ok) {
@@ -2544,6 +2728,8 @@ module.exports = {
   discoverActiveTaskContext,
   discoverSingleActiveToolRoute,
   authorizeActiveRouteTool,
+  expandCompactTaskAuthorization,
+  discardTaskAuthorizationWithoutActiveRoute,
   authorizeTaskRouteTool,
   effectiveToolRouteForState,
   validateTaskRouteScope,
@@ -2559,6 +2745,7 @@ module.exports = {
   quarantineCorruptTask,
   checkpointMutationViaPython,
   completeTaskAfterBuildViaPython,
+  requireAutomationAfterBuildViaPython,
   recordBuildRecoveryViaPython,
   markBuildRecoveryEvidenceViaPython,
   listToolsRouteContext,

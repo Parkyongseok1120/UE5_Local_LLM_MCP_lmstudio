@@ -63,6 +63,8 @@ RAG_ESSENTIAL_TOOLS = frozenset(
         "unreal_task_quarantine_corrupt",
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
+        "unreal_task_define_slices",
+        "unreal_task_resume",
         "unreal_task_cancel",
     }
 )
@@ -70,7 +72,6 @@ RAG_ESSENTIAL_TOOLS = frozenset(
 RAG_STABLE_HIDDEN_TOOLS = frozenset(
     {
         "unreal_task_start",
-        "unreal_task_resume",
         "unreal_task_approve",
         "unreal_project_prepare",
         "unreal_job_log_read",

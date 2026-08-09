@@ -129,6 +129,65 @@ def test_deliver_rag_result_records_terminal_absence(tmp_path: Path) -> None:
     assert second["ok"] is False
 
 
+def test_repeat_history_survives_mcp_process_memory_reset(monkeypatch, tmp_path: Path) -> None:
+    import read_query_history as history
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
+    reset_query_history()
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"persistent")
+    first = deliver_rag_result(
+        tool="unreal_rag_search",
+        active_project="C:/Games/Alpha.uproject",
+        query="FGomokuMatchConfig",
+        mode="review",
+        scope="project",
+        detail_level="compact",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+        session_id="stable-chat-session",
+        rows=[{"path": "Source/Alpha/GomokuGameMode.h"}],
+    )
+    assert first["ok"] is True
+
+    # Model an MCP host restart: process globals disappear while the state root remains.
+    history._HISTORY.clear()
+    history._HISTORY_ORDER.clear()
+    history._SEMANTIC_INDEX.clear()
+    history._TOPIC_INDEX.clear()
+    history._CONTINUATION_TOKENS.clear()
+
+    second = deliver_rag_result(
+        tool="unreal_rag_search",
+        active_project="C:/Games/Alpha.uproject",
+        query="FGomokuMatchConfig",
+        mode="review",
+        scope="project",
+        detail_level="compact",
+        top_k=4,
+        hybrid=False,
+        index_path=index,
+        session_id="stable-chat-session",
+        rows=None,
+    )
+    assert second["suppressed"] is True
+    assert second["repeat"]["repeatDetected"] is True
+
+
+def test_direct_source_handoff_is_project_neutral() -> None:
+    from unreal_rag_mcp import _direct_source_handoff
+
+    handoff = _direct_source_handoff("inspect FGomokuMatchConfig in the current project")
+    assert handoff["requiredNextTool"] == "search_files"
+    assert handoff["requiredNextToolArgs"] == {
+        "query": "FGomokuMatchConfig",
+        "path": "project://Source",
+        "maxResults": 40,
+    }
+    assert handoff["nextActionIsTool"] is True
+
+
 def test_empty_assembly_mentions_search_files() -> None:
     text = assemble_context([], "query", "review")
     assert "search_files" in text

@@ -54,25 +54,27 @@ def test_qwen35_prompt_requires_filename_aware_component_discovery() -> None:
     assert "RAG misses are not proof of absence" in text
 
 
-def test_qwen36_prompt_requires_gate_completion_auth_refresh() -> None:
+def test_qwen36_prompt_documents_server_bound_auth_and_ambiguity_fallback() -> None:
     text = read_text("prompts/lmstudio_qwen36_27b_compact_system.md")
 
-    assert "gateCompletion.taskAuthorization" in text
+    assert "automatic for one active task" in text
+    assert "normally omit `taskAuthorization`" in text
+    assert "ambiguous tasks" in text
+    assert "reuse the returned object unchanged" in text
     assert "TASK_ROUTE_STALE" in text
     assert "changeKind=new_file" in text
     assert "changeKind=multifile" in text
     assert "40 lines / 3,000 characters" in text
 
 
-def test_base_prompt_documents_complete_auth_refresh() -> None:
+def test_base_prompt_documents_server_bound_auth_and_complete_ambiguity_object() -> None:
     text = read_text("prompts/lmstudio_compact_mcp_base.md")
 
-    assert "complete server object" in text
-    assert "ownerCapability" in text
-    assert "conversationId" in text
-    assert "routeHash" in text
-    assert "routePhase" in text
-    assert "gateCompletion.taskAuthorization" in text
+    assert "Task authorization is server-bound" in text
+    assert "omit `taskAuthorization`" in text
+    assert "Ambiguous route only" in text
+    assert "complete returned object unchanged" in text
+    assert "requiresCompleteTaskAuthorization" in text
     assert "TASK_ROUTE_STALE" in text
 
 

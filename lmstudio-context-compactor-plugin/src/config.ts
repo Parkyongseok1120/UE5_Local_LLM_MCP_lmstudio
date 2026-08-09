@@ -46,6 +46,12 @@ export const configSchematics = createConfigSchematics()
   .field("softRemainingTokens", "numeric", { displayName: "Soft threshold", subtitle: "Compact before the next model call below this remaining-token count." }, 14000)
   .field("hardRemainingTokens", "numeric", { displayName: "Hard threshold", subtitle: "Force deterministic checkpoint compaction below this remaining-token count." }, 8000)
   .field("maxOutputReserve", "numeric", { displayName: "Output reserve", subtitle: "Tokens reserved for the next model response." }, 4096)
+  .field(
+    "architectureMaxOutputReserve",
+    "numeric",
+    { displayName: "Architecture output reserve", subtitle: "Minimum output budget for structured architecture/design validation calls." },
+    8192,
+  )
   .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra reserve for token-estimation and prompt-template variance." }, 1024)
   .field("temperature", "numeric", { displayName: "Temperature", subtitle: "Sampling temperature used by the underlying model proxy (0 to 1)." }, 0.1)
   .field("normalToolResultReserve", "numeric", { displayName: "Normal tool reserve", subtitle: "Tokens reserved for ordinary tool results." }, 3000)

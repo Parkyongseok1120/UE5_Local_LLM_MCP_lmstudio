@@ -327,6 +327,8 @@ function slimWriteSuccessPayload(summary, validation, options = {}) {
     operation: options.operation || null,
     bytesWritten: options.bytesWritten ?? null,
     validationSummary: null,
+    validationPassed: validation ? validation.skipped !== true && validation.ok !== false : null,
+    workflowComplete: validation ? validation.skipped !== true && validation.ok !== false : null,
     nextSteps: options.nextSteps || []
   };
   if (options.replacements != null) {
@@ -359,6 +361,8 @@ function slimWriteSuccessPayload(summary, validation, options = {}) {
   }
   if (validation && validation.skipped) {
     payload.validationSummary = payload.validationSummary || { ok: true };
+    payload.validationPassed = false;
+    payload.workflowComplete = false;
     payload.validationSummary.note = validation.note
       || "validation skipped; run static_validate_project before build";
   }
@@ -491,7 +495,13 @@ function buildFailureRecovery(firstError) {
     category = "api_signature";
     symbolQuery = symbolLeaf(firstQuoted);
   } else if (/^LNK\d+$/i.test(code)) {
-    category = "linker";
+    // MSVC reports unresolved externals as a quoted, decorated C++ signature
+    // instead of the clang-style "Undefined symbol" block handled above.
+    // Route the stable leaf symbol through the already-active symbol lookup;
+    // falling back to compile-fix RAG here can contradict the executor route.
+    const msvcSymbol = firstQuoted.replace(/\([^)]*\).*$/, "");
+    symbolQuery = symbolLeaf(msvcSymbol);
+    category = symbolQuery ? "linker_missing_definition" : "linker";
   } else if (code === "C1083") {
     category = "include_or_module";
   } else if (/\b(?:UHT|UnrealHeaderTool|generated\.h)\b/i.test(diagnostic.compact)) {

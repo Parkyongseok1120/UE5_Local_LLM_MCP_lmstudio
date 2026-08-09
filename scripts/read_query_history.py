@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ TTL_SECONDS = 30 * 60
 MAX_ENTRIES = 128
 CONTINUATION_TTL_SECONDS = 15 * 60
 TOPIC_DELIVERY_LIMIT = 2
+HISTORY_FILE_VERSION = 1
 
 
 _UE_TYPE_RE = re.compile(r"\b[UAFSTIE][A-Z][A-Za-z0-9_]{3,}\b")
@@ -56,6 +58,81 @@ def _normalize_query(query: str) -> str:
 
 def _now() -> float:
     return time.time()
+
+
+def _durable_history_path() -> Path | None:
+    explicit = str(os.environ.get("RAG_QUERY_HISTORY_PATH") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    # Installed MCP profiles set AGENT_STATE_ROOT. Keep unit-only/in-process
+    # callers isolated unless they explicitly opt into the shared state root.
+    if not str(os.environ.get("AGENT_STATE_ROOT") or "").strip():
+        return None
+    from state_root import resolve_agent_state_root
+
+    return resolve_agent_state_root() / "rag-query-history.json"
+
+
+def _replace_memory_from_payload(payload: dict[str, Any]) -> None:
+    history = payload.get("history") if isinstance(payload.get("history"), dict) else {}
+    order = payload.get("order") if isinstance(payload.get("order"), list) else []
+    semantic = payload.get("semanticIndex") if isinstance(payload.get("semanticIndex"), dict) else {}
+    topic = payload.get("topicIndex") if isinstance(payload.get("topicIndex"), dict) else {}
+    tokens = payload.get("continuationTokens") if isinstance(payload.get("continuationTokens"), dict) else {}
+    _HISTORY.clear()
+    _HISTORY.update({str(key): value for key, value in history.items() if isinstance(value, dict)})
+    _HISTORY_ORDER.clear()
+    _HISTORY_ORDER.extend(str(key) for key in order if str(key) in _HISTORY)
+    _SEMANTIC_INDEX.clear()
+    _SEMANTIC_INDEX.update({
+        str(key): [str(item) for item in value if str(item) in _HISTORY]
+        for key, value in semantic.items()
+        if isinstance(value, list)
+    })
+    _TOPIC_INDEX.clear()
+    _TOPIC_INDEX.update({
+        str(key): [str(item) for item in value if str(item) in _HISTORY]
+        for key, value in topic.items()
+        if isinstance(value, list)
+    })
+    _CONTINUATION_TOKENS.clear()
+    _CONTINUATION_TOKENS.update({str(key): str(value) for key, value in tokens.items()})
+
+
+def _load_durable_history() -> None:
+    path = _durable_history_path()
+    if path is None:
+        return
+    if not path.is_file():
+        _replace_memory_from_payload({})
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    if isinstance(payload, dict):
+        _replace_memory_from_payload(payload)
+
+
+def _save_durable_history() -> None:
+    path = _durable_history_path()
+    if path is None:
+        return
+    from atomic_io import atomic_write_text
+
+    payload = {
+        "version": HISTORY_FILE_VERSION,
+        "history": _HISTORY,
+        "order": _HISTORY_ORDER,
+        "semanticIndex": _SEMANTIC_INDEX,
+        "topicIndex": _TOPIC_INDEX,
+        "continuationTokens": _CONTINUATION_TOKENS,
+        "updatedAt": _now(),
+    }
+    atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+    )
 
 
 def _prune_expired() -> None:
@@ -218,6 +295,43 @@ def query_fingerprint(
     )
 
 
+def exact_query_fingerprint(
+    *,
+    tool: str,
+    active_project: str,
+    query: str,
+    mode: str,
+    scope: str,
+    detail_level: str,
+    top_k: int,
+    hybrid: bool,
+    index_path: Path,
+    session_id: str = "",
+) -> str:
+    """Fingerprint structured payloads without RAG query normalization.
+
+    Architecture proposals can retain the same Unreal type names while materially
+    changing ownership, lifecycle, or validation fields. The API-oriented RAG
+    normalizer intentionally collapses those queries, so it must not be used for
+    exact unchanged-payload suppression.
+    """
+    payload = {
+        "tool": tool,
+        "activeProject": active_project or "",
+        "sessionId": session_id or "",
+        "query": query or "",
+        "mode": (mode or "auto").strip().lower(),
+        "scope": (scope or "auto").strip().lower(),
+        "detailLevel": (detail_level or "compact").strip().lower(),
+        "top_k": int(top_k),
+        "hybrid": bool(hybrid),
+        "indexPath": index_path_identity(index_path),
+        "indexFingerprint": index_fingerprint(index_path),
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
 def check_repeat_query(
     fingerprint: str,
     *,
@@ -229,6 +343,7 @@ def check_repeat_query(
     topic_delivery_limit: int = TOPIC_DELIVERY_LIMIT,
     continuation_token: str = "",
 ) -> dict[str, Any]:
+    _load_durable_history()
     _prune_expired()
     if continuation_token and consume_continuation_token(
         continuation_token,
@@ -316,6 +431,7 @@ def issue_continuation_token(delivery_key: str) -> str:
 
     token = hashlib.sha256(f"{delivery_key}:{uuid.uuid4().hex}".encode("utf-8")).hexdigest()[:24]
     _CONTINUATION_TOKENS[token] = delivery_key
+    _save_durable_history()
     return token
 
 
@@ -325,6 +441,7 @@ def consume_continuation_token(token: str, delivery_key: str = "", *, semantic_k
     expected = _CONTINUATION_TOKENS.pop(str(token), "")
     if not expected:
         return False
+    _save_durable_history()
     if delivery_key and expected == delivery_key:
         return True
     # Allow detail escalation: token from a prior delivery under the same semantic key.
@@ -340,6 +457,8 @@ def consume_continuation_token(token: str, delivery_key: str = "", *, semantic_k
 def previous_detail_for_semantic(semantic_key: str) -> str | None:
     if not semantic_key:
         return None
+    _load_durable_history()
+    _prune_expired()
     for delivery_key in reversed(list(_SEMANTIC_INDEX.get(semantic_key) or [])):
         entry = _HISTORY.get(delivery_key)
         if entry and entry.get("deliveredFullContext"):
@@ -361,6 +480,7 @@ def record_query_delivery(
     semantic_key: str = "",
     topic_key: str = "",
 ) -> None:
+    _load_durable_history()
     _prune_expired()
     semantic = semantic_key or fingerprint
     delivered_full = int(match_count) > 0
@@ -390,6 +510,7 @@ def record_query_delivery(
         if fingerprint not in _TOPIC_INDEX[topic_key]:
             _TOPIC_INDEX[topic_key].append(fingerprint)
     _touch(fingerprint)
+    _save_durable_history()
 
 
 def reset_query_history() -> None:
@@ -398,9 +519,11 @@ def reset_query_history() -> None:
     _SEMANTIC_INDEX.clear()
     _TOPIC_INDEX.clear()
     _CONTINUATION_TOKENS.clear()
+    _save_durable_history()
 
 
 def reset_query_history_for_index(index_path: Path) -> int:
+    _load_durable_history()
     path_id = index_path_identity(index_path)
     fp = index_fingerprint(index_path)
     drop = [
@@ -422,6 +545,7 @@ def reset_query_history_for_index(index_path: Path) -> int:
     for key in drop:
         if key in _HISTORY_ORDER:
             _HISTORY_ORDER.remove(key)
+    _save_durable_history()
     return len(drop)
 
 

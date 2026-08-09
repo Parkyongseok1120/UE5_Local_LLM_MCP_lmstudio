@@ -4,6 +4,7 @@ import json
 import hashlib
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,12 +28,50 @@ from task_api import (  # noqa: E402
     task_mark_build_recovery_evidence,
     task_record_build_recovery,
     task_record_gate,
+    task_require_automation_after_build,
     task_replan,
     task_root,
     task_start,
     task_status,
     task_validate_build_recovery_sketch,
 )
+
+
+def test_recorded_gate_remains_valid_for_long_running_gui_slice(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement and verify a long-running Unreal slice through the GUI",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
+    )
+
+    recorded = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=started["taskAuthorization"],
+        input_payload={"sketch": "void F() {}"},
+        evidence={"ok": True},
+    )
+
+    assert recorded["ok"] is True
+    completed_at = datetime.fromisoformat(recorded["record"]["completedAt"])
+    expires_at = datetime.fromisoformat(recorded["record"]["expiresAt"])
+    assert completed_at.tzinfo is not None
+    assert expires_at.tzinfo is not None
+    assert (expires_at - completed_at).total_seconds() >= 2 * 60 * 60
 
 
 def _state(*, writes: bool, files: list[str] | None = None) -> dict:
@@ -138,6 +177,19 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
     assert metadata_only["roleSession"] == "executor"
     assert "replace_in_file" in metadata_only["activeTools"]
 
+    validated_state = _state(
+        writes=True,
+        files=["Source/Demo/Foo.cpp", "Source/Demo/Foo.h"],
+    )
+    validated_state["continuity"]["checkpoint"] = {
+        "phase": "executor",
+        "checkpointHash": "checkpoint-3",
+        "requiredNextAction": "build_unreal_project",
+    }
+    validated = derive_tool_route(validated_state)
+    assert "build_unreal_project" in validated["activeTools"]
+    assert len(validated["activeTools"]) <= 10
+
     for route in (planner, executor, runtime, verifier):
         assert 5 <= len(route["activeTools"]) <= 10
         assert 2 <= route["maxToolCallsPerPhase"] <= 8
@@ -232,6 +284,131 @@ def test_successful_build_completion_releases_route_ownership(
     )
     assert repeated["ok"] is True
     assert repeated["alreadyCompleted"] is True
+
+
+def test_successful_build_advances_multi_slice_plan_before_completion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement two bounded Unreal slices and build each one",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "rules", "files": ["Source/Demo/Rules.cpp"]},
+                {"sliceId": "network", "files": ["Source/Demo/Network.cpp"]},
+            ],
+        },
+    )
+
+    advanced = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        proof_level="Built",
+        mutation_generation=1,
+        build_log_path=".agent/logs/rules-build.log",
+    )
+
+    assert advanced["ok"] is True
+    assert advanced["status"] == "running"
+    assert advanced["sliceAdvanced"] is True
+    assert advanced["completedSliceId"] == "rules"
+    assert advanced["activeSliceId"] == "network"
+    assert advanced["pendingSlices"] == ["network"]
+    assert advanced["taskAuthorization"]["activeSliceId"] == "network"
+    state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text()
+    )
+    assert state["status"] == "running"
+    assert state["sliceProgress"] == {
+        "activeSliceId": "network",
+        "completedSlices": ["rules"],
+        "pendingSlices": ["network"],
+    }
+    assert state["pendingGates"] == ["unreal_code_sketch_claim_validate"]
+    assert len(state["buildProofHistory"]) == 1
+    assert active_task_route_context(tmp_path)["status"] == "active"
+
+    completed = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=advanced["taskAuthorization"],
+        proof_level="Built",
+        mutation_generation=2,
+        build_log_path=".agent/logs/network-build.log",
+    )
+    assert completed["ok"] is True
+    assert completed["status"] == "completed"
+    final_state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text()
+    )
+    assert final_state["sliceProgress"]["completedSlices"] == ["rules", "network"]
+    assert len(final_state["buildProofHistory"]) == 2
+    assert active_task_route_context(tmp_path)["status"] == "none"
+
+
+def test_pending_build_verification_exposes_automation_exit_gate() -> None:
+    state = _state(writes=True, files=["Source/Demo/Foo.cpp"])
+    state["requiredBeforeWrite"] = []
+    state["completedGates"] = {}
+    state["buildVerification"] = {
+        "status": "pending_automation",
+        "activeSliceId": "task",
+        "mutationGeneration": 2,
+        "testFilter": "Gomoku",
+    }
+
+    route = derive_tool_route(state)
+
+    assert route["phase"] == "verifier"
+    assert route["activeTools"][0] == "run_unreal_automation_tests"
+    assert "replace_in_file" not in route["activeTools"]
+
+
+def test_successful_build_binds_automation_gate_without_completing_task(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement and verify Gomoku rules",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "rules", "files": ["Source/Demo/Rules.cpp"]}
+            ],
+        },
+    )
+
+    pending = task_require_automation_after_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        mutation_generation=4,
+        build_log_path=".agent/logs/latest-build.log",
+        test_filter="Gomoku",
+        declared_tests=["Gomoku.Stage3.Rule", "Gomoku.Stage4.Items"],
+    )
+
+    assert pending["ok"] is True
+    assert pending["status"] == "pending_automation"
+    assert pending["toolRoute"]["phase"] == "verifier"
+    assert "run_unreal_automation_tests" in pending["toolRoute"]["activeTools"]
+    state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text()
+    )
+    assert state["status"] == "running"
+    assert state["buildVerification"]["mutationGeneration"] == 4
+    assert state["buildProofHistory"][-1]["kind"] == "build"
 
 
 def test_build_recovery_scope_is_shared_and_fail_closed(
@@ -349,6 +526,8 @@ def test_checkpoint_and_reselection_change_selection_binding_and_gates() -> None
     state = _state(writes=True, files=["Source/Demo/Foo.cpp"])
     state.update(
         {
+            "taskKind": "runtime_debug",
+            "request": "Diagnose a nearby PIE crash and patch the selected runtime cause",
             "selectedHypothesisId": "hyp-1",
             "selectedCandidateId": "candidate-1",
             "selectedTargetSnapshots": [
@@ -450,7 +629,12 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     assert exhausted["nextActionArgs"]["action"] == "record"
     assert exhausted["nextActionArgs"]["requiredNextAction"] == active_tool
     assert exhausted["nextActionArgs"]["includeGitChanges"] is False
-    assert exhausted["nextActionArgs"]["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
+    assert exhausted["nextActionArgs"]["taskSessionId"] == started["taskSessionId"]
+    assert (
+        exhausted["nextActionArgs"]["ownerCapability"]
+        == started["taskAuthorization"]["ownerCapability"]
+    )
+    assert "taskAuthorization" not in exhausted["nextActionArgs"]
     assert set(exhausted["nextActions"]) == {
         "unreal_task_status",
         "unreal_task_checkpoint",
@@ -1406,6 +1590,42 @@ def test_expired_idle_route_is_released_without_losing_task_state(
     assert persisted["autoReleasedReason"] == "expired_idle_lease"
     assert persisted["continuity"]["lease"]["status"] == "released"
     assert active_task_route_context(tmp_path)["status"] == "none"
+
+
+def test_successful_routed_tool_call_renews_active_lease(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    selected_path = "Source/Demo/Foo.cpp"
+    started = task_start(
+        tmp_path,
+        request=f"Edit {selected_path}",
+        mode="agent_edit",
+        plan_payload=_plan(writes=True, files=[selected_path]),
+    )
+    session = started["taskSessionId"]
+    state_path = task_root(tmp_path, session) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    old_expiry = datetime.now(tz=timezone.utc).timestamp() + 90
+    state["continuity"]["lease"]["expiresAt"] = datetime.fromtimestamp(
+        old_expiry, tz=timezone.utc
+    ).isoformat()
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    active_tool = started["toolRoute"]["activeTools"][0]
+    result = authorize_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        task_authorization=started["taskAuthorization"],
+        arguments={},
+    )
+
+    assert result["ok"] is True
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    renewed = persisted["continuity"]["lease"]
+    assert renewed["renewalReason"] == "route_tool_activity"
+    assert datetime.fromisoformat(renewed["expiresAt"]).timestamp() > old_expiry
 
 
 def test_expired_route_with_unconfirmed_job_remains_recovery_only(

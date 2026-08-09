@@ -31,6 +31,18 @@ def test_human_approval_at_high_score():
 def test_bounded_assumption_records_assumptions():
     gate = architecture_ambiguity_gate("Add world subsystem for level state")
     assert gate["recommendedAction"] == "bounded_assumption"
+
+
+def test_explicit_gameframework_authority_contract_does_not_ask_again():
+    gate = architecture_ambiguity_gate(
+        "Keep authoritative match state in GameState/GameMode. The server must validate moves, "
+        "replicate validated state to clients, and put client requests on a client-owned actor "
+        "such as PlayerController or Pawn."
+    )
+    assert gate["recommendedAction"] == "bounded_assumption"
+    assert gate["ambiguityScore"] <= 0.45
+    assert gate["clarificationQuestions"] == []
+    assert any("GameMode/GameState" in item for item in gate["assumptions"])
     assert isinstance(gate.get("assumptions"), list)
 
 

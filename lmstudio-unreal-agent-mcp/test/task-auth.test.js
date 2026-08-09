@@ -13,6 +13,8 @@ const {
   checkpointMutationViaPython,
   completeTaskAfterBuildViaPython,
   discoverActiveTaskContext,
+  discardTaskAuthorizationWithoutActiveRoute,
+  expandCompactTaskAuthorization,
   featureIntentTargetHash,
   requiredFields,
   reserveRouteCall,
@@ -32,6 +34,43 @@ const authorization = {
 
 test("requiredFields accepts nested taskAuthorization unchanged", () => {
   assert.deepStrictEqual(requiredFields({ taskAuthorization: authorization }), authorization);
+});
+
+test("inspection calls discard invented compact auth when no task route exists", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-no-route-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-no-route-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const result = discardTaskAuthorizationWithoutActiveRoute(
+      workspace,
+      {
+        path: "Source/Demo/Foo.cpp",
+        taskAuthorization: {
+          taskSessionId: "invented-chat-id",
+          ownerCapability: "invented-capability",
+        },
+      },
+      { activeProject: projectFile }
+    );
+    assert.strictEqual(result.discarded, true);
+    assert.strictEqual(result.args.path, "Source/Demo/Foo.cpp");
+    assert.strictEqual(result.args.taskAuthorization, undefined);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("requiredFields normalizes an integer plan revision from local tool callers", () => {
+  assert.deepStrictEqual(
+    requiredFields({ taskAuthorization: { ...authorization, planRevision: 1 } }),
+    authorization
+  );
 });
 
 test("successful build bridge completes task state and releases its lease", () => {
@@ -90,6 +129,40 @@ test("nested taskAuthorization validates against task state", () => {
   process.env.AGENT_STATE_ROOT = stateRoot;
   try {
     assert.strictEqual(validateMutationAuth(workspace, { taskAuthorization: authorization }, { requireAll: true }).ok, true);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("mutation authorization blocks placeholder slice plans until concrete slices are registered", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-slice-plan-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-slice-plan-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    ownerCapability: "owner-capability",
+    status: "running",
+    slicePlanningRequired: true,
+    writeGate: { writesAllowed: true },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const result = validateMutationAuth(
+      workspace,
+      { taskAuthorization: authorization },
+      { requireAll: true }
+    );
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.errorCode, "SLICE_PLAN_REQUIRED");
+    assert.strictEqual(result.nextAction, "unreal_task_define_slices");
+    assert.strictEqual(result.nextActionArgs.taskAuthorization.taskSessionId, authorization.taskSessionId);
+    assert.strictEqual(result.nextActionArgs.taskAuthorization.authToken, authorization.authToken);
+    assert.strictEqual(result.nextActionArgs.taskAuthorization.activeSliceId, authorization.activeSliceId);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
@@ -1310,6 +1383,7 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
   fs.mkdirSync(taskDir, { recursive: true });
   fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
     ...authorization,
+    ownerCapability: "owner-capability",
     status: "running",
     writeGate: { writesAllowed: true },
     toolRoute: {
@@ -1321,6 +1395,15 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
       maxToolCallsPerPhase: 2,
     },
     toolRouteUsage: { routeHash: "route-budget", count: 0, reserved: 0, reservations: [], calls: [] },
+    continuity: {
+      lease: {
+        status: "active",
+        ttlSeconds: 1800,
+        heartbeatAt: new Date(Date.now() - 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + 90_000).toISOString(),
+      },
+      recovery: { conflicts: [] },
+    },
   }));
   const previous = process.env.AGENT_STATE_ROOT;
   process.env.AGENT_STATE_ROOT = stateRoot;
@@ -1348,9 +1431,11 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
     assert.strictEqual(blocked.nextActionArgs.action, "record");
     assert.strictEqual(blocked.nextActionArgs.requiredNextAction, "read_file");
     assert.strictEqual(blocked.nextActionArgs.includeGitChanges, false);
+    assert.strictEqual(blocked.nextActionArgs.taskSessionId, authorization.taskSessionId);
+    assert.strictEqual(blocked.nextActionArgs.ownerCapability, "owner-capability");
     assert.strictEqual(
-      blocked.nextActionArgs.taskAuthorization.taskSessionId,
-      authorization.taskSessionId
+      Object.prototype.hasOwnProperty.call(blocked.nextActionArgs, "taskAuthorization"),
+      false
     );
     assert.match(blocked.agentInstruction, /action=record/);
     assert.strictEqual(
@@ -1392,6 +1477,8 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
     assert.strictEqual(state.toolRouteUsage.count, 1);
     assert.strictEqual(state.toolRouteUsage.reserved, 0);
     assert.deepStrictEqual(state.toolRouteUsage.reservations, []);
+    assert.strictEqual(state.continuity.lease.renewalReason, "route_tool_activity");
+    assert.ok(Date.parse(state.continuity.lease.expiresAt) > Date.now() + 20 * 60_000);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
@@ -1858,6 +1945,105 @@ test("explicit ownerCapability disables legacy connection ownership", () => {
     else process.env.MCP_BRIDGE_PAIR_ID = previousBridge;
     if (previousClient === undefined) delete process.env.MCP_CLIENT_INSTANCE_ID;
     else process.env.MCP_CLIENT_INSTANCE_ID = previousClient;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("compact task ownership expands to current full route authorization", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-compact-auth-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-compact-auth-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const cap = "e".repeat(64);
+    const scoped = routeState(projectFile, {
+      taskSessionId: "task_compact1",
+      conversationId: "conv-compact",
+      ownerCapability: cap,
+    });
+    const dir = path.join(stateRoot, "tasks", scoped.taskSessionId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(scoped));
+
+    const expanded = expandCompactTaskAuthorization(
+      workspace,
+      "read_file",
+      {
+        taskAuthorization: {
+          taskSessionId: scoped.taskSessionId,
+          ownerCapability: cap,
+        },
+      },
+      { activeProject: projectFile }
+    );
+
+    assert.strictEqual(expanded.ok, true);
+    assert.strictEqual(expanded.expanded, true);
+    assert.strictEqual(expanded.authorizationBinding, "compact_owner_capability");
+    assert.strictEqual(expanded.args.taskAuthorization.authToken, scoped.authToken);
+    assert.strictEqual(expanded.args.taskAuthorization.planId, scoped.planId);
+    assert.strictEqual(expanded.args.taskAuthorization.routeHash, scoped.toolRoute.routeHash);
+
+    const mismatched = expandCompactTaskAuthorization(
+      workspace,
+      "read_file",
+      {
+        taskAuthorization: {
+          taskSessionId: "task_wrong_1",
+          ownerCapability: cap,
+        },
+      },
+      { activeProject: projectFile }
+    );
+    assert.strictEqual(mismatched.ok, false);
+    assert.strictEqual(mismatched.errorCode, "TASK_ROUTE_CAPABILITY_MISMATCH");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("single scoped active route auto-binds complete server authorization", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-auto-auth-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-auto-auth-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const cap = "d".repeat(64);
+    const scoped = routeState(projectFile, {
+      taskSessionId: "task_autoauth1",
+      conversationId: "conv-auto-auth",
+      ownerCapability: cap,
+    });
+    const dir = path.join(stateRoot, "tasks", scoped.taskSessionId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(scoped));
+
+    const resolved = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      {},
+      { activeProject: projectFile, consumeBudget: false }
+    );
+
+    assert.strictEqual(resolved.ok, true);
+    assert.strictEqual(resolved.authorizationBinding, "single_active_route");
+    assert.strictEqual(resolved.taskSessionId, scoped.taskSessionId);
+    assert.strictEqual(resolved.taskAuthorization.taskSessionId, scoped.taskSessionId);
+    assert.strictEqual(resolved.taskAuthorization.authToken, scoped.authToken);
+    assert.strictEqual(resolved.taskAuthorization.ownerCapability, cap);
+    assert.strictEqual(resolved.taskAuthorization.routeHash, scoped.toolRoute.routeHash);
+    assert.strictEqual(resolved.taskAuthorization.routePhase, scoped.toolRoute.phase);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }

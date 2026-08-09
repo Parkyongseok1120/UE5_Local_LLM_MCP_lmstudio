@@ -23,6 +23,23 @@ def test_classify_compile_fix():
         "No new features, just fix existing code to compile.",
         "auto",
     ) == "compile_fix"
+
+
+def test_feature_prompt_with_build_acceptance_remains_edit_work():
+    prompt = (
+        "Finish the remaining prototype features that are only declared or untested. "
+        "Support a complete multiplayer match, run a real Unreal build and all relevant "
+        "automation tests, fixing any failures you find."
+    )
+    assert classify_task(prompt, "auto") == "edit"
+    roadmap_prompt = (
+        "Take O-Mock all the way through the original gameplay roadmap, stages 0 through 13. "
+        "This is a real implementation and verification pass. Implement the roadmap in coherent, "
+        "buildable slices: Stage 0: audit; Stage 1: deterministic rules; Stage 9: correct network "
+        "authority; Stage 10: lobby; Stage 11: minigame; Stage 13: bots. If a test or build fails, "
+        "diagnose the observed failure, fix the actual cause, and rerun it."
+    )
+    assert classify_task(roadmap_prompt, "auto") == "edit"
     assert classify_task(
         "현재 생성된 C++ 구현을 실제 컴파일 성공까지 직접 완성해줘",
         "auto",
@@ -81,6 +98,33 @@ def test_runtime_debug_fix_preserves_causal_workflow_and_write_gates(monkeypatch
     assert "same_observer_runtime_verification" in roles["verifier"]["requiredEvidence"]
     assert any("same reproductionFingerprint" in item for item in plan.stop_conditions)
     assert classify_task("Fix runtime crash in StaminaComponent", "auto") == "edit"
+
+
+def test_long_feature_spec_does_not_create_runtime_debug_gate_from_scattered_words(monkeypatch):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    request = (
+        "Implement the full authoritative Gomoku roadmap. Correct broken networking "
+        "code, keep match state in GameMode and GameState, add an ordered event log, "
+        "run Automation when builds fail, and inspect tests that do not assert behavior."
+    )
+
+    plan = build_agent_plan(request, "agent_edit")
+
+    assert plan.task_kind == "edit"
+    assert plan.orchestration["strategy"] != "runtime_causal_loop"
+    assert "unreal_runtime_debug_session" not in plan.orchestration["requiredBeforeWrite"]
+
+
+def test_nearby_runtime_symptom_still_requires_causal_gate(monkeypatch):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+
+    plan = build_agent_plan(
+        "Fix the GameMode runtime issue where PIE restores the wrong turn state.",
+        "agent_edit",
+    )
+
+    assert plan.orchestration["strategy"] == "runtime_causal_loop"
+    assert "unreal_runtime_debug_session" in plan.orchestration["requiredBeforeWrite"]
 
 
 def test_negated_refactor_does_not_escalate_local_fix():

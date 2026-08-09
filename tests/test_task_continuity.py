@@ -110,6 +110,26 @@ def test_checkpoint_conflict_blocks_then_explicit_rebase_recovers(tmp_path: Path
     assert current["state"]["pendingGates"] == ["unreal_architecture_reasoning"]
 
 
+def test_status_surfaces_checkpoint_next_action_instead_of_cancel_polling(tmp_path: Path) -> None:
+    started = task_start(tmp_path, request="Build the edited project", start_background_job=False)
+    authorization = _authorization(started)
+
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=authorization,
+        action="record",
+        phase="executor",
+        required_next_action="build_unreal_project",
+        validation={"status": "passed", "proofLevel": "StaticVerified"},
+        include_git_changes=False,
+    )
+    assert recorded["ok"] is True
+
+    status = task_status(tmp_path, started["taskSessionId"])
+
+    assert status["nextAction"] == "build_unreal_project"
+
+
 def test_checkpoint_rejects_paths_outside_project(tmp_path: Path) -> None:
     project = tmp_path / "Demo"
     project.mkdir()

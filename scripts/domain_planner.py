@@ -473,6 +473,25 @@ def build_fix_evidence(
 
 def architecture_ambiguity_gate(request: str) -> dict[str, Any]:
     text = _text_lower(request)
+    explicit_gameframework_contract = (
+        any(
+            marker in text
+            for marker in (
+                "authoritative match state in gamestate/gamemode",
+                "authoritative match state in game state/game mode",
+                "keeping authoritative match state in gamestate",
+                "keep authoritative match state in gamestate",
+            )
+        )
+        and any(marker in text for marker in ("server must validate", "server authority"))
+        and any(
+            marker in text
+            for marker in (
+                "client-owned actor", "client owned actor", "playercontroller or pawn",
+                "player controller or pawn",
+            )
+        )
+    )
     score = 0.35
     if any(m in text for m in ("maybe", "either", " or ", "unclear", "ambiguous", "아마", "불명확")):
         score += 0.25
@@ -484,6 +503,10 @@ def architecture_ambiguity_gate(request: str) -> dict[str, Any]:
         score += 0.05
     if "subsystem" in text and select_subsystem_lifetime(request)["requestedLifetime"] == "unknown":
         score = max(score, 0.75)
+    if explicit_gameframework_contract:
+        # The user already supplied the three decisions this gate protects:
+        # actor lifetime/owner, server authority, and the client-owned RPC entry.
+        score = min(score, 0.45)
     score = min(score, 1.0)
 
     if score >= 0.85:
@@ -509,7 +532,15 @@ def architecture_ambiguity_gate(request: str) -> dict[str, Any]:
 
     assumptions: list[str] = []
     if action == "bounded_assumption":
-        if "world" in text or "level" in text:
+        if explicit_gameframework_contract:
+            assumptions.extend(
+                [
+                    "Use GameMode/GameState as the authoritative match-state boundary.",
+                    "Accept client-originating server requests only through a client-owned PlayerController or Pawn.",
+                    "Replicate validated server state to clients with explicit lifetime registration and OnRep behavior where needed.",
+                ]
+            )
+        elif "world" in text or "level" in text:
             assumptions.append("Assume per-world ownership via UWorldSubsystem unless contradicted.")
         elif "game instance" in text or "session" in text:
             assumptions.append("Assume session ownership via UGameInstanceSubsystem unless contradicted.")

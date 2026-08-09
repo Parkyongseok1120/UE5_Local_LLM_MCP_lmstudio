@@ -70,6 +70,8 @@ const {
 } = require("./validation-dirty");
 const {
   authorizeActiveRouteTool,
+  expandCompactTaskAuthorization,
+  discardTaskAuthorizationWithoutActiveRoute,
   authorizeTaskRouteTool,
   discoverActiveTaskContext,
   listToolsRouteContext,
@@ -86,9 +88,14 @@ const {
   quarantineCorruptTask,
   checkpointMutationViaPython,
   completeTaskAfterBuildViaPython,
+  requireAutomationAfterBuildViaPython,
   recordBuildRecoveryViaPython,
   markBuildRecoveryEvidenceViaPython,
 } = require("./task-auth");
+const {
+  discoverAutomationTests,
+  runAutomationTests,
+} = require("./automation-executor");
 const {
   activeRouteFingerprint,
   startActiveRouteWatcher,
@@ -161,24 +168,30 @@ const {
   getFileCoverage,
 } = require("./tool-read-history");
 
-// #region agent log
-const AGENT_DEBUG_LOG = path.join(__dirname, "..", "..", "debug-821b0f.log");
-const AGENT_DEBUG_INGEST = "http://127.0.0.1:7430/ingest/0688ca65-d016-4b7d-bcca-51d06f27568c";
+// Optional diagnostics. Production MCP runs must not write repository-root
+// logs or POST to a hard-coded localhost collector unless explicitly enabled.
+const AGENT_DEBUG_LOG = String(process.env.MCP_DEBUG_LOG || "").trim();
+const AGENT_DEBUG_INGEST = String(process.env.MCP_DEBUG_INGEST_URL || "").trim();
+const AGENT_DEBUG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.MCP_DEBUG_TRACE || ""));
 function agentDebugLog(hypothesisId, location, message, data) {
+  if (!AGENT_DEBUG_ENABLED) return;
   const payload = {
-    sessionId: "821b0f",
-    runId: "stage4-mcp-deadlock",
+    sessionId: String(process.env.MCP_DEBUG_SESSION_ID || "mcp-debug"),
+    runId: String(process.env.MCP_DEBUG_RUN_ID || "manual"),
     hypothesisId,
     location,
     message,
     data: data || {},
     timestamp: Date.now(),
   };
-  try { fs.appendFileSync(AGENT_DEBUG_LOG, `${JSON.stringify(payload)}\n`, "utf8"); } catch { /* ignore */ }
+  if (AGENT_DEBUG_LOG) {
+    try { fs.appendFileSync(AGENT_DEBUG_LOG, `${JSON.stringify(payload)}\n`, "utf8"); } catch { /* ignore */ }
+  }
+  if (!AGENT_DEBUG_INGEST) return;
   try {
     fetch(AGENT_DEBUG_INGEST, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "821b0f" },
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": payload.sessionId },
       body: JSON.stringify(payload),
     }).catch(() => {});
   } catch { /* ignore */ }
@@ -319,6 +332,14 @@ const ROUTE_MUTATION_TOOLS = new Set([
   "replace_in_file",
   "delete_file",
   "apply_edit_bundle",
+]);
+const UNROUTED_INSPECTION_TOOLS = new Set([
+  "get_workspace_info",
+  "list_directory",
+  "read_file",
+  "read_file_range",
+  "read_symbol",
+  "search_files",
 ]);
 // Tool arguments share the model's generation budget.  Full-file old/new
 // payloads routinely truncate before LM Studio can dispatch the call, so the
@@ -497,29 +518,10 @@ function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = n
   // Plan-auth off: skip Python continuity checkpoint. Models often still pass a
   // fabricated taskSessionId; task_api would then fail every write for any project.
   if (!REQUIRE_TASK_AUTH_FOR_WRITES) {
-    // #region agent log
-    try {
-      const debugLogPath = path.join(__dirname, "..", "..", "debug-49b048.log");
-      fs.appendFileSync(
-        debugLogPath,
-        `${JSON.stringify({
-          sessionId: "49b048",
-          runId: "post-fix",
-          hypothesisId: "H9",
-          location: "server.js:recordAutomaticContinuityCheckpoint",
-          message: "skip continuity checkpoint (plan-auth disabled)",
-          data: {
-            modifiedCount: Array.isArray(modifiedFiles) ? modifiedFiles.length : 0,
-            hadTaskSessionId: Boolean(requiredFields(args || {}).taskSessionId),
-          },
-          timestamp: Date.now(),
-        })}\n`,
-        "utf8"
-      );
-    } catch {
-      // ignore debug log failures
-    }
-    // #endregion
+    agentDebugLog("H9", "server.js:recordAutomaticContinuityCheckpoint", "skip continuity checkpoint (plan-auth disabled)", {
+      modifiedCount: Array.isArray(modifiedFiles) ? modifiedFiles.length : 0,
+      hadTaskSessionId: Boolean(requiredFields(args || {}).taskSessionId),
+    });
     return {
       ok: true,
       skipped: true,
@@ -530,7 +532,7 @@ function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = n
     };
   }
   const checkpoint = checkpointMutationViaPython(WORKSPACE_ROOT, args, modifiedFiles, {
-    requiredNextAction: "continue_active_slice_then_validate",
+    requiredNextAction: "static_validate_project",
     validation: validation || {},
   });
   if (!checkpoint || checkpoint.ok !== true) {
@@ -551,6 +553,58 @@ function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = n
     checkpointHash: String(recorded.checkpointHash || ""),
     phase: String(recorded.phase || "executor"),
     modifiedFiles: Array.isArray(recorded.modifiedFiles) ? recorded.modifiedFiles : [],
+    ...(checkpoint.taskAuthorization && typeof checkpoint.taskAuthorization === "object"
+      ? { taskAuthorization: checkpoint.taskAuthorization }
+      : {}),
+    ...(checkpoint.toolRoute && typeof checkpoint.toolRoute === "object"
+      ? { toolRoute: checkpoint.toolRoute }
+      : {}),
+  };
+}
+
+function recordValidationContinuityCheckpoint(args, validation, passed) {
+  if (!REQUIRE_TASK_AUTH_FOR_WRITES || !requiredFields(args || {}).taskSessionId) {
+    return { ok: true, skipped: true, reason: "no_active_task_authorization" };
+  }
+  const findings = Array.isArray(validation?.findings) ? validation.findings : [];
+  const firstBlocking = findings.find((item) => String(item?.severity || "").toLowerCase() === "error")
+    || findings[0]
+    || null;
+  const compact = {
+    status: passed ? "passed" : "failed",
+    proofLevel: passed ? "StaticVerified" : "StaticFailed",
+    findingCount: Number(validation?.findingCount || findings.length || 0),
+    blockingErrorCount: findings.filter(
+      (item) => String(item?.severity || "").toLowerCase() === "error"
+    ).length,
+    ...(firstBlocking ? {
+      firstFinding: {
+        severity: String(firstBlocking.severity || ""),
+        code: String(firstBlocking.code || ""),
+        path: String(firstBlocking.path || ""),
+        line: Number(firstBlocking.line || 0),
+        message: String(firstBlocking.message || ""),
+      },
+    } : {}),
+  };
+  const checkpoint = checkpointMutationViaPython(WORKSPACE_ROOT, args, [], {
+    requiredNextAction: passed ? "build_unreal_project" : "read_file",
+    validation: compact,
+    note: passed
+      ? "Static validation passed; build is the next required proof."
+      : "Static validation failed; read the first finding before editing or rebuilding.",
+  });
+  if (!checkpoint || checkpoint.ok !== true) {
+    return {
+      ok: false,
+      errorCode: String(checkpoint?.errorCode || "VALIDATION_CHECKPOINT_FAILED"),
+      error: String(checkpoint?.error || "Validation continuity checkpoint failed."),
+    };
+  }
+  return {
+    ok: true,
+    checkpointHash: String(checkpoint.continuity?.checkpoint?.checkpointHash || ""),
+    phase: String(checkpoint.continuity?.checkpoint?.phase || "executor"),
     ...(checkpoint.taskAuthorization && typeof checkpoint.taskAuthorization === "object"
       ? { taskAuthorization: checkpoint.taskAuthorization }
       : {}),
@@ -805,29 +859,10 @@ function commitMutationRouteBudget(args, toolName) {
   // project write fails with TASK_STATE_MISSING / "Task state disappeared…".
   // Default (plan-auth on) keeps the existing route ledger contract.
   if (!REQUIRE_TASK_AUTH_FOR_WRITES) {
-    // #region agent log
-    try {
-      const debugLogPath = path.join(__dirname, "..", "..", "debug-49b048.log");
-      fs.appendFileSync(
-        debugLogPath,
-        `${JSON.stringify({
-          sessionId: "49b048",
-          runId: "post-fix",
-          hypothesisId: "H8",
-          location: "server.js:commitMutationRouteBudget",
-          message: "skip route budget (plan-auth disabled)",
-          data: {
-            toolName: String(toolName || ""),
-            hadTaskSessionId: Boolean(requiredFields(args || {}).taskSessionId),
-          },
-          timestamp: Date.now(),
-        })}\n`,
-        "utf8"
-      );
-    } catch {
-      // ignore debug log failures
-    }
-    // #endregion
+    agentDebugLog("H8", "server.js:commitMutationRouteBudget", "skip route budget (plan-auth disabled)", {
+      toolName: String(toolName || ""),
+      hadTaskSessionId: Boolean(requiredFields(args || {}).taskSessionId),
+    });
     return null;
   }
   const fields = requiredFields(args || {});
@@ -875,6 +910,7 @@ function validationToolResult(summary, validation, options = {}) {
     : slimWriteSuccessPayload(summary, validation, options);
   const passthrough = [
     "mutationGeneration", "validatedGeneration", "validationStale", "proofLevel",
+    "validationPassed", "validationStatus", "validationBlockingErrorCount",
     "commandSucceeded", "proofSatisfied", "recoveryRequired", "errorCode",
     "retryable", "doNotRetry", "stopCurrentWorkflow", "suggestedToolCalls",
     "validationOverrideAvailable", "buildAllowedForValidatedGeneration", "requiredNextTool",
@@ -1048,12 +1084,23 @@ function exposureProfileName() {
   return MCP_EXTENDED_TOOLS ? "extended" : "essential";
 }
 
-function filterAgentTools(tools, _context = null) {
+function filterAgentTools(tools, context = null) {
   // Advertised catalog is profile ∩ control-plane visibility only.
   // Route/phase/lease/ownership remain CallTool authorization boundaries —
   // never shrink tools/list so LM Studio does not look like a partial install.
   const allowed = callableAgentToolNames(tools.map((tool) => tool.name));
-  return tools.filter((tool) => allowed.has(tool.name));
+  return tools.filter((tool) => allowed.has(tool.name)).map((tool) => {
+    if (context?.status !== "none" || !UNROUTED_INSPECTION_TOOLS.has(tool.name)) {
+      return tool;
+    }
+    const schema = tool.inputSchema && typeof tool.inputSchema === "object"
+      ? tool.inputSchema
+      : null;
+    if (!schema?.properties?.taskAuthorization) return tool;
+    const properties = { ...schema.properties };
+    delete properties.taskAuthorization;
+    return { ...tool, inputSchema: { ...schema, properties } };
+  });
 }
 
 function buildToolCatalogDiagnostics(tools, context = null) {
@@ -1272,7 +1319,7 @@ function taskAuthSchemaProperties() {
   return {
     taskAuthorization: {
       type: "object",
-      description: "Server-issued auth object from unreal_task_start / checkpoint / stale-auth refresh. Include ownerCapability for multi-chat route ownership; never reuse another chat's capability.",
+      description: "Server-issued auth object. Compact {taskSessionId, ownerCapability} is accepted and expanded server-side for the current route; full auth fields may also be supplied unchanged.",
       properties: {
         taskSessionId: { type: "string" },
         authToken: { type: "string" },
@@ -1285,20 +1332,17 @@ function taskAuthSchemaProperties() {
           description: "Public chat scope label. Not sufficient for ownership by itself.",
         },
         planId: { type: "string" },
-        planRevision: { type: "string" },
+        planRevision: {
+          type: ["string", "integer"],
+          description: "Server-issued plan revision. Integer and numeric-string forms are equivalent.",
+        },
         activeSliceId: { type: "string" },
         routeHash: { type: "string" },
         routePhase: { type: "string" },
       },
       required: [
         "taskSessionId",
-        "authToken",
         "ownerCapability",
-        "planId",
-        "planRevision",
-        "activeSliceId",
-        "routeHash",
-        "routePhase",
       ],
       additionalProperties: false,
     },
@@ -1369,8 +1413,34 @@ function buildReadEvidenceContext(target, stat, resolution, options = {}) {
   };
 }
 
+function summarizeCachedRead(content) {
+  const source = String(content || "");
+  const lines = source.split(/\r?\n/);
+  const anchors = [];
+  for (let index = 0; index < lines.length && anchors.length < 16; index += 1) {
+    const line = lines[index].trim().replace(/^\d+\|/, "").trim().replace(/\s+/g, " ");
+    if (!line || line.startsWith("//")) continue;
+    if (
+      /^U(?:CLASS|STRUCT|ENUM|INTERFACE|FUNCTION|PROPERTY)\b/.test(line)
+      || /^(?:class|struct|enum(?:\s+class)?)\s+[A-Za-z_]/.test(line)
+      || /^[A-Za-z_][\w:<>,*&\s]*::[~A-Za-z_]\w*\s*\(/.test(line)
+      || /IMPLEMENT_(?:SIMPLE|COMPLEX)_AUTOMATION_TEST|BEGIN_DEFINE_SPEC|Describe\s*\(|It\s*\(/.test(line)
+      || /DOREPLIFETIME|HasAuthority\s*\(|_Implementation\s*\(|OnRep_|Server[A-Za-z_]*\s*\(/.test(line)
+    ) {
+      anchors.push(`L${index + 1}: ${line.slice(0, 220)}`);
+    }
+  }
+  return {
+    evidenceHash: crypto.createHash("sha256").update(source, "utf8").digest("hex"),
+    cachedContentBytes: Buffer.byteLength(source, "utf8"),
+    cachedLineCount: lines.length,
+    semanticAnchors: anchors,
+  };
+}
+
 function cachedReadSuccess(content, options = {}) {
   const errorCode = options.errorCode || "READ_REPEAT_DETECTED";
+  const summary = summarizeCachedRead(content);
   const payload = {
     ok: true,
     cached: true,
@@ -1384,7 +1454,8 @@ function cachedReadSuccess(content, options = {}) {
     phase: "evidence_cached",
     userMessage: options.userMessage || cachedReadInstruction(errorCode),
     agentInstruction: options.agentInstruction || cachedReadInstruction(errorCode),
-    content: content == null ? "" : content,
+    contentSuppressed: true,
+    ...summary,
     readAttempts: options.readAttempts || 2,
   };
   if (options.readCount != null) payload.readCount = options.readCount;
@@ -2101,24 +2172,24 @@ function allAgentTools() {
       },
       {
         name: "write_file",
-        description: "Create one brand-new UTF-8 file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Keep the first file body bounded (prefer <=8,000 characters); extend it later with replace_in_file if needed. Requires ALLOW_WRITE=1 and server-issued gateCompletion.taskAuthorization with routePhase=executor; never fabricate authorization, and call unreal_agent_plan once if none exists. Pass concrete targetFiles and changeKind=new_file to unreal_code_sketch_claim_validate before write. Create-only: any file that already exists is blocked. Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
+        description: "Create one brand-new UTF-8 file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Keep the first file body bounded (prefer <=8,000 characters); extend it later with replace_in_file if needed. Requires ALLOW_WRITE=1 and an active executor route; the server auto-binds the single active project task, while ambiguous tasks require the optional taskAuthorization selector. Pass concrete targetFiles and changeKind=new_file to unreal_code_sketch_claim_validate before write. Create-only: any file that already exists is blocked. Use replace_in_file to modify existing files. Do not retry write_file after a 'file already exists' error.",
         inputSchema: makeJsonSchema({
           ...taskAuthSchemaProperties(),
           path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
           content: { type: "string", description: "Full file content to write." },
           createDirs: { type: "boolean", description: "Create parent directories if needed. Default false." }
-        }, ["taskAuthorization", "path", "content"])
+        }, ["path", "content"])
       },
       {
         name: "replace_in_file",
-        description: "Safely replace one exact bounded region in an existing file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Use at most 60 changed lines and prefer <=8,000 combined oldText/newText characters; never duplicate a complete file as old/new text. Split larger work into multiple read_file_range + replace_in_file calls. Requires ALLOW_WRITE=1 and server-issued taskAuthorization; never fabricate authorization, and call unreal_agent_plan once if none exists. Read the target range first and set expectedOccurrences=1. Line endings (CRLF/LF) are normalized automatically. If oldText is not found, re-read a narrower range and correct it; never retry unchanged. Byte-identical repeat calls are rejected.",
+        description: "Safely replace one exact bounded region in an existing file under the active project's Source/Config/Plugins source tree (or .agent/ under WORKSPACE_ROOT). Use at most 60 changed lines and prefer <=8,000 combined oldText/newText characters; never duplicate a complete file as old/new text. Split larger work into multiple read_file_range + replace_in_file calls. Requires ALLOW_WRITE=1 and an active executor route; the server auto-binds the single active project task, while ambiguous tasks require the optional taskAuthorization selector. Read the target range first and set expectedOccurrences=1. Line endings (CRLF/LF) are normalized automatically. If oldText is not found, re-read a narrower range and correct it; never retry unchanged. Byte-identical repeat calls are rejected.",
         inputSchema: makeJsonSchema({
           ...taskAuthSchemaProperties(),
           path: { type: "string", description: "workspace:// or project:// path (active-project Source allowed even outside WORKSPACE_ROOT)." },
           oldText: { type: "string", description: "Exact text to replace." },
           newText: { type: "string", description: "Replacement text." },
           expectedOccurrences: { type: "number", description: "If set, replacement only proceeds when occurrence count matches." }
-        }, ["taskAuthorization", "path", "oldText", "newText"])
+        }, ["path", "oldText", "newText"])
       },
       {
         name: "propose_file_deletions",
@@ -2142,7 +2213,7 @@ function allAgentTools() {
       },
       {
         name: "delete_file",
-        description: "Delete one file under the active project's Source/ tree only after propose_file_deletions returned a per-file approvalToken and the user approved that plan. Requires server-issued taskAuthorization from unreal_agent_plan, ALLOW_WRITE=1, and ALLOW_SOURCE_DELETE=1; never fabricate authorization. Extended mode only.",
+        description: "Delete one file under the active project's Source/ tree only after propose_file_deletions returned a per-file approvalToken and the user approved that plan. Requires an active executor route, ALLOW_WRITE=1, and ALLOW_SOURCE_DELETE=1; the server auto-binds one active project task and requires the optional taskAuthorization selector only when routes are ambiguous. Extended mode only.",
         inputSchema: makeJsonSchema({
           ...taskAuthSchemaProperties(),
           path: { type: "string", description: "workspace:// or project:// path inside the active project's Source tree." },
@@ -2152,11 +2223,11 @@ function allAgentTools() {
           ifDeleted: { type: "string", description: "What concretely happens if this file is deleted." },
           approvalToken: { type: "string", description: "Per-file approvalToken returned by propose_file_deletions after user approval." },
           expectedContent: { type: "string", description: "Optional exact file content guard before delete." }
-        }, ["taskAuthorization", "path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"])
+        }, ["path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"])
       },
       {
         name: "apply_edit_bundle",
-        description: "Apply a small edit bundle atomically with pre-hash capture, scoped validation, and rollback on failure. For existing files use patches only, each covering at most 60 changed lines; multiple patches for the same file are allowed and applied in listed order. never put a complete existing file in files/content. The files form is only for bounded brand-new files. Requires ALLOW_WRITE=1 and server-issued taskAuthorization; never fabricate authorization, and call unreal_agent_plan once if none exists.",
+        description: "Apply a small edit bundle atomically with pre-hash capture, scoped validation, and rollback on failure. For existing files use patches only, each covering at most 60 changed lines; multiple patches for the same file are allowed and applied in listed order. never put a complete existing file in files/content. The files form is only for bounded brand-new files. Requires ALLOW_WRITE=1 and an active executor route; the server auto-binds one active project task and requires the optional taskAuthorization selector only when routes are ambiguous.",
         inputSchema: makeJsonSchema({
           files: {
             type: "array",
@@ -2183,11 +2254,11 @@ function allAgentTools() {
             }
           },
           ...taskAuthSchemaProperties()
-        }, ["taskAuthorization"])
+        }, [])
       },
       {
         name: "static_validate_project",
-        description: "Run static Unreal compile-readiness validation on active project and enabled plugin source. A completed scan stamps the current mutation generation even when findings remain, so one authoritative UBT build can follow without an override.",
+        description: "Run static Unreal compile-readiness validation on active project and enabled plugin source. A failed scan is fresh evidence but is not a passing build proof; fix the first finding and validate a new mutation. Use validationOverride only with a concrete audit note when authoritative UBT evidence is explicitly required.",
         inputSchema: makeJsonSchema({
           projectRoot: { type: "string", description: "Optional project root or .uproject path. Defaults to active project." }
         })
@@ -2232,6 +2303,17 @@ function allAgentTools() {
           validationOverrideNote: { type: "string", description: "Reason recorded when validationOverride=true." },
           allowEngineFallback: { type: "boolean", description: "When true, allow build when the resolved engine version differs from the active project's numeric EngineAssociation. Record an audit note in agent chat." }
         })
+      },
+      {
+        name: "run_unreal_automation_tests",
+        description: "Run declared project Automation tests through the installed UnrealEditor-Cmd after a successful UHT/UBT build. The server discovers test declarations, selects their shared natural prefix when testFilter is omitted, fails if zero tests execute, and completes or advances the active slice only after a passing run.",
+        inputSchema: makeJsonSchema({
+          testFilter: { type: "string", description: "Optional Automation name/prefix such as Gomoku. Defaults to the single shared prefix discovered in project source." },
+          engineRoot: { type: "string", description: "Optional UE engine root; defaults to the active project's resolved engine." },
+          project: { type: "string", description: "Optional .uproject path; defaults to active project." },
+          timeoutMs: { type: "number", description: "Automation timeout in ms. Default 30 minutes." },
+          verboseOutput: { type: "boolean", description: "Include bounded stdout/stderr in the response." }
+        })
       }
   ];
   const optionalTaskAuthorization = taskAuthSchemaProperties().taskAuthorization;
@@ -2261,7 +2343,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const name = request.params.name;
-  const args = request.params.arguments || {};
+  let args = request.params.arguments || {};
   const priorSeq = beginToolCall();
   try {
     clearLoopHistoriesOnProjectChange(false);
@@ -2290,17 +2372,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         agentInstruction: blocked.agentInstruction,
       });
     }
-    const nestedTaskAuthorization = args.taskAuthorization
+    if (
+      currentRouteContext.status === "none"
+      && UNROUTED_INSPECTION_TOOLS.has(name)
+    ) {
+      args = discardTaskAuthorizationWithoutActiveRoute(
+        WORKSPACE_ROOT,
+        args,
+        { activeProject: activeProjectForRoute }
+      ).args;
+    }
+    let nestedTaskAuthorization = args.taskAuthorization
       && typeof args.taskAuthorization === "object"
       ? args.taskAuthorization
       : args.task_authorization
       && typeof args.task_authorization === "object"
       ? args.task_authorization
       : null;
-    const hasExplicitTaskAuthorization = Boolean(
+    let hasExplicitTaskAuthorization = Boolean(
       nestedTaskAuthorization
       || String(args.taskSessionId || args.task_session_id || "").trim()
     );
+    if (hasExplicitTaskAuthorization && !SAFE_ROUTE_RECOVERY_TOOLS.has(name)) {
+      const compactExpansion = expandCompactTaskAuthorization(
+        WORKSPACE_ROOT,
+        name,
+        args,
+        { activeProject: activeProjectForRoute }
+      );
+      if (!compactExpansion.ok) {
+        return fail(
+          compactExpansion.error || "Compact task route authorization failed.",
+          routeAuthorizationFailureOptions(compactExpansion, name)
+        );
+      }
+      if (compactExpansion.expanded) {
+        args = compactExpansion.args;
+        nestedTaskAuthorization = args.taskAuthorization;
+        hasExplicitTaskAuthorization = true;
+      }
+    }
     let routePreflight = { ok: true };
     if (SAFE_ROUTE_RECOVERY_TOOLS.has(name)) {
       routePreflight = { ok: true, controlSurface: true };
@@ -2332,6 +2443,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         routePreflight.error || "Task route authorization failed.",
         routeAuthorizationFailureOptions(routePreflight, name)
       );
+    }
+    if (
+      !hasExplicitTaskAuthorization
+      && routePreflight.taskAuthorization
+      && typeof routePreflight.taskAuthorization === "object"
+    ) {
+      args = {
+        ...args,
+        taskAuthorization: routePreflight.taskAuthorization,
+      };
+      hasExplicitTaskAuthorization = true;
     }
     const earlyRepeatBlock = checkToolRepeatBlocked(name, args, priorSeq);
     if (earlyRepeatBlock.blocked) {
@@ -4079,33 +4201,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             nextSteps: ["Read the first blocking finding, edit the responsible source file, then validate the new mutation generation."],
           });
         }
-        const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration);
+        const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration, {
+          passed: false,
+          blockingErrorCount: severityCounts.error || 0,
+          proofLevel: "StaticFailed",
+        });
         if (finish.validationStale) {
           return fail("Validation stale: project mutated during validation.", {
             validationStale: true,
             mutationGeneration: finish.mutationGeneration,
-            nextSteps: ["Re-run static_validate_project after edits settle."],
+          nextSteps: ["Re-run static_validate_project after edits settle."],
           });
         }
+        const validationCheckpoint = recordValidationContinuityCheckpoint(args, validation, false);
         await agentNotify(validationSummary);
         return validationToolResult(validationSummary, validation, {
           ok: false,
           operation: "static_validate",
-          error: "Static validation found blocking errors; the completed scan is fresh for this mutation generation.",
+          error: "Static validation found blocking errors; the scan is fresh but is not a passing build proof.",
           errorCode: "STATIC_VALIDATION_FAILED",
           retryable: false,
-          doNotRetry: ["static_validate_project"],
+          doNotRetry: ["build_unreal_project"],
           stopCurrentWorkflow: false,
-          validationOverrideAvailable: false,
-          buildAllowedForValidatedGeneration: true,
-          requiredNextTool: "build_unreal_project",
+          validationOverrideAvailable: true,
+          buildAllowedForValidatedGeneration: false,
+          requiredNextTool: "read_file",
+          ...(validationCheckpoint.ok ? { continuityCheckpoint: validationCheckpoint } : {}),
+          validationPassed: finish.validationPassed,
+          validationStatus: finish.validationStatus,
+          validationBlockingErrorCount: finish.validationBlockingErrorCount,
+          proofLevel: finish.validationProofLevel,
           validatedGeneration: finish.validatedGeneration,
           mutationGeneration: finish.mutationGeneration,
-          nextSteps: ["Fix the first blocking finding, or run build_unreal_project exactly once without validationOverride to obtain authoritative UBT errors."],
+          nextSteps: [
+            "Fix the first blocking finding, then run static_validate_project again.",
+            "Use validationOverride=true only with a concrete audit note when authoritative UBT evidence is explicitly required.",
+          ],
         });
       }
       recordValidationSuccess(projectRoot, validationStart.startGeneration);
-      const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration);
+      const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration, {
+        passed: true,
+        blockingErrorCount: 0,
+        proofLevel: "StaticVerified",
+      });
       if (finish.validationStale) {
         return fail("Validation stale: project mutated during validation.", {
           validationStale: true,
@@ -4113,11 +4252,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Re-run static_validate_project after edits settle."],
         });
       }
+      const validationCheckpoint = recordValidationContinuityCheckpoint(args, validation, true);
       await agentNotify(validationSummary);
       return validationToolResult(validationSummary, validation, {
         operation: "static_validate",
+        validationPassed: finish.validationPassed,
+        validationStatus: finish.validationStatus,
+        validationBlockingErrorCount: finish.validationBlockingErrorCount,
+        proofLevel: finish.validationProofLevel,
         validatedGeneration: finish.validatedGeneration,
         mutationGeneration: finish.mutationGeneration,
+        ...(validationCheckpoint.ok ? { continuityCheckpoint: validationCheckpoint } : {}),
         nextSteps: ["Run build_unreal_project if C++ or Build.cs changed."],
         phase: "validating",
         userMessage: validationSummary,
@@ -4301,6 +4446,106 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!s || !s.isDirectory()) return fail(`cwd not found or not directory: ${args.cwd || "."}`);
       const result = await execCommand(command, cwd, Number(args.timeoutMs || COMMAND_TIMEOUT_MS));
       return text(JSON.stringify(result, null, 2));
+    }
+
+    if (name === "run_unreal_automation_tests") {
+      if (!ALLOW_UNREAL_BUILD) {
+        return fail("run_unreal_automation_tests blocked. Set ALLOW_UNREAL_BUILD=1 to enable.", {
+          errorCode: "AUTOMATION_DISABLED",
+        });
+      }
+      const planResult = await resolveBuildPlan(WORKSPACE_ROOT, CONFIG_PATH, args);
+      if (!planResult.ok || !planResult.build) {
+        return fail(planResult.error || "Could not resolve Unreal Automation plan.", {
+          errorCode: "AUTOMATION_PLAN_RESOLUTION_FAILED",
+        });
+      }
+      const projectPath = path.resolve(planResult.build.projectPath);
+      const projectRoot = path.dirname(projectPath);
+      const discovery = discoverAutomationTests(projectRoot);
+      if (!discovery.count) {
+        return fail("No project Automation test declarations were found.", {
+          errorCode: "NO_AUTOMATION_TESTS_DECLARED",
+          automationCoverage: discovery,
+          retryable: false,
+        });
+      }
+      const testFilter = String(args.testFilter || discovery.suggestedFilter || "").trim();
+      if (!testFilter) {
+        return fail("Automation tests use multiple roots; provide one concrete testFilter.", {
+          errorCode: "AUTOMATION_FILTER_REQUIRED",
+          declaredTests: discovery.names.slice(0, 100),
+          retryable: true,
+        });
+      }
+      const mutation = await readMutationState(projectRoot);
+      const logPath = path.join(projectRoot, ".agent", "logs", "latest-automation.log");
+      const execution = await runAutomationTests({
+        engineRoot: planResult.build.engineRoot,
+        projectPath,
+        testFilter,
+        timeoutMs: Number(args.timeoutMs || 30 * 60 * 1000),
+        logPath,
+      });
+      const payload = {
+        ok: execution.ok === true,
+        proofLevel: execution.ok === true ? "AutomationPassed" : "AutomationFailed",
+        errorCode: execution.errorCode || "",
+        error: execution.error || "",
+        testFilter,
+        declaredTestCount: discovery.count,
+        declaredTests: discovery.names.slice(0, 100),
+        succeededCount: Number(execution.succeededCount || 0),
+        failedCount: Number(execution.failedCount || 0),
+        queueEmpty: execution.queueEmpty === true,
+        exitCode: Number(execution.exitCode ?? 1),
+        timedOut: execution.timedOut === true,
+        fullLogPath: execution.fullLogPath || logPath,
+        mutationGeneration: Number(mutation.mutationGeneration || 0),
+      };
+      if (args.verboseOutput === true) {
+        payload.stdout = String(execution.stdout || "").slice(-16000);
+        payload.stderr = String(execution.stderr || "").slice(-8000);
+      }
+      if (!payload.ok) {
+        return fail("Unreal Automation exit gate failed.", {
+          ...payload,
+          retryable: false,
+          requiredNextTool: "read_unreal_logs",
+          nextSteps: ["Inspect latest-automation.log, fix the first failing project test, then rebuild the new mutation before rerunning Automation."],
+        });
+      }
+      const completion = completeTaskAfterBuildViaPython(
+        WORKSPACE_ROOT,
+        args,
+        {
+          proofLevel: payload.proofLevel,
+          proofKind: "automation",
+          mutationGeneration: payload.mutationGeneration,
+          buildLogPath: payload.fullLogPath,
+        }
+      );
+      payload.taskLifecycle = completion?.ok === true && completion?.active === true
+        ? {
+          status: "slice_advanced",
+          routeOwnershipReleased: false,
+          completedSliceId: String(completion.completedSliceId || ""),
+          activeSliceId: String(completion.activeSliceId || ""),
+          pendingSlices: Array.isArray(completion.pendingSlices)
+            ? completion.pendingSlices.map(String)
+            : [],
+          taskAuthorization: completion.taskAuthorization || undefined,
+          toolRoute: completion.toolRoute || undefined,
+        }
+        : completion?.ok === true
+          ? { status: "completed", routeOwnershipReleased: true }
+          : {
+            status: "completion_failed",
+            routeOwnershipReleased: false,
+            errorCode: String(completion?.errorCode || "TASK_AUTOMATION_COMPLETION_FAILED"),
+          };
+      try { await server.sendToolListChanged(); } catch { /* advisory */ }
+      return text(JSON.stringify(payload, null, 2));
     }
 
     if (name === "build_unreal_project") {
@@ -4581,23 +4826,71 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const budgetFail = commitDeferredBudgetOrFail();
       if (budgetFail) return budgetFail;
       if (disposition.buildOutcome === "succeeded") {
-        const completion = completeTaskAfterBuildViaPython(
-          WORKSPACE_ROOT,
-          args,
-          {
-            proofLevel: payload.proofLevel,
-            mutationGeneration: endGen.mutationGeneration,
-            buildLogPath: logPath,
-          }
-        );
-        payload.taskLifecycle = completion?.ok === true
-          ? { status: "completed", routeOwnershipReleased: true }
-          : {
-            status: "completion_failed",
-            routeOwnershipReleased: false,
-            errorCode: String(completion?.errorCode || "TASK_BUILD_COMPLETION_FAILED"),
-          };
-        if (completion?.ok === true && completion?.taskSessionId) {
+        const automationCoverage = discoverAutomationTests(projectRoot);
+        payload.automationCoverage = automationCoverage;
+        let lifecycleResult;
+        if (automationCoverage.count > 0) {
+          const testFilter = String(automationCoverage.suggestedFilter || "").trim();
+          lifecycleResult = requireAutomationAfterBuildViaPython(
+            WORKSPACE_ROOT,
+            args,
+            {
+              mutationGeneration: endGen.mutationGeneration,
+              buildLogPath: logPath,
+              testFilter,
+              declaredTests: automationCoverage.names,
+            }
+          );
+          payload.requiredNextTool = "run_unreal_automation_tests";
+          payload.requiredNextToolArgs = testFilter ? { testFilter } : {};
+          payload.taskLifecycle = lifecycleResult?.ok === true
+            ? {
+              status: "awaiting_automation",
+              routeOwnershipReleased: false,
+              activeSliceId: String(lifecycleResult.activeSliceId || ""),
+              taskAuthorization: lifecycleResult.taskAuthorization || undefined,
+              toolRoute: lifecycleResult.toolRoute || undefined,
+            }
+            : {
+              status: "automation_gate_binding_failed",
+              routeOwnershipReleased: false,
+              errorCode: String(lifecycleResult?.errorCode || "TASK_AUTOMATION_GATE_BINDING_FAILED"),
+            };
+          payload.nextSteps = [
+            `Call run_unreal_automation_tests${testFilter ? ` with testFilter=${testFilter}` : " with one declared test prefix"}; build success is not terminal while project tests are pending.`,
+          ];
+        } else {
+          lifecycleResult = completeTaskAfterBuildViaPython(
+            WORKSPACE_ROOT,
+            args,
+            {
+              proofLevel: payload.proofLevel,
+              proofKind: "build",
+              mutationGeneration: endGen.mutationGeneration,
+              buildLogPath: logPath,
+            }
+          );
+          payload.taskLifecycle = lifecycleResult?.ok === true && lifecycleResult?.active === true
+            ? {
+              status: "slice_advanced",
+              routeOwnershipReleased: false,
+              completedSliceId: String(lifecycleResult.completedSliceId || ""),
+              activeSliceId: String(lifecycleResult.activeSliceId || ""),
+              pendingSlices: Array.isArray(lifecycleResult.pendingSlices)
+                ? lifecycleResult.pendingSlices.map(String)
+                : [],
+              taskAuthorization: lifecycleResult.taskAuthorization || undefined,
+              toolRoute: lifecycleResult.toolRoute || undefined,
+            }
+            : lifecycleResult?.ok === true
+              ? { status: "completed", routeOwnershipReleased: true }
+              : {
+                status: "completion_failed",
+                routeOwnershipReleased: false,
+                errorCode: String(lifecycleResult?.errorCode || "TASK_BUILD_COMPLETION_FAILED"),
+              };
+        }
+        if (lifecycleResult?.ok === true && lifecycleResult?.taskSessionId) {
           try {
             await server.sendToolListChanged();
           } catch {

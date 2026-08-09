@@ -137,6 +137,57 @@ def test_checkpoint_unions_caller_prior_git_slice_and_impact_contract_files(
     assert len(checkpoint["fileSnapshots"]) == len(checkpoint["modifiedFiles"])
 
 
+def test_checkpoint_without_git_discovery_preserves_baseline_and_task_mutations(
+    tmp_path: Path,
+) -> None:
+    project, uproject = _project(tmp_path)
+    first = _write(project, "Source/Demo/First.cpp")
+    second = _write(project, "Source/Demo/Second.cpp")
+    _initialize_git(project)
+    first.write_text("first task edit", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Continue bounded task edits",
+        project_file=str(uproject),
+        plan_payload={"writeGate": {"writesAllowed": True}},
+    )
+    authorization = _authorization(started)
+
+    baseline = task_checkpoint(
+        tmp_path,
+        task_authorization=authorization,
+        action="record",
+        modified_files=["Source/Demo/First.cpp"],
+        include_git_changes=True,
+    )
+    assert baseline["ok"] is True
+    assert set(baseline["continuity"]["checkpoint"]["gitChangedFiles"]) == {
+        "Source/Demo/First.cpp",
+    }
+
+    second.write_text("second task edit", encoding="utf-8")
+    automatic = task_checkpoint(
+        tmp_path,
+        task_authorization=authorization,
+        action="record",
+        modified_files=["Source/Demo/Second.cpp"],
+        include_git_changes=False,
+    )
+    assert automatic["ok"] is True
+    assert set(automatic["continuity"]["checkpoint"]["gitChangedFiles"]) == {
+        "Source/Demo/First.cpp",
+        "Source/Demo/Second.cpp",
+    }
+
+    recovered = task_checkpoint(
+        tmp_path,
+        task_authorization=authorization,
+        action="recover",
+    )
+    assert recovered["ok"] is True
+    assert recovered["continuity"]["recovery"]["conflicts"] == []
+
+
 def test_checkpoint_preserves_prior_files_and_non_git_projects_warn(
     tmp_path: Path,
 ) -> None:

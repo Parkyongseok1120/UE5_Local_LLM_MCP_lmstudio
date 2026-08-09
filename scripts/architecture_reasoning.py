@@ -880,6 +880,505 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         invariant for invariant in declared_invariants if invariant not in covered_invariants
     ]
 
+    proposal_text = json.dumps(plan, ensure_ascii=False).lower()
+    network_markers = (
+        "multiplayer", "network", "replication", "replicated", "rpc", "server",
+        "client", "authority", "authoritative", "멀티플레이", "네트워크", "복제",
+        "서버", "클라이언트", "권한",
+    )
+    networked_proposal = any(marker in proposal_text for marker in network_markers)
+    networking = plan.get("networking") if isinstance(plan.get("networking"), dict) else {}
+    state_inventory = plan.get("stateInventory") if isinstance(plan.get("stateInventory"), list) else []
+    lifecycle_transitions = (
+        plan.get("lifecycleTransitions")
+        if isinstance(plan.get("lifecycleTransitions"), list)
+        else []
+    )
+    networking_complete = True
+    rpc_path_concrete = True
+    duplicate_truth_sources: list[str] = []
+    lifecycle_coverage_gaps: list[str] = []
+    framework_contracts = (
+        analysis.get("frameworkContracts")
+        if isinstance(analysis.get("frameworkContracts"), dict)
+        else {}
+    )
+    unreal_detected = (
+        framework_contracts.get("detected") is True
+        and framework_contracts.get("kind") == "UnrealGameFramework"
+    )
+
+    if networked_proposal:
+        required_network_fields = ("authorityOwner", "clientInitiated", "replicatedState")
+        missing_network_fields = [
+            field for field in required_network_fields if field not in networking
+            or (
+                field != "clientInitiated"
+                and not networking.get(field)
+            )
+        ]
+        if missing_network_fields:
+            networking_complete = False
+            issues.append(
+                "networked architecture proposal is missing networking fields: "
+                + ", ".join(missing_network_fields)
+            )
+
+        client_language = any(
+            marker in proposal_text
+            for marker in ("client request", "client calls", "clientinitiated", "rpc", "클라이언트")
+        )
+        client_initiated = networking.get("clientInitiated") is True
+        if client_language and networking.get("clientInitiated") is False:
+            issues.append(
+                "proposal describes a client request but networking.clientInitiated is false"
+            )
+            networking_complete = False
+        if client_language and "clientInitiated" not in networking:
+            client_initiated = True
+
+        if client_initiated:
+            request_path = _nonempty_string_list(networking.get("requestPath")) or []
+            missing_rpc_fields = [
+                field
+                for field in ("rpcOwner", "owningConnection", "serverValidation")
+                if not str(networking.get(field) or "").strip()
+            ]
+            if len(request_path) < 3:
+                missing_rpc_fields.append("requestPath[>=3 concrete hops]")
+            vague_path = any(
+                re.search(r"\b(?:or|either|tbd|unknown|optional)\b", hop, re.IGNORECASE)
+                or "또는" in hop
+                for hop in request_path
+            )
+            if vague_path:
+                rpc_path_concrete = False
+                issues.append(
+                    "networking.requestPath contains an unresolved alternative; select one callable path"
+                )
+            if missing_rpc_fields:
+                networking_complete = False
+                rpc_path_concrete = False
+                issues.append(
+                    "client-initiated network design is missing a callable RPC ownership contract: "
+                    + ", ".join(missing_rpc_fields)
+                )
+            rpc_owner = str(networking.get("rpcOwner") or "").strip()
+            if re.search(r"game\s*mode|gamemode|game\s*state|gamestate", rpc_owner, re.IGNORECASE):
+                networking_complete = False
+                rpc_path_concrete = False
+                issues.append(
+                    "client-initiated Server RPC owner is server-only/server-owned and is not callable "
+                    "from a remote client; choose an invoking actor/component owned by that connection "
+                    "and show the complete source-backed path to the authority owner"
+                )
+            owning_connection = str(networking.get("owningConnection") or "").strip().lower()
+            if owning_connection and not any(
+                marker in owning_connection
+                for marker in ("owning connection", "owned by", "net owner", "netconnection", "possessed")
+            ):
+                networking_complete = False
+                rpc_path_concrete = False
+                issues.append(
+                    "networking.owningConnection does not prove that the invoking RPC owner is owned by "
+                    "the requesting client's connection; a path from that actor to the server authority is "
+                    "not an ownership proof"
+                )
+            rpc_type_match = re.search(r"\b[AU][A-Z][A-Za-z0-9_]+", rpc_owner)
+            if rpc_type_match:
+                rpc_type = rpc_type_match.group(0)
+                declared_surface_text = json.dumps(
+                    {
+                        "impactedSurfaces": impacted,
+                        "implementationFiles": implementation,
+                        "boundaryChanges": boundary_changes,
+                        "migrationPlan": plan.get("migrationPlan"),
+                    },
+                    ensure_ascii=False,
+                ).lower()
+                if rpc_type.lower() not in declared_surface_text:
+                    issues.append(
+                        f"networking.rpcOwner {rpc_type} is absent from impacted surfaces/migration scope; "
+                        "include the existing or new RPC-bearing surface and its validation slice"
+                    )
+            for symbol_fact in framework_contracts.get("requestPathSymbols") or []:
+                if not isinstance(symbol_fact, dict):
+                    continue
+                required_surfaces = [
+                    str(item).replace("\\", "/")
+                    for item in symbol_fact.get("requiredImplementationSurfaces") or []
+                    if str(item).strip()
+                ]
+                missing_surfaces = [
+                    path for path in required_surfaces if path not in implementation
+                ]
+                if missing_surfaces:
+                    rpc_path_concrete = False
+                    issues.append(
+                        f"networking.requestPath symbol {symbol_fact.get('symbol')} is not source-complete; "
+                        "the method has no existing declaration/definition for this path and its required "
+                        "implementation surface(s) are absent: " + ", ".join(missing_surfaces)
+                    )
+
+        replicated_state = _nonempty_string_list(networking.get("replicatedState")) or []
+        if unreal_detected:
+            game_mode_types = {
+                str(item).lower() for item in framework_contracts.get("gameModeTypes") or []
+            }
+            for index, state_ref in enumerate(replicated_state):
+                owner_match = re.match(r"^\s*([AU][A-Za-z0-9_]+)::", state_ref)
+                if not owner_match:
+                    issues.append(
+                        f"networking.replicatedState[{index}] must be an owner-qualified Type::Field "
+                        "reference so replication ownership can be checked"
+                    )
+                    continue
+                if owner_match.group(1).lower() in game_mode_types:
+                    issues.append(
+                        f"networking.replicatedState[{index}] assigns replicated client-visible state to "
+                        f"{owner_match.group(1)}, but Unreal GameMode exists only on the authority; place the "
+                        "replicated view on a replicated framework owner and keep the mutation decision server-only"
+                    )
+
+        if not state_inventory:
+            issues.append(
+                "networked architecture proposal requires stateInventory to prove one truth source per state"
+            )
+        authoritative_owners: dict[str, set[str]] = defaultdict(set)
+        inventory_state_names: list[str] = []
+        participant_inventory_indexes: list[int] = []
+        identity_inventory_indexes: list[int] = []
+        has_player_array_contract = any(
+            str(row.get("symbol") or "") == "AGameStateBase::PlayerArray"
+            for row in framework_contracts.get("inheritedStateCollections") or []
+            if isinstance(row, dict)
+        )
+        for index, row in enumerate(state_inventory):
+            if not isinstance(row, dict):
+                issues.append(f"stateInventory[{index}] must be an object")
+                continue
+            missing = [
+                field for field in ("state", "owner", "lifetime", "authority", "source", "cleanup")
+                if not str(row.get(field) or "").strip()
+            ]
+            if missing:
+                issues.append(
+                    f"stateInventory[{index}] is missing: " + ", ".join(missing)
+                )
+                continue
+            state_name = re.sub(r"[^a-z0-9]", "", str(row.get("state") or "").lower())
+            inventory_state_names.append(state_name)
+            owner = str(row.get("owner") or "").strip()
+            authority = str(row.get("authority") or "").lower()
+            source = str(row.get("source") or "").lower()
+            if source == "derived" and not str(row.get("derivedFrom") or "").strip():
+                issues.append(f"stateInventory[{index}] derived state requires derivedFrom")
+            is_authoritative = "author" in authority or "server" in authority
+            if is_authoritative and re.search(r"\s(?:and|plus)\s|\+|/", owner, re.IGNORECASE):
+                issues.append(
+                    f"stateInventory[{index}] declares multiple/ambiguous owners for one authoritative state; "
+                    "name one canonical truth owner and describe mutators or replicated views elsewhere"
+                )
+            participant_state = any(
+                marker in state_name
+                for marker in (
+                    "participant", "membership", "memberroster", "playerroster", "lobbyroster"
+                )
+            )
+            if participant_state and source == "existing" and not str(
+                row.get("sourceEvidence") or ""
+            ).strip():
+                issues.append(
+                    f"stateInventory[{index}] claims an existing participant/roster truth source without "
+                    "sourceEvidence; cite the direct project symbol or inherited engine collection and state "
+                    "whether this row is canonical or derived"
+                )
+            if participant_state:
+                participant_inventory_indexes.append(index)
+                source_evidence = str(row.get("sourceEvidence") or "").strip()
+                if source == "existing" and source_evidence and not (
+                    "::" in source_evidence
+                    or re.search(r"\.(?:h|hpp|cpp|cxx)(?::\d+)?\b", source_evidence, re.IGNORECASE)
+                ):
+                    issues.append(
+                        f"stateInventory[{index}].sourceEvidence does not identify a concrete field/collection "
+                        "or source location; cite Type::Symbol or a project source path, or mark the state "
+                        "derived and name derivedFrom"
+                    )
+                framework_relation = str(row.get("frameworkRelation") or "").strip()
+                if has_player_array_contract and source == "new" and not framework_relation:
+                    issues.append(
+                        f"stateInventory[{index}] proposes a new authoritative participant/roster collection "
+                        "without reconciling it with inherited AGameStateBase::PlayerArray; add frameworkRelation "
+                        "that proves a non-overlapping responsibility, or mark it derived/existing and cite PlayerArray"
+                    )
+                if (
+                    has_player_array_contract
+                    and source == "new"
+                    and "playerarray" in framework_relation.lower().replace(" ", "")
+                    and not any(
+                        marker in framework_relation.lower()
+                        for marker in (
+                            "non-overlap", "nonoverlap", "reservation", "pre-login", "prelogin",
+                            "not connected", "연결 전", "예약", "비중복",
+                        )
+                    )
+                ):
+                    issues.append(
+                        f"stateInventory[{index}] calls participant membership a new truth source while relating "
+                        "it to AGameStateBase::PlayerArray; use source='derived' with derivedFrom, reuse the existing "
+                        "collection, or prove a genuinely non-overlapping lifetime"
+                    )
+            identity_state = any(
+                marker in state_name
+                for marker in ("identifier", "identity", "participantid", "playerid")
+            )
+            if identity_state:
+                identity_inventory_indexes.append(index)
+                missing_identity_contract = [
+                    field for field in ("validValues", "assignmentPolicy", "reusePolicy", "invalidValue")
+                    if not str(row.get(field) or "").strip()
+                ]
+                if missing_identity_contract:
+                    issues.append(
+                        f"stateInventory[{index}] identity lifecycle contract is missing: "
+                        + ", ".join(missing_identity_contract)
+                    )
+                valid_values = str(row.get("validValues") or "")
+                invalid_value = str(row.get("invalidValue") or "")
+                range_match = re.search(r"(-?\d+)\s*\.\.\s*(-?\d+)", valid_values)
+                invalid_match = re.search(r"-?\d+", invalid_value)
+                if range_match and invalid_match:
+                    lower, upper = int(range_match.group(1)), int(range_match.group(2))
+                    invalid_number = int(invalid_match.group(0))
+                    if lower <= invalid_number <= upper:
+                        issues.append(
+                            f"stateInventory[{index}].invalidValue {invalid_number} is inside the valid "
+                            f"identifier range {lower}..{upper}; cleanup cannot be distinguished from an active ID"
+                        )
+                invariant_range = re.search(
+                    r"[\[(]\s*(-?\d+)\s*\.\.\s*[^\])]+[\])]",
+                    " ".join(string_fields["invariants"]),
+                )
+                cleanup_text = str(row.get("cleanup") or "").lower()
+                if invariant_range and int(invariant_range.group(1)) == 0 and re.search(
+                    r"(?:=|to|as)\s*0\b|\b0\s*(?:으로|로)", cleanup_text
+                ):
+                    issues.append(
+                        f"stateInventory[{index}] cleanup assigns 0 even though 0 begins the valid identifier range; "
+                        "use an out-of-range invalid sentinel or an unambiguous removal/reassignment policy"
+                    )
+            if "author" in authority or "server" in authority or "권한" in authority:
+                authoritative_owners[state_name].add(str(row.get("owner") or "").strip())
+        for state_name, owners in authoritative_owners.items():
+            if state_name and len(owners) > 1:
+                duplicate_truth_sources.append(
+                    f"{state_name}: " + ", ".join(sorted(owners))
+                )
+        if duplicate_truth_sources:
+            issues.append(
+                "multiple authoritative truth sources declared: "
+                + "; ".join(duplicate_truth_sources)
+            )
+        participant_intent_text = json.dumps(
+            {
+                "decision": plan.get("decision"),
+                "invariants": plan.get("invariants"),
+                "ownership": plan.get("ownership"),
+                "lifecycleTransitions": plan.get("lifecycleTransitions"),
+                "migrationPlan": plan.get("migrationPlan"),
+            },
+            ensure_ascii=False,
+        ).lower()
+        participant_intent = any(
+            marker in participant_intent_text
+            for marker in (
+                "participant", "membership", "roster", "join", "postlogin", "logout",
+                "lobby player", "참가자", "참가", "퇴장", "로비 인원",
+            )
+        )
+        if participant_intent and not participant_inventory_indexes:
+            framework_hint = (
+                " For Unreal GameState projects, inspect and reconcile inherited "
+                "AGameStateBase::PlayerArray before proposing another collection."
+                if has_player_array_contract else ""
+            )
+            issues.append(
+                "participant membership/roster is part of the design but is absent from stateInventory; "
+                "identify its canonical or derived source, owner, lifecycle, and cleanup policy."
+                + framework_hint
+            )
+        identity_required = any(
+            marker in " ".join(string_fields["invariants"]).lower()
+            for marker in (
+                "identifier", "identity", "identif", "unique id", "participant id", "playerid"
+            )
+        )
+        if identity_required and not any(
+            any(marker in state_name for marker in ("identifier", "identity", "participantid", "playerid"))
+            for state_name in inventory_state_names
+        ):
+            issues.append(
+                "participant identity/uniqueness is declared as an invariant but is absent from stateInventory; "
+                "identify its canonical owner, allowed range, assignment point, and cleanup/reuse policy"
+            )
+
+        inventory_text_compact = re.sub(
+            r"[^a-z0-9]",
+            "",
+            " ".join(
+                str(row.get("state") or "").lower()
+                for row in state_inventory
+                if isinstance(row, dict)
+            ),
+        )
+        tracking_scope = json.dumps(
+            {
+                "decision": plan.get("decision"),
+                "implementationFiles": plan.get("implementationFiles"),
+                "networking": plan.get("networking"),
+                "lifecycleTransitions": plan.get("lifecycleTransitions"),
+                "validationMatrix": plan.get("validationMatrix"),
+                "migrationPlan": plan.get("migrationPlan"),
+                "implementationSlices": plan.get("implementationSlices"),
+            },
+            ensure_ascii=False,
+        )
+        tracking_identifiers = set(re.findall(
+            r"\b([A-Za-z_][A-Za-z0-9_]*?(?:Participants|Roster|Members)|"
+            r"(?:Occupied|Assigned|Used|Allocated)[A-Za-z0-9_]*Ids|LobbyPlayers)\b",
+            tracking_scope,
+            re.IGNORECASE,
+        ))
+        for identifier in sorted(tracking_identifiers, key=str.lower):
+            compact_identifier = re.sub(r"[^a-z0-9]", "", identifier.lower())
+            singular_identifier = re.sub(r"(?:participants|players|members|ids)$", lambda m: {
+                "participants": "participant", "players": "player", "members": "member", "ids": "id"
+            }[m.group(0)], compact_identifier)
+            if (
+                compact_identifier not in inventory_text_compact
+                and singular_identifier not in inventory_text_compact
+            ):
+                issues.append(
+                    f"mutable tracking collection {identifier} appears in the design but is absent from "
+                    "stateInventory; declare its owner/source/cleanup and prove it is not a duplicate truth source"
+                )
+
+        if not lifecycle_transitions:
+            issues.append(
+                "networked architecture proposal requires lifecycleTransitions with commit and failure recovery"
+            )
+        lifecycle_text = " ".join(
+            str(row.get("event") or "").lower()
+            for row in lifecycle_transitions
+            if isinstance(row, dict)
+        )
+        lifecycle_text = re.sub(r"[_-]+", " ", lifecycle_text)
+        lifecycle_contract_text = json.dumps(lifecycle_transitions, ensure_ascii=False).lower()
+        if participant_inventory_indexes and re.search(
+            r"\b(?:add|remove|clear)\b.{0,40}\b(?:lobby|participant|member)\s+tracking\b",
+            lifecycle_contract_text,
+        ):
+            issues.append(
+                "lifecycleTransitions imply a separate mutable participant/lobby tracking collection, but "
+                "stateInventory does not name it as a new canonical truth source or derive membership from "
+                "a cited existing collection"
+            )
+        lifecycle_intent_text = json.dumps(
+            {
+                "decision": plan.get("decision"),
+                "invariants": plan.get("invariants"),
+                "impactedSurfaces": plan.get("impactedSurfaces"),
+                "migrationPlan": plan.get("migrationPlan"),
+                "boundaryChanges": plan.get("boundaryChanges"),
+            },
+            ensure_ascii=False,
+        ).lower()
+
+        def has_event_marker(text: str, marker: str) -> bool:
+            if marker.isascii():
+                inflections = {
+                    "join": r"\bjoin(?:s|ed|ing)?\b",
+                    "leave": r"\b(?:leave|leaves|leaving|left)\b",
+                    "restart": r"\brestart(?:s|ed|ing|game)?\b",
+                    "login": r"\blogin\b|\blogged\s+in\b",
+                    "logout": r"\blogout\b|\blogged\s+out\b",
+                    "connect": r"\bconnect(?:s|ed|ing|ion)?\b",
+                    "disconnect": r"\bdisconnect(?:s|ed|ing|ion)?\b",
+                }
+                return bool(re.search(inflections.get(marker, rf"\b{re.escape(marker)}\b"), text))
+            return marker in text
+
+        event_groups = {
+            "join": ("join", "login", "connect", "참가", "접속"),
+            "leave": ("leave", "logout", "disconnect", "퇴장", "연결 해제"),
+            "restart": ("restart", "reset", "재시작", "초기화"),
+            "travel": ("travel", "transition", "servertravel", "seamless travel", "전환", "이동"),
+        }
+        for event_name, markers in event_groups.items():
+            if any(has_event_marker(lifecycle_intent_text, marker) for marker in markers) and not any(
+                has_event_marker(lifecycle_text, marker) for marker in markers
+            ):
+                lifecycle_coverage_gaps.append(event_name)
+        if lifecycle_coverage_gaps:
+            issues.append(
+                "lifecycleTransitions missing proposal event coverage: "
+                + ", ".join(lifecycle_coverage_gaps)
+            )
+        for index, row in enumerate(lifecycle_transitions):
+            if not isinstance(row, dict):
+                issues.append(f"lifecycleTransitions[{index}] must be an object")
+                continue
+            missing = [
+                field
+                for field in ("event", "owner", "preconditions", "commitPoint", "failureRecovery", "cleanup")
+                if not row.get(field)
+            ]
+            if missing:
+                issues.append(
+                    f"lifecycleTransitions[{index}] is missing: " + ", ".join(missing)
+                )
+            event_text = str(row.get("event") or "").lower()
+            if "travel" in event_text or "servertravel" in event_text:
+                travel_contract = " ".join(
+                    str(row.get(field) or "")
+                    for field in (
+                        "preconditions", "commitPoint", "failureRecovery", "cleanup"
+                    )
+                ).lower()
+                if "before travel" in travel_contract or "no rollback" in travel_contract:
+                    issues.append(
+                        f"lifecycleTransitions[{index}] commits authoritative match state before travel "
+                        "without rollback; define the post-success commit point or an explicit retry/rollback path"
+                    )
+                travel_mode = str(row.get("travelMode") or "").strip().lower()
+                if travel_mode not in {"seamless", "non-seamless"}:
+                    issues.append(
+                        f"lifecycleTransitions[{index}].travelMode must explicitly select "
+                        "seamless/non-seamless"
+                    )
+                if "servertravel" in (event_text + " " + travel_contract) and "level streaming" in travel_contract:
+                    issues.append(
+                        f"lifecycleTransitions[{index}] conflates ServerTravel with level streaming; these are "
+                        "different Unreal world-transition mechanisms and need separate lifecycle contracts"
+                    )
+                if travel_mode == "non-seamless":
+                    for field in ("reconstructionSource", "completionSignal"):
+                        if not str(row.get(field) or "").strip():
+                            issues.append(
+                                f"lifecycleTransitions[{index}] non-seamless travel requires {field} so "
+                                "destroyed world-owned state can be reconstructed and completion/failure observed"
+                            )
+
+        validation_text = " ".join([*string_fields["validationPlan"], *matrix_checks]).lower()
+        if client_initiated and not any(
+            marker in validation_text
+            for marker in ("rpc ownership", "owning connection", "rpc caller", "rpc call path")
+        ):
+            issues.append(
+                "network validation must test RPC caller ownership / owning-connection callability"
+            )
+
     staged_implementation = len(implementation) > 1 or bool(boundary_changes) or len(slices) > 1
     ownership = plan.get("ownership")
     required_ownership_fields = (
@@ -975,11 +1474,50 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             ]
         )
     )
+    repair_requirements: list[dict[str, str]] = []
+    repair_path_rules = (
+        ("absent from impacted surfaces/migration scope", "impactedSurfaces"),
+        ("Server RPC owner", "networking.rpcOwner"),
+        ("network validation must test", "validationPlan"),
+        ("staged architecture proposals require a non-empty migrationPlan", "migrationPlan"),
+        ("declared invariants missing validation coverage", "validationMatrix"),
+        ("networking.replicatedState[", "networking.replicatedState"),
+        ("requestPath", "networking.requestPath"),
+        ("rpcOwner", "networking.rpcOwner"),
+        ("owningConnection", "networking.owningConnection"),
+        ("networking fields", "networking"),
+        ("participant membership/roster", "stateInventory"),
+        ("mutable tracking collection", "stateInventory"),
+        ("stateInventory[", "stateInventory"),
+        ("travelMode", "lifecycleTransitions"),
+        ("lifecycleTransitions[", "lifecycleTransitions"),
+        ("lifecycleTransitions", "lifecycleTransitions"),
+        ("implementationSlices", "implementationSlices"),
+        ("validationMatrix[", "validationMatrix"),
+        ("ownership fields", "ownership"),
+        ("selectedAlternative", "selectedAlternative"),
+        ("alternatives", "alternatives"),
+    )
+    for issue in issues:
+        json_paths: list[str] = []
+        if "required implementation surface(s) are absent" in issue:
+            json_paths.extend(
+                ["networking.requestPath", "impactedSurfaces", "implementationSlices"]
+            )
+        for marker, candidate_path in repair_path_rules:
+            if marker in issue:
+                json_paths.append(candidate_path)
+                break
+        if not json_paths:
+            json_paths.append("proposal")
+        for json_path in dict.fromkeys(json_paths):
+            repair_requirements.append({"jsonPath": json_path, "constraint": issue})
     writes_allowed = not issues and not bool(cycles)
     return {
         "ok": not issues,
         "issues": issues,
         "warnings": warnings,
+        "repairRequirements": repair_requirements,
         "designContract": {
             "stagedImplementation": staged_implementation,
             "alternativeCount": len(alternatives),
@@ -997,6 +1535,13 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             "sliceDependencyCycle": slice_cycle,
             "alternativeComparison": alternative_comparison,
             "assetMigration": asset_migration,
+            "networkedProposal": networked_proposal,
+            "networkingComplete": networking_complete,
+            "rpcPathConcrete": rpc_path_concrete,
+            "stateInventoryCount": len(state_inventory),
+            "duplicateTruthSources": duplicate_truth_sources,
+            "lifecycleTransitionCount": len(lifecycle_transitions),
+            "lifecycleCoverageGaps": lifecycle_coverage_gaps,
         },
         "implementationGate": {
             "writesAllowed": writes_allowed,
@@ -1013,6 +1558,156 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         "proofBoundary": (
             "A complete design contract proves planning shape and traceability only. It does not prove "
             "the design is correct, the source candidates execute at runtime, or the implementation passes validation."
+        ),
+    }
+
+
+def _unreal_framework_contracts(
+    root: Path,
+    graph: dict[str, Any],
+    proposal: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Expose bounded Unreal GameFramework contracts and proposal symbol coverage.
+
+    Detection comes from project class inheritance, so this does not depend on a
+    project name, drive letter, engine install path, or operating system.
+    """
+    class_rows = [
+        row for row in graph.get("symbols") or []
+        if isinstance(row, dict) and row.get("symbol_kind") == "class"
+    ]
+    canonical_class_rows: dict[str, dict[str, Any]] = {}
+    for row in class_rows:
+        name = str(row.get("symbol_name") or "").strip()
+        if not name:
+            continue
+        previous = canonical_class_rows.get(name)
+        if previous is None or (
+            not str(previous.get("base_class") or "").strip()
+            and str(row.get("base_class") or "").strip()
+        ):
+            canonical_class_rows[name] = row
+    bases = {
+        name: str(row.get("base_class") or "").strip()
+        for name, row in canonical_class_rows.items()
+    }
+
+    def derives(type_name: str, targets: set[str]) -> bool:
+        current = type_name
+        visited: set[str] = set()
+        while current and current not in visited:
+            visited.add(current)
+            base = bases.get(current, current if current != type_name else "")
+            base = re.split(r"\s|,|<", base, maxsplit=1)[0].strip()
+            if base in targets:
+                return True
+            current = base
+        return False
+
+    game_state_types = sorted(
+        name for name in bases
+        if derives(name, {"AGameState", "AGameStateBase"})
+    )
+    game_mode_types = sorted(
+        name for name in bases
+        if derives(name, {"AGameMode", "AGameModeBase"})
+    )
+    player_state_types = sorted(
+        name for name in bases
+        if derives(name, {"APlayerState"})
+    )
+    player_controller_types = sorted(
+        name for name in bases
+        if derives(name, {"APlayerController"})
+    )
+    detected = bool(game_state_types or game_mode_types or player_state_types or player_controller_types)
+    if not detected:
+        return {"detected": False, "kind": "none", "requestPathSymbols": []}
+
+    class_files = {
+        name: _relative(root, str(row.get("file_path") or ""))
+        for name, row in canonical_class_rows.items()
+    }
+    function_rows = [
+        row for row in graph.get("symbols") or []
+        if isinstance(row, dict) and row.get("symbol_kind") == "function"
+    ]
+    request_path = (
+        ((proposal or {}).get("networking") or {}).get("requestPath")
+        if isinstance((proposal or {}).get("networking"), dict)
+        else []
+    )
+    references: list[str] = []
+    for hop in request_path or []:
+        for type_name, method_name in re.findall(
+            r"\b([AU][A-Za-z0-9_]+)::([A-Za-z_][A-Za-z0-9_]*)", str(hop)
+        ):
+            reference = f"{type_name}::{method_name}"
+            if reference not in references:
+                references.append(reference)
+
+    symbol_facts: list[dict[str, Any]] = []
+    for reference in references:
+        type_name, _method_name = reference.split("::", 1)
+        if type_name not in bases:
+            continue
+        matches = [
+            row for row in function_rows
+            if str(row.get("qualified_name") or "").lower() == reference.lower()
+        ]
+        declaration_files = sorted({
+            _relative(root, str(row.get("file_path") or ""))
+            for row in matches
+            if Path(str(row.get("file_path") or "")).suffix.lower() in {".h", ".hh", ".hpp", ".hxx"}
+        })
+        definition_files = sorted({
+            _relative(root, str(row.get("file_path") or ""))
+            for row in matches
+            if Path(str(row.get("file_path") or "")).suffix.lower() in {".c", ".cc", ".cpp", ".cxx"}
+        })
+        declaration_file = class_files.get(type_name, "")
+        companion_sources: list[str] = []
+        if declaration_file:
+            header = root / Path(declaration_file)
+            for suffix in (".cpp", ".cc", ".cxx"):
+                candidate = header.with_suffix(suffix)
+                if candidate.is_file():
+                    companion_sources.append(_relative(root, candidate))
+        required_surfaces: list[str] = []
+        if not declaration_files and declaration_file:
+            required_surfaces.append(declaration_file)
+        if not definition_files:
+            required_surfaces.extend(companion_sources or ([declaration_file] if declaration_file else []))
+        symbol_facts.append({
+            "symbol": reference,
+            "declarationFiles": declaration_files,
+            "definitionFiles": definition_files,
+            "requiredImplementationSurfaces": list(dict.fromkeys(required_surfaces)),
+        })
+
+    return {
+        "detected": True,
+        "kind": "UnrealGameFramework",
+        "gameModeTypes": game_mode_types,
+        "gameStateTypes": game_state_types,
+        "playerStateTypes": player_state_types,
+        "playerControllerTypes": player_controller_types,
+        "inheritedStateCollections": (
+            [{
+                "symbol": "AGameStateBase::PlayerArray",
+                "appliesTo": game_state_types,
+                "contract": (
+                    "GameStateBase maintains the replicated PlayerState collection for connected players; "
+                    "a second authoritative membership collection needs an explicit non-overlap contract, "
+                    "otherwise membership should reuse or derive from PlayerArray."
+                ),
+            }]
+            if game_state_types else []
+        ),
+        "requestPathSymbols": symbol_facts,
+        "proofBoundary": (
+            "Framework contracts are activated only by direct project inheritance evidence. "
+            "Project-specific behavior still requires direct source, build, test, or runtime proof."
         ),
     }
 
@@ -1063,6 +1758,7 @@ def analyze_architecture(
             "suppliedGraphRebuilt": bool(graph is not None and not graph_matches_root),
         },
         "topology": _topology(root, active_graph),
+        "frameworkContracts": _unreal_framework_contracts(root, active_graph, proposal),
         "dataFlow": analyze_data_flow(active_graph, focus_symbols),
         "stateTransitions": analyze_state_transitions(active_graph, focus_symbols),
         "lifecycle": analyze_lifecycle_boundaries(active_graph, focus_symbols),

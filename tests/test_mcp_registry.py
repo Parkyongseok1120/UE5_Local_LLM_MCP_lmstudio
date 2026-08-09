@@ -68,11 +68,12 @@ def test_public_schemas_cover_handler_consumed_arguments(tmp_path):
         },
         "unreal_render_report": {"diagramMode", "allowOverwrite"},
         "unreal_code_sketch_claim_validate": {"projectRoot", "targetFiles", "changeKind", "validationPlan", "architectureProposal", "architectureSymbols"},
-        "unreal_architecture_reasoning": {"projectRoot", "symbols", "proposal", "detailLevel"},
+        "unreal_architecture_reasoning": {
+            "projectRoot", "symbols", "proposal", "proposalPatch", "proposalRepairs", "baseProposalRevision",
+            "detailLevel", "sessionId",
+        },
         "unreal_feature_intent_resolve": {
-            "projectRoot", "targetFiles", "candidates", "selectedIntentId",
-            "selectionRationale", "blockingQuestionAnswers",
-            "taskAuthorization",
+            "selectedIntentId", "selectionRationale", "taskAuthorization",
         },
         "unreal_task_start": {"startBackgroundJob"},
         "unreal_architecture_decision_approve": {"approvalToken"},
@@ -85,3 +86,11 @@ def test_public_schemas_cover_handler_consumed_arguments(tmp_path):
 
     approval_schema = definitions["unreal_architecture_decision_approve"]["inputSchema"]
     assert "approvalToken" in approval_schema["required"]
+
+    repair_value = (
+        definitions["unreal_architecture_reasoning"]["inputSchema"]["properties"]
+        ["proposalRepairs"]["items"]["properties"]["value"]
+    )
+    assert {branch.get("type") for branch in repair_value["oneOf"]} == {
+        "string", "number", "boolean", "array", "object",
+    }

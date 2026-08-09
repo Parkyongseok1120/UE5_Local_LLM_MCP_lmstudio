@@ -60,6 +60,60 @@ _ROUTE_RECOVERY_ACTION_CODES = frozenset(
     }
 )
 
+_DIRECT_SOURCE_STOPWORDS = frozenset(
+    {
+        "about",
+        "active",
+        "analyze",
+        "architecture",
+        "current",
+        "existing",
+        "feature",
+        "implementation",
+        "investigate",
+        "project",
+        "review",
+        "source",
+        "structure",
+        "template",
+        "templates",
+        "unreal",
+    }
+)
+
+
+def _direct_source_search_term(query: str) -> str:
+    """Choose one bounded, project-neutral token for a direct source handoff."""
+
+    text = str(query or "")
+    for pattern in (
+        r"\b[UAFSTIE][A-Z][A-Za-z0-9_]{3,}\b",
+        r"\b[A-Za-z_][A-Za-z0-9_]*(?:GameMode|GameState|PlayerState|Subsystem|Component|Manager)\b",
+        r"\b[A-Za-z_][A-Za-z0-9_]{3,}\b",
+    ):
+        for match in re.finditer(pattern, text):
+            token = match.group(0)
+            if token.lower() not in _DIRECT_SOURCE_STOPWORDS:
+                return token[:96]
+    # `class` is intentionally generic: it works for unfamiliar projects
+    # without injecting a framework-specific architecture answer.
+    return "class"
+
+
+def _direct_source_handoff(query: str) -> dict[str, Any]:
+    args = {
+        "query": _direct_source_search_term(query),
+        "path": "project://Source",
+        "maxResults": 40,
+    }
+    return {
+        "requiredNextTool": "search_files",
+        "requiredNextToolArgs": args,
+        "nextAction": "search_files",
+        "nextActionArgs": args,
+        "nextActionIsTool": True,
+    }
+
 
 def _route_authorization_failure_payload(
     result: dict[str, Any], tool_name: str
@@ -363,6 +417,127 @@ def _architecture_proposal_schema() -> dict[str, Any]:
                 },
                 "additionalProperties": False,
             },
+            "networking": {
+                "type": "object",
+                "description": (
+                    "Required for networked proposals. Describe a concrete caller-to-authority "
+                    "path and owning-connection basis; do not use 'RPC or local call' placeholders."
+                ),
+                "properties": {
+                    "authorityOwner": {"type": "string", "minLength": 1},
+                    "clientInitiated": {"type": "boolean"},
+                    "requestPath": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "rpcOwner": {"type": "string", "minLength": 1},
+                    "owningConnection": {"type": "string", "minLength": 1},
+                    "serverValidation": {"type": "string", "minLength": 1},
+                    "replicatedState": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "description": (
+                            "Owner-qualified Type::Field references for client-visible replicated state. "
+                            "Do not list server-only GameMode fields as replicated state."
+                        ),
+                    },
+                },
+                "required": ["authorityOwner", "clientInitiated", "replicatedState"],
+                "additionalProperties": False,
+            },
+            "stateInventory": {
+                "type": "array",
+                "description": (
+                    "Authoritative and derived state inventory used to detect duplicate truth sources."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "state": {"type": "string", "minLength": 1},
+                        "owner": {"type": "string", "minLength": 1},
+                        "lifetime": {"type": "string", "minLength": 1},
+                        "authority": {"type": "string", "minLength": 1},
+                        "source": {
+                            "type": "string",
+                            "enum": ["existing", "new", "derived"],
+                        },
+                        "cleanup": {"type": "string", "minLength": 1},
+                        "derivedFrom": {"type": "string"},
+                        "frameworkRelation": {
+                            "type": "string",
+                            "description": (
+                                "How this state reuses, derives from, or has a provably non-overlapping "
+                                "lifetime from an inherited framework state collection."
+                            ),
+                        },
+                        "validValues": {
+                            "type": "string",
+                            "description": "Allowed identity values or range when this row stores identity.",
+                        },
+                        "invalidValue": {
+                            "type": "string",
+                            "description": "Out-of-range/unambiguous cleared identity value.",
+                        },
+                        "assignmentPolicy": {
+                            "type": "string",
+                            "description": "Authoritative assignment and collision policy for identity state.",
+                        },
+                        "reusePolicy": {
+                            "type": "string",
+                            "description": "Leave/restart cleanup and safe reuse policy for identity state.",
+                        },
+                        "sourceEvidence": {
+                            "type": "string",
+                            "description": (
+                                "Direct project/framework source location or inherited engine state that proves "
+                                "an 'existing' truth source; required for participant/roster state claims."
+                            ),
+                        },
+                    },
+                    "required": [
+                        "state", "owner", "lifetime", "authority", "source", "cleanup"
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "lifecycleTransitions": {
+                "type": "array",
+                "description": (
+                    "Lifecycle event contracts with explicit commit, cleanup, and failure recovery."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "event": {"type": "string", "minLength": 1},
+                        "owner": {"type": "string", "minLength": 1},
+                        "preconditions": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                            "minItems": 1,
+                        },
+                        "commitPoint": {"type": "string", "minLength": 1},
+                        "failureRecovery": {"type": "string", "minLength": 1},
+                        "cleanup": {"type": "string", "minLength": 1},
+                        "travelMode": {
+                            "type": "string",
+                            "enum": ["seamless", "non-seamless"],
+                        },
+                        "reconstructionSource": {
+                            "type": "string",
+                            "description": "Canonical source used to rebuild state after non-seamless travel.",
+                        },
+                        "completionSignal": {
+                            "type": "string",
+                            "description": "Observable acceptance/post-load signal used to distinguish success and failure.",
+                        },
+                    },
+                    "required": [
+                        "event", "owner", "preconditions", "commitPoint",
+                        "failureRecovery", "cleanup"
+                    ],
+                    "additionalProperties": False,
+                },
+            },
             "migrationPlan": {
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
@@ -468,12 +643,179 @@ def _task_authorization_schema() -> dict[str, Any]:
                 "description": "Public chat scope label. Not sufficient for ownership alone.",
             },
             "planId": {"type": "string"},
-            "planRevision": {"type": "string"},
+            "planRevision": {
+                "type": ["string", "integer"],
+                "description": (
+                    "Server-issued plan revision. Integer and numeric-string forms are equivalent."
+                ),
+            },
             "activeSliceId": {"type": "string"},
             "routeHash": {"type": "string"},
             "routePhase": {"type": "string"},
         },
         "required": [
+            "taskSessionId",
+            "ownerCapability",
+        ],
+        "additionalProperties": False,
+        "description": (
+            "Compact task ownership authorization. taskSessionId and ownerCapability are "
+            "stable across route changes; the server refreshes all optional route fields "
+            "from current task state before dispatch."
+        ),
+    }
+
+
+def _architecture_proposal_patch_schema() -> dict[str, Any]:
+    schema = _architecture_proposal_schema()
+    schema.pop("required", None)
+    schema["description"] = (
+        "Compact revision of the last proposal stored for this session. Only include changed top-level "
+        "fields; nested objects merge recursively while arrays replace the prior array."
+    )
+    return schema
+
+
+def _architecture_proposal_repairs_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 24,
+        "description": (
+            "Preferred after proposal validation fails: atomically replace every unique dotted jsonPath value "
+            "named by repairSubmission.requiredJsonPaths. Include each path exactly once. For an array field, "
+            "one repair value is the complete replacement array; never repeat the path for individual rows."
+        ),
+        "items": {
+            "type": "object",
+            "properties": {
+                "jsonPath": {
+                    "type": "string",
+                    "pattern": r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$",
+                },
+                "value": {
+                    "description": (
+                        "Complete replacement value for jsonPath. Preserve the field's declared JSON type."
+                    ),
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "number"},
+                        {"type": "boolean"},
+                        {
+                            "type": "array",
+                            "items": {
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {"type": "number"},
+                                    {"type": "boolean"},
+                                    {"type": "array"},
+                                    {"type": "object", "additionalProperties": True},
+                                ]
+                            },
+                        },
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                },
+            },
+            "required": ["jsonPath", "value"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _architecture_repair_value_schema(json_path: str) -> dict[str, Any]:
+    node = _architecture_proposal_schema()
+    for part in str(json_path or "").split("."):
+        properties = node.get("properties") if isinstance(node, dict) else None
+        if not isinstance(properties, dict) or part not in properties:
+            return {}
+        node = properties[part]
+    return node if isinstance(node, dict) else {}
+
+
+def _architecture_repair_placeholder(json_path: str) -> Any:
+    expected_type = _architecture_repair_value_schema(json_path).get("type")
+    if expected_type == "array":
+        return ["<complete replacement array; expand each item to the field schema>"]
+    if expected_type == "object":
+        return {}
+    if expected_type == "boolean":
+        return False
+    if expected_type in {"number", "integer"}:
+        return 0
+    return "<replacement value satisfying the returned constraint>"
+
+
+def _architecture_repair_submission(
+    proposal_revision: str, repair_requirements: list[dict[str, Any]]
+) -> dict[str, Any]:
+    paths = list(
+        dict.fromkeys(
+            str(row.get("jsonPath") or "").strip()
+            for row in repair_requirements
+            if isinstance(row, dict)
+            and str(row.get("jsonPath") or "").strip()
+            and str(row.get("jsonPath") or "").strip() != "proposal"
+        )
+    )[:24]
+    constraints_by_path: dict[str, list[str]] = {path: [] for path in paths}
+    for row in repair_requirements:
+        if not isinstance(row, dict):
+            continue
+        path = str(row.get("jsonPath") or "").strip()
+        constraint = str(row.get("constraint") or "").strip()
+        if path in constraints_by_path and constraint:
+            constraints_by_path[path].append(constraint[:500])
+    return {
+        "mode": "proposalRepairs",
+        "baseProposalRevision": proposal_revision,
+        "requiredJsonPaths": paths,
+        "requiredRepairs": [
+            {
+                "jsonPath": path,
+                "expectedType": str(_architecture_repair_value_schema(path).get("type") or "any"),
+                "constraints": constraints_by_path[path],
+            }
+            for path in paths
+        ],
+        "argumentShape": {
+            "baseProposalRevision": proposal_revision,
+            "proposalRepairs": [
+                {
+                    "jsonPath": path,
+                    "value": _architecture_repair_placeholder(path),
+                }
+                for path in paths
+            ],
+        },
+    }
+
+
+def _checkpoint_authorization_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "taskSessionId": {"type": "string"},
+            "ownerCapability": {
+                "type": "string",
+                "description": "Secret ownership token from the active task.",
+            },
+        },
+        "required": ["taskSessionId", "ownerCapability"],
+        "additionalProperties": False,
+        "description": (
+            "Compact route ownership authorization. The server resolves current plan, token, "
+            "slice, and route fields from task state."
+        ),
+    }
+
+
+def _has_complete_task_authorization(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return all(
+        str(value.get(field) or "").strip()
+        for field in (
             "taskSessionId",
             "authToken",
             "ownerCapability",
@@ -482,13 +824,30 @@ def _task_authorization_schema() -> dict[str, Any]:
             "activeSliceId",
             "routeHash",
             "routePhase",
-        ],
-        "additionalProperties": False,
-        "description": (
-            "Server-issued taskAuthorization from unreal_task_start / checkpoint / stale-auth "
-            "refresh. Include ownerCapability for multi-chat route ownership."
-        ),
-    }
+        )
+    )
+
+
+def _has_task_route_ownership(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return all(
+        str(value.get(field) or "").strip()
+        for field in ("taskSessionId", "ownerCapability")
+    )
+
+
+def _refresh_argument_task_authorization(
+    arguments: dict[str, Any],
+    route_authorization: dict[str, Any],
+) -> None:
+    """Replace compact or stale caller auth before the tool handler sees it."""
+
+    current = route_authorization.get("taskAuthorization")
+    if not isinstance(current, dict) or not _has_complete_task_authorization(current):
+        return
+    arguments["taskAuthorization"] = dict(current)
+    arguments.pop("task_authorization", None)
 
 
 def _record_prewrite_gate(
@@ -735,8 +1094,35 @@ def _handle_unreal_feature_intent_resolve(
     arguments: dict[str, Any],
 ) -> None:
     request = str(arguments.get("request") or "").strip()
+    raw_target_files = arguments.get("targetFiles")
+    authorization = (
+        arguments.get("taskAuthorization")
+        if isinstance(arguments.get("taskAuthorization"), dict)
+        else {}
+    )
+    task_session_id = str(authorization.get("taskSessionId") or "").strip()
+    task_state: dict[str, Any] = {}
+    if task_session_id and (not request or not raw_target_files):
+        from task_api import task_status
+
+        status = task_status(server.workspace, task_session_id)
+        task_state = status.get("state") if isinstance(status.get("state"), dict) else {}
+        if not request:
+            request = str(task_state.get("request") or "").strip()
+        if not raw_target_files:
+            route = (
+                task_state.get("toolRoute")
+                if isinstance(task_state.get("toolRoute"), dict)
+                else {}
+            )
+            selected_slice = (
+                route.get("selectedSlice")
+                if isinstance(route.get("selectedSlice"), dict)
+                else {}
+            )
+            raw_target_files = selected_slice.get("files")
     target_files, argument_error = _string_list_argument(
-        arguments.get("targetFiles"),
+        raw_target_files,
         "targetFiles",
     )
     if argument_error:
@@ -748,6 +1134,15 @@ def _handle_unreal_feature_intent_resolve(
         )
         return
     project_root = str(arguments.get("projectRoot") or "").strip()
+    if not project_root and task_state:
+        task_project = str(task_state.get("projectFile") or "").strip()
+        if task_project:
+            task_project_path = Path(task_project).expanduser().resolve()
+            project_root = str(
+                task_project_path.parent
+                if task_project_path.suffix.lower() == ".uproject"
+                else task_project_path
+            )
     if not project_root:
         active = str(load_shared_config().get("activeProject") or "").strip()
         if active:
@@ -909,7 +1304,44 @@ def _handle_unreal_code_sketch_claim_validate(
         server.tool_result(message_id, "Missing required argument: sketch", is_error=True)
         return
     oversized = len(sketch) > MAX_SKETCH_CHARS
+    authorization = (
+        arguments.get("taskAuthorization")
+        if isinstance(arguments.get("taskAuthorization"), dict)
+        else {}
+    )
+    task_state: dict[str, Any] = {}
+    raw_target_files = arguments.get("targetFiles")
+    request_text = str(arguments.get("request") or "").strip()
+    task_session_id = str(authorization.get("taskSessionId") or "").strip()
+    if task_session_id and (not request_text or not raw_target_files):
+        from task_api import task_status
+
+        status = task_status(server.workspace, task_session_id)
+        task_state = status.get("state") if isinstance(status.get("state"), dict) else {}
+        if not request_text:
+            request_text = str(task_state.get("request") or "").strip()
+        if not raw_target_files:
+            route = (
+                task_state.get("toolRoute")
+                if isinstance(task_state.get("toolRoute"), dict)
+                else {}
+            )
+            selected_slice = (
+                route.get("selectedSlice")
+                if isinstance(route.get("selectedSlice"), dict)
+                else {}
+            )
+            raw_target_files = selected_slice.get("files")
     project_root = str(arguments.get("projectRoot") or "").strip()
+    if not project_root and task_state:
+        task_project = str(task_state.get("projectFile") or "").strip()
+        if task_project:
+            task_path = Path(task_project).expanduser().resolve()
+            project_root = str(
+                task_path.parent
+                if task_path.suffix.lower() == ".uproject"
+                else task_path
+            )
     if not project_root and not oversized:
         active = str(load_shared_config().get("activeProject") or "").strip()
         if active:
@@ -918,11 +1350,10 @@ def _handle_unreal_code_sketch_claim_validate(
     target_files: list[str] = []
     validation_plan: list[str] = []
     if not oversized:
-        target_files, argument_error = _string_list_argument(arguments.get("targetFiles"), "targetFiles")
+        target_files, argument_error = _string_list_argument(raw_target_files, "targetFiles")
         if argument_error:
             _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
             return
-        authorization = arguments.get("taskAuthorization") or arguments.get("task_authorization")
         if isinstance(authorization, dict):
             from task_api import task_validate_build_recovery_sketch
 
@@ -1022,11 +1453,14 @@ def _handle_unreal_code_sketch_claim_validate(
     declaration_context = ""
     declaration_context_files: list[str] = []
     if not oversized:
+        effective_change_kind = str(arguments.get("changeKind") or "").strip()
+        if not effective_change_kind:
+            effective_change_kind = "multifile" if len(target_files) > 1 else "modify_existing"
         generation_contract = build_generation_contract(
-            str(arguments.get("request") or sketch),
+            request_text or sketch,
             project_root=project_root or None,
             target_files=target_files,
-            change_kind=str(arguments.get("changeKind") or "modify_existing"),
+            change_kind=effective_change_kind,
             validation_plan=validation_plan,
             graph=graph,
         )
@@ -1205,12 +1639,20 @@ def _handle_unreal_code_sketch_claim_validate(
             declaration_context_files.append(raw_path)
         declaration_context = "\n".join(context_chunks)
 
+    shared_config = load_shared_config()
+    engine_root = str(
+        arguments.get("engineRoot")
+        or os.environ.get("UNREAL_ENGINE_ROOT")
+        or shared_config.get("defaultEngineRoot")
+        or ""
+    ).strip()
     payload = validate_sketch(
         sketch,
         server.index,
         top_k=max(1, min(16, int(arguments.get("topK") or 5))),
         graph=graph,
         declaration_context=declaration_context,
+        engine_root=engine_root or None,
     )
     payload["graphStatus"] = graph_status
     payload["declarationContext"] = {
@@ -1257,7 +1699,10 @@ def _handle_unreal_code_sketch_claim_validate(
         payload["generationContract"] = {
             "ok": False,
             "mode": "blocked",
-            "changeKind": str(arguments.get("changeKind") or "modify_existing"),
+            "changeKind": (
+                str(arguments.get("changeKind") or "").strip()
+                or ("multifile" if len(target_files) > 1 else "modify_existing")
+            ),
             "projectRoot": project_root,
             "projectSpecific": False,
             "targets": [],
@@ -1579,7 +2024,267 @@ def _handle_unreal_architecture_reasoning(
         _invalid_tool_argument(server, message_id, "unreal_architecture_reasoning", argument_error)
         return
     proposal = arguments.get("proposal")
+    proposal_patch = arguments.get("proposalPatch")
+    proposal_repairs = arguments.get("proposalRepairs")
     detail_level = str(arguments.get("detailLevel") or "compact")
+    proposal_delivery_key = ""
+    proposal_session_id = str(
+        arguments.get("sessionId") or arguments.get("session_id") or ""
+    ).strip()
+    proposal_patch_applied = False
+    proposal_repairs_applied = False
+    supplied_proposal_modes = sum(
+        value is not None for value in (proposal, proposal_patch, proposal_repairs)
+    )
+    if supplied_proposal_modes > 1:
+        _invalid_tool_argument(
+            server,
+            message_id,
+            "unreal_architecture_reasoning",
+            "Supply exactly one of proposal, proposalPatch, or proposalRepairs.",
+        )
+        return
+    if proposal_patch is not None or proposal_repairs is not None:
+        if proposal_patch is not None and not isinstance(proposal_patch, dict):
+            _invalid_tool_argument(
+                server, message_id, "unreal_architecture_reasoning", "proposalPatch must be an object"
+            )
+            return
+        if proposal_repairs is not None and (
+            not isinstance(proposal_repairs, list)
+            or not proposal_repairs
+            or not all(isinstance(row, dict) for row in proposal_repairs)
+        ):
+            _invalid_tool_argument(
+                server,
+                message_id,
+                "unreal_architecture_reasoning",
+                "proposalRepairs must be a non-empty array of {jsonPath, value} objects",
+            )
+            return
+        from architecture_proposal_store import (
+            apply_proposal_repairs,
+            load_proposal_draft,
+            merge_proposal_patch,
+        )
+
+        stored = load_proposal_draft(proposal_session_id, project_root)
+        if stored is None:
+            server.structured_tool_result(
+                message_id,
+                {
+                    "ok": False,
+                    "errorCode": "ARCHITECTURE_PROPOSAL_BASE_MISSING",
+                    "retryable": True,
+                    "requiredNextAction": "submit_full_architecture_proposal",
+                    "nextActionIsTool": False,
+                    "agentInstruction": (
+                        "No stored proposal exists for this session/project. Submit one compact full proposal, "
+                        "then use proposalPatch for later revisions."
+                    ),
+                },
+            )
+            return
+        expected_revision = str(arguments.get("baseProposalRevision") or "").strip()
+        if expected_revision and expected_revision != stored["revision"]:
+            server.structured_tool_result(
+                message_id,
+                {
+                    "ok": False,
+                    "errorCode": "ARCHITECTURE_PROPOSAL_REVISION_CONFLICT",
+                    "retryable": True,
+                    "proposalRevision": stored["revision"],
+                    "requiredNextAction": "rebase_architecture_proposal_patch",
+                    "nextActionIsTool": False,
+                },
+            )
+            return
+        if proposal_patch is not None:
+            proposal = merge_proposal_patch(stored["proposal"], proposal_patch)
+            proposal_patch_applied = True
+        else:
+            current_analysis = analyze_architecture(
+                project_root,
+                symbols=symbols,
+                proposal=stored["proposal"],
+            )
+            current_validation = current_analysis.get("proposalValidation") or {}
+            current_repairs = list(current_validation.get("repairRequirements") or [])[:24]
+            allowed_paths = {
+                str(row.get("jsonPath") or "").strip()
+                for row in current_repairs
+                if isinstance(row, dict)
+                and str(row.get("jsonPath") or "").strip()
+                and str(row.get("jsonPath") or "").strip() != "proposal"
+            }
+            submitted_paths = [
+                str(row.get("jsonPath") or "").strip() for row in proposal_repairs
+            ]
+            duplicate_paths = sorted(
+                {path for path in submitted_paths if submitted_paths.count(path) > 1}
+            )
+            unexpected_paths = sorted(
+                {path for path in submitted_paths if path not in allowed_paths}
+            )
+            missing_paths = sorted(allowed_paths - set(submitted_paths))
+            value_type_errors: list[dict[str, str]] = []
+            python_types = {
+                "array": list,
+                "object": dict,
+                "string": str,
+                "boolean": bool,
+                "number": (int, float),
+                "integer": int,
+            }
+            for row in proposal_repairs:
+                path = str(row.get("jsonPath") or "").strip()
+                expected_type = str(_architecture_repair_value_schema(path).get("type") or "")
+                expected_python_type = python_types.get(expected_type)
+                value = row.get("value")
+                if expected_python_type is not None and not isinstance(value, expected_python_type):
+                    value_type_errors.append(
+                        {
+                            "jsonPath": path,
+                            "expectedType": expected_type,
+                            "actualType": type(value).__name__,
+                        }
+                    )
+            if unexpected_paths or missing_paths or duplicate_paths or value_type_errors:
+                server.structured_tool_result(
+                    message_id,
+                    {
+                        "ok": False,
+                        "errorCode": "ARCHITECTURE_PROPOSAL_REPAIR_PATH_MISMATCH",
+                        "retryable": True,
+                        "proposalRevision": stored["revision"],
+                        "proposalValidation": {
+                            "ok": False,
+                            "issues": list(current_validation.get("issues") or [])[:24],
+                            "repairRequirements": current_repairs,
+                        },
+                        "unexpectedJsonPaths": unexpected_paths,
+                        "missingJsonPaths": missing_paths,
+                        "duplicateJsonPaths": duplicate_paths,
+                        "valueTypeErrors": value_type_errors,
+                        "repairSubmission": _architecture_repair_submission(
+                            stored["revision"], current_repairs
+                        ),
+                        "requiredNextAction": "submit_exact_architecture_repairs",
+                        "nextActionIsTool": False,
+                        "agentInstruction": (
+                            "Call this tool once with every requiredJsonPaths entry exactly once and no other paths. "
+                            "Fill each value with your own corrected design. An array path takes one complete array "
+                            "value, not repeated entries. The rejected repair was not applied."
+                        ),
+                    },
+                )
+                return
+            try:
+                proposal = apply_proposal_repairs(stored["proposal"], proposal_repairs)
+            except ValueError as exc:
+                _invalid_tool_argument(
+                    server, message_id, "unreal_architecture_reasoning", str(exc)
+                )
+                return
+            proposal_repairs_applied = True
+    effective_arguments = dict(arguments)
+    if isinstance(proposal, dict):
+        effective_arguments["proposal"] = proposal
+        effective_arguments.pop("proposalPatch", None)
+        effective_arguments.pop("proposalRepairs", None)
+    if isinstance(proposal, dict):
+        from read_query_history import check_repeat_query, exact_query_fingerprint
+
+        proposal_delivery_key = exact_query_fingerprint(
+            tool="unreal_architecture_reasoning",
+            active_project=project_root,
+            query=json.dumps(proposal, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            mode="architecture_proposal",
+            scope="project",
+            detail_level="proposal",
+            top_k=1,
+            hybrid=False,
+            index_path=server.index,
+            session_id=proposal_session_id,
+        )
+        repeat = check_repeat_query(proposal_delivery_key)
+        if repeat.get("repeatDetected"):
+            from architecture_proposal_store import proposal_revision
+
+            # Revalidate the durable merged draft so an unchanged retry still
+            # returns the exact current repair contract.  Without this bounded
+            # payload, hard context compaction can preserve only the error code
+            # and revision, causing smaller local models to regenerate the same
+            # patch indefinitely.
+            current_analysis = analyze_architecture(
+                project_root,
+                symbols=symbols,
+                proposal=proposal,
+            )
+            current_validation = current_analysis.get("proposalValidation") or {}
+            current_repairs = list(current_validation.get("repairRequirements") or [])[:24]
+
+            server.structured_tool_result(
+                message_id,
+                {
+                    "ok": False,
+                    "errorCode": "ARCHITECTURE_PROPOSAL_UNCHANGED",
+                    "retryable": True,
+                    "stopCurrentWorkflow": False,
+                    "doNotRetryUnchanged": True,
+                    "requiredNextAction": "revise_architecture_proposal",
+                    "nextActionIsTool": False,
+                    "proposalRevision": proposal_revision(proposal),
+                    "proposalValidation": {
+                        "ok": False,
+                        "issues": list(current_validation.get("issues") or [])[:24],
+                        "repairRequirements": current_repairs,
+                    },
+                    "rejectedPatchFields": (
+                        sorted(str(key) for key in (proposal_patch or {}).keys())
+                        if proposal_patch is not None
+                        else [str(row.get("jsonPath") or "") for row in (proposal_repairs or [])]
+                    ),
+                    "repairSubmission": _architecture_repair_submission(
+                        proposal_revision(proposal), current_repairs
+                    ),
+                    "message": "The identical architecture proposal was already validated in this chat.",
+                    "agentInstruction": (
+                        "Do not resubmit the same proposalPatch. Call this tool once using the returned "
+                        "repairSubmission.argumentShape: include every path exactly once, keep each jsonPath "
+                        "unchanged, and replace only its placeholder value with your own corrected design. "
+                        "For array paths, provide one complete replacement array."
+                    ),
+                },
+            )
+            return
+
+    def record_proposal_delivery() -> None:
+        if not proposal_delivery_key:
+            return
+        from read_query_history import record_query_delivery
+
+        record_query_delivery(
+            proposal_delivery_key,
+            detail_level="proposal",
+            match_count=1,
+            active_project=project_root,
+            mode="architecture_proposal",
+            index_path=server.index,
+            session_id=proposal_session_id,
+        )
+
+    def persist_proposal_draft(payload: dict[str, Any]) -> None:
+        if not isinstance(proposal, dict):
+            return
+        from architecture_proposal_store import save_proposal_draft
+
+        payload["proposalRevision"] = save_proposal_draft(
+            proposal_session_id, project_root, proposal
+        )
+        payload["proposalPatchApplied"] = proposal_patch_applied
+        payload["proposalRepairsApplied"] = proposal_repairs_applied
+
     started = time.perf_counter()
     if not project_root:
         payload = analyze_architecture(
@@ -1595,12 +2300,14 @@ def _handle_unreal_architecture_reasoning(
         gate_completion = _record_prewrite_gate(
             server,
             gate_name="unreal_architecture_reasoning",
-            arguments=arguments,
+            arguments=effective_arguments,
             evidence=payload,
             gate_passed=False,
         )
         if gate_completion is not None:
             payload["gateCompletion"] = gate_completion
+        persist_proposal_draft(payload)
+        record_proposal_delivery()
         server.structured_tool_result(
             message_id,
             compact_architecture_payload(payload, detail_level),
@@ -1628,6 +2335,18 @@ def _handle_unreal_architecture_reasoning(
         if isinstance(proposal_validation, dict)
         else {}
     )
+    if isinstance(proposal_validation, dict) and proposal_validation.get("ok") is not True:
+        payload["ok"] = False
+        payload["errorCode"] = "ARCHITECTURE_PROPOSAL_INVALID"
+        payload["retryable"] = True
+        payload["stopCurrentWorkflow"] = False
+        payload["requiredNextAction"] = "revise_architecture_proposal"
+        payload["nextActionIsTool"] = False
+        payload["agentInstruction"] = (
+            "Use repairSubmission.argumentShape on the next call. Include every required path exactly once, "
+            "keep its jsonPath string unchanged, and replace only placeholder values with your own corrected design. "
+            "For an array path provide one complete replacement array; do not repeat that path per item."
+        )
     gate_passed = bool(
         payload.get("ok")
         and (payload.get("graphEvidence") or {}).get("complete") is not False
@@ -1642,12 +2361,19 @@ def _handle_unreal_architecture_reasoning(
     gate_completion = _record_prewrite_gate(
         server,
         gate_name="unreal_architecture_reasoning",
-        arguments=arguments,
+        arguments=effective_arguments,
         evidence=payload,
         gate_passed=gate_passed,
     )
     if gate_completion is not None:
         payload["gateCompletion"] = gate_completion
+    persist_proposal_draft(payload)
+    if isinstance(proposal_validation, dict) and proposal_validation.get("ok") is not True:
+        payload["repairSubmission"] = _architecture_repair_submission(
+            str(payload.get("proposalRevision") or ""),
+            list(proposal_validation.get("repairRequirements") or [])[:24],
+        )
+    record_proposal_delivery()
     server.structured_tool_result(
         message_id,
         compact_architecture_payload(payload, detail_level),
@@ -2051,15 +2777,28 @@ def build_mcp_tool_registry() -> McpToolRegistry:
             schema_dict={
                 "projectRoot": {"type": "string", "description": "Optional project root/.uproject; defaults to active project."},
                 "symbols": {"type": "array", "items": {"type": "string"}, "description": "Optional symbols to focus data-flow/state analysis on."},
+                "sessionId": {
+                    "type": "string",
+                    "description": "Stable chat session id injected by the context plugin for unchanged-proposal suppression.",
+                },
                 "detailLevel": {
                     "type": "string",
                     "enum": ["compact", "standard", "full"],
                     "default": "compact",
-                    "description": "Response detail. Safety/proposal gates are never compacted away.",
+                    "description": (
+                        "Response detail. Safety/proposal gates are never compacted away; "
+                        "all levels retain a portable hard response bound."
+                    ),
                 },
                 "proposal": {
                     **_architecture_proposal_schema(),
                     "description": "Optional architecture proposal with explicit design and validation obligations.",
+                },
+                "proposalPatch": _architecture_proposal_patch_schema(),
+                "proposalRepairs": _architecture_proposal_repairs_schema(),
+                "baseProposalRevision": {
+                    "type": "string",
+                    "description": "Revision returned with the stored proposal being patched.",
                 },
                 "taskAuthorization": _task_authorization_schema(),
             },
@@ -2251,6 +2990,8 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_task_quarantine_corrupt",
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
+        "unreal_task_define_slices",
+        "unreal_task_resume",
         "unreal_task_cancel",
     }
 )
@@ -2258,7 +2999,6 @@ ESSENTIAL_TOOL_NAMES = frozenset(
 STABLE_HIDDEN_TOOL_NAMES = frozenset(
     {
         "unreal_task_start",
-        "unreal_task_resume",
         "unreal_task_approve",
         "unreal_project_prepare",
         "unreal_job_log_read",
@@ -2595,10 +3335,41 @@ class McpServer:
 
     def all_tool_definitions(self) -> list[dict[str, Any]]:
         from tool_exposure import callable_rag_tool_names
+        from task_api import list_tools_route_context
 
         tools = self._route_aware_tool_definitions(
             self._all_tool_definitions_unfiltered()
         )
+        active_project = str(
+            load_shared_config().get("activeProject") or ""
+        ).strip()
+        route_context = list_tools_route_context(
+            self.workspace,
+            active_project=active_project,
+        )
+        if str(route_context.get("status") or "") == "active":
+            for tool in tools:
+                if tool.get("name") != "unreal_code_sketch_claim_validate":
+                    continue
+                full_schema = tool.get("inputSchema") or {}
+                full_properties = full_schema.get("properties") or {}
+                tool["description"] = (
+                    "Validate one concise claim-bearing sketch for the active task slice. "
+                    "The server binds the task request, project, target files, and change kind; "
+                    "pass only sketch, optional validationPlan, and taskAuthorization."
+                )
+                tool["inputSchema"] = self._schema(
+                    {
+                        "sketch": full_properties.get("sketch", {"type": "string"}),
+                        "validationPlan": full_properties.get(
+                            "validationPlan",
+                            {"type": "array", "items": {"type": "string"}},
+                        ),
+                        "taskAuthorization": _task_authorization_schema(),
+                    },
+                    ["sketch", "taskAuthorization"],
+                )
+                break
         all_names = [tool["name"] for tool in tools]
         allowed = callable_rag_tool_names(all_names)
         # Advertised catalog is profile ∩ control-plane visibility only.
@@ -2764,6 +3535,7 @@ class McpServer:
                             ),
                         },
                         "sessionId": {"type": "string"},
+                        "taskAuthorization": _checkpoint_authorization_schema(),
                     },
                     ["query"],
                 ),
@@ -2790,6 +3562,7 @@ class McpServer:
                             "default": "compact",
                             "description": "Symbol lookup evidence tier (same as unreal_rag_search detailLevel).",
                         },
+                        "taskAuthorization": _checkpoint_authorization_schema(),
                     },
                     ["query"],
                 ),
@@ -3225,6 +3998,13 @@ class McpServer:
                     {
                         "projectRoot": {"type": "string", "description": "Optional project root/.uproject; defaults to active project."},
                         "symbols": {"type": "array", "items": {"type": "string"}, "description": "Optional symbols to focus on."},
+                        "sessionId": {
+                            "type": "string",
+                            "description": (
+                                "Stable chat session id. Context generators may inject this to "
+                                "scope unchanged-proposal suppression across MCP restarts."
+                            ),
+                        },
                         "detailLevel": {
                             "type": "string",
                             "enum": ["compact", "standard", "full"],
@@ -3235,6 +4015,12 @@ class McpServer:
                             **_architecture_proposal_schema(),
                             "description": "Optional architecture proposal to validate before implementation.",
                         },
+                        "proposalPatch": _architecture_proposal_patch_schema(),
+                        "proposalRepairs": _architecture_proposal_repairs_schema(),
+                        "baseProposalRevision": {
+                            "type": "string",
+                            "description": "Revision returned with the stored proposal being patched.",
+                        },
                         "taskAuthorization": _task_authorization_schema(),
                     },
                 ),
@@ -3243,7 +4029,9 @@ class McpServer:
                 "name": "unreal_feature_intent_resolve",
                 "title": "Resolve Ambiguous Feature Intent",
                 "description": (
-                    "Generate or normalize three to five deterministic feature-intent "
+                    "For an active task, pass only the current taskAuthorization; the server "
+                    "binds the original request and active slice files. Generate or normalize "
+                    "three to five deterministic feature-intent "
                     "candidates, require explicit observer/oracle acceptance criteria, "
                     "resolve ties and blocking questions fail-closed, and bind the selected "
                     "intent to the active task plan, checkpoint, and exact target snapshots. "
@@ -3251,39 +4039,17 @@ class McpServer:
                 ),
                 "inputSchema": self._schema(
                     {
-                        "request": {"type": "string", "minLength": 1},
-                        "projectRoot": {
+                        "selectedIntentId": {
                             "type": "string",
-                            "description": "Project root/.uproject; defaults to activeProject.",
+                            "description": "Eligible intentId returned by a prior blocked selection response.",
                         },
-                        "targetFiles": {
-                            "type": "array",
-                            "items": {"type": "string", "minLength": 1},
-                            "minItems": 1,
-                            "description": "Exact project-relative targets covered by the selected intent.",
-                        },
-                        "candidateCount": {
-                            "type": "integer",
-                            "minimum": 3,
-                            "maximum": 5,
-                            "default": 3,
-                        },
-                        "candidates": {
-                            "type": "array",
-                            "minItems": 3,
-                            "maxItems": 5,
-                            "items": {"type": "object"},
-                            "description": "Optional explicit candidates; server recomputes eligibility and score.",
-                        },
-                        "selectedIntentId": {"type": "string"},
-                        "selectionRationale": {"type": "string"},
-                        "blockingQuestionAnswers": {
-                            "type": "object",
-                            "additionalProperties": {"type": "string"},
+                        "selectionRationale": {
+                            "type": "string",
+                            "description": "Why the selected intent matches the explicit task contract.",
                         },
                         "taskAuthorization": _task_authorization_schema(),
                     },
-                    ["request", "targetFiles"],
+                    ["taskAuthorization"],
                 ),
             },
             {
@@ -3444,8 +4210,8 @@ class McpServer:
                 "description": (
                     "Anti-hallucination check for plain-chat code sketches (시안). "
                     "Extracts Unreal-style symbols and member calls from drafted code, "
-                    "verifies each against the local symbol index, and flags invented "
-                    "APIs (denylist) and unverified names. Call this BEFORE presenting "
+                    "verifies each against the project/index evidence and version-local Engine headers, and flags invented "
+                    "APIs (denylist) and unresolved names. An index miss is reported as coverage missing, not API absence. Call this BEFORE presenting "
                     "compile-ready code. known_bad, unverified, weak, and skipped_graph are all hard "
                     "write-gate blockers. On failure follow firstBlocker + nextAction exactly and never "
                     "rerun an unchanged sketch. Optional targetFiles/projectRoot additionally produce a source-backed "
@@ -3468,6 +4234,7 @@ class McpServer:
                         "topK": {"type": "integer", "minimum": 1, "maximum": 16, "default": 5},
                         "request": {"type": "string", "description": "User intent for the source-backed generation contract."},
                         "projectRoot": {"type": "string", "description": "Optional project root/.uproject; defaults to active project."},
+                        "engineRoot": {"type": "string", "description": "Optional Unreal Engine root for exact header fallback; defaults to configured/environment engine root."},
                         "targetFiles": {"type": "array", "items": {"type": "string"}, "description": "Target paths for project-specific code; omit only for a generic example."},
                         "changeKind": {
                             "type": "string",
@@ -3533,7 +4300,7 @@ class McpServer:
                             "enum": ["resolved", "not_resolved", "regressed"],
                         },
                     },
-                    ["action", "taskAuthorization"],
+                    ["action"],
                 ),
             },
             {
@@ -4016,7 +4783,7 @@ class McpServer:
                             "enum": ["status", "heartbeat", "record", "recover", "rebase"],
                             "default": "status",
                         },
-                        "taskAuthorization": _task_authorization_schema(),
+                        "taskAuthorization": _checkpoint_authorization_schema(),
                         "leaseSeconds": {
                             "type": "integer",
                             "minimum": 60,
@@ -4027,12 +4794,62 @@ class McpServer:
                         "pendingSlices": {"type": "array", "items": {"type": "string"}},
                         "modifiedFiles": {"type": "array", "items": {"type": "string"}},
                         "requiredNextAction": {"type": "string"},
-                        "validation": {"type": "object"},
+                        "validation": {
+                            "type": "object",
+                            "properties": {
+                                "status": {"type": "string"},
+                                "summary": {"type": "string"},
+                                "artifacts": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "errors": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "additionalProperties": False,
+                            "description": "Optional compact validation evidence; omit for budget renewal.",
+                        },
                         "note": {"type": "string"},
                         "acceptCurrentFiles": {"type": "boolean", "default": False},
                         "includeGitChanges": {"type": "boolean", "default": False},
                     },
                     ["action", "taskAuthorization"],
+                ),
+            },
+            {
+                "name": "unreal_task_define_slices",
+                "title": "Define executable task slices",
+                "description": (
+                    "After bounded project discovery, register every concrete executable slice "
+                    "for a broad feature task before the first write. Each slice must contain "
+                    "1-4 project-relative files under Source, Plugins, or Config."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "taskAuthorization": _task_authorization_schema(),
+                        "slices": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "sliceId": {"type": "string"},
+                                    "files": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "maxItems": 4,
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": ["sliceId", "files"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "activeSliceId": {"type": "string"},
+                    },
+                    ["taskAuthorization", "slices"],
                 ),
             },
             {
@@ -4432,7 +5249,8 @@ class McpServer:
                 return
             self._active_route_context = route_authorization
         elif (
-            isinstance(authorization, dict)
+            _has_complete_task_authorization(authorization)
+            and not _has_task_route_ownership(authorization)
             and str(name or "") not in CONTROL_PLANE_TOOLS
         ):
             from task_api import authorize_task_tool
@@ -4452,6 +5270,7 @@ class McpServer:
                 )
                 return
             self._active_route_context = route_authorization
+            _refresh_argument_task_authorization(arguments, route_authorization)
         else:
             from task_api import authorize_active_task_tool
 
@@ -4473,6 +5292,7 @@ class McpServer:
                     )
                     return
                 self._active_route_context = route_authorization
+                _refresh_argument_task_authorization(arguments, route_authorization)
 
         try:
             if _MCP_TOOL_REGISTRY.dispatch(self, message_id, name, arguments):
@@ -4652,11 +5472,95 @@ class McpServer:
                 )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_checkpoint":
-                from task_api import task_checkpoint
+                from task_api import (
+                    task_authorization_for_state,
+                    task_checkpoint,
+                    task_resolve_active_session_id,
+                    task_root,
+                )
+
+                checkpoint_authorization = arguments.get("taskAuthorization")
+                full_authorization_fields = (
+                    "taskSessionId",
+                    "authToken",
+                    "ownerCapability",
+                    "planId",
+                    "planRevision",
+                    "activeSliceId",
+                    "routeHash",
+                    "routePhase",
+                )
+                has_complete_authorization = (
+                    isinstance(checkpoint_authorization, dict)
+                    and all(
+                        str(checkpoint_authorization.get(field) or "").strip()
+                        for field in full_authorization_fields
+                    )
+                )
+                if not has_complete_authorization:
+                    config = load_shared_config()
+                    compact = (
+                        checkpoint_authorization
+                        if isinstance(checkpoint_authorization, dict)
+                        else {}
+                    )
+                    compact_session_id = str(
+                        arguments.get("taskSessionId")
+                        or compact.get("taskSessionId")
+                        or ""
+                    ).strip()
+                    compact_capability = str(
+                        arguments.get("ownerCapability")
+                        or compact.get("ownerCapability")
+                        or ""
+                    ).strip()
+                    if not compact_session_id or not compact_capability:
+                        self.structured_tool_result(
+                            message_id,
+                            {
+                                "ok": False,
+                                "errorCode": "TASK_ROUTE_OWNERSHIP_REQUIRED",
+                                "error": (
+                                    "Checkpoint requires taskAuthorization or the compact "
+                                    "taskSessionId + ownerCapability form."
+                                ),
+                            },
+                        )
+                        return
+                    resolved = task_resolve_active_session_id(
+                        self.workspace,
+                        active_project=str(config.get("activeProject") or ""),
+                        task_session_id=compact_session_id,
+                        owner_capability=compact_capability,
+                    )
+                    if not resolved.get("ok"):
+                        self.structured_tool_result(message_id, resolved)
+                        return
+                    state_path = task_root(
+                        self.workspace,
+                        str(resolved.get("taskSessionId") or ""),
+                    ) / "state.json"
+                    try:
+                        checkpoint_state = json.loads(state_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError, TypeError):
+                        checkpoint_state = {}
+                    if not isinstance(checkpoint_state, dict):
+                        checkpoint_state = {}
+                    if str(checkpoint_state.get("ownerCapability") or "") != compact_capability:
+                        self.structured_tool_result(
+                            message_id,
+                            {
+                                "ok": False,
+                                "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
+                                "error": "Checkpoint ownerCapability does not own the active task.",
+                            },
+                        )
+                        return
+                    checkpoint_authorization = task_authorization_for_state(checkpoint_state)
 
                 payload = task_checkpoint(
                     self.workspace,
-                    task_authorization=arguments.get("taskAuthorization") or {},
+                    task_authorization=checkpoint_authorization or {},
                     action=str(arguments.get("action") or "status"),
                     lease_seconds=arguments.get("leaseSeconds"),
                     phase=str(arguments.get("phase") or ""),
@@ -4672,6 +5576,18 @@ class McpServer:
                     note=str(arguments.get("note") or ""),
                     accept_current_files=arguments.get("acceptCurrentFiles") is True,
                     include_git_changes=arguments.get("includeGitChanges") is True,
+                )
+                if payload.get("ok"):
+                    self.notify_tools_list_changed()
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_define_slices":
+                from task_api import task_define_slices
+
+                payload = task_define_slices(
+                    self.workspace,
+                    task_authorization=arguments.get("taskAuthorization") or {},
+                    slices=list(arguments.get("slices") or []),
+                    active_slice_id=str(arguments.get("activeSliceId") or ""),
                 )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()
@@ -5346,16 +6262,13 @@ class McpServer:
         if precheck.get("suppressed"):
             repeat = precheck.get("repeat") or {}
             handoff = maybe_auto_handoff(repeat_detected=True)
-            short = (
-                f"{repeat.get('message')}\n"
-                f"requiredNextAction: {repeat.get('requiredNextAction')}"
-            )
+            source_handoff = _direct_source_handoff(request)
             structured = {
                 "ok": False,
                 "errorCode": repeat.get("errorCode") or "RAG_QUERY_REPEAT_BLOCKED",
                 "repeatDetected": True,
-                "retryable": False,
-                "stopCurrentWorkflow": True,
+                "retryable": True,
+                "stopCurrentWorkflow": False,
                 "doNotRetry": True,
                 "doNotRetryTools": ["unreal_agent_session", "unreal_rag_search"],
                 "fullContextSuppressed": True,
@@ -5365,11 +6278,18 @@ class McpServer:
                 "deliveryVariantKey": precheck.get("deliveryVariantKey"),
                 "message": repeat.get("message"),
                 "requiredNextAction": repeat.get("requiredNextAction"),
-                "agentInstruction": "Stop RAG calls. Use existing evidence or one direct project-source read, then fix or answer.",
+                "agentInstruction": "Do not call RAG again. Call the required search_files tool once, inspect matching project source, then continue or answer.",
+                **source_handoff,
             }
             if handoff:
                 structured["autoHandoff"] = handoff
-            self.tool_result(message_id, short, structured=structured, char_limit=1200, is_error=True)
+            self.tool_result(
+                message_id,
+                json.dumps(structured, ensure_ascii=False, separators=(",", ":")),
+                structured=structured,
+                char_limit=2400,
+                is_error=True,
+            )
             return
 
         rows, context, resolved_scope, detail = self.run_search(request, top_k, arguments, use_hybrid)
@@ -5531,30 +6451,29 @@ class McpServer:
         )
         if pre_delivery.get("suppressed"):
             repeat = pre_delivery.get("repeat") or {}
-            short = (
-                f"{repeat.get('message')}\n"
-                f"requiredNextAction: {repeat.get('requiredNextAction')}"
-            )
+            source_handoff = _direct_source_handoff(query)
+            structured = {
+                "ok": False,
+                "errorCode": repeat.get("errorCode") or "RAG_QUERY_REPEAT_BLOCKED",
+                "repeatDetected": True,
+                "retryable": True,
+                "stopCurrentWorkflow": False,
+                "doNotRetry": True,
+                "doNotRetryTools": ["unreal_rag_search"],
+                "fullContextSuppressed": True,
+                "semanticQueryKey": pre_delivery.get("semanticQueryKey"),
+                "topicQueryKey": pre_delivery.get("topicQueryKey"),
+                "deliveryVariantKey": pre_delivery.get("deliveryVariantKey"),
+                "message": repeat.get("message"),
+                "requiredNextAction": repeat.get("requiredNextAction"),
+                "agentInstruction": "Do not call RAG again. Call the required search_files tool once, inspect matching project source, then continue or answer.",
+                **source_handoff,
+            }
             self.tool_result(
                 message_id,
-                short,
-                structured={
-                    "ok": False,
-                    "errorCode": repeat.get("errorCode") or "RAG_QUERY_REPEAT_BLOCKED",
-                    "repeatDetected": True,
-                    "retryable": False,
-                    "stopCurrentWorkflow": True,
-                    "doNotRetry": True,
-                    "doNotRetryTools": ["unreal_rag_search"],
-                    "fullContextSuppressed": True,
-                    "semanticQueryKey": pre_delivery.get("semanticQueryKey"),
-                    "topicQueryKey": pre_delivery.get("topicQueryKey"),
-                    "deliveryVariantKey": pre_delivery.get("deliveryVariantKey"),
-                    "message": repeat.get("message"),
-                    "requiredNextAction": repeat.get("requiredNextAction"),
-                    "agentInstruction": "Stop RAG calls. Use existing evidence or one direct project-source read, then fix or answer.",
-                },
-                char_limit=1200,
+                json.dumps(structured, ensure_ascii=False, separators=(",", ":")),
+                structured=structured,
+                char_limit=2400,
                 is_error=True,
             )
             return
@@ -5587,6 +6506,7 @@ class McpServer:
         }
         if project_miss or (zero_result and bool(active_project)):
             structured["requiredNextAction"] = "search_files_then_read_file"
+            structured.update(_direct_source_handoff(query))
             structured["nextSteps"] = [
                 "Call search_files on the active project's Source/ for the feature or symbol tokens.",
                 "read_file / read_file_range matching paths before claiming presence or absence.",
@@ -5644,9 +6564,34 @@ class McpServer:
         structured["semanticQueryKey"] = delivery.get("semanticQueryKey")
         structured["deliveryVariantKey"] = delivery.get("deliveryVariantKey")
         structured["continuationToken"] = delivery.get("continuationToken")
+        result_text = context
+        if project_miss or (zero_result and bool(active_project)):
+            result_text = json.dumps(
+                {
+                    "ok": structured.get("ok"),
+                    "scope": structured.get("scope"),
+                    "matchCount": match_count,
+                    "projectMatchCount": structured.get("projectMatchCount"),
+                    "doNotRepeatSearch": True,
+                    "message": (
+                        "No active-project RAG match was found. Continue with direct project source evidence."
+                    ),
+                    "agentInstruction": (
+                        "Call the required search_files tool once, then read matching source before answering."
+                    ),
+                    "requiredNextAction": structured.get("requiredNextAction"),
+                    "requiredNextTool": structured.get("requiredNextTool"),
+                    "requiredNextToolArgs": structured.get("requiredNextToolArgs"),
+                    "nextAction": structured.get("nextAction"),
+                    "nextActionArgs": structured.get("nextActionArgs"),
+                    "nextActionIsTool": True,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         self.tool_result(
             message_id,
-            context,
+            result_text,
             structured=structured,
             char_limit=char_limit,
             is_error=bool(project_miss),
