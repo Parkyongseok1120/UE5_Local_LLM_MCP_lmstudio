@@ -540,8 +540,19 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const baseKey = core.baseSessionKey(messages, salt);
   const envSessionId = String(process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID || "").trim();
   const marker = core.extractSessionMarker(messages) || envSessionId;
+  const conversationSessionId = core.lmStudioConversationSessionFingerprint(
+    workingDirectory,
+    resolvedTargetModel,
+  );
   let sessionResolution: any;
-  if (marker) {
+  if (conversationSessionId) {
+    sessionResolution = {
+      sessionId: conversationSessionId,
+      reason: "lmstudio_conversation_directory",
+      minted: false,
+      baseKey,
+    };
+  } else if (marker) {
     sessionResolution = {
       sessionId: core.sessionFingerprint(messages, salt, { sessionMarker: marker }),
       reason: envSessionId ? "env" : "marker",
@@ -556,7 +567,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     });
   }
   const sessionId = String(sessionResolution.sessionId);
-  if (!marker && sessionResolution.minted) {
+  if (conversationSessionId) {
+    tryInjectSessionMarker(history, conversationSessionId);
+  } else if (!marker && sessionResolution.minted) {
     tryInjectSessionMarker(history, sessionId);
   } else if (marker) {
     tryInjectSessionMarker(history, marker);

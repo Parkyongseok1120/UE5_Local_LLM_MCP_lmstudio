@@ -779,9 +779,27 @@ function sessionFingerprint(messages, salt = "", options = {}) {
     || "",
   ).trim().toLowerCase();
   if (marker) {
-    return sha256(`${salt}\nmarker:${marker}`).slice(0, 32);
+    // A UCC marker is already a minted session identity. Re-hashing it turns
+    // marker A into session B on the next generation and breaks continuity.
+    return marker.replace(/[^a-f0-9]/g, "").slice(0, 32);
   }
   return baseSessionKey(messages, salt);
+}
+
+function lmStudioConversationSessionFingerprint(workingDirectory, modelIdentifier = "") {
+  const raw = String(workingDirectory || "").trim();
+  if (!raw) return "";
+  const normalized = raw.replace(/\\/g, "/").replace(/\/+$/, "");
+  const match = normalized.match(/(?:^|\/)working-directories\/([^/]+)$/i);
+  if (!match || !String(match[1] || "").trim()) return "";
+  // LM Studio assigns this directory per conversation. It remains stable while
+  // assistant/tool messages grow or are cancelled, unlike message lineage.
+  // Include the model so switching generator targets cannot inherit an
+  // incompatible checkpoint. Normalize Windows drive/path casing only.
+  const pathIdentity = /^[A-Za-z]:\//.test(normalized)
+    ? normalized.toLowerCase()
+    : normalized;
+  return sha256(`lmstudio-conversation\n${pathIdentity}\n${String(modelIdentifier || "")}`).slice(0, 32);
 }
 
 function isMajorGoalChange(priorObjective, latestObjective) {
@@ -1122,6 +1140,7 @@ module.exports = {
   lineageContinues,
   baseSessionKey,
   sessionFingerprint,
+  lmStudioConversationSessionFingerprint,
   isMajorGoalChange,
   toolNamesMatch,
   expectedToolReserve,

@@ -1004,6 +1004,46 @@ def test_architecture_proposal_rejects_absolute_and_traversing_implementation_pa
         )
 
 
+def test_uncovered_implementation_files_allow_scope_or_slice_repair() -> None:
+    invariant = "preserve behavior"
+    covered = "Source/Game/Private/Covered.cpp"
+    uncovered = "Source/Game/Private/Uncovered.cpp"
+    analysis = {
+        "topology": {
+            "owners": [{"files": [covered, uncovered]}],
+            "sourceDependencyCycles": [],
+        },
+        "graphEvidence": {"complete": True, "sourceFileCount": 2},
+        "focus": {"unmatchedSymbols": []},
+    }
+    proposal = {
+        "decision": "stage a bounded change",
+        "invariants": [invariant],
+        "impactedSurfaces": [covered, uncovered],
+        "validationPlan": ["compile"],
+        "alternatives": ["stage", "defer"],
+        "implementationFiles": [covered, uncovered],
+        "implementationSlices": [
+            {
+                "sliceId": "covered",
+                "files": [covered],
+                "dependsOn": [],
+                "invariants": [invariant],
+                "validation": ["compile"],
+            }
+        ],
+    }
+
+    validation = validate_architecture_proposal(proposal, analysis)
+    repair_paths = {
+        row["jsonPath"]
+        for row in validation["repairRequirements"]
+        if "not covered by implementationSlices" in row["constraint"]
+    }
+
+    assert repair_paths == {"implementationSlices", "implementationFiles"}
+
+
 def test_architecture_proposal_rejects_duplicate_slice_file_owner_and_rogue_invariant() -> None:
     invariant = "preserve behavior"
     shared = "Source/Core/Public/Shared.h"

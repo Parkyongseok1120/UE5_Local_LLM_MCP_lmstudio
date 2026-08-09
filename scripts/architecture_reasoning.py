@@ -1500,6 +1500,11 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
     )
     for issue in issues:
         json_paths: list[str] = []
+        if "implementationFiles not covered by implementationSlices" in issue:
+            # Either extend the slices or narrow the declared implementation scope.
+            # Both are valid, coupled repairs, so expose both paths atomically instead
+            # of forcing one implementation strategy on the caller.
+            json_paths.extend(["implementationSlices", "implementationFiles"])
         if "required implementation surface(s) are absent" in issue:
             json_paths.extend(
                 ["networking.requestPath", "impactedSurfaces", "implementationSlices"]

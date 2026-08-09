@@ -22,12 +22,12 @@ function activeCheckpoint(stateRoot) {
   ));
 }
 
-function controllerFor(model, config, stateRoot, emitted, toolDefinitions) {
+function controllerFor(model, config, stateRoot, emitted, toolDefinitions, workingDirectory = stateRoot) {
   return {
     client: { llm: { async listLoaded() { return [model]; } } },
     abortSignal: new AbortController().signal,
     getPluginConfig() { return { get(key) { return config[key]; } }; },
-    getWorkingDirectory() { return stateRoot; },
+    getWorkingDirectory() { return workingDirectory; },
     getToolDefinitions() { return toolDefinitions; },
     fragmentGenerated(content, opts) { emitted.push({ kind: "fragment", content, opts }); },
     toolCallGenerationStarted(info) { emitted.push({ kind: "start", info }); },
@@ -185,6 +185,46 @@ test("RAG search tool calls receive a stable compactor session id", async () => 
     assert.equal(JSON.parse(args[1].content).sessionId, ends[0].request.arguments.sessionId);
     assert.equal(sawArchitectureGate, true);
     assert.equal(architectureMaxTokens, 8192);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("one LM Studio conversation keeps one checkpoint session across mutable lineage", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-conversation-session-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const model = {
+      identifier: "conversation-session-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onPredictionFragment({ content: "done" });
+        return { async result() { return {}; } };
+      },
+    };
+    const workingDirectory = "C:\\Users\\dev\\.lmstudio\\working-directories\\1786265188981";
+    const controller = controllerFor(model, {}, stateRoot, [], [], workingDirectory);
+    const first = Chat.empty();
+    first.append("system", "rules");
+    first.append("user", "inspect the project");
+    first.append("assistant", "partial tool turn A");
+    await generate(controller, first);
+
+    const continued = Chat.empty();
+    continued.append("system", "rules");
+    continued.append("user", "inspect the project");
+    continued.append("assistant", "same turn finalized with different content and tools");
+    continued.append("user", "continue");
+    await generate(controller, continued);
+
+    const sessionDirs = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== "_base");
+    assert.equal(sessionDirs.length, 1);
+    assert.equal(activeCheckpoint(stateRoot).objective, "continue");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });

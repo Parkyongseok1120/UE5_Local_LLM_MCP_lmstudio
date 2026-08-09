@@ -304,6 +304,40 @@ test("session markers isolate identical first prompts across chats", () => {
   assert.equal(core.extractSessionMarker(chatA), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 });
 
+test("session markers are idempotent session identities", () => {
+  const marker = "abcdef0123456789abcdef0123456789";
+  const messages = [
+    { role: "system", content: `rules\n<!-- ucc-session:${marker} -->` },
+    { role: "user", content: "continue" },
+  ];
+  assert.equal(core.sessionFingerprint(messages, "workspace\nmodel"), marker);
+  assert.equal(
+    core.sessionFingerprint(messages, "workspace\nmodel", { sessionMarker: marker }),
+    marker,
+  );
+});
+
+test("LM Studio conversation directories provide cross-platform stable session identities", () => {
+  const windowsA = "C:\\Users\\dev\\.lmstudio\\working-directories\\1786265188981";
+  const windowsSame = "c:/users/dev/.lmstudio/working-directories/1786265188981/";
+  const windowsB = "C:\\Users\\dev\\.lmstudio\\working-directories\\1786265188982";
+  const posix = "/Users/dev/.lmstudio/working-directories/1786265188981";
+  const a = core.lmStudioConversationSessionFingerprint(windowsA, "qwen-model");
+
+  assert.match(a, /^[a-f0-9]{32}$/);
+  assert.equal(a, core.lmStudioConversationSessionFingerprint(windowsSame, "qwen-model"));
+  assert.notEqual(a, core.lmStudioConversationSessionFingerprint(windowsB, "qwen-model"));
+  assert.notEqual(a, core.lmStudioConversationSessionFingerprint(windowsA, "other-model"));
+  assert.match(
+    core.lmStudioConversationSessionFingerprint(posix, "qwen-model"),
+    /^[a-f0-9]{32}$/,
+  );
+  assert.equal(
+    core.lmStudioConversationSessionFingerprint("C:\\Projects\\O-Mock", "qwen-model"),
+    "",
+  );
+});
+
 test("lineageContinues matches growing chats but not sibling chats", () => {
   const first = core.messageLineageFingerprints([
     { role: "system", content: "rules" },
