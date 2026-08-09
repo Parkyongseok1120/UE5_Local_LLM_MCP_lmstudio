@@ -318,7 +318,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         task_auth = plan_payload["taskAuthorization"]
         assert all(task_auth.values()), task_auth
         stale_auth = dict(task_auth)
-        stale_auth["authToken"] = "stale-plan-only-token"
+        stale_auth["ownerCapability"] = "wrong-owner-capability"
         task_states = [
             json.loads(path.read_text(encoding="utf-8"))
             for path in (tmp_path / "state" / "unreal-agent" / "tasks").glob(
@@ -338,7 +338,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                 "name": "unreal_code_sketch_claim_validate",
                 "arguments": {
                     "sketch": "alpha\n",
-                    "request": "stale authorization must fail",
+                    "request": "wrong task ownership must fail",
                     "projectRoot": str(project_dir),
                     "targetFiles": ["Source/DemoGame/Public/NewThing.h"],
                     "changeKind": "new_file",
@@ -351,7 +351,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             "structuredContent"
         ) or json.loads(stale_gate["result"]["content"][0]["text"])
         assert stale_payload["ok"] is False
-        assert stale_payload["errorCode"] == "TASK_AUTH_MISMATCH"
+        assert stale_payload["errorCode"] == "TASK_ROUTE_CAPABILITY_MISMATCH"
         gated = rag.request(
             "tools/call",
             {
@@ -395,21 +395,23 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         out_of_slice_text = out_of_slice["result"]["content"][0]["text"]
         assert "TASK_SLICE_TARGET_MISMATCH" in out_of_slice_text, out_of_slice_text
         assert not (source_dir / "Blocked.h").exists()
+        wrong_owner_write_auth = dict(create_auth)
+        wrong_owner_write_auth["ownerCapability"] = "wrong-owner-capability"
         plan_denied = client.request(
             "tools/call",
             {
                 "name": "write_file",
                 "arguments": {
-                    "taskAuthorization": stale_auth,
-                    "path": "Source/DemoGame/Public/BlockedPlan.h",
+                    "taskAuthorization": wrong_owner_write_auth,
+                    "path": "Source/DemoGame/Public/NewThing.h",
                     "content": "blocked\n",
                 },
             },
             20,
         )
         assert plan_denied["result"].get("isError") is True
-        assert "TASK_AUTH_MISMATCH" in plan_denied["result"]["content"][0]["text"]
-        assert not (source_dir / "BlockedPlan.h").exists()
+        assert "TASK_ROUTE_CAPABILITY_MISMATCH" in plan_denied["result"]["content"][0]["text"]
+        assert not (source_dir / "NewThing.h").exists()
 
 
         created = client.request(

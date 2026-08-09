@@ -903,6 +903,23 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
       "retry_same_tool_with_returned_taskAuthorization"
     );
 
+    const ownedState = routeState(projectFile, { ownerCapability: "owner-capability" });
+    writeRouteState(stateRoot, ownedState);
+    const wrongOwner = validateMutationAuth(
+      workspace,
+      {
+        taskAuthorization: {
+          ...routeAuthorization,
+          ownerCapability: "wrong-owner-capability",
+        },
+        path: "Source/Demo/Foo.cpp",
+      },
+      { requireAll: true, toolName: "replace_in_file" }
+    );
+    assert.strictEqual(wrongOwner.ok, false);
+    assert.strictEqual(wrongOwner.errorCode, "TASK_ROUTE_CAPABILITY_MISMATCH");
+    writeRouteState(stateRoot, state);
+
     const exact = validateMutationAuth(
       workspace,
       {

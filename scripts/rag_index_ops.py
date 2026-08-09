@@ -157,7 +157,7 @@ def capabilities_summary() -> dict[str, Any]:
         "tools": {
             "unreal_rag_search": "Mode-aware hybrid FTS + symbol retrieval.",
             "unreal_symbol_lookup": "Shortcut for class/function/API symbol lookup.",
-            "unreal_open_project_picker": "Open Windows GUI to pick active .uproject.",
+            "unreal_open_project_picker": "Open a desktop GUI to pick the active .uproject.",
             "unreal_get_active_project": "Read shared activeProject for RAG and agent.",
             "unreal_set_active_project": "Set or clear shared activeProject (.uproject path).",
             "unreal_rag_health": "Index size, chunk counts, source breakdown.",

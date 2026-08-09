@@ -37,6 +37,52 @@ from rag_embeddings import embedding_status
 
 _ENGINE_PROJECTS = frozenset({"", "engine", "Engine", "__engine__"})
 
+_SOURCE_DERIVED_PROJECT_LAYERS = frozenset(
+    {"unreal_symbol", "project_architecture", "project_profile", "project_text"}
+)
+_SOURCE_DERIVED_PROJECT_SOURCES = frozenset(
+    {"unreal_symbol", "project_architecture", "project_profile", "unreal_project_text"}
+)
+
+
+def _is_source_derived_project_row(
+    row: dict[str, Any], active_projects: list[str]
+) -> bool:
+    """Return whether a RAG row is generated from the active project's C++ source.
+
+    Asset/editor metadata has an independent freshness contract and is deliberately
+    not suppressed by a C++ source timestamp change.
+    """
+
+    project = str(row.get("project") or "").strip().casefold()
+    active = {str(item).strip().casefold() for item in active_projects if str(item).strip()}
+    if active and project not in active:
+        return False
+    if not project or project in {item.casefold() for item in _ENGINE_PROJECTS}:
+        return False
+    layer = str(row.get("layer") or "").strip().casefold()
+    source = str(row.get("source") or "").strip().casefold()
+    doc_type = str(row.get("doc_type") or "").strip().casefold()
+    return (
+        layer in _SOURCE_DERIVED_PROJECT_LAYERS
+        or source in _SOURCE_DERIVED_PROJECT_SOURCES
+        or doc_type in {"project_symbol", "project_architecture", "project_profile", "project_text"}
+    )
+
+
+def _stale_project_evidence_notice(stale_status: dict[str, Any], suppressed: int) -> str:
+    if not stale_status.get("directSourcePreferred"):
+        return ""
+    reason = str(stale_status.get("reason") or "project_source_metadata_stale")
+    return (
+        "## PROJECT SOURCE FRESHNESS GATE\n\n"
+        f"The active project's generated source metadata is stale ({reason}). "
+        f"Suppressed {suppressed} source-derived project RAG row(s). "
+        "Do not use cached project symbols, architecture summaries, or project-text chunks for current "
+        "implementation claims. Use search_files/read_file on the active project's Source/ and treat those "
+        "direct reads as authoritative. Engine/documentation rows below remain retrieval evidence only.\n\n"
+    )
+
 _ROUTE_SAME_CALL_RETRY_CODES = frozenset(
     {
         "TASK_AUTH_INCOMPLETE",
@@ -185,7 +231,7 @@ from semantic_refactor_guard import (
     capture_semantic_snapshot,
     compare_semantic_refactor,
 )
-from architecture_reasoning import analyze_architecture
+from architecture_reasoning import analyze_architecture, source_snapshot_fingerprint
 from feature_intent_contract import (
     FEATURE_INTENT_GATE,
     resolve_feature_intent,
@@ -394,6 +440,14 @@ def _architecture_proposal_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
             },
+            "assetCreationPlan": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "description": (
+                    "Explicit creation plus validation steps for referenced /Game packages "
+                    "that do not yet exist."
+                ),
+            },
             "boundaryChanges": {
                 "type": "array",
                 "items": {
@@ -468,6 +522,20 @@ def _architecture_proposal_schema() -> dict[str, Any]:
                             "description": (
                                 "How this state reuses, derives from, or has a provably non-overlapping "
                                 "lifetime from an inherited framework state collection."
+                            ),
+                        },
+                        "consistencyPolicy": {
+                            "type": "string",
+                            "description": (
+                                "Required when a derived state is independently stored or replicated: prove how "
+                                "all mutation, cleanup, and reconstruction remain atomic with the canonical source."
+                            ),
+                        },
+                        "semanticDifference": {
+                            "type": "string",
+                            "description": (
+                                "Source-backed distinction when adding a state/phase whose name overlaps an "
+                                "existing state value."
                             ),
                         },
                         "validValues": {
@@ -747,8 +815,34 @@ def _architecture_repair_placeholder(json_path: str) -> Any:
 
 
 def _architecture_repair_submission(
-    proposal_revision: str, repair_requirements: list[dict[str, Any]]
+    proposal_revision: str,
+    repair_requirements: list[dict[str, Any]],
+    *,
+    repair_strategy: str = "exact_paths",
 ) -> dict[str, Any]:
+    full_replan = (
+        str(repair_strategy or "").strip().lower() == "full_replan"
+        or any(
+            isinstance(row, dict)
+            and str(row.get("jsonPath") or "").strip() == "proposal"
+            for row in repair_requirements
+        )
+    )
+    if full_replan:
+        return {
+            "mode": "fullProposal",
+            "baseProposalRevision": proposal_revision,
+            "requiredJsonPaths": [],
+            "requiredRepairs": [],
+            "argumentShape": {
+                "proposal": "<complete independently re-derived proposal object>"
+            },
+            "instruction": (
+                "Reuse already-read direct-source evidence while sourceSnapshotFingerprint is unchanged. "
+                "Re-read only when the source changed, required evidence is missing, or the needed lines were "
+                "not covered. Submit one complete proposal and do not patch the stored draft."
+            ),
+        }
     paths = list(
         dict.fromkeys(
             str(row.get("jsonPath") or "").strip()
@@ -789,6 +883,59 @@ def _architecture_repair_submission(
             ],
         },
     }
+
+
+def _architecture_value_at_json_path(proposal: dict[str, Any], json_path: str) -> Any:
+    """Return a proposal value for a bounded dotted path used by repair metadata."""
+    normalized = str(json_path or "").strip()
+    if normalized == "proposal":
+        return proposal
+    current: Any = proposal
+    for part in normalized.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _architecture_unchanged_replan_requirements(
+    previous: dict[str, Any],
+    candidate: dict[str, Any],
+    requirements: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Find rejected issue groups whose implicated fields did not change.
+
+    A requirement can expose multiple alternative paths because changing any
+    one of them may resolve the relationship (for example, either align an
+    implementation slice or its declared file inventory). Values are compared
+    structurally so key order and JSON formatting cannot masquerade as a replan.
+    """
+    unchanged: list[dict[str, Any]] = []
+    for row in requirements:
+        if not isinstance(row, dict):
+            continue
+        paths = list(
+            dict.fromkeys(
+                str(path or "").strip()
+                for path in row.get("anyOfJsonPaths") or []
+                if str(path or "").strip()
+            )
+        )
+        if not paths:
+            continue
+        if any(
+            _architecture_value_at_json_path(previous, path)
+            != _architecture_value_at_json_path(candidate, path)
+            for path in paths
+        ):
+            continue
+        unchanged.append(
+            {
+                "constraint": str(row.get("constraint") or "").strip(),
+                "anyOfJsonPaths": paths,
+            }
+        )
+    return unchanged
 
 
 def _checkpoint_authorization_schema() -> dict[str, Any]:
@@ -2099,6 +2246,38 @@ def _handle_unreal_architecture_reasoning(
                 },
             )
             return
+        stored_snapshot = str(stored.get("sourceSnapshotFingerprint") or "")
+        if stored_snapshot:
+            current_graph, _graph_source, _graph_ms = server.architecture_graph(
+                project_root,
+                require_content_verification=True,
+            )
+            current_snapshot = source_snapshot_fingerprint(current_graph)
+            if current_snapshot and current_snapshot != stored_snapshot:
+                server.structured_tool_result(
+                    message_id,
+                    {
+                        "ok": False,
+                        "errorCode": "ARCHITECTURE_PROPOSAL_SOURCE_CHANGED",
+                        "retryable": True,
+                        "proposalRevision": stored["revision"],
+                        "storedSourceSnapshotFingerprint": stored_snapshot,
+                        "currentSourceSnapshotFingerprint": current_snapshot,
+                        "requiredNextAction": "submit_full_architecture_proposal",
+                        "nextActionIsTool": False,
+                        "repairSubmission": {
+                            "mode": "fullProposal",
+                            "argumentShape": {
+                                "proposal": "<complete proposal re-derived from the current source snapshot>"
+                            },
+                        },
+                        "agentInstruction": (
+                            "Project source changed after the stored proposal was validated. Re-read current source "
+                            "and submit a complete proposal; do not patch the stale draft."
+                        ),
+                    },
+                )
+                return
         if proposal_patch is not None:
             proposal = merge_proposal_patch(stored["proposal"], proposal_patch)
             proposal_patch_applied = True
@@ -2110,6 +2289,33 @@ def _handle_unreal_architecture_reasoning(
             )
             current_validation = current_analysis.get("proposalValidation") or {}
             current_repairs = list(current_validation.get("repairRequirements") or [])[:24]
+            if current_validation.get("repairStrategy") == "full_replan":
+                server.structured_tool_result(
+                    message_id,
+                    {
+                        "ok": False,
+                        "errorCode": "ARCHITECTURE_PROPOSAL_REPLAN_REQUIRED",
+                        "retryable": True,
+                        "proposalRevision": stored["revision"],
+                        "proposalValidation": {
+                            "ok": False,
+                            "issues": list(current_validation.get("issues") or [])[:12],
+                            "repairStrategy": "full_replan",
+                            "repairRequirements": current_repairs,
+                        },
+                        "repairSubmission": _architecture_repair_submission(
+                            stored["revision"], current_repairs, repair_strategy="full_replan"
+                        ),
+                        "requiredNextAction": "submit_full_architecture_proposal",
+                        "nextActionIsTool": False,
+                        "agentInstruction": (
+                            "The stored design has a core ownership/state/lifecycle contradiction. Re-read direct "
+                            "source and submit one complete revised proposal. Do not send proposalRepairs or reuse "
+                            "the prior ownership decision."
+                        ),
+                    },
+                )
+                return
             allowed_paths = {
                 str(row.get("jsonPath") or "").strip()
                 for row in current_repairs
@@ -2167,7 +2373,9 @@ def _handle_unreal_architecture_reasoning(
                         "duplicateJsonPaths": duplicate_paths,
                         "valueTypeErrors": value_type_errors,
                         "repairSubmission": _architecture_repair_submission(
-                            stored["revision"], current_repairs
+                            stored["revision"],
+                            current_repairs,
+                            repair_strategy=str(current_validation.get("repairStrategy") or ""),
                         ),
                         "requiredNextAction": "submit_exact_architecture_repairs",
                         "nextActionIsTool": False,
@@ -2192,6 +2400,93 @@ def _handle_unreal_architecture_reasoning(
         effective_arguments["proposal"] = proposal
         effective_arguments.pop("proposalPatch", None)
         effective_arguments.pop("proposalRepairs", None)
+    if (
+        isinstance(proposal, dict)
+        and proposal_patch is None
+        and proposal_repairs is None
+        and proposal_session_id
+        and project_root
+    ):
+        from architecture_proposal_store import load_proposal_draft, proposal_revision
+
+        stored_replan = load_proposal_draft(proposal_session_id, project_root)
+        if (
+            stored_replan is not None
+            and isinstance(stored_replan.get("proposal"), dict)
+            and stored_replan["proposal"] != proposal
+        ):
+            stored_snapshot = str(stored_replan.get("sourceSnapshotFingerprint") or "")
+            current_graph, _current_graph_source, _current_graph_ms = server.architecture_graph(
+                project_root,
+                require_content_verification=True,
+            )
+            current_snapshot = source_snapshot_fingerprint(current_graph)
+            if stored_snapshot and current_snapshot == stored_snapshot:
+                stored_analysis = analyze_architecture(
+                    project_root,
+                    symbols=symbols,
+                    proposal=stored_replan["proposal"],
+                    graph=current_graph,
+                    validate_supplied_graph=False,
+                )
+                stored_validation = stored_analysis.get("proposalValidation") or {}
+                replan_requirements = list(
+                    stored_validation.get("replanChangeRequirements") or []
+                )[:24]
+                unchanged_requirements = _architecture_unchanged_replan_requirements(
+                    stored_replan["proposal"], proposal, replan_requirements
+                )
+                if (
+                    stored_validation.get("repairStrategy") == "full_replan"
+                    and unchanged_requirements
+                ):
+                    required_changed_paths = list(
+                        dict.fromkeys(
+                            path
+                            for row in unchanged_requirements
+                            for path in row.get("anyOfJsonPaths") or []
+                        )
+                    )
+                    current_repairs = list(
+                        stored_validation.get("repairRequirements") or []
+                    )[:24]
+                    server.structured_tool_result(
+                        message_id,
+                        {
+                            "ok": False,
+                            "errorCode": "ARCHITECTURE_PROPOSAL_REPLAN_CORE_UNCHANGED",
+                            "retryable": True,
+                            "stopCurrentWorkflow": False,
+                            "doNotRetryUnchangedCore": True,
+                            "proposalRevision": stored_replan["revision"],
+                            "rejectedCandidateRevision": proposal_revision(proposal),
+                            "sourceSnapshotFingerprint": current_snapshot,
+                            "unchangedCoreRequirements": unchanged_requirements,
+                            "requiredChangedPaths": required_changed_paths,
+                            "proposalValidation": {
+                                "ok": False,
+                                "issues": list(stored_validation.get("issues") or [])[:24],
+                                "repairStrategy": "full_replan",
+                                "repairRequirements": current_repairs,
+                                "replanChangeRequirements": replan_requirements,
+                            },
+                            "repairSubmission": _architecture_repair_submission(
+                                stored_replan["revision"],
+                                current_repairs,
+                                repair_strategy="full_replan",
+                            ),
+                            "requiredNextAction": "submit_full_architecture_proposal",
+                            "nextActionIsTool": False,
+                            "agentInstruction": (
+                                "The candidate changed formatting or unrelated fields but retained one or more "
+                                "relationships implicated by the prior rejection. Independently reconsider each "
+                                "unchangedCoreRequirements group and submit one complete proposal in which at least "
+                                "one path in every anyOfJsonPaths group changes materially. Do not copy the prior "
+                                "values. The rejected candidate was not stored."
+                            ),
+                        },
+                    )
+                    return
     if isinstance(proposal, dict):
         from read_query_history import check_repeat_query, exact_query_fingerprint
 
@@ -2223,6 +2518,7 @@ def _handle_unreal_architecture_reasoning(
             )
             current_validation = current_analysis.get("proposalValidation") or {}
             current_repairs = list(current_validation.get("repairRequirements") or [])[:24]
+            full_replan = current_validation.get("repairStrategy") == "full_replan"
 
             server.structured_tool_result(
                 message_id,
@@ -2232,7 +2528,11 @@ def _handle_unreal_architecture_reasoning(
                     "retryable": True,
                     "stopCurrentWorkflow": False,
                     "doNotRetryUnchanged": True,
-                    "requiredNextAction": "revise_architecture_proposal",
+                    "requiredNextAction": (
+                        "submit_full_architecture_proposal"
+                        if full_replan
+                        else "revise_architecture_proposal"
+                    ),
                     "nextActionIsTool": False,
                     "proposalRevision": proposal_revision(proposal),
                     "proposalValidation": {
@@ -2246,14 +2546,23 @@ def _handle_unreal_architecture_reasoning(
                         else [str(row.get("jsonPath") or "") for row in (proposal_repairs or [])]
                     ),
                     "repairSubmission": _architecture_repair_submission(
-                        proposal_revision(proposal), current_repairs
+                        proposal_revision(proposal),
+                        current_repairs,
+                        repair_strategy=str(current_validation.get("repairStrategy") or ""),
                     ),
                     "message": "The identical architecture proposal was already validated in this chat.",
                     "agentInstruction": (
-                        "Do not resubmit the same proposalPatch. Call this tool once using the returned "
-                        "repairSubmission.argumentShape: include every path exactly once, keep each jsonPath "
-                        "unchanged, and replace only its placeholder value with your own corrected design. "
-                        "For array paths, provide one complete replacement array."
+                        "Do not patch or resubmit the stored design. Reuse already-read direct-source evidence "
+                        "while sourceSnapshotFingerprint is unchanged; re-read only if source changed, evidence is "
+                        "missing, or needed lines were not covered. Submit one complete proposal with a materially "
+                        "different ownership/state/lifecycle decision."
+                        if full_replan
+                        else (
+                            "Do not resubmit the same proposalPatch. Call this tool once using the returned "
+                            "repairSubmission.argumentShape: include every path exactly once, keep each jsonPath "
+                            "unchanged, and replace only its placeholder value with your own corrected design. "
+                            "For array paths, provide one complete replacement array."
+                        )
                     ),
                 },
             )
@@ -2280,7 +2589,12 @@ def _handle_unreal_architecture_reasoning(
         from architecture_proposal_store import save_proposal_draft
 
         payload["proposalRevision"] = save_proposal_draft(
-            proposal_session_id, project_root, proposal
+            proposal_session_id,
+            project_root,
+            proposal,
+            source_snapshot_fingerprint=str(
+                (payload.get("graphEvidence") or {}).get("sourceSnapshotFingerprint") or ""
+            ),
         )
         payload["proposalPatchApplied"] = proposal_patch_applied
         payload["proposalRepairsApplied"] = proposal_repairs_applied
@@ -2336,16 +2650,27 @@ def _handle_unreal_architecture_reasoning(
         else {}
     )
     if isinstance(proposal_validation, dict) and proposal_validation.get("ok") is not True:
+        full_replan = proposal_validation.get("repairStrategy") == "full_replan"
         payload["ok"] = False
         payload["errorCode"] = "ARCHITECTURE_PROPOSAL_INVALID"
         payload["retryable"] = True
         payload["stopCurrentWorkflow"] = False
-        payload["requiredNextAction"] = "revise_architecture_proposal"
+        payload["requiredNextAction"] = (
+            "submit_full_architecture_proposal"
+            if full_replan
+            else "revise_architecture_proposal"
+        )
         payload["nextActionIsTool"] = False
         payload["agentInstruction"] = (
-            "Use repairSubmission.argumentShape on the next call. Include every required path exactly once, "
-            "keep its jsonPath string unchanged, and replace only placeholder values with your own corrected design. "
-            "For an array path provide one complete replacement array; do not repeat that path per item."
+            "Re-read direct project source and submit one complete independently derived proposal. The current "
+            "ownership/state/lifecycle foundation is inconsistent, so do not use proposalPatch/proposalRepairs "
+            "and do not preserve the rejected central ownership decision."
+            if full_replan
+            else (
+                "Use repairSubmission.argumentShape on the next call. Include every required path exactly once, "
+                "keep its jsonPath string unchanged, and replace only placeholder values with your own corrected design. "
+                "For an array path provide one complete replacement array; do not repeat that path per item."
+            )
         )
     gate_passed = bool(
         payload.get("ok")
@@ -2372,6 +2697,7 @@ def _handle_unreal_architecture_reasoning(
         payload["repairSubmission"] = _architecture_repair_submission(
             str(payload.get("proposalRevision") or ""),
             list(proposal_validation.get("repairRequirements") or [])[:24],
+            repair_strategy=str(proposal_validation.get("repairStrategy") or ""),
         )
     record_proposal_delivery()
     server.structured_tool_result(
@@ -3577,8 +3903,9 @@ class McpServer:
                 "name": "unreal_open_project_picker",
                 "title": "Open Active Project Picker (GUI)",
                 "description": (
-                    "Open a Windows picker to choose the active .uproject. "
-                    "Default opens a selectable project list; set explorer=true for a file dialog."
+                    "Open a native GUI picker to choose the active .uproject. On Windows the default "
+                    "is a project list and explorer=true opens a file dialog; other desktop systems "
+                    "use the available native Tk file dialog."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -4995,13 +5322,16 @@ class McpServer:
         )
         return options, resolved_scope
 
-    def run_search(
+    def _run_search_with_diagnostics(
         self,
         query: str,
         top_k: int,
         arguments: dict[str, Any],
         use_hybrid: bool,
-    ) -> tuple[list[dict[str, Any]], str, str, str]:
+        *,
+        stale_status: dict[str, Any] | None = None,
+    ) -> tuple[list[dict[str, Any]], str, str, str, dict[str, Any]]:
+        from index_staleness import project_source_stale_status
         from token_budget import code_detail_limits, resolve_code_detail
 
         mode = str(arguments.get("mode") or "auto")
@@ -5015,6 +5345,29 @@ class McpServer:
         arguments = dict(arguments)
         arguments["query"] = query
         options, resolved_scope = self.search_options_from_args(arguments, top_k)
+        freshness = stale_status or project_source_stale_status(search_mode=mode)
+        suppress_stale_project_source = bool(
+            freshness.get("directSourcePreferred")
+            and (
+                freshness.get("projectSymbolsFresh") is False
+                or freshness.get("architectureFresh") is False
+            )
+        )
+        active_names = active_project_names()
+        diagnostics: dict[str, Any] = {
+            "staleProjectRowsSuppressed": 0,
+            "sourceDerivedProjectEvidenceSuppressed": suppress_stale_project_source,
+        }
+
+        def fresh_project_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            if not suppress_stale_project_source:
+                return rows
+            kept = [
+                row for row in rows
+                if not _is_source_derived_project_row(row, active_names)
+            ]
+            diagnostics["staleProjectRowsSuppressed"] += len(rows) - len(kept)
+            return kept
 
         if resolved_scope == "mixed" and options.projects:
             engine_opts = SearchOptions(
@@ -5031,6 +5384,7 @@ class McpServer:
             local_rows = search_hybrid(self.index, query, top_k, options) if use_hybrid else search(
                 self.index, query, top_k, options
             )
+            local_rows = fresh_project_rows(local_rows)
             engine_rows = search_hybrid(self.index, query, top_k, engine_opts) if use_hybrid else search(
                 self.index, query, top_k, engine_opts
             )
@@ -5042,57 +5396,91 @@ class McpServer:
                     merged.append(row)
                     seen.add(cid)
             context = assemble_context_mixed(local_rows, engine_rows, query, mode, **assembly_kwargs)
+            context = _stale_project_evidence_notice(
+                freshness, int(diagnostics["staleProjectRowsSuppressed"])
+            ) + context
             merged = annotate_other_project_rows(merged, active_project_names())
             context += other_project_context_warning(merged)
-            return merged, context, resolved_scope, detail
+            return merged, context, resolved_scope, detail, diagnostics
 
         rows = search_hybrid(self.index, query, top_k, options) if use_hybrid else search(
             self.index, query, top_k, options
         )
+        rows = fresh_project_rows(rows)
         if not rows and options.projects:
             # Do not substitute engine/guideline hits as project evidence.
             active = active_project_names()
             resolved_scope = "project_miss"
-            context = (
+            context = _stale_project_evidence_notice(
+                freshness, int(diagnostics["staleProjectRowsSuppressed"])
+            ) + (
                 "No matching Unreal RAG context was found in the active project index. "
                 "Use search_files then read_file on that project's Source/ before claiming "
                 "a feature exists or is missing. Guideline/engine hits are not primary "
                 f"project evidence. activeProjects={active!r}."
             )
-            return [], context, resolved_scope, detail
+            return [], context, resolved_scope, detail, diagnostics
         context = assemble_context(rows, query, mode, **assembly_kwargs)
+        context = _stale_project_evidence_notice(
+            freshness, int(diagnostics["staleProjectRowsSuppressed"])
+        ) + context
         rows = annotate_other_project_rows(rows, active_project_names())
         context += other_project_context_warning(rows)
+        return rows, context, resolved_scope, detail, diagnostics
+
+    def run_search(
+        self,
+        query: str,
+        top_k: int,
+        arguments: dict[str, Any],
+        use_hybrid: bool,
+    ) -> tuple[list[dict[str, Any]], str, str, str]:
+        """Compatibility wrapper for callers that do not need freshness diagnostics."""
+
+        rows, context, resolved_scope, detail, _diagnostics = (
+            self._run_search_with_diagnostics(query, top_k, arguments, use_hybrid)
+        )
         return rows, context, resolved_scope, detail
 
     def launch_project_picker(self, explorer: bool = False) -> dict[str, Any]:
-        script = self.workspace / "scripts" / "pick_active_project.ps1"
+        windows = sys.platform.startswith("win")
+        script = self.workspace / "scripts" / (
+            "pick_active_project.ps1" if windows else "pick_active_project_gui.py"
+        )
         if not script.exists():
             raise FileNotFoundError(f"Picker script not found: {script}")
-        args = [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(script),
-        ]
-        if explorer:
-            args.append("-Explorer")
+        if windows:
+            args = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+            ]
+            if explorer:
+                args.append("-Explorer")
+        else:
+            args = [sys.executable, str(script), "--workspace", str(self.workspace), "--prepare"]
+        popen_kwargs: dict[str, Any] = {
+            "cwd": str(self.workspace),
+            "close_fds": True,
+        }
+        if windows:
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        else:
+            popen_kwargs["start_new_session"] = True
         subprocess.Popen(
             args,
-            cwd=str(self.workspace),
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-            close_fds=True,
+            **popen_kwargs,
         )
-        mode = "file explorer" if explorer else "project list"
+        mode = "file dialog" if explorer or not windows else "project list"
         return {
             "ok": True,
-            "message": f"Opened Windows {mode} picker on your desktop. Choose a .uproject to set activeProject.",
+            "platform": sys.platform,
+            "message": f"Opened the {mode} picker on your desktop. Choose a .uproject to set activeProject.",
             "cliAlternatives": [
-                ".\\rag.ps1 pick-project",
-                ".\\rag.ps1 pick-project -Explorer",
-                "rag.ps1 pick-project",
+                "unreal_set_active_project(projectPath=<absolute .uproject path>)",
             ],
         }
 
@@ -6237,6 +6625,7 @@ class McpServer:
         config = load_shared_config()
         active_project = str(config.get("activeProject") or "")
         from agent_session_core import compact_evidence_refs, maybe_auto_handoff, resolve_session_id
+        from index_staleness import project_source_stale_status
         from rag_delivery import deliver_rag_result
 
         session_id = resolve_session_id(
@@ -6292,7 +6681,16 @@ class McpServer:
             )
             return
 
-        rows, context, resolved_scope, detail = self.run_search(request, top_k, arguments, use_hybrid)
+        stale_status = project_source_stale_status(search_mode=mode)
+        rows, context, resolved_scope, detail, search_diagnostics = (
+            self._run_search_with_diagnostics(
+                request,
+                top_k,
+                arguments,
+                use_hybrid,
+                stale_status=stale_status,
+            )
+        )
         from token_budget import code_detail_limits
 
         char_limit = int(code_detail_limits(detail)["max_tool_chars"])
@@ -6322,6 +6720,9 @@ class McpServer:
             "hybrid": use_hybrid,
             "detailLevel": detail,
             "matchCount": len(rows),
+            "indexStaleness": stale_status,
+            "directSourcePreferred": stale_status.get("directSourcePreferred", False),
+            **search_diagnostics,
             "semanticQueryKey": delivery.get("semanticQueryKey"),
             "deliveryVariantKey": delivery.get("deliveryVariantKey"),
             "continuationToken": delivery.get("continuationToken"),
@@ -6478,11 +6879,19 @@ class McpServer:
             )
             return
 
-        rows, context, resolved_scope, detail = self.run_search(query, top_k, arguments, use_hybrid)
+        stale_status = project_source_stale_status(search_mode=mode)
+        rows, context, resolved_scope, detail, search_diagnostics = (
+            self._run_search_with_diagnostics(
+                query,
+                top_k,
+                arguments,
+                use_hybrid,
+                stale_status=stale_status,
+            )
+        )
         char_limit = int(code_detail_limits(detail)["max_tool_chars"])
         truncated = "assembly budget truncated" in context
         next_detail = next_code_detail(detail) if truncated else None
-        stale_status = project_source_stale_status(search_mode=mode)
         match_count = len(rows)
         project_miss = resolved_scope == "project_miss"
         zero_result = match_count == 0
@@ -6503,6 +6912,7 @@ class McpServer:
             "matchCount": match_count,
             "projectMatchCount": 0 if project_miss else match_count,
             "activeProjects": active_project_names() if (project_miss or active_project) else [],
+            **search_diagnostics,
         }
         if project_miss or (zero_result and bool(active_project)):
             structured["requiredNextAction"] = "search_files_then_read_file"
@@ -6573,6 +6983,16 @@ class McpServer:
                     "matchCount": match_count,
                     "projectMatchCount": structured.get("projectMatchCount"),
                     "doNotRepeatSearch": True,
+                    "indexStaleness": stale_status,
+                    "staleProjectRowsSuppressed": search_diagnostics.get(
+                        "staleProjectRowsSuppressed", 0
+                    ),
+                    "freshnessGate": (
+                        "PROJECT SOURCE FRESHNESS GATE: Cached project source metadata was "
+                        "suppressed. Direct Source/ reads are authoritative."
+                        if search_diagnostics.get("sourceDerivedProjectEvidenceSuppressed")
+                        else "No active-project match was available; use direct Source/ reads."
+                    ),
                     "message": (
                         "No active-project RAG match was found. Continue with direct project source evidence."
                     ),
@@ -6607,6 +7027,7 @@ class McpServer:
             self.tool_result(message_id, f"RAG index does not exist: {self.index}", is_error=True)
             return
 
+        from index_staleness import project_source_stale_status
         from token_budget import code_detail_limits, next_code_detail, resolve_code_detail
 
         detail = resolve_code_detail(str(arguments.get("detailLevel") or "compact"))
@@ -6619,6 +7040,18 @@ class McpServer:
             symbol_kind=str(arguments.get("symbol_kind") or ""),
             project=list(arguments.get("project") or []),
         )
+        stale_status = project_source_stale_status(search_mode="api_lookup")
+        suppressed = 0
+        if (
+            stale_status.get("directSourcePreferred")
+            and stale_status.get("projectSymbolsFresh") is False
+        ):
+            fresh_rows = [
+                row for row in rows
+                if not _is_source_derived_project_row(row, active_project_names())
+            ]
+            suppressed = len(rows) - len(fresh_rows)
+            rows = fresh_rows
         context = assemble_context(
             rows,
             query,
@@ -6626,6 +7059,7 @@ class McpServer:
             max_assembly_chars=int(limits["assembly_chars"]),
             max_chars_per_row=int(limits["row_chars"]),
         )
+        context = _stale_project_evidence_notice(stale_status, suppressed) + context
         contract = symbol_signature_contract(query)
         context = symbol_signature_instruction(contract) + "\n" + context
         truncated = "assembly budget truncated" in context
@@ -6638,6 +7072,9 @@ class McpServer:
                 "detailLevel": detail,
                 "nextDetailLevel": next_detail,
                 "signatureContract": contract,
+                "indexStaleness": stale_status,
+                "directSourcePreferred": stale_status.get("directSourcePreferred", False),
+                "staleProjectRowsSuppressed": suppressed,
             },
             char_limit=int(limits["max_tool_chars"]),
         )

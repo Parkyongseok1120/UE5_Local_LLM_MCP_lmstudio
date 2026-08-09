@@ -22,7 +22,7 @@ from read_query_history import (  # noqa: E402
     semantic_query_key,
 )
 from rag_delivery import deliver_rag_result  # noqa: E402
-from unreal_rag_mcp import essential_tools_enabled, extended_tools_enabled  # noqa: E402
+from unreal_rag_mcp import McpServer, essential_tools_enabled, extended_tools_enabled  # noqa: E402
 
 
 def test_repeat_query_suppresses_second_call(tmp_path: Path) -> None:
@@ -382,3 +382,66 @@ def test_stale_status_no_recommended_refresh_tool_in_payload(monkeypatch: pytest
     status = project_source_stale_status(force=True, search_mode="review")
     assert status["recommendedTool"] is None
     assert status["analysisCanProceed"] is True
+
+
+def test_lmstudio_visible_content_suppresses_stale_project_source_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import unreal_rag_mcp as rag_mcp
+
+    reset_query_history()
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"not-a-real-db")
+    stale_row = {
+        "chunk_id": "stale-symbol",
+        "project": "Demo",
+        "layer": "unreal_symbol",
+        "source": "unreal_symbol",
+        "doc_type": "project_symbol",
+        "title": "Stale reflected function",
+        "locator": str(tmp_path / "Source" / "Demo" / "Mode.h"),
+        "text": "UFUNCTION(Server, Reliable) void OldCall();",
+        "chunk_index": 0,
+    }
+    monkeypatch.setattr(rag_mcp, "search", lambda *_a, **_k: [stale_row])
+    monkeypatch.setattr(rag_mcp, "active_project_names", lambda: ["Demo"])
+    monkeypatch.setattr(
+        rag_mcp,
+        "load_shared_config",
+        lambda: {"activeProject": str(tmp_path / "Demo.uproject")},
+    )
+    monkeypatch.setattr(
+        "index_staleness.project_source_stale_status",
+        lambda *a, **k: {
+            "stale": True,
+            "reason": "source_newer_than_symbols",
+            "analysisCanProceed": True,
+            "directSourcePreferred": True,
+            "projectSymbolsFresh": False,
+            "architectureFresh": False,
+            "refreshRecommended": True,
+            "stalenessSeverity": "advisory",
+        },
+    )
+    server = McpServer(index)
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_search(
+        1,
+        {
+            "query": "current lobby architecture",
+            "mode": "design",
+            "scope": "project",
+            "top_k": 4,
+        },
+    )
+
+    result = sent[-1]["result"]
+    visible_text = result["content"][0]["text"]
+    assert "PROJECT SOURCE FRESHNESS GATE" in visible_text
+    assert "Direct Source/ reads are authoritative" in visible_text
+    assert "Stale reflected function" not in visible_text
+    assert result["structuredContent"]["staleProjectRowsSuppressed"] == 1
+    assert result["structuredContent"]["requiredNextAction"] == "search_files_then_read_file"
+    assert result["structuredContent"]["requiredNextTool"] == "search_files"

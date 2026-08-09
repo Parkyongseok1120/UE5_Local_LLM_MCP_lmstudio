@@ -50,7 +50,25 @@ export const configSchematics = createConfigSchematics()
     "architectureMaxOutputReserve",
     "numeric",
     { displayName: "Architecture output reserve", subtitle: "Minimum output budget for structured architecture/design validation calls." },
-    8192,
+    6144,
+  )
+  .field(
+    "architectureEvidenceReadThreshold",
+    "numeric",
+    { displayName: "Architecture evidence reads", subtitle: "Minimum unique successful direct-source reads before forcing architecture validation; implementation evidence is also required." },
+    4,
+  )
+  .field(
+    "architectureEvidenceHardLimit",
+    "numeric",
+    { displayName: "Architecture evidence hard limit", subtitle: "Force validation after this many unique reads even when source-file types cannot be classified." },
+    8,
+  )
+  .field(
+    "architectureReplanEvidenceReadBudget",
+    "numeric",
+    { displayName: "Architecture replan evidence reads", subtitle: "Bounded direct-source reads reopened after a rejected full replan before validation is forced again." },
+    4,
   )
   .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra reserve for token-estimation and prompt-template variance." }, 1024)
   .field("temperature", "numeric", { displayName: "Temperature", subtitle: "Sampling temperature used by the underlying model proxy (0 to 1)." }, 0.1)

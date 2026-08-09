@@ -40,6 +40,23 @@ def test_proposal_patch_merges_objects_and_replaces_arrays(monkeypatch, tmp_path
     assert loaded == {"proposal": merged, "revision": revision}
 
 
+def test_proposal_store_persists_optional_source_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    proposal = {"decision": "reuse current owners"}
+    revision = save_proposal_draft(
+        "chat-source-bound",
+        "/portable/project",
+        proposal,
+        source_snapshot_fingerprint="source-sha256",
+    )
+
+    assert load_proposal_draft("chat-source-bound", "/portable/project") == {
+        "proposal": proposal,
+        "revision": revision,
+        "sourceSnapshotFingerprint": "source-sha256",
+    }
+
+
 def test_proposal_repairs_replace_only_exact_dotted_paths():
     base = {
         "decision": "reuse",

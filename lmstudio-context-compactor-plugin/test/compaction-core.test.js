@@ -318,10 +318,10 @@ test("session markers are idempotent session identities", () => {
 });
 
 test("LM Studio conversation directories provide cross-platform stable session identities", () => {
-  const windowsA = "C:\\Users\\dev\\.lmstudio\\working-directories\\1786265188981";
-  const windowsSame = "c:/users/dev/.lmstudio/working-directories/1786265188981/";
-  const windowsB = "C:\\Users\\dev\\.lmstudio\\working-directories\\1786265188982";
-  const posix = "/Users/dev/.lmstudio/working-directories/1786265188981";
+  const windowsA = "C:\\Users\\USERNAME\\.lmstudio\\working-directories\\1786265188981";
+  const windowsSame = "c:/users/USERNAME/.lmstudio/working-directories/1786265188981/";
+  const windowsB = "C:\\Users\\USERNAME\\.lmstudio\\working-directories\\1786265188982";
+  const posix = "/Users/USERNAME/.lmstudio/working-directories/1786265188981";
   const a = core.lmStudioConversationSessionFingerprint(windowsA, "qwen-model");
 
   assert.match(a, /^[a-f0-9]{32}$/);
@@ -771,6 +771,20 @@ test("protocol marker clears arbitrary instructional next actions", () => {
   assert.equal(checkpoint.requiredNextTool, null);
 });
 
+test("architecture portfolio and repair instructions are not treated as tool names", () => {
+  for (const action of [
+    "collect_source_evidence_for_owner_choice",
+    "resolve_ambiguous_candidates_with_rationale",
+    "review_ranked_candidates_and_select",
+    "resolve_architecture_contract_issues",
+    "submit_exact_architecture_repairs",
+    "submit_full_architecture_proposal",
+    "revise_architecture_proposal",
+  ]) {
+    assert.equal(core.isNonToolNextAction(action), true, action);
+  }
+});
+
 test("architecture repair continuity survives hard compaction without repeating a patch", () => {
   const repairRequirements = [
     {
@@ -915,4 +929,51 @@ test("architecture exact-path repairs survive hard compaction", () => {
   );
   assert.equal(checkpoint.architectureProposal.repairMode, "proposalRepairs");
   assert.deepEqual(checkpoint.architectureProposal.requiredRepairPaths, ["stateInventory"]);
+});
+
+test("architecture full replan survives hard compaction without patch instructions", () => {
+  const messages = [
+    { role: "user", content: "blind lobby architecture validation" },
+    {
+      role: "assistant",
+      toolCalls: [{
+        id: "replan-1",
+        name: "unreal_architecture_reasoning",
+        arguments: { proposal: { decision: "put all lobby state in GameState" } },
+      }],
+    },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "replan-1",
+        name: "unreal_architecture_reasoning",
+        content: JSON.stringify({
+          ok: false,
+          errorCode: "ARCHITECTURE_PROPOSAL_INVALID",
+          proposalRevision: "r-full",
+          graphEvidence: { sourceSnapshotFingerprint: "source-fingerprint" },
+          proposalValidation: {
+            ok: false,
+            repairStrategy: "full_replan",
+            designContract: { requiresFullReplan: true },
+            repairRequirements: [{ jsonPath: "proposal", constraint: "replan" }],
+          },
+          repairSubmission: { mode: "fullProposal", requiredJsonPaths: [] },
+          requiredNextAction: "submit_full_architecture_proposal",
+        }),
+      }],
+    },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.equal(checkpoint.architectureProposal.repairStrategy, "full_replan");
+  assert.equal(checkpoint.architectureProposal.requiresFullReplan, true);
+  assert.equal(checkpoint.architectureProposal.repairMode, "fullProposal");
+  assert.equal(checkpoint.architectureProposal.sourceSnapshotFingerprint, "source-fingerprint");
+  const summary = core.summarizeOldMessages(messages, checkpoint);
+  assert.match(summary, /submit one complete independently derived proposal/i);
+  assert.match(summary, /Reuse retained direct-source evidence while sourceSnapshotFingerprint is unchanged/);
+  assert.match(summary, /Re-read only when source changed, required evidence is missing/);
+  assert.match(summary, /Do not use proposalPatch\/proposalRepairs/);
+  assert.doesNotMatch(summary, /one \{jsonPath,value\} entry/);
 });

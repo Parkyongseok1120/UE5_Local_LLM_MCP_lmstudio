@@ -696,7 +696,12 @@ def assembly_instructions(mode: str) -> str:
         )
     if mode == "api_lookup":
         return "Prefer exact symbol, signature, include path, and owning module over memory."
-    return "Use the grouped RAG evidence first. If evidence is insufficient, say what is missing."
+    return (
+        "Use grouped RAG rows as retrieval evidence. For claims about the active project's current "
+        "implementation, direct source reads outrank generated symbol/profile/architecture metadata, "
+        "and any freshness gate in this result overrides the rows below. If evidence is insufficient, "
+        "say what is missing."
+    )
 
 
 PROJECT_SOURCES = frozenset({

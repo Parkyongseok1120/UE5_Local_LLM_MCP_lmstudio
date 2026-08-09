@@ -2536,6 +2536,31 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       taskSessionId: sanitized.taskSessionId,
     };
   }
+  const nestedAuthorization = args.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : args.task_authorization && typeof args.task_authorization === "object"
+      ? args.task_authorization
+      : {};
+  const suppliedOwnerCapability = String(
+    args.ownerCapability
+    || args.owner_capability
+    || nestedAuthorization.ownerCapability
+    || nestedAuthorization.owner_capability
+    || ""
+  ).trim();
+  const stateOwnerCapability = String(state.ownerCapability || "").trim();
+  if (
+    suppliedOwnerCapability
+    && stateOwnerCapability
+    && suppliedOwnerCapability !== stateOwnerCapability
+  ) {
+    return {
+      ok: false,
+      error: "taskAuthorization.ownerCapability does not own this task session.",
+      errorCode: "TASK_ROUTE_CAPABILITY_MISMATCH",
+      taskSessionId: sanitized.taskSessionId,
+    };
+  }
   if (Object.prototype.hasOwnProperty.call(options, "activeProject")) {
     const scopeValidation = validateTaskRouteScope(
       state,

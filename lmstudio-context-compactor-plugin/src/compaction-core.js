@@ -189,6 +189,16 @@ const NON_TOOL_NEXT_ACTIONS = new Set([
   "start_agent_edit_task_to_apply_changes",
   "replan_autonomous_strategy",
   "quarantine_corrupt_task",
+  "collect_source_evidence_for_owner_choice",
+  "resolve_ambiguous_candidates_with_rationale",
+  "review_ranked_candidates_and_select",
+  "resolve_architecture_contract_issues",
+  "resolve_source_dependency_cycle",
+  "implement_next_slice",
+  "submit_exact_architecture_repairs",
+  "submit_full_architecture_proposal",
+  "revise_architecture_proposal",
+  "rebase_architecture_proposal_patch",
 ]);
 
 function isNonToolNextAction(value) {
@@ -235,6 +245,7 @@ function collectControlFields(value, state) {
   if (!value || typeof value !== "object") return;
   if (typeof value.proposalRevision === "string" && value.proposalRevision.trim()) {
     const previous = state.architectureProposal || {};
+    const nextErrorCode = String(value.errorCode || previous.lastErrorCode || "").slice(0, 120);
     const validation = value.proposalValidation && typeof value.proposalValidation === "object"
       ? value.proposalValidation
       : null;
@@ -250,14 +261,36 @@ function collectControlFields(value, state) {
       validationOk: validation ? validation.ok === true : previous.validationOk,
       proposalPatchApplied: value.proposalPatchApplied === true,
       repairRequirements: repairs,
-      lastErrorCode: String(value.errorCode || previous.lastErrorCode || "").slice(0, 120),
+      lastErrorCode: nextErrorCode,
+      unchangedCorePaths: (
+        nextErrorCode === "ARCHITECTURE_PROPOSAL_REPLAN_CORE_UNCHANGED"
+        && Array.isArray(value.requiredChangedPaths)
+      )
+        ? value.requiredChangedPaths.slice(0, 24).map((path) => String(path).slice(0, 160))
+        : [],
       requiredNextAction: String(
         value.requiredNextAction || previous.requiredNextAction || ""
       ).slice(0, 160),
+      repairStrategy: String(
+        validation?.repairStrategy || value.repairStrategy || previous.repairStrategy || ""
+      ).slice(0, 80),
+      stagedContractRequired: typeof validation?.designContract?.stagedImplementation === "boolean"
+        ? validation.designContract.stagedImplementation
+        : previous.stagedContractRequired === true,
+      networkedContractRequired: typeof validation?.designContract?.networkedProposal === "boolean"
+        ? validation.designContract.networkedProposal
+        : previous.networkedContractRequired === true,
+      requiresFullReplan: validation?.designContract?.requiresFullReplan === true
+        || value.repairSubmission?.mode === "fullProposal",
       repairMode: String(value.repairSubmission?.mode || previous.repairMode || "").slice(0, 80),
       requiredRepairPaths: Array.isArray(value.repairSubmission?.requiredJsonPaths)
         ? value.repairSubmission.requiredJsonPaths.slice(0, 24).map((path) => String(path).slice(0, 160))
         : (previous.requiredRepairPaths || []),
+      sourceSnapshotFingerprint: String(
+        value.graphEvidence?.sourceSnapshotFingerprint
+        || previous.sourceSnapshotFingerprint
+        || ""
+      ).slice(0, 96),
     };
   }
   const directActionIsTool = value.nextActionIsTool !== false
@@ -952,14 +985,28 @@ function summarizeOldMessages(messages, checkpoint) {
   }
   if (checkpoint.architectureProposal) {
     lines.push(`architectureProposalContinuation=${JSON.stringify(checkpoint.architectureProposal)}`);
-    lines.push(
-      "architectureProposalInstruction=Use the exact proposal revision above. Resolve each retained repair "
-      + "requirement by changing the corresponding values. Compare against lastPatchPreview and never resubmit "
-      + "the same patch digest; when repairMode is proposalRepairs, call unreal_architecture_reasoning with "
-      + "baseProposalRevision plus one {jsonPath,value} entry per requiredRepairPaths item. Keep each path exact, "
-      + "fill values from your own design, and do not regenerate or resend the prior proposalPatch. For an array "
-      + "path, send one complete replacement array rather than repeating that jsonPath per item.",
-    );
+    if (
+      checkpoint.architectureProposal.requiresFullReplan
+      || checkpoint.architectureProposal.repairStrategy === "full_replan"
+      || checkpoint.architectureProposal.repairMode === "fullProposal"
+    ) {
+      lines.push(
+        "architectureProposalInstruction=The retained proposal has a core ownership/state/lifecycle contradiction. "
+        + "Reuse retained direct-source evidence while sourceSnapshotFingerprint is unchanged. Re-read only when "
+        + "source changed, required evidence is missing, or needed lines were not covered. Submit one complete "
+        + "independently derived proposal. Do not use proposalPatch/proposalRepairs, do not reuse lastPatchPreview, "
+        + "and do not preserve the rejected central owner.",
+      );
+    } else {
+      lines.push(
+        "architectureProposalInstruction=Use the exact proposal revision above. Resolve each retained repair "
+        + "requirement by changing the corresponding values. Compare against lastPatchPreview and never resubmit "
+        + "the same patch digest; when repairMode is proposalRepairs, call unreal_architecture_reasoning with "
+        + "baseProposalRevision plus one {jsonPath,value} entry per requiredRepairPaths item. Keep each path exact, "
+        + "fill values from your own design, and do not regenerate or resend the prior proposalPatch. For an array "
+        + "path, send one complete replacement array rather than repeating that jsonPath per item.",
+      );
+    }
   }
   if (checkpoint.failedToolResults?.length) {
     lines.push(`failedToolResults=${JSON.stringify(checkpoint.failedToolResults)}`);

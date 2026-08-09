@@ -126,15 +126,23 @@ def project_index_needs_sync(project: Path, index_dir: Path) -> tuple[bool, str]
         return True, "missing_project_symbols"
 
     source_root = project_root / "Source"
-    if source_root.is_dir() and symbols_path.is_file():
+    newest_source: float | None = None
+    if source_root.is_dir():
         newest_source = _newest_mtime(source_root, ("*.cpp", "*.h", "*.hpp", "*.cs"))
-        if newest_source is not None:
-            try:
-                symbols_mtime = symbols_path.stat().st_mtime
-            except OSError:
-                symbols_mtime = None
-            if symbols_mtime is not None and newest_source > symbols_mtime:
-                return True, "source_newer_than_symbols"
+    if newest_source is not None and symbols_path.is_file():
+        try:
+            symbols_mtime = symbols_path.stat().st_mtime
+        except OSError:
+            symbols_mtime = None
+        if symbols_mtime is not None and newest_source > symbols_mtime:
+            return True, "source_newer_than_symbols"
+    if newest_source is not None and architecture.is_file():
+        try:
+            architecture_mtime = architecture.stat().st_mtime
+        except OSError:
+            architecture_mtime = None
+        if architecture_mtime is not None and newest_source > architecture_mtime:
+            return True, "source_newer_than_architecture"
 
     editor_needed, editor_reason = _project_editor_metadata_needs_sync(project, index_dir, project_name)
     if editor_needed:
@@ -170,16 +178,25 @@ def project_index_sync_capabilities(project: Path, index_dir: Path) -> dict[str,
     has_symbols = bool(_project_rows(_load_jsonl_rows(symbols_path), project_name))
 
     source_newer_than_symbols = False
+    source_newer_than_architecture = False
     source_root = project_root / "Source"
-    if source_root.is_dir() and symbols_path.is_file():
+    newest_source: float | None = None
+    if source_root.is_dir():
         newest_source = _newest_mtime(source_root, ("*.cpp", "*.h", "*.hpp", "*.cs"))
-        if newest_source is not None:
-            try:
-                symbols_mtime = symbols_path.stat().st_mtime
-            except OSError:
-                symbols_mtime = None
-            if symbols_mtime is not None and newest_source > symbols_mtime:
-                source_newer_than_symbols = True
+    if newest_source is not None and symbols_path.is_file():
+        try:
+            symbols_mtime = symbols_path.stat().st_mtime
+        except OSError:
+            symbols_mtime = None
+        if symbols_mtime is not None and newest_source > symbols_mtime:
+            source_newer_than_symbols = True
+    if newest_source is not None and architecture.is_file():
+        try:
+            architecture_mtime = architecture.stat().st_mtime
+        except OSError:
+            architecture_mtime = None
+        if architecture_mtime is not None and newest_source > architecture_mtime:
+            source_newer_than_architecture = True
 
     editor_needed, editor_reason = _project_editor_metadata_needs_sync(project, index_dir, project_name)
     manifest_path = index_dir / "build_manifest.json"
@@ -187,9 +204,13 @@ def project_index_sync_capabilities(project: Path, index_dir: Path) -> dict[str,
 
     sync_needed, primary_reason = project_index_needs_sync(project, index_dir)
 
-    project_source_fresh = not source_newer_than_symbols and has_profile
+    project_source_fresh = (
+        not source_newer_than_symbols
+        and not source_newer_than_architecture
+        and has_profile
+    )
     project_symbols_fresh = has_symbols and not source_newer_than_symbols
-    architecture_fresh = has_architecture
+    architecture_fresh = has_architecture and not source_newer_than_architecture
     editor_metadata_fresh = not editor_needed
 
     blocking_reasons = {
@@ -216,11 +237,16 @@ def project_index_sync_capabilities(project: Path, index_dir: Path) -> dict[str,
         "projectSourceFresh": project_source_fresh,
         "projectSymbolsFresh": project_symbols_fresh,
         "architectureFresh": architecture_fresh,
+        "sourceNewerThanArchitecture": source_newer_than_architecture,
         "editorMetadataFresh": editor_metadata_fresh,
         "manifestFresh": not manifest_stale_flag,
         "stalenessSeverity": severity,
         "analysisCanProceed": analysis_can_proceed,
-        "directSourcePreferred": source_newer_than_symbols or not project_symbols_fresh,
+        "directSourcePreferred": (
+            source_newer_than_symbols
+            or source_newer_than_architecture
+            or not project_symbols_fresh
+        ),
         "refreshRecommended": bool(sync_needed) and not is_blocking,
         "refreshRequired": is_blocking,
         "editorMetadataReason": editor_reason if editor_needed else None,

@@ -2397,9 +2397,15 @@ def test_architecture_reasoning_applies_exact_path_repairs(monkeypatch, tmp_path
         for row in first["proposalValidation"]["repairRequirements"]
     )
     assert first["repairSubmission"]["mode"] == "proposalRepairs"
-    assert first["repairSubmission"]["requiredRepairs"][0]["expectedType"] == "array"
+    migration_repair = next(
+        row
+        for row in first["repairSubmission"]["requiredRepairs"]
+        if row["jsonPath"] == "migrationPlan"
+    )
+    assert migration_repair["expectedType"] == "array"
     assert set(first["repairSubmission"]["requiredJsonPaths"]) == {
         "migrationPlan",
+        "ownership",
         "selectedAlternative",
     }
 
@@ -2439,6 +2445,16 @@ def test_architecture_reasoning_applies_exact_path_repairs(monkeypatch, tmp_path
                             "jsonPath": "migrationPlan",
                             "value": ["add compatible worker behavior before moving call sites"],
                         },
+                        {
+                            "jsonPath": "ownership",
+                            "value": {
+                                "stateOwner": "Worker",
+                                "dataOwner": "Worker",
+                                "lifecycleOwner": "Worker",
+                                "failurePolicy": "stop before mutation",
+                                "recoveryPolicy": "retain prior worker state",
+                            },
+                        },
                         {"jsonPath": "selectedAlternative", "value": "keep boundary"},
                     ],
             },
@@ -2448,6 +2464,138 @@ def test_architecture_reasoning_applies_exact_path_repairs(monkeypatch, tmp_path
     assert repaired.get("errorCode") != "ARCHITECTURE_PROPOSAL_REPAIR_PATH_MISMATCH"
     assert repaired["proposalRepairsApplied"] is True
     assert repaired["proposalRevision"] != first["proposalRevision"]
+
+
+def test_architecture_core_contradiction_requires_full_replan_and_source_rebind(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "DemoGameMode.h").write_text(
+        '#include "GameFramework/GameModeBase.h"\n'
+        'class ADemoGameMode : public AGameModeBase {};\n',
+        encoding="utf-8",
+    )
+    (source / "DemoGameState.h").write_text(
+        '#include "GameFramework/GameStateBase.h"\n'
+        'class ADemoGameState : public AGameStateBase {};\n',
+        encoding="utf-8",
+    )
+    (source / "DemoPlayerController.h").write_text(
+        '#include "GameFramework/PlayerController.h"\n'
+        'class ADemoPlayerController : public APlayerController {};\n',
+        encoding="utf-8",
+    )
+    proposal = {
+        "decision": "Use authoritative multiplayer with GameMode-owned client RPC",
+        "invariants": ["Only authority commits state"],
+        "impactedSurfaces": ["ADemoGameMode", "ADemoPlayerController"],
+        "validationPlan": ["RPC ownership and owning connection callability"],
+        "alternatives": ["GameMode RPC", "controller RPC"],
+        "networking": {
+            "authorityOwner": "ADemoGameMode",
+            "clientInitiated": True,
+            "requestPath": [
+                "client input",
+                "ADemoGameMode::ServerSetReady [new Server RPC]",
+                "ADemoGameState::ApplyReady",
+            ],
+            "rpcOwner": "ADemoGameMode",
+            "owningConnection": "owned by the requesting client's owning connection",
+            "serverValidation": "validate authority",
+            "replicatedState": ["ADemoGameState::Phase"],
+        },
+        "stateInventory": [{
+            "state": "Phase", "owner": "ADemoGameState", "lifetime": "world",
+            "authority": "server authoritative", "source": "new", "cleanup": "reset",
+        }],
+        "lifecycleTransitions": [{
+            "event": "request", "owner": "ADemoGameMode", "preconditions": ["authority"],
+            "commitPoint": "after validation", "failureRecovery": "no mutation", "cleanup": "none",
+        }],
+    }
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        40,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project),
+                "sessionId": "full-replan-chat",
+                "proposal": proposal,
+            },
+        },
+    )
+    first = sent[-1]["result"]["structuredContent"]
+    assert first["proposalValidation"]["repairStrategy"] == "full_replan"
+    assert first["repairSubmission"]["mode"] == "fullProposal"
+    assert first["requiredNextAction"] == "submit_full_architecture_proposal"
+
+    cosmetically_revised = {
+        **proposal,
+        "decision": "Use authoritative multiplayer after independently reconsidering the design",
+    }
+    server.handle_tool_call(
+        41,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project),
+                "sessionId": "full-replan-chat",
+                "proposal": cosmetically_revised,
+            },
+        },
+    )
+    unchanged_core = sent[-1]["result"]["structuredContent"]
+    assert unchanged_core["errorCode"] == "ARCHITECTURE_PROPOSAL_REPLAN_CORE_UNCHANGED"
+    assert unchanged_core["proposalRevision"] == first["proposalRevision"]
+    assert unchanged_core["rejectedCandidateRevision"] != first["proposalRevision"]
+    assert "networking.rpcOwner" in unchanged_core["requiredChangedPaths"]
+    assert unchanged_core["doNotRetryUnchangedCore"] is True
+    assert unchanged_core["repairSubmission"]["mode"] == "fullProposal"
+
+    server.handle_tool_call(
+        42,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project),
+                "sessionId": "full-replan-chat",
+                "baseProposalRevision": first["proposalRevision"],
+                "proposalRepairs": [{
+                    "jsonPath": "networking.rpcOwner",
+                    "value": "ADemoPlayerController",
+                }],
+            },
+        },
+    )
+    rejected_patch = sent[-1]["result"]["structuredContent"]
+    assert rejected_patch["errorCode"] == "ARCHITECTURE_PROPOSAL_REPLAN_REQUIRED"
+    assert rejected_patch["proposalRevision"] == first["proposalRevision"]
+
+    with (source / "DemoGameState.h").open("a", encoding="utf-8") as handle:
+        handle.write("// source changed after proposal\n")
+    server.handle_tool_call(
+        43,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project),
+                "sessionId": "full-replan-chat",
+                "baseProposalRevision": first["proposalRevision"],
+                "proposalPatch": {"decision": "try to patch stale proposal"},
+            },
+        },
+    )
+    source_changed = sent[-1]["result"]["structuredContent"]
+    assert source_changed["errorCode"] == "ARCHITECTURE_PROPOSAL_SOURCE_CHANGED"
+    assert source_changed["repairSubmission"]["mode"] == "fullProposal"
 
 
 def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatch, tmp_path):

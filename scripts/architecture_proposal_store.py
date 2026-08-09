@@ -43,14 +43,22 @@ def load_proposal_draft(session_id: str, project_root: str) -> dict[str, Any] | 
     proposal = payload.get("proposal")
     if not isinstance(proposal, dict):
         return None
-    return {
+    result = {
         "proposal": proposal,
         "revision": str(payload.get("revision") or proposal_revision(proposal)),
     }
+    source_snapshot = str(payload.get("sourceSnapshotFingerprint") or "")
+    if source_snapshot:
+        result["sourceSnapshotFingerprint"] = source_snapshot
+    return result
 
 
 def save_proposal_draft(
-    session_id: str, project_root: str, proposal: dict[str, Any]
+    session_id: str,
+    project_root: str,
+    proposal: dict[str, Any],
+    *,
+    source_snapshot_fingerprint: str = "",
 ) -> str:
     revision = proposal_revision(proposal)
     if not str(session_id or "").strip():
@@ -60,10 +68,11 @@ def save_proposal_draft(
         path,
         json.dumps(
             {
-                "version": 1,
+                "version": 2,
                 "sessionId": session_id,
                 "projectRoot": project_root,
                 "revision": revision,
+                "sourceSnapshotFingerprint": str(source_snapshot_fingerprint or ""),
                 "proposal": proposal,
                 "updatedAt": time.time(),
             },

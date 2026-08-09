@@ -384,6 +384,22 @@ function toolNamesMatch(expected: string, actual: string): boolean {
 }
 
 const ARCHITECTURE_GATE_MARKER = "[UNREAL_ARCHITECTURE_VALIDATION_GATE]";
+const ARCHITECTURE_SUBMISSION_MARKER = "[UNREAL_ARCHITECTURE_SUBMISSION_REQUIRED]";
+const ARCHITECTURE_PAYLOAD_REPAIR_MARKER = "[UNREAL_ARCHITECTURE_PAYLOAD_REPAIR_REQUIRED]";
+const ARCHITECTURE_TOOL_NAME = "unreal_architecture_reasoning";
+const ARCHITECTURE_EVIDENCE_TOOLS = [
+  "read_file",
+  "read_file_range",
+  "read_symbol",
+  "unreal_symbol_lookup",
+];
+const ARCHITECTURE_DISCOVERY_TOOLS = [
+  ...ARCHITECTURE_EVIDENCE_TOOLS,
+  "search_files",
+  "list_directory",
+  "unreal_get_active_project",
+  "get_workspace_info",
+];
 
 function latestUserGoalText(messages: ChatMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -393,6 +409,22 @@ function latestUserGoalText(messages: ChatMessage[]): string {
     if (value && !core.isMetaUserMessage(value)) return value;
   }
   return "";
+}
+
+function architectureContractGoalText(
+  messages: ChatMessage[],
+  latestGoal: string,
+  includeRecoveryHistory: boolean,
+): string {
+  if (!includeRecoveryHistory) return String(latestGoal || "");
+  const goals: string[] = [];
+  for (const message of messages) {
+    if (message.getRole() !== "user") continue;
+    const value = String(message.getText() || "").trim();
+    if (!value || core.isMetaUserMessage(value)) continue;
+    goals.push(value);
+  }
+  return goals.slice(-8).join("\n");
 }
 
 function requiresArchitectureValidation(goal: string, toolDefinitions: any[]): boolean {
@@ -405,6 +437,12 @@ function requiresArchitectureValidation(goal: string, toolDefinitions: any[]): b
   return /templates_lobby|authoritative\s+multiplayer|architecture|architectural|structure\s+design|design\s+validation|구조\s*설계|설계\s*검증|아키텍처/i.test(textValue);
 }
 
+function architectureRecoveryContinuationRequested(goal: string): boolean {
+  return /\b(?:continue|resume|retry|same\s+validation|this\s+validation)\b|계속|이어|재개|검증|그대로/i.test(
+    String(goal || ""),
+  );
+}
+
 function injectArchitectureValidationRule(chat: Chat): boolean {
   const rule = (
     `${ARCHITECTURE_GATE_MARKER}\n`
@@ -414,12 +452,13 @@ function injectArchitectureValidationRule(chat: Chat): boolean {
     + "caller-to-authority path, truth-source inventory, lifecycle recovery, validation matrix, or slice contract "
     + "and validate once more. Prove that a client-originated Server RPC is invoked on an actor/component actually "
     + "owned by that client's connection, and ground every claimed existing participant/roster truth source in "
-    + "direct project or inherited framework evidence. Apply every proposalValidation.repairRequirements entry "
-    + "at its exact jsonPath in the next proposal object; do not bury a required field in another prose property. "
-    + "After rejection, prefer the returned repairSubmission.argumentShape: call the tool with baseProposalRevision "
-    + "and proposalRepairs containing one exact {jsonPath,value} entry per required path. Keep the paths unchanged "
-    + "and derive only the replacement values yourself. For an array path, put the complete replacement array in one "
-    + "entry; never repeat a jsonPath for individual rows. Use proposalPatch only when no exact repairSubmission is returned. "
+    + "direct project or inherited framework evidence. If proposalValidation.repairStrategy is full_replan or "
+    + "repairSubmission.mode is fullProposal, reuse already-read direct-source evidence while the source snapshot "
+    + "is unchanged; re-read only when source changed, evidence is missing, or needed lines were not covered. Then "
+    + "submit one complete proposal; never use proposalPatch/proposalRepairs or preserve the rejected central owner. "
+    + "Otherwise apply every returned repair "
+    + "requirement at its exact jsonPath and prefer repairSubmission.argumentShape with one complete replacement value "
+    + "per path. Never repeat a jsonPath for individual array rows. "
     + "Keep private reasoning brief and submit a compact proposal: one concise sentence per scalar field and only "
     + "the evidence needed for the contract, targeting under 2500 output tokens before the tool call completes. "
     + "Never replace a concrete callable path with an unresolved 'RPC or local call' option."
@@ -447,6 +486,502 @@ function injectArchitectureValidationRule(chat: Chat): boolean {
     return false;
   }
   return false;
+}
+
+function injectArchitectureSubmissionRule(chat: Chat): boolean {
+  const rule = (
+    `${ARCHITECTURE_SUBMISSION_MARKER}\n`
+    + "Enough direct-source evidence has been collected for this architecture-validation turn. Submit your own "
+    + "complete proposal to unreal_architecture_reasoning now. The validator tool is forced: do not emit a final "
+    + "design, call another discovery tool, or ask the user to retry. If a prior proposal failed, follow its retained "
+    + "repairSubmission contract and continue until proposalValidation.ok is true."
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(ARCHITECTURE_SUBMISSION_MARKER)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    if (typeof (chat as any).append === "function") {
+      (chat as any).append("system", rule);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function injectArchitectureCoreChangeRule(chat: Chat, jsonPaths: string[]): boolean {
+  const paths = [...new Set(
+    (jsonPaths || []).map((path) => String(path || "").trim()).filter(Boolean),
+  )].slice(0, 24);
+  if (!paths.length) return false;
+  const rule = (
+    "[UNREAL_ARCHITECTURE_CORE_CHANGE_REQUIRED]\n"
+    + `The previous full proposal was rejected because these implicated paths remained structurally unchanged: ${paths.join(", ")}. `
+    + "Submit a complete independently re-derived proposal now. Every listed path must materially differ from the "
+    + "rejected payload while satisfying direct-source evidence. These are negative constraints only; derive all "
+    + "replacement values yourself and do not emit a final answer before validator success."
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes("[UNREAL_ARCHITECTURE_CORE_CHANGE_REQUIRED]")) {
+        if (typeof (message as any).replaceText === "function") {
+          (message as any).replaceText(
+            current.replace(
+              /\[UNREAL_ARCHITECTURE_CORE_CHANGE_REQUIRED\][\s\S]*?(?=\n\[|$)/,
+              rule,
+            ),
+          );
+        }
+        return true;
+      }
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    if (typeof (chat as any).append === "function") {
+      (chat as any).append("system", rule);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function injectArchitecturePayloadRepairRule(chat: Chat, jsonPaths: string[]): boolean {
+  const paths = [...new Set(
+    (jsonPaths || []).map((path) => String(path || "").trim()).filter(Boolean),
+  )].slice(0, 64);
+  if (!paths.length) return false;
+  const rule = (
+    `${ARCHITECTURE_PAYLOAD_REPAIR_MARKER}\n`
+    + "The previous validator call was withheld locally because its tool payload omitted required JSON-schema "
+    + `paths: ${paths.join(", ")}. Reissue exactly one complete unreal_architecture_reasoning call now. `
+    + "Populate every listed field from your own source-grounded design; the paths specify serialization shape "
+    + "only and do not supply design values. Do not emit final text before validator success."
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(ARCHITECTURE_PAYLOAD_REPAIR_MARKER)) {
+        if (typeof (message as any).replaceText === "function") {
+          (message as any).replaceText(
+            current.replace(
+              /\[UNREAL_ARCHITECTURE_PAYLOAD_REPAIR_REQUIRED\][\s\S]*?(?=\n\[|$)/,
+              rule,
+            ),
+          );
+        }
+        return true;
+      }
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    if (typeof (chat as any).append === "function") {
+      (chat as any).append("system", rule);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function trailingMetaUserMessage(messages: ChatMessage[]): ChatMessage | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.getRole() !== "user") continue;
+    const text = String(message.getText() || "").trim();
+    if (!text) continue;
+    return core.isMetaUserMessage(text) ? message : null;
+  }
+  return null;
+}
+
+function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
+  attempted: boolean;
+  validated: boolean;
+  directEvidenceCount: number;
+  declarationEvidenceCount: number;
+  implementationEvidenceCount: number;
+  evidenceCallsSinceLastAttempt: number;
+  discoveryCallsSinceLastAttempt: number;
+  uniqueEvidenceSinceLastAttempt: number;
+  lastValidationFailed: boolean;
+  lastRepairStrategy: string;
+  lastRepairMode: string;
+  requiresFullProposal: boolean;
+  lastErrorCode: string;
+  unchangedCorePaths: string[];
+  stagedContractRequired: boolean;
+  networkedContractRequired: boolean;
+} {
+  const snapshots = core.snapshotMessages(messages);
+  const resultsById = new Map<string, any>();
+  for (const snapshot of snapshots) {
+    for (const result of snapshot.toolResults || []) {
+      const id = String(result?.toolCallId || "").trim();
+      if (id) resultsById.set(id, result);
+    }
+  }
+  let attempted = Boolean(checkpoint?.architectureProposal);
+  let validated = checkpoint?.architectureProposal?.validationOk === true;
+  let lastValidationFailed = checkpoint?.architectureProposal?.validationOk === false;
+  let lastRepairStrategy = String(checkpoint?.architectureProposal?.repairStrategy || "").trim();
+  let lastRepairMode = String(checkpoint?.architectureProposal?.repairMode || "").trim();
+  let requiresFullProposal = Boolean(
+    checkpoint?.architectureProposal?.requiresFullReplan
+    || lastRepairStrategy === "full_replan"
+    || lastRepairMode === "fullProposal",
+  );
+  let lastErrorCode = String(checkpoint?.architectureProposal?.lastErrorCode || "").trim();
+  let unchangedCorePaths = Array.isArray(checkpoint?.architectureProposal?.unchangedCorePaths)
+    ? checkpoint.architectureProposal.unchangedCorePaths.map((path: any) => String(path || "").trim()).filter(Boolean)
+    : [];
+  let stagedContractRequired = checkpoint?.architectureProposal?.stagedContractRequired === true;
+  let networkedContractRequired = Boolean(
+    checkpoint?.architectureProposal?.networkedContractRequired === true
+    || unchangedCorePaths.some((path: string) => path === "networking" || path.startsWith("networking.")),
+  );
+  const evidence = new Set<string>();
+  const declarationEvidence = new Set<string>();
+  const implementationEvidence = new Set<string>();
+  const evidenceSinceLastAttempt = new Set<string>();
+  let evidenceCallsSinceLastAttempt = 0;
+  let discoveryCallsSinceLastAttempt = 0;
+  for (const snapshot of snapshots) {
+    for (const call of snapshot.toolCalls || []) {
+      const name = String(call?.name || "").trim();
+      const result = resultsById.get(String(call?.id || "").trim());
+      if (toolNamesMatch(ARCHITECTURE_TOOL_NAME, name)) {
+        attempted = true;
+        evidenceCallsSinceLastAttempt = 0;
+        discoveryCallsSinceLastAttempt = 0;
+        evidenceSinceLastAttempt.clear();
+        if (result) {
+          for (const payload of core.parseJsonObjects(result.content)) {
+            const payloadErrorCode = String(payload?.errorCode || "").trim();
+            if (payloadErrorCode) lastErrorCode = payloadErrorCode;
+            unchangedCorePaths = (
+              payloadErrorCode === "ARCHITECTURE_PROPOSAL_REPLAN_CORE_UNCHANGED"
+              && Array.isArray(payload?.requiredChangedPaths)
+            )
+              ? payload.requiredChangedPaths.map((path: any) => String(path || "").trim()).filter(Boolean).slice(0, 24)
+              : [];
+            const validation = payload?.proposalValidation;
+            const designContract = validation?.designContract;
+            if (typeof designContract?.stagedImplementation === "boolean") {
+              stagedContractRequired = designContract.stagedImplementation;
+            }
+            if (typeof designContract?.networkedProposal === "boolean") {
+              networkedContractRequired = designContract.networkedProposal;
+            }
+            if (validation?.ok === true) {
+              validated = true;
+              lastValidationFailed = false;
+              requiresFullProposal = false;
+            } else if (validation?.ok === false) {
+              validated = false;
+              lastValidationFailed = true;
+            }
+            const repairStrategy = String(validation?.repairStrategy || "").trim();
+            const repairMode = String(payload?.repairSubmission?.mode || "").trim();
+            if (repairStrategy) lastRepairStrategy = repairStrategy;
+            if (repairMode) lastRepairMode = repairMode;
+            const currentRequiresFullProposal = Boolean(
+              validation?.designContract?.requiresFullReplan === true
+              || repairStrategy === "full_replan"
+              || repairMode === "fullProposal",
+            );
+            if (validation?.ok === true) {
+              requiresFullProposal = false;
+            } else if (validation?.ok === false || repairStrategy || repairMode) {
+              // The newest validator decision replaces the persisted mode. Keeping
+              // a prior full-replan flag sticky after the validator has narrowed the
+              // issue to proposalRepairs makes the model regenerate the entire
+              // proposal and can reintroduce already-fixed ownership mistakes.
+              requiresFullProposal = currentRequiresFullProposal;
+            }
+          }
+        }
+        continue;
+      }
+      if (!result || !core.toolResultSucceeded(result)) continue;
+      if (ARCHITECTURE_DISCOVERY_TOOLS.some((tool) => toolNamesMatch(tool, name))) {
+        discoveryCallsSinceLastAttempt += 1;
+      }
+      if (!ARCHITECTURE_EVIDENCE_TOOLS.some((tool) => toolNamesMatch(tool, name))) continue;
+      const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
+      const sourceIdentity = String(
+        args.path || args.filePath || args.symbol || args.symbolName || args.query || call.id || "",
+      ).trim();
+      const rangeIdentity = [args.startLine, args.endLine, args.lineStart, args.lineEnd]
+        .filter((value) => value !== undefined && value !== null && String(value).trim())
+        .join(":");
+      const identity = sourceIdentity
+        ? `${name.toLowerCase()}:${sourceIdentity}${rangeIdentity ? `:${rangeIdentity}` : ""}`
+        : "";
+      if (!identity) continue;
+      evidence.add(identity);
+      evidenceSinceLastAttempt.add(identity);
+      evidenceCallsSinceLastAttempt += 1;
+      const normalizedSource = sourceIdentity.replace(/\\/g, "/").toLowerCase();
+      if (/\.(?:h|hh|hpp|hxx|inl)$/.test(normalizedSource)) declarationEvidence.add(identity);
+      if (
+        /\.(?:c|cc|cpp|cxx|m|mm|cs)$/.test(normalizedSource)
+        || ["read_symbol", "unreal_symbol_lookup"].some((tool) => toolNamesMatch(tool, name))
+      ) {
+        implementationEvidence.add(identity);
+      }
+    }
+  }
+  return {
+    attempted,
+    validated,
+    directEvidenceCount: evidence.size,
+    declarationEvidenceCount: declarationEvidence.size,
+    implementationEvidenceCount: implementationEvidence.size,
+    evidenceCallsSinceLastAttempt,
+    discoveryCallsSinceLastAttempt,
+    uniqueEvidenceSinceLastAttempt: evidenceSinceLastAttempt.size,
+    lastValidationFailed,
+    lastRepairStrategy,
+    lastRepairMode,
+    requiresFullProposal,
+    lastErrorCode,
+    unchangedCorePaths,
+    stagedContractRequired,
+    networkedContractRequired,
+  };
+}
+
+function appendRequired(schema: any, fields: string[]): void {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return;
+  schema.required = [...new Set([
+    ...(Array.isArray(schema.required) ? schema.required : []),
+    ...fields,
+  ])];
+}
+
+function architectureSubmissionTool(
+  tool: any,
+  requireCompleteProposal: boolean,
+  options: { stagedContract?: boolean; networkedContract?: boolean } = {},
+): any {
+  if (!requireCompleteProposal) return tool;
+  let cloned: any;
+  try {
+    cloned = JSON.parse(JSON.stringify(tool));
+  } catch {
+    return tool;
+  }
+  const callable = cloned?.function && typeof cloned.function === "object"
+    ? cloned.function
+    : cloned;
+  const parameters = callable?.parameters;
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return cloned;
+  const properties = parameters.properties;
+  if (!properties || typeof properties !== "object" || !("proposal" in properties)) return cloned;
+  appendRequired(parameters, ["proposal"]);
+  const proposal = properties.proposal;
+  if (!proposal || typeof proposal !== "object" || Array.isArray(proposal)) return cloned;
+  const proposalProperties = proposal.properties;
+  if (!proposalProperties || typeof proposalProperties !== "object") return cloned;
+  if (options.stagedContract) {
+    appendRequired(proposal, [
+      "decision",
+      "invariants",
+      "impactedSurfaces",
+      "validationPlan",
+      "alternatives",
+      "selectedAlternative",
+      "selectionRationale",
+      "implementationFiles",
+      "ownership",
+      "stateInventory",
+      "lifecycleTransitions",
+      "migrationPlan",
+      "validationMatrix",
+      "implementationSlices",
+    ]);
+    for (const field of [
+      "alternatives",
+      "implementationFiles",
+      "stateInventory",
+      "lifecycleTransitions",
+      "migrationPlan",
+      "validationMatrix",
+      "implementationSlices",
+    ]) {
+      const fieldSchema = proposalProperties[field];
+      if (fieldSchema && typeof fieldSchema === "object" && !Array.isArray(fieldSchema)) {
+        fieldSchema.minItems = field === "alternatives" ? 2 : 1;
+      }
+    }
+    appendRequired(proposalProperties.ownership, [
+      "stateOwner",
+      "dataOwner",
+      "lifecycleOwner",
+      "failurePolicy",
+      "recoveryPolicy",
+    ]);
+    const matrixInvariant = proposalProperties.validationMatrix?.items?.properties?.invariant;
+    if (matrixInvariant && typeof matrixInvariant === "object") {
+      matrixInvariant.description = (
+        "Must exactly equal one string from proposal.invariants so validation coverage is machine-checkable."
+      );
+    }
+    const sliceInvariants = proposalProperties.implementationSlices?.items?.properties?.invariants;
+    if (sliceInvariants && typeof sliceInvariants === "object") {
+      sliceInvariants.description = (
+        "Every entry must exactly equal one string from proposal.invariants; do not invent slice-only invariants."
+      );
+    }
+  }
+  if (options.networkedContract && proposalProperties.networking) {
+    appendRequired(proposal, ["networking"]);
+    appendRequired(proposalProperties.networking, [
+      "authorityOwner",
+      "clientInitiated",
+      "requestPath",
+      "rpcOwner",
+      "owningConnection",
+      "serverValidation",
+      "replicatedState",
+    ]);
+    const requestPath = proposalProperties.networking?.properties?.requestPath;
+    if (requestPath && typeof requestPath === "object") requestPath.minItems = 3;
+  }
+  return cloned;
+}
+
+function requiredSchemaLeafPaths(schema: any, basePath: string, depth = 0): string[] {
+  if (!schema || typeof schema !== "object" || depth > 12) return basePath ? [basePath] : [];
+  const required = Array.isArray(schema.required)
+    ? schema.required.map((field: any) => String(field || "").trim()).filter(Boolean)
+    : [];
+  const properties = schema.properties && typeof schema.properties === "object"
+    ? schema.properties
+    : {};
+  if (!required.length) return basePath ? [basePath] : [];
+  const paths: string[] = [];
+  for (const field of required) {
+    const childPath = basePath ? `${basePath}.${field}` : field;
+    const childSchema = properties[field];
+    const descendants = requiredSchemaLeafPaths(childSchema, childPath, depth + 1);
+    paths.push(...(descendants.length ? descendants : [childPath]));
+  }
+  return paths;
+}
+
+function schemaContractViolationPaths(
+  schema: any,
+  value: any,
+  basePath = "",
+  depth = 0,
+): string[] {
+  if (!schema || typeof schema !== "object" || depth > 12) return [];
+  const schemaTypes = Array.isArray(schema.type) ? schema.type : [schema.type].filter(Boolean);
+  const expectsObject = schemaTypes.includes("object") || Boolean(schema.properties || schema.required);
+  const expectsArray = schemaTypes.includes("array");
+  if (expectsObject) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      const requiredLeaves = requiredSchemaLeafPaths(schema, basePath, depth);
+      return requiredLeaves.length ? requiredLeaves : [basePath || "$arguments"];
+    }
+    const required = Array.isArray(schema.required)
+      ? schema.required.map((field: any) => String(field || "").trim()).filter(Boolean)
+      : [];
+    const properties = schema.properties && typeof schema.properties === "object"
+      ? schema.properties
+      : {};
+    const violations: string[] = [];
+    for (const field of required) {
+      const childPath = basePath ? `${basePath}.${field}` : field;
+      if (!Object.prototype.hasOwnProperty.call(value, field) || value[field] == null) {
+        const requiredLeaves = requiredSchemaLeafPaths(properties[field], childPath, depth + 1);
+        violations.push(...(requiredLeaves.length ? requiredLeaves : [childPath]));
+        continue;
+      }
+      violations.push(...schemaContractViolationPaths(
+        properties[field], value[field], childPath, depth + 1,
+      ));
+    }
+    for (const [field, childSchema] of Object.entries(properties)) {
+      if (required.includes(field) || !Object.prototype.hasOwnProperty.call(value, field)) continue;
+      const childPath = basePath ? `${basePath}.${field}` : field;
+      violations.push(...schemaContractViolationPaths(
+        childSchema, value[field], childPath, depth + 1,
+      ));
+    }
+    return violations;
+  }
+  if (expectsArray) {
+    if (!Array.isArray(value)) return [basePath || "$arguments"];
+    const minItems = Number(schema.minItems || 0);
+    if (Number.isFinite(minItems) && value.length < minItems) return [basePath || "$arguments"];
+    if (schema.items && typeof schema.items === "object") {
+      return value.flatMap((item: any, index: number) => schemaContractViolationPaths(
+        schema.items, item, `${basePath}[${index}]`, depth + 1,
+      ));
+    }
+  }
+  return [];
+}
+
+function architecturePayloadViolationPaths(request: any, tool: any): string[] {
+  if (!toolNamesMatch(ARCHITECTURE_TOOL_NAME, requestedToolName(request))) return [];
+  const callable = tool?.function && typeof tool.function === "object" ? tool.function : tool;
+  const parameters = callable?.parameters;
+  const args = request?.arguments && typeof request.arguments === "object"
+    ? request.arguments
+    : {};
+  return [...new Set(schemaContractViolationPaths(parameters, args))].slice(0, 64);
+}
+
+function stagedArchitectureContractRequired(goal: string): boolean {
+  return /templates_lobby|implementation\s+slice|migration\s+(?:order|plan)|lifecycle|alternative|ownership|구현\s*슬라이스|마이그레이션|생명주기|대안|소유권/i.test(
+    String(goal || ""),
+  );
+}
+
+function networkedArchitectureContractRequired(goal: string): boolean {
+  return /authoritative|authority|multiplayer|replication|network|\brpc\b|\bserver\b|\bclient\b|멀티플레이|네트워크|리플리케이션|서버|클라이언트|권한/i.test(
+    String(goal || ""),
+  );
+}
+
+function architectureDiscoveryToolAllowed(name: string): boolean {
+  return toolNamesMatch(ARCHITECTURE_TOOL_NAME, name)
+    || ARCHITECTURE_DISCOVERY_TOOLS.some((tool) => toolNamesMatch(tool, name));
 }
 
 const SESSION_SCOPED_ANALYSIS_TOOLS = [
@@ -503,6 +1038,54 @@ function validateToolRequest(request: any, checkpoint: any): { ok: boolean; reas
     return { ok: false, reason: `tool call id already completed: ${request.id}` };
   }
   return { ok: true };
+}
+
+function reconcilePendingToolCalls(pendingCalls: any[], currentSnapshots: any[]): {
+  remainingPending: any[];
+  matchedIds: string[];
+  abandonedIds: string[];
+} {
+  const completed = currentSnapshots.flatMap((message: any) => message.toolResults || []);
+  const activeCallIds = new Set(
+    currentSnapshots
+      .flatMap((message: any) => message.toolCalls || [])
+      .map((call: any) => String(call?.id || "").trim())
+      .filter(Boolean),
+  );
+  const anonymousCompletedCount = completed.filter((result: any) => !result.toolCallId).length;
+  const matchedIds: string[] = [];
+  const abandonedIds: string[] = [];
+  const remainingPending = pendingCalls.filter((pending: any) => {
+    const pendingId = String(pending?.id || "").trim();
+    const observedResultCount = Number(pending?.observedToolResultCount || 0);
+    const hasAnonymousBaseline = Number.isFinite(Number(pending?.observedAnonymousToolResultCount));
+    const matched = pendingId
+      ? completed.some((result: any) => String(result?.toolCallId || "").trim() === pendingId)
+      : (hasAnonymousBaseline
+        ? anonymousCompletedCount > Number(pending.observedAnonymousToolResultCount)
+        : completed.length > observedResultCount);
+    if (matched) {
+      if (pendingId) matchedIds.push(pendingId);
+      return false;
+    }
+    const architectureCallRemovedFromActiveHistory = Boolean(
+      pendingId
+      && !activeCallIds.has(pendingId)
+      && toolNamesMatch(ARCHITECTURE_TOOL_NAME, String(pending?.name || "")),
+    );
+    if (architectureCallRemovedFromActiveHistory) {
+      // LM Studio can retain a durable pending checkpoint after the user stops
+      // generation and deletes or replaces that assistant version. A read-only
+      // architecture validator call that no longer exists in active history can
+      // never receive a result, so retaining it deadlocks every later recovery
+      // turn. Limit abandonment to this validator; unresolved mutation tools stay
+      // fail-closed until an explicit result is recorded.
+      abandonedIds.push(pendingId);
+      return false;
+    }
+    return true;
+  });
+  return { remainingPending, matchedIds, abandonedIds };
 }
 
 async function generate(ctl: GeneratorController, history: Chat): Promise<void> {
@@ -598,21 +1181,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   ];
   if (checkpoint && unresolvedPendingCalls.length > 0) {
     const currentSnapshots = core.snapshotMessages(messages);
-    const completed = currentSnapshots.flatMap((message: any) => message.toolResults || []);
-    const anonymousCompletedCount = completed.filter((result: any) => !result.toolCallId).length;
-    const matchedIds: string[] = [];
-    const remainingPending = unresolvedPendingCalls.filter((pending: any) => {
-      const pendingId = pending?.id || null;
-      const observedResultCount = Number(pending?.observedToolResultCount || 0);
-      const hasAnonymousBaseline = Number.isFinite(Number(pending?.observedAnonymousToolResultCount));
-      const matched = pendingId
-        ? completed.some((result: any) => result.toolCallId === pendingId)
-        : (hasAnonymousBaseline
-          ? anonymousCompletedCount > Number(pending.observedAnonymousToolResultCount)
-          : completed.length > observedResultCount);
-      if (matched && pendingId) matchedIds.push(String(pendingId));
-      return !matched;
-    });
+    const { remainingPending, matchedIds, abandonedIds } = reconcilePendingToolCalls(
+      unresolvedPendingCalls,
+      currentSnapshots,
+    );
     if (remainingPending.length !== unresolvedPendingCalls.length) {
       checkpoint.completedToolCallIds = [
         ...(checkpoint.completedToolCallIds || []),
@@ -626,6 +1198,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         requireCheckpointPersistence,
         "pending_tool_result_reconciliation",
       );
+      if (abandonedIds.length > 0) {
+        await appendEventBestEffort(sessionId, {
+          type: "pending_tool_calls_abandoned",
+          at: new Date().toISOString(),
+          reason: "read_only_architecture_call_absent_from_active_history",
+          toolCallIds: abandonedIds,
+        });
+      }
     }
     unresolvedPendingCalls = remainingPending;
   }
@@ -645,17 +1225,120 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     );
   }
 
-  const currentFormatted = await model.applyPromptTemplate(history);
-  const inputTokens = await model.countTokens(currentFormatted);
   const contextLength = await model.getContextLength();
   const toolDefinitions = ctl.getToolDefinitions();
-  const architectureValidationRequired = requiresArchitectureValidation(
-    latestUserGoalText(messages), toolDefinitions,
+  const nextCheckpoint = core.buildCheckpoint(messages, checkpoint || {}, { maxCheckpointFacts: 32 });
+  nextCheckpoint.compactionGeneration = Number(checkpoint?.compactionGeneration || 0);
+  const trailingMetaUser = trailingMetaUserMessage(messages);
+  const architectureGoal = latestUserGoalText(messages);
+  const persistedArchitectureRecovery = Boolean(
+    nextCheckpoint?.architectureProposal?.validationOk === false
+    && architectureRecoveryContinuationRequested(architectureGoal),
+  );
+  const architectureValidationRequired = !trailingMetaUser && (
+    requiresArchitectureValidation(architectureGoal, toolDefinitions)
+    || persistedArchitectureRecovery
   );
   if (architectureValidationRequired) {
     injectArchitectureValidationRule(history);
   }
-  const toolSchemaTokens = await model.countTokens(JSON.stringify(toolDefinitions));
+  const architectureEvidenceReadThreshold = Math.floor(finiteNumber(
+    configValue(ctl, "architectureEvidenceReadThreshold", 4), 4, 1, 64,
+  ));
+  const architectureEvidenceHardLimit = Math.floor(finiteNumber(
+    configValue(ctl, "architectureEvidenceHardLimit", 8), 8, architectureEvidenceReadThreshold, 128,
+  ));
+  const architectureReplanEvidenceReadBudget = Math.floor(finiteNumber(
+    configValue(ctl, "architectureReplanEvidenceReadBudget", 4), 4, 0, 32,
+  ));
+  const architectureStatus = architectureGateStatus(messages, nextCheckpoint);
+  const architectureContractGoal = architectureContractGoalText(
+    messages,
+    architectureGoal,
+    architectureStatus.attempted && architectureStatus.lastValidationFailed,
+  );
+  const stagedContractRequired = Boolean(
+    architectureStatus.stagedContractRequired
+    || stagedArchitectureContractRequired(architectureContractGoal),
+  );
+  const networkedContractRequired = Boolean(
+    architectureStatus.networkedContractRequired
+    || networkedArchitectureContractRequired(architectureContractGoal),
+  );
+  if (nextCheckpoint?.architectureProposal) {
+    nextCheckpoint.architectureProposal.stagedContractRequired = stagedContractRequired;
+    nextCheckpoint.architectureProposal.networkedContractRequired = networkedContractRequired;
+  }
+  const architectureTool = toolDefinitions.find((tool: any) => {
+    const name = tool?.function?.name || tool?.name || "";
+    return toolNamesMatch(ARCHITECTURE_TOOL_NAME, name);
+  });
+  const requiredArchitectureTool = toolNamesMatch(
+    ARCHITECTURE_TOOL_NAME,
+    String(checkpoint?.requiredNextTool?.name || ""),
+  );
+  const initialArchitectureEvidenceReady = Boolean(
+    architectureStatus.directEvidenceCount >= architectureEvidenceReadThreshold
+    && (
+      architectureStatus.implementationEvidenceCount > 0
+      || architectureStatus.directEvidenceCount >= architectureEvidenceHardLimit
+    )
+  );
+  const architectureEvidenceRefillActive = Boolean(
+    architectureValidationRequired
+    && architectureTool
+    && architectureStatus.attempted
+    && architectureStatus.lastValidationFailed
+    && architectureStatus.requiresFullProposal
+    && architectureStatus.lastErrorCode !== "ARCHITECTURE_PROPOSAL_REPLAN_CORE_UNCHANGED"
+    && architectureReplanEvidenceReadBudget > 0
+    && architectureStatus.discoveryCallsSinceLastAttempt < architectureReplanEvidenceReadBudget
+    && !requiredArchitectureTool
+  );
+  const architectureToolForced = Boolean(
+    architectureValidationRequired
+    && !architectureStatus.validated
+    && architectureTool
+    && (
+      (!architectureStatus.attempted && initialArchitectureEvidenceReady)
+      || (architectureStatus.attempted && !architectureEvidenceRefillActive)
+      || requiredArchitectureTool
+    )
+  );
+  if (architectureToolForced) {
+    injectArchitectureSubmissionRule(history);
+    if (architectureStatus.lastErrorCode === "ARCHITECTURE_PROPOSAL_REPLAN_CORE_UNCHANGED") {
+      injectArchitectureCoreChangeRule(history, architectureStatus.unchangedCorePaths);
+    }
+  }
+  const requireCompleteArchitectureProposal = Boolean(
+    (architectureToolForced || architectureEvidenceRefillActive)
+    && (!nextCheckpoint?.architectureProposal || architectureStatus.requiresFullProposal),
+  );
+  const architectureContractTool = architectureSubmissionTool(
+    architectureTool,
+    requireCompleteArchitectureProposal,
+    {
+      stagedContract: stagedContractRequired,
+      networkedContract: networkedContractRequired,
+    },
+  );
+  const effectiveToolDefinitions = architectureToolForced
+    ? [architectureContractTool]
+    : (architectureEvidenceRefillActive
+      ? toolDefinitions
+        .filter((tool: any) => architectureDiscoveryToolAllowed(
+          tool?.function?.name || tool?.name || "",
+        ))
+        .map((tool: any) => (
+          toolNamesMatch(ARCHITECTURE_TOOL_NAME, tool?.function?.name || tool?.name || "")
+            ? architectureContractTool
+            : tool
+        ))
+      : toolDefinitions);
+  const currentFormatted = await model.applyPromptTemplate(history);
+  const inputTokens = await model.countTokens(currentFormatted);
+  const toolSchemaTokens = await model.countTokens(JSON.stringify(effectiveToolDefinitions));
   const persistedNextToolName = checkpoint?.requiredNextTool?.name || "";
   const nextToolName = core.isNonToolNextAction(persistedNextToolName) ? "" : persistedNextToolName;
   const hardRemainingTokens = finiteNumber(configValue(ctl, "hardRemainingTokens", 8000), 8000);
@@ -663,7 +1346,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     configValue(ctl, "maxOutputReserve", 4096), 4096, 1,
   );
   const architectureOutputReserve = finiteNumber(
-    configValue(ctl, "architectureMaxOutputReserve", 8192), 8192, configuredOutputReserve,
+    configValue(ctl, "architectureMaxOutputReserve", 6144), 6144, configuredOutputReserve,
   );
   const config = {
     enabled,
@@ -686,6 +1369,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     targetRemainingTokensAfterCompaction: finiteNumber(
       configValue(ctl, "targetRemainingTokensAfterCompaction", 24000), 24000, hardRemainingTokens,
     ),
+    architectureEvidenceReadThreshold,
+    architectureEvidenceHardLimit,
+    architectureReplanEvidenceReadBudget,
   };
   const decision = core.budgetDecision({ contextLength, inputTokens, nextToolName, config, toolSchemaTokens });
 
@@ -703,10 +1389,25 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     contextLength,
     decision,
     workingDirectory,
+    architectureValidationRequired,
+    architectureToolForced,
+    architectureEvidenceRefillActive,
+    architectureAttempted: architectureStatus.attempted,
+    architectureValidated: architectureStatus.validated,
+    architectureDirectEvidenceCount: architectureStatus.directEvidenceCount,
+    architectureDeclarationEvidenceCount: architectureStatus.declarationEvidenceCount,
+    architectureImplementationEvidenceCount: architectureStatus.implementationEvidenceCount,
+    architectureEvidenceCallsSinceLastAttempt: architectureStatus.evidenceCallsSinceLastAttempt,
+    architectureDiscoveryCallsSinceLastAttempt: architectureStatus.discoveryCallsSinceLastAttempt,
+    architectureUniqueEvidenceSinceLastAttempt: architectureStatus.uniqueEvidenceSinceLastAttempt,
+    architectureLastRepairStrategy: architectureStatus.lastRepairStrategy,
+    architectureLastRepairMode: architectureStatus.lastRepairMode,
+    architectureLastErrorCode: architectureStatus.lastErrorCode,
+    architectureUnchangedCorePaths: architectureStatus.unchangedCorePaths,
+    architectureStagedContractRequired: stagedContractRequired,
+    architectureNetworkedContractRequired: networkedContractRequired,
+    requireCompleteArchitectureProposal,
   });
-
-  const nextCheckpoint = core.buildCheckpoint(messages, checkpoint || {}, { maxCheckpointFacts: 32 });
-  nextCheckpoint.compactionGeneration = Number(checkpoint?.compactionGeneration || 0);
 
   let modelChat = history;
   const lastCompactionCount = Number(checkpoint?.lastCompactionSourceMessageCount || 0);
@@ -731,15 +1432,6 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   }).length;
   const hasPriorAssistant = messages.some((message) => message.getRole() === "assistant");
   const latestIsReadOnly = core.isReadOnlyUserGoal(latestObjective);
-  let trailingMetaUser: ChatMessage | null = null;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.getRole() !== "user") continue;
-    const text = String(message.getText() || "").trim();
-    if (!text) continue;
-    if (core.isMetaUserMessage(text)) trailingMetaUser = message;
-    break;
-  }
   const budgetPressed = decision.action === "soft_compact" || decision.action === "hard_compact";
   // Major mode flips may soft-compact even when the budget is healthy, but ordinary
   // objective-string churn must not. Retained turns are never zeroed by goal change alone.
@@ -876,7 +1568,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     nextCheckpoint?.requiredNextTool?.name
     && !core.isNonToolNextAction(nextCheckpoint.requiredNextTool.name),
   );
-  const toolControlPlaneEnforced = strictToolControlPlane || requiredToolGateActive;
+  const toolControlPlaneEnforced = strictToolControlPlane
+    || requiredToolGateActive
+    || architectureToolForced
+    || architectureEvidenceRefillActive;
   const bufferUntilPredictionComplete = Boolean(config.bufferUntilPredictionComplete)
     || requireCheckpointPersistence
     || Boolean(config.rejectTruncatedPredictions);
@@ -892,56 +1587,76 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     if (toolControlPlaneEnforced || bufferUntilPredictionComplete) events.push(event);
     else emitEvent(event);
   };
-  const prediction = model.respond(modelChat, {
-    maxTokens: Number(config.maxOutputReserve),
-    temperature: Number(config.temperature),
-    ...(toolDefinitions.length > 0 ? { rawTools: { type: "toolArray", tools: toolDefinitions } } : {}),
-    contextOverflowPolicy: "stopAtLimit",
-    signal: ctl.abortSignal,
-    onPredictionFragment(fragment: any) {
-      recordEvent({
-        kind: "fragment",
-        content: String(fragment.content || ""),
-        opts: fragmentOptions(fragment),
-      });
-    },
-    onToolCallRequestStart(callId: number, info: any) {
-      recordEvent({ kind: "start", callId, toolCallId: info?.toolCallId });
-    },
-    onToolCallRequestNameReceived(callId: number, name: string) {
-      recordEvent({ kind: "name", callId, name });
-    },
-    onToolCallRequestArgumentFragmentGenerated(callId: number, content: string) {
-      recordEvent({ kind: "args", callId, content });
-    },
-    onToolCallRequestEnd(callId: number, info: any) {
-      const rawRequest = info?.toolCallRequest || {};
-      const request = enrichToolRequestSession(rawRequest, sessionId);
-      if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
-        replaceBufferedArgumentFragments(events, callId, request.arguments);
-      }
-      requests.push({ callId, request });
-      recordEvent({ kind: "end", callId, request });
-    },
-    onToolCallRequestFailure(callId: number, error: Error) {
-      recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
-    },
-  });
-  const predictionResult: any = await prediction.result();
-  const stopReason = String(predictionResult?.stats?.stopReason || "");
+  const runPrediction = async (predictionTools: any[], forceTool: boolean): Promise<string> => {
+    const prediction = model.respond(modelChat, {
+      maxTokens: Number(config.maxOutputReserve),
+      temperature: Number(config.temperature),
+      ...(predictionTools.length > 0 ? {
+        rawTools: {
+          type: "toolArray",
+          tools: predictionTools,
+          ...(forceTool ? { force: true } : {}),
+        },
+      } : {}),
+      contextOverflowPolicy: "stopAtLimit",
+      signal: ctl.abortSignal,
+      onPredictionFragment(fragment: any) {
+        recordEvent({
+          kind: "fragment",
+          content: String(fragment.content || ""),
+          opts: fragmentOptions(fragment),
+        });
+      },
+      onToolCallRequestStart(callId: number, info: any) {
+        recordEvent({ kind: "start", callId, toolCallId: info?.toolCallId });
+      },
+      onToolCallRequestNameReceived(callId: number, name: string) {
+        recordEvent({ kind: "name", callId, name });
+      },
+      onToolCallRequestArgumentFragmentGenerated(callId: number, content: string) {
+        recordEvent({ kind: "args", callId, content });
+      },
+      onToolCallRequestEnd(callId: number, info: any) {
+        const rawRequest = info?.toolCallRequest || {};
+        const request = enrichToolRequestSession(rawRequest, sessionId);
+        if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
+          replaceBufferedArgumentFragments(events, callId, request.arguments);
+        }
+        requests.push({ callId, request });
+        recordEvent({ kind: "end", callId, request });
+      },
+      onToolCallRequestFailure(callId: number, error: Error) {
+        recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
+      },
+    });
+    const predictionResult: any = await prediction.result();
+    return String(predictionResult?.stats?.stopReason || "");
+  };
   const unsafeStopReasons = new Set(["contextLengthReached", "failed", "modelUnloaded"]);
-  const truncated = unsafeStopReasons.has(stopReason)
-    || (Boolean(config.rejectTruncatedPredictions) && stopReason === "maxPredictedTokensReached");
-  await appendEventBestEffort(sessionId, {
-    type: "prediction_completion",
-    at: new Date().toISOString(),
-    stopReason: stopReason || "unspecified",
-    bufferedEventCount: events.length,
-    toolRequestCount: requests.length,
-    outputCommitted: false,
-    outputCommitPending: !truncated,
-  });
-  if (truncated) {
+  const predictionTruncated = (reason: string): boolean => (
+    unsafeStopReasons.has(reason)
+    || (Boolean(config.rejectTruncatedPredictions) && reason === "maxPredictedTokensReached")
+  );
+  const recordPredictionCompletion = async (
+    reason: string,
+    recoveryAttempt: boolean,
+  ): Promise<void> => {
+    const truncatedPrediction = predictionTruncated(reason);
+    await appendEventBestEffort(sessionId, {
+      type: "prediction_completion",
+      at: new Date().toISOString(),
+      stopReason: reason || "unspecified",
+      bufferedEventCount: events.length,
+      toolRequestCount: requests.length,
+      outputCommitted: false,
+      outputCommitPending: !truncatedPrediction,
+      architectureFinalRecoveryAttempt: recoveryAttempt,
+    });
+  };
+
+  let stopReason = await runPrediction(effectiveToolDefinitions, architectureToolForced);
+  await recordPredictionCompletion(stopReason, false);
+  if (predictionTruncated(stopReason)) {
     const safelyBuffered = toolControlPlaneEnforced || bufferUntilPredictionComplete;
     throw new Error(
       `Model prediction was discarded because it did not complete safely (stopReason=${stopReason}). `
@@ -950,12 +1665,181 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         : "Atomic output was explicitly disabled, so already-streamed output may be partial. Enable atomic output before retrying."),
     );
   }
+  const incompleteArchitecturePaths = requireCompleteArchitectureProposal
+    ? [...new Set(requests.flatMap((entry) => (
+      architecturePayloadViolationPaths(entry.request, architectureContractTool)
+    )))]
+    : [];
+  if (incompleteArchitecturePaths.length > 0) {
+    // Some smaller local models acknowledge the complete schema in reasoning but
+    // omit required sections from the emitted tool arguments. Do not send that
+    // malformed call to the MCP server and enter a result/retry loop. Give the
+    // model one bounded serialization-only retry with missing JSON paths; values
+    // still have to be derived by the model from retained source evidence.
+    await appendEventBestEffort(sessionId, {
+      type: "architecture_payload_repair_started",
+      at: new Date().toISOString(),
+      missingRequiredPaths: incompleteArchitecturePaths,
+      priorToolRequestCount: requests.length,
+    });
+    events.length = 0;
+    requests.length = 0;
+    injectArchitecturePayloadRepairRule(modelChat, incompleteArchitecturePaths);
+    stopReason = await runPrediction([architectureContractTool], true);
+    await recordPredictionCompletion(stopReason, true);
+    if (predictionTruncated(stopReason)) {
+      throw new Error(
+        `Forced architecture payload repair was discarded because it did not complete safely (stopReason=${stopReason}).`,
+      );
+    }
+    const retryArchitectureRequests = requests.filter((entry) => (
+      toolNamesMatch(ARCHITECTURE_TOOL_NAME, requestedToolName(entry.request))
+    ));
+    const remainingViolationPaths = [...new Set(retryArchitectureRequests.flatMap((entry) => (
+      architecturePayloadViolationPaths(entry.request, architectureContractTool)
+    )))];
+    if (retryArchitectureRequests.length === 0 || remainingViolationPaths.length > 0) {
+      nextCheckpoint.requiredNextTool = {
+        name: ARCHITECTURE_TOOL_NAME,
+        reference: "architecture_payload_repair_failed",
+        args: {},
+      };
+      await persistCheckpoint(
+        sessionId,
+        nextCheckpoint,
+        requireCheckpointPersistence,
+        "architecture_payload_repair_failed",
+      );
+      await appendEventBestEffort(sessionId, {
+        type: "architecture_payload_repair_failed",
+        at: new Date().toISOString(),
+        reason: retryArchitectureRequests.length === 0
+          ? "validator_call_missing"
+          : "required_schema_paths_still_missing",
+        missingRequiredPaths: remainingViolationPaths,
+      });
+      throw new Error(
+        "Architecture validator output was discarded after one bounded payload repair because required JSON-schema "
+        + `paths are still missing: ${(remainingViolationPaths.length
+          ? remainingViolationPaths
+          : incompleteArchitecturePaths).join(", ")}.`,
+      );
+    }
+    await appendEventBestEffort(sessionId, {
+      type: "architecture_payload_repair_completed",
+      at: new Date().toISOString(),
+      repairedRequiredPaths: incompleteArchitecturePaths,
+    });
+  }
+  let architectureRequestProduced = requests.some((entry) => (
+    toolNamesMatch(ARCHITECTURE_TOOL_NAME, requestedToolName(entry.request))
+  ));
+  if (
+    architectureValidationRequired
+    && !architectureStatus.validated
+    && requests.length === 0
+    && !architectureRequestProduced
+  ) {
+    // A smaller local model can understand a rejected proposal in prose but
+    // still try to end the turn instead of producing the mandatory replacement
+    // payload. Discard that unvalidated text and make one bounded recovery
+    // prediction in the same GUI turn with only the validator schema available.
+    // The model still derives every proposal value; this supplies no design
+    // answer and cannot execute project writes.
+    await appendEventBestEffort(sessionId, {
+      type: "architecture_final_recovery_started",
+      at: new Date().toISOString(),
+      reason: "proposal_validation_missing",
+      directEvidenceCount: architectureStatus.directEvidenceCount,
+      proposalAttempted: architectureStatus.attempted,
+    });
+    events.length = 0;
+    requests.length = 0;
+    injectArchitectureSubmissionRule(modelChat);
+    stopReason = await runPrediction([architectureContractTool], true);
+    await recordPredictionCompletion(stopReason, true);
+    if (predictionTruncated(stopReason)) {
+      throw new Error(
+        `Forced architecture recovery was discarded because it did not complete safely (stopReason=${stopReason}).`
+      );
+    }
+    architectureRequestProduced = requests.some((entry) => (
+      toolNamesMatch(ARCHITECTURE_TOOL_NAME, requestedToolName(entry.request))
+    ));
+    await appendEventBestEffort(sessionId, {
+      type: "architecture_final_recovery_completed",
+      at: new Date().toISOString(),
+      stopReason: stopReason || "unspecified",
+      architectureRequestProduced,
+    });
+  }
+  if (
+    architectureValidationRequired
+    && !architectureStatus.validated
+    && requests.length === 0
+    && !architectureRequestProduced
+  ) {
+    nextCheckpoint.requiredNextTool = {
+      name: ARCHITECTURE_TOOL_NAME,
+      reference: "architecture_final_blocked",
+      args: {},
+    };
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "architecture_final_blocked",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "architecture_final_blocked",
+      at: new Date().toISOString(),
+      reason: "proposal_validation_missing",
+      directEvidenceCount: architectureStatus.directEvidenceCount,
+      proposalAttempted: architectureStatus.attempted,
+    });
+    throw new Error(
+      "Architecture final output was discarded because unreal_architecture_reasoning has not returned "
+      + "proposalValidation.ok=true. Retry this generation; the validator tool is now required.",
+    );
+  }
 
   const verdictByCallId = new Map<number, { ok: boolean; reason?: string }>();
   for (const entry of requests) {
-    const verdict = toolControlPlaneEnforced
-      ? validateToolRequest(entry.request, nextCheckpoint)
-      : { ok: true };
+    const requestedName = requestedToolName(entry.request);
+    const requestArguments = entry.request?.arguments && typeof entry.request.arguments === "object"
+      ? entry.request.arguments
+      : {};
+    const missingRequiredProposal = Boolean(
+      requireCompleteArchitectureProposal
+      && toolNamesMatch(ARCHITECTURE_TOOL_NAME, requestedName)
+      && (
+        !requestArguments.proposal
+        || typeof requestArguments.proposal !== "object"
+        || Array.isArray(requestArguments.proposal)
+      )
+    );
+    const architectureToolRejected = architectureToolForced
+      && !toolNamesMatch(ARCHITECTURE_TOOL_NAME, requestedName);
+    const discoveryToolRejected = architectureEvidenceRefillActive
+      && !architectureDiscoveryToolAllowed(requestedName);
+    const verdict = architectureToolRejected
+      ? {
+        ok: false,
+        reason: `Architecture submission is required; expected ${ARCHITECTURE_TOOL_NAME}, got ${requestedName || "<unnamed>"}.`,
+      }
+      : (discoveryToolRejected
+        ? {
+          ok: false,
+          reason: `Architecture evidence refill only allows direct-source discovery or ${ARCHITECTURE_TOOL_NAME}; received ${requestedName || "<unnamed>"}.`,
+        }
+      : (missingRequiredProposal
+        ? {
+          ok: false,
+          reason: "Architecture submission is required; the validator call must include one complete proposal object.",
+        }
+      : (toolControlPlaneEnforced
+        ? validateToolRequest(entry.request, nextCheckpoint)
+        : { ok: true })));
     verdictByCallId.set(entry.callId, verdict);
     if (!verdict.ok) {
       await appendEventBestEffort(sessionId, {
@@ -1016,5 +1900,5 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   });
 }
 
-export { generate };
+export { architectureGateStatus, generate, reconcilePendingToolCalls };
 // End of module.

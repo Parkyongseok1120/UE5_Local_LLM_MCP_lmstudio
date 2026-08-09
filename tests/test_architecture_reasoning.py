@@ -7,7 +7,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from architecture_reasoning import analyze_architecture, validate_architecture_proposal  # noqa: E402
+from architecture_reasoning import (  # noqa: E402
+    analyze_architecture,
+    source_snapshot_fingerprint,
+    validate_architecture_proposal,
+)
 from build_symbol_graph import build_symbol_graph  # noqa: E402
 
 
@@ -61,6 +65,7 @@ def test_architecture_proposal_requires_design_contract_and_blocks_cycle(tmp_pat
 
     assert incomplete["proposalValidation"]["ok"] is False
     assert "invariants" in incomplete["proposalValidation"]["issues"][0]
+    assert incomplete["proposalValidation"]["repairStrategy"] == "full_replan"
     assert complete["proposalValidation"]["ok"] is True
     assert complete["proposalValidation"]["implementationGate"]["writesAllowed"] is True
 
@@ -392,6 +397,7 @@ def _unreal_lobby_fixture(root: Path) -> None:
     (source / "LobbyGameState.h").write_text(
         """
 #include "GameFramework/GameStateBase.h"
+enum class ELobbyPhase : uint8 { Waiting, Playing };
 class ALobbyGameState : public AGameStateBase {};
 """,
         encoding="utf-8",
@@ -402,6 +408,8 @@ class ALobbyGameState : public AGameStateBase {};
 class ALobbyGameMode : public AGameModeBase
 {
     void SetReady();
+    virtual void PostLogin(APlayerController* NewPlayer) override;
+    virtual void Logout(AController* Exiting) override;
 };
 """,
         encoding="utf-8",
@@ -413,7 +421,11 @@ class ALobbyGameMode : public AGameModeBase
     (source / "LobbyPlayerController.h").write_text(
         """
 #include "GameFramework/PlayerController.h"
-class ALobbyPlayerController : public APlayerController {};
+class ALobbyPlayerController : public APlayerController
+{
+    UFUNCTION(BlueprintCallable)
+    void Server_BadReadyRequest();
+};
 """,
         encoding="utf-8",
     )
@@ -530,10 +542,18 @@ def test_networked_proposal_accepts_concrete_rpc_state_and_lifecycle_contract(
     )["proposalValidation"]
     assert rejected_rpc["ok"] is False
     assert any("server-only/server-owned" in item for item in rejected_rpc["issues"])
-    assert any(
-        row["jsonPath"] == "networking.rpcOwner"
-        for row in rejected_rpc["repairRequirements"]
-    )
+    assert rejected_rpc["repairStrategy"] == "full_replan"
+    assert rejected_rpc["repairRequirements"] == [
+        {
+            "jsonPath": "proposal",
+            "constraint": (
+                "Core ownership, remote-call, truth-source, or lifecycle relationships are inconsistent. "
+                "Reuse already-read direct-source evidence while the source snapshot is unchanged, and submit "
+                "a complete independently derived proposal instead of patching individual fields. Re-read only "
+                "when the source changed, required evidence is missing, or the needed lines were not covered."
+            ),
+        }
+    ]
 
     bad_connection = copy.deepcopy(proposal)
     bad_connection["networking"]["owningConnection"] = (
@@ -543,6 +563,7 @@ def test_networked_proposal_accepts_concrete_rpc_state_and_lifecycle_contract(
         tmp_path, proposal=bad_connection
     )["proposalValidation"]
     assert any("does not prove" in item for item in rejected_connection["issues"])
+    assert rejected_connection["repairStrategy"] == "full_replan"
 
     missing_rpc_surface = copy.deepcopy(proposal)
     missing_rpc_surface["impactedSurfaces"] = ["Source/Game/Private/Worker.cpp"]
@@ -564,6 +585,18 @@ def test_networked_proposal_accepts_concrete_rpc_state_and_lifecycle_contract(
         tmp_path, proposal=ungrounded_roster
     )["proposalValidation"]
     assert any("sourceEvidence" in item for item in rejected_roster["issues"])
+
+    readiness_state = copy.deepcopy(proposal)
+    readiness_state["stateInventory"][0]["state"] = (
+        "Per-player ready flag (templates_lobby)"
+    )
+    readiness_validation = analyze_architecture(
+        tmp_path, proposal=readiness_state
+    )["proposalValidation"]
+    assert not any(
+        "participant/roster" in item or "sourceEvidence" in item
+        for item in readiness_validation["issues"]
+    )
 
     hidden_tracking = copy.deepcopy(proposal)
     hidden_tracking["stateInventory"][0].update({
@@ -797,6 +830,227 @@ def test_unreal_request_path_requires_missing_method_implementation_surfaces(
     assert any("LobbyPlayerController.cpp" in item for item in validation["issues"])
     assert any("ALobbyGameState::OnAllPlayersReady" in item for item in validation["issues"])
     assert any("LobbyGameState.h" in item for item in validation["issues"])
+
+
+def test_unreal_semantic_validator_rejects_rpc_truth_phase_and_lifecycle_contradictions(
+    tmp_path: Path,
+) -> None:
+    _unreal_lobby_fixture(tmp_path)
+    proposal = {
+        "decision": "Make ALobbyGameState the sole authoritative lobby owner",
+        "invariants": ["Authority alone mutates lobby state"],
+        "impactedSurfaces": [
+            "Source/Lobby/LobbyGameState.h",
+            "Source/Lobby/LobbyGameState.cpp",
+            "Source/Lobby/LobbyGameMode.h",
+            "Source/Lobby/LobbyPlayerController.h",
+        ],
+        "validationPlan": ["build", "RPC ownership and owning connection callability"],
+        "alternatives": ["GameState owner", "GameMode owner"],
+        "implementationFiles": [
+            "Source/Lobby/LobbyGameState.h",
+            "Source/Lobby/LobbyGameMode.h",
+            "Source/Lobby/LobbyPlayerController.h",
+        ],
+        "networking": {
+            "authorityOwner": "ALobbyGameState (Server only)",
+            "clientInitiated": True,
+            "requestPath": [
+                "ALobbyPlayerController::ClientSetReady local input",
+                "ALobbyGameMode::ServerSetReadyRPC [new Server RPC] -> ALobbyGameState::ApplyReady",
+                "ALobbyGameState::EvaluateStart",
+            ],
+            "rpcOwner": "ALobbyPlayerController",
+            "owningConnection": "owned by the requesting client's owning connection",
+            "serverValidation": "validate membership and phase",
+            "replicatedState": [
+                "ALobbyGameState::LobbyParticipants",
+                "ALobbyGameState::Phase",
+            ],
+        },
+        "stateInventory": [
+            {
+                "state": "Phase",
+                "owner": "ALobbyGameState",
+                "lifetime": "world",
+                "authority": "server authoritative",
+                "source": "existing",
+                "cleanup": "reset",
+            },
+            {
+                "state": "LobbyParticipants",
+                "owner": "ALobbyGameState",
+                "lifetime": "lobby",
+                "authority": "server authoritative",
+                "source": "derived",
+                "derivedFrom": "AGameStateBase::PlayerArray",
+                "frameworkRelation": "PlayerArray에 의존하지 않고 독립적으로 관리",
+                "cleanup": "퇴장 시 제거하고 재시작 시 초기화",
+            },
+        ],
+        "lifecycleTransitions": [
+            {
+                "event": "join",
+                "owner": "ALobbyGameState",
+                "preconditions": ["authority"],
+                "commitPoint": "LobbyParticipants에 추가",
+                "failureRecovery": "no mutation",
+                "cleanup": "remove on failure",
+            },
+            {
+                "event": "Logout",
+                "owner": "ALobbyGameState",
+                "preconditions": ["authority"],
+                "commitPoint": "LobbyParticipants에서 제거",
+                "failureRecovery": "retry cleanup",
+                "cleanup": "clear ready",
+            },
+        ],
+        "migrationPlan": [
+            "Add ELobbyPhase::LobbyWaiting while preserving ELobbyPhase::Waiting",
+            "Implement PostLogin and Logout in LobbyGameState.cpp",
+        ],
+        "implementationSlices": [
+            {
+                "sliceId": "lobby",
+                "files": [
+                    "Source/Lobby/LobbyGameState.h",
+                    "Source/Lobby/LobbyGameMode.h",
+                    "Source/Lobby/LobbyPlayerController.h",
+                ],
+                "invariants": ["Authority alone mutates lobby state"],
+                "validation": ["build"],
+            }
+        ],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert validation["ok"] is False
+    assert validation["repairStrategy"] == "full_replan"
+    issues = validation["issues"]
+    assert any("Server RPC hop ALobbyGameMode::ServerSetReadyRPC" in item for item in issues)
+    assert any("declared derived" in item for item in issues)
+    assert any("mutates it independently" in item for item in issues)
+    assert any("replicates derived state" in item for item in issues)
+    assert any("ELobbyPhase::LobbyWaiting" in item for item in issues)
+    assert any("framework lifecycle hook PostLogin" in item for item in issues)
+    assert any("assigns Unreal hook Logout" in item for item in issues)
+
+
+def test_unreal_request_path_verifies_existing_ufunction_server_specifier(
+    tmp_path: Path,
+) -> None:
+    _unreal_lobby_fixture(tmp_path)
+    proposal = {
+        "decision": "Route a client request through the existing controller declaration",
+        "invariants": ["Only authority commits state"],
+        "impactedSurfaces": ["ALobbyPlayerController", "ALobbyGameMode"],
+        "validationPlan": ["RPC ownership and owning connection callability"],
+        "alternatives": ["reuse", "replace"],
+        "networking": {
+            "authorityOwner": "ALobbyGameMode",
+            "clientInitiated": True,
+            "requestPath": [
+                "client input",
+                "ALobbyPlayerController::Server_BadReadyRequest",
+                "ALobbyGameMode::SetReady",
+            ],
+            "rpcOwner": "ALobbyPlayerController",
+            "owningConnection": "owned by the requesting client's owning connection",
+            "serverValidation": "validate authority",
+            "replicatedState": ["ALobbyGameState::Phase"],
+        },
+        "stateInventory": [{
+            "state": "Phase", "owner": "ALobbyGameState", "lifetime": "world",
+            "authority": "server authoritative", "source": "existing", "cleanup": "reset",
+        }],
+        "lifecycleTransitions": [{
+            "event": "request", "owner": "ALobbyGameMode", "preconditions": ["authority"],
+            "commitPoint": "after validation", "failureRecovery": "no mutation", "cleanup": "none",
+        }],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert any("not UFUNCTION(Server" in item for item in validation["issues"])
+    assert validation["repairStrategy"] == "full_replan"
+
+
+def test_unreal_missing_game_package_requires_explicit_creation_plan(tmp_path: Path) -> None:
+    _unreal_lobby_fixture(tmp_path)
+    proposal = {
+        "decision": "Travel to /Game/Maps/LobbyMatch",
+        "invariants": ["Travel target exists"],
+        "impactedSurfaces": ["ALobbyGameMode"],
+        "validationPlan": ["build"],
+        "alternatives": ["travel", "stay"],
+    }
+    rejected = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+    assert any("/Game/Maps/LobbyMatch" in item for item in rejected["issues"])
+
+    proposal["assetCreationPlan"] = [
+        "Create /Game/Maps/LobbyMatch and validate map load/cook"
+    ]
+    accepted_asset_contract = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+    assert not any(
+        "/Game/Maps/LobbyMatch" in item for item in accepted_asset_contract["issues"]
+    )
+
+
+def test_full_replan_guard_tracks_core_changes_not_ancillary_asset_repairs(
+    tmp_path: Path,
+) -> None:
+    _unreal_lobby_fixture(tmp_path)
+    proposal = {
+        "decision": "Use a GameMode-owned ready RPC before lobby travel",
+        "invariants": ["Only authority commits state"],
+        "impactedSurfaces": ["ALobbyGameMode", "/Game/Maps/MissingLobby"],
+        "validationPlan": ["RPC ownership", "map load"],
+        "alternatives": ["GameMode RPC", "controller RPC"],
+        "networking": {
+            "authorityOwner": "ALobbyGameMode",
+            "clientInitiated": True,
+            "requestPath": [
+                "client input",
+                "ALobbyGameMode::ServerSetReadyRPC [new Server RPC]",
+                "ALobbyGameState::ApplyReady",
+            ],
+            "rpcOwner": "ALobbyGameMode",
+            "owningConnection": "owned by the requesting client's owning connection",
+            "serverValidation": "validate authority",
+            "replicatedState": ["ALobbyGameState::Phase"],
+        },
+        "stateInventory": [{
+            "state": "Phase",
+            "owner": "ALobbyGameState",
+            "lifetime": "world",
+            "authority": "server authoritative",
+            "source": "existing",
+            "cleanup": "reset",
+        }],
+        "lifecycleTransitions": [{
+            "event": "request",
+            "owner": "ALobbyGameMode",
+            "preconditions": ["authority"],
+            "commitPoint": "after validation",
+            "failureRecovery": "no mutation",
+            "cleanup": "none",
+        }],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert validation["repairStrategy"] == "full_replan"
+    assert any("assetMigration is required" in issue for issue in validation["issues"])
+    guarded_paths = {
+        json_path
+        for requirement in validation["replanChangeRequirements"]
+        for json_path in requirement["anyOfJsonPaths"]
+    }
+    assert "networking.rpcOwner" in guarded_paths
+    assert "assetMigration" not in guarded_paths
+    assert "assetCreationPlan" not in guarded_paths
 
 
 def test_unreal_nonseamless_travel_requires_reconstruction_contract_and_rejects_streaming_mix(
@@ -1116,3 +1370,55 @@ def test_game_asset_surface_requires_migration_contract(tmp_path: Path) -> None:
     validation = analysis["proposalValidation"]
     assert validation["ok"] is False
     assert any("assetMigration is required" in issue for issue in validation["issues"])
+
+
+def test_framework_roles_support_pre_ue58_gameframework_base_classes(tmp_path: Path) -> None:
+    source = tmp_path / "Source" / "PortableLobby"
+    source.mkdir(parents=True)
+    (source / "PortableGameMode.h").write_text(
+        '#include "GameFramework/GameMode.h"\n'
+        'class APortableGameMode : public AGameMode {};\n',
+        encoding="utf-8",
+    )
+    (source / "PortableGameState.h").write_text(
+        '#include "GameFramework/GameState.h"\n'
+        'class APortableGameState : public AGameState {};\n',
+        encoding="utf-8",
+    )
+    (source / "PortablePlayerState.h").write_text(
+        '#include "GameFramework/PlayerState.h"\n'
+        'class APortablePlayerState : public APlayerState {};\n',
+        encoding="utf-8",
+    )
+    (source / "PortablePlayerController.h").write_text(
+        '#include "GameFramework/PlayerController.h"\n'
+        'class APortablePlayerController : public APlayerController {};\n',
+        encoding="utf-8",
+    )
+
+    contracts = analyze_architecture(tmp_path)["frameworkContracts"]
+
+    assert contracts["detected"] is True
+    assert contracts["classRoles"] == {
+        "APortableGameMode": "game_mode",
+        "APortableGameState": "game_state",
+        "APortablePlayerController": "player_controller",
+        "APortablePlayerState": "player_state",
+    }
+    assert contracts["lifecycleHookOwners"]["PostLogin"] == "game_mode"
+    assert contracts["inheritedStateCollections"][0]["symbol"] == "AGameStateBase::PlayerArray"
+
+
+def test_source_snapshot_is_separator_portable_but_case_sensitive() -> None:
+    posix = {
+        "files": [{"relativePath": "Source/Demo/Mode.h", "fileHash": "abc"}]
+    }
+    windows = {
+        "files": [{"relativePath": r"Source\Demo\Mode.h", "fileHash": "abc"}]
+    }
+    different_case = {
+        "files": [{"relativePath": "Source/demo/Mode.h", "fileHash": "abc"}]
+    }
+
+    assert source_snapshot_fingerprint(posix) == source_snapshot_fingerprint(windows)
+    assert source_snapshot_fingerprint(posix) != source_snapshot_fingerprint(different_case)
