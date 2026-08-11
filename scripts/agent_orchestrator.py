@@ -99,6 +99,13 @@ WRITE_INTENT_MARKERS = (
     "\uac1c\uc120",
     "구현", "수정", "고쳐", "추가", "생성", "만들", "패치",
 )
+CONTINUATION_REQUEST_RE = re.compile(
+    r"^(?:please\s+)?(?:continue|keep\s+going|go\s+on|proceed|resume)(?:\s+please)?[.!?\s]*$|"
+    r"^(?:계속(?:\s*해|\s*해주세요|\s*진행해|\s*진행해주세요)?|"
+    r"진행해(?:줘|주세요)?|이어서(?:\s*해|\s*해주세요)?|"
+    r"이어가(?:줘|주세요)?|ㅇㅇ|응|네)[.!?\s]*$",
+    re.IGNORECASE,
+)
 NEGATED_REFACTOR_PATTERNS = (
     r"\b(?:no|not|without)\s+(?:cross[- ]file\s+)?refactor(?:ing)?\b",
     r"\bdo\s+not\s+refactor\b",
@@ -533,6 +540,12 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
     if _has_write_intent(text):
         return "edit"
     return "inspect_only"
+
+
+def is_continuation_request(request: str) -> bool:
+    """Return true only for a context-dependent, goal-free continuation command."""
+
+    return bool(CONTINUATION_REQUEST_RE.fullmatch(str(request or "").strip()))
 
 
 def resolve_plan_request(request: str, latest_user_message: str | None = None) -> dict[str, Any]:

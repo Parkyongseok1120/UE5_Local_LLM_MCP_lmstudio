@@ -2,7 +2,7 @@
 
 const crypto = require("node:crypto");
 
-const COMPACTION_SCHEMA_VERSION = 1;
+const COMPACTION_SCHEMA_VERSION = 2;
 const DEFAULT_COMPACTION_CONFIG = Object.freeze({
   enabled: true,
   observeOnly: false,
@@ -65,7 +65,14 @@ function toolResultsOf(message) {
 }
 
 function toolResultContent(result) {
-  const raw = result?.content ?? result?.structuredContent ?? result?.result ?? "";
+  // The MCP control envelope lives in structuredContent. Prefer it over the
+  // intentionally concise text projection so compaction never has to infer
+  // protocol state from prose.
+  const raw = (
+    result?.structuredContent && typeof result.structuredContent === "object"
+      ? result.structuredContent
+      : result?.content ?? result?.result ?? ""
+  );
   if (typeof raw === "string") {
     const source = raw.trim();
     if ((source.startsWith("[") || source.startsWith("{")) && source.length > 1) {
@@ -181,28 +188,38 @@ function toolResultSucceeded(result) {
   return true;
 }
 
-const NON_TOOL_NEXT_ACTIONS = new Set([
-  "use_active_route_tool",
-  "continue_with_current_tool_route",
-  "request_fresh_authorization_or_replan",
-  "retry_same_tool_with_returned_taskAuthorization",
-  "start_agent_edit_task_to_apply_changes",
-  "replan_autonomous_strategy",
-  "quarantine_corrupt_task",
-  "collect_source_evidence_for_owner_choice",
-  "resolve_ambiguous_candidates_with_rationale",
-  "review_ranked_candidates_and_select",
-  "resolve_architecture_contract_issues",
-  "resolve_source_dependency_cycle",
-  "implement_next_slice",
-  "submit_exact_architecture_repairs",
-  "submit_full_architecture_proposal",
-  "revise_architecture_proposal",
-  "rebase_architecture_proposal_patch",
+function isNonToolNextAction(_value) {
+  // Kept as a compatibility export for the generator. New checkpoints only
+  // persist actions whose server-owned control.nextActionIsTool is true, so a
+  // duplicated sentinel allowlist is neither needed nor authoritative.
+  return false;
+}
+
+const ARCHITECTURE_CONTROL_STATES = new Set([
+  "Discovery",
+  "InitialProposal",
+  "FullReplan",
+  "EvidenceRefill",
+  "ExactRepair",
+  "Revalidation",
+  "Validated",
+  "FailedClosed",
 ]);
 
-function isNonToolNextAction(value) {
-  return NON_TOOL_NEXT_ACTIONS.has(String(value || "").trim());
+function compactProtocolControl(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version || 0) < 1) return null;
+  return {
+    version: Number(value.version),
+    taskId: String(value.taskId || "").slice(0, 160),
+    phase: String(value.phase || "").slice(0, 160),
+    status: String(value.status || "").slice(0, 160),
+    nextAction: String(value.nextAction || "").slice(0, 160),
+    nextActionIsTool: value.nextActionIsTool === true,
+    retryPolicy: String(value.retryPolicy || "none").slice(0, 40),
+    blockerFingerprint: String(value.blockerFingerprint || "").slice(0, 160),
+    continuationToken: String(value.continuationToken || "").slice(0, 160),
+  };
 }
 
 function compactTaskRouteOwnership(value) {
@@ -243,6 +260,16 @@ function boundedArchitecturePatchPreview(value) {
 
 function collectControlFields(value, state) {
   if (!value || typeof value !== "object") return;
+  const protocolControl = compactProtocolControl(value.control);
+  if (protocolControl) {
+    state.protocolControl = protocolControl;
+    if (
+      ARCHITECTURE_CONTROL_STATES.has(protocolControl.status)
+      || /architecture/i.test(protocolControl.phase)
+    ) {
+      state.architectureControl = protocolControl;
+    }
+  }
   if (typeof value.proposalRevision === "string" && value.proposalRevision.trim()) {
     const previous = state.architectureProposal || {};
     const nextErrorCode = String(value.errorCode || previous.lastErrorCode || "").slice(0, 120);
@@ -293,18 +320,23 @@ function collectControlFields(value, state) {
       ).slice(0, 96),
     };
   }
-  const directActionIsTool = value.nextActionIsTool !== false
-    && value.requiredNextActionIsTool !== false;
+  const directActionIsTool = protocolControl
+    ? protocolControl.nextActionIsTool === true
+    : value.nextActionIsTool === true || Boolean(value.requiredNextTool);
   let directRequiredNextToolSeen = false;
   let directRequiredNextTool = null;
-  let directAction = "";
-  let directActionField = "";
-  let directArgs = null;
+  let directAction = protocolControl?.nextAction || "";
+  let directActionField = protocolControl?.nextAction ? "control.nextAction" : "";
+  let directArgs = protocolControl && value.nextActionArgs && typeof value.nextActionArgs === "object"
+    ? value.nextActionArgs
+    : null;
   for (const [key, child] of Object.entries(value)) {
-    if (key === "requiredNextTool") {
+    if (key === "control") {
+      continue;
+    } else if (!protocolControl && key === "requiredNextTool") {
       directRequiredNextToolSeen = true;
       directRequiredNextTool = child;
-    } else if (["requiredNextAction", "nextAction"].includes(key) && typeof child === "string") {
+    } else if (!protocolControl && ["requiredNextAction", "nextAction"].includes(key) && typeof child === "string") {
       const candidate = child.trim();
       if (/^[a-z][a-z0-9_]{2,}(?::[a-z0-9_-]+)?$/.test(candidate)) {
         if (!directAction || key === "nextAction") {
@@ -312,7 +344,7 @@ function collectControlFields(value, state) {
           directActionField = key;
         }
       }
-    } else if (["requiredNextToolArgs", "nextActionArgs"].includes(key) && child && typeof child === "object") {
+    } else if (!protocolControl && ["requiredNextToolArgs", "nextActionArgs"].includes(key) && child && typeof child === "object") {
       if (!directArgs || key === "nextActionArgs") directArgs = child;
     } else if (["taskAuthorization", "routeAuthorization"].includes(key)) {
       const ownership = compactTaskRouteOwnership(child);
@@ -362,29 +394,19 @@ function collectControlFields(value, state) {
       state.requiredNextToolRef = null;
       state.requiredNextToolArgs = null;
     } else if (typeof directRequiredNextTool === "string") {
-      if (isNonToolNextAction(directRequiredNextTool)) {
-        state.requiredNextTool = null;
-        state.requiredNextToolRef = null;
-        state.requiredNextToolArgs = null;
-      } else {
-        state.requiredNextTool = directRequiredNextTool;
-        state.requiredNextToolRef = null;
-      }
+      state.requiredNextTool = directRequiredNextTool;
+      state.requiredNextToolRef = null;
     } else if (directRequiredNextTool && typeof directRequiredNextTool === "object") {
       const name = typeof directRequiredNextTool.name === "string"
         ? directRequiredNextTool.name
         : (typeof directRequiredNextTool.tool === "string" ? directRequiredNextTool.tool : "");
-      if (isNonToolNextAction(name)) {
-        state.requiredNextTool = null;
-        state.requiredNextToolRef = null;
-        state.requiredNextToolArgs = null;
-      } else if (name) {
+      if (name) {
         state.requiredNextTool = name;
         state.requiredNextToolRef = directRequiredNextTool;
       }
     }
   } else if (directAction) {
-    if (!directActionIsTool || isNonToolNextAction(directAction)) {
+    if (!directActionIsTool) {
       // This is a server routing sentinel, not an MCP tool name. It means the
       // prior exact-tool gate is no longer applicable and any currently active
       // route tool may be selected.
@@ -395,6 +417,12 @@ function collectControlFields(value, state) {
       state.requiredNextTool = directAction.split(":", 1)[0];
       state.requiredNextToolRef = { sourceField: directActionField, value: directAction };
     }
+  } else if (protocolControl) {
+    // An enveloped completed response with no next action is authoritative and
+    // clears any older nested/legacy action discovered during recursion.
+    state.requiredNextTool = null;
+    state.requiredNextToolRef = null;
+    state.requiredNextToolArgs = null;
   }
   if (directArgs && state.requiredNextTool) state.requiredNextToolArgs = directArgs;
 }
@@ -544,7 +572,8 @@ function extractControlState(messages, prior = {}, options = {}) {
     // Revision 22 migration: old checkpoints discarded ownerCapability. When
     // an active task route is present, rescan the bounded conversation once so
     // compact route ownership can be recovered from an earlier tool result.
-    && (!priorHasActiveTaskRoute || priorHasRouteOwnership);
+    && (!priorHasActiveTaskRoute || priorHasRouteOwnership)
+    && Number(prior.schemaVersion || 0) === COMPACTION_SCHEMA_VERSION;
   const source = canResume ? snapshots.slice(priorCount) : snapshots;
   const state = {
     schemaVersion: COMPACTION_SCHEMA_VERSION,
@@ -555,15 +584,9 @@ function extractControlState(messages, prior = {}, options = {}) {
     touchedPaths: canResume && Array.isArray(prior.modifiedFiles) ? [...prior.modifiedFiles] : [],
     lastDiagnostics: canResume && Array.isArray(prior.diagnostics) ? [...prior.diagnostics] : [],
     exactSignatureContracts: canResume && Array.isArray(prior.exactSignatureContracts) ? [...prior.exactSignatureContracts] : [],
-    requiredNextTool: canResume && !isNonToolNextAction(prior.requiredNextTool?.name)
-      ? (prior.requiredNextTool?.name || null)
-      : null,
-    requiredNextToolRef: canResume && !isNonToolNextAction(prior.requiredNextTool?.name)
-      ? (prior.requiredNextTool?.reference || null)
-      : null,
-    requiredNextToolArgs: canResume && !isNonToolNextAction(prior.requiredNextTool?.name)
-      ? (prior.requiredNextTool?.args || null)
-      : null,
+    requiredNextTool: canResume ? (prior.requiredNextTool?.name || null) : null,
+    requiredNextToolRef: canResume ? (prior.requiredNextTool?.reference || null) : null,
+    requiredNextToolArgs: canResume ? (prior.requiredNextTool?.args || null) : null,
     mutationGeneration: canResume ? Number(prior.mutationGeneration || 0) : 0,
     buildState: canResume ? { ...(prior.buildState || {}) } : {},
     selectedSlice: canResume ? (prior.selectedSlice || null) : null,
@@ -575,6 +598,12 @@ function extractControlState(messages, prior = {}, options = {}) {
     coverageEvidence: canResume && Array.isArray(prior.coverageEvidence) ? [...prior.coverageEvidence] : [],
     architectureProposal: canResume && prior.architectureProposal
       ? { ...prior.architectureProposal }
+      : null,
+    protocolControl: canResume && prior.protocolControl
+      ? { ...prior.protocolControl }
+      : null,
+    architectureControl: canResume && prior.architectureControl
+      ? { ...prior.architectureControl }
       : null,
     failedToolResults: canResume && Array.isArray(prior.failedToolResults) ? [...prior.failedToolResults] : [],
     facts: canResume && Array.isArray(prior.facts) ? [...prior.facts] : [],
@@ -738,6 +767,8 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     invariants: control.invariants,
     coverageEvidence: control.coverageEvidence,
     architectureProposal: control.architectureProposal,
+    protocolControl: control.protocolControl,
+    architectureControl: control.architectureControl,
     failedToolResults: control.failedToolResults,
     requiredNextTool: control.requiredNextTool ? {
       name: control.requiredNextTool,
@@ -1007,6 +1038,12 @@ function summarizeOldMessages(messages, checkpoint) {
         + "path, send one complete replacement array rather than repeating that jsonPath per item.",
       );
     }
+  }
+  if (checkpoint.protocolControl) {
+    lines.push(`protocolControl=${JSON.stringify(checkpoint.protocolControl)}`);
+  }
+  if (checkpoint.architectureControl) {
+    lines.push(`architectureControl=${JSON.stringify(checkpoint.architectureControl)}`);
   }
   if (checkpoint.failedToolResults?.length) {
     lines.push(`failedToolResults=${JSON.stringify(checkpoint.failedToolResults)}`);

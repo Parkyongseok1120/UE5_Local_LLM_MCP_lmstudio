@@ -11,6 +11,7 @@ APIs before presenting compile-ready code.
 Verdicts:
 - ``known_bad``: symbol matches the invented-API / wrong-lifecycle denylist.
 - ``verified``: an exact symbol match exists in the index or project graph.
+- ``compiler_required``: one bounded source lookup was exhausted; UHT/UBT is the oracle.
 - ``weak``: only a graph prefix or owner-less match exists; treat as needs-confirmation.
 - ``unverified``: no index evidence found; must not be presented as real API.
 
@@ -30,7 +31,7 @@ from typing import Any
 
 # Unreal C++ types carry a conventional U/A/F/S/I prefix. Broad suffix-only
 # matching (``*Actor``, ``*Component``) also matched ordinary member names such
-# as ``BoardActor`` and turned assignments into nonexistent API claims.
+# as ``InventoryActor`` and turned assignments into nonexistent API claims.
 # The character immediately after the Unreal prefix pair must be alphanumeric.
 # This keeps enum values such as ``IE_Pressed`` out of the type-symbol gate.
 SYMBOL_RES = (re.compile(r"\b[AUFSI][A-Z][A-Za-z0-9][A-Za-z0-9_]+\b"),)
@@ -44,6 +45,15 @@ STATIC_CALL_CLAIM_RE = re.compile(
     r"\b(?P<receiver>[AUFSI][A-Z][A-Za-z0-9_]*)\s*::\s*"
     r"(?P<member>[A-Za-z_][A-Za-z0-9_]{2,})\s*\("
 )
+QUALIFIED_CHAIN_CALL_RE = re.compile(
+    r"\b(?P<base>[A-Za-z_][A-Za-z0-9_]*)\s*(?:->|\.)\s*"
+    r"(?P<source>[A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*?\)\s*\.\s*"
+    r"(?P<member>[A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+DIRECT_CHAIN_CALL_RE = re.compile(
+    r"(?<![A-Za-z0-9_>.])(?P<source>[A-Za-z_][A-Za-z0-9_]*)\s*"
+    r"\([^;{}]*?\)\s*\.\s*(?P<member>[A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
 # A qualified out-of-class function definition contains the same ``Type::Name(``
 # token sequence as a static call.  Mask these definition spans so a newly
 # implemented project method is not falsely treated as an API invocation.
@@ -55,7 +65,8 @@ QUALIFIED_FUNCTION_DEFINITION_RE = re.compile(
     r"(?:\r?\n[ \t]*)?\{"
 )
 VARIABLE_TYPE_RE = re.compile(
-    r"\b(?P<type>(?:[AUFSI][A-Z][A-Za-z0-9_:]*|bool|u?int(?:8|16|32|64)|float|double))"
+    r"\b(?:(?:const|volatile)\s+)*"
+    r"(?P<type>(?:[AUFSI][A-Z][A-Za-z0-9_:]*|bool|u?int(?:8|16|32|64)|float|double))"
     r"(?:\s*[*&]\s*|\s+)"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
 )
@@ -199,6 +210,17 @@ def extract_symbols(text: str) -> list[str]:
     for pattern in SYMBOL_RES:
         for match in pattern.finditer(text or ""):
             sym = match.group(0)
+            # Unreal-style method names can also begin with an apparent type
+            # prefix (for example FMath::FInterpTo). The owned call is checked
+            # separately with its receiver; treating the member token as a
+            # second standalone type claim creates a contradictory UNKNOWN.
+            prefix = text[max(0, match.start() - 4) : match.start()]
+            suffix = text[match.end() :]
+            if (
+                re.search(r"(?:::|->|\.)\s*$", prefix)
+                and re.match(r"\s*\(", suffix)
+            ):
+                continue
             if sym not in found:
                 found.append(sym)
     return found
@@ -385,6 +407,77 @@ def extract_member_call_claims(
                     "callKind": "static",
                 }
             )
+
+    definition_owners = list(QUALIFIED_FUNCTION_DEFINITION_RE.finditer(text or ""))
+
+    def add_chain_claim(
+        *,
+        base: str,
+        source_member: str,
+        terminal_member: str,
+        position: int,
+    ) -> None:
+        source_receiver_type = variable_types.get(
+            base,
+            KNOWN_RECEIVER_NAME_TYPES.get(base, ""),
+        )
+        if base == "this" and not source_receiver_type:
+            enclosing = [item for item in definition_owners if item.start() <= position]
+            source_receiver_type = (
+                enclosing[-1].group("receiver") if enclosing else ""
+            )
+        source_key = (base, source_receiver_type, source_member)
+        if source_key not in seen:
+            seen.add(source_key)
+            claims.append(
+                {
+                    "receiver": base,
+                    "receiverType": source_receiver_type,
+                    "member": source_member,
+                    "callKind": "member",
+                }
+            )
+        chain_receiver = (
+            f"{base}->{source_member}()"
+            if base != "this"
+            else f"{source_member}()"
+        )
+        chain_key = (chain_receiver, "", terminal_member)
+        if chain_key in seen:
+            return
+        seen.add(chain_key)
+        claims.append(
+            {
+                "receiver": chain_receiver,
+                "receiverType": "",
+                "member": terminal_member,
+                "callKind": "chained",
+                "sourceReceiverType": source_receiver_type,
+                "sourceMember": source_member,
+            }
+        )
+
+    qualified_chain_spans: list[tuple[int, int]] = []
+    for match in QUALIFIED_CHAIN_CALL_RE.finditer(text or ""):
+        qualified_chain_spans.append(match.span())
+        add_chain_claim(
+            base=match.group("base"),
+            source_member=match.group("source"),
+            terminal_member=match.group("member"),
+            position=match.start(),
+        )
+    for match in DIRECT_CHAIN_CALL_RE.finditer(text or ""):
+        if any(start <= match.start() < end for start, end in qualified_chain_spans):
+            continue
+        enclosing = [item for item in definition_owners if item.start() <= match.start()]
+        if not enclosing:
+            continue
+        add_chain_claim(
+            base="this",
+            source_member=match.group("source"),
+            terminal_member=match.group("member"),
+            position=match.start(),
+        )
     return claims
 
 
@@ -469,13 +562,81 @@ def _split_cpp_arguments(value: str) -> list[str]:
 
 def _normalized_cpp_type(value: str) -> str:
     cleaned = re.sub(r"\s*=.*$", "", str(value or "")).strip()
+    cleaned = re.sub(r"\[\[[^\]]*\]\]", " ", cleaned)
+    cleaned = re.sub(
+        r"\b(?:UE_FORCEINLINE_HINT|UE_NODISCARD|FORCEINLINE|FORCEINLINE_DEBUGGABLE)\b",
+        " ",
+        cleaned,
+    )
     cleaned = re.sub(r"\b(?:const|volatile|class|struct)\b", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     # A declaration parameter ends in its identifier; preserve pointer/reference
     # tokens while dropping only that final name.
-    cleaned = re.sub(r"\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^]]*\])?$", "", cleaned)
+    builtin_type_phrases = {
+        "signed char", "unsigned char", "short", "unsigned short",
+        "int", "unsigned int", "long", "unsigned long", "long long",
+        "unsigned long long", "float", "double", "long double", "bool",
+        "wchar_t", "char8_t", "char16_t", "char32_t",
+    }
+    if cleaned.casefold() not in builtin_type_phrases:
+        cleaned = re.sub(
+            r"\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^]]*\])?$",
+            "",
+            cleaned,
+        )
     cleaned = re.sub(r"\s*([*&])\s*", r"\1", cleaned)
     return cleaned.strip()
+
+
+_CPP_NUMERIC_TYPES = frozenset(
+    {
+        "float",
+        "double",
+        "long double",
+        "freal",
+        "frealsingle",
+        "frealdouble",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "short",
+        "unsigned short",
+        "int",
+        "unsigned int",
+        "long",
+        "unsigned long",
+        "long long",
+        "unsigned long long",
+        "size_t",
+        "ssize_t",
+    }
+)
+
+
+def _cpp_type_is_dependent(value: str) -> bool:
+    normalized = _normalized_cpp_type(value).replace("*", "").replace("&", "").strip()
+    if not normalized:
+        return True
+    folded = normalized.casefold()
+    if folded == "auto" or "decltype" in folded or "typename" in folded:
+        return True
+    identifiers = re.findall(r"\b[A-Za-z_]\w*\b", normalized)
+    return any(re.fullmatch(r"T\d*", item) for item in identifiers)
+
+
+def _cpp_types_compatible(actual: str, expected: str) -> bool:
+    left = _normalized_cpp_type(actual).replace("*", "").replace("&", "").strip()
+    right = _normalized_cpp_type(expected).replace("*", "").replace("&", "").strip()
+    if not left or not right or _cpp_type_is_dependent(right):
+        return True
+    if left.casefold() == right.casefold():
+        return True
+    return left.casefold() in _CPP_NUMERIC_TYPES and right.casefold() in _CPP_NUMERIC_TYPES
 
 
 def _project_signature_contract(row: dict[str, Any], symbol: str) -> dict[str, Any] | None:
@@ -544,6 +705,43 @@ def _project_contract_rows(
     return rows
 
 
+def _contract_return_receiver_type(rows: list[dict[str, Any]]) -> str:
+    return_types: set[str] = set()
+    for row in rows:
+        for contract in row.get("signatures") or []:
+            if not isinstance(contract, dict):
+                continue
+            raw = str(contract.get("returnType") or "").strip()
+            if not raw or _cpp_type_is_dependent(raw):
+                continue
+            normalized = _normalized_cpp_type(raw)
+            normalized = normalized.replace("*", "").replace("&", "").strip()
+            if normalized:
+                return_types.add(normalized.split("::")[-1])
+    return next(iter(return_types)) if len(return_types) == 1 else ""
+
+
+def _resolve_chained_receiver_types(
+    claims: list[dict[str, str]],
+    rows_by_claim: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, str]]:
+    resolved: list[dict[str, str]] = []
+    for claim in claims:
+        if claim.get("callKind") != "chained" or claim.get("receiverType"):
+            continue
+        source_owner = str(claim.get("sourceReceiverType") or "").strip()
+        source_member = str(claim.get("sourceMember") or "").strip()
+        if not source_owner or not source_member:
+            continue
+        key = f"{source_owner.casefold()}::{source_member.casefold()}"
+        return_type = _contract_return_receiver_type(rows_by_claim.get(key, []))
+        if not return_type:
+            continue
+        claim["receiverType"] = return_type
+        resolved.append(claim)
+    return resolved
+
+
 def _call_contract_issues(
     text: str,
     declaration_context: str,
@@ -597,8 +795,9 @@ def _call_contract_issues(
     def base_type(value: str) -> str:
         return _normalized_cpp_type(value).replace("*", "").replace("&", "").strip()
     assignment = re.compile(
-        r"(?P<target>[A-Za-z_][A-Za-z0-9_:]*)\s*(?P<pointer>\*)?\s*"
-        r"[A-Za-z_][A-Za-z0-9_]*\s*=\s*$"
+        r"(?P<target>[A-Za-z_][A-Za-z0-9_:]*)"
+        r"(?:\s*(?P<pointer>\*)\s*|\s*&\s*|\s+)"
+        r"(?P<variable>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*$"
     )
     for match, owner, symbol in occurrences:
         key = f"{owner.casefold()}::{symbol.casefold()}"
@@ -659,7 +858,7 @@ def _call_contract_issues(
             compatible_contract = any(
                 len(expected) == len(actual_types)
                 and all(
-                    not actual or not wanted or base_type(actual) == wanted
+                    not actual or not wanted or _cpp_types_compatible(actual, wanted)
                     for actual, wanted in zip(actual_types, expected)
                 )
                 for expected in typed_contracts
@@ -669,7 +868,7 @@ def _call_contract_issues(
                     f"arg{index + 1}={actual or 'unknown'} expected {expected}"
                     for expected_types in typed_contracts[:1]
                     for index, (actual, expected) in enumerate(zip(actual_types, expected_types))
-                    if actual and expected and base_type(actual) != expected
+                    if actual and expected and not _cpp_types_compatible(actual, expected)
                 ]
                 if mismatch_pairs:
                     issue_key = (key, "PARAMETER_TYPE_MISMATCH", "|".join(actual_types))
@@ -702,13 +901,13 @@ def _call_contract_issues(
             )
             for contract in contracts
             if str(contract.get("returnType") or "").strip()
+            and not _cpp_type_is_dependent(str(contract.get("returnType") or ""))
         }
         incompatible = return_contracts and all(
             (
                 returned_pointer != target_pointer
                 or (
-                    returned != target_type
-                    and (not returned or not target_type or returned[0] != target_type[0])
+                    not _cpp_types_compatible(returned, target_type)
                 )
             )
             for returned, returned_pointer in return_contracts
@@ -1219,6 +1418,33 @@ def validate_sketch(
     for key, value in project_rows_by_claim.items():
         contract_rows_by_claim.setdefault(key, []).extend(value)
 
+    resolved_chain_claims = _resolve_chained_receiver_types(
+        member_claims,
+        contract_rows_by_claim,
+    )
+    chained_engine_claims = [
+        {
+            "symbol": claim["member"],
+            "receiverType": claim["receiverType"],
+        }
+        for claim in resolved_chain_claims
+        if claim.get("member") and claim.get("receiverType")
+        and f"{claim['receiverType'].casefold()}::{claim['member'].casefold()}"
+        not in engine_rows_by_claim
+    ]
+    if chained_engine_claims:
+        chained_lookup = lookup_engine_header_evidence(
+            resolved_engine_root,
+            chained_engine_claims,
+        )
+        for key, value in (chained_lookup.get("results") or {}).items():
+            engine_rows_by_claim.setdefault(str(key), []).extend(list(value or []))
+            contract_rows_by_claim.setdefault(str(key), []).extend(list(value or []))
+        engine_lookup["inspectedFileCount"] = int(
+            engine_lookup.get("inspectedFileCount") or 0
+        ) + int(chained_lookup.get("inspectedFileCount") or 0)
+        engine_lookup["chainedLookupClaimCount"] = len(chained_engine_claims)
+
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -1364,6 +1590,42 @@ def validate_sketch(
     )
     results.extend(_project_declaration_contract_issues(analysis_text, graph))
 
+    scalar_types = {
+        "bool",
+        "int",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "float",
+        "double",
+        "FReal",
+        "FRealSingle",
+        "FRealDouble",
+    }
+    for claim in member_claims:
+        receiver_type = str(claim.get("receiverType") or "")
+        if claim.get("callKind") != "chained" or receiver_type not in scalar_types:
+            continue
+        results.append(
+            {
+                "symbol": str(claim.get("member") or ""),
+                "receiver": str(claim.get("receiver") or ""),
+                "receiverType": receiver_type,
+                "verdict": "known_bad",
+                "errorCode": "CHAIN_RECEIVER_NOT_OBJECT",
+                "evidence": [],
+                "note": (
+                    f"{claim.get('sourceReceiverType')}::{claim.get('sourceMember')} "
+                    f"returns scalar {receiver_type}; {claim.get('member')} cannot be called on it."
+                ),
+            }
+        )
+
     combined_declarations = _mask_comments_and_literals(
         f"{declaration_context}\n{sketch}"
     )
@@ -1396,9 +1658,27 @@ def validate_sketch(
             }
         )
 
+    compiler_required_results: list[dict[str, Any]] = []
+    if str(engine_lookup.get("status") or "") == "ready":
+        for result in results:
+            if result.get("verdict") not in {"unverified", "weak"}:
+                continue
+            result["sourceLookupVerdict"] = result["verdict"]
+            result["verdict"] = "compiler_required"
+            result["coverageStatus"] = "source_lookup_exhausted"
+            result["note"] = (
+                f"{result.get('note') or ''} One bounded exact/index/header lookup is "
+                "complete; do not start another symbol-lookup loop. The bounded mutation "
+                "must be followed immediately by UHT/UBT compiler proof."
+            ).strip()
+            compiler_required_results.append(result)
+
     known_bad = sum(1 for r in results if r["verdict"] == "known_bad")
     unverified = sum(1 for r in results if r["verdict"] == "unverified")
     weak = sum(1 for r in results if r["verdict"] == "weak")
+    compiler_required = sum(
+        1 for r in results if r["verdict"] == "compiler_required"
+    )
     verified = sum(1 for r in results if r["verdict"] == "verified")
     known_bad_terms = [
         str(result["symbol"])
@@ -1407,11 +1687,18 @@ def validate_sketch(
     ]
     known_bad_suffix = f" ({', '.join(known_bad_terms[:4])})" if known_bad_terms else ""
     verdict_summary = (
-        f"{verified} verified, {weak} weak, {known_bad} known_bad"
+        f"{verified} verified, {compiler_required} compiler_required, "
+        f"{weak} weak, {known_bad} known_bad"
         f"{known_bad_suffix}, "
         f"{unverified} unverified"
     )
-    verdict_order = {"known_bad": 0, "unverified": 1, "weak": 2, "verified": 3}
+    verdict_order = {
+        "known_bad": 0,
+        "unverified": 1,
+        "weak": 2,
+        "compiler_required": 3,
+        "verified": 4,
+    }
     results.sort(key=lambda item: (verdict_order.get(str(item.get("verdict")), 9), str(item.get("symbol"))))
 
     payload = {
@@ -1427,6 +1714,21 @@ def validate_sketch(
         "knownBadCount": known_bad,
         "unverifiedCount": unverified,
         "weakCount": weak,
+        "compilerRequiredCount": compiler_required,
+        "compilerProofRequired": compiler_required > 0,
+        "compilerProofSymbols": [
+            str(item.get("symbol") or "")
+            for item in compiler_required_results
+            if str(item.get("symbol") or "")
+        ],
+        "proofLevel": (
+            "SourceLookupExhaustedCompilerPending"
+            if compiler_required
+            else "SourceVerified"
+        ),
+        "postMutationRequiredAction": (
+            "build_unreal_project" if compiler_required else ""
+        ),
         "results": results,
         "sketchCharCount": sketch_chars,
         "maxSketchChars": MAX_SKETCH_CHARS,
@@ -1445,9 +1747,10 @@ def validate_sketch(
             ),
         },
         "guidance": (
-            "Replace every known_bad item using its replacement, downgrade unverified or weak "
-            "symbols to UNKNOWN, then validate receiver types and exact signatures before presenting it. "
-            "Keep proof level at Proposed."
+            "Replace every known_bad item in one batch. Unverified/weak claims remain blocked when "
+            "engine source is unavailable. compiler_required claims already exhausted bounded source "
+            "lookup and must go directly to UHT/UBT after the bounded mutation; do not loop through "
+            "per-symbol lookup tools."
         ),
     }
     if index_lookup_error:

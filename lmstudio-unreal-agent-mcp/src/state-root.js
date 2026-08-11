@@ -27,7 +27,7 @@ function resolveAgentStateRoot(_workspaceRoot = "") {
 
 function ensureStateRootLayout(stateRoot = resolveAgentStateRoot()) {
   const root = path.resolve(stateRoot);
-  for (const sub of ["locks", "transactions", "tasks", "jobs", "backups"]) {
+  for (const sub of ["locks", "transactions", "tasks", "jobs", "backups", "reports"]) {
     fs.mkdirSync(path.join(root, sub), { recursive: true });
   }
   return root;

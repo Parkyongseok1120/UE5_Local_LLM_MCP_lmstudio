@@ -185,9 +185,11 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
 
     def with_gate_ux(payload: dict[str, Any]) -> dict[str, Any]:
         runtime_status = str(runtime_session.get("status") or "")
+        slice_plan_required = state.get("slicePlanningRequired") is True
         ready = (
             status == "running"
             and bool(state.get("writesAllowed"))
+            and not slice_plan_required
             and not pending_gates
             and not job_in_progress
             and lease.get("active") is True
@@ -199,6 +201,8 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             blocked_reasons.append(f"task_status:{status}")
         if not bool(state.get("writesAllowed")):
             blocked_reasons.append("write_gate_denied")
+        if slice_plan_required:
+            blocked_reasons.append("slice_plan_required")
         blocked_reasons.extend(
             f"gate_{item['reason']}:{item['gate']}" for item in gate_issues
         )
@@ -221,6 +225,8 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             next_action = "start_new_unreal_agent_plan"
         elif status == "completed":
             next_action = ""
+        elif slice_plan_required:
+            next_action = "unreal_task_define_slices"
         elif job_in_progress:
             next_action = "unreal_task_status"
         elif checkpoint_conflicts:

@@ -128,13 +128,25 @@ def test_rag_repeated_health_calls(rag_env: dict[str, str], tmp_path: Path) -> N
         _init_client(client, name="soak-rag")
         bad = _tools_call(client, 199, "unreal_health", {})
         assert bad["result"].get("isError") is True
+        observed_health = []
         for idx in range(SOAK_CALLS):
             resp = _tools_call(client, 200 + idx, "unreal_rag_health", {})
             assert "result" in resp
+            # The health observation succeeded even though this fixture
+            # intentionally has no index. Semantic health is carried in the
+            # structured payload, not misreported as an MCP transport error.
             assert resp["result"].get("isError") is not True
             structured = resp["result"].get("structuredContent") or {}
-            if isinstance(structured, dict) and "okForChat" in structured:
-                assert structured.get("okForChat") is not False
+            assert structured.get("okForChat") is False
+            assert structured.get("chatAction") == "stop_and_report_rag_rebuild_required"
+            observed_health.append(
+                (
+                    structured.get("okForChat"),
+                    structured.get("chatAction"),
+                    structured.get("indexReadable"),
+                )
+            )
+        assert len(set(observed_health)) == 1
     finally:
         client.close()
 

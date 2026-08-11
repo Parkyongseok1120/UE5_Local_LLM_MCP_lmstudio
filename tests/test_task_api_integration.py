@@ -14,7 +14,9 @@ from task_api import (  # noqa: E402
     task_cancel,
     task_complete_after_successful_build,
     task_define_slices,
+    task_continue_active,
     task_record_gate,
+    task_record_gate_failure,
     task_root,
     task_start,
     task_status,
@@ -438,6 +440,142 @@ def test_broad_feature_task_requires_and_registers_runtime_slices(tmp_path: Path
         "Source/Demo/Lobby.cpp",
         "Source/Demo/Match.cpp",
     ]
+
+
+def test_short_ambiguous_feature_requires_concrete_runtime_slice(tmp_path: Path) -> None:
+    started = task_start(
+        tmp_path,
+        request="Add a subsystem to manage state",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "featureIntent": {"requiresResolution": True},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_feature_intent_resolve"]
+            },
+        },
+    )
+
+    assert started["state"]["slicePlanningRequired"] is True
+    assert started["nextAction"] == "unreal_task_define_slices"
+
+
+def test_feature_request_path_is_bound_to_server_selected_slice(tmp_path: Path) -> None:
+    started = task_start(
+        tmp_path,
+        request="Update Source/Demo/StateSubsystem.cpp to manage transient state",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "featureIntent": {"requiresResolution": True},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_feature_intent_resolve"]
+            },
+        },
+    )
+
+    state = started["state"]
+    assert state["slicePlanningRequired"] is False
+    assert state["activeSliceId"] == "request_scope"
+    assert state["toolRoute"]["selectedSlice"]["files"] == [
+        "Source/Demo/StateSubsystem.cpp"
+    ]
+
+
+def test_failed_gate_attempts_are_persisted_and_equivalent_retry_is_blocked(
+    tmp_path: Path,
+) -> None:
+    gate = "unreal_code_sketch_claim_validate"
+    started = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Thing.cpp",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": [gate]},
+            "executablePlanSlices": [
+                {"sliceId": "thing", "files": ["Source/Demo/Thing.cpp"]}
+            ],
+        },
+    )
+    authorization = started["taskAuthorization"]
+    evidence = {
+        "ok": False,
+        "errorCode": "ENGINE_RETURN_TYPE_MISMATCH",
+        "nextAction": gate,
+        "firstBlocker": {
+            "errorCode": "ENGINE_RETURN_TYPE_MISMATCH",
+            "symbol": "CalculateDirection",
+            "receiverType": "UKismetAnimationLibrary",
+            "verdict": "known_bad",
+        },
+    }
+
+    first = task_record_gate_failure(
+        tmp_path,
+        gate_name=gate,
+        task_authorization=authorization,
+        input_payload={"sketch": "float Direction = CalculateDirection(...);"},
+        evidence=evidence,
+    )
+    second = task_record_gate_failure(
+        tmp_path,
+        gate_name=gate,
+        task_authorization=authorization,
+        input_payload={"sketch": "formatting changed only"},
+        evidence=evidence,
+    )
+
+    assert first["errorCode"] == "GATE_VALIDATION_FAILED"
+    assert first["equivalentAttemptCount"] == 1
+    assert second["errorCode"] == "REPEATED_GATE_BLOCKER"
+    assert second["equivalentAttemptCount"] == 2
+    assert second["retryable"] is False
+    current = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert gate in current["pendingGates"]
+    assert current["completedGates"] == {}
+    assert current["failedGateAttempts"][gate]["attemptCount"] == 2
+
+    completed = task_record_gate(
+        tmp_path,
+        gate_name=gate,
+        task_authorization=authorization,
+        input_payload={"sketch": "corrected"},
+        evidence={"ok": True},
+        target_snapshots=[],
+    )
+    assert completed["ok"] is True
+    current = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert gate not in current["failedGateAttempts"]
+
+
+def test_continuation_preserves_active_task_intent_and_authorization(tmp_path: Path) -> None:
+    started = task_start(
+        tmp_path,
+        request="Implement Source/Demo/StateSubsystem.cpp",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "state", "files": ["Source/Demo/StateSubsystem.cpp"]}
+            ],
+        },
+    )
+
+    continued = task_continue_active(tmp_path, started["taskSessionId"])
+
+    assert continued["ok"] is True
+    assert continued["continuationPreserved"] is True
+    assert continued["request"] == "Implement Source/Demo/StateSubsystem.cpp"
+    assert continued["taskKind"] == "edit"
+    assert continued["taskAuthorization"]["planRevision"] == "1"
+    assert continued["taskAuthorization"]["authToken"] == started["authToken"]
+    current = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert current["pendingGates"] == ["unreal_code_sketch_claim_validate"]
+    assert current["activeSliceId"] == "state"
 
 
 def test_required_prewrite_gate_rejects_mismatched_authorization(tmp_path: Path) -> None:

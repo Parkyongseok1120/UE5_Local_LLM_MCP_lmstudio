@@ -439,9 +439,10 @@ def test_lmstudio_visible_content_suppresses_stale_project_source_rows(
 
     result = sent[-1]["result"]
     visible_text = result["content"][0]["text"]
-    assert "PROJECT SOURCE FRESHNESS GATE" in visible_text
-    assert "Direct Source/ reads are authoritative" in visible_text
+    structured = result["structuredContent"]
+    assert "PROJECT SOURCE FRESHNESS GATE" in structured["freshnessGate"]
+    assert "Direct Source/ reads are authoritative" in structured["freshnessGate"]
     assert "Stale reflected function" not in visible_text
-    assert result["structuredContent"]["staleProjectRowsSuppressed"] == 1
-    assert result["structuredContent"]["requiredNextAction"] == "search_files_then_read_file"
-    assert result["structuredContent"]["requiredNextTool"] == "search_files"
+    assert structured["staleProjectRowsSuppressed"] == 1
+    assert structured["requiredNextAction"] == "search_files_then_read_file"
+    assert structured["requiredNextTool"] == "search_files"

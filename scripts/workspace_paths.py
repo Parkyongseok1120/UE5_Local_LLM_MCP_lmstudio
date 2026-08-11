@@ -234,6 +234,16 @@ def _discover_engine_roots(
     return candidates
 
 
+def discover_engine_roots(
+    host_platform: str | None = None,
+    environ: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> list[Path]:
+    """Return validated Unreal roots in newest-first order for the current host."""
+
+    return _discover_engine_roots(host_platform, environ, home)
+
+
 def resolve_index_namespace(start: Path | None = None) -> str:
     config = load_workspace_config(start)
     namespace = str(config.get("indexNamespace") or "").strip()

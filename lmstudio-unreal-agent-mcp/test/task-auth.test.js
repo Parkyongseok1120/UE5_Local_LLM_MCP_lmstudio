@@ -886,8 +886,9 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
     assert.strictEqual(mismatch.errorCode, "TASK_AUTH_MISMATCH");
     assert.strictEqual(
       mismatch.nextAction,
-      "request_fresh_authorization_or_replan"
+      "unreal_agent_plan"
     );
+    assert.strictEqual(mismatch.nextActionIsTool, true);
     assert.strictEqual(
       Object.prototype.hasOwnProperty.call(mismatch.taskAuthorization, "authToken"),
       false

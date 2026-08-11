@@ -11,8 +11,29 @@ sys.path.insert(0, str(SCRIPTS))
 from agent_orchestrator import (  # noqa: E402
     build_agent_plan,
     classify_task,
+    is_continuation_request,
     verify_edit_allowed,
 )
+
+
+def test_continuation_classifier_only_accepts_pure_short_commands():
+    for request in (
+        "계속해",
+        "계속 진행해",
+        "이어가",
+        "ㅇㅇ",
+        "응",
+        "continue",
+        "go on",
+        "resume",
+    ):
+        assert is_continuation_request(request) is True
+    for request in (
+        "continue implementing Source/Demo/Foo.cpp",
+        "계속 진행하면서 새 subsystem도 추가해",
+        "resume the cancelled build with a new plan",
+    ):
+        assert is_continuation_request(request) is False
 
 
 def test_classify_compile_fix():

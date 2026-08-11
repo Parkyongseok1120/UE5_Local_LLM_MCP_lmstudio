@@ -49,6 +49,14 @@ test("checkpoint recovery nextAction outranks its post-checkpoint requiredNextAc
       ok: false,
       errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
       nextAction: "unreal_task_checkpoint",
+      nextActionIsTool: true,
+      control: {
+        version: 1,
+        phase: "route",
+        status: "NeedsAction",
+        nextAction: "unreal_task_checkpoint",
+        nextActionIsTool: true,
+      },
       nextActionArgs: {
         action: "record",
         requiredNextAction: "read_file",
@@ -62,13 +70,13 @@ test("checkpoint recovery nextAction outranks its post-checkpoint requiredNextAc
 
 test("checkpoint validation rejects malformed pending tool state", () => {
   assert.equal(core.validateCheckpoint({
-    schemaVersion: 1,
+    schemaVersion: core.COMPACTION_SCHEMA_VERSION,
     checkpointGeneration: 1,
     completedToolCallIds: [],
     pendingToolCalls: [{ id: "pending-1" }],
   }), false);
   assert.equal(core.validateCheckpoint({
-    schemaVersion: 1,
+    schemaVersion: core.COMPACTION_SCHEMA_VERSION,
     checkpointGeneration: 1,
     completedToolCallIds: [42],
   }), false);
@@ -733,6 +741,7 @@ test("resuming a legacy checkpoint drops a persisted active-route sentinel", () 
     reference: { sourceField: "nextAction", value: "use_active_route_tool" },
     args: { stale: true },
   };
+  prior.schemaVersion = 1;
   const next = core.buildCheckpoint([
     ...messages,
     { role: "user", content: "retry the exact build" },
@@ -771,7 +780,7 @@ test("protocol marker clears arbitrary instructional next actions", () => {
   assert.equal(checkpoint.requiredNextTool, null);
 });
 
-test("architecture portfolio and repair instructions are not treated as tool names", () => {
+test("server control marks architecture instructions as non-tool actions", () => {
   for (const action of [
     "collect_source_evidence_for_owner_choice",
     "resolve_ambiguous_candidates_with_rationale",
@@ -781,8 +790,61 @@ test("architecture portfolio and repair instructions are not treated as tool nam
     "submit_full_architecture_proposal",
     "revise_architecture_proposal",
   ]) {
-    assert.equal(core.isNonToolNextAction(action), true, action);
+    const checkpoint = core.buildCheckpoint([
+      { role: "user", content: "continue architecture repair" },
+      {
+        role: "tool",
+        content: JSON.stringify({
+          control: {
+            version: 1,
+            phase: "unreal_architecture_reasoning",
+            status: "ExactRepair",
+            nextAction: action,
+            nextActionIsTool: false,
+          },
+          nextAction: action,
+          nextActionIsTool: false,
+        }),
+      },
+    ]);
+    assert.equal(checkpoint.requiredNextTool, null, action);
   }
+});
+
+test("structured control outranks concise text and nested legacy actions", () => {
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "continue" },
+    {
+      role: "tool",
+      toolResults: [{
+        name: "unreal_task_checkpoint",
+        content: [{ type: "text", text: "checkpoint complete; see structuredContent" }],
+        structuredContent: {
+          control: {
+            version: 1,
+            taskId: "task-1",
+            phase: "checkpoint",
+            status: "NeedsAction",
+            nextAction: "read_file",
+            nextActionIsTool: true,
+          },
+          nextAction: "read_file",
+          nextActionIsTool: true,
+          nextActionArgs: {
+            path: "Source/Demo.cpp",
+            requiredNextAction: "submit_full_architecture_proposal",
+          },
+        },
+      }],
+    },
+  ]);
+
+  assert.equal(checkpoint.requiredNextTool.name, "read_file");
+  assert.deepEqual(checkpoint.requiredNextTool.args, {
+    path: "Source/Demo.cpp",
+    requiredNextAction: "submit_full_architecture_proposal",
+  });
+  assert.equal(checkpoint.protocolControl.taskId, "task-1");
 });
 
 test("architecture repair continuity survives hard compaction without repeating a patch", () => {

@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import importlib.util
+import ast
+import inspect
 import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,7 +76,8 @@ def test_public_schemas_cover_handler_consumed_arguments(tmp_path):
             "detailLevel", "sessionId",
         },
         "unreal_feature_intent_resolve": {
-            "selectedIntentId", "selectionRationale", "taskAuthorization",
+            "selectedIntentId", "selectionRationale", "blockingQuestionAnswers",
+            "taskAuthorization",
         },
         "unreal_task_start": {"startBackgroundJob"},
         "unreal_architecture_decision_approve": {"approvalToken"},
@@ -94,3 +98,36 @@ def test_public_schemas_cover_handler_consumed_arguments(tmp_path):
     assert {branch.get("type") for branch in repair_value["oneOf"]} == {
         "string", "number", "boolean", "array", "object",
     }
+
+
+def test_registered_handlers_do_not_consume_arguments_missing_from_public_schema(
+    tmp_path,
+):
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    definitions = {
+        tool["name"]: set(tool["inputSchema"].get("properties") or {})
+        for tool in _tool_descriptions(server)
+    }
+
+    for name in mod._MCP_TOOL_REGISTRY.names():
+        spec = mod._MCP_TOOL_REGISTRY.get(name)
+        handler = (
+            getattr(mod.McpServer, spec.handler)
+            if isinstance(spec.handler, str)
+            else spec.handler
+        )
+        tree = ast.parse(textwrap.dedent(inspect.getsource(handler)))
+        consumed = {
+            node.args[0].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in {"arguments", "args"}
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        }
+        assert consumed <= definitions[name], (name, sorted(consumed - definitions[name]))

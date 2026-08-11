@@ -411,6 +411,91 @@ def test_successful_build_binds_automation_gate_without_completing_task(
     assert state["buildProofHistory"][-1]["kind"] == "build"
 
 
+def test_compiler_required_gate_is_bound_to_build_before_automation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement a bounded API call and verify it",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "api", "files": ["Source/Demo/Api.cpp"]}
+            ],
+        },
+    )
+    recorded = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=started["taskAuthorization"],
+        input_payload={"sketch": "Object->PotentialApi();"},
+        evidence={
+            "ok": True,
+            "compilerProofRequired": True,
+            "compilerProofSymbols": ["PotentialApi"],
+        },
+    )
+    assert recorded["ok"] is True
+    before = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text()
+    )
+    assert before["compilerProof"]["status"] == "pending_build"
+    assert before["compilerProof"]["sliceId"] == "api"
+
+    pending = task_require_automation_after_build(
+        tmp_path,
+        task_authorization=recorded["taskAuthorization"],
+        mutation_generation=3,
+        build_log_path=".agent/logs/api-build.log",
+        test_filter="Demo.Api",
+        declared_tests=["Demo.Api.Runtime"],
+    )
+
+    assert pending["ok"] is True
+    after = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text()
+    )
+    assert after["status"] == "running"
+    assert after["compilerProof"]["status"] == "verified"
+    assert after["compilerProof"]["mutationGeneration"] == 3
+    assert after["compilerProof"]["buildLogPath"] == ".agent/logs/api-build.log"
+
+
+def test_invalidated_code_gate_clears_derived_compiler_proof() -> None:
+    state = _state(writes=True)
+    gate = "unreal_code_sketch_claim_validate"
+    state.update(
+        {
+            "requiredBeforeWrite": [gate],
+            "completedGates": {gate: {"status": "completed"}},
+            "pendingGates": [],
+            "requiredGateSetHash": "stale-plan-identity",
+            "compilerProof": {
+                "required": True,
+                "status": "verified",
+                "symbols": ["PotentialApi"],
+                "sliceId": "slice-1",
+            },
+        }
+    )
+
+    _refresh_server_owned_state(state)
+
+    assert state["completedGates"] == {}
+    assert state["compilerProof"] == {
+        "required": False,
+        "status": "not_required",
+        "symbols": [],
+    }
+
+
 def test_build_recovery_scope_is_shared_and_fail_closed(
     tmp_path: Path,
     monkeypatch,
@@ -850,7 +935,8 @@ def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
     )
     assert stale["ok"] is False
     assert stale["errorCode"] == "TASK_AUTH_MISMATCH"
-    assert stale["nextAction"] == "request_fresh_authorization_or_replan"
+    assert stale["nextAction"] == "unreal_agent_plan"
+    assert stale["nextActionIsTool"] is True
     assert "authToken" not in stale["taskAuthorization"]
     assert stale["taskAuthorization"]["planRevision"] == replanned["planRevision"]
     assert "authToken" in (stale.get("mismatchedFields") or [])
@@ -1375,7 +1461,8 @@ def test_gate_mismatch_returns_refresh_auth_not_same_tool_retry(
     )
     assert denied["ok"] is False
     assert denied["errorCode"] == "TASK_AUTH_MISMATCH"
-    assert denied["nextAction"] == "request_fresh_authorization_or_replan"
+    assert denied["nextAction"] == "unreal_agent_plan"
+    assert denied["nextActionIsTool"] is True
     assert "authToken" not in denied["taskAuthorization"]
     assert denied["taskAuthorization"]["planRevision"] == replanned["planRevision"]
     assert denied["nextAction"] != "retry_same_tool_with_returned_taskAuthorization"
@@ -1787,11 +1874,20 @@ def test_project_identity_bridges_rag_and_node_workspaces_without_cross_project_
         "unreal_task_checkpoint",
         "unreal_task_cancel",
     }
-    assert "unreal_rag_search" in names
     assert controls <= names
     assert controls.isdisjoint(started["toolRoute"]["activeTools"])
-    from tool_exposure import rag_essential_tool_names
+    from tool_exposure import (
+        phase_visible_rag_tool_names,
+        rag_essential_tool_names,
+    )
 
-    assert names == set(rag_essential_tool_names())
+    route_context = active_task_route_context(
+        workspace_b,
+        active_project=str(project_file),
+    )
+    assert names == set(
+        phase_visible_rag_tool_names(rag_essential_tool_names(), route_context)
+    )
+    assert "unreal_rag_search" not in names
     assert "unreal_code_sketch_claim_validate" in names
-    assert "unreal_semantic_refactor_guard" in names
+    assert "unreal_semantic_refactor_guard" not in names

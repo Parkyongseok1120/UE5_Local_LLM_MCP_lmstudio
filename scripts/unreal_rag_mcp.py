@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -32,6 +33,8 @@ from mcp_tool_compact import (
     compact_metadata_status_payload,
     compact_sync_metadata_payload,
 )
+from mcp_public_contract import compact_task_authorization, sanitize_model_payload
+from route_recovery_policy import recovery_codes, route_recovery_action
 from rag_context import assemble_context, assemble_context_mixed
 from rag_embeddings import embedding_status
 
@@ -43,6 +46,34 @@ _SOURCE_DERIVED_PROJECT_LAYERS = frozenset(
 _SOURCE_DERIVED_PROJECT_SOURCES = frozenset(
     {"unreal_symbol", "project_architecture", "project_profile", "unreal_project_text"}
 )
+
+_LONG_RUNNING_PROGRESS_TOOLS = frozenset(
+    {
+        "unreal_agent_plan",
+        "unreal_architecture_reasoning",
+        "unreal_code_sketch_claim_validate",
+        "unreal_feature_intent_resolve",
+        "unreal_project_prepare",
+        "unreal_runtime_verify",
+        "unreal_start_compile_loop",
+        "unreal_start_rag_refresh",
+        "unreal_task_checkpoint",
+        "unreal_task_start",
+    }
+)
+
+_TOOL_PROGRESS_LABELS = {
+    "unreal_agent_plan": "Task and architecture planning",
+    "unreal_architecture_reasoning": "Architecture evidence analysis",
+    "unreal_code_sketch_claim_validate": "Source and engine API validation",
+    "unreal_feature_intent_resolve": "Feature intent and target binding",
+    "unreal_project_prepare": "Project metadata preparation",
+    "unreal_runtime_verify": "Unreal runtime verification",
+    "unreal_start_compile_loop": "Build workflow launch",
+    "unreal_start_rag_refresh": "RAG refresh launch",
+    "unreal_task_checkpoint": "Checkpoint and recovery validation",
+    "unreal_task_start": "Project and task initialization",
+}
 
 
 def _is_source_derived_project_row(
@@ -83,28 +114,8 @@ def _stale_project_evidence_notice(stale_status: dict[str, Any], suppressed: int
         "direct reads as authoritative. Engine/documentation rows below remain retrieval evidence only.\n\n"
     )
 
-_ROUTE_SAME_CALL_RETRY_CODES = frozenset(
-    {
-        "TASK_AUTH_INCOMPLETE",
-        "TASK_ROUTE_OWNERSHIP_REQUIRED",
-        "TASK_ROUTE_STALE",
-        "TASK_STATE_LOCKED",
-    }
-)
-_ROUTE_RECOVERY_ACTION_CODES = frozenset(
-    {
-        "TASK_AUTH_INVALID_FORMAT",
-        "TASK_AUTH_MISMATCH",
-        "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
-        "TASK_ROUTE_OWNERSHIP_REQUIRED",
-        "TASK_ROUTE_SCOPE_EXCEEDED",
-        "TASK_SESSION_REQUIRED",
-        "TASK_SLICE_SCOPE_REQUIRED",
-        "TASK_SLICE_TARGET_MISMATCH",
-        "TASK_STATE_MISSING",
-        "TASK_TOOL_NOT_ACTIVE",
-    }
-)
+_ROUTE_SAME_CALL_RETRY_CODES = recovery_codes("sameCallRetryCodes")
+_ROUTE_RECOVERY_ACTION_CODES = recovery_codes("recoveryActionCodes")
 
 _DIRECT_SOURCE_STOPWORDS = frozenset(
     {
@@ -169,6 +180,10 @@ def _route_authorization_failure_payload(
     payload = {**result, "tool": str(tool_name or "")}
     error_code = str(payload.get("errorCode") or "TASK_ROUTE_AUTH_FAILED")
     same_call_retry = error_code in _ROUTE_SAME_CALL_RETRY_CODES
+    policy_recovery = route_recovery_action(error_code)
+    if error_code in _ROUTE_RECOVERY_ACTION_CODES:
+        payload.setdefault("nextAction", str(policy_recovery["action"]))
+        payload.setdefault("nextActionIsTool", bool(policy_recovery["isTool"]))
     recovery_action = (
         error_code in _ROUTE_RECOVERY_ACTION_CODES
         or bool(payload.get("nextAction"))
@@ -697,41 +712,7 @@ def _architecture_proposal_schema() -> dict[str, Any]:
 
 
 def _task_authorization_schema() -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "taskSessionId": {"type": "string"},
-            "authToken": {"type": "string"},
-            "ownerCapability": {
-                "type": "string",
-                "description": "Secret ownership token from unreal_task_start. Not a conversationId.",
-            },
-            "conversationId": {
-                "type": "string",
-                "description": "Public chat scope label. Not sufficient for ownership alone.",
-            },
-            "planId": {"type": "string"},
-            "planRevision": {
-                "type": ["string", "integer"],
-                "description": (
-                    "Server-issued plan revision. Integer and numeric-string forms are equivalent."
-                ),
-            },
-            "activeSliceId": {"type": "string"},
-            "routeHash": {"type": "string"},
-            "routePhase": {"type": "string"},
-        },
-        "required": [
-            "taskSessionId",
-            "ownerCapability",
-        ],
-        "additionalProperties": False,
-        "description": (
-            "Compact task ownership authorization. taskSessionId and ownerCapability are "
-            "stable across route changes; the server refreshes all optional route fields "
-            "from current task state before dispatch."
-        ),
-    }
+    return _checkpoint_authorization_schema()
 
 
 def _architecture_proposal_patch_schema() -> dict[str, Any]:
@@ -1011,7 +992,7 @@ def _record_prewrite_gate(
     if not isinstance(authorization, dict):
         return None
     if not gate_passed:
-        return {
+        failure = {
             "ok": False,
             "gate": gate_name,
             "errorCode": "GATE_VALIDATION_FAILED",
@@ -1031,6 +1012,38 @@ def _record_prewrite_gate(
                 )
             ),
         }
+        if _has_complete_task_authorization(authorization):
+            from task_api import task_record_gate_failure
+
+            input_payload = {
+                key: value
+                for key, value in arguments.items()
+                if key not in {"taskAuthorization", "task_authorization"}
+            }
+            recorded = task_record_gate_failure(
+                server.workspace,
+                gate_name=gate_name,
+                task_authorization=authorization,
+                input_payload=input_payload,
+                evidence=evidence,
+            )
+            if recorded.get("errorCode") in {
+                "GATE_VALIDATION_FAILED",
+                "REPEATED_GATE_BLOCKER",
+            }:
+                failure.update(recorded)
+                if recorded.get("repeatedBlocker") is True:
+                    failure["doNotRetryUnchanged"] = True
+                    failure["retryable"] = False
+                    failure["agentInstruction"] = (
+                        "The same canonical gate blocker was already observed. Do not call "
+                        f"{gate_name} again with equivalent evidence. Execute nextAction with "
+                        "the returned taskAuthorization, or define a new concrete slice/replan "
+                        "only after the underlying evidence changes."
+                    )
+            elif recorded.get("ok") is False:
+                return recorded
+        return failure
     from task_api import task_record_gate
 
     input_payload = {
@@ -1070,35 +1083,31 @@ def _attach_code_sketch_recovery(
     )
     contract_issue = str(contract_issues[0]) if contract_issues else ""
     blocking_verdicts = {"known_bad", "unverified", "weak", "skipped_graph"}
-    blocker = next(
-        (
-            row
-            for row in (payload.get("results") or [])
-            if isinstance(row, dict)
-            and str(row.get("verdict") or "") in blocking_verdicts
-        ),
-        None,
-    )
-    first_blocker = {
-        key: blocker[key]
-        for key in (
-            "symbol",
-            "receiver",
-            "receiverType",
-            "verdict",
-            "replacement",
-            "note",
-        )
-        if isinstance(blocker, dict) and blocker.get(key) not in (None, "")
-    }
-    if isinstance(blocker, dict) and isinstance(blocker.get("evidence"), list):
-        first_blocker["evidence"] = blocker["evidence"][:2]
-
-    if contract_issue:
-        first_blocker = {
-            "verdict": "contract",
-            "note": contract_issue,
+    blockers: list[dict[str, Any]] = []
+    for issue in contract_issues[:12]:
+        blockers.append({"verdict": "contract", "note": str(issue)})
+    for blocker in payload.get("results") or []:
+        if not isinstance(blocker, dict) or str(blocker.get("verdict") or "") not in blocking_verdicts:
+            continue
+        compact_blocker = {
+            key: blocker[key]
+            for key in (
+                "symbol",
+                "receiver",
+                "receiverType",
+                "verdict",
+                "errorCode",
+                "replacement",
+                "note",
+            )
+            if blocker.get(key) not in (None, "")
         }
+        if isinstance(blocker.get("evidence"), list):
+            compact_blocker["evidence"] = blocker["evidence"][:2]
+        blockers.append(compact_blocker)
+        if len(blockers) >= 24:
+            break
+    first_blocker = blockers[0] if blockers else {}
 
     verdict = str(first_blocker.get("verdict") or "")
     symbol = str(first_blocker.get("symbol") or "").strip()
@@ -1108,6 +1117,7 @@ def _attach_code_sketch_recovery(
             "requiredChange": "fix_generation_contract",
             "contractIssue": contract_issue,
             "allowedTargetFiles": list(arguments.get("targetFiles") or []),
+            "blockers": blockers,
         }
         instruction = (
             "The write gate is closed by the generation contract. Correct changeKind/targetFiles "
@@ -1117,33 +1127,32 @@ def _attach_code_sketch_recovery(
             "taskAuthorization. Do not perform symbol lookup for out-of-scope code, rerun unchanged, "
             "replan, or present manual paste-ready code."
         )
-    elif verdict in {"unverified", "weak"} and symbol:
-        next_action = "unreal_symbol_lookup"
-        next_action_args: dict[str, Any] = {
-            "query": symbol,
-            "top_k": 8,
-            "detailLevel": "compact",
-        }
+    elif verdict in {"unverified", "weak"}:
+        next_action = "unreal_project_status"
+        next_action_args = {"blockers": blockers}
         instruction = (
-            f"The write gate is closed. Call unreal_symbol_lookup once for {symbol} with "
-            "nextActionArgs and the current taskAuthorization. If it returns no exact owner/signature "
-            "match, remove the API claim or replace it with an exact API verified from source. A "
-            "project-local helper may be declared only when it belongs to targetFiles and the requested "
-            "design already requires that helper. Never move responsibility to another class, redeclare "
-            "an engine API, or invent a wrapper merely to evade validation. "
-            "Then rerun unreal_code_sketch_claim_validate once with a concise changed claim sketch "
-            "(not the full file; aim for at most 40 lines / 3000 characters). "
-            "Do not rerun the unchanged sketch, do not replan, and do not present manual paste-ready code."
+            "The engine/project source oracle is unavailable, so unresolved claims remain blocked. "
+            "Check project/engine readiness once, then revalidate all changed claims together. Do not "
+            "call one symbol lookup per blocker. Do not rerun the unchanged sketch. Never move "
+            "responsibility to another class merely to bypass an unresolved API claim."
         )
     elif verdict == "known_bad" and symbol:
         next_action = "unreal_code_sketch_claim_validate"
         next_action_args = {
-            "requiredChange": f"replace_or_remove:{symbol}",
-            "replacement": str(first_blocker.get("replacement") or ""),
+            "requiredChanges": [
+                {
+                    "symbol": str(item.get("symbol") or ""),
+                    "replacement": str(item.get("replacement") or ""),
+                    "errorCode": str(item.get("errorCode") or ""),
+                }
+                for item in blockers
+                if item.get("verdict") == "known_bad"
+            ],
+            "blockers": blockers,
         }
         instruction = (
-            f"The write gate is closed. Replace or remove the known-bad claim {symbol} in the draft "
-            "using firstBlocker.replacement, then rerun unreal_code_sketch_claim_validate once with "
+            "The write gate is closed. Replace or remove every returned known-bad claim in one batch, "
+            "then rerun unreal_code_sketch_claim_validate once with "
             "a concise changed claim sketch (not the full file; aim for at most 40 lines / 3000 "
             "characters) and current taskAuthorization. Do not rerun the unchanged sketch, "
             "replan, or present manual paste-ready code."
@@ -1175,6 +1184,8 @@ def _attach_code_sketch_recovery(
             "gatePassed": False,
             "writeGateClosed": True,
             "firstBlocker": first_blocker,
+            "blockers": blockers,
+            "blockerCount": len(blockers),
             "nextAction": next_action,
             "nextActionArgs": next_action_args,
             "reuseCurrentTaskAuthorization": isinstance(
@@ -1240,34 +1251,40 @@ def _handle_unreal_feature_intent_resolve(
     message_id: Any,
     arguments: dict[str, Any],
 ) -> None:
-    request = str(arguments.get("request") or "").strip()
-    raw_target_files = arguments.get("targetFiles")
+    server.progress_phase(message_id, "Resolving task-bound feature intent")
     authorization = (
         arguments.get("taskAuthorization")
         if isinstance(arguments.get("taskAuthorization"), dict)
         else {}
     )
     task_session_id = str(authorization.get("taskSessionId") or "").strip()
-    task_state: dict[str, Any] = {}
-    if task_session_id and (not request or not raw_target_files):
-        from task_api import task_status
+    if not task_session_id:
+        _invalid_tool_argument(
+            server,
+            message_id,
+            FEATURE_INTENT_GATE,
+            "taskAuthorization.taskSessionId is required",
+        )
+        return
+    from task_api import task_status
 
-        status = task_status(server.workspace, task_session_id)
-        task_state = status.get("state") if isinstance(status.get("state"), dict) else {}
-        if not request:
-            request = str(task_state.get("request") or "").strip()
-        if not raw_target_files:
-            route = (
-                task_state.get("toolRoute")
-                if isinstance(task_state.get("toolRoute"), dict)
-                else {}
-            )
-            selected_slice = (
-                route.get("selectedSlice")
-                if isinstance(route.get("selectedSlice"), dict)
-                else {}
-            )
-            raw_target_files = selected_slice.get("files")
+    status = task_status(server.workspace, task_session_id)
+    if not status.get("ok"):
+        server.structured_tool_result(message_id, status)
+        return
+    task_state = status.get("state") if isinstance(status.get("state"), dict) else {}
+    request = str(task_state.get("request") or "").strip()
+    route = (
+        task_state.get("toolRoute")
+        if isinstance(task_state.get("toolRoute"), dict)
+        else {}
+    )
+    selected_slice = (
+        route.get("selectedSlice")
+        if isinstance(route.get("selectedSlice"), dict)
+        else {}
+    )
+    raw_target_files = selected_slice.get("files")
     target_files, argument_error = _string_list_argument(
         raw_target_files,
         "targetFiles",
@@ -1280,16 +1297,15 @@ def _handle_unreal_feature_intent_resolve(
             argument_error,
         )
         return
-    project_root = str(arguments.get("projectRoot") or "").strip()
-    if not project_root and task_state:
-        task_project = str(task_state.get("projectFile") or "").strip()
-        if task_project:
-            task_project_path = Path(task_project).expanduser().resolve()
-            project_root = str(
-                task_project_path.parent
-                if task_project_path.suffix.lower() == ".uproject"
-                else task_project_path
-            )
+    project_root = ""
+    task_project = str(task_state.get("projectFile") or "").strip()
+    if task_project:
+        task_project_path = Path(task_project).expanduser().resolve()
+        project_root = str(
+            task_project_path.parent
+            if task_project_path.suffix.lower() == ".uproject"
+            else task_project_path
+        )
     if not project_root:
         active = str(load_shared_config().get("activeProject") or "").strip()
         if active:
@@ -1299,15 +1315,6 @@ def _handle_unreal_feature_intent_resolve(
                 if active_path.suffix.lower() == ".uproject"
                 else active_path
             )
-    candidates = arguments.get("candidates")
-    if candidates is not None and not isinstance(candidates, list):
-        _invalid_tool_argument(
-            server,
-            message_id,
-            FEATURE_INTENT_GATE,
-            "candidates must be an array",
-        )
-        return
     question_answers = arguments.get("blockingQuestionAnswers")
     if question_answers is not None and not isinstance(question_answers, dict):
         _invalid_tool_argument(
@@ -1317,26 +1324,105 @@ def _handle_unreal_feature_intent_resolve(
             "blockingQuestionAnswers must be an object",
         )
         return
-    try:
-        candidate_count = int(arguments.get("candidateCount") or 3)
-    except (TypeError, ValueError):
-        _invalid_tool_argument(
-            server,
+    feature_state = (
+        task_state.get("featureIntent")
+        if isinstance(task_state.get("featureIntent"), dict)
+        else {}
+    )
+    candidate_count = max(3, min(5, int(feature_state.get("candidateCount") or 3)))
+
+    gate_input = {
+        key: value
+        for key, value in arguments.items()
+        if key not in {"taskAuthorization", "task_authorization"}
+    }
+    from task_api import task_gate_failure_preflight
+
+    preflight = task_gate_failure_preflight(
+        server.workspace,
+        gate_name=FEATURE_INTENT_GATE,
+        task_authorization=authorization,
+        input_payload=gate_input,
+    )
+    if not preflight.get("ok"):
+        server.structured_tool_result(message_id, preflight)
+        return
+    if preflight.get("blocked"):
+        server.structured_tool_result(
             message_id,
-            FEATURE_INTENT_GATE,
-            "candidateCount must be an integer from 3 through 5",
+            {
+                "ok": False,
+                "status": "blocked",
+                "errorCode": "REPEATED_GATE_BLOCKER",
+                "error": "The same gate input already produced the same blocker twice.",
+                "gate": FEATURE_INTENT_GATE,
+                "resolverSkipped": True,
+                "equivalentAttemptCount": preflight.get("attemptCount"),
+                "blockerFingerprint": preflight.get("blockerFingerprint"),
+                "validationErrorCode": preflight.get("validationErrorCode"),
+                "nextAction": preflight.get("nextAction"),
+                "nextActionArgs": {
+                    "taskAuthorization": preflight.get("taskAuthorization") or {},
+                },
+                "taskAuthorization": preflight.get("taskAuthorization") or {},
+                "toolRoute": preflight.get("toolRoute") or {},
+                "retryable": False,
+                "doNotRetryUnchanged": True,
+                "agentInstruction": (
+                    "Do not run this resolver again with unchanged arguments. Execute "
+                    "nextAction or change the underlying task evidence first."
+                ),
+            },
         )
         return
 
+    server.progress_phase(message_id, "Capturing server-owned target snapshots")
+    target_snapshots, snapshot_issues = _feature_intent_target_snapshots(
+        project_root,
+        target_files,
+    )
+    from feature_intent_fast_path import (
+        bounded_local_question_answers,
+        evaluate_bounded_local_fast_path,
+    )
+
+    fast_path = evaluate_bounded_local_fast_path(
+        request,
+        target_files=target_files,
+        target_snapshots=target_snapshots,
+    )
+    explicit_semantic_input = bool(
+        str(arguments.get("selectedIntentId") or "").strip()
+        or str(arguments.get("selectionRationale") or "").strip()
+        or question_answers
+    )
+    use_fast_path = bool(
+        fast_path.get("eligible")
+        and not snapshot_issues
+        and not explicit_semantic_input
+    )
+    effective_selected_intent = str(arguments.get("selectedIntentId") or "")
+    effective_rationale = str(arguments.get("selectionRationale") or "")
+    effective_answers = question_answers
+    if use_fast_path:
+        effective_selected_intent = "bounded_local"
+        effective_rationale = (
+            "Server strict fast path: existing one-module target, reversible local "
+            "change, and no authority, replication, persistence, or ownership expansion."
+        )
+        effective_answers = bounded_local_question_answers()
+
     full_resolution = resolve_feature_intent(
         request,
-        candidates=candidates,
-        selected_intent_id=str(arguments.get("selectedIntentId") or ""),
-        selection_rationale=str(arguments.get("selectionRationale") or ""),
-        blocking_question_answers=question_answers,
+        candidates=None,
+        selected_intent_id=effective_selected_intent,
+        selection_rationale=effective_rationale,
+        blocking_question_answers=effective_answers,
         user_approved=False,
         write_intent=True,
-        candidate_count=max(3, min(5, candidate_count)),
+        reversible=True if use_fast_path else None,
+        bounded_scope=True if use_fast_path else None,
+        candidate_count=candidate_count,
         include_full=True,
     )
     approval_result: dict[str, Any] | None = None
@@ -1363,13 +1449,15 @@ def _handle_unreal_feature_intent_resolve(
         if approval_result.get("ok"):
             full_resolution = resolve_feature_intent(
                 request,
-                candidates=candidates,
-                selected_intent_id=str(arguments.get("selectedIntentId") or ""),
-                selection_rationale=str(arguments.get("selectionRationale") or ""),
-                blocking_question_answers=question_answers,
+                candidates=None,
+                selected_intent_id=effective_selected_intent,
+                selection_rationale=effective_rationale,
+                blocking_question_answers=effective_answers,
                 user_approved=True,
                 write_intent=True,
-                candidate_count=max(3, min(5, candidate_count)),
+                reversible=True if use_fast_path else None,
+                bounded_scope=True if use_fast_path else None,
+                candidate_count=candidate_count,
                 include_full=True,
             )
         if not approval_result or not approval_result.get("ok"):
@@ -1378,15 +1466,17 @@ def _handle_unreal_feature_intent_resolve(
                 task_authorization=task_authorization,
                 intent_contract_hash=contract_hash,
             )
-    target_snapshots, snapshot_issues = _feature_intent_target_snapshots(
-        project_root,
-        target_files,
-    )
     payload = {
         key: value
         for key, value in full_resolution.items()
         if key not in {"contract", "selectedCandidate"}
     }
+    if use_fast_path:
+        payload["fastPath"] = {
+            **fast_path,
+            "applied": True,
+            "selectionRationale": effective_rationale,
+        }
     if approval_result is not None:
         payload["approval"] = approval_result
     if snapshot_issues:
@@ -1429,6 +1519,7 @@ def _handle_unreal_feature_intent_resolve(
             (full_resolution.get("ambiguity") or {}).get("recommendedAction") or ""
         ),
     }
+    server.progress_phase(message_id, "Recording feature intent gate")
     gate_completion = _record_prewrite_gate(
         server,
         gate_name=FEATURE_INTENT_GATE,
@@ -1446,6 +1537,7 @@ def _handle_unreal_feature_intent_resolve(
 def _handle_unreal_code_sketch_claim_validate(
     server: McpServer, message_id: Any, arguments: dict[str, Any]
 ) -> None:
+    server.progress_phase(message_id, "Resolving task and selected source slice")
     sketch = str(arguments.get("sketch") or "")
     if not sketch.strip():
         server.tool_result(message_id, "Missing required argument: sketch", is_error=True)
@@ -1562,6 +1654,7 @@ def _handle_unreal_code_sketch_claim_validate(
     }
     if project_root and not oversized:
         try:
+            server.progress_phase(message_id, "Building verified project symbol graph")
             resolved_project_root = Path(project_root).expanduser().resolve()
             if resolved_project_root.is_file() and resolved_project_root.suffix.lower() == ".uproject":
                 resolved_project_root = resolved_project_root.parent
@@ -1611,180 +1704,20 @@ def _handle_unreal_code_sketch_claim_validate(
             validation_plan=validation_plan,
             graph=graph,
         )
-        # Models often draft several `// Foo.cpp` sections while claiming only
-        # one or two targetFiles. Reject that mismatch before chasing symbols
-        # from files that are outside the server-bound active slice.
-        labeled_files = re.findall(
-            r"(?mi)^\s*(?://|/\*)\s*(?:file\s*:\s*)?"
-            r"([A-Za-z0-9_.\\/\-]+\.(?:h|hpp|hh|inl|cpp|cc|cxx|cs))"
-            r"(?=\s*(?:[-:]|(?:\*/)?\s*$))",
+        from code_sketch_pipeline import (
+            load_declaration_context,
+            validate_active_slice_surface,
+        )
+
+        generation_contract = validate_active_slice_surface(
             sketch,
+            target_files=target_files,
+            generation_contract=generation_contract,
+            graph=graph,
         )
-        allowed_paths = {
-            str(Path(item).as_posix()).casefold() for item in target_files
-        }
-        allowed_names = {Path(item).name.casefold() for item in target_files}
-        outside_labels = [
-            item
-            for item in dict.fromkeys(labeled_files)
-            if str(Path(item).as_posix()).casefold() not in allowed_paths
-            and Path(item).name.casefold() not in allowed_names
-        ]
-        if outside_labels:
-            issue = (
-                "sketch contains labeled source sections outside targetFiles: "
-                + ", ".join(outside_labels[:6])
-            )
-            generation_contract.setdefault("issues", []).insert(0, issue)
-            generation_contract["ok"] = False
-            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
-            generation_contract["writeGate"]["reason"] = "sketch exceeds active targetFiles slice"
-        # A reflected UCLASS is a generated-code/source ownership surface, not
-        # a harmless helper declaration.  Reject newly proposed reflected
-        # classes whose names do not correspond to this slice's target files.
-        # This prevents a broad sketch for BoardActor.* from quietly smuggling
-        # PlayerController/HUD classes into the authorized write pair.
-        reflected_classes = re.findall(
-            r"(?ms)\bUCLASS\s*(?:\([^)]*\))?\s*class\s+"
-            r"(?:[A-Z][A-Z0-9_]*_API\s+)?([A-Za-z_]\w*)",
-            sketch,
+        declaration_context, declaration_context_files = load_declaration_context(
+            generation_contract
         )
-        target_stems = {Path(item).stem.casefold() for item in target_files}
-        existing_target_text = ""
-        for target in generation_contract.get("targets") or []:
-            if not isinstance(target, dict) or not target.get("exists"):
-                continue
-            try:
-                existing_target_text += "\n" + Path(
-                    str(target.get("absolutePath") or "")
-                ).read_text(encoding="utf-8-sig", errors="replace")
-            except OSError:
-                continue
-        outside_reflected_classes: list[str] = []
-        invalid_reflected_prefixes: list[str] = []
-        for class_name in dict.fromkeys(reflected_classes):
-            if not class_name.startswith(("A", "U")):
-                invalid_reflected_prefixes.append(class_name)
-            canonical = class_name[1:] if class_name[:1] in {"A", "U", "W"} else class_name
-            matches_target = canonical.casefold() in target_stems
-            already_owned_by_target = bool(
-                re.search(rf"\bclass\s+(?:[A-Z][A-Z0-9_]*_API\s+)?{re.escape(class_name)}\b", existing_target_text)
-            )
-            if not matches_target and not already_owned_by_target:
-                outside_reflected_classes.append(class_name)
-        if outside_reflected_classes or invalid_reflected_prefixes:
-            issues = generation_contract.setdefault("issues", [])
-            if outside_reflected_classes:
-                issues.insert(
-                    0,
-                    "sketch declares reflected UCLASS types outside targetFiles: "
-                    + ", ".join(outside_reflected_classes[:6]),
-                )
-            if invalid_reflected_prefixes:
-                issues.insert(
-                    0,
-                    "UCLASS names must use an Unreal A/U prefix: "
-                    + ", ".join(invalid_reflected_prefixes[:6]),
-                )
-            generation_contract["ok"] = False
-            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
-            generation_contract["writeGate"]["reason"] = "reflected class exceeds active targetFiles slice"
-        reflected_headers: dict[str, str] = {}
-        for row in (graph or {}).get("symbols") or []:
-            if not isinstance(row, dict) or row.get("is_reflected") is not True:
-                continue
-            if row.get("symbol_kind") not in {"class", "interface"}:
-                continue
-            symbol_name = str(row.get("symbol_name") or "").strip()
-            file_name = Path(str(row.get("file_path") or "")).name
-            if symbol_name and file_name:
-                reflected_headers[symbol_name.casefold()] = file_name
-        wrong_reflected_includes: list[str] = []
-        for include_path in re.findall(
-            r'(?mi)^\s*#\s*include\s*"([^"]+)"',
-            sketch,
-        ):
-            include_name = Path(include_path).name
-            reflected_type = Path(include_name).stem
-            actual_header = reflected_headers.get(reflected_type.casefold(), "")
-            if actual_header and include_name.casefold() != actual_header.casefold():
-                wrong_reflected_includes.append(
-                    f'{include_path} names {reflected_type}, but project source declares it in {actual_header}'
-                )
-        if wrong_reflected_includes:
-            generation_contract.setdefault("issues", []).insert(
-                0,
-                "sketch uses a guessed reflected-type header: "
-                + wrong_reflected_includes[0],
-            )
-            generation_contract["ok"] = False
-            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
-            generation_contract["writeGate"]["reason"] = "reflected include path is not source-backed"
-        # A project-specific modification gate must validate the actual code
-        # shape that will be written, not a prose checklist naming APIs.  Small
-        # models otherwise submit bullets such as ``Uses: TryPlaceStone(...)``;
-        # no call-expression is extracted, the gate reports zero claims, and a
-        # completely different full-file rewrite follows.  Greenfield class
-        # inheritance shorthand remains supported by the dedicated local-type
-        # extractor, while existing-file edits require at least one concrete
-        # source marker.
-        modifies_existing = any(
-            isinstance(target, dict) and bool(target.get("exists"))
-            for target in generation_contract.get("targets") or []
-        )
-        concrete_source = bool(
-            re.search(
-                r"(?m)(?:;|[{}]|^\s*#\s*(?:include|define|if|pragma)\b|"
-                r"\b(?:UCLASS|USTRUCT|UENUM|UPROPERTY|UFUNCTION|GENERATED_BODY)\s*\()",
-                sketch,
-            )
-        )
-        if modifies_existing and not concrete_source:
-            issue = (
-                "existing-file validation requires a concrete code snippet; "
-                "a prose API/implementation summary cannot open the write gate"
-            )
-            generation_contract.setdefault("issues", []).insert(0, issue)
-            generation_contract["ok"] = False
-            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
-            generation_contract["writeGate"]["reason"] = "sketch is prose, not proposed code"
-        behavior_placeholders = re.findall(
-            r"(?mi)^\s*//[^\n]*\b(?:TODO|FIXME|implement|place|handle|execute|apply)\b"
-            r"[^\n]*\bhere\b[^\n]*$",
-            sketch,
-        )
-        if behavior_placeholders:
-            issue = (
-                "sketch leaves requested behavior as an implementation placeholder: "
-                + behavior_placeholders[0].strip()[:220]
-            )
-            generation_contract.setdefault("issues", []).insert(0, issue)
-            generation_contract["ok"] = False
-            generation_contract.setdefault("writeGate", {})["writesAllowed"] = False
-            generation_contract["writeGate"]["reason"] = "requested behavior is still a placeholder"
-        context_chunks: list[str] = []
-        context_chars = 0
-        for evidence in generation_contract.get("requiredReads") or []:
-            if not isinstance(evidence, dict):
-                continue
-            raw_path = str(evidence.get("filePath") or "").strip()
-            if not raw_path or raw_path in declaration_context_files:
-                continue
-            path = Path(raw_path)
-            if path.suffix.lower() not in {".h", ".hpp", ".hh", ".inl", ".cpp", ".cc", ".cxx"}:
-                continue
-            try:
-                source_text = path.read_text(encoding="utf-8-sig", errors="replace")
-            except OSError:
-                continue
-            remaining = 96_000 - context_chars
-            if remaining <= 0 or len(declaration_context_files) >= 4:
-                break
-            source_text = source_text[:remaining]
-            context_chunks.append(source_text)
-            context_chars += len(source_text)
-            declaration_context_files.append(raw_path)
-        declaration_context = "\n".join(context_chunks)
 
     shared_config = load_shared_config()
     engine_root = str(
@@ -1793,6 +1726,7 @@ def _handle_unreal_code_sketch_claim_validate(
         or shared_config.get("defaultEngineRoot")
         or ""
     ).strip()
+    server.progress_phase(message_id, "Validating source claims against engine headers")
     payload = validate_sketch(
         sketch,
         server.index,
@@ -1810,7 +1744,11 @@ def _handle_unreal_code_sketch_claim_validate(
     if project_root and not oversized and graph_status["status"] != "ready":
         skipped_graph = 0
         for row in payload.get("results") or []:
-            if not isinstance(row, dict) or row.get("verdict") not in {"unverified", "weak"}:
+            if not isinstance(row, dict) or row.get("verdict") not in {
+                "unverified",
+                "weak",
+                "compiler_required",
+            }:
                 continue
             row["verdict"] = "skipped_graph"
             row["note"] = (
@@ -1820,6 +1758,9 @@ def _handle_unreal_code_sketch_claim_validate(
             skipped_graph += 1
         payload["unverifiedCount"] = 0
         payload["weakCount"] = 0
+        payload["compilerRequiredCount"] = 0
+        payload["compilerProofRequired"] = False
+        payload["compilerProofSymbols"] = []
         payload["skippedGraphCount"] = skipped_graph
         payload["verdictSummary"] = (
             f"{payload.get('verifiedCount', 0)} verified, "
@@ -1921,10 +1862,25 @@ def _handle_unreal_code_sketch_claim_validate(
         payload.get("ok")
         and (contract.get("writeGate") or {}).get("writesAllowed") is True
     )
+    if gate_passed and payload.get("compilerProofRequired") is True:
+        payload["compilerEscalation"] = {
+            "required": True,
+            "sourceLookupAttempts": 1,
+            "nextOracle": "UHT/UBT",
+            "postMutationTool": "build_unreal_project",
+            "symbols": list(payload.get("compilerProofSymbols") or []),
+            "bounded": True,
+        }
+        payload["agentInstruction"] = (
+            "Bounded source lookup is exhausted for compiler_required claims. Apply only the "
+            "validated target slice, then call build_unreal_project immediately. Do not call "
+            "unreal_symbol_lookup or repeat this sketch before compiler proof."
+        )
     payload["gatePassed"] = gate_passed
     payload["writeGateClosed"] = not gate_passed
     if not gate_passed:
         _attach_code_sketch_recovery(payload, arguments=arguments)
+    server.progress_phase(message_id, "Recording code validation gate")
     gate_completion = _record_prewrite_gate(
         server,
         gate_name="unreal_code_sketch_claim_validate",
@@ -1997,7 +1953,11 @@ def _handle_unreal_code_sketch_claim_validate(
     if gate_summary.get("ok") and isinstance(next_authorization, dict):
         summary_lines.append(
             "nextTaskAuthorization="
-            + json.dumps(next_authorization, ensure_ascii=False, separators=(",", ":"))
+            + json.dumps(
+                compact_task_authorization(next_authorization),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         )
         if isinstance(next_route, dict):
             summary_lines.append(
@@ -2013,7 +1973,7 @@ def _handle_unreal_code_sketch_claim_validate(
                 )
             )
         summary_lines.append(
-            "Reuse nextTaskAuthorization exactly for the next tool call; do not synthesize routePhase or routeHash."
+            "Reuse nextTaskAuthorization exactly; the server resolves current route fields."
         )
     if gate_summary.get("agentInstruction"):
         summary_lines.append(str(gate_summary["agentInstruction"]))
@@ -2160,6 +2120,7 @@ def _handle_unreal_semantic_refactor_guard(
 def _handle_unreal_architecture_reasoning(
     server: McpServer, message_id: Any, arguments: dict[str, Any]
 ) -> None:
+    server.progress_phase(message_id, "Loading architecture request and stored proposal")
     project_root = str(arguments.get("projectRoot") or "").strip()
     if not project_root:
         active = str(load_shared_config().get("activeProject") or "").strip()
@@ -2176,7 +2137,7 @@ def _handle_unreal_architecture_reasoning(
     detail_level = str(arguments.get("detailLevel") or "compact")
     proposal_delivery_key = ""
     proposal_session_id = str(
-        arguments.get("sessionId") or arguments.get("session_id") or ""
+        arguments.get("sessionId") or ""
     ).strip()
     proposal_patch_applied = False
     proposal_repairs_applied = False
@@ -2627,10 +2588,12 @@ def _handle_unreal_architecture_reasoning(
             compact_architecture_payload(payload, detail_level),
         )
         return
+    server.progress_phase(message_id, "Building project architecture evidence")
     graph, graph_source, graph_ms = server.architecture_graph(
         project_root,
         require_content_verification=proposal is not None,
     )
+    server.progress_phase(message_id, "Validating ownership, lifecycle, and state flow")
     payload = analyze_architecture(
         project_root,
         symbols=symbols,
@@ -2651,6 +2614,8 @@ def _handle_unreal_architecture_reasoning(
     )
     if isinstance(proposal_validation, dict) and proposal_validation.get("ok") is not True:
         full_replan = proposal_validation.get("repairStrategy") == "full_replan"
+        if full_replan:
+            server.progress_phase(message_id, "Architecture recovery: full replan required")
         payload["ok"] = False
         payload["errorCode"] = "ARCHITECTURE_PROPOSAL_INVALID"
         payload["retryable"] = True
@@ -2777,7 +2742,7 @@ def _handle_unreal_runtime_debug_session(
     from task_api import task_record_gate, task_set_runtime_session, task_status
 
     action = str(arguments.get("action") or "status").strip().lower()
-    authorization = arguments.get("taskAuthorization") or arguments.get("task_authorization")
+    authorization = arguments.get("taskAuthorization")
     if not isinstance(authorization, dict):
         _invalid_tool_argument(
             server,
@@ -2978,6 +2943,101 @@ def _handle_unreal_runtime_debug_session(
     server.structured_tool_result(message_id, payload)
 
 
+def _handle_unreal_runtime_verify(
+    server: McpServer,
+    message_id: Any,
+    arguments: dict[str, Any],
+) -> None:
+    from runtime_verify import build_runtime_verify_plan, run_runtime_verify_plan
+    from workspace_paths import resolve_active_project_path
+
+    action = str(arguments.get("action") or "plan").strip().casefold()
+    project_file = str(arguments.get("projectFile") or "").strip()
+    if not project_file:
+        project_file = str(resolve_active_project_path() or "")
+    manifest = arguments.get("manifest")
+    if not isinstance(manifest, dict):
+        _invalid_tool_argument(
+            server,
+            message_id,
+            "unreal_runtime_verify",
+            "manifest must be an object",
+        )
+        return
+    server.progress_phase(message_id, "Runtime environment and manifest validation")
+    plan = build_runtime_verify_plan(
+        manifest,
+        project_file=project_file,
+        engine_root=str(arguments.get("engineRoot") or "").strip() or None,
+        editor_cmd=str(arguments.get("editorCmd") or "").strip() or None,
+        allow_engine_fallback=arguments.get("allowEngineFallback") is True,
+    )
+    if action == "plan":
+        execute_args = {"action": "execute", "manifest": manifest}
+        for key in (
+            "projectFile",
+            "engineRoot",
+            "editorCmd",
+            "allowEngineFallback",
+        ):
+            if arguments.get(key) not in (None, ""):
+                execute_args[key] = arguments[key]
+        server.structured_tool_result(
+            message_id,
+            {
+                "ok": bool(plan.get("ok")),
+                "action": "plan",
+                "runtimeVerifyPlan": plan,
+                "nextAction": "unreal_runtime_verify" if plan.get("ok") else "",
+                "nextActionIsTool": bool(plan.get("ok")),
+                "nextActionArgs": execute_args,
+            },
+        )
+        return
+    if action != "execute":
+        _invalid_tool_argument(
+            server,
+            message_id,
+            "unreal_runtime_verify",
+            "action must be plan or execute",
+        )
+        return
+    if not plan.get("ok"):
+        server.structured_tool_result(
+            message_id,
+            {
+                "ok": False,
+                "action": action,
+                "errorCode": "INVALID_RUNTIME_VERIFY_PLAN",
+                "runtimeVerifyPlan": plan,
+            },
+        )
+        return
+    if os.environ.get("ALLOW_UNREAL_BUILD", "").strip().casefold() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        server.structured_tool_result(
+            message_id,
+            {
+                "ok": False,
+                "action": action,
+                "errorCode": "RUNTIME_EXECUTION_DISABLED",
+                "error": "Set ALLOW_UNREAL_BUILD=1 to execute Unreal runtime verification.",
+                "runtimeVerifyPlan": plan,
+            },
+        )
+        return
+    server.progress_phase(message_id, "Executing Unreal Automation runtime oracle")
+    result = run_runtime_verify_plan(plan)
+    server.structured_tool_result(
+        message_id,
+        {**result, "action": action, "runtimeVerifyPlan": plan},
+    )
+
+
 def _handle_unreal_node_plan_validate(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
     plan = arguments.get("plan")
     if not isinstance(plan, dict):
@@ -2994,7 +3054,7 @@ def _handle_unreal_node_plan_validate(server: McpServer, message_id: Any, argume
 def _handle_unreal_diagram_validate(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
     from mermaid_validate import validate_mermaid_block
 
-    source = str(arguments.get("diagram") or arguments.get("mermaid") or "").strip()
+    source = str(arguments.get("diagram") or "").strip()
     result = validate_mermaid_block(source)
     server.tool_result(message_id, json.dumps(result, ensure_ascii=False, indent=2), structured=result)
 
@@ -3134,7 +3194,12 @@ def build_mcp_tool_registry() -> McpToolRegistry:
     registry.register(
         ToolSpec(
             name=FEATURE_INTENT_GATE,
-            schema_dict={},
+            schema_dict={
+                "selectedIntentId": {"type": "string"},
+                "selectionRationale": {"type": "string"},
+                "blockingQuestionAnswers": {"type": "object"},
+                "taskAuthorization": _task_authorization_schema(),
+            },
             handler=_handle_unreal_feature_intent_resolve,
         )
     )
@@ -3225,6 +3290,25 @@ def build_mcp_tool_registry() -> McpToolRegistry:
     )
     registry.register(
         ToolSpec(
+            name="unreal_runtime_verify",
+            schema_dict={
+                "action": {
+                    "type": "string",
+                    "enum": ["plan", "execute"],
+                    "default": "plan",
+                },
+                "manifest": {"type": "object"},
+                "projectFile": {"type": "string"},
+                "engineRoot": {"type": "string"},
+                "editorCmd": {"type": "string"},
+                "allowEngineFallback": {"type": "boolean", "default": False},
+                "taskAuthorization": _task_authorization_schema(),
+            },
+            handler=_handle_unreal_runtime_verify,
+        )
+    )
+    registry.register(
+        ToolSpec(
             name="unreal_node_plan_validate",
             schema_dict={
                 "plan": {
@@ -3304,6 +3388,7 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_feature_intent_resolve",
         "unreal_runtime_config_check",
         "unreal_runtime_debug_session",
+        "unreal_runtime_verify",
         "unreal_code_sketch_claim_validate",
         "unreal_semantic_refactor_guard",
         "unreal_review_claim_validate",
@@ -3397,6 +3482,10 @@ class McpServer:
         self.index = index.resolve()
         self.workspace = Path(__file__).resolve().parent.parent
         self._progress_handlers: list[Callable[[str, str], None]] = []
+        self._send_lock = threading.RLock()
+        self._tool_progress_lock = threading.Lock()
+        self._tool_progress: dict[Any, dict[str, Any]] = {}
+        self._request_context: dict[Any, dict[str, Any]] = {}
         self._connection_session_id = uuid.uuid4().hex[:12]
         from project_switch_invalidate import read_cache_generation
 
@@ -3516,7 +3605,122 @@ class McpServer:
         write_utf8_line(sys.stderr, message)
 
     def send(self, payload: dict[str, Any]) -> None:
-        write_json_line(sys.stdout, payload)
+        # Heartbeats originate on a daemon thread while the request handler is
+        # doing synchronous source/build analysis. Serialize whole JSONL writes
+        # so notifications can never interleave with the final tool response.
+        with self._send_lock:
+            write_json_line(sys.stdout, payload)
+
+    @staticmethod
+    def _progress_interval_seconds() -> float:
+        try:
+            configured = float(os.environ.get("MCP_PROGRESS_INTERVAL_SECONDS", "3"))
+        except ValueError:
+            configured = 3.0
+        return max(2.0, min(5.0, configured))
+
+    def _emit_tool_progress(
+        self,
+        progress: dict[str, Any],
+        *,
+        completed: bool = False,
+    ) -> None:
+        with progress["emitLock"]:
+            if progress.get("finished") and not completed:
+                return
+            if completed:
+                progress["finished"] = True
+            elapsed = max(0.0, time.monotonic() - float(progress["startedAt"]))
+            phase = str(progress.get("phase") or progress.get("tool") or "Working")
+            if completed:
+                message = f"{phase} completed · {elapsed:.1f}s elapsed"
+            else:
+                message = f"{phase} · {int(elapsed)}s elapsed"
+            token = progress.get("progressToken")
+            if token is not None:
+                progress["sequence"] = int(progress.get("sequence") or 0) + 1
+                self.send(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/progress",
+                        "params": {
+                            "progressToken": token,
+                            "progress": progress["sequence"],
+                            "message": message,
+                        },
+                    }
+                )
+            elif not completed:
+                self.notify(f"[{progress.get('tool')}] {message}")
+
+    def _begin_tool_progress(
+        self,
+        message_id: Any,
+        tool_name: str,
+        params: dict[str, Any],
+        *,
+        interval_seconds: float | None = None,
+    ) -> None:
+        metadata = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+        token = metadata.get("progressToken")
+        if token is None and tool_name not in _LONG_RUNNING_PROGRESS_TOOLS:
+            return
+        interval = (
+            max(0.01, float(interval_seconds))
+            if interval_seconds is not None
+            else self._progress_interval_seconds()
+        )
+        progress = {
+            "tool": tool_name,
+            "phase": _TOOL_PROGRESS_LABELS.get(tool_name, f"Running: {tool_name}"),
+            "progressToken": token,
+            "startedAt": time.monotonic(),
+            "sequence": 0,
+            "interval": interval,
+            "stop": threading.Event(),
+            "emitLock": threading.Lock(),
+            "finished": False,
+        }
+        with self._tool_progress_lock:
+            previous = self._tool_progress.pop(message_id, None)
+            self._tool_progress[message_id] = progress
+        if previous:
+            previous["stop"].set()
+        if token is not None:
+            self._emit_tool_progress(progress)
+
+        def heartbeat() -> None:
+            stop = progress["stop"]
+            while not stop.wait(interval):
+                with self._tool_progress_lock:
+                    if self._tool_progress.get(message_id) is not progress:
+                        return
+                self._emit_tool_progress(progress)
+
+        threading.Thread(
+            target=heartbeat,
+            name=f"mcp-progress-{tool_name[:32]}",
+            daemon=True,
+        ).start()
+
+    def progress_phase(self, message_id: Any, phase: str) -> None:
+        with self._tool_progress_lock:
+            progress = self._tool_progress.get(message_id)
+            if progress is None:
+                return
+            progress["phase"] = str(phase or progress.get("phase") or "Working")
+            token_present = progress.get("progressToken") is not None
+        if token_present:
+            self._emit_tool_progress(progress)
+
+    def _finish_tool_progress(self, message_id: Any) -> None:
+        with self._tool_progress_lock:
+            progress = self._tool_progress.pop(message_id, None)
+        if progress is None:
+            return
+        progress["stop"].set()
+        if progress.get("progressToken") is not None:
+            self._emit_tool_progress(progress, completed=True)
 
     def notify(self, message: str, level: str = "info") -> None:
         self.send(
@@ -3536,9 +3740,38 @@ class McpServer:
         )
 
     def result(self, message_id: Any, result: dict[str, Any]) -> None:
+        self._finish_tool_progress(message_id)
+        with self._tool_progress_lock:
+            self._request_context.pop(message_id, None)
         self.send({"jsonrpc": "2.0", "id": message_id, "result": result})
 
     def error(self, message_id: Any, code: int, message: str) -> None:
+        self._finish_tool_progress(message_id)
+        with self._tool_progress_lock:
+            request_context = dict(self._request_context.pop(message_id, None) or {})
+        if request_context:
+            try:
+                from agent_run_report import record_tool_result, refresh_terminal_report
+
+                started = float(request_context.get("startedAt") or time.perf_counter())
+                task_id = record_tool_result(
+                    self.workspace,
+                    tool_name=str(request_context.get("tool") or "unknown"),
+                    arguments=(
+                        request_context.get("arguments")
+                        if isinstance(request_context.get("arguments"), dict)
+                        else {}
+                    ),
+                    structured={"ok": False, "errorCode": f"JSON_RPC_{code}"},
+                    is_error=True,
+                    call_id=str(request_context.get("callId") or ""),
+                    source="unreal-rag",
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                )
+                if task_id:
+                    refresh_terminal_report(self.workspace, task_id)
+            except (OSError, ValueError, TypeError):
+                pass
         self.send({"jsonrpc": "2.0", "id": message_id, "error": {"code": code, "message": message}})
 
     def tool_result(
@@ -3553,21 +3786,138 @@ class McpServer:
         from mcp_tool_compact import max_tool_result_chars, truncate_text
 
         limit = char_limit if char_limit is not None else max_tool_result_chars()
+        with self._tool_progress_lock:
+            request_context = dict(self._request_context.get(message_id) or {})
+        tool_name = str(request_context.get("tool") or "")
+        structured_payload = dict(structured) if isinstance(structured, dict) else structured
+        decoded_text: Any = None
+        text_was_json = False
+        try:
+            decoded_text = json.loads(text)
+            text_was_json = True
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+        if isinstance(decoded_text, dict):
+            # Some handlers return a compact actionable JSON projection as
+            # text alongside a richer evidence object. Once text duplication
+            # is removed, projection-only fields (for example freshnessGate)
+            # must be promoted into structuredContent or they disappear.
+            structured_payload = {
+                **decoded_text,
+                **(structured_payload if isinstance(structured_payload, dict) else {}),
+            }
+        if isinstance(structured_payload, dict) and tool_name == "unreal_architecture_reasoning":
+            from architecture_state import (
+                ArchitectureTransitionError,
+                architecture_state_for_result,
+                load_architecture_state,
+                save_architecture_state,
+            )
+
+            request_arguments = (
+                request_context.get("arguments")
+                if isinstance(request_context.get("arguments"), dict)
+                else {}
+            )
+            project_root = str(
+                structured_payload.get("projectRoot")
+                or request_arguments.get("projectRoot")
+                or ""
+            ).strip()
+            session_id = str(request_arguments.get("sessionId") or "").strip()
+            state_input = dict(structured_payload)
+            if project_root:
+                state_input.setdefault("projectRoot", project_root)
+            previous_state = load_architecture_state(session_id, project_root)
+            try:
+                architecture_state = architecture_state_for_result(
+                    previous_state,
+                    state_input,
+                    proposal_supplied=any(
+                        request_arguments.get(key) is not None
+                        for key in ("proposal", "proposalPatch", "proposalRepairs")
+                    ),
+                )
+            except ArchitectureTransitionError as exc:
+                architecture_state = {
+                    "version": 1,
+                    "current": "FailedClosed",
+                    "transitionHistory": list(
+                        previous_state.get("transitionHistory") or []
+                    )[-63:],
+                    "integrityError": str(exc),
+                }
+                structured_payload.update(
+                    {
+                        "ok": False,
+                        "errorCode": "ARCHITECTURE_STATE_TRANSITION_INVALID",
+                        "error": str(exc),
+                        "retryable": False,
+                    }
+                )
+            structured_payload["architectureState"] = architecture_state
+            save_architecture_state(session_id, project_root, architecture_state)
+        if isinstance(structured_payload, dict):
+            from mcp_control_envelope import attach_control_envelope
+
+            structured_payload = attach_control_envelope(
+                structured_payload,
+                tool_name=tool_name,
+            )
+        try:
+            from agent_run_report import record_tool_result, refresh_terminal_report
+
+            started = float(request_context.get("startedAt") or time.perf_counter())
+            task_id = record_tool_result(
+                self.workspace,
+                tool_name=tool_name,
+                arguments=(
+                    request_context.get("arguments")
+                    if isinstance(request_context.get("arguments"), dict)
+                    else {}
+                ),
+                structured=(structured_payload if isinstance(structured_payload, dict) else None),
+                is_error=is_error,
+                call_id=str(request_context.get("callId") or ""),
+                source="unreal-rag",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            if task_id:
+                refresh_terminal_report(self.workspace, task_id)
+        except (OSError, ValueError, TypeError):
+            # Telemetry is non-authoritative and must never alter tool results.
+            pass
+        public_structured = (
+            sanitize_model_payload(structured_payload)
+            if structured_payload is not None
+            else None
+        )
+        public_text = text
+        if text_was_json:
+            public_text = json.dumps(
+                sanitize_model_payload(decoded_text),
+                ensure_ascii=False,
+                indent=2,
+            )
+        if isinstance(public_structured, dict) and text_was_json:
+            from mcp_control_envelope import concise_control_text
+
+            public_text = concise_control_text(public_structured)
         payload: dict[str, Any] = {
-            "content": [{"type": "text", "text": truncate_text(text, limit)}],
+            "content": [{"type": "text", "text": truncate_text(public_text, limit)}],
             "isError": is_error,
         }
-        if structured is not None:
+        if public_structured is not None:
             cap = max(8_000, min(limit // 2, 32_000))
             try:
                 from mcp_tool_compact import compact_structured_payload
 
-                serialized = json.dumps(structured, ensure_ascii=False)
+                serialized = json.dumps(public_structured, ensure_ascii=False)
                 if len(serialized) > cap:
-                    payload["structuredContent"] = compact_structured_payload(structured, max_bytes=cap)
+                    payload["structuredContent"] = compact_structured_payload(public_structured, max_bytes=cap)
                     payload["structuredContentTruncated"] = True
                 else:
-                    payload["structuredContent"] = structured
+                    payload["structuredContent"] = public_structured
             except (TypeError, ValueError):
                 payload["structuredContent"] = {"error": "structuredContent could not be serialized"}
         self.result(message_id, payload)
@@ -3602,7 +3952,12 @@ class McpServer:
                 message_id,
                 {
                     "protocolVersion": protocol_version,
-                    "capabilities": {"tools": {"listChanged": True}},
+                    "capabilities": {
+                        "tools": {"listChanged": True},
+                        # Token-less long-call heartbeats use the standard MCP
+                        # logging notification as a compatibility fallback.
+                        "logging": {},
+                    },
                     "serverInfo": {
                         "name": "unreal-rag",
                         "version": "0.3.0",
@@ -3660,7 +4015,7 @@ class McpServer:
         }
 
     def all_tool_definitions(self) -> list[dict[str, Any]]:
-        from tool_exposure import callable_rag_tool_names
+        from tool_exposure import callable_rag_tool_names, phase_visible_rag_tool_names
         from task_api import list_tools_route_context
 
         tools = self._route_aware_tool_definitions(
@@ -3698,10 +4053,8 @@ class McpServer:
                 break
         all_names = [tool["name"] for tool in tools]
         allowed = callable_rag_tool_names(all_names)
-        # Advertised catalog is profile ∩ control-plane visibility only.
-        # Route/phase/lease/ownership stay call-time authorization boundaries so
-        # blocked/corrupt/expired state cannot look like a partial MCP install.
-        return [tool for tool in tools if tool["name"] in allowed]
+        visible = phase_visible_rag_tool_names(allowed, route_context)
+        return [tool for tool in tools if tool["name"] in visible]
 
     def tool_catalog_diagnostics(self) -> dict[str, Any]:
         from state_root import ensure_state_root_layout, resolve_agent_state_root
@@ -4374,6 +4727,14 @@ class McpServer:
                             "type": "string",
                             "description": "Why the selected intent matches the explicit task contract.",
                         },
+                        "blockingQuestionAnswers": {
+                            "type": "object",
+                            "description": (
+                                "Explicit answers keyed by the missing-dimension ids returned in "
+                                "blockingQuestions. Required only when the prior response reports "
+                                "FEATURE_INTENT_BLOCKING_QUESTIONS."
+                            ),
+                        },
                         "taskAuthorization": _task_authorization_schema(),
                     },
                     ["taskAuthorization"],
@@ -4464,19 +4825,20 @@ class McpServer:
             },
             {
                 "name": "unreal_asset_graph_lookup",
-                "title": "Lookup Material/Blueprint Graph Metadata",
+                "title": "Lookup Unreal Asset Graph/Metadata",
                 "description": (
-                    "Return exported graph metadata for any material or blueprint by /Game/... path or short asset name. "
+                    "Return exported graph/structured metadata for Blueprint, AnimBP, Montage/Notify, BlendSpace, "
+                    "Material/MI, Niagara, Skeleton/Socket, mesh, texture, and related assets by path or name. "
                     "Use graphDetail: compact (default), medium, large, or full. When graphSampled=true, escalate one "
                     "level via nextDetailLevel — do not repeat the same graphDetail or alternate with rag_search."
                 ),
                 "inputSchema": self._schema(
                     {
-                        "assetPath": {"type": "string", "description": "Asset path or short name, e.g. /Game/Materials/M_Core or M_Blackhole_Core"},
+                        "assetPath": {"type": "string", "description": "Asset path or short name, e.g. /Game/Materials/M_Core or M_Surface_Core"},
                         "search": {"type": "string", "description": "Optional substring search when assetPath is empty."},
                         "assetKind": {
                             "type": "string",
-                            "enum": ["auto", "material", "blueprint"],
+                            "enum": ["auto", "material", "blueprint", "animation", "structured", "texture", "mesh", "world_look", "fmod"],
                             "default": "auto",
                         },
                         "graphDetail": {
@@ -4628,6 +4990,78 @@ class McpServer:
                         },
                     },
                     ["action"],
+                ),
+            },
+            {
+                "name": "unreal_runtime_verify",
+                "title": "Run one manifest-driven Unreal runtime oracle",
+                "description": (
+                    "Plan or execute a bounded Unreal Automation runtime oracle. One manifest covers "
+                    "single-player, network replication, travel/lifecycle, and asset contracts; "
+                    "declared exact Automation tests own gameplay/client topology and assertions."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "action": {
+                            "type": "string",
+                            "enum": ["plan", "execute"],
+                            "default": "plan",
+                        },
+                        "manifest": {
+                            "type": "object",
+                            "properties": {
+                                "scenario": {
+                                    "type": "string",
+                                    "enum": [
+                                        "automation",
+                                        "network_replication",
+                                        "travel_lifecycle",
+                                        "asset_contract",
+                                    ],
+                                },
+                                "automationFilter": {"type": "string", "minLength": 1},
+                                "assertions": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {"type": "string", "minLength": 1},
+                                            "automationTest": {"type": "string", "minLength": 1},
+                                        },
+                                        "required": ["id", "automationTest"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                                "clients": {"type": "integer", "minimum": 1, "maximum": 8},
+                                "netMode": {
+                                    "type": "string",
+                                    "enum": ["standalone", "listen_server", "dedicated_server"],
+                                },
+                                "topologyOwner": {
+                                    "type": "string",
+                                    "enum": ["automation_test"],
+                                },
+                                "mapName": {"type": "string"},
+                                "assetPaths": {"type": "array", "items": {"type": "string"}},
+                                "soakIterations": {"type": "integer", "minimum": 1, "maximum": 100},
+                                "timeoutSeconds": {"type": "integer", "minimum": 60, "maximum": 86400},
+                                "traceChannels": {"type": "array", "items": {"type": "string"}},
+                                "traceOutput": {"type": "string"},
+                                "requireTrace": {"type": "boolean"},
+                                "reportPath": {"type": "string"},
+                                "unrealInsightsCmd": {"type": "string"},
+                            },
+                            "required": ["scenario", "automationFilter", "assertions"],
+                            "additionalProperties": False,
+                        },
+                        "projectFile": {"type": "string"},
+                        "engineRoot": {"type": "string"},
+                        "editorCmd": {"type": "string"},
+                        "allowEngineFallback": {"type": "boolean", "default": False},
+                        "taskAuthorization": _task_authorization_schema(),
+                    },
+                    ["manifest"],
                 ),
             },
             {
@@ -4949,7 +5383,7 @@ class McpServer:
                 "name": "unreal_task_start",
                 "title": "Start scoped agent task",
                 "description": (
-                    "Create a task session with auth token for write/build gating. "
+                    "Create a task session with a stable ownership handle for write/build gating. "
                     "Call first for multi-step edit workflows; poll unreal_task_status for phase updates."
                 ),
                 "inputSchema": self._schema(
@@ -4962,22 +5396,6 @@ class McpServer:
                         },
                         "projectFile": {"type": "string", "description": "Optional .uproject path override."},
                         "planId": {"type": "string"},
-                        "conversationId": {
-                            "type": "string",
-                            "description": (
-                                "Stable chat/conversation id (public scope label). "
-                                "Reuse the value returned by the first unreal_task_start "
-                                "in this chat. Ownership requires ownerCapability from "
-                                "taskAuthorization, not conversationId alone."
-                            ),
-                        },
-                        "taskAuthorization": {
-                            "type": "object",
-                            "description": (
-                                "Prefer passing the taskAuthorization object returned by "
-                                "unreal_task_start. It includes ownerCapability."
-                            ),
-                        },
                         "startBackgroundJob": {"type": "boolean", "default": False},
                         "leaseSeconds": {
                             "type": "integer",
@@ -4999,7 +5417,7 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
-                        "conversationId": {"type": "string"},
+                        "taskAuthorization": _checkpoint_authorization_schema(),
                     },
                 ),
             },
@@ -5015,12 +5433,7 @@ class McpServer:
                 ),
                 "inputSchema": self._schema(
                     {
-                        "conversationId": {"type": "string"},
-                        "ownerCapability": {
-                            "type": "string",
-                            "description": "Secret from taskAuthorization; never from task_list_active.",
-                        },
-                        "taskAuthorization": {"type": "object"},
+                        "taskAuthorization": _checkpoint_authorization_schema(),
                     },
                 ),
             },
@@ -5034,9 +5447,7 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
-                        "conversationId": {"type": "string"},
-                        "ownerCapability": {"type": "string"},
-                        "taskAuthorization": {"type": "object"},
+                        "taskAuthorization": _checkpoint_authorization_schema(),
                     },
                 ),
             },
@@ -5052,9 +5463,7 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
-                        "conversationId": {"type": "string"},
-                        "ownerCapability": {"type": "string"},
-                        "taskAuthorization": {"type": "object"},
+                        "taskAuthorization": _checkpoint_authorization_schema(),
                         "force": {"type": "boolean", "default": False},
                     },
                 ),
@@ -5084,9 +5493,7 @@ class McpServer:
                     {
                         "taskSessionId": {"type": "string"},
                         "jobId": {"type": "string"},
-                        "conversationId": {"type": "string"},
-                        "ownerCapability": {"type": "string"},
-                        "taskAuthorization": {"type": "object"},
+                        "taskAuthorization": _checkpoint_authorization_schema(),
                         "force": {"type": "boolean", "default": False},
                     },
                     required=["taskSessionId"],
@@ -5532,9 +5939,30 @@ class McpServer:
         )
 
     def handle_tool_call(self, message_id: Any, params: dict[str, Any]) -> None:
-        self._maybe_refresh_project_caches()
         name = params.get("name")
         arguments = params.get("arguments") or {}
+        call_id = f"{self._connection_session_id}:{message_id}"
+        with self._tool_progress_lock:
+            self._request_context[message_id] = {
+                "tool": str(name or "unknown"),
+                "arguments": arguments if isinstance(arguments, dict) else {},
+                "callId": call_id,
+                "startedAt": time.perf_counter(),
+            }
+        try:
+            from agent_run_report import record_tool_started
+
+            record_tool_started(
+                self.workspace,
+                tool_name=str(name or "unknown"),
+                arguments=arguments if isinstance(arguments, dict) else {},
+                call_id=call_id,
+                source="unreal-rag",
+            )
+        except (OSError, ValueError, TypeError):
+            pass
+        self._begin_tool_progress(message_id, str(name or "unknown"), params)
+        self._maybe_refresh_project_caches()
 
         from phase_tool_router import ALWAYS_DISCOVERABLE_CONTROL_TOOLS
         from tool_exposure import callable_rag_tool_names, tool_not_callable_payload
@@ -5616,6 +6044,31 @@ class McpServer:
             NON_BUDGETED_REPLAN_TOOLS,
         )
 
+        if (
+            _has_task_route_ownership(authorization)
+            and not _has_complete_task_authorization(authorization)
+        ):
+            from task_api import expand_compact_task_authorization
+
+            expanded_authorization = expand_compact_task_authorization(
+                self.workspace,
+                task_authorization=authorization,
+            )
+            if not expanded_authorization.get("ok"):
+                self.structured_tool_result(
+                    message_id,
+                    _route_authorization_failure_payload(
+                        expanded_authorization,
+                        str(name or ""),
+                    ),
+                )
+                return
+            _refresh_argument_task_authorization(
+                arguments,
+                expanded_authorization,
+            )
+            authorization = arguments.get("taskAuthorization")
+
         if str(name or "") in NON_BUDGETED_REPLAN_TOOLS:
             from task_api import authorize_active_task_tool
 
@@ -5638,7 +6091,6 @@ class McpServer:
             self._active_route_context = route_authorization
         elif (
             _has_complete_task_authorization(authorization)
-            and not _has_task_route_ownership(authorization)
             and str(name or "") not in CONTROL_PLANE_TOOLS
         ):
             from task_api import authorize_task_tool
@@ -5719,6 +6171,15 @@ class McpServer:
                 from workspace_paths import resolve_index_path
 
                 payload = active_project_readiness(self.workspace)
+                from unreal_capability_detection import detect_unreal_capabilities
+                from workspace_paths import resolve_active_project_path, resolve_engine_root
+
+                capability_project = resolve_active_project_path(self.workspace)
+                if capability_project:
+                    payload["capabilities"] = detect_unreal_capabilities(
+                        capability_project,
+                        engine_root=resolve_engine_root(self.workspace),
+                    )
                 agent_write_enabled = resolve_agent_write_enabled()
                 payload["agentWriteEnabled"] = agent_write_enabled
                 blocking: list[str] = []
@@ -5946,10 +6407,21 @@ class McpServer:
                         return
                     checkpoint_authorization = task_authorization_for_state(checkpoint_state)
 
+                checkpoint_action = str(arguments.get("action") or "status")
+                self.progress_phase(
+                    message_id,
+                    (
+                        "Checkpoint recovery and conflict validation"
+                        if checkpoint_action in {"recover", "rebase"}
+                        else "Recording task checkpoint"
+                        if checkpoint_action == "record"
+                        else "Reading task checkpoint status"
+                    ),
+                )
                 payload = task_checkpoint(
                     self.workspace,
                     task_authorization=checkpoint_authorization or {},
-                    action=str(arguments.get("action") or "status"),
+                    action=checkpoint_action,
                     lease_seconds=arguments.get("leaseSeconds"),
                     phase=str(arguments.get("phase") or ""),
                     completed_slices=list(arguments.get("completedSlices") or []),
@@ -6251,7 +6723,7 @@ class McpServer:
                 payload = document_symbols(project_root, rel)
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_agent_plan":
-                from agent_orchestrator import build_agent_plan
+                from agent_orchestrator import build_agent_plan, is_continuation_request
 
                 request = str(arguments.get("request") or "").strip()
                 latest_user_message = str(
@@ -6264,6 +6736,42 @@ class McpServer:
                 if not request:
                     self.tool_result(message_id, "Missing request", is_error=True)
                     return
+                continuation_text = (
+                    latest_user_message
+                    if latest_user_message and is_continuation_request(latest_user_message)
+                    else request
+                )
+                if is_continuation_request(continuation_text):
+                    self.progress_phase(message_id, "Restoring active task continuation")
+                    active_task_session_id = str(
+                        self._active_route_context.get("taskSessionId") or ""
+                    ).strip()
+                    if not active_task_session_id:
+                        self.structured_tool_result(
+                            message_id,
+                            {
+                                "ok": False,
+                                "errorCode": "TASK_CONTINUATION_WITHOUT_SESSION",
+                                "error": (
+                                    "A continuation command has no healthy active task to inherit."
+                                ),
+                                "retryable": False,
+                                "agentInstruction": (
+                                    "Ask for the concrete task goal. Do not classify this continuation "
+                                    "as a new inspect-only task and do not invent write authority."
+                                ),
+                            },
+                        )
+                        return
+                    from task_api import task_continue_active
+
+                    continued = task_continue_active(
+                        self.workspace,
+                        active_task_session_id,
+                    )
+                    self.structured_tool_result(message_id, continued)
+                    return
+                self.progress_phase(message_id, "Classifying task and building guarded plan")
                 payload = build_agent_plan(
                     request,
                     mode,
@@ -6299,6 +6807,7 @@ class McpServer:
                     and frontend == "lmstudio"
                 )
                 if writes_allowed and (compactor_required or compactor_advisory):
+                    self.progress_phase(message_id, "Checking context compaction state")
                     from context_compactor_status import recent_context_compactor_status
 
                     try:

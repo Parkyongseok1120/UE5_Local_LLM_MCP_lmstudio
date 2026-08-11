@@ -33,7 +33,7 @@ def resolve_agent_state_root(workspace: Path | None = None) -> Path:
 
 def ensure_state_root_layout(state_root: Path | None = None) -> Path:
     root = state_root or resolve_agent_state_root()
-    for sub in ("locks", "transactions", "tasks", "jobs", "backups"):
+    for sub in ("locks", "transactions", "tasks", "jobs", "backups", "reports"):
         (root / sub).mkdir(parents=True, exist_ok=True)
     return root
 

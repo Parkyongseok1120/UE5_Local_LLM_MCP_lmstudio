@@ -6,13 +6,14 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const store = require("../src/checkpoint-store.js");
+const core = require("../src/compaction-core.js");
 
 test("checkpoint store keeps the newest 20 generations and active checkpoint", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-store-"));
   try {
     for (let generation = 1; generation <= 25; generation += 1) {
       await store.saveCheckpoint("session", {
-        schemaVersion: 1,
+        schemaVersion: core.COMPACTION_SCHEMA_VERSION,
         checkpointGeneration: generation,
         completedToolCallIds: [],
       }, root);
@@ -89,7 +90,7 @@ test("newest durable generation recovers a stale active checkpoint", async () =>
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-recover-generation-"));
   try {
     await store.saveCheckpoint("session", {
-      schemaVersion: 1,
+      schemaVersion: core.COMPACTION_SCHEMA_VERSION,
       checkpointGeneration: 1,
       completedToolCallIds: [],
     }, root);
@@ -97,7 +98,7 @@ test("newest durable generation recovers a stale active checkpoint", async () =>
     fs.writeFileSync(
       path.join(dir, "checkpoint-000002.json"),
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: core.COMPACTION_SCHEMA_VERSION,
         checkpointGeneration: 2,
         completedToolCallIds: [],
       }),
@@ -115,7 +116,7 @@ test("corrupt active checkpoint falls back to the newest durable generation", as
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-recover-corrupt-"));
   try {
     await store.saveCheckpoint("session", {
-      schemaVersion: 1,
+      schemaVersion: core.COMPACTION_SCHEMA_VERSION,
       checkpointGeneration: 7,
       completedToolCallIds: [],
     }, root);

@@ -1235,7 +1235,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     nextCheckpoint?.architectureProposal?.validationOk === false
     && architectureRecoveryContinuationRequested(architectureGoal),
   );
-  const architectureValidationRequired = !trailingMetaUser && (
+  // Once the MCP supplies an architecture control envelope, the server FSM is
+  // authoritative. Legacy heuristic orchestration remains only for histories
+  // that predate the envelope/checkpoint migration.
+  const serverOwnedArchitectureControl = Boolean(nextCheckpoint?.architectureControl);
+  const architectureValidationRequired = !serverOwnedArchitectureControl && !trailingMetaUser && (
     requiresArchitectureValidation(architectureGoal, toolDefinitions)
     || persistedArchitectureRecovery
   );
@@ -1275,7 +1279,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   });
   const requiredArchitectureTool = toolNamesMatch(
     ARCHITECTURE_TOOL_NAME,
-    String(checkpoint?.requiredNextTool?.name || ""),
+    String(nextCheckpoint?.requiredNextTool?.name || ""),
   );
   const initialArchitectureEvidenceReady = Boolean(
     architectureStatus.directEvidenceCount >= architectureEvidenceReadThreshold
@@ -1339,7 +1343,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const currentFormatted = await model.applyPromptTemplate(history);
   const inputTokens = await model.countTokens(currentFormatted);
   const toolSchemaTokens = await model.countTokens(JSON.stringify(effectiveToolDefinitions));
-  const persistedNextToolName = checkpoint?.requiredNextTool?.name || "";
+  const persistedNextToolName = nextCheckpoint?.requiredNextTool?.name || "";
   const nextToolName = core.isNonToolNextAction(persistedNextToolName) ? "" : persistedNextToolName;
   const hardRemainingTokens = finiteNumber(configValue(ctl, "hardRemainingTokens", 8000), 8000);
   const configuredOutputReserve = finiteNumber(
@@ -1390,6 +1394,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     decision,
     workingDirectory,
     architectureValidationRequired,
+    serverOwnedArchitectureControl,
     architectureToolForced,
     architectureEvidenceRefillActive,
     architectureAttempted: architectureStatus.attempted,
@@ -1663,6 +1668,24 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       + (safelyBuffered
         ? "No buffered text or tool call was committed; compact the context or increase the model context/output limit."
         : "Atomic output was explicitly disabled, so already-streamed output may be partial. Enable atomic output before retrying."),
+    );
+  }
+  if (requiredToolGateActive && !architectureValidationRequired && requests.length === 0) {
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "server_required_tool_missing",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "server_required_tool_missing",
+      at: new Date().toISOString(),
+      requiredTool: nextCheckpoint?.requiredNextTool?.name || "",
+      protocolControl: nextCheckpoint?.protocolControl || null,
+    });
+    throw new Error(
+      `Server control requires ${nextCheckpoint?.requiredNextTool?.name}; `
+      + "the prose-only prediction was discarded without executing that tool.",
     );
   }
   const incompleteArchitecturePaths = requireCompleteArchitectureProposal

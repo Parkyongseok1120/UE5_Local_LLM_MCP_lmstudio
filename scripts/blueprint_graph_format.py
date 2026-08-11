@@ -95,7 +95,14 @@ def append_blueprint_graph_text_parts(row: dict[str, Any], text_parts: list[str]
 def blueprint_row_search_text(row: dict[str, Any]) -> str:
     parts = [str(row.get("asset_path") or ""), str(row.get("generated_class") or "")]
     append_blueprint_graph_text_parts(row, parts)
-    for key in ("variables", "functions", "interfaces", "parent_class"):
+    for key in (
+        "variables",
+        "functions",
+        "interfaces",
+        "parent_class",
+        "state_machines",
+        "transition_rules",
+    ):
         value = row.get(key)
         if value:
             parts.append(f"{key}: {value}")

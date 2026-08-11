@@ -208,6 +208,8 @@ static TSharedRef<FJsonObject> LmStudioBlueprintToJson(const FAssetData& Asset, 
     TArray<FString> Functions;
     TArray<TSharedPtr<FJsonValue>> GraphRows;
     TArray<TSharedPtr<FJsonValue>> GraphLinks;
+    TArray<TSharedPtr<FJsonValue>> StateMachines;
+    TArray<TSharedPtr<FJsonValue>> TransitionRules;
     for (const UEdGraph* Graph : Graphs)
     {
         if (!Graph)
@@ -220,6 +222,50 @@ static TSharedRef<FJsonObject> LmStudioBlueprintToJson(const FAssetData& Asset, 
             Functions.Add(GraphName);
         }
         GraphRows.Add(MakeShared<FJsonValueObject>(LmStudioGraphToJson(Graph, GraphLinks)));
+
+        TArray<TSharedPtr<FJsonValue>> States;
+        int32 GraphTransitionCount = 0;
+        for (const UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (!Node)
+            {
+                continue;
+            }
+            const FString NodeClass = LmStudioClassName(Node);
+            const FString NodeTitle = Node->GetNodeTitle(ENodeTitleType::ListView).ToString();
+            const FString SemanticMarker = (NodeClass + TEXT(" ") + NodeTitle).ToLower();
+            if (SemanticMarker.Contains(TEXT("transition")))
+            {
+                TSharedRef<FJsonObject> Transition = MakeShared<FJsonObject>();
+                Transition->SetStringField(TEXT("graph"), GraphName);
+                Transition->SetStringField(TEXT("name"), Node->GetName());
+                Transition->SetStringField(TEXT("title"), NodeTitle);
+                Transition->SetStringField(TEXT("class"), NodeClass);
+                Transition->SetStringField(TEXT("evidence_level"), TEXT("graph_node_projection"));
+                TransitionRules.Add(MakeShared<FJsonValueObject>(Transition));
+                ++GraphTransitionCount;
+            }
+            else if (
+                SemanticMarker.Contains(TEXT("animstate"))
+                || SemanticMarker.Contains(TEXT("state machine"))
+                || SemanticMarker.Contains(TEXT("statemachine")))
+            {
+                TSharedRef<FJsonObject> State = MakeShared<FJsonObject>();
+                State->SetStringField(TEXT("name"), Node->GetName());
+                State->SetStringField(TEXT("title"), NodeTitle);
+                State->SetStringField(TEXT("class"), NodeClass);
+                States.Add(MakeShared<FJsonValueObject>(State));
+            }
+        }
+        if (States.Num() > 0 || GraphTransitionCount > 0)
+        {
+            TSharedRef<FJsonObject> StateMachine = MakeShared<FJsonObject>();
+            StateMachine->SetStringField(TEXT("graph"), GraphName);
+            StateMachine->SetArrayField(TEXT("states"), States);
+            StateMachine->SetNumberField(TEXT("transition_count"), GraphTransitionCount);
+            StateMachine->SetStringField(TEXT("evidence_level"), TEXT("graph_node_projection"));
+            StateMachines.Add(MakeShared<FJsonValueObject>(StateMachine));
+        }
     }
     if (Functions.Num() > 0)
     {
@@ -233,6 +279,17 @@ static TSharedRef<FJsonObject> LmStudioBlueprintToJson(const FAssetData& Asset, 
     if (GraphLinks.Num() > 0)
     {
         Row->SetArrayField(TEXT("graph_links"), GraphLinks);
+    }
+    if (StateMachines.Num() > 0)
+    {
+        Row->SetArrayField(TEXT("state_machines"), StateMachines);
+    }
+    if (TransitionRules.Num() > 0)
+    {
+        Row->SetArrayField(TEXT("transition_rules"), TransitionRules);
+        Row->SetStringField(
+            TEXT("animation_state_evidence"),
+            TEXT("State/transition entries are graph-node projections; runtime transition behavior still requires Automation proof."));
     }
 
     TArray<FName> Dependencies;

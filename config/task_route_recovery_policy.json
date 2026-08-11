@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "sameCallRetryCodes": [
+    "TASK_AUTH_INCOMPLETE",
+    "TASK_ROUTE_OWNERSHIP_REQUIRED",
+    "TASK_ROUTE_STALE",
+    "TASK_STATE_LOCKED"
+  ],
+  "redirectCodes": [
+    "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+    "TASK_ROUTE_SCOPE_EXCEEDED",
+    "TASK_SLICE_SCOPE_REQUIRED",
+    "TASK_SLICE_TARGET_MISMATCH",
+    "TASK_TOOL_NOT_ACTIVE"
+  ],
+  "recoveryActionCodes": [
+    "MULTIPLE_HEALTHY_ROUTE_TASKS",
+    "TASK_AUTH_INCOMPLETE",
+    "TASK_AUTH_INVALID_FORMAT",
+    "TASK_AUTH_MISMATCH",
+    "TASK_OWNER_HINT_MISMATCH",
+    "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+    "TASK_ROUTE_BLOCKED",
+    "TASK_ROUTE_CAPABILITY_MISMATCH",
+    "TASK_ROUTE_MISSING",
+    "TASK_ROUTE_OWNERSHIP_REQUIRED",
+    "TASK_ROUTE_SCOPE_EXCEEDED",
+    "TASK_ROUTE_STALE",
+    "TASK_SCOPE_MISMATCH",
+    "TASK_SESSION_REQUIRED",
+    "TASK_SLICE_SCOPE_REQUIRED",
+    "TASK_SLICE_TARGET_MISMATCH",
+    "TASK_STATE_CORRUPT",
+    "TASK_STATE_MISSING",
+    "TASK_STATE_ROOT_UNAVAILABLE",
+    "TASK_TOOL_NOT_ACTIVE"
+  ],
+  "defaultActions": {
+    "MULTIPLE_HEALTHY_ROUTE_TASKS": {
+      "action": "pass_ownerCapability_to_select_task",
+      "isTool": false
+    },
+    "TASK_AUTH_INCOMPLETE": {
+      "action": "retry_same_tool_with_returned_taskAuthorization",
+      "isTool": false
+    },
+    "TASK_AUTH_INVALID_FORMAT": {
+      "action": "unreal_agent_plan",
+      "isTool": true
+    },
+    "TASK_AUTH_MISMATCH": {
+      "action": "unreal_agent_plan",
+      "isTool": true
+    },
+    "TASK_OWNER_HINT_MISMATCH": {
+      "action": "unreal_project_status",
+      "isTool": true
+    },
+    "TASK_PHASE_TOOL_BUDGET_EXHAUSTED": {
+      "action": "unreal_task_checkpoint",
+      "isTool": true
+    },
+    "TASK_ROUTE_BLOCKED": {
+      "action": "unreal_task_checkpoint",
+      "isTool": true
+    },
+    "TASK_ROUTE_CAPABILITY_MISMATCH": {
+      "action": "retry_without_invalid_ownerCapability_or_use_matching_capability",
+      "isTool": false
+    },
+    "TASK_ROUTE_MISSING": {
+      "action": "unreal_task_list_active",
+      "isTool": true
+    },
+    "TASK_ROUTE_OWNERSHIP_REQUIRED": {
+      "action": "retry_same_tool_with_returned_taskAuthorization",
+      "isTool": false
+    },
+    "TASK_ROUTE_SCOPE_EXCEEDED": {
+      "action": "unreal_code_sketch_claim_validate",
+      "isTool": true
+    },
+    "TASK_ROUTE_STALE": {
+      "action": "retry_same_tool_with_returned_taskAuthorization",
+      "isTool": false
+    },
+    "TASK_SCOPE_MISMATCH": {
+      "action": "unreal_project_status",
+      "isTool": true
+    },
+    "TASK_SESSION_REQUIRED": {
+      "action": "unreal_agent_plan",
+      "isTool": true
+    },
+    "TASK_SLICE_SCOPE_REQUIRED": {
+      "action": "unreal_code_sketch_claim_validate",
+      "isTool": true
+    },
+    "TASK_SLICE_TARGET_MISMATCH": {
+      "action": "unreal_code_sketch_claim_validate",
+      "isTool": true
+    },
+    "TASK_STATE_CORRUPT": {
+      "action": "unreal_task_quarantine_corrupt",
+      "isTool": true
+    },
+    "TASK_STATE_MISSING": {
+      "action": "unreal_agent_plan",
+      "isTool": true
+    },
+    "TASK_STATE_ROOT_UNAVAILABLE": {
+      "action": "check_agent_state_root",
+      "isTool": false
+    },
+    "TASK_TOOL_NOT_ACTIVE": {
+      "action": "unreal_task_checkpoint",
+      "isTool": true
+    }
+  },
+  "fallbackAction": {
+    "action": "unreal_task_list_active",
+    "isTool": true
+  }
+}

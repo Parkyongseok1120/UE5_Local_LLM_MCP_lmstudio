@@ -26,6 +26,7 @@ RAG_ESSENTIAL = {
     "unreal_feature_intent_resolve",
     "unreal_runtime_config_check",
     "unreal_runtime_debug_session",
+    "unreal_runtime_verify",
     "unreal_code_sketch_claim_validate",
     "unreal_semantic_refactor_guard",
     "unreal_review_claim_validate",
@@ -120,6 +121,7 @@ def test_feature_intent_schema_is_compact_for_local_tool_calling(monkeypatch, tm
     assert set(properties) == {
         "selectedIntentId",
         "selectionRationale",
+        "blockingQuestionAnswers",
         "taskAuthorization",
     }
     assert properties["taskAuthorization"]["additionalProperties"] is False
@@ -148,10 +150,11 @@ def test_checkpoint_uses_compact_server_resolved_authorization(monkeypatch, tmp_
         for item in server.all_tool_definitions()
         if item["name"] == "unreal_feature_intent_resolve"
     )
-    revision = feature_tool["inputSchema"]["properties"]["taskAuthorization"][
-        "properties"
-    ]["planRevision"]
-    assert revision["type"] == ["string", "integer"]
+    assert set(
+        feature_tool["inputSchema"]["properties"]["taskAuthorization"][
+            "properties"
+        ]
+    ) == {"taskSessionId", "ownerCapability"}
     validation = tool["inputSchema"]["properties"]["validation"]
     assert validation["additionalProperties"] is False
     assert set(validation["properties"]) == {
@@ -187,17 +190,7 @@ def test_rag_evidence_tools_advertise_compact_route_ownership(monkeypatch, tmp_p
     gate_auth = tools["unreal_feature_intent_resolve"]["inputSchema"]["properties"][
         "taskAuthorization"
     ]
-    assert {
-        "taskSessionId",
-        "authToken",
-        "ownerCapability",
-        "conversationId",
-        "planId",
-        "planRevision",
-        "activeSliceId",
-        "routeHash",
-        "routePhase",
-    } == set(gate_auth["properties"])
+    assert set(gate_auth["properties"]) == {"taskSessionId", "ownerCapability"}
 
     assert mod._has_complete_task_authorization(
         {"taskSessionId": "t", "ownerCapability": "cap"}
@@ -426,7 +419,9 @@ def test_autonomy_blocked_route_lists_and_dispatches_bounded_replan(
     )
     payload = sent[-1]["result"]["structuredContent"]
     assert payload["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
-    assert payload["taskAuthorization"]["planRevision"] == "2"
+    from task_api import task_status
+
+    assert task_status(tmp_path, started["taskSessionId"])["state"]["planRevision"] == "2"
     persisted = json.loads(state_path.read_text(encoding="utf-8"))
     assert persisted["autonomySupervisor"]["blockers"] == []
     assert (
@@ -455,7 +450,7 @@ def test_blocked_routes_keep_catalog_but_reject_replan_at_call_time(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Advertised Essential catalog stays stable; route errors block at CallTool."""
+    """Blocked routes keep controls/current phase visible and fail at CallTool."""
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     mod = _load_rag_mcp_module()
@@ -463,6 +458,7 @@ def test_blocked_routes_keep_catalog_but_reject_replan_at_call_time(
     from tool_exposure import load_stable_manifest
 
     essential = set(load_stable_manifest()["ragEssential"])
+    always = set(load_stable_manifest()["ragAlwaysDiscoverable"])
     started = task_start(
         tmp_path,
         request="Edit Source/Demo/Foo.cpp",
@@ -486,9 +482,12 @@ def test_blocked_routes_keep_catalog_but_reject_replan_at_call_time(
         return {tool["name"] for tool in server.all_tool_definitions()}
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
+    phase_catalog = essential & (
+        always | set(state["toolRoute"]["activeTools"])
+    )
     state["continuity"]["lease"]["expiresAt"] = "2000-01-01T00:00:00+00:00"
     state_path.write_text(json.dumps(state), encoding="utf-8")
-    assert catalog_names() == essential
+    assert catalog_names() == phase_catalog
     assert "unreal_agent_plan" in catalog_names()
     server.handle_tool_call(
         561,
@@ -507,7 +506,7 @@ def test_blocked_routes_keep_catalog_but_reject_replan_at_call_time(
         {"relativePath": "Source/Demo/Foo.cpp", "reason": "content_changed"}
     ]
     state_path.write_text(json.dumps(state), encoding="utf-8")
-    assert catalog_names() == essential
+    assert catalog_names() == phase_catalog
     server.handle_tool_call(
         562,
         {
@@ -549,7 +548,7 @@ def test_blocked_routes_keep_catalog_but_reject_replan_at_call_time(
             ],
         },
     )
-    assert catalog_names() == essential
+    assert catalog_names() == phase_catalog
     server.handle_tool_call(
         563,
         {
@@ -581,7 +580,7 @@ def test_clean_startup_advertises_manifest_rag_essential(monkeypatch, tmp_path) 
     assert diag["routeContextStatus"] == "none"
 
 
-def test_active_route_keeps_rag_catalog_stable(monkeypatch, tmp_path) -> None:
+def test_active_route_exposes_only_phase_rag_tools_and_controls(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     mod = _load_rag_mcp_module()
@@ -589,7 +588,7 @@ def test_active_route_keeps_rag_catalog_stable(monkeypatch, tmp_path) -> None:
     from tool_exposure import load_stable_manifest
 
     essential = set(load_stable_manifest()["ragEssential"])
-    task_start(
+    started = task_start(
         tmp_path,
         request="Edit Source/Demo/Foo.cpp",
         mode="agent_edit",
@@ -604,10 +603,15 @@ def test_active_route_keeps_rag_catalog_stable(monkeypatch, tmp_path) -> None:
     )
     server = mod.McpServer(tmp_path / "missing.sqlite")
     server.workspace = tmp_path
-    assert {tool["name"] for tool in server.all_tool_definitions()} == essential
+    expected = essential & (
+        set(load_stable_manifest()["ragAlwaysDiscoverable"])
+        | set(started["state"]["toolRoute"]["activeTools"])
+    )
+    assert {tool["name"] for tool in server.all_tool_definitions()} == expected
+    assert expected < essential
     diag = server.tool_catalog_diagnostics()
     assert diag["routeContextStatus"] == "active"
-    assert diag["advertisedCount"] == len(essential)
+    assert diag["advertisedCount"] == len(expected)
 
 
 def test_corrupt_route_keeps_catalog_and_recovery_controls(monkeypatch, tmp_path) -> None:
@@ -617,7 +621,7 @@ def test_corrupt_route_keeps_catalog_and_recovery_controls(monkeypatch, tmp_path
     from task_api import task_root, task_start
     from tool_exposure import load_stable_manifest
 
-    essential = set(load_stable_manifest()["ragEssential"])
+    always = set(load_stable_manifest()["ragAlwaysDiscoverable"])
     started = task_start(
         tmp_path,
         request="Edit Source/Demo/Foo.cpp",
@@ -638,7 +642,7 @@ def test_corrupt_route_keeps_catalog_and_recovery_controls(monkeypatch, tmp_path
     sent: list[dict] = []
     server.send = sent.append
     names = {tool["name"] for tool in server.all_tool_definitions()}
-    assert names == essential
+    assert names == always
     assert "unreal_task_quarantine_corrupt" in names
     diag = server.tool_catalog_diagnostics()
     assert diag["routeContextStatus"] == "ambiguous_or_corrupt"
@@ -710,7 +714,10 @@ def test_terminal_route_integrity_failure_still_stops(monkeypatch):
         "read_file",
     )
     assert payload["retryable"] is False
-    assert payload["stopCurrentWorkflow"] is True
+    assert payload["stopCurrentWorkflow"] is False
+    assert payload["recoveryActionRequired"] is True
+    assert payload["nextAction"] == "unreal_task_quarantine_corrupt"
+    assert payload["nextActionIsTool"] is True
 
 
 def test_agent_write_plan_fails_closed_without_fresh_context_proxy(monkeypatch, tmp_path):
@@ -805,6 +812,54 @@ def test_agent_write_plan_allows_direct_model_under_advisory_policy(
     assert routing["active"] is False
     assert routing["blocksWrites"] is False
     assert routing["directModelAllowed"] is True
+
+
+def test_pure_continuation_reuses_active_task_without_replanning(monkeypatch, tmp_path):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
+    project = tmp_path / "Demo" / "Demo.uproject"
+    project.parent.mkdir(parents=True)
+    project.write_text("{}", encoding="utf-8")
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(json.dumps({"activeProject": str(project)}), encoding="utf-8")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        1701,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {
+                "request": "Implement Source/Demo/StateSubsystem.cpp",
+                "mode": "agent_edit",
+            },
+        },
+    )
+    planned = sent[-1]["result"]["structuredContent"]
+    original_task = planned["taskAuthorization"]["taskSessionId"]
+    from task_api import task_status
+
+    original_revision = task_status(tmp_path, original_task)["state"]["planRevision"]
+
+    server.handle_tool_call(
+        1702,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {"request": "계속 진행해"},
+        },
+    )
+    continued = sent[-1]["result"]["structuredContent"]
+
+    assert continued["ok"] is True
+    assert continued["continuationPreserved"] is True
+    assert continued["taskAuthorization"]["taskSessionId"] == original_task
+    assert task_status(tmp_path, original_task)["state"]["planRevision"] == original_revision
+    assert continued["request"] == "Implement Source/Demo/StateSubsystem.cpp"
+    assert continued["taskKind"] == "edit"
 
 
 def test_compile_fix_plan_reproduces_build_before_requesting_fix_sketch(
@@ -1242,12 +1297,12 @@ def test_greenfield_sketch_gate_advances_to_executor(monkeypatch, tmp_path):
     assert payload["ok"] is True, payload
     assert payload["gateCompletion"]["ok"] is True, payload
     assert payload["gateCompletion"]["toolRoute"]["phase"] == "executor"
-    assert payload["gateCompletion"]["taskAuthorization"]["routePhase"] == "executor"
     text_result = sent[-1]["result"]["content"][0]["text"]
     assert "nextTaskAuthorization=" in text_result
-    assert payload["gateCompletion"]["taskAuthorization"]["routeHash"] in text_result
+    assert payload["gateCompletion"]["taskAuthorization"]["ownerCapability"] in text_result
+    assert "routeHash" not in text_result
     assert '"phase":"executor"' in text_result
-    assert "do not synthesize routePhase or routeHash" in text_result
+    assert "server resolves current route fields" in text_result
 
 
 def test_build_cs_and_header_sketch_does_not_stall_prewrite_gate(monkeypatch, tmp_path):
@@ -1344,17 +1399,13 @@ def test_code_sketch_text_result_names_blocking_symbols(monkeypatch, tmp_path):
     assert payload["writeGateClosed"] is True
     assert payload["firstBlocker"]["symbol"] == "UDefinitelyMissingApi"
     assert payload["firstBlocker"]["verdict"] == "unverified"
-    assert payload["nextAction"] == "unreal_symbol_lookup"
-    assert payload["nextActionArgs"] == {
-        "query": "UDefinitelyMissingApi",
-        "top_k": 8,
-        "detailLevel": "compact",
-    }
+    assert payload["nextAction"] == "unreal_project_status"
+    assert payload["nextActionArgs"]["blockers"][0]["symbol"] == "UDefinitelyMissingApi"
     assert payload["doNotRetryUnchanged"] is True
     assert text_result.startswith("GATE_FAILED: writes remain closed")
     assert "blockingSymbols=UDefinitelyMissingApi:unverified" in text_result
     assert "firstBlocker=UDefinitelyMissingApi:unverified" in text_result
-    assert 'nextAction=unreal_symbol_lookup {"query":"UDefinitelyMissingApi"' in text_result
+    assert 'nextAction=unreal_project_status {"blockers":' in text_result
     assert "Do not rerun the unchanged sketch" in text_result
     assert "Never move responsibility to another class" in text_result
 
@@ -1720,8 +1771,11 @@ def test_failed_task_sketch_gate_preserves_executable_recovery(monkeypatch, tmp_
     payload = sent[-1]["result"]["structuredContent"]
     completion = payload["gateCompletion"]
     assert completion["errorCode"] == "GATE_VALIDATION_FAILED"
-    assert completion["nextAction"] == "unreal_symbol_lookup"
-    assert completion["nextActionArgs"]["query"] == "InitializeDefinitelyMissingBoard"
+    assert completion["nextAction"] == "unreal_project_status"
+    assert (
+        completion["nextActionArgs"]["blockers"][0]["symbol"]
+        == "InitializeDefinitelyMissingBoard"
+    )
     assert completion["firstBlocker"]["note"]
     assert completion["doNotRetryUnchanged"] is True
     assert completion["reuseCurrentTaskAuthorization"] is True
@@ -2219,6 +2273,9 @@ def test_architecture_reasoning_rejects_non_object_proposal(monkeypatch, tmp_pat
     payload = sent[-1]["result"]["structuredContent"]
     assert payload["proposalValidation"]["ok"] is False
     assert payload["proposalValidation"]["implementationGate"]["writesAllowed"] is False
+    assert payload["architectureState"]["current"] == "FullReplan"
+    assert payload["control"]["phase"] == "unreal_architecture_reasoning"
+    assert payload["control"]["status"] == "FullReplan"
 
 
 def test_architecture_reasoning_blocks_unchanged_proposal_across_server_memory(
@@ -2677,7 +2734,7 @@ def test_runtime_debug_experiment_persists_session_and_completes_gate(monkeypatc
         },
     )
     experiment = sent[-1]["result"]["structuredContent"]
-    assert experiment["ok"] is True
+    assert experiment["ok"] is True, json.dumps(experiment, ensure_ascii=False)
     assert experiment["session"]["status"] == "ready_for_patch_candidates"
     authorization = dict(experiment["taskAuthorization"])
     server.handle_tool_call(

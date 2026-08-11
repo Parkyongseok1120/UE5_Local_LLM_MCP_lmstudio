@@ -131,11 +131,18 @@ def compact_code_sketch_payload(
         if row.get("verdict") in {"unverified", "skipped_budget", "skipped_graph"}
     ]
     weak = [row for row in rows if row.get("verdict") == "weak"]
+    compiler_required = [
+        row for row in rows if row.get("verdict") == "compiler_required"
+    ]
     verified = [row for row in rows if row.get("verdict") == "verified"]
     selected = [
         *(_compact_sketch_row(row, keep_evidence=True) for row in known_bad),
         *(_compact_sketch_row(row, keep_evidence=True) for row in unverified[:24]),
         *(_compact_sketch_row(row, keep_evidence=True) for row in weak[:8]),
+        *(
+            _compact_sketch_row(row, keep_evidence=True)
+            for row in compiler_required[:24]
+        ),
     ]
     compact = {
         key: payload[key]
@@ -155,6 +162,11 @@ def compact_code_sketch_payload(
             "knownBadCount",
             "unverifiedCount",
             "weakCount",
+            "compilerRequiredCount",
+            "compilerProofRequired",
+            "compilerProofSymbols",
+            "proofLevel",
+            "postMutationRequiredAction",
             "skippedGraphCount",
             "sketchCharCount",
             "maxSketchChars",
@@ -165,12 +177,15 @@ def compact_code_sketch_payload(
             "gatePassed",
             "writeGateClosed",
             "firstBlocker",
+            "blockers",
+            "blockerCount",
             "nextAction",
             "nextActionArgs",
             "doNotRetryUnchanged",
             "reuseCurrentTaskAuthorization",
             "guidance",
             "agentInstruction",
+            "control",
         )
         if key in payload
     }
@@ -178,6 +193,7 @@ def compact_code_sketch_payload(
     compact["resultOmissions"] = {
         "unverified": max(0, len(unverified) - 24),
         "weak": max(0, len(weak) - 8),
+        "compilerRequired": max(0, len(compiler_required) - 24),
         "verified": len(verified),
     }
     if "generationContract" in payload:
@@ -185,6 +201,8 @@ def compact_code_sketch_payload(
     for key in ("architectureProposalValidation", "architectureImplementationGate"):
         if key in payload:
             compact[key] = payload[key]
+    if "compilerEscalation" in payload:
+        compact["compilerEscalation"] = payload["compilerEscalation"]
     gate = _compact_gate_completion(payload.get("gateCompletion"))
     if gate is not None:
         compact["gateCompletion"] = gate
@@ -205,6 +223,7 @@ def compact_code_sketch_payload(
     compact["resultOmissions"] = {
         "unverified": len(unverified),
         "weak": len(weak),
+        "compilerRequired": len(compiler_required),
         "verified": len(verified),
     }
     compact["_structuredTruncated"] = True
@@ -222,11 +241,18 @@ def compact_code_sketch_payload(
             "knownBadCount",
             "unverifiedCount",
             "weakCount",
+            "compilerRequiredCount",
+            "compilerProofRequired",
+            "compilerProofSymbols",
+            "proofLevel",
+            "postMutationRequiredAction",
             "skippedGraphCount",
             "graphStatus",
             "gatePassed",
             "writeGateClosed",
             "firstBlocker",
+            "blockers",
+            "blockerCount",
             "nextAction",
             "nextActionArgs",
             "doNotRetryUnchanged",
@@ -235,6 +261,7 @@ def compact_code_sketch_payload(
             "results",
             "resultOmissions",
             "gateCompletion",
+            "compilerEscalation",
         )
         if key in compact
     }
@@ -415,6 +442,12 @@ def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> di
     elif payload.get("primary") is not None or payload.get("matchCount") is not None:
         specialized = compact_asset_graph_payload(payload)
 
+    if isinstance(specialized, dict):
+        specialized = dict(specialized)
+        for protected_key in ("control", "architectureState"):
+            if protected_key in payload:
+                specialized[protected_key] = payload[protected_key]
+
     serialized = json.dumps(specialized, ensure_ascii=False)
     if len(serialized) <= max_bytes:
         return specialized
@@ -429,6 +462,8 @@ def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> di
 
     return {
         "ok": payload.get("ok"),
+        "control": payload.get("control"),
+        "architectureState": payload.get("architectureState"),
         "_structuredTruncated": True,
         "summaryKeys": list(payload.keys())[:20],
     }
@@ -665,6 +700,8 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
         "proposalPatchApplied": payload.get("proposalPatchApplied"),
         "proposalRepairsApplied": payload.get("proposalRepairsApplied"),
         "repairSubmission": payload.get("repairSubmission"),
+        "architectureState": payload.get("architectureState"),
+        "control": payload.get("control"),
         # Put fail-closed decisions before sampled evidence so a host-side
         # character limit can never hide the reason a proposal was rejected.
         "proposalValidation": payload.get("proposalValidation"),

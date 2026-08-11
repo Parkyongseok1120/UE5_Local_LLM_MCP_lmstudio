@@ -307,3 +307,27 @@ def test_architecture_rejection_precedes_sampled_evidence_in_serialized_output()
     assert len(compact["candidatePortfolio"]["candidates"]) == 4
     assert len(encoded) < 20_000
 
+
+def test_architecture_compaction_preserves_server_fsm_and_control() -> None:
+    payload = {
+        "ok": False,
+        "architectureState": {
+            "version": 1,
+            "current": "ExactRepair",
+            "transitionHistory": [],
+        },
+        "control": {
+            "version": 1,
+            "phase": "unreal_architecture_reasoning",
+            "status": "ExactRepair",
+            "nextAction": "revise_architecture_proposal",
+            "nextActionIsTool": False,
+        },
+        "dataFlow": {"flows": [{"symbol": str(index)} for index in range(100)]},
+    }
+
+    compact = compact_architecture_payload(payload, "compact")
+
+    assert compact["architectureState"]["current"] == "ExactRepair"
+    assert compact["control"]["status"] == "ExactRepair"
+

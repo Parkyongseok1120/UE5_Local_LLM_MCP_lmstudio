@@ -20,6 +20,17 @@ const path = require("path");
 const cp = require("child_process");
 const os = require("os");
 const crypto = require("crypto");
+const { AsyncLocalStorage } = require("async_hooks");
+const { sanitizeModelPayload } = require("./public-contract.js");
+const {
+  attachControlEnvelope,
+  conciseControlText,
+} = require("./control-envelope.js");
+const {
+  SAME_CALL_RETRY_CODES,
+  REDIRECT_CODES,
+  recoveryAction,
+} = require("./route-recovery-policy.js");
 
 const {
   Server
@@ -108,6 +119,8 @@ const {
 } = require("./edit-bundle");
 const { recoverIncompleteJournals } = require("./transaction-journal");
 const { resolveAgentStateRoot, ensureStateRootLayout } = require("./state-root");
+const { recordToolResult, recordToolStarted } = require("./agent-run-report.js");
+const { createProgressHeartbeat } = require("./progress-heartbeat.js");
 const {
   validateWriteTarget,
   shouldRollback,
@@ -141,6 +154,7 @@ const {
 } = require("./context-ux.js");
 const {
   callableAgentToolNames,
+  phaseVisibleAgentToolNames,
   toolNotCallablePayload,
   projectSwitchGuidance,
 } = require("./tool-exposure");
@@ -393,6 +407,7 @@ const server = new Server(
     }
   }
 );
+const toolCallContext = new AsyncLocalStorage();
 let lastObservedRouteFingerprint = "";
 
 function launchProjectPicker(explorer = false) {
@@ -427,12 +442,43 @@ function launchProjectPicker(explorer = false) {
 }
 
 function text(content) {
-  return {
+  let publicContent = String(content);
+  let structuredContent = null;
+  const context = toolCallContext.getStore() || {};
+  try {
+    structuredContent = sanitizeModelPayload(
+      attachControlEnvelope(JSON.parse(publicContent), String(context.toolName || ""))
+    );
+    publicContent = conciseControlText(structuredContent);
+  } catch {
+    // Plain text tool responses have no protocol object to sanitize.
+  }
+  const result = {
     content: [{
       type: "text",
-      text: compactMcpContent(content, MCP_AGENT_RESULT_MAX_CHARS)
+      text: compactMcpContent(publicContent, MCP_AGENT_RESULT_MAX_CHARS)
     }]
   };
+  if (structuredContent) {
+    result.structuredContent = structuredContent;
+    try {
+      recordToolResult(WORKSPACE_ROOT, {
+        toolName: String(context.toolName || "unknown"),
+        arguments: context.arguments && typeof context.arguments === "object" ? context.arguments : {},
+        structured: structuredContent,
+        callId: String(context.callId || ""),
+        durationMs: context.startedAtMs ? Date.now() - Number(context.startedAtMs) : 0,
+      });
+    } catch {
+      // Telemetry is deliberately non-authoritative.
+    }
+  }
+  try {
+    context.progressHeartbeat?.finish();
+  } catch {
+    // Progress transport support is optional.
+  }
+  return result;
 }
 
 function fail(message, options = {}) {
@@ -635,6 +681,11 @@ function continuityCheckpointFailure(checkpoint, operation, paths, mutation = nu
 
 async function agentNotify(message, level = "info") {
   try {
+    toolCallContext.getStore()?.progressHeartbeat?.setPhase(String(message));
+  } catch {
+    // Progress transport support is optional.
+  }
+  try {
     await server.notification({
       method: "notifications/message",
       params: { level, logger: "unreal-agent", data: String(message) }
@@ -688,11 +739,7 @@ function enforceTaskAuth(args, options = {}) {
     const missingState = auth.errorCode === "TASK_STATE_MISSING";
     const toolInactive = auth.errorCode === "TASK_TOOL_NOT_ACTIVE";
     const budgetExhausted = auth.errorCode === "TASK_PHASE_TOOL_BUDGET_EXHAUSTED";
-    const routeRedirect = new Set([
-      "TASK_SLICE_SCOPE_REQUIRED",
-      "TASK_SLICE_TARGET_MISMATCH",
-      "TASK_ROUTE_SCOPE_EXCEEDED",
-    ]).has(auth.errorCode);
+    const routeRedirect = REDIRECT_CODES.has(auth.errorCode);
     const recoveryActionRequired = (
       authMismatch
       || invalidFormat
@@ -744,7 +791,10 @@ function enforceTaskAuth(args, options = {}) {
         agentInstruction: "Do not replan. Retry the same write tool once with taskAuthorization from this error response.",
       } : {}),
       ...(authMismatch ? {
-        agentInstruction: "Plan identity changed. Copy taskAuthorization from this error, then replan or re-run required gates before writing. Do not retry the write tool alone and do not stop the whole user workflow.",
+        doNotRetry: [String(options.toolName || "write_tool")],
+        nextAction: "unreal_agent_plan",
+        suggestedToolCalls: [{ tool: "unreal_agent_plan", args: { request: "<original user request>" } }],
+        agentInstruction: "Plan identity changed and this error intentionally does not expose a live authToken. Do not copy its incomplete taskAuthorization or retry the write. Call unreal_agent_plan once with the original request; the active task will replan or return the current server-owned route.",
       } : {}),
       ...(invalidFormat || missingState ? {
         doNotRetry: [String(options.toolName || "write_tool")],
@@ -773,28 +823,11 @@ function enforceTaskAuth(args, options = {}) {
   return null;
 }
 
-const ROUTE_SAME_CALL_RETRY_CODES = new Set([
-  "TASK_AUTH_INCOMPLETE",
-  "TASK_ROUTE_OWNERSHIP_REQUIRED",
-  "TASK_ROUTE_STALE",
-  "TASK_STATE_LOCKED",
-]);
-const ROUTE_REDIRECT_CODES = new Set([
-  "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
-  "TASK_SLICE_SCOPE_REQUIRED",
-  "TASK_SLICE_TARGET_MISMATCH",
-  "TASK_ROUTE_SCOPE_EXCEEDED",
-  "TASK_TOOL_NOT_ACTIVE",
-]);
-
 function routeAuthorizationFailureOptions(result = {}, toolName = "") {
   const errorCode = String(result.errorCode || "TASK_ROUTE_AUTH_FAILED");
-  const sameCallRetry = ROUTE_SAME_CALL_RETRY_CODES.has(errorCode);
-  const routeRedirect = ROUTE_REDIRECT_CODES.has(errorCode);
+  const sameCallRetry = SAME_CALL_RETRY_CODES.has(errorCode);
+  const routeRedirect = REDIRECT_CODES.has(errorCode);
   let nextAction = String(result.nextAction || "").trim();
-  if (!nextAction && errorCode === "TASK_PHASE_TOOL_BUDGET_EXHAUSTED") {
-    nextAction = "unreal_task_checkpoint";
-  }
   if (!nextAction && errorCode === "TASK_TOOL_NOT_ACTIVE") {
     const route = result.toolRoute && typeof result.toolRoute === "object"
       ? result.toolRoute
@@ -807,16 +840,13 @@ function routeAuthorizationFailureOptions(result = {}, toolName = "") {
       : [];
     nextAction = pending[0] || active[0] || "unreal_task_checkpoint";
   }
-  if (
-    !nextAction
-    && (errorCode === "TASK_AUTH_INVALID_FORMAT"
-      || errorCode === "TASK_STATE_MISSING")
-  ) {
-    nextAction = "unreal_agent_plan";
+  const policyRecovery = recoveryAction(errorCode);
+  if (!nextAction) {
+    nextAction = policyRecovery.action;
   }
-  if (errorCode === "TASK_AUTH_MISMATCH") {
-    nextAction = "unreal_agent_plan";
-  }
+  const nextActionIsPolicyRecovery = Boolean(
+    nextAction && nextAction === String(policyRecovery.action || "")
+  );
   const advertisedActions = Array.isArray(result.nextActions)
     ? result.nextActions.map(String).filter(Boolean)
     : [];
@@ -842,6 +872,13 @@ function routeAuthorizationFailureOptions(result = {}, toolName = "") {
     doNotFabricateTaskAuthorization: true,
     ...(toolName && !sameCallRetry ? { doNotRetry: [String(toolName)] } : {}),
     ...(nextAction ? { nextAction } : {}),
+    // The shared recovery policy is authoritative for its own action. A stale
+    // lower-level flag must not turn a callable recovery tool into prose.
+    nextActionIsTool: nextActionIsPolicyRecovery
+      ? policyRecovery.isTool
+      : result.nextActionIsTool === undefined
+        ? false
+        : Boolean(result.nextActionIsTool),
     ...(result.nextActionArgs && typeof result.nextActionArgs === "object"
       ? { nextActionArgs: result.nextActionArgs }
       : {}),
@@ -1085,11 +1122,9 @@ function exposureProfileName() {
 }
 
 function filterAgentTools(tools, context = null) {
-  // Advertised catalog is profile ∩ control-plane visibility only.
-  // Route/phase/lease/ownership remain CallTool authorization boundaries —
-  // never shrink tools/list so LM Studio does not look like a partial install.
   const allowed = callableAgentToolNames(tools.map((tool) => tool.name));
-  return tools.filter((tool) => allowed.has(tool.name)).map((tool) => {
+  const visible = phaseVisibleAgentToolNames(allowed, context || {});
+  return tools.filter((tool) => visible.has(tool.name)).map((tool) => {
     if (context?.status !== "none" || !UNROUTED_INSPECTION_TOOLS.has(tool.name)) {
       return tool;
     }
@@ -1319,26 +1354,13 @@ function taskAuthSchemaProperties() {
   return {
     taskAuthorization: {
       type: "object",
-      description: "Server-issued auth object. Compact {taskSessionId, ownerCapability} is accepted and expanded server-side for the current route; full auth fields may also be supplied unchanged.",
+      description: "Stable task ownership handle. The server resolves every rotating route field from current task state.",
       properties: {
         taskSessionId: { type: "string" },
-        authToken: { type: "string" },
         ownerCapability: {
           type: "string",
           description: "Secret ownership token from task_start. Not a conversationId.",
         },
-        conversationId: {
-          type: "string",
-          description: "Public chat scope label. Not sufficient for ownership by itself.",
-        },
-        planId: { type: "string" },
-        planRevision: {
-          type: ["string", "integer"],
-          description: "Server-issued plan revision. Integer and numeric-string forms are equivalent.",
-        },
-        activeSliceId: { type: "string" },
-        routeHash: { type: "string" },
-        routePhase: { type: "string" },
       },
       required: [
         "taskSessionId",
@@ -1992,18 +2014,7 @@ function allAgentTools() {
         name: "list_active_tasks",
         description: "List running task sessions for the active project/workspace without requiring a known taskSessionId. Does not return authToken or ownerCapability. Foreign conversation metadata is redacted unless taskAuthorization.ownerCapability matches.",
         inputSchema: makeJsonSchema({
-          taskAuthorization: {
-            type: "object",
-            description: "Optional. Pass ownerCapability to mark which tasks you own.",
-            properties: {
-              ownerCapability: { type: "string" },
-              conversationId: { type: "string" },
-              taskSessionId: { type: "string" },
-            },
-            additionalProperties: true,
-          },
-          ownerCapability: { type: "string" },
-          conversationId: { type: "string" },
+          taskAuthorization: taskAuthSchemaProperties().taskAuthorization,
         })
       },
       {
@@ -2012,18 +2023,7 @@ function allAgentTools() {
         inputSchema: makeJsonSchema({
           taskSessionId: { type: "string", description: "Optional explicit taskSessionId when multiple running tasks exist." },
           force: { type: "boolean", description: "Force-cancel a healthy task owned by another MCP connection after user confirmation." },
-          taskAuthorization: {
-            type: "object",
-            description: "Ownership proof from unreal_task_start. Include ownerCapability.",
-            properties: {
-              ownerCapability: { type: "string" },
-              conversationId: { type: "string" },
-              taskSessionId: { type: "string" },
-            },
-            additionalProperties: true,
-          },
-          ownerCapability: { type: "string" },
-          conversationId: { type: "string" },
+          taskAuthorization: taskAuthSchemaProperties().taskAuthorization,
         })
       },
       {
@@ -2308,7 +2308,7 @@ function allAgentTools() {
         name: "run_unreal_automation_tests",
         description: "Run declared project Automation tests through the installed UnrealEditor-Cmd after a successful UHT/UBT build. The server discovers test declarations, selects their shared natural prefix when testFilter is omitted, fails if zero tests execute, and completes or advances the active slice only after a passing run.",
         inputSchema: makeJsonSchema({
-          testFilter: { type: "string", description: "Optional Automation name/prefix such as Gomoku. Defaults to the single shared prefix discovered in project source." },
+          testFilter: { type: "string", description: "Optional Automation name/prefix such as Project.Runtime. Defaults to the single shared prefix discovered in project source." },
           engineRoot: { type: "string", description: "Optional UE engine root; defaults to the active project's resolved engine." },
           project: { type: "string", description: "Optional .uproject path; defaults to active project." },
           timeoutMs: { type: "number", description: "Automation timeout in ms. Default 30 minutes." },
@@ -2343,9 +2343,40 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const name = request.params.name;
-  let args = request.params.arguments || {};
-  const priorSeq = beginToolCall();
-  try {
+  return toolCallContext.run({ toolName: name }, async () => {
+    let args = request.params.arguments || {};
+    const priorSeq = beginToolCall();
+    const context = toolCallContext.getStore();
+    if (context) {
+      context.arguments = args;
+      context.startedAtMs = Date.now();
+      context.callId = `${process.pid}:${context.startedAtMs}:${priorSeq}:${crypto.randomBytes(4).toString("hex")}`;
+      const metadata = request.params?._meta && typeof request.params._meta === "object"
+        ? request.params._meta
+        : {};
+      context.progressHeartbeat = createProgressHeartbeat({
+        toolName: name,
+        progressToken: metadata.progressToken,
+        sendProgress: (params) => server.notification({
+          method: "notifications/progress",
+          params,
+        }),
+        sendMessage: (data) => server.notification({
+          method: "notifications/message",
+          params: { level: "info", logger: "unreal-agent", data },
+        }),
+      });
+      try {
+        recordToolStarted(WORKSPACE_ROOT, {
+          toolName: name,
+          arguments: args,
+          callId: context.callId,
+        });
+      } catch {
+        // Telemetry is deliberately non-authoritative.
+      }
+    }
+    try {
     clearLoopHistoriesOnProjectChange(false);
     const activeProjectForRoute = getActiveProject(CONFIG_PATH) || "";
     const currentRouteContext = listToolsRouteContext(
@@ -4930,7 +4961,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ? `Fix the invalid ${name} arguments and retry once with corrected input.`
         : `Do not retry ${name} with the same arguments. Stop the current workflow and report the MCP internal error.`,
     });
-  }
+    }
+  });
 });
 
 async function main() {

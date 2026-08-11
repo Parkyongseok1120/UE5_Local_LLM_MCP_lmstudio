@@ -8,7 +8,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-TEXT_SUFFIXES = (".js", ".json", ".md", ".py", ".ps1", ".sh", ".yml", ".yaml")
+TEXT_SUFFIXES = (
+    ".js",
+    ".json",
+    ".md",
+    ".py",
+    ".ps1",
+    ".sh",
+    ".txt",
+    ".yml",
+    ".yaml",
+)
 
 
 def _tracked_text_files(repo_root: Path) -> list[Path]:

@@ -177,7 +177,9 @@ def _discover_type_declaration_paths(
     patterns = {
         symbol: re.compile(
             rf"\b(?:(?:class|struct)\s+(?:\w+_API\s+)?{re.escape(symbol)}\b|"
-            rf"enum(?:\s+class)?\s+(?:\w+_API\s+)?{re.escape(symbol)}\b)"
+            rf"enum(?:\s+class)?\s+(?:\w+_API\s+)?{re.escape(symbol)}\b|"
+            rf"using\s+{re.escape(symbol)}\s*=|"
+            rf"typedef\b[^;\n]*\b{re.escape(symbol)}\s*;)"
         )
         for symbol in missing
     }
@@ -286,23 +288,55 @@ def _split_parameters(value: str) -> list[str]:
     return [part for part in parts if part]
 
 
+_DECLARATION_PREFIX_REJECT = re.compile(
+    r"^(?:return|co_return|if|else|for|while|switch|case|sizeof|static_assert)\b"
+)
+
+
+def _declaration_return_type(prefix: str) -> str | None:
+    """Return a declaration's type prefix, or ``None`` for a call/expression.
+
+    The previous parser accepted any ``Name(args);`` line.  That made calls,
+    assignments, and even commented-out code look like declarations and later
+    produced false return/parameter mismatches.  Keep this deliberately
+    conservative: a missed inline declaration is UNKNOWN evidence, while a
+    fabricated signature incorrectly closes a fail-closed write gate.
+    """
+
+    raw = str(prefix or "").strip()
+    if not raw or any(marker in raw for marker in ("//", "/*", "*/", "=", "->")):
+        return None
+    cleaned = re.sub(r"\[\[[^\]]*\]\]", " ", raw)
+    cleaned = re.sub(r"\bUE_(?:FORCEINLINE_HINT|NODISCARD)\b", " ", cleaned)
+    cleaned = re.sub(r"\b(?:FORCEINLINE|FORCEINLINE_DEBUGGABLE)\b", " ", cleaned)
+    cleaned = re.sub(
+        r"\b(?:static|virtual|inline|constexpr|consteval|friend|explicit)\b",
+        " ",
+        cleaned,
+    )
+    cleaned = re.sub(r"\b[A-Z][A-Z0-9_]*_API\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned or _DECLARATION_PREFIX_REJECT.match(cleaned):
+        return None
+    # Out-of-class definitions may leave ``Owner::`` immediately before the
+    # method token.  It is ownership syntax, not part of the return type.
+    cleaned = re.sub(r"(?:[A-Za-z_]\w*(?:<[^<>\n]*>)?::)+\s*$", "", cleaned).strip()
+    return cleaned
+
+
 def _signature_contracts(text: str, symbol: str) -> list[dict[str, Any]]:
     declaration = re.compile(
         rf"(?m)^[ \t]*(?P<prefix>[^(){{}};\n]+?)\b{re.escape(symbol)}\s*"
-        rf"\((?P<params>[^;{{}}]*)\)\s*(?:const\s*)?(?:override\s*)?(?:final\s*)?;"
+        rf"\((?P<params>[^;{{}}]*)\)\s*(?:const\s*)?(?:override\s*)?"
+        rf"(?:final\s*)?(?:noexcept(?:\s*\([^)]*\))?\s*)?(?P<end>;|\{{)"
     )
     contracts: list[dict[str, Any]] = []
     for match in declaration.finditer(text):
+        return_type = _declaration_return_type(match.group("prefix"))
+        if return_type is None:
+            continue
         parameters = _split_parameters(match.group("params"))
         required = sum(1 for parameter in parameters if "=" not in parameter)
-        prefix_tokens = [
-            token
-            for token in match.group("prefix").strip().split()
-            if token not in {"static", "virtual", "inline", "constexpr", "FORCEINLINE"}
-            and not token.endswith("_API")
-            and not token.startswith("UE_")
-        ]
-        return_type = " ".join(prefix_tokens).strip()
         contracts.append(
             {
                 "returnType": return_type,
@@ -310,11 +344,22 @@ def _signature_contracts(text: str, symbol: str) -> list[dict[str, Any]]:
                 "maximumArgumentCount": len(parameters),
                 "parameters": parameters,
                 "declaration": match.group(0).strip(),
+                "line": text.count("\n", 0, match.start()) + 1,
             }
         )
         if len(contracts) >= 8:
             break
     return contracts
+
+
+def _candidate_header_rank(path: Path) -> tuple[int, int, int, str]:
+    """Prefer public engine declarations over experimental/third-party twins."""
+
+    folded = path.as_posix().casefold()
+    third_party = 1 if "/thirdparty/" in folded else 0
+    experimental = 1 if "/experimental/" in folded else 0
+    private = 1 if "/private/" in folded else 0
+    return (third_party, experimental, private, folded)
 
 
 def lookup_engine_header_evidence(
@@ -346,12 +391,17 @@ def lookup_engine_header_evidence(
     for raw_claim in claim_list:
         symbol = _unqualified(raw_claim.get("symbol") or "")
         owner = _unqualified(raw_claim.get("receiverType") or "")
-        if (
+        # Resolve owners as declarations even when a similarly named header
+        # exists.  Common aliases (FVector) and non-matching owner headers
+        # (FMath -> UnrealMathUtility.h) otherwise bind to an unrelated
+        # Vector.h/Math.h from another module.
+        if owner:
+            unresolved_types.append(owner)
+        elif (
             symbol
-            and not owner
             and raw_claim.get("allowDeclarationScan") is True
             and not any(
-            catalog.get(name.casefold(), []) for name in _header_names(symbol)
+                catalog.get(name.casefold(), []) for name in _header_names(symbol)
             )
         ):
             unresolved_types.append(symbol)
@@ -370,8 +420,15 @@ def lookup_engine_header_evidence(
         key = f"{owner.casefold()}::{symbol.casefold()}" if owner else symbol.casefold()
         candidate_names = _header_names(owner or symbol)
         candidates: list[Path] = []
+        if owner:
+            candidates.extend(declaration_paths.get(owner, []))
         for name in candidate_names:
-            candidates.extend(catalog.get(name.casefold(), []))
+            candidates.extend(
+                sorted(
+                    catalog.get(name.casefold(), []),
+                    key=_candidate_header_rank,
+                )
+            )
         if not owner:
             candidates.extend(declaration_paths.get(symbol, []))
         seen: set[str] = set()
@@ -390,6 +447,19 @@ def lookup_engine_header_evidence(
                 continue
             line, excerpt = found
             signatures = _signature_contracts(text, symbol) if owner else []
+            # A filename/token match is not owner proof.  Without a parsed
+            # declaration this may only be a call in an unrelated same-named
+            # header, so keep the claim UNKNOWN instead of fabricating an
+            # exact owner row.
+            if owner and not signatures:
+                continue
+            if signatures:
+                signature_line = int(signatures[0].get("line") or line)
+                source_lines = text.splitlines()
+                start = max(0, signature_line - 3)
+                end = min(len(source_lines), signature_line + 3)
+                line = signature_line
+                excerpt = "\n".join(source_lines[start:end]).strip()
             results.setdefault(key, []).append(
                 {
                     "symbol_name": symbol,
@@ -403,6 +473,11 @@ def lookup_engine_header_evidence(
                     **({"signatures": signatures} if signatures else {}),
                 }
             )
+            # The declaration-resolved or highest-ranked matching header owns
+            # the bounded contract.  Do not merge lower-ranked experimental or
+            # third-party twins into one impossible overload set.
+            if owner:
+                break
     return {
         "status": "ready",
         "engineRoot": str(root),

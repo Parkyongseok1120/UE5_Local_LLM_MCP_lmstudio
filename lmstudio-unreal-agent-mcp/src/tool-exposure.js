@@ -59,6 +59,21 @@ function stableAgentToolNames(allRegistered) {
   return new Set(allRegistered.filter((name) => essential.has(name)));
 }
 
+function phaseVisibleAgentToolNames(profileAllowed, context = {}) {
+  const allowed = new Set(profileAllowed || []);
+  const status = String(context.status || "none");
+  if (status === "none") return allowed;
+  const manifest = loadStableManifest();
+  const always = new Set(manifest.agentAlwaysDiscoverable || []);
+  const route = context.route && typeof context.route === "object"
+    ? context.route
+    : context.state?.toolRoute && typeof context.state.toolRoute === "object"
+      ? context.state.toolRoute
+      : {};
+  const active = new Set(Array.isArray(route.activeTools) ? route.activeTools.map(String) : []);
+  return new Set([...allowed].filter((name) => always.has(name) || active.has(name)));
+}
+
 function toolNotCallablePayload(toolName) {
   const message = `Tool '${toolName}' is not callable in the current MCP exposure profile.`;
   return {
@@ -95,4 +110,5 @@ module.exports = {
   toolNotCallablePayload,
   loadStableManifest,
   projectSwitchGuidance,
+  phaseVisibleAgentToolNames,
 };

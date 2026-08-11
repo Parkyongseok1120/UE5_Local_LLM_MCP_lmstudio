@@ -122,7 +122,7 @@ def _usable_route_file(value: Any) -> str:
     return path
 
 
-def _request_files(request: Any) -> list[str]:
+def request_files(request: Any) -> list[str]:
     return list(
         dict.fromkeys(
             path
@@ -130,6 +130,11 @@ def _request_files(request: Any) -> list[str]:
             if (path := _usable_route_file(match.group(1)))
         )
     )
+
+
+# Keep the old private name for internal compatibility while giving scope
+# detection a reusable public owner.
+_request_files = request_files
 
 
 def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
@@ -168,7 +173,7 @@ def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
     if not declared:
         declared.extend(_clean_strings(plan_scope.get("impactContractFiles")))
     if not declared:
-        declared.extend(_request_files(state.get("request")))
+        declared.extend(request_files(state.get("request")))
     normalized = list(
         dict.fromkeys(
             path
@@ -331,10 +336,12 @@ def _task_tools(task_kind: str) -> list[str]:
         "runtime_debug": [
             "unreal_runtime_config_check",
             "unreal_runtime_debug_session",
+            "unreal_runtime_verify",
         ],
         "runtime_edit": [
             "unreal_runtime_config_check",
             "unreal_runtime_debug_session",
+            "unreal_runtime_verify",
         ],
         "codegen": ["unreal_code_sketch_claim_validate"],
         "code_sketch": ["unreal_code_sketch_claim_validate"],
@@ -368,6 +375,7 @@ def _active_tools(
     if phase == "runtime_analysis":
         tools = [
             "unreal_runtime_debug_session",
+            "unreal_runtime_verify",
             "unreal_runtime_config_check",
             "read_unreal_logs",
             "unreal_rag_search",
@@ -420,6 +428,7 @@ def _active_tools(
                 tools[4:4] = ["apply_edit_bundle", "write_file", "replace_in_file"]
         if has_runtime_session or task_kind in {"runtime", "runtime_edit", "runtime_debug"}:
             tools.insert(4, "unreal_runtime_debug_session")
+            tools.insert(5, "unreal_runtime_verify")
     elif phase == "verifier":
         tools = [
             "read_file",
@@ -441,6 +450,7 @@ def _active_tools(
             tools.insert(0, "run_unreal_automation_tests")
         if has_runtime_session or task_kind in {"runtime", "runtime_edit", "runtime_debug"}:
             tools.insert(2, "unreal_runtime_debug_session")
+            tools.insert(3, "unreal_runtime_verify")
     else:
         if task_kind in {"compile_fix", "reflection_fix", "module_fix"}:
             tools = [

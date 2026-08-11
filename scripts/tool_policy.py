@@ -23,6 +23,7 @@ RAG_MCP_TOOLS = frozenset(
         "unreal_architecture_reasoning",
         "unreal_feature_intent_resolve",
         "unreal_runtime_debug_session",
+        "unreal_runtime_verify",
         "unreal_code_sketch_claim_validate",
         "unreal_semantic_refactor_guard",
         "unreal_review_claim_validate",

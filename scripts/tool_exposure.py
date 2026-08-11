@@ -79,6 +79,27 @@ def agent_hidden_tool_names() -> frozenset[str]:
     return frozenset(load_stable_manifest().get("agentHiddenUntilControlPlane") or [])
 
 
+def phase_visible_rag_tool_names(
+    profile_allowed: Iterable[str],
+    route_context: dict,
+) -> frozenset[str]:
+    """Shrink an active/blocked catalog without changing CallTool authority."""
+
+    allowed = frozenset(str(item) for item in profile_allowed)
+    status = str((route_context or {}).get("status") or "none")
+    if status == "none":
+        return allowed
+    always = set(load_stable_manifest().get("ragAlwaysDiscoverable") or [])
+    state = (
+        route_context.get("state")
+        if isinstance(route_context.get("state"), dict)
+        else {}
+    )
+    route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
+    active = {str(item) for item in route.get("activeTools") or [] if str(item)}
+    return frozenset(name for name in allowed if name in always or name in active)
+
+
 def callable_rag_tool_names(all_registered: Iterable[str]) -> frozenset[str]:
     registered = frozenset(all_registered)
     essential = rag_essential_tool_names()

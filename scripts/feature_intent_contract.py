@@ -281,7 +281,7 @@ def analyze_feature_intent_ambiguity(
             else marker in text
         )
     )
-    # A concrete implementation choice such as "WGomokuHUD or simple UI widget"
+    # A concrete implementation choice such as "WFeatureHUD or simple UI widget"
     # is not the same as an open-ended "maybe/best/proper" request. Keep the
     # choice in the ambiguity score, but do not let that one token make an
     # otherwise named, reversible target unbounded.

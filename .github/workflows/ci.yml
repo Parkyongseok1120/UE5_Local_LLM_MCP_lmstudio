@@ -159,7 +159,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $suffixes = @('.js', '.json', '.md', '.py', '.ps1', '.sh', '.yml', '.yaml')
+          $suffixes = @('.js', '.json', '.md', '.py', '.ps1', '.sh', '.txt', '.yml', '.yaml')
           $bomFiles = @()
           $tracked = git ls-files -z
           if ($LASTEXITCODE -ne 0) { throw "git ls-files failed" }

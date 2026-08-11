@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Look up exported Material/Blueprint graph metadata by asset path or name."""
+"""Look up exported Unreal asset graph and structured metadata by path/name."""
 
 from __future__ import annotations
 
@@ -14,7 +14,17 @@ from project_context import active_project_name as context_active_project_name
 from project_row_filter import filter_rows_by_project
 from asset_taxonomy import classify_ue_asset_class, graph_lookup_guidance
 
-AssetKind = Literal["auto", "material", "blueprint", "animation"]
+AssetKind = Literal[
+    "auto",
+    "material",
+    "blueprint",
+    "animation",
+    "structured",
+    "texture",
+    "mesh",
+    "world_look",
+    "fmod",
+]
 GraphDetail = Literal["compact", "medium", "large", "full"]
 
 GRAPH_DETAIL_ORDER: tuple[GraphDetail, ...] = ("compact", "medium", "large", "full")
@@ -35,6 +45,17 @@ KIND_FILES: dict[str, str] = {
     "world_look": "raw_world_look_metadata.jsonl",
     "fmod": "raw_fmod_metadata.jsonl",
     "animation": "raw_animation_metadata.jsonl",
+}
+
+KIND_FILE_CANDIDATES: dict[str, tuple[str, ...]] = {
+    **{key: (value,) for key, value in KIND_FILES.items()},
+    "animation": (
+        "raw_animation_metadata.jsonl",
+        "raw_anim_blueprint_metadata.jsonl",
+        "raw_anim_montage_metadata.jsonl",
+        "raw_skeletal_mesh_metadata.jsonl",
+        "raw_sequencer_metadata.jsonl",
+    ),
 }
 
 AUTO_SEARCH_KINDS = (
@@ -220,6 +241,11 @@ def _summarize_material(row: dict[str, Any], *, detail: GraphDetail = "compact")
         "vectorParameters": (meta.get("vector_parameters") or [])[:param_limit],
         "textureParameters": (meta.get("texture_parameters") or [])[:param_limit],
         "staticSwitchParameters": (meta.get("static_switch_parameters") or [])[:param_limit],
+        "scalarParameterValues": (meta.get("scalar_parameter_values") or [])[:param_limit],
+        "vectorParameterValues": (meta.get("vector_parameter_values") or [])[:param_limit],
+        "textureParameterValues": (meta.get("texture_parameter_values") or [])[:param_limit],
+        "staticSwitchParameterValues": (meta.get("static_switch_parameter_values") or [])[:param_limit],
+        "dependencies": (meta.get("dependencies") or [])[:40],
         "description": meta.get("description"),
         "user_exposed_caption": meta.get("user_exposed_caption"),
     }
@@ -245,8 +271,14 @@ def _summarize_blueprint(row: dict[str, Any]) -> dict[str, Any]:
             if isinstance(graph, dict)
         ],
         "graphLinks": (meta.get("graph_links") or [])[:80],
+        "stateMachines": (meta.get("state_machines") or [])[:24],
+        "transitionRules": (meta.get("transition_rules") or [])[:80],
+        "components": (meta.get("components") or [])[:80],
         "variables": meta.get("variables") or [],
         "functions": meta.get("functions") or [],
+        "interfaces": meta.get("interfaces") or [],
+        "properties": meta.get("properties") or {},
+        "dependencies": (meta.get("dependencies") or [])[:40],
     }
 
 
@@ -262,6 +294,8 @@ def _summarize_structured(row: dict[str, Any]) -> dict[str, Any]:
         "blackboardKeys": meta.get("blackboard_keys") or [],
         "emitters": meta.get("emitters") or [],
         "userParameters": meta.get("user_parameters") or [],
+        "behaviorNodes": meta.get("behavior_nodes") or [],
+        "properties": meta.get("properties") or {},
         "inputMappings": meta.get("input_mappings") or [],
         "dependencies": meta.get("dependencies") or [],
     }
@@ -300,10 +334,22 @@ def _summarize_animation(row: dict[str, Any]) -> dict[str, Any]:
         "assetType": meta.get("asset_type"),
         "name": _asset_name(row) or None,
         "skeleton": meta.get("skeleton"),
+        "generatedClass": meta.get("generated_class"),
+        "parentClass": meta.get("parent_class"),
+        "graphs": (meta.get("graphs") or [])[:24],
+        "graphLinks": (meta.get("graph_links") or [])[:160],
+        "stateMachines": (meta.get("state_machines") or [])[:24],
+        "transitionRules": (meta.get("transition_rules") or [])[:80],
+        "variables": (meta.get("variables") or [])[:160],
+        "notifies": (meta.get("notifies") or [])[:80],
+        "montageSections": (meta.get("montage_sections") or [])[:80],
+        "slots": (meta.get("slots") or [])[:40],
         "poses": (meta.get("poses") or [])[:40],
         "blendSamples": (meta.get("blend_samples") or [])[:40],
         "bones": (meta.get("bones") or [])[:40],
         "sockets": (meta.get("sockets") or [])[:40],
+        "properties": meta.get("properties") or {},
+        "dependencies": (meta.get("dependencies") or [])[:40],
     }
 
 
@@ -398,6 +444,44 @@ def _summarize_row(kind: str, row: dict[str, Any], *, detail: GraphDetail = "com
     return _summarize_generic(row)
 
 
+def _metadata_coverage(summary: dict[str, Any]) -> dict[str, Any]:
+    """Declare which semantic asset facts are present instead of overclaiming."""
+
+    fields = {
+        "blueprintProperties": ("variables", "components", "properties"),
+        "animStateMachines": ("stateMachines",),
+        "animTransitions": ("transitionRules",),
+        "montageAndNotifies": ("montageSections", "notifies", "slots"),
+        "blendSpace": ("blendSamples",),
+        "materialParameters": (
+            "scalarParameters",
+            "vectorParameters",
+            "textureParameters",
+            "staticSwitchParameters",
+            "scalarParameterValues",
+            "vectorParameterValues",
+            "textureParameterValues",
+            "staticSwitchParameterValues",
+        ),
+        "niagara": ("emitters", "userParameters", "behaviorNodes"),
+        "skeletonBinding": ("skeleton", "bones"),
+        "skeletonSockets": ("sockets",),
+    }
+    available = {
+        name: [field for field in candidates if summary.get(field) not in (None, "", [], {})]
+        for name, candidates in fields.items()
+    }
+    return {
+        "evidenceLevel": "editor_export",
+        "available": {name: bool(found) for name, found in available.items()},
+        "fields": {name: found for name, found in available.items() if found},
+        "boundary": (
+            "Only fields present in this export are proven. Missing state/transition/node data requires "
+            "a fresh Editor export with the C++ graph exporter; repeated lookup cannot create evidence."
+        ),
+    }
+
+
 def _detect_kind(query: str, explicit: AssetKind) -> AssetKind:
     if explicit != "auto":
         return explicit
@@ -451,23 +535,31 @@ def lookup_asset_graph(
     matches: list[dict[str, Any]] = []
     searched: list[str] = []
     for search_kind in kinds_to_search:
-        filename = KIND_FILES.get(search_kind)
-        if not filename:
+        filenames = KIND_FILE_CANDIDATES.get(search_kind) or ()
+        if not filenames:
             continue
-        raw_path = idx / filename
-        searched.append(str(raw_path))
-        if not raw_path.is_file():
-            continue
-        rows = _filter_project(_load_jsonl(raw_path), project_name)
-        for row in rows:
-            if _matches_query(row, query):
-                matches.append({"kind": search_kind, "row": row})
+        seen_assets: set[str] = set()
+        for filename in filenames:
+            raw_path = idx / filename
+            searched.append(str(raw_path))
+            if not raw_path.is_file():
+                continue
+            rows = _filter_project(_load_jsonl(raw_path), project_name)
+            for row in rows:
+                asset_key = _asset_path(row).casefold()
+                if _matches_query(row, query) and asset_key not in seen_assets:
+                    matches.append({"kind": search_kind, "row": row})
+                    seen_assets.add(asset_key)
 
     if not matches:
         asset_class = ""
         registry_path = idx / "raw_asset_registry.jsonl"
         if registry_path.is_file():
-            for row in _load_jsonl(registry_path):
+            registry_rows = _filter_project(
+                _load_jsonl(registry_path),
+                project_name,
+            )
+            for row in registry_rows:
                 if _matches_query(row, query):
                     meta = _row_metadata(row)
                     asset_class = str(meta.get("asset_type") or row.get("asset_type") or "")
@@ -496,6 +588,7 @@ def lookup_asset_graph(
         row = item["row"]
         summary = _summarize_row(item["kind"], row, detail=resolved_detail)
         summary["kind"] = item["kind"]
+        summary["metadataCoverage"] = _metadata_coverage(summary)
         if include_full_graph or resolved_detail == "full":
             summary["rawMetadata"] = _row_metadata(row)
         summaries.append(summary)
@@ -529,28 +622,34 @@ def search_asset_graphs(
 
     hits: list[dict[str, Any]] = []
     for search_kind in kinds:
-        filename = KIND_FILES.get(search_kind)
-        if not filename:
+        filenames = KIND_FILE_CANDIDATES.get(search_kind) or ()
+        if not filenames:
             continue
-        raw_path = idx / filename
-        if not raw_path.is_file():
-            continue
-        rows = _filter_project(_load_jsonl(raw_path), project_name)
-        for row in rows:
-            path = _asset_path(row).lower()
-            name = _asset_name(row).lower()
-            haystack = f"{path} {name}"
-            if q and q not in haystack:
+        seen_assets: set[str] = set()
+        for filename in filenames:
+            raw_path = idx / filename
+            if not raw_path.is_file():
                 continue
-            hits.append(
-                {
-                    "kind": search_kind,
-                    "assetPath": _asset_path(row),
-                    "name": _asset_name(row),
-                    "graphEdgeCount": len(_row_metadata(row).get("graph_edges") or []),
-                    "graphLinkCount": len(_row_metadata(row).get("graph_links") or []),
-                }
-            )
+            rows = _filter_project(_load_jsonl(raw_path), project_name)
+            for row in rows:
+                path = _asset_path(row).lower()
+                name = _asset_name(row).lower()
+                haystack = f"{path} {name}"
+                if (q and q not in haystack) or path in seen_assets:
+                    continue
+                seen_assets.add(path)
+                hits.append(
+                    {
+                        "kind": search_kind,
+                        "assetPath": _asset_path(row),
+                        "name": _asset_name(row),
+                        "assetType": _row_metadata(row).get("asset_type"),
+                        "graphEdgeCount": len(_row_metadata(row).get("graph_edges") or []),
+                        "graphLinkCount": len(_row_metadata(row).get("graph_links") or []),
+                    }
+                )
+                if len(hits) >= limit:
+                    break
             if len(hits) >= limit:
                 break
         if len(hits) >= limit:
@@ -654,7 +753,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Look up exported asset graph metadata.")
     parser.add_argument("--asset-path", default="", help="Asset path or short name, e.g. /Game/Materials/M_Core or M_Core")
     parser.add_argument("--search", default="", help="Substring search across indexed material/blueprint assets")
-    parser.add_argument("--asset-kind", default="auto", choices=["auto", "material", "blueprint"])
+    parser.add_argument("--asset-kind", default="auto", choices=["auto", *AUTO_SEARCH_KINDS])
     parser.add_argument("--index-dir", default="")
     parser.add_argument("--project-name", default="")
     parser.add_argument("--full", action="store_true")

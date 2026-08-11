@@ -6,12 +6,16 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from code_sketch_claim_validate import (  # noqa: E402
     MAX_SKETCH_CHARS,
+    _cpp_types_compatible,
     _lookup_many_exact,
+    _normalized_cpp_type,
     extract_member_call_claims,
     extract_member_calls,
     extract_local_declarations,
@@ -19,16 +23,38 @@ from code_sketch_claim_validate import (  # noqa: E402
     validate_sketch,
 )
 from unreal_api_denylist import check_denylist  # noqa: E402
+from engine_header_evidence import _signature_contracts  # noqa: E402
 
 # A path that does not exist, so validate_sketch takes the deterministic
 # "index not found" branch (no dependency on a built RAG index).
 NO_INDEX = Path(__file__).resolve().parent / "_no_such_index.sqlite"
 
 
+def test_cpp_type_normalization_preserves_multiword_builtin_types():
+    assert _normalized_cpp_type("long double") == "long double"
+    assert _normalized_cpp_type("unsigned long long") == "unsigned long long"
+    assert _normalized_cpp_type("const long double Value") == "long double"
+    assert _normalized_cpp_type("unsigned int Count") == "unsigned int"
+
+
+def test_unreal_real_aliases_are_numeric_compatible_with_builtin_floats():
+    assert _cpp_types_compatible("FRealSingle", "float") is True
+    assert _cpp_types_compatible("float", "FRealSingle") is True
+    assert _cpp_types_compatible("FRealDouble", "double") is True
+    assert _cpp_types_compatible("double", "FReal") is True
+
+
 def test_extract_symbols_finds_unreal_types():
     syms = extract_symbols("ULevelSequencePlayer* P; UMovieSceneSequence* S; FTransform T;")
     assert "ULevelSequencePlayer" in syms
     assert "UMovieSceneSequence" in syms
+
+
+def test_extract_symbols_does_not_duplicate_prefixed_owned_method_as_type():
+    syms = extract_symbols("double Value = FMath::FInterpTo(A, B, Dt, Speed);")
+
+    assert "FMath" in syms
+    assert "FInterpTo" not in syms
 
 
 def test_actor_suffix_member_name_is_not_an_unreal_type_claim():
@@ -1231,7 +1257,7 @@ def test_existing_game_state_server_rpc_does_not_block_a_removal_sketch():
     )
 
 
-def test_engine_header_miss_is_reported_as_coverage_miss_not_absence(tmp_path):
+def test_engine_header_miss_escalates_once_to_compiler_proof_not_absence(tmp_path):
     engine_source = tmp_path / "UE_5.8" / "Engine" / "Source" / "Runtime"
     engine_source.mkdir(parents=True)
 
@@ -1247,11 +1273,14 @@ def test_engine_header_miss_is_reported_as_coverage_miss_not_absence(tmp_path):
         for item in result["results"]
         if item["symbol"] == "PerformImaginaryAction"
     )
-    assert method["verdict"] == "unverified"
-    assert method["coverageStatus"] == "index_source_coverage_missing"
-    assert "not proof that the API is absent" in method["note"]
+    assert method["verdict"] == "compiler_required"
+    assert method["sourceLookupVerdict"] == "unverified"
+    assert method["coverageStatus"] == "source_lookup_exhausted"
+    assert "UHT/UBT compiler proof" in method["note"]
     assert result["engineHeaderLookup"]["status"] == "ready"
-    assert result["ok"] is False
+    assert result["ok"] is True
+    assert result["compilerProofRequired"] is True
+    assert result["postMutationRequiredAction"] == "build_unreal_project"
 
 
 def test_engine_header_contract_rejects_wrong_argument_count(tmp_path):
@@ -1343,6 +1372,211 @@ public:
     assert "AActor*" in mismatch["note"]
     assert result["knownBadCount"] >= 1
     assert result["ok"] is False
+
+
+@pytest.mark.parametrize("engine_version", ["5.4", "5.5", "5.6", "5.7", "5.8"])
+def test_version_local_engine_headers_accept_real_template_signature_shapes(
+    tmp_path: Path,
+    engine_version: str,
+):
+    engine = tmp_path / f"UE {engine_version} Cross Platform"
+    core_math = engine / "Engine" / "Source" / "Runtime" / "Core" / "Public" / "Math"
+    core_math.mkdir(parents=True)
+    (core_math / "MathFwd.h").write_text(
+        "using FVector = UE::Math::TVector<double>;\n",
+        encoding="utf-8",
+    )
+    (core_math / "Vector.h").write_text(
+        """
+namespace UE::Math
+{
+template <typename T>
+struct TVector
+{
+    [[nodiscard]] UE_FORCEINLINE_HINT static T DotProduct(
+        const TVector<T>& V1, const TVector<T>& V2);
+    [[nodiscard]] T Size() const;
+};
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (core_math / "UnrealMathUtility.h").write_text(
+        """
+struct FMath
+{
+    template <typename T1, typename T2, typename T3, typename T4>
+    [[nodiscard]] static auto FInterpTo(
+        T1 Current, T2 Target, T3 DeltaTime, T4 InterpSpeed)
+    {
+        return Current;
+    }
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    anim = (
+        engine
+        / "Engine"
+        / "Source"
+        / "Runtime"
+        / "AnimGraphRuntime"
+        / "Public"
+        / "KismetAnimationLibrary.h"
+    )
+    anim.parent.mkdir(parents=True)
+    anim.write_text(
+        """
+class ANIMGRAPHRUNTIME_API UKismetAnimationLibrary
+{
+public:
+    static float CalculateDirection(const FVector& Velocity, const FRotator& BaseRotation);
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    unrelated = (
+        engine
+        / "Engine"
+        / "Source"
+        / "ThirdParty"
+        / "Noise"
+        / "Public"
+        / "Vector.h"
+    )
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text(
+        """
+struct FVector
+{
+    static bool DotProduct(int32 Wrong);
+    bool Size(int32 Wrong) const;
+};
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = validate_sketch(
+        """
+FVector A;
+FVector B;
+double Dot = FVector::DotProduct(A, B);
+double Length = A.Size();
+double Smoothed = FMath::FInterpTo(Current, Target, DeltaTime, Speed);
+float Direction = UKismetAnimationLibrary::CalculateDirection(Velocity, Rotation);
+""",
+        NO_INDEX,
+        graph={"symbols": []},
+        engine_root=engine,
+    )
+
+    assert result["ok"] is True, result
+    assert not any(
+        str(item.get("errorCode") or "").startswith("ENGINE_")
+        for item in result["results"]
+    )
+    for symbol in ("DotProduct", "Size", "FInterpTo", "CalculateDirection"):
+        row = next(item for item in result["results"] if item["symbol"] == symbol)
+        assert row["verdict"] == "verified", row
+        assert all("ThirdParty" not in evidence["locator"] for evidence in row["evidence"])
+
+
+def test_chained_call_uses_header_return_type_as_terminal_receiver(tmp_path: Path):
+    engine = tmp_path / "UE_5.8"
+    actor_header = (
+        engine
+        / "Engine"
+        / "Source"
+        / "Runtime"
+        / "Engine"
+        / "Classes"
+        / "GameFramework"
+        / "Actor.h"
+    )
+    vector_header = (
+        engine
+        / "Engine"
+        / "Source"
+        / "Runtime"
+        / "Core"
+        / "Public"
+        / "Math"
+        / "Vector.h"
+    )
+    actor_header.parent.mkdir(parents=True)
+    vector_header.parent.mkdir(parents=True)
+    actor_header.write_text(
+        "class AActor {\npublic:\n    FVector GetVelocity() const;\n};\n",
+        encoding="utf-8",
+    )
+    vector_header.write_text(
+        "struct FVector {\n    double Size() const;\n};\n",
+        encoding="utf-8",
+    )
+
+    result = validate_sketch(
+        "void AActor::Tick() { double Speed = GetVelocity().Size(); }",
+        NO_INDEX,
+        graph={"symbols": []},
+        engine_root=engine,
+    )
+
+    assert result["ok"] is True, result
+    size = next(item for item in result["results"] if item["symbol"] == "Size")
+    assert size["receiverType"] == "FVector"
+    assert size["verdict"] == "verified"
+    assert result["engineHeaderLookup"]["inspectedFileCount"] >= 2
+
+
+def test_chained_call_rejects_member_on_scalar_return(tmp_path: Path):
+    engine = tmp_path / "UE_5.8"
+    actor_header = (
+        engine
+        / "Engine"
+        / "Source"
+        / "Runtime"
+        / "Engine"
+        / "Classes"
+        / "GameFramework"
+        / "Actor.h"
+    )
+    actor_header.parent.mkdir(parents=True)
+    actor_header.write_text(
+        "class AActor {\npublic:\n    double GetVelocity() const;\n};\n",
+        encoding="utf-8",
+    )
+
+    result = validate_sketch(
+        "void AActor::Tick() { double Speed = GetVelocity().Size(); }",
+        NO_INDEX,
+        graph={"symbols": []},
+        engine_root=engine,
+    )
+
+    issue = next(
+        item
+        for item in result["results"]
+        if item.get("errorCode") == "CHAIN_RECEIVER_NOT_OBJECT"
+    )
+    assert issue["receiverType"] == "double"
+    assert result["knownBadCount"] >= 1
+    assert result["ok"] is False
+
+
+def test_header_signature_parser_rejects_calls_assignments_and_comments():
+    text = """
+// static bool DotProduct(int32 Wrong);
+return Size();
+double Value = Size();
+OutLength = Size();
+[[nodiscard]] double Size() const;
+"""
+
+    contracts = _signature_contracts(text, "Size")
+
+    assert len(contracts) == 1
+    assert contracts[0]["returnType"] == "double"
+    assert contracts[0]["requiredArgumentCount"] == 0
 
 
 def test_project_source_contract_rejects_observed_qwen_api_mixing(tmp_path):

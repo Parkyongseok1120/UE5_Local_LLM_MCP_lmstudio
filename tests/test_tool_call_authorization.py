@@ -161,10 +161,13 @@ def test_agent_mutation_tools_advertise_bounded_payload_contract(tmp_path: Path)
         assert "at most 60 changed lines" in by_name["replace_in_file"]["description"]
         assert "never put a complete existing file" in by_name["apply_edit_bundle"]["description"]
         assert "brand-new files only" in by_name["apply_edit_bundle"]["inputSchema"]["properties"]["files"]["description"]
-        revision_schema = by_name["replace_in_file"]["inputSchema"]["properties"][
+        authorization_schema = by_name["replace_in_file"]["inputSchema"]["properties"][
             "taskAuthorization"
-        ]["properties"]["planRevision"]
-        assert revision_schema["type"] == ["string", "integer"]
+        ]
+        assert set(authorization_schema["properties"]) == {
+            "taskSessionId",
+            "ownerCapability",
+        }
     finally:
         client.close()
 
@@ -220,7 +223,9 @@ def test_agent_rejects_fabricated_write_authorization_with_plan_recovery(
             2,
         )
         assert result["result"].get("isError") is True
-        payload = json.loads(result["result"]["content"][0]["text"])
+        payload = result["result"].get("structuredContent") or json.loads(
+            result["result"]["content"][0]["text"]
+        )
         assert payload["errorCode"] == "TASK_AUTH_INVALID_FORMAT"
         assert payload["stopCurrentWorkflow"] is False
         assert payload["recoveryActionRequired"] is True
@@ -228,6 +233,86 @@ def test_agent_rejects_fabricated_write_authorization_with_plan_recovery(
         assert payload["taskAuthorizationSource"] == "server_only"
         assert payload["doNotFabricateTaskAuthorization"] is True
         assert not (tmp_path / "Source" / "Demo" / "Fabricated.h").exists()
+    finally:
+        client.close()
+
+
+def test_agent_auth_mismatch_never_tells_model_to_copy_incomplete_auth(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    require_agent_mcp_deps()
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
+    from task_api import task_start
+
+    project = tmp_path / "Demo"
+    project.mkdir()
+    project_file = project / "Demo.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        project,
+        request="Create Source/Demo/New.h",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "new_file", "files": ["Source/Demo/New.h"]}
+            ],
+        },
+    )
+    bad_authorization = dict(started["taskAuthorization"])
+    bad_authorization["authToken"] = "stale-token"
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(
+        json.dumps({"activeProject": str(project_file)}),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(project),
+            "AGENT_STATE_ROOT": str(state_root),
+            "SHARED_UNREAL_CONFIG": str(shared_config),
+            "ALLOW_WRITE": "1",
+        }
+    )
+    client = _StdioClient(
+        [_node_exe(), str(AGENT_SERVER)],
+        env=env,
+        cwd=ROOT / "lmstudio-unreal-agent-mcp",
+    )
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "t", "version": "1"},
+            },
+            1,
+        )
+        result = client.call_tool(
+            "write_file",
+            {
+                "taskAuthorization": bad_authorization,
+                "path": "Source/Demo/New.h",
+                "content": "#pragma once\n",
+            },
+            2,
+        )
+        payload = result["result"].get("structuredContent") or json.loads(
+            result["result"]["content"][0]["text"]
+        )
+        assert payload["errorCode"] == "TASK_AUTH_MISMATCH"
+        assert payload["nextAction"] == "unreal_agent_plan"
+        assert "unreal_agent_plan" not in payload.get("doNotCall", [])
+        assert "write_file" in payload["doNotRetry"]
+        assert "does not expose a live authToken" in payload["agentInstruction"]
+        assert not (project / "Source" / "Demo" / "New.h").exists()
     finally:
         client.close()
 

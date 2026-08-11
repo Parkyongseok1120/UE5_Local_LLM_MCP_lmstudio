@@ -189,13 +189,15 @@ def test_corrupt_task_blocks_route_union_catalog(tmp_path: Path, monkeypatch) ->
     assert (task_root(tmp_path, started["taskSessionId"]) / "state.json").is_file()
 
 
-def test_task_authorization_schema_accepts_owner_capability() -> None:
+def test_task_authorization_schema_exposes_only_compact_owner_capability() -> None:
     import unreal_rag_mcp as rag
 
     schema = rag._task_authorization_schema()
     assert "ownerCapability" in schema["properties"]
     assert "ownerCapability" in schema["required"]
-    assert "conversationId" in schema["properties"]
+    assert "conversationId" not in schema["properties"]
+    assert "authToken" not in schema["properties"]
+    assert set(schema["required"]) == {"taskSessionId", "ownerCapability"}
     assert schema.get("additionalProperties") is False
 
 

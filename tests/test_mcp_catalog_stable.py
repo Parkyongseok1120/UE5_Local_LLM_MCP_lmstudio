@@ -26,6 +26,14 @@ AGENT_SERVER = ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js"
 RAG_SCRIPT = ROOT / "scripts" / "unreal_rag_mcp.py"
 
 
+def _agent_phase_catalog(route: dict | None = None) -> set[str]:
+    allowed = set(MANIFEST["agentEssential"])
+    visible = set(MANIFEST["agentAlwaysDiscoverable"])
+    if isinstance(route, dict):
+        visible.update(str(item) for item in route.get("activeTools") or [])
+    return allowed & visible
+
+
 def _node_exe() -> str:
     node = shutil.which("node")
     if not node:
@@ -169,13 +177,13 @@ def test_clean_startup_advertises_manifest_agent_essential(tmp_path: Path) -> No
     assert "unreal-agent" in stderr
 
 
-def test_active_route_keeps_agent_catalog_stable(tmp_path: Path) -> None:
+def test_active_route_exposes_only_phase_agent_tools_and_controls(tmp_path: Path) -> None:
     require_agent_mcp_deps()
     from task_api import task_start
 
     state_root = tmp_path / "state"
     os.environ["AGENT_STATE_ROOT"] = str(state_root)
-    task_start(
+    started = task_start(
         tmp_path,
         request="Edit Source/Demo/Foo.cpp",
         mode="agent_edit",
@@ -187,7 +195,9 @@ def test_active_route_keeps_agent_catalog_stable(tmp_path: Path) -> None:
         cwd=ROOT / "lmstudio-unreal-agent-mcp",
     )
     try:
-        assert _list_agent_tools(client) == set(MANIFEST["agentEssential"])
+        names = _list_agent_tools(client)
+        assert names == _agent_phase_catalog(started["state"]["toolRoute"])
+        assert names < set(MANIFEST["agentEssential"])
     finally:
         client.close()
 
@@ -216,7 +226,7 @@ def test_expired_route_keeps_catalog_but_blocks_call(tmp_path: Path) -> None:
     )
     try:
         names = _list_agent_tools(client)
-        assert names == set(MANIFEST["agentEssential"])
+        assert names == _agent_phase_catalog(state["toolRoute"])
         assert "read_file" in names
         called = client.request(
             "tools/call",
@@ -261,7 +271,7 @@ def test_corrupt_task_keeps_catalog_and_exposes_quarantine(tmp_path: Path) -> No
     )
     try:
         names = _list_agent_tools(client)
-        assert names == set(MANIFEST["agentEssential"])
+        assert names == _agent_phase_catalog()
         assert "quarantine_corrupt_task" in names
         called = client.request(
             "tools/call",
@@ -304,6 +314,8 @@ def test_scope_mismatch_keeps_catalog_but_blocks_mutation(tmp_path: Path) -> Non
         cwd=ROOT / "lmstudio-unreal-agent-mcp",
     )
     try:
+        # No activeProject is configured, so the project-bound task cannot own
+        # this catalog yet; retain the discovery profile until project selection.
         assert _list_agent_tools(client) == set(MANIFEST["agentEssential"])
     finally:
         client.close()
@@ -352,7 +364,9 @@ def test_scope_mismatch_keeps_catalog_but_blocks_mutation(tmp_path: Path) -> Non
         cwd=ROOT / "lmstudio-unreal-agent-mcp",
     )
     try:
-        assert _list_agent_tools(client) == set(MANIFEST["agentEssential"])
+        assert _list_agent_tools(client) == _agent_phase_catalog(
+            started["state"]["toolRoute"]
+        )
     finally:
         client.close()
 

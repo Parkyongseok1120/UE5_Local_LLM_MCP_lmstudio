@@ -12,6 +12,36 @@ from export_common import (
 
 MAX_ROW_NAMES = 80
 
+
+def _call_no_args(value, method_name: str):
+    method = getattr(value, method_name, None)
+    if not callable(method):
+        return None
+    try:
+        return method()
+    except Exception:
+        return None
+
+
+def _niagara_parameter_names(container) -> list[str]:
+    if container is None:
+        return []
+    variables = (
+        _call_no_args(container, "get_parameters")
+        or safe_prop(container, "parameters", None)
+        or safe_prop(container, "Parameters", None)
+    )
+    names = []
+    for item in coerce_list(variables)[:MAX_ITEMS]:
+        name = (
+            safe_prop(item, "name", None)
+            or safe_prop(item, "Name", None)
+            or _call_no_args(item, "get_name")
+        )
+        if name:
+            names.append(str(name))
+    return names
+
 STRUCTURED_EXPORT_CLASSES = frozenset(
     {
         "DataTable",
@@ -154,22 +184,34 @@ def _collect_user_defined_enum(asset_obj) -> dict:
 def _collect_niagara_system(asset_obj) -> dict:
     row: dict = {}
     emitters = []
-    for prop in ("system_emitters", "SystemEmitters"):
-        for item in coerce_list(safe_prop(asset_obj, prop, None))[:MAX_ITEMS]:
-            emitter = safe_prop(item, "emitter", None) or safe_prop(item, "Emitter", None) or item
-            name = safe_name(emitter)
-            if name:
-                emitters.append(name)
+    emitter_handles = _call_no_args(asset_obj, "get_emitter_handles")
+    if emitter_handles is None:
+        emitter_handles = safe_prop(asset_obj, "system_emitters", None) or safe_prop(asset_obj, "SystemEmitters", None)
+    for item in coerce_list(emitter_handles)[:MAX_ITEMS]:
+        emitter = safe_prop(item, "emitter", None) or safe_prop(item, "Emitter", None) or item
+        name = safe_name(emitter)
+        if name:
+            emitters.append(name)
     if emitters:
         row["emitters"] = emitters
     user_params = []
+    exposed = _call_no_args(asset_obj, "get_exposed_parameters")
+    user_params.extend(_niagara_parameter_names(exposed))
     for prop in ("user_parameters", "UserParameters"):
         for item in coerce_list(safe_prop(asset_obj, prop, None))[:MAX_ITEMS]:
             name = safe_prop(item, "name", None) or safe_prop(item, "Name", None)
             if name:
                 user_params.append(str(name))
     if user_params:
-        row["user_parameters"] = user_params
+        row["user_parameters"] = list(dict.fromkeys(user_params))[:MAX_ITEMS]
+    for source, target in (
+        ("warmup_time", "warmup_time"),
+        ("warmup_tick_delta", "warmup_tick_delta"),
+        ("fixed_tick_delta_time", "fixed_tick_delta_time"),
+    ):
+        value = safe_prop(asset_obj, source, None)
+        if value is not None:
+            row.setdefault("properties", {})[target] = value_to_text(value)
     return row
 
 
@@ -181,6 +223,9 @@ def _collect_niagara_emitter(asset_obj) -> dict:
             modules.append(graph_prop)
     if modules:
         row["behavior_nodes"] = modules
+    simulation_target = safe_prop(asset_obj, "simulation_target", None)
+    if simulation_target is not None:
+        row.setdefault("properties", {})["simulation_target"] = value_to_text(simulation_target)
     return row
 
 

@@ -4,7 +4,7 @@
 # Usage:
 #   exec(open(r'path/to/tools/ue_export/run_all_exports.py', encoding='utf-8').read())
 #   run_all_metadata_exports(r'C:\UnrealExports', content_path='/Game')
-#   run_all_metadata_exports(r'C:\UnrealExports', content_path='/Game/06_Environment/BossStage')
+#   run_all_metadata_exports(r'C:\UnrealExports', content_path='/Game/Environment/ExampleArea')
 
 import json
 import os

@@ -16,6 +16,7 @@ const {
   taskIsForeignHealthy,
 } = require("./mcp-connection");
 const { spawnSync } = require("child_process");
+const { recoveryAction } = require("./route-recovery-policy");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -506,6 +507,7 @@ function authRefreshFailure(result, state, mismatchedFields = null) {
     if (Array.isArray(mismatchedFields) && mismatchedFields.length) {
       context.mismatchedFields = mismatchedFields.map(String);
     }
+    const recovery = recoveryAction(result.errorCode);
     const payload = {
       ...result,
       authorizationContext: context,
@@ -515,19 +517,20 @@ function authRefreshFailure(result, state, mismatchedFields = null) {
         planRevision: context.planRevision,
         activeSliceId: context.activeSliceId,
       },
-      nextAction: "request_fresh_authorization_or_replan",
-      nextActionIsTool: false,
+      nextAction: recovery.action,
+      nextActionIsTool: recovery.isTool,
     };
     if (Array.isArray(mismatchedFields) && mismatchedFields.length) {
       payload.mismatchedFields = mismatchedFields.map(String);
     }
     return payload;
   }
+  const recovery = recoveryAction(result.errorCode);
   return {
     ...result,
     taskAuthorization: taskAuthorizationForState(state),
-    nextAction: "retry_same_tool_with_returned_taskAuthorization",
-    nextActionIsTool: false,
+    nextAction: recovery.action,
+    nextActionIsTool: recovery.isTool,
   };
 }
 
@@ -1461,27 +1464,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
 }
 
 function routeRecoveryNextAction(errorCode = "") {
-  switch (String(errorCode || "")) {
-    case "TASK_STATE_CORRUPT":
-      return "quarantine_corrupt_task";
-    case "TASK_ROUTE_OWNERSHIP_REQUIRED":
-      return "retry_with_taskAuthorization_ownerCapability";
-    case "TASK_ROUTE_CAPABILITY_MISMATCH":
-      return "retry_without_invalid_ownerCapability_or_use_matching_capability";
-    case "TASK_ROUTE_BLOCKED":
-      return "unreal_task_checkpoint_or_recover";
-    case "TASK_SCOPE_MISMATCH":
-    case "TASK_OWNER_HINT_MISMATCH":
-      return "verify_active_project";
-    case "TASK_STATE_ROOT_UNAVAILABLE":
-      return "check_agent_state_root";
-    case "TASK_ROUTE_MISSING":
-      return "unreal_task_list_active";
-    case "MULTIPLE_HEALTHY_ROUTE_TASKS":
-      return "pass_ownerCapability_to_select_task";
-    default:
-      return "list_active_tasks";
-  }
+  return recoveryAction(errorCode).action;
 }
 
 function listRunningTasksForProject(workspaceRoot, activeProject = "", options = {}) {

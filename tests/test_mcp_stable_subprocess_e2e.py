@@ -33,6 +33,16 @@ def _node_exe() -> str:
     return node
 
 
+def _tool_payload(response: dict) -> dict:
+    """Read the canonical MCP payload without depending on duplicated JSON text."""
+
+    result = response.get("result", response)
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        return structured
+    return json.loads(result["content"][0]["text"])
+
+
 class _StdioJsonRpc:
     def __init__(self, cmd: list[str], *, env: dict[str, str] | None = None, cwd: Path | None = None) -> None:
         self.proc = subprocess.Popen(
@@ -69,6 +79,27 @@ class _StdioJsonRpc:
                 return message
         if self.proc.poll() is None:
             self.proc.terminate()
+        raise format_subprocess_response_failure(self.proc, req_id)
+
+    def read_response_with_notifications(
+        self,
+        req_id: int,
+        *,
+        timeout_sec: float = 30.0,
+    ) -> tuple[dict, list[dict]]:
+        import time
+
+        notifications: list[dict] = []
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            line = self.proc.stdout.readline()
+            if not line:
+                continue
+            message = json.loads(line)
+            if message.get("id") == req_id:
+                return message, notifications
+            if message.get("method", "").startswith("notifications/"):
+                notifications.append(message)
         raise format_subprocess_response_failure(self.proc, req_id)
 
     def request(self, method: str, params: dict | None = None, req_id: int = 1) -> dict:
@@ -108,7 +139,7 @@ def test_rag_mcp_subprocess_tools_list_stable_essential(tmp_path: Path, monkeypa
         assert "unreal_review_claim_validate" in names
         invalid = client.request("tools/call", {"name": "unreal_agent_plan", "arguments": {}}, req_id=3)
         invalid_result = invalid["result"]
-        invalid_payload = invalid_result.get("structuredContent") or json.loads(invalid_result["content"][0]["text"])
+        invalid_payload = _tool_payload(invalid_result)
         assert invalid_result["isError"] is True
         assert invalid_payload["errorCode"] == "INVALID_TOOL_ARGUMENTS"
         assert "request" in invalid_payload["requiredArguments"]
@@ -154,16 +185,124 @@ def test_agent_mcp_subprocess_tools_list_stable_essential(tmp_path: Path) -> Non
             assert "ownerCapability" in schema["properties"]["taskAuthorization"]["required"]
         invalid = client.request("tools/call", {"name": "read_file", "arguments": {}}, req_id=3)
         invalid_result = invalid["result"]
-        invalid_payload = json.loads(invalid_result["content"][0]["text"])
+        invalid_payload = _tool_payload(invalid_result)
         assert invalid_result["isError"] is True
         assert invalid_payload["errorCode"] == "INVALID_TOOL_ARGUMENTS"
         assert "path" in invalid_payload["requiredArguments"]
         assert invalid_payload["retryable"] is True
         repeated = client.request("tools/call", {"name": "read_file", "arguments": {}}, req_id=4)
         repeated_result = repeated["result"]
-        repeated_payload = json.loads(repeated_result["content"][0]["text"])
+        repeated_payload = _tool_payload(repeated_result)
         assert repeated_payload["errorCode"] == "TOOL_REPEAT_BLOCKED"
         assert repeated_payload["retryable"] is False
+    finally:
+        client.close()
+
+
+def test_agent_subprocess_emits_standard_progress_before_tool_result(tmp_path: Path) -> None:
+    require_agent_mcp_deps()
+    sample = tmp_path / "progress.txt"
+    sample.write_text("alive\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(tmp_path),
+            "ALLOW_WRITE": "0",
+            "ALLOW_COMMANDS": "0",
+            "ALLOW_UNREAL_BUILD": "0",
+        }
+    )
+    client = _StdioJsonRpc(
+        [_node_exe(), str(AGENT_SERVER)],
+        env=env,
+        cwd=ROOT / "lmstudio-unreal-agent-mcp",
+    )
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "progress-e2e", "version": "1"},
+            },
+            1,
+        )
+        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        client.send(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "read_file",
+                    "arguments": {"path": str(sample)},
+                    "_meta": {"progressToken": "progress-e2e-token"},
+                },
+            }
+        )
+        response, notifications = client.read_response_with_notifications(2)
+        assert response["result"].get("isError") is not True
+        progress = [
+            item
+            for item in notifications
+            if item.get("method") == "notifications/progress"
+        ]
+        assert progress
+        assert progress[0]["params"]["progressToken"] == "progress-e2e-token"
+        assert "Running: read_file" in progress[0]["params"]["message"]
+    finally:
+        client.close()
+
+
+def test_rag_plan_only_subprocess_writes_terminal_agent_run_report(tmp_path: Path) -> None:
+    state_root = tmp_path / "state" / "unreal-agent"
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(json.dumps({"activeProject": None}), encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "ALLOW_CONTROL_PLANE_TOOLS": "1",
+            "AGENT_STATE_ROOT": str(state_root),
+            "SHARED_UNREAL_CONFIG": str(shared),
+        }
+    )
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"")
+    client = _StdioJsonRpc(
+        [_python_exe(), str(RAG_SCRIPT), "--index", str(index)],
+        env=env,
+    )
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "report-e2e", "version": "1"},
+            },
+            1,
+        )
+        response = client.request(
+            "tools/call",
+            {
+                "name": "unreal_task_start",
+                "arguments": {
+                    "request": "Inspect generic project configuration without edits",
+                    "mode": "plan_only",
+                },
+            },
+            2,
+        )
+        payload = _tool_payload(response)
+        assert payload["status"] == "completed"
+        task_id = payload["taskSessionId"]
+        report_path = state_root / "reports" / f"{task_id}.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert report["final"] == "PASS"
+        assert report["toolCalls"] == 1
+        assert report["task"] == "Inspect generic project configuration without edits"
     finally:
         client.close()
 
@@ -202,7 +341,7 @@ def test_dual_mcp_project_switch_and_read(tmp_path: Path, monkeypatch) -> None:
             2,
         )
         assert switch["result"]["isError"] is not True
-        structured = switch["result"].get("structuredContent") or json.loads(switch["result"]["content"][0]["text"])
+        structured = _tool_payload(switch)
         assert structured.get("ok") is True
         assert structured.get("switchResult") in {"switched", "switched_degraded"}
     finally:
@@ -229,8 +368,8 @@ def test_dual_mcp_project_switch_and_read(tmp_path: Path, monkeypatch) -> None:
             {"name": "get_active_project", "arguments": {}},
             2,
         )
-        text = active["result"]["content"][0]["text"]
-        assert "DemoGame.uproject" in text
+        active_payload = _tool_payload(active)
+        assert "DemoGame.uproject" in json.dumps(active_payload)
         read_result = agent.request(
             "tools/call",
             {"name": "read_file", "arguments": {"path": str(sample)}},
@@ -288,9 +427,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             2,
         )
         assert plan_only["result"].get("isError") is not True, plan_only
-        plan_only_payload = plan_only["result"].get("structuredContent") or json.loads(
-            plan_only["result"]["content"][0]["text"]
-        )
+        plan_only_payload = _tool_payload(plan_only)
         assert plan_only_payload["writeGate"]["writesAllowed"] is False
         # plan_only auto-completes and must not leave durable write authorization.
         plan_only_auth = plan_only_payload.get("taskAuthorization") or {}
@@ -311,9 +448,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             3,
         )
         assert planned["result"].get("isError") is not True, planned
-        plan_payload = planned["result"].get("structuredContent") or json.loads(
-            planned["result"]["content"][0]["text"]
-        )
+        plan_payload = _tool_payload(planned)
         assert plan_payload["writeGate"]["writesAllowed"] is True
         task_auth = plan_payload["taskAuthorization"]
         assert all(task_auth.values()), task_auth
@@ -347,9 +482,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             },
             32,
         )
-        stale_payload = stale_gate["result"].get(
-            "structuredContent"
-        ) or json.loads(stale_gate["result"]["content"][0]["text"])
+        stale_payload = _tool_payload(stale_gate)
         assert stale_payload["ok"] is False
         assert stale_payload["errorCode"] == "TASK_ROUTE_CAPABILITY_MISMATCH"
         gated = rag.request(
@@ -370,9 +503,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             },
             4,
         )
-        gated_payload = gated["result"].get("structuredContent") or json.loads(
-            gated["result"]["content"][0]["text"]
-        )
+        gated_payload = _tool_payload(gated)
         assert gated_payload["gateCompletion"]["ok"] is True, gated_payload
         create_auth = gated_payload["gateCompletion"]["taskAuthorization"]
     finally:
@@ -420,13 +551,14 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             2,
         )
         assert created["result"].get("isError") is not True, created
-        created_payload = json.loads(created["result"]["content"][0]["text"])
+        created_payload = _tool_payload(created)
         assert created_payload["continuityCheckpoint"]["ok"] is True
         assert created_payload["continuityCheckpoint"]["checkpointHash"]
         post_create_auth = created_payload["taskAuthorization"]
         assert post_create_auth == created_payload["continuityCheckpoint"]["taskAuthorization"]
-        assert post_create_auth["routeHash"] == created_payload["toolRoute"]["routeHash"]
-        assert post_create_auth["routePhase"] == created_payload["toolRoute"]["phase"]
+        assert set(post_create_auth) == {"taskSessionId", "ownerCapability"}
+        assert created_payload["toolRoute"]["routeHash"]
+        assert created_payload["toolRoute"]["phase"] == "executor"
         persisted_after_create = json.loads(
             (
                 tmp_path
@@ -483,9 +615,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                 },
                 21,
             )
-            checkpoint_payload = checkpointed["result"].get(
-                "structuredContent"
-            ) or json.loads(checkpointed["result"]["content"][0]["text"])
+            checkpoint_payload = _tool_payload(checkpointed)
             assert checkpoint_payload["ok"] is True, checkpoint_payload
             replace_plan = rag_replace.request(
                 "tools/call",
@@ -501,9 +631,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                 },
                 2,
             )
-            replace_plan_payload = replace_plan["result"].get("structuredContent") or json.loads(
-                replace_plan["result"]["content"][0]["text"]
-            )
+            replace_plan_payload = _tool_payload(replace_plan)
             replace_auth = replace_plan_payload["taskAuthorization"]
             replace_gate = rag_replace.request(
                 "tools/call",
@@ -524,9 +652,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                 },
                 3,
             )
-            replace_gate_payload = replace_gate["result"].get("structuredContent") or json.loads(
-                replace_gate["result"]["content"][0]["text"]
-            )
+            replace_gate_payload = _tool_payload(replace_gate)
             assert replace_gate_payload["gateCompletion"]["ok"] is True, replace_gate_payload
             replace_create_auth = replace_gate_payload["gateCompletion"][
                 "taskAuthorization"
@@ -549,7 +675,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             4,
         )
         assert replaced["result"].get("isError") is not True, replaced
-        replaced_payload = json.loads(replaced["result"]["content"][0]["text"])
+        replaced_payload = _tool_payload(replaced)
         assert replaced_payload["continuityCheckpoint"]["ok"] is True
         assert replaced_payload["taskAuthorization"] == replaced_payload[
             "continuityCheckpoint"
@@ -637,11 +763,16 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
         client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         listed = client.request("tools/list", {}, 2)
         names = {tool["name"] for tool in listed["result"]["tools"]}
-        expected = set(MANIFEST["agentEssential"])
+        state_path = task_root(ROOT, started["taskSessionId"]) / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        expected = set(MANIFEST["agentAlwaysDiscoverable"])
+        expected.update(state["toolRoute"]["activeTools"])
+        expected &= set(MANIFEST["agentEssential"])
         assert names == expected
         assert "read_file" in names
         assert "replace_in_file" in names
-        assert "build_unreal_project" in names
+        assert "list_directory" not in names
+        assert "build_unreal_project" not in names
 
         read = client.request(
             "tools/call",
@@ -656,7 +787,6 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
         )
         assert read["result"].get("isError") is not True, read
         assert "project identity route" in read["result"]["content"][0]["text"]
-        state_path = task_root(ROOT, started["taskSessionId"]) / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         assert state["toolRouteUsage"]["count"] == 1
         assert state["toolRouteUsage"]["calls"] == ["read_file"]
@@ -827,7 +957,7 @@ def test_agent_successful_read_repeat_returns_cached(tmp_path: Path) -> None:
             req_id=3,
         )
         assert second["result"].get("isError") is not True
-        payload = json.loads(second["result"]["content"][0]["text"])
+        payload = _tool_payload(second)
         assert payload.get("ok") is True
         assert payload.get("cached") is True
         assert payload.get("repeatDetected") is True
@@ -917,7 +1047,7 @@ def test_agent_evidence_stagnation_is_error_without_wrong_body(tmp_path: Path) -
             req_id=req_id,
         )
         assert blocked["result"].get("isError") is True
-        payload = json.loads(blocked["result"]["content"][0]["text"])
+        payload = _tool_payload(blocked)
         assert payload.get("errorCode") == "EVIDENCE_STAGNATION"
         assert payload.get("ok") is False
         assert "content" not in payload or not str(payload.get("content") or "").strip()
@@ -932,7 +1062,7 @@ def test_agent_evidence_stagnation_is_error_without_wrong_body(tmp_path: Path) -
             req_id=req_id + 1,
         )
         assert blocked_again["result"].get("isError") is True
-        payload2 = json.loads(blocked_again["result"]["content"][0]["text"])
+        payload2 = _tool_payload(blocked_again)
         assert payload2.get("errorCode") == "EVIDENCE_STAGNATION_REPEAT"
     finally:
         client.close()
@@ -961,7 +1091,7 @@ def test_agent_search_files_opt_in_matches_component_filename(tmp_path: Path) ->
             req_id=2,
         )
         assert default_response["result"].get("isError") is not True
-        default_payload = json.loads(default_response["result"]["content"][0]["text"])
+        default_payload = _tool_payload(default_response)
         assert len(default_payload["results"]) == 1
         assert "fileNameResults" not in default_payload
 
@@ -980,7 +1110,7 @@ def test_agent_search_files_opt_in_matches_component_filename(tmp_path: Path) ->
             req_id=3,
         )
         assert response["result"].get("isError") is not True
-        payload = json.loads(response["result"]["content"][0]["text"])
+        payload = _tool_payload(response)
         assert len(payload["results"]) == 1
         assert payload["fileNameResults"] == [
             {
@@ -1207,7 +1337,7 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
             {"name": "static_validate_project", "arguments": {}},
             req_id=2,
         )
-        payload = json.loads(result["result"]["content"][0]["text"])
+        payload = _tool_payload(result)
         assert result["result"].get("isError") is not True
         assert payload["errorCode"] == "STATIC_VALIDATION_FAILED"
         assert payload["validatedGeneration"] == 2
@@ -1227,17 +1357,17 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
             {"name": "read_unreal_logs", "arguments": {"filter": "error"}},
             req_id=3,
         )
-        logs_text = logs["result"]["content"][0]["text"]
+        logs_payload = _tool_payload(logs)
         assert logs["result"].get("isError") is not True
-        assert "latest-build.log" in logs_text
-        assert "error C2065" in logs_text
+        assert "latest-build.log" in json.dumps(logs_payload)
+        assert "error C2065" in json.dumps(logs_payload)
 
         first_error = client.request(
             "tools/call",
             {"name": "read_unreal_logs", "arguments": {"mode": "first_error"}},
             req_id=4,
         )
-        first_payload = json.loads(first_error["result"]["content"][0]["text"])
+        first_payload = _tool_payload(first_error)
         assert first_payload["responseMode"] == "first_error"
         assert first_payload["logs"][0]["firstErrorFound"] is True
         assert any("error C1000" in line for line in first_payload["logs"][0]["lines"])
@@ -1250,7 +1380,7 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
             },
             req_id=5,
         )
-        range_payload = json.loads(ranged["result"]["content"][0]["text"])
+        range_payload = _tool_payload(ranged)
         assert range_payload["responseMode"] == "range"
         assert range_payload["logs"][0]["lineCount"] == 60
         assert range_payload["logs"][0]["nextCursorByte"] == first_range_end
@@ -1268,7 +1398,7 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
             },
             req_id=6,
         )
-        continued_payload = json.loads(continued["result"]["content"][0]["text"])
+        continued_payload = _tool_payload(continued)
         assert continued_payload["logs"][0]["lineCount"] == 60
         assert continued_payload["logs"][0]["cursorByte"] == first_range_end
         assert continued_payload["logs"][0]["nextCursorByte"] == second_range_end

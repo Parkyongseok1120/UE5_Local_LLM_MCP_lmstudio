@@ -49,6 +49,12 @@ EXTENDED_METADATA_KEYS = (
     "duration",
     "namespace",
     "graphs",
+    "graph_links",
+    "state_machines",
+    "transition_rules",
+    "notifies",
+    "montage_sections",
+    "slots",
 )
 
 

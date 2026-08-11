@@ -50,6 +50,9 @@ def _plan() -> dict:
             "requiresResolution": True,
         },
         "orchestration": {"requiredBeforeWrite": [GATE]},
+        "executablePlanSlices": [
+            {"sliceId": "feature", "files": ["Source/Demo/Thing.cpp"]}
+        ],
     }
 
 
