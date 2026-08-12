@@ -7,7 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from feature_intent_contract import resolve_feature_intent  # noqa: E402
-from task_api import task_record_gate_failure, task_start, task_status  # noqa: E402
+from task_api import (  # noqa: E402
+    task_define_slices,
+    task_record_gate_failure,
+    task_start,
+    task_status,
+)
 from unreal_rag_mcp import McpServer  # noqa: E402
 
 GATE = "unreal_feature_intent_resolve"
@@ -64,6 +69,73 @@ def test_bounded_existing_file_uses_one_call_server_fast_path(
     state = task_status(tmp_path, started["taskSessionId"])["state"]
     assert state["selectedIntentId"] == "bounded_local"
     assert state["completedGates"][GATE]["targetSnapshots"][0]["exists"] is True
+
+
+def test_strict_network_architecture_provenance_disables_local_fast_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "Demo"
+    target = project / "Source" / "Demo" / "Thing.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void Run() {}\n", encoding="utf-8")
+    project_file = project / "Demo.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request=(
+            "Add a null guard in existing Source/Demo/Thing.cpp and preserve "
+            "all behavior outside that case."
+        ),
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "featureIntent": {"requiresResolution": True},
+            "orchestration": {"requiredBeforeWrite": [GATE]},
+            "executablePlanSlices": [
+                {"sliceId": "guard", "files": ["Source/Demo/Thing.cpp"]}
+            ],
+        },
+    )
+    defined = task_define_slices(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        slices=[{"sliceId": "guard", "files": ["Source/Demo/Thing.cpp"]}],
+        slice_provenance={
+            "source": "validated_architecture",
+            "featureIntentContract": {
+                "decision": "Preserve server authority while changing input validation",
+                "scope": {
+                    "networked": True,
+                    "runtime": "listen_server",
+                    "validationLevel": "Strict",
+                    "risk": "high",
+                },
+                "validationPlan": ["two-client PIE authority validation"],
+                "hasMigrationPlan": False,
+            },
+        },
+    )
+    assert defined["ok"] is True
+    server = McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        803,
+        {
+            "name": GATE,
+            "arguments": {"taskAuthorization": defined["taskAuthorization"]},
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload.get("selectedIntentId") != "architecture_bound_local"
+    assert "fastPath" not in payload
 
 
 def test_third_identical_feature_gate_call_skips_resolver(

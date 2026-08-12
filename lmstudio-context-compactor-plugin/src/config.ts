@@ -76,6 +76,12 @@ export const configSchematics = createConfigSchematics()
     { displayName: "Architecture replan evidence reads", subtitle: "Bounded direct-source reads reopened after a rejected full replan before validation is forced again." },
     4,
   )
+  .field(
+    "preRouteDiscoveryLimit",
+    "numeric",
+    { displayName: "Pre-route discovery limit", subtitle: "Force one unreal_agent_plan handoff after this many successful discovery calls on a write request without a server-owned task route." },
+    6,
+  )
   .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra reserve for token-estimation and prompt-template variance." }, 1024)
   .field("temperature", "numeric", { displayName: "Temperature", subtitle: "Sampling temperature used by the underlying model proxy (0 to 1)." }, 0.1)
   .field("normalToolResultReserve", "numeric", { displayName: "Normal tool reserve", subtitle: "Tokens reserved for ordinary tool results." }, 3000)

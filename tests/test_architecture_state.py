@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from architecture_state import (  # noqa: E402
     ARCHITECTURE_STATES,
     _TRANSITIONS,
+    _state_path,
     ArchitectureTransitionError,
     architecture_state_for_result,
     initial_architecture_state,
@@ -106,6 +107,26 @@ def test_source_change_forces_evidence_refill_even_after_validation() -> None:
     assert changed["current"] == "EvidenceRefill"
 
 
+def test_incomplete_architecture_evidence_routes_to_refill_not_replan() -> None:
+    result = architecture_state_for_result(
+        initial_architecture_state(),
+        {
+            "ok": False,
+            "projectRoot": "Demo",
+            "errorCode": "ARCHITECTURE_EVIDENCE_INCOMPLETE",
+            "graphEvidence": {"complete": True},
+            "proposalValidation": {
+                "ok": False,
+                "repairStrategy": "evidence_refill",
+                "implementationGate": {"writesAllowed": False},
+            },
+        },
+        proposal_supplied=True,
+    )
+
+    assert result["current"] == "EvidenceRefill"
+
+
 def test_architecture_state_is_durable_per_session_and_project(
     tmp_path: Path,
     monkeypatch,
@@ -116,3 +137,66 @@ def test_architecture_state_is_durable_per_session_and_project(
 
     assert load_architecture_state("session-a", "Project-A")["current"] == "InitialProposal"
     assert load_architecture_state("session-a", "Project-B")["current"] == "Discovery"
+
+
+def test_missing_architecture_state_starts_in_discovery(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+
+    state = load_architecture_state("missing-session", "Project-A")
+
+    assert state == initial_architecture_state()
+
+
+def test_corrupt_architecture_state_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    path = _state_path("corrupt-session", "Project-A")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"current":', encoding="utf-8")
+
+    state = load_architecture_state("corrupt-session", "Project-A")
+
+    assert state["current"] == "FailedClosed"
+    assert "invalid JSON" in state["integrityError"]
+
+
+def test_unreadable_architecture_state_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    path = _state_path("unreadable-session", "Project-A")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"version":1,"current":"Discovery","transitionHistory":[]}', encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fail_target_read(target: Path, *args, **kwargs):
+        if target == path:
+            raise OSError("simulated cross-platform read failure")
+        return original_read_text(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_target_read)
+
+    state = load_architecture_state("unreadable-session", "Project-A")
+
+    assert state["current"] == "FailedClosed"
+    assert "unreadable" in state["integrityError"]
+
+
+@pytest.mark.parametrize("payload", ["[]", '{"version":1,"current":"Discovery"}'])
+def test_malformed_architecture_state_shape_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+    payload: str,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    path = _state_path("shape-session", "Project-A")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(payload, encoding="utf-8")
+
+    assert load_architecture_state("shape-session", "Project-A")["current"] == "FailedClosed"

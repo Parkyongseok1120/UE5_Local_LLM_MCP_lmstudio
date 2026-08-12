@@ -389,6 +389,7 @@ def test_lmstudio_visible_content_suppresses_stale_project_source_rows(
 ) -> None:
     import unreal_rag_mcp as rag_mcp
 
+    monkeypatch.setenv("MCP_FRONTEND", "lmstudio")
     reset_query_history()
     index = tmp_path / "rag.sqlite"
     index.write_bytes(b"not-a-real-db")
@@ -440,9 +441,18 @@ def test_lmstudio_visible_content_suppresses_stale_project_source_rows(
     result = sent[-1]["result"]
     visible_text = result["content"][0]["text"]
     structured = result["structuredContent"]
+    assert result["isError"] is False
+    assert structured["ok"] is True
+    assert structured["searchCompleted"] is True
+    assert structured["projectEvidenceAvailable"] is False
+    assert structured["projectMiss"] is True
     assert "PROJECT SOURCE FRESHNESS GATE" in structured["freshnessGate"]
     assert "Direct Source/ reads are authoritative" in structured["freshnessGate"]
     assert "Stale reflected function" not in visible_text
     assert structured["staleProjectRowsSuppressed"] == 1
     assert structured["requiredNextAction"] == "search_files_then_read_file"
     assert structured["requiredNextTool"] == "search_files"
+    visible = json.loads(visible_text)
+    assert visible["requiredNextTool"] == "search_files"
+    assert visible["requiredNextToolArgs"] == structured["requiredNextToolArgs"]
+    assert visible["message"].startswith("No active-project RAG match")

@@ -676,6 +676,165 @@ def resolve_feature_intent(
     return result
 
 
+def resolve_architecture_bound_feature_intent(
+    request: str,
+    *,
+    architecture_contract: dict[str, Any],
+    target_files: list[str],
+    include_full: bool = False,
+) -> dict[str, Any]:
+    """Resolve one local feature from a server-validated architecture contract.
+
+    The architecture gate has already selected ownership, scope, invariants,
+    files, and validation obligations. Reasking the model to select among the
+    generic feature templates loses that evidence and adds a redundant round
+    trip. This adapter preserves the normal 3-candidate audit shape while
+    making the validated contract the explicit selected candidate.
+    """
+
+    contract = architecture_contract if isinstance(architecture_contract, dict) else {}
+    scope = contract.get("scope") if isinstance(contract.get("scope"), dict) else {}
+    ownership = (
+        contract.get("ownership")
+        if isinstance(contract.get("ownership"), dict)
+        else {}
+    )
+    decision = _clean(contract.get("decision") or request, limit=1200)
+    non_goals_value = scope.get("nonGoals")
+    non_goals = (
+        "; ".join(_clean(item, limit=300) for item in non_goals_value if _clean(item))
+        if isinstance(non_goals_value, list)
+        else _clean(non_goals_value, limit=800)
+    )
+    dimensions = {
+        "ownershipLifetime": _clean(
+            "; ".join(
+                value
+                for value in (
+                    str(ownership.get("stateOwner") or ""),
+                    str(ownership.get("dataOwner") or ""),
+                    str(ownership.get("lifecycleOwner") or ""),
+                )
+                if value.strip()
+            )
+            or "Use the owner and lifetime selected by the validated architecture.",
+            limit=1000,
+        ),
+        "authorityReplication": (
+            f"Validated local scope: networked={scope.get('networked')!s}; "
+            f"runtime={_clean(scope.get('runtime'), limit=120) or 'standalone'}."
+        ),
+        "persistence": (
+            "No persistence or migration is introduced by this validated local contract."
+        ),
+        "failureSemantics": _clean(
+            "; ".join(
+                value
+                for value in (
+                    str(ownership.get("failurePolicy") or ""),
+                    str(ownership.get("recoveryPolicy") or ""),
+                )
+                if value.strip()
+            )
+            or "Fail closed and preserve the prior observable state.",
+            limit=1000,
+        ),
+        "userVisibleBehavior": decision,
+        "nonGoals": non_goals or "Preserve behavior outside the validated architecture scope.",
+    }
+    validation_plan = [
+        _clean(item, limit=500)
+        for item in (contract.get("validationPlan") or [])
+        if _clean(item)
+    ]
+    if not validation_plan:
+        validation_plan = ["targeted build and regression validation"]
+    criteria = [
+        _criterion(
+            f"architecture_check_{index + 1}",
+            f"The validated architecture decision remains true for {decision}.",
+            check,
+            (
+                f"{check} completes successfully for the exact selected slice "
+                "with no regression outside its declared files"
+            ),
+        )
+        for index, check in enumerate(validation_plan[:4])
+    ]
+    selected = {
+        "intentId": "architecture_bound_local",
+        "title": "Validated local architecture contract",
+        "summary": decision,
+        "dimensions": dimensions,
+        "acceptanceCriteria": criteria,
+        "reversible": True,
+        "boundedScope": True,
+        "riskWeight": 1,
+    }
+    generic_alternatives = _candidate_templates(request, 3)
+    candidates = [selected, *generic_alternatives[:2]]
+    answers = {name: value for name, value in dimensions.items()}
+    result = resolve_feature_intent(
+        request,
+        candidates=candidates,
+        selected_intent_id="architecture_bound_local",
+        selection_rationale=(
+            "Server selected the already-validated local architecture contract; "
+            "the model is not asked to recreate its ownership or slice decision."
+        ),
+        blocking_question_answers=answers,
+        user_approved=True,
+        write_intent=True,
+        reversible=True,
+        bounded_scope=bool(1 <= len(target_files) <= 2),
+        candidate_count=3,
+        include_full=include_full,
+    )
+    result["architectureBound"] = {
+        "serverOwned": True,
+        "targetFiles": list(target_files),
+        "validationLevel": str(scope.get("validationLevel") or ""),
+    }
+    return result
+
+
+def can_auto_bind_architecture_feature_intent(
+    *,
+    slice_provenance: dict[str, Any],
+    target_files: list[str],
+    snapshot_issues: list[str],
+    explicit_semantic_input: bool,
+) -> bool:
+    """Return whether validated architecture evidence may replace model selection.
+
+    Only a reversible, bounded, non-networked Draft/Bound decision is eligible.
+    Strict, high-risk, persistence/migration, and multiplayer decisions must keep
+    the normal explicit Feature Intent resolution path.
+    """
+
+    provenance = slice_provenance if isinstance(slice_provenance, dict) else {}
+    contract = (
+        provenance.get("featureIntentContract")
+        if isinstance(provenance.get("featureIntentContract"), dict)
+        else {}
+    )
+    scope = contract.get("scope") if isinstance(contract.get("scope"), dict) else {}
+    return bool(
+        provenance.get("source") == "validated_architecture"
+        and contract
+        and scope.get("networked") is False
+        and str(scope.get("runtime") or "").strip().casefold()
+        in {"local_hotseat", "standalone", "editor"}
+        and str(scope.get("validationLevel") or "Draft").strip().casefold()
+        in {"draft", "bound"}
+        and str(scope.get("risk") or "low").strip().casefold() != "high"
+        and contract.get("hasMigrationPlan") is not True
+        and 1 <= len(target_files) <= 2
+        and not snapshot_issues
+        and not explicit_semantic_input
+    )
+
+
 def target_snapshot_hash(target_snapshots: list[dict[str, Any]]) -> str:
     normalized = [
         {

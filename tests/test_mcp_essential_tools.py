@@ -308,6 +308,97 @@ def test_hidden_control_plane_tools_require_flag(monkeypatch, tmp_path) -> None:
     assert "unreal_task_start" in names
 
 
+def test_initial_active_project_lookup_bypasses_foreign_task_ownership(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Bootstrap project discovery must stay usable before task authorization exists."""
+
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_dir = tmp_path / "O_Mock"
+    project_dir.mkdir()
+    project_file = project_dir / "O_Mock.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(
+        json.dumps({"activeProject": str(project_file)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared_config))
+
+    mod = _load_rag_mcp_module()
+    from task_api import authorize_active_task_tool, task_start
+
+    started = task_start(
+        tmp_path,
+        request="Edit Source/O_Mock/Private/BoardActor.cpp",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+        },
+    )
+    denied = authorize_active_task_tool(
+        tmp_path,
+        tool_name="unreal_rag_search",
+        arguments={},
+    )
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "TASK_ROUTE_OWNERSHIP_REQUIRED"
+
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        500,
+        {"name": "unreal_get_active_project", "arguments": {}},
+    )
+
+    result = sent[-1]["result"]
+    assert result.get("isError") is not True
+    payload = result["structuredContent"]
+    assert Path(payload["activeProject"]).resolve() == project_file.resolve()
+    assert payload["projectContext"]["ok"] is True
+    assert payload.get("errorCode") != "TASK_ROUTE_OWNERSHIP_REQUIRED"
+    assert payload["requiredNextTool"] == "unreal_agent_plan"
+    assert payload["control"]["nextAction"] == "unreal_agent_plan"
+    assert payload["control"]["nextActionIsTool"] is True
+    assert started["status"] == "running"
+
+
+def test_active_project_lookup_without_selection_does_not_force_planner(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(
+        json.dumps({"activeProject": None, "projectSearchRoots": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared_config))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        499,
+        {"name": "unreal_get_active_project", "arguments": {}},
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["projectContext"]["ok"] is False
+    assert payload["control"]["nextActionIsTool"] is False
+    assert "requiredNextTool" not in payload
+    assert payload["suggestedToolCalls"]
+
+
 def test_active_task_control_surface_is_listed_and_callable_without_flag(
     monkeypatch,
     tmp_path,
@@ -867,6 +958,215 @@ def test_agent_write_plan_allows_direct_model_under_advisory_policy(
     assert routing["active"] is False
     assert routing["blocksWrites"] is False
     assert routing["directModelAllowed"] is True
+
+
+def test_validated_architecture_slices_bind_server_side_before_feature_intent(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "0")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
+    project = tmp_path / "Demo" / "Demo.uproject"
+    project.parent.mkdir(parents=True)
+    project.write_text("{}", encoding="utf-8")
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(json.dumps({"activeProject": str(project)}), encoding="utf-8")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    server.set_pending_architecture_handoff(
+        project_root=str(project.parent),
+        proposal={
+            "implementationSlices": [
+                {
+                    "sliceId": "history-core",
+                    "files": [
+                        "Source/Demo/MoveHistory.h",
+                        "Source/Demo/MoveHistory.cpp",
+                    ],
+                },
+                {
+                    "sliceId": "history-integration-tests",
+                    "files": [
+                        "Source/Demo/GameState.cpp",
+                        "Source/Demo/Tests/MoveHistory.spec.cpp",
+                    ],
+                },
+            ]
+        },
+        session_id="architecture-chat",
+        proposal_revision="proposal-rev-1",
+        source_snapshot_fingerprint="source-snapshot-1",
+    )
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        1700,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {
+                "request": "Create the local move history and undo system with tests",
+                "mode": "codegen",
+                "sessionId": "architecture-chat",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["architectureHandoff"] == {
+        "serverOwned": True,
+        "proposalRevision": "proposal-rev-1",
+        "sourceSnapshotFingerprint": "source-snapshot-1",
+        "sliceCount": 2,
+        "activeSliceId": "history-core",
+    }
+    assert payload["toolRoute"]["selectedSlice"]["sliceId"] == "history-core"
+    assert payload["toolRoute"]["selectedSlice"]["files"] == [
+        "Source/Demo/MoveHistory.h",
+        "Source/Demo/MoveHistory.cpp",
+    ]
+    from task_api import task_status
+
+    state = task_status(
+        tmp_path,
+        payload["taskAuthorization"]["taskSessionId"],
+    )["state"]
+    assert [row["sliceId"] for row in state["planScope"]["slices"]] == [
+        "history-core",
+        "history-integration-tests",
+    ]
+    assert state["sliceProgress"]["pendingSlices"] == [
+        "history-integration-tests"
+    ]
+
+
+def test_validated_architecture_handler_hands_its_slice_to_same_chat_planner(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "0")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
+    project = tmp_path / "Demo" / "Demo.uproject"
+    source = project.parent / "Source" / "Demo"
+    source.mkdir(parents=True)
+    project.write_text("{}", encoding="utf-8")
+    (source / "Worker.cpp").write_text("void Run() {}\n", encoding="utf-8")
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(json.dumps({"activeProject": str(project)}), encoding="utf-8")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        17001,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project.parent),
+                "sessionId": "same-chat",
+                "proposal": {
+                    "decision": "add one bounded local helper implementation",
+                    "scope": {
+                        "networked": False,
+                        "runtime": "standalone",
+                        "validationLevel": "Draft",
+                    },
+                    "invariants": [
+                        {"id": "I1", "statement": "existing worker behavior stays stable"},
+                    ],
+                    "impactedSurfaces": ["Source/Demo/NewHelper.cpp"],
+                    "validationPlan": ["compile"],
+                    "implementationFiles": ["Source/Demo/NewHelper.cpp"],
+                    "implementationSlices": [
+                        {
+                            "sliceId": "new-helper",
+                            "files": ["Source/Demo/NewHelper.cpp"],
+                            "dependsOn": [],
+                            "invariantIds": ["I1"],
+                            "validation": ["compile"],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    architecture = sent[-1]["result"]["structuredContent"]
+    assert architecture["proposalValidation"]["ok"] is True
+    assert architecture["architectureState"]["current"] == "Validated"
+
+    server.handle_tool_call(
+        17002,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {
+                "request": "Create Source/Demo/NewHelper.cpp for the bounded local helper",
+                "mode": "codegen",
+                "sessionId": "same-chat",
+            },
+        },
+    )
+
+    planner = sent[-1]["result"]["structuredContent"]
+    assert planner["architectureHandoff"]["serverOwned"] is True
+    assert planner["architectureHandoff"]["sliceCount"] == 1
+    selected_slice = planner["toolRoute"]["selectedSlice"]
+    assert selected_slice["sliceId"] == "new-helper"
+    assert selected_slice["files"] == ["Source/Demo/NewHelper.cpp"]
+
+    server.handle_tool_call(
+        17003,
+        {
+            "name": "unreal_feature_intent_resolve",
+            "arguments": {
+                "taskAuthorization": planner["taskAuthorization"],
+            },
+        },
+    )
+
+    intent = sent[-1]["result"]["structuredContent"]
+    assert intent["ok"] is True, intent
+    assert intent["internalPhases"] == [
+        "SelectIntent",
+        "ResolveSlice",
+        "CaptureSnapshot",
+        "BindIntent",
+    ]
+    assert intent["sliceResolution"]["serverOwned"] is True
+    assert intent["sliceResolution"]["activeSliceId"] == "new-helper"
+
+
+def test_architecture_handoff_is_not_reused_by_another_chat(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Demo"
+    project.mkdir()
+    server.set_pending_architecture_handoff(
+        project_root=str(project),
+        proposal={
+            "implementationSlices": [
+                {"sliceId": "chat-a-only", "files": ["Source/Demo/A.cpp"]},
+            ]
+        },
+        session_id="chat-a",
+    )
+
+    assert server.consume_pending_architecture_handoff(
+        project,
+        session_id="chat-b",
+    ) == {}
+    assert server.consume_pending_architecture_handoff(
+        project,
+        session_id="chat-a",
+    ) == {}
 
 
 def test_pure_continuation_reuses_active_task_without_replanning(monkeypatch, tmp_path):
@@ -2340,6 +2640,108 @@ def test_architecture_reasoning_rejects_non_object_proposal(monkeypatch, tmp_pat
     assert payload["control"]["status"] == "FullReplan"
 
 
+def test_architecture_reasoning_fails_closed_on_corrupt_persisted_fsm(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    server.set_pending_architecture_handoff(
+        project_root=str(project),
+        proposal={
+            "implementationSlices": [
+                {
+                    "sliceId": "must-not-leak",
+                    "files": ["Source/Demo/Worker.cpp"],
+                }
+            ]
+        },
+        proposal_revision="stale-before-integrity-check",
+    )
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "Worker.cpp").write_text("void Run() {}\n", encoding="utf-8")
+    from architecture_state import _state_path
+
+    state_path = _state_path("corrupt-fsm-chat", str(project))
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text('{"current":', encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        29,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project),
+                "sessionId": "corrupt-fsm-chat",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "ARCHITECTURE_STATE_INTEGRITY_FAILED"
+    assert payload["retryable"] is False
+    assert payload["stopCurrentWorkflow"] is True
+    assert payload["architectureState"]["current"] == "FailedClosed"
+    assert "invalid JSON" in payload["architectureState"]["integrityError"]
+    assert payload["control"]["status"] == "FailedClosed"
+    assert server.consume_pending_architecture_handoff(project) == {}
+
+
+def test_architecture_reasoning_refills_missing_focus_evidence_without_replan(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Project"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "Worker.cpp").write_text("void Run() {}\n", encoding="utf-8")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        291,
+        {
+            "name": "unreal_architecture_reasoning",
+            "arguments": {
+                "projectRoot": str(project),
+                "sessionId": "focus-refill-chat",
+                "symbols": ["MissingWorker"],
+                "proposal": {
+                    "decision": "edit the local worker",
+                    "scope": {"networked": False, "runtime": "standalone"},
+                    "invariants": ["preserve worker behavior"],
+                    "impactedSurfaces": ["Source/Demo/Worker.cpp"],
+                    "validationPlan": ["compile"],
+                    "implementationFiles": ["Source/Demo/Worker.cpp"],
+                },
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "ARCHITECTURE_EVIDENCE_INCOMPLETE"
+    assert payload["proposalValidation"]["repairStrategy"] == "evidence_refill"
+    assert payload["requiredNextAction"] == "collect_architecture_evidence"
+    assert "repairSubmission" not in payload
+    assert payload["architectureState"]["current"] == "EvidenceRefill"
+    assert server.consume_pending_architecture_handoff(
+        project,
+        session_id="focus-refill-chat",
+    ) == {}
+
+
 def test_architecture_reasoning_blocks_unchanged_proposal_across_server_memory(
     monkeypatch, tmp_path
 ):
@@ -2461,6 +2863,12 @@ def test_architecture_reasoning_applies_exact_path_repairs(monkeypatch, tmp_path
     invariant = "worker behavior remains stable"
     proposal = {
         "decision": "preserve the worker boundary",
+        "scope": {
+            "networked": False,
+            "runtime": "standalone",
+            "risk": "high",
+            "validationLevel": "Strict",
+        },
         "invariants": [invariant],
         "impactedSurfaces": ["Source/Demo/Worker.cpp", "Source/Demo/Worker.h"],
         "validationPlan": ["static validation", "build", "targeted regression"],
@@ -2488,6 +2896,34 @@ def test_architecture_reasoning_applies_exact_path_repairs(monkeypatch, tmp_path
             },
         ],
         "implementationFiles": ["Source/Demo/Worker.cpp", "Source/Demo/Worker.h"],
+        "selectedAlternative": "keep boundary",
+        "ownership": {
+            "stateOwner": "Demo worker",
+            "dataOwner": "Demo worker",
+            "lifecycleOwner": "Demo module",
+            "failurePolicy": "keep the current implementation",
+            "recoveryPolicy": "revert the bounded slice",
+        },
+        "stateInventory": [
+            {
+                "state": "worker state",
+                "owner": "Demo worker",
+                "lifetime": "module",
+                "authority": "local",
+                "source": "existing",
+                "cleanup": "module shutdown",
+            }
+        ],
+        "lifecycleTransitions": [
+            {
+                "event": "worker update",
+                "owner": "Demo worker",
+                "preconditions": ["worker initialized"],
+                "commitPoint": "after validation",
+                "failureRecovery": "leave state unchanged",
+                "cleanup": "release worker state",
+            }
+        ],
         "implementationSlices": [
             {
                 "sliceId": "worker",
@@ -2522,11 +2958,7 @@ def test_architecture_reasoning_applies_exact_path_repairs(monkeypatch, tmp_path
         if row["jsonPath"] == "migrationPlan"
     )
     assert migration_repair["expectedType"] == "array"
-    assert set(first["repairSubmission"]["requiredJsonPaths"]) == {
-        "migrationPlan",
-        "ownership",
-        "selectedAlternative",
-    }
+    assert first["repairSubmission"]["requiredJsonPaths"] == ["migrationPlan"]
 
     server.handle_tool_call(
         31,
@@ -2559,23 +2991,12 @@ def test_architecture_reasoning_applies_exact_path_repairs(monkeypatch, tmp_path
                 "projectRoot": str(project),
                 "sessionId": "repair-chat",
                 "baseProposalRevision": first["proposalRevision"],
-                    "proposalRepairs": [
-                        {
-                            "jsonPath": "migrationPlan",
-                            "value": ["add compatible worker behavior before moving call sites"],
-                        },
-                        {
-                            "jsonPath": "ownership",
-                            "value": {
-                                "stateOwner": "Worker",
-                                "dataOwner": "Worker",
-                                "lifecycleOwner": "Worker",
-                                "failurePolicy": "stop before mutation",
-                                "recoveryPolicy": "retain prior worker state",
-                            },
-                        },
-                        {"jsonPath": "selectedAlternative", "value": "keep boundary"},
-                    ],
+                "proposalRepairs": [
+                    {
+                        "jsonPath": "migrationPlan",
+                        "value": ["add compatible worker behavior before moving call sites"],
+                    },
+                ],
             },
         },
     )

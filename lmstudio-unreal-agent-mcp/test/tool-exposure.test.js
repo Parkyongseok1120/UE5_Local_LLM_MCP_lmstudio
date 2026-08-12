@@ -52,7 +52,7 @@ test("projectSwitchGuidance uses set_active_project in extended profile", () => 
   }
 });
 
-test("clean startup hides route-owned mutation and build tools", () => {
+test("transport catalog stays stable before a route exists", () => {
   const visible = phaseVisibleAgentToolNames(new Set([
     "get_active_project",
     "read_file",
@@ -60,5 +60,11 @@ test("clean startup hides route-owned mutation and build tools", () => {
     "static_validate_project",
     "build_unreal_project",
   ]), { status: "none" });
-  assert.deepStrictEqual([...visible].sort(), ["get_active_project", "read_file"]);
+  assert.deepStrictEqual([...visible].sort(), [
+    "apply_edit_bundle",
+    "build_unreal_project",
+    "get_active_project",
+    "read_file",
+    "static_validate_project",
+  ]);
 });

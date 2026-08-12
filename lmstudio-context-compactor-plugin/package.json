@@ -1,6 +1,6 @@
 {
   "name": "unreal-context-compactor",
-  "version": "0.4.13",
+  "version": "0.4.19",
   "private": true,
   "main": "index.js",
   "scripts": {

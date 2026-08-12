@@ -644,6 +644,222 @@ def _nonempty_string_list(value: Any) -> list[str] | None:
     return result if len(result) == len(value) else None
 
 
+def _invariant_aliases(declared: list[str]) -> dict[str, str]:
+    """Map an unambiguous leading invariant label (for example I1:) to its text."""
+
+    candidates: dict[str, list[str]] = defaultdict(list)
+    for invariant in declared:
+        match = re.match(r"^\s*([A-Za-z][A-Za-z0-9_.-]{0,31})\s*[:.)-]\s+\S", invariant)
+        if match:
+            candidates[match.group(1).casefold()].append(invariant)
+    return {
+        label: values[0]
+        for label, values in candidates.items()
+        if len(values) == 1
+    }
+
+
+def _parse_invariant_declarations(value: Any) -> tuple[list[str], dict[str, str], list[str]]:
+    """Accept legacy strings and the stable {id, statement} invariant contract."""
+
+    if not isinstance(value, list) or not value:
+        return [], {}, ["architecture proposal field invariants must be a non-empty array"]
+    declared: list[str] = []
+    explicit_ids: dict[str, str] = {}
+    errors: list[str] = []
+    for index, item in enumerate(value):
+        if isinstance(item, str) and item.strip():
+            declared.append(item.strip())
+            continue
+        if not isinstance(item, dict):
+            errors.append(f"invariants[{index}] must be a non-empty string or an object with id/statement")
+            continue
+        invariant_id = str(item.get("id") or "").strip()
+        statement = str(item.get("statement") or "").strip()
+        if not invariant_id or not statement:
+            errors.append(f"invariants[{index}] requires non-empty id and statement")
+            continue
+        folded_id = invariant_id.casefold()
+        if folded_id in explicit_ids:
+            errors.append(f"invariants has duplicate id: {invariant_id}")
+            continue
+        explicit_ids[folded_id] = statement
+        declared.append(statement)
+    return declared, explicit_ids, errors
+
+
+def _resolve_invariant_reference(
+    value: str,
+    declared: list[str],
+    aliases: dict[str, str],
+) -> str:
+    reference = str(value or "").strip()
+    if reference in declared:
+        return reference
+    return aliases.get(reference.casefold(), "")
+
+
+_NETWORK_MARKER_RE = re.compile(
+    r"\b(?:multiplayer|network(?:ed|ing)?|replicat(?:e|ed|es|ing|ion)|rpc|server|client|"
+    r"authority|authoritative)\b|멀티플레이|네트워크|복제|RPC|서버|클라이언트|권한",
+    re.IGNORECASE,
+)
+_NETWORK_NEGATION_RE = re.compile(
+    r"\b(?:no|not|never|without|avoid|avoids|disabled?|exclude[ds]?|unchanged|"
+    r"non[- ]networked|local[- ]only|local\s+hotseat|out\s+of\s+scope|do\s+not|does\s+not|"
+    r"must\s+not|none|not\s+applicable)\b|로컬\s*전용|네트워크\s*아님|건드리지|"
+    r"사용하지\s*않|변경하지\s*않|제외|비활성|없음|해당\s*없",
+    re.IGNORECASE,
+)
+
+
+def _iter_proposal_strings(value: Any):
+    if isinstance(value, str):
+        if value.strip():
+            yield value
+        return
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from _iter_proposal_strings(child)
+        return
+    if isinstance(value, list):
+        for child in value:
+            yield from _iter_proposal_strings(child)
+
+
+def _has_affirmative_network_claim(text: str) -> bool:
+    source = str(text or "")
+    for match in _NETWORK_MARKER_RE.finditer(source):
+        window = source[max(0, match.start() - 64): min(len(source), match.end() + 64)]
+        if _NETWORK_NEGATION_RE.search(window):
+            continue
+        return True
+    return False
+
+
+def _is_networked_architecture_proposal(plan: dict[str, Any]) -> bool:
+    """Detect affirmative network design, ignoring explicit local-only exclusions."""
+
+    networking = plan.get("networking") if isinstance(plan.get("networking"), dict) else {}
+    if networking.get("clientInitiated") is True:
+        return True
+    if _nonempty_string_list(networking.get("replicatedState")):
+        return True
+    return any(_has_affirmative_network_claim(text) for text in _iter_proposal_strings(plan))
+
+
+def _has_structured_network_contract(plan: dict[str, Any]) -> bool:
+    networking = plan.get("networking") if isinstance(plan.get("networking"), dict) else {}
+    if networking.get("clientInitiated") is True:
+        return True
+    if _nonempty_string_list(networking.get("replicatedState")):
+        return True
+    rpc_owner = str(networking.get("rpcOwner") or "").strip()
+    if rpc_owner and not _NETWORK_NEGATION_RE.search(rpc_owner):
+        return True
+    return False
+
+
+_STRICT_ARCHITECTURE_MARKER_RE = re.compile(
+    r"\b(?:persistence|persistent\s+save|save\s+migration|schema\s+migration|async|thread(?:ed|ing)?|"
+    r"cross[- ]module|large[- ]scale\s+refactor|source\s+of\s+truth\s+(?:move|migration)|ssot\s+(?:move|migration))\b|"
+    r"영속성|저장\s*마이그레이션|스키마\s*마이그레이션|비동기|스레드|모듈\s*간|대규모\s*리팩터링",
+    re.IGNORECASE,
+)
+_GENERAL_NEGATION_RE = re.compile(
+    r"\b(?:no|not|never|without|exclude[ds]?|out\s+of\s+scope|do\s+not|does\s+not|must\s+not)\b|"
+    r"제외|사용하지\s*않|변경하지\s*않|도입하지\s*않|없음",
+    re.IGNORECASE,
+)
+
+
+def _has_affirmative_strict_claim(text: str) -> bool:
+    source = str(text or "")
+    for match in _STRICT_ARCHITECTURE_MARKER_RE.finditer(source):
+        window = source[max(0, match.start() - 64): min(len(source), match.end() + 64)]
+        if _GENERAL_NEGATION_RE.search(window):
+            continue
+        return True
+    return False
+
+
+def _selected_contract_strings(plan: dict[str, Any]):
+    """Yield only the selected design, excluding rejected alternatives/non-goals."""
+
+    scope = plan.get("scope") if isinstance(plan.get("scope"), dict) else {}
+    selected_scope = {
+        key: value
+        for key, value in scope.items()
+        if key != "nonGoals"
+    }
+    selected = {
+        key: value
+        for key, value in plan.items()
+        if key not in {"alternatives", "selectionRationale", "scope"}
+    }
+    selected["scope"] = selected_scope
+    yield from _iter_proposal_strings(selected)
+
+
+_TEST_MARKER_RE = re.compile(
+    r"\b(?:automation|automated|unit|functional|integration|regression)\s+tests?\b|"
+    r"\btests?\b|자동\s*테스트|단위\s*테스트|기능\s*테스트|통합\s*테스트|회귀\s*테스트",
+    re.IGNORECASE,
+)
+
+
+def _has_affirmative_test_claim(text: str) -> bool:
+    """Recognize a promised test without treating `no tests` as a promise."""
+
+    source = str(text or "")
+    for match in _TEST_MARKER_RE.finditer(source):
+        before = source[max(0, match.start() - 48): match.start()]
+        after = source[match.end(): min(len(source), match.end() + 64)]
+        if re.search(
+            r"(?:\bno\b|\bwithout\b|\bskip(?:ping)?\b|\bexclude[ds]?\b)\s*$|"
+            r"(?:없음|제외|생략|하지\s*않|안\s*함)\s*$",
+            before,
+            re.IGNORECASE,
+        ):
+            continue
+        if re.match(
+            r"\s*(?:are?\s+|is\s+)?(?:not\s+(?:required|planned|needed)|excluded|"
+            r"out\s+of\s+scope|unnecessary)\b|\s*(?:없음|제외|생략|불필요|하지\s*않|안\s*함)",
+            after,
+            re.IGNORECASE,
+        ):
+            continue
+        return True
+    return False
+
+
+def _architecture_validation_level(plan: dict[str, Any], networked: bool) -> str:
+    scope = plan.get("scope") if isinstance(plan.get("scope"), dict) else {}
+    declared = str(scope.get("validationLevel") or "").strip().casefold()
+    declared_rank = {"draft": 0, "bound": 1, "strict": 2}.get(declared, 0)
+    inferred_rank = 0
+    implementation_files = plan.get("implementationFiles")
+    implementation_count = len(implementation_files) if isinstance(implementation_files, list) else 0
+    implementation_modules = {
+        str(path).replace("\\", "/").split("/")[1].casefold()
+        for path in (implementation_files or [])
+        if isinstance(path, str)
+        and len(str(path).replace("\\", "/").split("/")) > 2
+        and str(path).replace("\\", "/").split("/")[0].casefold() == "source"
+    }
+    implementation_slices = plan.get("implementationSlices")
+    slice_count = len(implementation_slices) if isinstance(implementation_slices, list) else 0
+    if implementation_count > 2 or slice_count > 1 or plan.get("boundaryChanges"):
+        inferred_rank = 1
+    if networked or str(scope.get("risk") or "").casefold() == "high":
+        inferred_rank = 2
+    if len(implementation_modules) > 1:
+        inferred_rank = 2
+    if any(_has_affirmative_strict_claim(text) for text in _selected_contract_strings(plan)):
+        inferred_rank = 2
+    return ("Draft", "Bound", "Strict")[max(declared_rank, inferred_rank)]
+
+
 def _normalize_project_relative_path(value: str) -> tuple[str, str]:
     raw = str(value or "").strip().replace("\\", "/")
     if not raw:
@@ -702,18 +918,53 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
     if not isinstance(decision, str) or not decision.strip():
         issues.append("architecture proposal field decision must be a non-empty string")
 
-    string_fields: dict[str, list[str]] = {}
-    for field in ("invariants", "impactedSurfaces", "validationPlan"):
+    scope_value = plan.get("scope")
+    scope = scope_value if isinstance(scope_value, dict) else {}
+    explicit_network_scope = scope.get("networked") if isinstance(scope.get("networked"), bool) else None
+    inferred_network_scope = _is_networked_architecture_proposal(plan)
+    structured_network_scope = _has_structured_network_contract(plan)
+    if scope_value is None:
+        warnings.append(
+            "proposal scope.networked is not explicit; network scope was inferred conservatively"
+        )
+    elif not isinstance(scope_value, dict):
+        issues.append("architecture proposal field scope must be an object")
+    else:
+        if explicit_network_scope is None:
+            issues.append("architecture proposal scope.networked must be a boolean")
+        if not str(scope.get("runtime") or "").strip():
+            issues.append("architecture proposal scope.runtime must be a non-empty string")
+    networked_proposal = (
+        explicit_network_scope
+        if explicit_network_scope is not None
+        else inferred_network_scope
+    )
+    if explicit_network_scope is False and structured_network_scope:
+        issues.append(
+            "scope.networked=false contradicts affirmative networking behavior in the proposal"
+        )
+
+    declared_invariants, explicit_invariant_ids, invariant_errors = _parse_invariant_declarations(
+        plan.get("invariants")
+    )
+    issues.extend(invariant_errors)
+    string_fields: dict[str, list[str]] = {"invariants": declared_invariants}
+    for field in ("impactedSurfaces", "validationPlan"):
         parsed = _nonempty_string_list(plan.get(field))
         if not parsed:
             issues.append(f"architecture proposal field {field} must be a non-empty string array")
             parsed = []
         string_fields[field] = parsed
+    declared_invariant_aliases = {
+        **_invariant_aliases(string_fields["invariants"]),
+        **explicit_invariant_ids,
+    }
+    normalized_invariant_reference_count = 0
 
     alternatives_value = plan.get("alternatives")
     alternatives = alternatives_value if isinstance(alternatives_value, list) else []
-    if not alternatives:
-        issues.append("architecture proposal field alternatives must be a non-empty array")
+    if alternatives_value is not None and not isinstance(alternatives_value, list):
+        issues.append("architecture proposal field alternatives must be an array when supplied")
     structured_alternatives = 0
     for index, alternative in enumerate(alternatives):
         if isinstance(alternative, str) and alternative.strip():
@@ -750,6 +1001,7 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             continue
         normalized_implementation.append(normalized)
     implementation = list(dict.fromkeys(normalized_implementation))
+    validation_level = _architecture_validation_level(plan, networked_proposal)
 
     known_paths = {
         str(file_path).replace("\\", "/")
@@ -786,7 +1038,12 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             continue
         slice_id = str(row.get("sliceId") or "").strip()
         files = _nonempty_string_list(row.get("files"))
-        invariants = _nonempty_string_list(row.get("invariants"))
+        invariant_reference_value = (
+            row.get("invariantIds")
+            if row.get("invariantIds") is not None
+            else row.get("invariants")
+        )
+        invariants = _nonempty_string_list(invariant_reference_value)
         validation = _nonempty_string_list(row.get("validation"))
         depends_on = _nonempty_string_list(row.get("dependsOn") or [])
         if not slice_id:
@@ -817,7 +1074,9 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
                 file_slice_owner[normalized] = slice_id
         files = list(dict.fromkeys(normalized_files))
         if not invariants:
-            issues.append(f"implementationSlices[{index}].invariants must be a non-empty string array")
+            issues.append(
+                f"implementationSlices[{index}] requires invariantIds or invariants as a non-empty string array"
+            )
             invariants = []
         if not validation:
             issues.append(f"implementationSlices[{index}].validation must be a non-empty string array")
@@ -825,9 +1084,20 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         if depends_on is None:
             issues.append(f"implementationSlices[{index}].dependsOn must be a string array")
             depends_on = []
-        undeclared_slice_invariants = [
-            invariant for invariant in invariants if invariant not in string_fields["invariants"]
-        ]
+        resolved_slice_invariants: list[str] = []
+        undeclared_slice_invariants: list[str] = []
+        for invariant in invariants:
+            resolved = _resolve_invariant_reference(
+                invariant,
+                string_fields["invariants"],
+                declared_invariant_aliases,
+            )
+            if not resolved:
+                undeclared_slice_invariants.append(invariant)
+                continue
+            resolved_slice_invariants.append(resolved)
+            if resolved != invariant:
+                normalized_invariant_reference_count += 1
         if undeclared_slice_invariants:
             issues.append(
                 f"implementationSlices[{index}].invariants not declared by proposal: "
@@ -838,7 +1108,7 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             {
                 "sliceId": slice_id,
                 "files": files,
-                "invariants": invariants,
+                "invariants": resolved_slice_invariants,
                 "validation": validation,
                 "dependsOn": depends_on,
             }
@@ -869,6 +1139,105 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             + ", ".join(undeclared_slice_files)
         )
 
+    integration_value = plan.get("integrationPoints")
+    integration_points = integration_value if isinstance(integration_value, list) else []
+    if integration_value is not None and not isinstance(integration_value, list):
+        issues.append("integrationPoints must be an array when supplied")
+    normalized_integration_points: list[dict[str, Any]] = []
+    integration_files: set[str] = set()
+    for index, row in enumerate(integration_points):
+        if not isinstance(row, dict):
+            issues.append(f"integrationPoints[{index}] must be an object")
+            continue
+        missing = [
+            field
+            for field in ("event", "producerOwner", "consumerOwner", "bindingOwner")
+            if not str(row.get(field) or "").strip()
+        ]
+        files = _nonempty_string_list(row.get("files"))
+        validation = _nonempty_string_list(row.get("validation"))
+        if missing:
+            issues.append(
+                f"integrationPoints[{index}] is missing: " + ", ".join(missing)
+            )
+        if not files:
+            issues.append(
+                f"integrationPoints[{index}].files must be a non-empty string array"
+            )
+            files = []
+        if not validation:
+            issues.append(
+                f"integrationPoints[{index}].validation must be a non-empty string array"
+            )
+            validation = []
+        normalized_files: list[str] = []
+        for file_index, file_path in enumerate(files):
+            normalized, path_issue = _normalize_project_relative_path(file_path)
+            if path_issue:
+                issues.append(
+                    f"integrationPoints[{index}].files[{file_index}] {path_issue}"
+                )
+                continue
+            normalized_files.append(normalized)
+            integration_files.add(normalized)
+        normalized_integration_points.append(
+            {
+                "event": str(row.get("event") or "").strip(),
+                "producerOwner": str(row.get("producerOwner") or "").strip(),
+                "consumerOwner": str(row.get("consumerOwner") or "").strip(),
+                "bindingOwner": str(row.get("bindingOwner") or "").strip(),
+                "files": list(dict.fromkeys(normalized_files)),
+                "validation": validation,
+            }
+        )
+
+    test_files_value = plan.get("testFiles")
+    raw_test_files = (
+        _nonempty_string_list(test_files_value)
+        if test_files_value is not None
+        else []
+    )
+    if test_files_value is not None and raw_test_files is None:
+        issues.append("testFiles must be an array of non-empty strings when supplied")
+        raw_test_files = []
+    test_files: list[str] = []
+    for index, file_path in enumerate(raw_test_files or []):
+        normalized, path_issue = _normalize_project_relative_path(file_path)
+        if path_issue:
+            issues.append(f"testFiles[{index}] {path_issue}")
+            continue
+        test_files.append(normalized)
+    test_files = list(dict.fromkeys(test_files))
+
+    if any(len(row.get("files") or []) > 2 for row in normalized_slices):
+        issues.append(
+            "implementationSlices may contain at most two files per executable slice"
+        )
+    undeclared_integration_files = sorted(integration_files - set(implementation))
+    if undeclared_integration_files:
+        issues.append(
+            "integration point files not declared in implementationFiles: "
+            + ", ".join(undeclared_integration_files)
+        )
+    uncovered_integration_files = sorted(integration_files - covered_files)
+    if uncovered_integration_files:
+        issues.append(
+            "integration point files not covered by implementationSlices: "
+            + ", ".join(uncovered_integration_files)
+        )
+    undeclared_test_files = sorted(set(test_files) - set(implementation))
+    if undeclared_test_files:
+        issues.append(
+            "testFiles not declared in implementationFiles: "
+            + ", ".join(undeclared_test_files)
+        )
+    uncovered_test_files = sorted(set(test_files) - covered_files)
+    if uncovered_test_files:
+        issues.append(
+            "testFiles not covered by implementationSlices: "
+            + ", ".join(uncovered_test_files)
+        )
+
     matrix_value = plan.get("validationMatrix")
     matrix = matrix_value if isinstance(matrix_value, list) else []
     if matrix_value is not None and not isinstance(matrix_value, list):
@@ -880,14 +1249,22 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         if not isinstance(row, dict):
             issues.append(f"validationMatrix[{index}] must be an object")
             continue
-        invariant = str(row.get("invariant") or "").strip()
+        invariant = str(row.get("invariantId") or row.get("invariant") or "").strip()
+        resolved_invariant = _resolve_invariant_reference(
+            invariant,
+            declared_invariants,
+            declared_invariant_aliases,
+        )
         checks = _nonempty_string_list(row.get("checks"))
-        if invariant not in declared_invariants:
+        if not resolved_invariant:
             issues.append(
-                f"validationMatrix[{index}].invariant must exactly match a declared invariant"
+                f"validationMatrix[{index}] must reference a declared invariant by invariantId, "
+                "complete statement, or unique leading label"
             )
         else:
-            covered_invariants.add(invariant)
+            covered_invariants.add(resolved_invariant)
+            if resolved_invariant != invariant:
+                normalized_invariant_reference_count += 1
         if not checks:
             issues.append(f"validationMatrix[{index}].checks must be a non-empty string array")
         else:
@@ -898,12 +1275,6 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
 
     proposal_raw_text = json.dumps(plan, ensure_ascii=False)
     proposal_text = proposal_raw_text.lower()
-    network_markers = (
-        "multiplayer", "network", "replication", "replicated", "rpc", "server",
-        "client", "authority", "authoritative", "멀티플레이", "네트워크", "복제",
-        "서버", "클라이언트", "권한",
-    )
-    networked_proposal = any(marker in proposal_text for marker in network_markers)
     networking = plan.get("networking") if isinstance(plan.get("networking"), dict) else {}
     state_inventory = plan.get("stateInventory") if isinstance(plan.get("stateInventory"), list) else []
     lifecycle_transitions = (
@@ -911,6 +1282,85 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         if isinstance(plan.get("lifecycleTransitions"), list)
         else []
     )
+    project_root_text = str(analysis.get("projectRoot") or "").strip()
+    project_root_for_contract = Path(project_root_text) if project_root_text else None
+    new_implementation_files = [
+        path
+        for path in implementation
+        if project_root_for_contract is not None
+        and not (project_root_for_contract / Path(path)).is_file()
+    ]
+    lifecycle_events = [
+        str(row.get("event") or "").strip().casefold()
+        for row in lifecycle_transitions
+        if isinstance(row, dict) and str(row.get("event") or "").strip()
+    ]
+    externally_driven_events = [
+        event
+        for event in lifecycle_events
+        if not re.fullmatch(
+            r"(?:initialize|deinitialize|construct|destruct|reset|startup|shutdown)",
+            event,
+            re.IGNORECASE,
+        )
+    ]
+    bound_contract_required = validation_level in {"Bound", "Strict"}
+    integration_contract_required = bool(
+        bound_contract_required
+        and new_implementation_files
+        and externally_driven_events
+    )
+    if integration_contract_required and not normalized_integration_points:
+        issues.append(
+            "new event-driven runtime owners require integrationPoints that identify "
+            "the producer, consumer, binding owner, exact files, and validation"
+        )
+    validation_requests_tests = any(
+        _has_affirmative_test_claim(text)
+        for text in string_fields["validationPlan"]
+    )
+    if bound_contract_required and validation_requests_tests and not test_files:
+        issues.append(
+            "validationPlan requests automated tests but testFiles is empty"
+        )
+    lifecycle_owner = str(
+        (plan.get("ownership") or {}).get("lifecycleOwner")
+        if isinstance(plan.get("ownership"), dict)
+        else ""
+    )
+    ownership = plan.get("ownership") if isinstance(plan.get("ownership"), dict) else {}
+    selected_owner_claims = [
+        str(plan.get("decision") or ""),
+        *(str(ownership.get(field) or "") for field in ("stateOwner", "dataOwner", "lifecycleOwner")),
+        *(
+            str(row.get("owner") or "")
+            for row in state_inventory
+            if isinstance(row, dict)
+        ),
+        *(
+            str(row.get(field) or "")
+            for row in normalized_integration_points
+            for field in ("consumerOwner", "bindingOwner")
+        ),
+    ]
+    selected_game_instance_subsystem = any(
+        re.search(
+            r"\bGameInstance\s*Subsystem\b|\bUGameInstanceSubsystem\b",
+            claim,
+            re.IGNORECASE,
+        )
+        and not _GENERAL_NEGATION_RE.search(claim)
+        for claim in selected_owner_claims
+    )
+    if (
+        selected_game_instance_subsystem
+        and re.search(r"\b[AU]?GameMode(?:Base)?\b", lifecycle_owner, re.IGNORECASE)
+    ):
+        issues.append(
+            "ownership.lifecycleOwner cannot assign a GameInstanceSubsystem lifecycle to GameMode; "
+            "bind subsystem creation/destruction to UGameInstance/FSubsystemCollection and list "
+            "gameplay event subscription separately in integrationPoints"
+        )
     networking_complete = True
     rpc_path_concrete = True
     duplicate_truth_sources: list[str] = []
@@ -1742,25 +2192,32 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         selection_rationale=str(plan.get("selectionRationale") or ""),
     )
 
-    if staged_implementation:
-        if len(alternatives) < 2:
-            issues.append("staged architecture proposals require at least two alternatives")
+    bound_contract_required = validation_level in {"Bound", "Strict"}
+    strict_contract_required = validation_level == "Strict"
+    if bound_contract_required:
         if missing_ownership:
             issues.append(
-                "staged architecture proposal ownership is missing: "
+                f"{validation_level} architecture proposal ownership is missing: "
                 + ", ".join(missing_ownership)
             )
-        if not migration_plan:
-            issues.append("staged architecture proposals require a non-empty migrationPlan")
         if not slices:
-            issues.append("staged architecture proposals require implementationSlices")
+            issues.append(f"{validation_level} architecture proposals require implementationSlices")
         if not matrix:
-            issues.append("staged architecture proposals require validationMatrix")
+            issues.append(f"{validation_level} architecture proposals require validationMatrix")
         elif uncovered_invariants:
             issues.append(
                 "declared invariants missing validation coverage: "
                 + ", ".join(uncovered_invariants)
             )
+        if not state_inventory:
+            issues.append(f"{validation_level} architecture proposals require stateInventory")
+        if not lifecycle_transitions:
+            issues.append(f"{validation_level} architecture proposals require lifecycleTransitions")
+    if strict_contract_required:
+        if len(alternatives) < 2:
+            issues.append("Strict architecture proposals require at least two alternatives")
+        if not migration_plan:
+            issues.append("Strict architecture proposals require a non-empty migrationPlan")
         if not alternative_comparison["selectionValid"]:
             issues.extend(
                 "architecture alternative selection: " + issue
@@ -1773,20 +2230,37 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         )
 
     cycles = (analysis.get("topology") or {}).get("sourceDependencyCycles") or []
+    touched_module_nodes = {
+        f"module:{parts[1]}"
+        for path in [*impacted, *implementation]
+        for parts in [str(path or "").replace("\\", "/").split("/")]
+        if len(parts) > 2 and parts[0].casefold() == "source"
+    }
+    relevant_cycles = [
+        cycle
+        for cycle in cycles
+        if any(str(node) in touched_module_nodes for node in cycle)
+    ]
+    evidence_blockers: list[str] = []
     graph_incomplete = not bool((analysis.get("graphEvidence") or {}).get("complete", True))
     if graph_incomplete:
-        issues.append("source graph is incomplete because one or more source files could not be read")
+        evidence_blockers.append(
+            "source graph is incomplete because one or more source files could not be read"
+        )
     if int((analysis.get("graphEvidence") or {}).get("sourceFileCount") or 0) == 0:
-        issues.append("no supported project source files were found for architecture validation")
+        evidence_blockers.append(
+            "no supported project source files were found for architecture validation"
+        )
     unmatched_focus = (analysis.get("focus") or {}).get("unmatchedSymbols") or []
     if unmatched_focus:
-        issues.append(
+        evidence_blockers.append(
             "focused architecture symbol(s) were not found: "
             + ", ".join(str(item) for item in unmatched_focus)
         )
-    if cycles:
+    issues.extend(evidence_blockers)
+    if relevant_cycles:
         warnings.append(
-            "Source dependency cycle(s) detected; do not add another cross-boundary dependency "
+            "Source dependency cycle(s) intersect the proposed implementation modules; do not add another cross-boundary dependency "
             "without resolving or explicitly accepting the cycle."
         )
 
@@ -1804,13 +2278,19 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
     repair_requirements: list[dict[str, str]] = []
     replan_change_requirements: list[dict[str, Any]] = []
     repair_path_rules = (
+        ("scope.networked", "scope"),
+        ("scope.runtime", "scope"),
+        ("proposal field scope", "scope"),
+        ("invariants[", "invariants"),
         ("absent from impacted surfaces/migration scope", "impactedSurfaces"),
         ("Server RPC owner", "networking.rpcOwner"),
         ("network validation must test", "validationPlan"),
         ("staged architecture proposals require a non-empty migrationPlan", "migrationPlan"),
+        ("Strict architecture proposals require a non-empty migrationPlan", "migrationPlan"),
         ("declared invariants missing validation coverage", "validationMatrix"),
         ("networking.replicatedState[", "networking.replicatedState"),
         ("requestPath", "networking.requestPath"),
+        ("proposal describes a client request", "networking.clientInitiated"),
         ("rpcOwner", "networking.rpcOwner"),
         ("owningConnection", "networking.owningConnection"),
         ("networking fields", "networking"),
@@ -1818,12 +2298,23 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         ("referenced Unreal asset package does not exist", "assetCreationPlan"),
         ("asset migration:", "assetMigration"),
         ("participant membership/roster", "stateInventory"),
+        ("participant identity/uniqueness", "stateInventory"),
         ("mutable tracking collection", "stateInventory"),
         ("stateInventory[", "stateInventory"),
+        ("stateInventory", "stateInventory"),
         ("travelMode", "lifecycleTransitions"),
         ("lifecycleTransitions[", "lifecycleTransitions"),
         ("lifecycleTransitions", "lifecycleTransitions"),
+        ("integrationPoints[", "integrationPoints"),
+        ("require integrationPoints", "integrationPoints"),
+        ("integration point files", "integrationPoints"),
+        ("testFiles", "testFiles"),
+        ("GameInstanceSubsystem lifecycle", "ownership.lifecycleOwner"),
+        ("implementationFiles", "implementationFiles"),
         ("implementationSlices", "implementationSlices"),
+        ("implementation slice ", "implementationSlices"),
+        ("implementation slice dependency cycle", "implementationSlices"),
+        ("boundaryChanges", "boundaryChanges"),
         ("validationMatrix[", "validationMatrix"),
         ("require validationMatrix", "validationMatrix"),
         ("proposal ownership is missing", "ownership"),
@@ -1832,8 +2323,15 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         ("alternative selection", "alternatives"),
         ("alternatives", "alternatives"),
     )
-    for issue in issues:
+    proposal_issues = [issue for issue in issues if issue not in evidence_blockers]
+    for issue in proposal_issues:
         json_paths: list[str] = []
+        field_match = re.search(
+            r"architecture proposal field ([A-Za-z][A-Za-z0-9_]*)",
+            issue,
+        )
+        if field_match:
+            json_paths.append(field_match.group(1))
         if "implementationFiles not covered by implementationSlices" in issue:
             # Either extend the slices or narrow the declared implementation scope.
             # Both are valid, coupled repairs, so expose both paths atomically instead
@@ -1863,7 +2361,7 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         for json_path in unique_paths:
             repair_requirements.append({"jsonPath": json_path, "constraint": issue})
     full_replan_markers = (
-        "networked architecture proposal is missing networking fields",
+        "scope.networked=false contradicts affirmative networking behavior",
         "client-initiated network design is missing a callable RPC ownership contract",
         "RPC owner is server-only/server-owned",
         "does not prove that the invoking RPC owner is owned",
@@ -1904,7 +2402,20 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
     for row in generic_replan_requirements:
         if row not in guarded_replan_requirements:
             guarded_replan_requirements.append(row)
-    if requires_full_replan:
+    whole_proposal_invalid = any(
+        issue == "architecture proposal must be an object"
+        for issue in proposal_issues
+    )
+    evidence_refill_required = bool(evidence_blockers) and not whole_proposal_invalid
+    if evidence_refill_required:
+        # Proposal shape cannot be judged conclusively against incomplete or
+        # mismatched evidence. Refill/correct the evidence first, then derive a
+        # fresh exact-repair or full-replan decision from that verified graph.
+        requires_full_replan = False
+        repair_requirements = []
+        replan_change_requirements = []
+        guarded_replan_requirements = []
+    elif requires_full_replan:
         repair_requirements = [{
             "jsonPath": "proposal",
             "constraint": (
@@ -1914,13 +2425,20 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
                 "when the source changed, required evidence is missing, or the needed lines were not covered."
             ),
         }]
-    writes_allowed = not issues and not bool(cycles)
+    draft_bounded_write = bool(implementation) and len(implementation) <= 2 and not boundary_changes
+    writes_allowed = not issues and not bool(relevant_cycles) and (
+        validation_level != "Draft" or draft_bounded_write
+    )
     return {
         "ok": not issues,
         "issues": issues,
         "warnings": warnings,
         "repairRequirements": repair_requirements,
-        "repairStrategy": "full_replan" if requires_full_replan else "exact_paths",
+        "repairStrategy": (
+            "evidence_refill"
+            if evidence_refill_required
+            else ("full_replan" if requires_full_replan else "exact_paths")
+        ),
         # Preserve only core issue-to-field groups when full_replan collapses
         # repairRequirements to the whole proposal. Ancillary file, validation,
         # and asset issues must be allowed through to a fresh validation pass so
@@ -1932,15 +2450,23 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
         ),
         "designContract": {
             "stagedImplementation": staged_implementation,
+            "validationLevel": validation_level,
+            "explicitNetworkScope": explicit_network_scope is not None,
             "alternativeCount": len(alternatives),
             "structuredAlternativeCount": structured_alternatives,
             "implementationSliceCount": len(normalized_slices),
             "implementationFilesCovered": not uncovered_files,
             "uncoveredImplementationFiles": uncovered_files,
             "undeclaredSliceFiles": undeclared_slice_files,
+            "integrationPointCount": len(normalized_integration_points),
+            "integrationContractRequired": integration_contract_required,
+            "integrationFiles": sorted(integration_files),
+            "testFiles": test_files,
+            "testFilesRequired": validation_requests_tests and bound_contract_required,
             "invariantCount": len(declared_invariants),
             "invariantCoverageCount": len(covered_invariants),
             "uncoveredInvariants": uncovered_invariants,
+            "normalizedInvariantReferenceCount": normalized_invariant_reference_count,
             "ownershipComplete": not missing_ownership,
             "missingOwnershipFields": missing_ownership,
             "migrationPlanPresent": bool(migration_plan),
@@ -1951,6 +2477,7 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             "networkingComplete": networking_complete,
             "rpcPathConcrete": rpc_path_concrete,
             "requiresFullReplan": requires_full_replan,
+            "evidenceBlockers": evidence_blockers,
             "stateInventoryCount": len(state_inventory),
             "duplicateTruthSources": duplicate_truth_sources,
             "lifecycleTransitionCount": len(lifecycle_transitions),
@@ -1960,12 +2487,20 @@ def validate_architecture_proposal(proposal: dict[str, Any], analysis: dict[str,
             "writesAllowed": writes_allowed,
             "requiresReadBeforeWrite": True,
             "requiresStagedImplementation": staged_implementation,
-            "requiresArchitectureApproval": bool(boundary_changes) or bool(cycles),
+            "requiresArchitectureApproval": bool(boundary_changes) or bool(relevant_cycles),
             "requiredValidation": required_validation,
             "nextAction": (
-                "resolve_architecture_contract_issues"
-                if issues
-                else ("resolve_source_dependency_cycle" if cycles else "implement_next_slice")
+                "collect_architecture_evidence"
+                if evidence_refill_required
+                else (
+                    "resolve_architecture_contract_issues"
+                    if issues
+                else (
+                    "resolve_source_dependency_cycle"
+                    if relevant_cycles
+                    else ("implement_next_slice" if writes_allowed else "bind_architecture_contract")
+                )
+                )
             ),
         },
         "proofBoundary": (

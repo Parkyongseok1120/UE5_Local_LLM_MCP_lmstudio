@@ -380,12 +380,49 @@ def _has_negated_write_intent(text: str) -> bool:
     return any(re.search(pattern, text) for pattern in NEGATED_WRITE_PATTERNS)
 
 
+def _has_read_only_override(text: str) -> bool:
+    """Recognize an actual read-only instruction, not its explicit rejection."""
+
+    normalized = str(text or "")
+    # "Do not stop at analysis/plan/report only" is an execution instruction.
+    # A raw substring check used to see ``계획만`` inside that contrast and
+    # incorrectly turn explicit implementation requests into inspect-only work.
+    normalized = re.sub(
+        r"(?:문서나\s*)?(?:계획|분석|설명|보고)만.{0,40}?그치지\s*말(?:고|라|아)?",
+        " ",
+        normalized,
+    )
+    normalized = re.sub(
+        r"\b(?:do\s+not|don't|dont)\s+(?:only|just)\s+(?:plan|analy[sz]e|report|explain)\b",
+        " ",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    return any(marker in normalized for marker in READ_ONLY_OVERRIDE_MARKERS)
+
+
 def _has_write_intent(text: str) -> bool:
-    if any(m in text for m in READ_ONLY_OVERRIDE_MARKERS):
+    if _has_read_only_override(text):
         return False
     if _has_negated_write_intent(text):
         return False
-    if not any(m in text for m in WRITE_INTENT_MARKERS):
+    english_write = bool(
+        re.search(
+            r"\b(?:implement(?:s|ed|ing)?|improve(?:s|d|ing)?|fix(?:es|ed|ing)?|"
+            r"patch(?:es|ed|ing)?|create(?:s|d|ing)?|add(?:s|ed|ing)?|"
+            r"write(?:s|written|writing)?|generate(?:s|d|ing)?)\b",
+            text,
+        )
+    )
+    non_english_write = any(
+        marker in text
+        for marker in WRITE_INTENT_MARKERS
+        if marker not in {
+            "implement", "improve", "fix", "patch", "create", "add ",
+            "write ", "generate ",
+        }
+    )
+    if not english_write and not non_english_write:
         return False
     if any(m in text for m in ("생성", "만들")):
         return any(m in text for m in CREATE_TARGET_MARKERS)
@@ -507,7 +544,7 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
         return "code_sketch"
     if mode == "api_lookup":
         return "answer_only"
-    if any(m in text for m in READ_ONLY_OVERRIDE_MARKERS) or _has_negated_write_intent(text):
+    if _has_read_only_override(text) or _has_negated_write_intent(text):
         return "inspect_only"
     if _is_feature_implementation_request(text):
         return "edit"
@@ -549,12 +586,7 @@ def is_continuation_request(request: str) -> bool:
 
 
 def resolve_plan_request(request: str, latest_user_message: str | None = None) -> dict[str, Any]:
-    """Prefer the user's latest verbatim goal when the model invents a write/refactor request.
-
-    LM Studio often calls unreal_agent_plan with a restated implementation plan after a
-    prior structure-overview turn. If latestUserMessage is read-only / bug-hunt only,
-    classify and plan from that message instead of the invented request.
-    """
+    """Keep the user's latest verbatim goal authoritative over model restatements."""
     plan_request = str(request or "").strip()
     latest = str(latest_user_message or "").strip()
     result: dict[str, Any] = {
@@ -565,6 +597,19 @@ def resolve_plan_request(request: str, latest_user_message: str | None = None) -
         "modelRequestKind": classify_task(plan_request, "auto") if plan_request else None,
         "latestUserKind": classify_task(latest, "auto") if latest else None,
     }
+    if latest and latest != plan_request:
+        # A pure continuation is context, not a replacement objective.  Keep a
+        # meaningful planner request when non-compactor clients pass the raw
+        # latest utterance ("continue" / "계속해") as latestUserMessage.
+        if is_continuation_request(latest) and not is_continuation_request(plan_request):
+            return result
+        result["request"] = latest
+        result["usedLatestUserMessage"] = True
+        result["modelRequestSuppressed"] = True
+        result["inventedImplementationPlan"] = _looks_like_invented_implementation_plan(
+            plan_request
+        )
+        return result
     if _looks_like_invented_implementation_plan(plan_request):
         result["inventedImplementationPlan"] = True
         if latest:
@@ -582,18 +627,6 @@ def resolve_plan_request(request: str, latest_user_message: str | None = None) -
         return result
     if not latest or not plan_request or latest == plan_request:
         return result
-    latest_kind = result["latestUserKind"]
-    model_kind = result["modelRequestKind"]
-    latest_is_read_only = (
-        latest_kind in {"answer_only", "inspect_only", "cpp_analysis", "runtime_debug", "code_sketch"}
-        or (not _has_write_intent(latest.lower()))
-        or _has_negated_write_intent(latest.lower())
-    )
-    model_is_mutating = model_kind in {"edit", "refactor", "compile_fix"}
-    if latest_is_read_only and model_is_mutating:
-        result["request"] = latest
-        result["usedLatestUserMessage"] = True
-        result["modelRequestSuppressed"] = True
     return result
 
 
@@ -1219,7 +1252,10 @@ def build_suggested_tool_calls(
     if task_kind in {"edit", "compile_fix", "refactor"} and project_context.get("ok"):
         browse_path = str(project_context.get("sourceBrowsePath") or "")
         symbols = _symbol_candidates_from_text(text)
-        calls: list[dict[str, Any]] = [{"tool": "unreal_get_active_project", "args": {}}]
+        # The planner response already includes a resolved projectContext. A
+        # second active-project lookup wastes a route call and, when another
+        # conversation owns a task, can produce an avoidable ownership error.
+        calls: list[dict[str, Any]] = []
         if browse_path:
             for symbol in symbols[:3]:
                 calls.append({"tool": "search_files", "args": {"query": symbol, "path": browse_path}})
@@ -1319,13 +1355,20 @@ def build_agent_plan(
     notes: list[str] = []
     if resolved.get("modelRequestSuppressed"):
         notes.append(
-            "Plan request overridden: model invented a write/refactor or implementation plan "
-            "while the active goal is read-only / findings-only (or latestUserMessage was used)."
+            "Plan request overridden: latestUserMessage is the authoritative user goal; "
+            "a model restatement cannot narrow, broaden, or replace it."
         )
-        notes.append(
-            "Do not call unreal_architecture_reasoning or invent implementation slices. "
-            "Deliver findings (Bug|ByDesign|Ambiguous|NeedsRuntimeProof) only."
-        )
+        if classify_task(request, "auto") in {
+            "answer_only",
+            "inspect_only",
+            "cpp_analysis",
+            "runtime_debug",
+            "code_sketch",
+        }:
+            notes.append(
+                "Do not call unreal_architecture_reasoning or invent implementation slices. "
+                "Deliver findings (Bug|ByDesign|Ambiguous|NeedsRuntimeProof) only."
+            )
     if resolved.get("inventedImplementationPlan"):
         notes.append(
             "Detected invented implementation-plan text in unreal_agent_plan.request; "

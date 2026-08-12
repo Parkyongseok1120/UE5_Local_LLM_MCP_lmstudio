@@ -90,6 +90,9 @@ LOCAL_INHERITANCE_SKETCH_RE = re.compile(
 LOCAL_DELEGATE_DECL_RE = re.compile(
     r"\bDECLARE_(?:DYNAMIC_)?MULTICAST_DELEGATE(?:_[A-Za-z]+Params?)?\s*\(\s*([A-Za-z_]\w*)"
 )
+SCOPED_VALUE_CLAIM_RE = re.compile(
+    r"\b(?P<owner>[A-Za-z_]\w*)\s*::\s*(?P<value>[A-Za-z_]\w*)\b(?!\s*\()"
+)
 
 # UnrealBuildTool exposes these C# collections in ``*.Build.cs`` files. Their
 # collection methods are not Unreal C++ APIs and therefore cannot be resolved
@@ -234,6 +237,113 @@ def extract_member_calls(text: str) -> list[str]:
         if name and name not in found:
             found.append(name)
     return found
+
+
+def _project_enum_contract_issues(
+    text: str,
+    graph: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Reject enum values absent from an exact project enum declaration.
+
+    Enum values intentionally stay out of the broad Unreal type-symbol lookup,
+    but a scoped value such as ``EMatchPhase::Ended`` is still a compile-time
+    contract. Only project enums with a directly readable declaration are
+    judged here; unknown engine/third-party scopes remain for header/compiler
+    proof instead of being guessed absent.
+    """
+
+    if not isinstance(graph, dict):
+        return []
+    masked = _mask_comments_and_literals(text)
+    claims = list(
+        dict.fromkeys(
+            (match.group("owner"), match.group("value"))
+            for match in SCOPED_VALUE_CLAIM_RE.finditer(masked)
+        )
+    )
+    if not claims:
+        return []
+
+    enum_rows: dict[str, list[dict[str, Any]]] = {}
+    for row in graph.get("symbols") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("symbol_kind") or "").casefold() != "enum":
+            continue
+        name = str(row.get("symbol_name") or "").strip()
+        if name:
+            enum_rows.setdefault(name.casefold(), []).append(row)
+
+    source_cache: dict[str, str] = {}
+    contracts: dict[str, tuple[set[str], str]] = {}
+    for owner, _value in claims:
+        owner_key = owner.casefold()
+        if owner_key in contracts or owner_key not in enum_rows:
+            continue
+        for row in enum_rows[owner_key]:
+            file_path = str(
+                row.get("file_path")
+                or (row.get("sourceEvidence") or {}).get("filePath")
+                or ""
+            ).strip()
+            if not file_path:
+                continue
+            if file_path not in source_cache:
+                try:
+                    source_cache[file_path] = Path(file_path).read_text(
+                        encoding="utf-8-sig",
+                        errors="replace",
+                    )[:512_000]
+                except OSError:
+                    source_cache[file_path] = ""
+            source = source_cache[file_path]
+            if not source:
+                continue
+            declaration = re.search(
+                rf"\benum\s+(?:class\s+|struct\s+)?{re.escape(owner)}\b"
+                rf"[^{{;]*\{{(?P<body>[^}}]*)\}}",
+                _mask_comments_and_literals(source),
+                re.DOTALL,
+            )
+            if not declaration:
+                continue
+            values = {
+                value_match.group(1)
+                for item in declaration.group("body").split(",")
+                if (value_match := re.match(r"\s*([A-Za-z_]\w*)", item))
+            }
+            if values:
+                contracts[owner_key] = (values, file_path)
+                break
+
+    issues: list[dict[str, Any]] = []
+    for owner, value in claims:
+        contract = contracts.get(owner.casefold())
+        if not contract:
+            continue
+        values, file_path = contract
+        if value in values:
+            continue
+        issues.append(
+            {
+                "symbol": f"{owner}::{value}",
+                "verdict": "known_bad",
+                "errorCode": "PROJECT_ENUM_VALUE_NOT_DECLARED",
+                "evidence": [
+                    {
+                        "source": "project_source",
+                        "location": file_path,
+                        "enum": owner,
+                        "declaredValues": sorted(values),
+                    }
+                ],
+                "note": (
+                    f"{value} is not declared by project enum {owner}. "
+                    f"Use one of: {', '.join(sorted(values)[:16])}."
+                ),
+            }
+        )
+    return issues
 
 
 SAFE_TEMPLATE_WRAPPER_MEMBERS = {
@@ -588,34 +698,72 @@ def _normalized_cpp_type(value: str) -> str:
     return cleaned.strip()
 
 
-_CPP_NUMERIC_TYPES = frozenset(
-    {
-        "float",
-        "double",
-        "long double",
-        "freal",
-        "frealsingle",
-        "frealdouble",
-        "int8",
-        "int16",
-        "int32",
-        "int64",
-        "uint8",
-        "uint16",
-        "uint32",
-        "uint64",
-        "short",
-        "unsigned short",
-        "int",
-        "unsigned int",
-        "long",
-        "unsigned long",
-        "long long",
-        "unsigned long long",
-        "size_t",
-        "ssize_t",
-    }
-)
+_CPP_NUMERIC_MODELS: dict[str, tuple[str, int, int]] = {
+    # category, minimum width, maximum width.  Platform-dependent C++ types use
+    # a width range so a conversion is called widening only when it is safe on
+    # Windows, Linux, and macOS.
+    "signed char": ("signed", 8, 8),
+    "int8": ("signed", 8, 8),
+    "short": ("signed", 16, 16),
+    "int16": ("signed", 16, 16),
+    "int": ("signed", 32, 32),
+    "int32": ("signed", 32, 32),
+    "long": ("signed", 32, 64),
+    "long long": ("signed", 64, 64),
+    "int64": ("signed", 64, 64),
+    "ssize_t": ("signed", 32, 64),
+    "unsigned char": ("unsigned", 8, 8),
+    "uint8": ("unsigned", 8, 8),
+    "unsigned short": ("unsigned", 16, 16),
+    "uint16": ("unsigned", 16, 16),
+    "unsigned int": ("unsigned", 32, 32),
+    "uint32": ("unsigned", 32, 32),
+    "unsigned long": ("unsigned", 32, 64),
+    "unsigned long long": ("unsigned", 64, 64),
+    "uint64": ("unsigned", 64, 64),
+    "size_t": ("unsigned", 32, 64),
+    "float": ("float", 24, 24),
+    "frealsingle": ("float", 24, 24),
+    "double": ("float", 53, 53),
+    "freal": ("float", 53, 53),
+    "frealdouble": ("float", 53, 53),
+    # C++ only guarantees that long double is at least as precise as double.
+    "long double": ("float", 53, 113),
+}
+
+
+def _numeric_conversion_kind(actual: str, expected: str) -> str:
+    """Classify a value conversion as exact, widening, narrowing, or incompatible."""
+
+    left = _normalized_cpp_type(actual).replace("&", "").strip().casefold()
+    right = _normalized_cpp_type(expected).replace("&", "").strip().casefold()
+    if not left or not right or "*" in left or "*" in right:
+        return "incompatible"
+    if left == right:
+        return "exact"
+    source = _CPP_NUMERIC_MODELS.get(left)
+    target = _CPP_NUMERIC_MODELS.get(right)
+    if source is None or target is None:
+        return "incompatible"
+    if source == target:
+        return "exact"
+    source_kind, source_min_bits, source_max_bits = source
+    target_kind, target_min_bits, _target_max_bits = target
+
+    if source_kind == target_kind:
+        return "widening" if target_min_bits >= source_max_bits else "narrowing"
+    if source_kind == "unsigned" and target_kind == "signed":
+        # One additional signed bit is required to contain the complete source
+        # range (for example uint32 -> int64).
+        return "widening" if target_min_bits > source_max_bits else "narrowing"
+    if source_kind == "signed" and target_kind == "unsigned":
+        return "narrowing"
+    if source_kind in {"signed", "unsigned"} and target_kind == "float":
+        value_bits = source_max_bits - (1 if source_kind == "signed" else 0)
+        return "widening" if target_min_bits >= value_bits else "narrowing"
+    if source_kind == "float" and target_kind in {"signed", "unsigned"}:
+        return "narrowing"
+    return "incompatible"
 
 
 def _cpp_type_is_dependent(value: str) -> bool:
@@ -630,13 +778,13 @@ def _cpp_type_is_dependent(value: str) -> bool:
 
 
 def _cpp_types_compatible(actual: str, expected: str) -> bool:
-    left = _normalized_cpp_type(actual).replace("*", "").replace("&", "").strip()
-    right = _normalized_cpp_type(expected).replace("*", "").replace("&", "").strip()
+    left = _normalized_cpp_type(actual).replace("&", "").strip()
+    right = _normalized_cpp_type(expected).replace("&", "").strip()
     if not left or not right or _cpp_type_is_dependent(right):
         return True
     if left.casefold() == right.casefold():
         return True
-    return left.casefold() in _CPP_NUMERIC_TYPES and right.casefold() in _CPP_NUMERIC_TYPES
+    return _numeric_conversion_kind(left, right) in {"exact", "widening"}
 
 
 def _project_signature_contract(row: dict[str, Any], symbol: str) -> dict[str, Any] | None:
@@ -786,7 +934,22 @@ def _call_contract_issues(
         constructed = re.match(r"^(?P<type>[AUFSI][A-Za-z0-9_]*)\s*[({]", value)
         if constructed:
             return constructed.group("type")
-        if re.match(r"^[+-]?\d+$", value):
+        floating = re.match(
+            r"^[+-]?(?:(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)(?P<suffix>[fFlL]?)$",
+            value,
+        )
+        if floating:
+            suffix = floating.group("suffix").casefold()
+            return "float" if suffix == "f" else ("long double" if suffix == "l" else "double")
+        integer = re.match(r"^[+-]?\d+(?P<suffix>(?:u(?:ll|l)?|(?:ll|l)u?)?)$", value, re.IGNORECASE)
+        if integer:
+            suffix = integer.group("suffix").casefold()
+            if "u" in suffix and ("ll" in suffix or suffix.endswith("l")):
+                return "uint64"
+            if "ll" in suffix or suffix.endswith("l"):
+                return "int64"
+            if "u" in suffix:
+                return "uint32"
             return "int32"
         if value in {"true", "false"}:
             return "bool"
@@ -1589,6 +1752,7 @@ def validate_sketch(
         )
     )
     results.extend(_project_declaration_contract_issues(analysis_text, graph))
+    results.extend(_project_enum_contract_issues(analysis_text, graph))
 
     scalar_types = {
         "bool",

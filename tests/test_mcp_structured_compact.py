@@ -27,6 +27,43 @@ def test_compact_structured_payload_stays_valid_json() -> None:
     assert compact.get("_structuredTruncated") is True
 
 
+def test_rag_match_count_is_not_misclassified_as_asset_graph() -> None:
+    handoff_args = {
+        "query": "GomokuGameState",
+        "path": "project://Source",
+        "maxResults": 40,
+    }
+    payload = {
+        "ok": True,
+        "searchCompleted": True,
+        "projectEvidenceAvailable": False,
+        "projectMiss": True,
+        "scope": "project_miss",
+        "matchCount": 0,
+        "message": "No active-project RAG match was found.",
+        "requiredNextTool": "search_files",
+        "requiredNextToolArgs": handoff_args,
+        "nextAction": "search_files",
+        "nextActionArgs": handoff_args,
+        "nextActionIsTool": True,
+        "control": {
+            "version": 1,
+            "phase": "unreal_rag_search",
+            "status": "NeedsAction",
+            "nextAction": "search_files",
+            "nextActionIsTool": True,
+        },
+    }
+
+    compact = compact_structured_payload(payload, max_bytes=8_000)
+
+    assert compact["projectMiss"] is True
+    assert compact["requiredNextTool"] == "search_files"
+    assert compact["requiredNextToolArgs"] == handoff_args
+    assert compact["message"].startswith("No active-project")
+    assert "assetKind" not in compact
+
+
 def test_code_sketch_compaction_preserves_every_known_bad_replacement() -> None:
     payload = {
         "ok": False,
@@ -164,6 +201,9 @@ def test_agent_plan_compaction_preserves_authorization_and_bounds_repeated_reque
         "taskAuthorizationRequiredForWrites": True,
         "writeToolAuthorizationArgs": {"taskAuthorization": authorization},
         "authorizationRetryPolicy": {"reuseExistingAuthorization": True},
+        "nextAction": "unreal_code_sketch_claim_validate",
+        "nextActionIsTool": True,
+        "requiredNextToolArgs": {"taskAuthorization": authorization},
         "contextCompactorRouting": {
             "policy": "advisory",
             "active": False,
@@ -180,6 +220,7 @@ def test_agent_plan_compaction_preserves_authorization_and_bounds_repeated_reque
     assert compact["writeToolAuthorizationArgs"]["taskAuthorization"] == authorization
     assert compact["contextCompactorRouting"]["policy"] == "advisory"
     assert compact["contextCompactorRouting"]["directModelAllowed"] is True
+    assert compact["requiredNextToolArgs"] == {"taskAuthorization": authorization}
     assert len(compact["request"]) < 1_300
     assert len(json.dumps(compact, ensure_ascii=False)) <= 8_000
     assert len(json.dumps(compact, ensure_ascii=False)) < len(json.dumps(payload, ensure_ascii=False))

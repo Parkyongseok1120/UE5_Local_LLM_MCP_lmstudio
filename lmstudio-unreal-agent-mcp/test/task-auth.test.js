@@ -1765,6 +1765,7 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
       mcpConnectionId: `${getMcpConnectionId()}:conv-bbbb`,
       request: "secret-b-request",
     });
+    taskA.toolRoute.pendingGates = ["unreal_code_sketch_claim_validate"];
     const dirA = path.join(stateRoot, "tasks", taskA.taskSessionId);
     const dirB = path.join(stateRoot, "tasks", taskB.taskSessionId);
     fs.mkdirSync(dirA, { recursive: true });
@@ -1855,8 +1856,16 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
     assert.strictEqual(other.request, "");
     assert.strictEqual(other.mcpConnectionId, "");
     assert.strictEqual(other.conversationId, undefined);
+    assert.strictEqual(listedA.nextAction, "unreal_code_sketch_claim_validate");
+    assert.strictEqual(listedA.nextActionIsTool, true);
+    assert.notStrictEqual(listedA.nextAction, "cancel_active_task");
 
     const listedTop = listActiveTasks(workspace, projectFile, {});
+    assert.strictEqual(
+      listedTop.nextAction,
+      "active_task_requires_explicit_user_decision"
+    );
+    assert.strictEqual(listedTop.nextActionIsTool, false);
     // Simulate parser via top-level capability through listActiveTasks options
     // (server routeOwnershipFromArgs now maps args.ownerCapability).
     const listedTopLevel = listActiveTasks(workspace, projectFile, {
@@ -1873,6 +1882,16 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
       {}
     );
     assert.strictEqual(deniedCancel.errorCode, "TASK_OWNED_BY_ANOTHER_CONNECTION");
+
+    const cancelledOwn = cancelActiveTask(
+      workspace,
+      projectFile,
+      taskA.taskSessionId,
+      false,
+      { ownerCapability: capA }
+    );
+    assert.strictEqual(cancelledOwn.ok, true);
+    assert.strictEqual(cancelledOwn.userMessageKo, "작업 취소됨");
 
     const corruptDir = path.join(stateRoot, "tasks", "corrupt_blocker");
     fs.mkdirSync(corruptDir, { recursive: true });

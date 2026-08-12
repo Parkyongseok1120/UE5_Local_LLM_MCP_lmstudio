@@ -107,7 +107,7 @@ def test_rag_rejects_extended_refresh_in_essential_mode(tmp_path: Path) -> None:
         client.close()
 
 
-def test_agent_exposes_apply_edit_bundle_but_requires_task_authorization(tmp_path: Path) -> None:
+def test_agent_rejects_unrouted_apply_edit_bundle_before_auth_validation(tmp_path: Path) -> None:
     require_agent_mcp_deps()
     env = os.environ.copy()
     env.update(
@@ -126,18 +126,55 @@ def test_agent_exposes_apply_edit_bundle_but_requires_task_authorization(tmp_pat
         client.proc.stdin.flush()
         result = client.call_tool("apply_edit_bundle", {"files": []}, 2)
         assert result["result"].get("isError") is True
-        assert "TASK_SESSION_REQUIRED" in result["result"]["content"][0]["text"]
+        payload = result["result"].get("structuredContent") or json.loads(
+            result["result"]["content"][0]["text"]
+        )
+        assert payload["errorCode"] == "TASK_PLANNER_ROUTE_REQUIRED"
+        assert payload["requiredTool"] == "unreal_agent_plan"
+        assert payload["nextActionIsTool"] is False
     finally:
         client.close()
 
 
-def test_agent_mutation_tools_advertise_bounded_payload_contract(tmp_path: Path) -> None:
+def test_agent_routed_mutation_tools_advertise_bounded_payload_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     require_agent_mcp_deps()
+    from task_api import task_start
+
+    project = tmp_path / "Demo"
+    project.mkdir()
+    project_file = project / "Demo.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
+    started = task_start(
+        project,
+        request="Create Source/Demo/New.h",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "new_file", "files": ["Source/Demo/New.h"]}
+            ],
+        },
+    )
+    assert started["ok"] is True
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(
+        json.dumps({"activeProject": str(project_file)}),
+        encoding="utf-8",
+    )
     env = os.environ.copy()
     env.update(
         {
             "MCP_ESSENTIAL_TOOLS": "1",
-            "WORKSPACE_ROOT": str(tmp_path),
+            "WORKSPACE_ROOT": str(project),
+            "AGENT_STATE_ROOT": str(state_root),
+            "SHARED_UNREAL_CONFIG": str(shared_config),
             "ALLOW_WRITE": "1",
         }
     )
@@ -174,14 +211,43 @@ def test_agent_mutation_tools_advertise_bounded_payload_contract(tmp_path: Path)
 
 def test_agent_rejects_fabricated_write_authorization_with_plan_recovery(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     require_agent_mcp_deps()
+    from task_api import task_start
+
+    project = tmp_path / "Demo"
+    project.mkdir()
+    project_file = project / "Demo.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
+    started = task_start(
+        project,
+        request="Create Source/Demo/Fabricated.h",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "new_file", "files": ["Source/Demo/Fabricated.h"]}
+            ],
+        },
+    )
+    assert started["ok"] is True
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(
+        json.dumps({"activeProject": str(project_file)}),
+        encoding="utf-8",
+    )
     env = os.environ.copy()
     env.update(
         {
             "MCP_ESSENTIAL_TOOLS": "1",
-            "WORKSPACE_ROOT": str(tmp_path),
-            "AGENT_STATE_ROOT": str(tmp_path / "state"),
+            "WORKSPACE_ROOT": str(project),
+            "AGENT_STATE_ROOT": str(state_root),
+            "SHARED_UNREAL_CONFIG": str(shared_config),
             "ALLOW_WRITE": "1",
         }
     )
@@ -232,7 +298,7 @@ def test_agent_rejects_fabricated_write_authorization_with_plan_recovery(
         assert payload["nextAction"] == "unreal_agent_plan"
         assert payload["taskAuthorizationSource"] == "server_only"
         assert payload["doNotFabricateTaskAuthorization"] is True
-        assert not (tmp_path / "Source" / "Demo" / "Fabricated.h").exists()
+        assert not (project / "Source" / "Demo" / "Fabricated.h").exists()
     finally:
         client.close()
 

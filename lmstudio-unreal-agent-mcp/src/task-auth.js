@@ -1575,6 +1575,14 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
     const route = state.toolRoute && typeof state.toolRoute === "object"
       ? state.toolRoute
       : {};
+    const pendingGates = Array.isArray(route.pendingGates)
+      ? route.pendingGates.map(String).filter(Boolean)
+      : (Array.isArray(state.pendingGates)
+        ? state.pendingGates.map(String).filter(Boolean)
+        : []);
+    const routeNextAction = routeMissing
+      ? "unreal_task_status"
+      : (pendingGates[0] || "continue_with_current_tool_route");
     const connectionMatches = taskConnectionMatches(
       state,
       conversationId,
@@ -1593,6 +1601,9 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
       conversationId: String(state.conversationId || ""),
       routePhase: String(route.phase || ""),
       routeMissing,
+      pendingGates,
+      routeNextAction,
+      routeNextActionIsTool: Boolean(routeMissing || pendingGates.length),
       ownsActiveToolRoute: taskOwnsActiveToolRoute(
         state,
         conversationId,
@@ -1749,6 +1760,11 @@ function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], opti
   const bridgeEnv = {
     ...process.env,
     MCP_CLIENT_INSTANCE_ID: getMcpClientInstanceId(),
+    // Python otherwise inherits a locale-dependent Windows console encoding
+    // (commonly CP949). The bridge decodes stdout as UTF-8, so non-ASCII
+    // structured fields such as userMessageKo became U+FFFD in LM Studio.
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
   };
   const code = [
     "import json, sys",
@@ -1977,14 +1993,26 @@ function listActiveTasks(workspaceRoot, activeProject = "", options = {}) {
   try {
     const tasks = listRunningTasksForProject(workspaceRoot, activeProject, options);
     const corrupt = tasks.filter((item) => item.status === "corrupt");
+    const owned = tasks.filter((item) => (
+      item.status === "running"
+      && item.connectionMatches === true
+      && item.ownsActiveToolRoute === true
+    ));
     const activeProjectSelected = Boolean(String(activeProject || "").trim());
     const nextAction = corrupt.length
       ? "quarantine_corrupt_task"
-      : (tasks.length
-        ? "cancel_active_task"
+      : (owned.length === 1
+        ? String(owned[0].routeNextAction || "continue_with_current_tool_route")
+        : (tasks.length
+          ? "active_task_requires_explicit_user_decision"
         : (activeProjectSelected
           ? "enable_or_call_unreal_agent_plan"
-          : "get_active_project"));
+          : "get_active_project")));
+    const nextActionIsTool = Boolean(
+      corrupt.length
+      || (owned.length === 1 && owned[0].routeNextActionIsTool === true)
+      || (!activeProjectSelected && !tasks.length)
+    );
     return {
       ok: true,
       count: tasks.length,
@@ -1992,7 +2020,13 @@ function listActiveTasks(workspaceRoot, activeProject = "", options = {}) {
       corruptCount: corrupt.length,
       tasks,
       nextAction,
-      nextActionIsTool: Boolean(corrupt.length || tasks.length || !activeProjectSelected),
+      nextActionIsTool,
+      ...(tasks.length && !corrupt.length && owned.length !== 1 ? {
+        agentInstruction: (
+          "Task listing is diagnostic. A healthy task is never cancelled automatically. "
+          + "Resume or cancel only after explicit ownership and user intent are established."
+        ),
+      } : {}),
       ...(!tasks.length && !corrupt.length && activeProjectSelected ? {
         requiredProvider: "mcp/unreal-rag",
         requiredTool: "unreal_agent_plan",

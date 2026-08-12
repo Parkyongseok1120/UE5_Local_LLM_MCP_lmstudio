@@ -87,6 +87,17 @@ def initial_architecture_state() -> dict[str, Any]:
     return {"version": 1, "current": "Discovery", "transitionHistory": []}
 
 
+def _failed_closed_architecture_state(reason: str) -> dict[str, Any]:
+    """Return the fail-closed state used for persisted-state integrity failures."""
+
+    return {
+        "version": 1,
+        "current": "FailedClosed",
+        "transitionHistory": [],
+        "integrityError": str(reason or "persisted architecture state is invalid"),
+    }
+
+
 def reduce_architecture_state(
     state: dict[str, Any] | None,
     event: str,
@@ -133,19 +144,33 @@ def _state_path(session_id: str, project_root: str) -> Path:
 def load_architecture_state(session_id: str, project_root: str) -> dict[str, Any]:
     if not str(session_id or "").strip():
         return initial_architecture_state()
+    path = _state_path(session_id, project_root)
     try:
-        payload = json.loads(
-            _state_path(session_id, project_root).read_text(encoding="utf-8-sig")
-        )
-    except (OSError, json.JSONDecodeError):
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
         return initial_architecture_state()
+    except (OSError, UnicodeError):
+        return _failed_closed_architecture_state(
+            "persisted architecture state exists but is unreadable"
+        )
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return _failed_closed_architecture_state(
+            "persisted architecture state contains invalid JSON"
+        )
+    if not isinstance(payload, dict):
+        return _failed_closed_architecture_state(
+            "persisted architecture state must be a JSON object"
+        )
     if str(payload.get("current") or "") not in ARCHITECTURE_STATES:
-        return {
-            "version": 1,
-            "current": "FailedClosed",
-            "transitionHistory": [],
-            "integrityError": "persisted architecture state is invalid",
-        }
+        return _failed_closed_architecture_state(
+            "persisted architecture state is invalid"
+        )
+    if not isinstance(payload.get("transitionHistory"), list):
+        return _failed_closed_architecture_state(
+            "persisted architecture transition history is invalid"
+        )
     return payload
 
 
@@ -188,6 +213,7 @@ def architecture_state_for_result(
         error_code in {
             "ARCHITECTURE_PROPOSAL_SOURCE_CHANGED",
             "PROJECT_GRAPH_UNAVAILABLE",
+            "ARCHITECTURE_EVIDENCE_INCOMPLETE",
         }
         or payload.get("projectRoot") in (None, "")
         or graph.get("complete") is False
@@ -210,6 +236,17 @@ def architecture_state_for_result(
             gate = validation.get("implementationGate") or {}
             if gate.get("writesAllowed") is True:
                 return reduce_architecture_state(state, "VALIDATION_PASSED")
+            design_contract = (
+                validation.get("designContract")
+                if isinstance(validation.get("designContract"), dict)
+                else {}
+            )
+            if design_contract.get("validationLevel") == "Draft":
+                return reduce_architecture_state(
+                    state,
+                    "EXACT_REPAIR_REQUIRED",
+                    metadata={"reason": "bind_architecture_contract"},
+                )
             return reduce_architecture_state(
                 state,
                 "FAIL_CLOSED",

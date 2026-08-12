@@ -61,25 +61,16 @@ function stableAgentToolNames(allRegistered) {
 
 function phaseVisibleAgentToolNames(profileAllowed, context = {}) {
   const allowed = new Set(profileAllowed || []);
-  const status = String(context.status || "none");
-  const manifest = loadStableManifest();
-  if (status === "none") {
-    // The planner and task state live in unreal-rag. Advertising route-owned
-    // build/write tools before that provider has created a route invites the
-    // model to invent taskAuthorization. A clean startup therefore exposes
-    // only controls and source discovery; tools/list expands after the
-    // server-owned task route appears.
-    const unrouted = new Set(manifest.agentUnroutedDiscoverable || []);
-    return new Set([...allowed].filter((name) => unrouted.has(name)));
-  }
-  const always = new Set(manifest.agentAlwaysDiscoverable || []);
-  const route = context.route && typeof context.route === "object"
-    ? context.route
-    : context.state?.toolRoute && typeof context.state.toolRoute === "object"
-      ? context.state.toolRoute
-      : {};
-  const active = new Set(Array.isArray(route.activeTools) ? route.activeTools.map(String) : []);
-  return new Set([...allowed].filter((name) => always.has(name) || active.has(name)));
+  // Keep transport-level tools/list profile-stable. LM Studio 0.4.x may
+  // acknowledge tools/list_changed without rebuilding the current chat's
+  // generator catalog, which previously stranded a valid executor route with
+  // no write schemas. The context proxy still intersects these definitions
+  // with the server-owned active route before prediction, and CallTool remains
+  // the final authority for every client. `context` stays in the signature for
+  // API compatibility and diagnostics; it must not mutate the transport
+  // schema set mid-conversation.
+  void context;
+  return allowed;
 }
 
 function toolNotCallablePayload(toolName) {

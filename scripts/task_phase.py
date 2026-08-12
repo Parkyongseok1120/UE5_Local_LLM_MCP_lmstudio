@@ -220,18 +220,22 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
         if status in {"pending_approval", "awaiting_approval"}:
             next_action = "unreal_task_approve"
         elif status == "cancelled":
-            next_action = "unreal_task_resume"
+            # Resume remains an explicit user affordance in resumeAction. A
+            # cancellation result must not turn that optional control into the
+            # model's mandatory next workflow step.
+            next_action = ""
         elif status in {"failed", "cancellation_uncertain"}:
             next_action = "start_new_unreal_agent_plan"
         elif status == "completed":
             next_action = ""
         elif slice_plan_required:
-            # Feature intent resolves the slice and binds exact snapshots inside
-            # the same model-facing call. Exposing define_slices here recreates
-            # the resolver -> define -> resolver ceremony that the atomic gate
-            # is specifically intended to remove.
+            # Feature intent is one model-facing transaction, so do not force a
+            # doomed first resolver call before any concrete file is known. The
+            # planner route remains read-only while the model discovers a bounded
+            # 1-2 file slice; its first resolver call can then select, register,
+            # snapshot, and bind that slice atomically.
             next_action = (
-                "unreal_feature_intent_resolve"
+                "discover_bounded_feature_slice"
                 if "unreal_feature_intent_resolve" in pending_gates
                 else "unreal_task_define_slices"
             )
@@ -254,7 +258,7 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             next_action = (
                 pending_gates[0]
                 if pending_gates
-                else checkpoint_next_action or str(payload.get("resumeAction") or "")
+                else checkpoint_next_action
             )
 
         continuity_ready = (
@@ -303,7 +307,12 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             "blockedReasons": blocked_reasons,
         }
         route = compact_tool_route(state.get("toolRoute"))
-        if route:
+        if route and status not in {
+            "cancelled",
+            "completed",
+            "failed",
+            "cancellation_uncertain",
+        }:
             payload["toolRoute"] = route
         payload["selectedHypothesisId"] = str(
             state.get("selectedHypothesisId") or ""
@@ -347,6 +356,10 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
                 ),
                 "intentContractHash": str(
                     feature_intent.get("intentContractHash") or ""
+                ),
+                "discoveryRequiredBeforeResolve": bool(
+                    slice_plan_required
+                    and "unreal_feature_intent_resolve" in pending_gates
                 ),
             }
         if next_action:

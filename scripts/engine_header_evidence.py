@@ -20,6 +20,7 @@ from typing import Any, Iterable
 
 _HEADER_CATALOGS: dict[str, dict[str, list[Path]]] = {}
 _TYPE_DECLARATION_PATHS: dict[tuple[str, str], list[Path]] = {}
+_MAX_PYTHON_DECLARATION_SCAN_FILES = 512
 _SKIP_DIRS = {
     ".git",
     "Binaries",
@@ -97,7 +98,17 @@ def _header_catalog(engine_root: Path) -> dict[str, list[Path]]:
                 if not file_name.lower().endswith((".h", ".hpp", ".inl")):
                     continue
                 path = Path(directory) / file_name
-                if not _contained(path, engine_root):
+                # ``os.walk`` starts at a source root that was itself resolved
+                # below ``engine_root`` and every child name comes from that
+                # walker.  Resolving every one of the 40k+ installed UE
+                # headers performs a filesystem round-trip per file (and made
+                # the first GUI validator call take more than a minute when
+                # ``rg`` was not on LM Studio's PATH).  Lexical containment is
+                # sufficient for this trusted enumeration and keeps the
+                # portable Python fallback bounded on Windows, Linux, and
+                # macOS.  Individual candidate files are still resolved and
+                # checked again before their contents are read.
+                if not _lexically_contained(path, engine_root):
                     continue
                 catalog.setdefault(file_name.casefold(), []).append(path)
     _HEADER_CATALOGS[key] = catalog
@@ -244,6 +255,18 @@ def _discover_type_declaration_paths(
                 _TYPE_DECLARATION_PATHS[cache_key] = list(found[symbol])
                 resolved[symbol] = list(found[symbol])
             return resolved, len(missing)
+    # Reading every installed Engine header in Python is not a bounded
+    # fallback.  On a normal UE installation this is tens of thousands of
+    # files and made one LM Studio tool call take almost two minutes whenever
+    # ``rg`` was absent from the GUI process PATH.  Filename-matched headers
+    # have already been checked above.  Preserve the exhaustive Python path for
+    # small synthetic/source SDKs, but leave large-tree misses unresolved so
+    # the validator can escalate them once to UHT/UBT compiler proof.
+    if len(all_headers) > _MAX_PYTHON_DECLARATION_SCAN_FILES:
+        for symbol, cache_key in missing.items():
+            _TYPE_DECLARATION_PATHS[cache_key] = []
+            resolved[symbol] = []
+        return resolved, 0
     for header in all_headers:
         if not _contained(header, engine_root):
             continue

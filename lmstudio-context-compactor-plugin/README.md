@@ -8,12 +8,31 @@ compacted `Chat` to the configured underlying local model when the remaining bud
 With zero or multiple loaded LLMs, the plugin fails with a list of candidates and asks for an
 exact model key. The existing `mcp/unreal-agent` and `mcp/unreal-rag` plugins remain tool providers.
 
-Version 0.4.13 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
+Version 0.4.19 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
 before every prediction and buffers model text/tool calls until LM Studio confirms a safe stop.
 Context-limit and max-output truncations are discarded instead of being presented as completed work.
+Architecture proposals now carry an explicit local/network scope and stable invariant IDs. Bounded local
+features use the Bound contract without Strict-only alternatives, migration, or RPC ceremony.
 Explicit reasoning fragments stream as live progress while final text and tool calls remain atomic.
 The latest server-owned `activeTools` route is also intersected with the combined LM Studio catalog
 before prediction, preventing stale cross-MCP tool schemas from causing avoidable rejected calls.
+When a new executor route contains mutation tools but LM Studio still holds the Agent provider's
+pre-route catalog, the proxy forces one read-only catalog refresh. If the mutation schemas are still
+missing afterward, generation fails closed instead of polling health, checkpoint, or source reads.
+Terminal task responses also clear callable route ownership while preserving resume as an explicit
+user affordance, so a cancelled/completed task cannot leak its former executor/verifier route.
+Server-required recovery tools are now the only forced schema for their next prediction; an unrelated
+multi-read batch can no longer be generated and rejected after a RAG direct-source handoff.
+Provider-qualified LM Studio tool names are normalized before route matching, and server-owned task
+authorization/required arguments are injected into the selected schema before prediction. Initial
+active-project discovery remains a pre-task control call, while a planner with an already resolved
+project context no longer asks the model to repeat it. A successful bootstrap lookup forces that planner
+immediately, with both planner goal fields overwritten by the exact current user message. Broad feature requests now receive one bounded
+source-discovery phase before the atomic feature-intent bind instead of being forced into a resolver
+call with no exact file snapshot.
+Write requests without a server-owned route also have a bounded discovery phase: natural-language
+new-system design requests enter architecture validation, and ordinary source discovery is handed
+off to `unreal_agent_plan` after six successful discovery calls instead of reading files indefinitely.
 Strict tool-call rejection remains off by default, so multiple valid tool calls are preserved.
 
 > **Important — you must select this plugin as the chat model**  

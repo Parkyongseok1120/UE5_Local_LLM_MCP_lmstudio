@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from architecture_reasoning import (  # noqa: E402
+    _architecture_validation_level,
     analyze_architecture,
     source_snapshot_fingerprint,
     validate_architecture_proposal,
@@ -48,6 +49,157 @@ def test_architecture_analysis_has_boundaries_data_flow_and_state_candidates(tmp
     assert "not prove" in result["dataFlow"]["proofBoundary"]
 
 
+def test_architecture_rigor_keeps_local_async_strict_but_ignores_negative_non_goals() -> None:
+    assert _architecture_validation_level(
+        {
+            "decision": "add a local-only async worker",
+            "scope": {"networked": False, "runtime": "standalone"},
+            "implementationFiles": ["Source/Demo/Worker.cpp"],
+        },
+        False,
+    ) == "Strict"
+    assert _architecture_validation_level(
+        {
+            "decision": "edit one bounded local function",
+            "scope": {
+                "networked": False,
+                "runtime": "standalone",
+                "nonGoals": ["do not add persistence or schema migration"],
+            },
+            "implementationFiles": ["Source/Demo/Worker.cpp"],
+        },
+        False,
+    ) == "Draft"
+    assert _architecture_validation_level(
+        {
+            "decision": "edit one bounded local function",
+            "scope": {"networked": False, "runtime": "standalone"},
+            "implementationFiles": ["Source/Demo/Worker.cpp"],
+            "alternatives": [
+                {
+                    "name": "persistent save subsystem",
+                    "rationale": "rejected because persistence is outside this task",
+                }
+            ],
+        },
+        False,
+    ) == "Draft"
+
+
+def test_non_selected_subsystem_alternative_does_not_change_lifecycle_owner() -> None:
+    proposal = {
+        "decision": "keep one local undo entry point on the existing game mode",
+        "scope": {"networked": False, "runtime": "local_hotseat"},
+        "invariants": ["undo leaves the board consistent"],
+        "impactedSurfaces": ["Source/Demo/GameMode.cpp"],
+        "validationPlan": ["compile"],
+        "implementationFiles": ["Source/Demo/GameMode.cpp"],
+        "ownership": {"lifecycleOwner": "ADemoGameMode"},
+        "alternatives": ["UGameInstanceSubsystem"],
+    }
+    analysis = {
+        "projectRoot": "Demo",
+        "topology": {"owners": [], "sourceDependencyCycles": []},
+        "graphEvidence": {"complete": True, "sourceFileCount": 1},
+        "focus": {"unmatchedSymbols": []},
+    }
+
+    validation = validate_architecture_proposal(proposal, analysis)
+
+    assert validation["ok"] is True, validation["issues"]
+    assert validation["designContract"]["validationLevel"] == "Draft"
+    assert not any("GameInstanceSubsystem lifecycle" in issue for issue in validation["issues"])
+
+
+def test_negative_test_scope_does_not_require_test_files() -> None:
+    proposal = {
+        "decision": "bind one already-existing local worker contract",
+        "scope": {
+            "networked": False,
+            "runtime": "standalone",
+            "validationLevel": "Bound",
+        },
+        "invariants": [{"id": "I1", "statement": "worker behavior stays stable"}],
+        "impactedSurfaces": ["Source/Demo/Worker.cpp"],
+        "validationPlan": ["compile; no automated tests required for this source-only fixture"],
+        "implementationFiles": ["Source/Demo/Worker.cpp"],
+        "ownership": {
+            "stateOwner": "existing worker",
+            "dataOwner": "existing worker",
+            "lifecycleOwner": "existing caller",
+            "failurePolicy": "leave state unchanged",
+            "recoveryPolicy": "retry the caller",
+        },
+        "stateInventory": [
+            {
+                "state": "worker value",
+                "owner": "existing worker",
+                "lifetime": "call",
+                "authority": "local",
+                "source": "existing",
+                "cleanup": "stack unwind",
+            }
+        ],
+        "lifecycleTransitions": [
+            {
+                "event": "initialize",
+                "owner": "existing worker",
+                "preconditions": ["caller is valid"],
+                "commitPoint": "worker starts",
+                "failureRecovery": "leave state unchanged",
+                "cleanup": "caller releases the worker",
+            }
+        ],
+        "validationMatrix": [
+            {"invariantId": "I1", "checks": ["compile"]},
+        ],
+        "implementationSlices": [
+            {
+                "sliceId": "worker",
+                "files": ["Source/Demo/Worker.cpp"],
+                "dependsOn": [],
+                "invariantIds": ["I1"],
+                "validation": ["compile"],
+            }
+        ],
+    }
+    analysis = {
+        "projectRoot": "",
+        "topology": {"owners": [], "sourceDependencyCycles": []},
+        "graphEvidence": {"complete": True, "sourceFileCount": 1},
+        "focus": {"unmatchedSymbols": []},
+    }
+
+    validation = validate_architecture_proposal(proposal, analysis)
+
+    assert validation["ok"] is True, validation["issues"]
+    assert validation["designContract"]["testFilesRequired"] is False
+
+
+def test_schema_and_path_mismatches_use_exact_repair_not_full_replan() -> None:
+    analysis = {
+        "projectRoot": "Demo",
+        "topology": {"owners": [], "sourceDependencyCycles": []},
+        "graphEvidence": {"complete": True, "sourceFileCount": 1},
+        "focus": {"unmatchedSymbols": []},
+    }
+    proposal = {
+        "decision": "edit one local file",
+        "scope": {"networked": False},
+        "invariants": ["preserve behavior"],
+        "impactedSurfaces": ["Source/Demo/Worker.cpp"],
+        "validationPlan": ["compile"],
+        "implementationFiles": ["../Escape.cpp"],
+    }
+
+    validation = validate_architecture_proposal(proposal, analysis)
+
+    assert validation["ok"] is False
+    assert validation["repairStrategy"] == "exact_paths"
+    repair_paths = {row["jsonPath"] for row in validation["repairRequirements"]}
+    assert {"scope", "implementationFiles"}.issubset(repair_paths)
+
+
 def test_architecture_proposal_requires_design_contract_and_blocks_cycle(tmp_path: Path) -> None:
     _fixture(tmp_path)
     incomplete = analyze_architecture(tmp_path, proposal={"decision": "add service"})
@@ -65,9 +217,11 @@ def test_architecture_proposal_requires_design_contract_and_blocks_cycle(tmp_pat
 
     assert incomplete["proposalValidation"]["ok"] is False
     assert "invariants" in incomplete["proposalValidation"]["issues"][0]
-    assert incomplete["proposalValidation"]["repairStrategy"] == "full_replan"
+    assert incomplete["proposalValidation"]["repairStrategy"] == "exact_paths"
     assert complete["proposalValidation"]["ok"] is True
     assert complete["proposalValidation"]["implementationGate"]["writesAllowed"] is True
+    assert complete["proposalValidation"]["designContract"]["validationLevel"] == "Draft"
+    assert complete["proposalValidation"]["implementationGate"]["nextAction"] == "implement_next_slice"
 
 
 def test_architecture_reasoning_supports_python_source_candidates(tmp_path: Path) -> None:
@@ -127,6 +281,34 @@ def test_architecture_cycle_is_reported_once_and_closes_implementation_gate(tmp_
     assert result["proposalValidation"]["implementationGate"]["writesAllowed"] is False
 
 
+def test_unrelated_existing_module_cycle_does_not_block_bounded_write(tmp_path: Path) -> None:
+    module_a = tmp_path / "Source" / "A"
+    module_b = tmp_path / "Source" / "B"
+    module_c = tmp_path / "Source" / "C"
+    module_a.mkdir(parents=True)
+    module_b.mkdir(parents=True)
+    module_c.mkdir(parents=True)
+    (module_a / "A.h").write_text('#include "../B/B.h"\n', encoding="utf-8")
+    (module_b / "B.h").write_text('#include "../A/A.h"\n', encoding="utf-8")
+    (module_c / "C.cpp").write_text("void RunLocal() {}\n", encoding="utf-8")
+
+    result = analyze_architecture(
+        tmp_path,
+        proposal={
+            "decision": "edit only the independent C module",
+            "scope": {"networked": False, "runtime": "standalone"},
+            "invariants": ["A and B remain untouched"],
+            "impactedSurfaces": ["Source/C/C.cpp"],
+            "validationPlan": ["compile"],
+            "implementationFiles": ["Source/C/C.cpp"],
+        },
+    )
+
+    assert result["topology"]["sourceDependencyCycles"]
+    assert result["proposalValidation"]["ok"] is True
+    assert result["proposalValidation"]["implementationGate"]["writesAllowed"] is True
+
+
 def test_architecture_analysis_requires_an_explicit_project_root() -> None:
     result = analyze_architecture("")
 
@@ -167,7 +349,36 @@ def test_architecture_analysis_fails_closed_for_unmatched_focus_symbol(tmp_path:
     assert result["ok"] is False
     assert result["focus"]["unmatchedSymbols"] == ["MissingWorker"]
     assert result["proposalValidation"]["ok"] is False
+    assert result["proposalValidation"]["repairStrategy"] == "evidence_refill"
+    assert result["proposalValidation"]["repairRequirements"] == []
+    assert result["proposalValidation"]["implementationGate"]["nextAction"] == (
+        "collect_architecture_evidence"
+    )
     assert result["proposalValidation"]["implementationGate"]["writesAllowed"] is False
+
+
+def test_incomplete_graph_refills_evidence_before_replanning_proposal() -> None:
+    proposal = {
+        "decision": "edit one local worker",
+        "scope": {"networked": False, "runtime": "standalone"},
+        "invariants": ["preserve worker behavior"],
+        "impactedSurfaces": ["Source/Demo/Worker.cpp"],
+        "validationPlan": ["compile"],
+        "implementationFiles": ["Source/Demo/Worker.cpp"],
+    }
+    analysis = {
+        "projectRoot": "Demo",
+        "topology": {"owners": [], "sourceDependencyCycles": []},
+        "graphEvidence": {"complete": False, "sourceFileCount": 1},
+        "focus": {"unmatchedSymbols": []},
+    }
+
+    validation = validate_architecture_proposal(proposal, analysis)
+
+    assert validation["ok"] is False
+    assert validation["repairStrategy"] == "evidence_refill"
+    assert validation["designContract"]["requiresFullReplan"] is False
+    assert validation["repairRequirements"] == []
 
 
 def test_architecture_analysis_reports_guarded_state_owners_and_lifecycle_boundaries(
@@ -330,6 +541,26 @@ def test_staged_architecture_proposal_accepts_covered_acyclic_slices(
             "recoveryPolicy": "roll back the active slice",
         },
         "migrationPlan": ["add compatible Core API", "move Game callsite"],
+        "stateInventory": [
+            {
+                "state": "worker state",
+                "owner": "module:Game",
+                "lifetime": "process",
+                "authority": "local",
+                "source": "existing",
+                "cleanup": "module shutdown",
+            }
+        ],
+        "lifecycleTransitions": [
+            {
+                "event": "worker migration",
+                "owner": "module:Game",
+                "preconditions": ["Core API available"],
+                "commitPoint": "Game callsite compiled",
+                "failureRecovery": "retain old callsite",
+                "cleanup": "remove compatibility shim after regression",
+            }
+        ],
         "validationMatrix": [
             {"invariant": invariant, "checks": ["dependency graph", "compile"]}
         ],
@@ -470,6 +701,249 @@ def test_networked_proposal_rejects_vague_rpc_and_missing_lifecycle_contract(
     assert any("lifecycleTransitions" in item for item in validation["issues"])
 
 
+def test_local_bound_proposal_uses_explicit_scope_and_invariant_ids(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    proposal = {
+        "decision": "Add a local-only move history helper; no RPC or dedicated server use",
+        "scope": {
+            "networked": False,
+            "runtime": "local_hotseat",
+            "validationLevel": "Bound",
+            "nonGoals": ["do not modify networked play or server features"],
+        },
+        "invariants": [
+            {"id": "I1", "statement": "Board state remains owned by the existing rule engine"},
+            {"id": "I2", "statement": "One undo removes one move and restores one turn"},
+        ],
+        "impactedSurfaces": ["Source/Game/Private/Worker.cpp"],
+        "validationPlan": ["compile", "local undo regression"],
+        "implementationFiles": ["Source/Game/Private/Worker.cpp"],
+        "ownership": {
+            "stateOwner": "local move history helper",
+            "dataOwner": "existing rule engine",
+            "lifecycleOwner": "local game state",
+            "failurePolicy": "leave board and turn unchanged",
+            "recoveryPolicy": "clear history on restart",
+        },
+        "stateInventory": [
+            {
+                "state": "move history",
+                "owner": "local move history helper",
+                "lifetime": "local match",
+                "authority": "local",
+                "source": "new",
+                "cleanup": "clear on restart",
+            }
+        ],
+        "lifecycleTransitions": [
+            {
+                "event": "undo",
+                "owner": "local move history helper",
+                "preconditions": ["history is non-empty"],
+                "commitPoint": "after rule engine removes the stone",
+                "failureRecovery": "leave history unchanged",
+                "cleanup": "none",
+            }
+        ],
+        "validationMatrix": [
+            {"invariantId": "I1", "checks": ["ownership review"]},
+            {"invariantId": "I2", "checks": ["local undo regression"]},
+        ],
+        "implementationSlices": [
+            {
+                "sliceId": "local-undo",
+                "files": ["Source/Game/Private/Worker.cpp"],
+                "dependsOn": [],
+                "invariantIds": ["I1", "I2"],
+                "validation": ["compile", "local undo regression"],
+            }
+        ],
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert validation["ok"] is True, validation["issues"]
+    contract = validation["designContract"]
+    assert contract["validationLevel"] == "Bound"
+    assert contract["networkedProposal"] is False
+    assert contract["normalizedInvariantReferenceCount"] == 4
+    assert contract["alternativeCount"] == 0
+    assert validation["repairStrategy"] == "exact_paths"
+
+    legacy = copy.deepcopy(proposal)
+    legacy["invariants"] = [
+        "I1: Board state remains owned by the existing rule engine",
+        "I2: One undo removes one move and restores one turn",
+    ]
+    legacy["implementationSlices"][0].pop("invariantIds")
+    legacy["implementationSlices"][0]["invariants"] = ["I1", "I2"]
+    legacy["validationMatrix"] = [
+        {"invariant": "I1", "checks": ["ownership review"]},
+        {"invariant": "I2", "checks": ["local undo regression"]},
+    ]
+
+    legacy_validation = analyze_architecture(tmp_path, proposal=legacy)["proposalValidation"]
+
+    assert legacy_validation["ok"] is True, legacy_validation["issues"]
+    assert legacy_validation["designContract"]["normalizedInvariantReferenceCount"] == 4
+
+
+def test_new_event_driven_owner_requires_connected_files_and_promised_tests(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    base = {
+        "decision": "Add a local move-history subsystem and undo command",
+        "scope": {
+            "networked": False,
+            "runtime": "local_hotseat",
+            "validationLevel": "Bound",
+        },
+        "invariants": [
+            {"id": "I1", "statement": "Every accepted move is recorded once"},
+            {"id": "I2", "statement": "Undo restores the prior board and turn"},
+        ],
+        "impactedSurfaces": [
+            "Source/Game/Public/MoveHistorySubsystem.h",
+            "Source/Game/Private/MoveHistorySubsystem.cpp",
+        ],
+        "validationPlan": ["build", "automated undo regression tests"],
+        "implementationFiles": [
+            "Source/Game/Public/MoveHistorySubsystem.h",
+            "Source/Game/Private/MoveHistorySubsystem.cpp",
+        ],
+        "ownership": {
+            "stateOwner": "UMoveHistorySubsystem",
+            "dataOwner": "UMoveHistorySubsystem",
+            "lifecycleOwner": "AGameModeBase via GameInstanceSubsystem registration",
+            "failurePolicy": "leave the board unchanged",
+            "recoveryPolicy": "clear history on restart",
+        },
+        "stateInventory": [
+            {
+                "state": "move history",
+                "owner": "UMoveHistorySubsystem",
+                "lifetime": "local match",
+                "authority": "local host",
+                "source": "new",
+                "cleanup": "clear on restart",
+            }
+        ],
+        "lifecycleTransitions": [
+            {
+                "event": "OnStonePlaced",
+                "owner": "UMoveHistorySubsystem",
+                "preconditions": ["move was accepted"],
+                "commitPoint": "append one immutable entry",
+                "failureRecovery": "leave history unchanged",
+                "cleanup": "unbind when the subsystem deinitializes",
+            }
+        ],
+        "validationMatrix": [
+            {"invariantId": "I1", "checks": ["event-to-history assertion"]},
+            {"invariantId": "I2", "checks": ["undo state assertion"]},
+        ],
+        "implementationSlices": [
+            {
+                "sliceId": "history-core",
+                "files": [
+                    "Source/Game/Public/MoveHistorySubsystem.h",
+                    "Source/Game/Private/MoveHistorySubsystem.cpp",
+                ],
+                "dependsOn": [],
+                "invariantIds": ["I1", "I2"],
+                "validation": ["compile"],
+            }
+        ],
+    }
+
+    rejected = analyze_architecture(tmp_path, proposal=base)["proposalValidation"]
+
+    assert rejected["ok"] is False
+    assert rejected["repairStrategy"] == "exact_paths"
+    assert any("require integrationPoints" in issue for issue in rejected["issues"])
+    assert any("testFiles is empty" in issue for issue in rejected["issues"])
+    assert any("GameInstanceSubsystem lifecycle" in issue for issue in rejected["issues"])
+
+    connected = copy.deepcopy(base)
+    connected["ownership"]["lifecycleOwner"] = (
+        "UGameInstance and FSubsystemCollection own subsystem creation/destruction"
+    )
+    connected["implementationFiles"].extend(
+        [
+            "Source/Game/Private/Worker.cpp",
+            "Source/Game/Private/Tests/MoveHistory.spec.cpp",
+        ]
+    )
+    connected["impactedSurfaces"].extend(
+        [
+            "Source/Game/Private/Worker.cpp",
+            "Source/Game/Private/Tests/MoveHistory.spec.cpp",
+        ]
+    )
+    connected["integrationPoints"] = [
+        {
+            "event": "OnStonePlaced",
+            "producerOwner": "existing game-state move path",
+            "consumerOwner": "UMoveHistorySubsystem",
+            "bindingOwner": "UMoveHistorySubsystem Initialize/Deinitialize",
+            "files": [
+                "Source/Game/Private/Worker.cpp",
+                "Source/Game/Private/MoveHistorySubsystem.cpp",
+            ],
+            "validation": ["one accepted move produces one history entry"],
+        }
+    ]
+    connected["testFiles"] = ["Source/Game/Private/Tests/MoveHistory.spec.cpp"]
+    connected["implementationSlices"].append(
+        {
+            "sliceId": "history-integration-tests",
+            "files": [
+                "Source/Game/Private/Worker.cpp",
+                "Source/Game/Private/Tests/MoveHistory.spec.cpp",
+            ],
+            "dependsOn": ["history-core"],
+            "invariantIds": ["I1", "I2"],
+            "validation": ["build", "automated undo regression tests"],
+        }
+    )
+
+    accepted = analyze_architecture(tmp_path, proposal=connected)["proposalValidation"]
+
+    assert accepted["ok"] is True, accepted["issues"]
+    assert accepted["designContract"]["integrationContractRequired"] is True
+    assert accepted["designContract"]["integrationPointCount"] == 1
+    assert accepted["designContract"]["testFiles"] == [
+        "Source/Game/Private/Tests/MoveHistory.spec.cpp"
+    ]
+
+
+def test_explicit_local_scope_conflicting_with_real_replication_requires_replan(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    proposal = {
+        "decision": "Replicate move history to remote clients",
+        "scope": {"networked": False, "runtime": "local_hotseat"},
+        "invariants": ["server owns replicated move history"],
+        "impactedSurfaces": ["Source/Game/Private/Worker.cpp"],
+        "validationPlan": ["compile"],
+        "implementationFiles": ["Source/Game/Private/Worker.cpp"],
+        "networking": {
+            "authorityOwner": "server",
+            "clientInitiated": False,
+            "replicatedState": ["AGameStateBase::MoveHistory"],
+        },
+    }
+
+    validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
+
+    assert any("scope.networked=false contradicts" in issue for issue in validation["issues"])
+    assert validation["repairStrategy"] == "full_replan"
+
+
 def test_networked_proposal_accepts_concrete_rpc_state_and_lifecycle_contract(
     tmp_path: Path,
 ) -> None:
@@ -484,7 +958,28 @@ def test_networked_proposal_accepts_concrete_rpc_state_and_lifecycle_contract(
             "automation regression",
             "RPC ownership and owning connection callability",
         ],
-        "alternatives": ["reuse current owner", "add a service"],
+        "alternatives": [
+            {
+                "name": "reuse current owner",
+                "scores": {
+                    "complexity": 2,
+                    "maintainability": 5,
+                    "performance": 4,
+                    "risk": 2,
+                },
+            },
+            {
+                "name": "add a service",
+                "scores": {
+                    "complexity": 4,
+                    "maintainability": 3,
+                    "performance": 3,
+                    "risk": 4,
+                },
+            },
+        ],
+        "selectedAlternative": "reuse current owner",
+        "implementationFiles": ["Source/Game/Private/Worker.cpp"],
         "ownership": {
             "stateOwner": "AReplicatedState",
             "dataOwner": "AReplicatedState",
@@ -525,6 +1020,22 @@ def test_networked_proposal_accepts_concrete_rpc_state_and_lifecycle_contract(
                 "cleanup": "clear pending request",
             }
         ],
+        "migrationPlan": ["retain the current owner and add the RPC validation path"],
+        "validationMatrix": [
+            {
+                "invariant": "Only the authority commits state",
+                "checks": ["RPC ownership and owning connection callability"],
+            }
+        ],
+        "implementationSlices": [
+            {
+                "sliceId": "network-flow",
+                "files": ["Source/Game/Private/Worker.cpp"],
+                "dependsOn": [],
+                "invariants": ["Only the authority commits state"],
+                "validation": ["build/compile", "automation regression"],
+            }
+        ],
     }
 
     validation = analyze_architecture(tmp_path, proposal=proposal)["proposalValidation"]
@@ -534,6 +1045,30 @@ def test_networked_proposal_accepts_concrete_rpc_state_and_lifecycle_contract(
     assert contract["networkingComplete"] is True
     assert contract["rpcPathConcrete"] is True
     assert contract["duplicateTruthSources"] == []
+
+    missing_network_field = copy.deepcopy(proposal)
+    missing_network_field["networking"].pop("replicatedState")
+    bounded_repair = analyze_architecture(
+        tmp_path, proposal=missing_network_field
+    )["proposalValidation"]
+    assert bounded_repair["ok"] is False
+    assert bounded_repair["repairStrategy"] == "exact_paths"
+    assert {row["jsonPath"] for row in bounded_repair["repairRequirements"]} == {
+        "networking"
+    }
+
+    client_flag_mismatch = copy.deepcopy(proposal)
+    client_flag_mismatch["networking"]["clientInitiated"] = False
+    client_flag_repair = analyze_architecture(
+        tmp_path, proposal=client_flag_mismatch
+    )["proposalValidation"]
+    assert any(
+        "clientInitiated is false" in item for item in client_flag_repair["issues"]
+    )
+    assert client_flag_repair["repairStrategy"] == "exact_paths"
+    assert "networking.clientInitiated" in {
+        row["jsonPath"] for row in client_flag_repair["repairRequirements"]
+    }
 
     server_owned_rpc = copy.deepcopy(proposal)
     server_owned_rpc["networking"]["rpcOwner"] = "AGomokuGameMode::Server_SetReady"
@@ -1215,6 +1750,10 @@ def test_staged_architecture_proposal_rejects_slice_dependency_cycle(
 
     assert validation["ok"] is False
     assert any("slice dependency cycle" in item for item in validation["issues"])
+    assert validation["repairStrategy"] == "exact_paths"
+    assert "implementationSlices" in {
+        row["jsonPath"] for row in validation["repairRequirements"]
+    }
     assert validation["implementationGate"]["writesAllowed"] is False
 
 

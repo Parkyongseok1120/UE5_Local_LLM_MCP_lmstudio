@@ -298,6 +298,8 @@ from semantic_refactor_guard import (
 from architecture_reasoning import analyze_architecture, source_snapshot_fingerprint
 from feature_intent_contract import (
     FEATURE_INTENT_GATE,
+    can_auto_bind_architecture_feature_intent,
+    resolve_architecture_bound_feature_intent,
     resolve_feature_intent,
     target_snapshot_hash,
 )
@@ -433,9 +435,58 @@ def _architecture_proposal_schema() -> dict[str, Any]:
         "type": "object",
         "properties": {
             "decision": {"type": "string", "minLength": 1},
+            "scope": {
+                "type": "object",
+                "description": (
+                    "Explicit risk boundary. scope.networked is authoritative; negative prose such as "
+                    "'no RPC' is never used to infer a networked design."
+                ),
+                "properties": {
+                    "networked": {"type": "boolean"},
+                    "runtime": {
+                        "type": "string",
+                        "enum": [
+                            "local_hotseat",
+                            "standalone",
+                            "listen_server",
+                            "dedicated_server",
+                            "editor",
+                            "mixed",
+                            "unknown",
+                        ],
+                    },
+                    "risk": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "validationLevel": {
+                        "type": "string",
+                        "enum": ["Draft", "Bound", "Strict"],
+                    },
+                    "nonGoals": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                },
+                "required": ["networked", "runtime"],
+                "additionalProperties": False,
+            },
             "invariants": {
                 "type": "array",
-                "items": {"type": "string", "minLength": 1},
+                "description": (
+                    "Prefer stable {id, statement} entries. Legacy non-empty strings remain accepted."
+                ),
+                "items": {
+                    "oneOf": [
+                        {"type": "string", "minLength": 1},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "minLength": 1},
+                                "statement": {"type": "string", "minLength": 1},
+                            },
+                            "required": ["id", "statement"],
+                            "additionalProperties": False,
+                        },
+                    ]
+                },
                 "minItems": 1,
             },
             "impactedSurfaces": {
@@ -502,6 +553,47 @@ def _architecture_proposal_schema() -> dict[str, Any]:
             },
             "implementationFiles": {
                 "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "integrationPoints": {
+                "type": "array",
+                "description": (
+                    "Required for a new event-driven runtime owner. Name the existing event "
+                    "producer, the new consumer, who binds/unbinds them, every touched file, "
+                    "and an observable validation. These are functional connection points, not "
+                    "an additional model-facing phase."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "event": {"type": "string", "minLength": 1},
+                        "producerOwner": {"type": "string", "minLength": 1},
+                        "consumerOwner": {"type": "string", "minLength": 1},
+                        "bindingOwner": {"type": "string", "minLength": 1},
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                            "minItems": 1,
+                        },
+                        "validation": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                            "minItems": 1,
+                        },
+                    },
+                    "required": [
+                        "event", "producerOwner", "consumerOwner", "bindingOwner",
+                        "files", "validation",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "testFiles": {
+                "type": "array",
+                "description": (
+                    "Exact project-relative automated-test files when validationPlan promises tests. "
+                    "Every test file must also appear in implementationFiles and implementationSlices."
+                ),
                 "items": {"type": "string", "minLength": 1},
             },
             "assetCreationPlan": {
@@ -715,13 +807,18 @@ def _architecture_proposal_schema() -> dict[str, Any]:
                     "type": "object",
                     "properties": {
                         "invariant": {"type": "string", "minLength": 1},
+                        "invariantId": {"type": "string", "minLength": 1},
                         "checks": {
                             "type": "array",
                             "items": {"type": "string", "minLength": 1},
                             "minItems": 1,
                         },
                     },
-                    "required": ["invariant", "checks"],
+                    "required": ["checks"],
+                    "anyOf": [
+                        {"required": ["invariantId"]},
+                        {"required": ["invariant"]},
+                    ],
                     "additionalProperties": False,
                 },
             },
@@ -745,18 +842,27 @@ def _architecture_proposal_schema() -> dict[str, Any]:
                             "items": {"type": "string", "minLength": 1},
                             "minItems": 1,
                         },
+                        "invariantIds": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                            "minItems": 1,
+                        },
                         "validation": {
                             "type": "array",
                             "items": {"type": "string", "minLength": 1},
                             "minItems": 1,
                         },
                     },
-                    "required": ["sliceId", "files", "invariants", "validation"],
+                    "required": ["sliceId", "files", "validation"],
+                    "anyOf": [
+                        {"required": ["invariantIds"]},
+                        {"required": ["invariants"]},
+                    ],
                     "additionalProperties": False,
                 },
             },
         },
-        "required": ["decision", "invariants", "impactedSurfaces", "validationPlan", "alternatives"],
+        "required": ["decision", "scope", "invariants", "impactedSurfaces", "validationPlan"],
     }
 
 
@@ -1349,6 +1455,8 @@ def _handle_unreal_feature_intent_resolve(
         for item in (initial_slice.get("files") or [])
         if str(item or "").strip()
     ]
+    if initial_targets:
+        internal_phases.append("ResolveSlice")
     if not initial_targets:
         supplied_slices = arguments.get("slices")
         if not isinstance(supplied_slices, list) or not supplied_slices:
@@ -1561,10 +1669,31 @@ def _handle_unreal_feature_intent_resolve(
         or str(arguments.get("selectionRationale") or "").strip()
         or question_answers
     )
+    slice_provenance = (
+        task_state.get("sliceProvenance")
+        if isinstance(task_state.get("sliceProvenance"), dict)
+        else {}
+    )
+    architecture_contract = (
+        slice_provenance.get("featureIntentContract")
+        if isinstance(slice_provenance.get("featureIntentContract"), dict)
+        else {}
+    )
+    has_architecture_provenance = bool(
+        slice_provenance.get("source") == "validated_architecture"
+        and architecture_contract
+    )
+    architecture_bound_local = can_auto_bind_architecture_feature_intent(
+        slice_provenance=slice_provenance,
+        target_files=target_files,
+        snapshot_issues=snapshot_issues,
+        explicit_semantic_input=explicit_semantic_input,
+    )
     use_fast_path = bool(
         fast_path.get("eligible")
         and not snapshot_issues
         and not explicit_semantic_input
+        and not has_architecture_provenance
     )
     effective_selected_intent = str(arguments.get("selectedIntentId") or "")
     effective_rationale = str(arguments.get("selectionRationale") or "")
@@ -1577,19 +1706,27 @@ def _handle_unreal_feature_intent_resolve(
         )
         effective_answers = bounded_local_question_answers()
 
-    full_resolution = resolve_feature_intent(
-        request,
-        candidates=None,
-        selected_intent_id=effective_selected_intent,
-        selection_rationale=effective_rationale,
-        blocking_question_answers=effective_answers,
-        user_approved=False,
-        write_intent=True,
-        reversible=True if use_fast_path else None,
-        bounded_scope=True if use_fast_path else None,
-        candidate_count=candidate_count,
-        include_full=True,
-    )
+    if architecture_bound_local:
+        full_resolution = resolve_architecture_bound_feature_intent(
+            request,
+            architecture_contract=architecture_contract,
+            target_files=target_files,
+            include_full=True,
+        )
+    else:
+        full_resolution = resolve_feature_intent(
+            request,
+            candidates=None,
+            selected_intent_id=effective_selected_intent,
+            selection_rationale=effective_rationale,
+            blocking_question_answers=effective_answers,
+            user_approved=False,
+            write_intent=True,
+            reversible=True if use_fast_path else None,
+            bounded_scope=True if use_fast_path else None,
+            candidate_count=candidate_count,
+            include_full=True,
+        )
     approval_result: dict[str, Any] | None = None
     if (
         full_resolution.get("errorCode")
@@ -1705,6 +1842,27 @@ def _handle_unreal_feature_intent_resolve(
             "activeSliceId": str(slice_registration.get("activeSliceId") or ""),
             "sliceCount": len(slice_registration.get("slices") or []),
             "pendingSlices": list(slice_registration.get("pendingSlices") or []),
+        }
+    elif initial_targets:
+        plan_scope = (
+            task_state.get("planScope")
+            if isinstance(task_state.get("planScope"), dict)
+            else {}
+        )
+        slice_progress = (
+            task_state.get("sliceProgress")
+            if isinstance(task_state.get("sliceProgress"), dict)
+            else {}
+        )
+        payload["sliceResolution"] = {
+            "serverOwned": True,
+            "activeSliceId": str(
+                selected_slice.get("sliceId")
+                or task_state.get("activeSliceId")
+                or ""
+            ),
+            "sliceCount": len(plan_scope.get("slices") or []),
+            "pendingSlices": list(slice_progress.get("pendingSlices") or []),
         }
     server.structured_tool_result(message_id, payload)
 
@@ -2624,12 +2782,32 @@ def _handle_unreal_architecture_reasoning(
                     )
                     return
     if isinstance(proposal, dict):
+        from build_symbol_graph import source_inventory_signature
         from read_query_history import check_repeat_query, exact_query_fingerprint
 
+        try:
+            proposal_signature_root = Path(project_root).expanduser().resolve()
+            if (
+                proposal_signature_root.is_file()
+                and proposal_signature_root.suffix.lower() == ".uproject"
+            ):
+                proposal_signature_root = proposal_signature_root.parent
+            proposal_source_signature = source_inventory_signature(proposal_signature_root)
+        except OSError:
+            proposal_source_signature = "unavailable"
         proposal_delivery_key = exact_query_fingerprint(
             tool="unreal_architecture_reasoning",
             active_project=project_root,
-            query=json.dumps(proposal, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            query=json.dumps(
+                {
+                    "proposal": proposal,
+                    "symbols": symbols,
+                    "sourceInventorySignature": proposal_source_signature,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             mode="architecture_proposal",
             scope="project",
             detail_level="proposal",
@@ -2704,8 +2882,8 @@ def _handle_unreal_architecture_reasoning(
             )
             return
 
-    def record_proposal_delivery() -> None:
-        if not proposal_delivery_key:
+    def record_proposal_delivery(*, repair_strategy: str = "") -> None:
+        if not proposal_delivery_key or repair_strategy == "evidence_refill":
             return
         from read_query_history import record_query_delivery
 
@@ -2788,20 +2966,36 @@ def _handle_unreal_architecture_reasoning(
         else {}
     )
     if isinstance(proposal_validation, dict) and proposal_validation.get("ok") is not True:
-        full_replan = proposal_validation.get("repairStrategy") == "full_replan"
+        repair_strategy = str(proposal_validation.get("repairStrategy") or "")
+        full_replan = repair_strategy == "full_replan"
+        evidence_refill = repair_strategy == "evidence_refill"
         if full_replan:
             server.progress_phase(message_id, "Architecture recovery: full replan required")
+        elif evidence_refill:
+            server.progress_phase(message_id, "Architecture recovery: source evidence refill required")
         payload["ok"] = False
-        payload["errorCode"] = "ARCHITECTURE_PROPOSAL_INVALID"
+        payload["errorCode"] = (
+            "ARCHITECTURE_EVIDENCE_INCOMPLETE"
+            if evidence_refill
+            else "ARCHITECTURE_PROPOSAL_INVALID"
+        )
         payload["retryable"] = True
         payload["stopCurrentWorkflow"] = False
         payload["requiredNextAction"] = (
-            "submit_full_architecture_proposal"
-            if full_replan
-            else "revise_architecture_proposal"
+            "collect_architecture_evidence"
+            if evidence_refill
+            else (
+                "submit_full_architecture_proposal"
+                if full_replan
+                else "revise_architecture_proposal"
+            )
         )
         payload["nextActionIsTool"] = False
         payload["agentInstruction"] = (
+            "Correct the missing focus symbol or refill the unreadable/incomplete direct-source evidence, then "
+            "revalidate the stored proposal. Do not rewrite a design merely because its evidence was unavailable."
+            if evidence_refill
+            else (
             "Re-read direct project source and submit one complete independently derived proposal. The current "
             "ownership/state/lifecycle foundation is inconsistent, so do not use proposalPatch/proposalRepairs "
             "and do not preserve the rejected central ownership decision."
@@ -2810,6 +3004,7 @@ def _handle_unreal_architecture_reasoning(
                 "Use repairSubmission.argumentShape on the next call. Include every required path exactly once, "
                 "keep its jsonPath string unchanged, and replace only placeholder values with your own corrected design. "
                 "For an array path provide one complete replacement array; do not repeat that path per item."
+            )
             )
         )
     gate_passed = bool(
@@ -2833,13 +3028,43 @@ def _handle_unreal_architecture_reasoning(
     if gate_completion is not None:
         payload["gateCompletion"] = gate_completion
     persist_proposal_draft(payload)
-    if isinstance(proposal_validation, dict) and proposal_validation.get("ok") is not True:
+    if isinstance(proposal, dict):
+        if gate_passed:
+            server.set_pending_architecture_handoff(
+                project_root=project_root,
+                proposal=proposal,
+                session_id=proposal_session_id,
+                proposal_revision=str(payload.get("proposalRevision") or ""),
+                source_snapshot_fingerprint=str(
+                    (payload.get("graphEvidence") or {}).get(
+                        "sourceSnapshotFingerprint"
+                    )
+                    or ""
+                ),
+            )
+        else:
+            # A rejected revision must invalidate a previously staged bridge;
+            # otherwise the next planner call could bind stale slices from the
+            # last passing proposal.
+            server.set_pending_architecture_handoff(
+                project_root=project_root,
+                proposal=None,
+            )
+    if (
+        isinstance(proposal_validation, dict)
+        and proposal_validation.get("ok") is not True
+        and proposal_validation.get("repairStrategy") != "evidence_refill"
+    ):
         payload["repairSubmission"] = _architecture_repair_submission(
             str(payload.get("proposalRevision") or ""),
             list(proposal_validation.get("repairRequirements") or [])[:24],
             repair_strategy=str(proposal_validation.get("repairStrategy") or ""),
         )
-    record_proposal_delivery()
+    record_proposal_delivery(
+        repair_strategy=str((proposal_validation or {}).get("repairStrategy") or "")
+        if isinstance(proposal_validation, dict)
+        else ""
+    )
     server.structured_tool_result(
         message_id,
         compact_architecture_payload(payload, detail_level),
@@ -3279,7 +3504,24 @@ def _handle_unreal_get_active_project(server: McpServer, message_id: Any, argume
         "sharedConfigPath": str(shared_config_path()),
         "projectContext": project_context,
     }
-    if not project_context.get("ok"):
+    if project_context.get("ok"):
+        payload.update(
+            {
+                # Project identity is the one safe pre-task lookup.  Once it
+                # succeeds, task ownership must be established before the
+                # model starts bounded discovery; otherwise capable models
+                # can recreate the observed list/read loop.
+                "nextAction": "unreal_agent_plan",
+                "nextActionIsTool": True,
+                "requiredNextTool": "unreal_agent_plan",
+                "agentInstruction": (
+                    "Call unreal_agent_plan exactly once with the current user's full "
+                    "request. The planner already receives this projectContext; do not "
+                    "call unreal_get_active_project again."
+                ),
+            }
+        )
+    else:
         payload["suggestedToolCalls"] = project_context.get("suggestedToolCalls") or []
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -3373,6 +3615,31 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                 "selectedIntentId": {"type": "string"},
                 "selectionRationale": {"type": "string"},
                 "blockingQuestionAnswers": {"type": "object"},
+                "slices": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 24,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "sliceId": {"type": "string"},
+                            "files": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 2,
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["sliceId", "files"],
+                        "additionalProperties": False,
+                    },
+                },
+                "activeSliceId": {"type": "string"},
+                "targetFiles": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "items": {"type": "string"},
+                },
                 "taskAuthorization": _task_authorization_schema(),
             },
             handler=_handle_unreal_feature_intent_resolve,
@@ -3669,6 +3936,12 @@ class McpServer:
         self._cache_partial_clear: list[str] = []
         self._applied_cache_generation = self._cache_generation
         self._architecture_graph_cache: dict[str, dict[str, Any]] = {}
+        # One-shot server-owned bridge from a validated architecture proposal
+        # to the guarded task planner.  The model should not have to copy the
+        # same implementation slices into a second tool call, and the task SSOT
+        # must not silently replace a validated multi-slice plan with an
+        # incomplete two-file guess.
+        self._pending_architecture_handoff: dict[str, Any] = {}
         try:
             from reconcile_jobs import reconcile_stale_jobs
 
@@ -3711,6 +3984,104 @@ class McpServer:
             self._architecture_graph_cache.clear()
         except Exception:
             self._cache_refresh_required = True
+
+    @staticmethod
+    def _project_root_identity(project: str | Path) -> str:
+        candidate = Path(project).expanduser().resolve()
+        if candidate.is_file() and candidate.suffix.lower() == ".uproject":
+            candidate = candidate.parent
+        value = str(candidate)
+        return value.casefold() if os.name == "nt" else value
+
+    def set_pending_architecture_handoff(
+        self,
+        *,
+        project_root: str,
+        proposal: dict[str, Any] | None,
+        session_id: str = "",
+        proposal_revision: str = "",
+        source_snapshot_fingerprint: str = "",
+    ) -> None:
+        slices: list[dict[str, Any]] = []
+        for row in (proposal or {}).get("implementationSlices") or []:
+            if not isinstance(row, dict):
+                continue
+            slice_id = str(row.get("sliceId") or "").strip()
+            files = [
+                str(path or "").strip()
+                for path in (row.get("files") or [])
+                if str(path or "").strip()
+            ]
+            if slice_id and files:
+                slices.append({"sliceId": slice_id, "files": files})
+        if not project_root or not slices:
+            self._pending_architecture_handoff = {}
+            return
+        proposal_value = proposal if isinstance(proposal, dict) else {}
+        scope = proposal_value.get("scope") if isinstance(proposal_value.get("scope"), dict) else {}
+        ownership = (
+            proposal_value.get("ownership")
+            if isinstance(proposal_value.get("ownership"), dict)
+            else {}
+        )
+        feature_intent_contract = {
+            "decision": str(proposal_value.get("decision") or "")[:2000],
+            "scope": {
+                key: value
+                for key, value in scope.items()
+                if key in {"networked", "runtime", "risk", "validationLevel", "nonGoals"}
+            },
+            "invariants": list(proposal_value.get("invariants") or [])[:8],
+            "validationPlan": [
+                str(item or "")[:1000]
+                for item in (proposal_value.get("validationPlan") or [])[:12]
+                if str(item or "").strip()
+            ],
+            "ownership": {
+                key: str(value or "")[:1000]
+                for key, value in ownership.items()
+                if key in {
+                    "stateOwner", "dataOwner", "lifecycleOwner",
+                    "failurePolicy", "recoveryPolicy",
+                }
+                and str(value or "").strip()
+            },
+            "selectedAlternative": str(
+                proposal_value.get("selectedAlternative") or ""
+            )[:1000],
+            "hasMigrationPlan": bool(proposal_value.get("migrationPlan")),
+        }
+        self._pending_architecture_handoff = {
+            "projectRootIdentity": self._project_root_identity(project_root),
+            "sessionId": str(session_id or "").strip(),
+            "proposalRevision": str(proposal_revision or ""),
+            "sourceSnapshotFingerprint": str(source_snapshot_fingerprint or ""),
+            "slices": slices,
+            "featureIntentContract": feature_intent_contract,
+            "recordedAt": time.time(),
+        }
+
+    def consume_pending_architecture_handoff(
+        self,
+        project: str | Path,
+        *,
+        session_id: str = "",
+        max_age_seconds: float = 600.0,
+    ) -> dict[str, Any]:
+        handoff = dict(self._pending_architecture_handoff or {})
+        if not handoff:
+            return {}
+        age = max(0.0, time.time() - float(handoff.get("recordedAt") or 0.0))
+        if (
+            age > max_age_seconds
+            or handoff.get("projectRootIdentity") != self._project_root_identity(project)
+            or str(handoff.get("sessionId") or "").strip()
+            != str(session_id or "").strip()
+        ):
+            self._pending_architecture_handoff = {}
+            return {}
+        self._pending_architecture_handoff = {}
+        return handoff
 
     def architecture_graph(
         self,
@@ -4004,34 +4375,60 @@ class McpServer:
             if project_root:
                 state_input.setdefault("projectRoot", project_root)
             previous_state = load_architecture_state(session_id, project_root)
-            try:
-                architecture_state = architecture_state_for_result(
-                    previous_state,
-                    state_input,
-                    proposal_supplied=any(
-                        request_arguments.get(key) is not None
-                        for key in ("proposal", "proposalPatch", "proposalRepairs")
-                    ),
-                )
-            except ArchitectureTransitionError as exc:
-                architecture_state = {
-                    "version": 1,
-                    "current": "FailedClosed",
-                    "transitionHistory": list(
-                        previous_state.get("transitionHistory") or []
-                    )[-63:],
-                    "integrityError": str(exc),
-                }
+            if (
+                previous_state.get("current") == "FailedClosed"
+                and str(previous_state.get("integrityError") or "").strip()
+            ):
+                architecture_state = previous_state
                 structured_payload.update(
                     {
                         "ok": False,
-                        "errorCode": "ARCHITECTURE_STATE_TRANSITION_INVALID",
-                        "error": str(exc),
+                        "errorCode": "ARCHITECTURE_STATE_INTEGRITY_FAILED",
+                        "error": str(previous_state.get("integrityError") or ""),
                         "retryable": False,
+                        "stopCurrentWorkflow": True,
+                        "requiredNextAction": "repair_or_remove_persisted_architecture_state",
+                        "nextActionIsTool": False,
                     }
                 )
+            else:
+                try:
+                    architecture_state = architecture_state_for_result(
+                        previous_state,
+                        state_input,
+                        proposal_supplied=any(
+                            request_arguments.get(key) is not None
+                            for key in ("proposal", "proposalPatch", "proposalRepairs")
+                        ),
+                    )
+                except ArchitectureTransitionError as exc:
+                    architecture_state = {
+                        "version": 1,
+                        "current": "FailedClosed",
+                        "transitionHistory": list(
+                            previous_state.get("transitionHistory") or []
+                        )[-63:],
+                        "integrityError": str(exc),
+                    }
+                    structured_payload.update(
+                        {
+                            "ok": False,
+                            "errorCode": "ARCHITECTURE_STATE_TRANSITION_INVALID",
+                            "error": str(exc),
+                            "retryable": False,
+                        }
+                    )
             structured_payload["architectureState"] = architecture_state
             save_architecture_state(session_id, project_root, architecture_state)
+            if structured_payload.get("ok") is False:
+                # The handler may have staged a proposal handoff before the
+                # persisted FSM integrity/transition check ran.  Never allow a
+                # fail-closed state result to leak that candidate into the next
+                # task planner call.
+                self.set_pending_architecture_handoff(
+                    project_root=project_root,
+                    proposal=None,
+                )
         if isinstance(structured_payload, dict):
             from mcp_control_envelope import attach_control_envelope
 
@@ -5557,6 +5954,13 @@ class McpServer:
                             ),
                         },
                         "mode": {"type": "string", "default": "auto"},
+                        "sessionId": {
+                            "type": "string",
+                            "description": (
+                                "Stable chat session id injected by the context plugin; binds a "
+                                "validated architecture handoff to this planner call."
+                            ),
+                        },
                     },
                     ["request"],
                 ),
@@ -7157,6 +7561,101 @@ class McpServer:
                 if not task.get("ok"):
                     self.structured_tool_result(message_id, task)
                     return
+                architecture_handoff = self.consume_pending_architecture_handoff(
+                    active_project,
+                    session_id=str(arguments.get("sessionId") or "").strip(),
+                )
+                if writes_allowed:
+                    if architecture_handoff:
+                        from task_api import task_cancel, task_define_slices
+
+                        handoff_slices = list(architecture_handoff.get("slices") or [])
+                        slice_registration = task_define_slices(
+                            self.workspace,
+                            task_authorization=dict(task.get("taskAuthorization") or {}),
+                            slices=handoff_slices,
+                            active_slice_id=str(
+                                (handoff_slices[0] or {}).get("sliceId")
+                                if handoff_slices
+                                else ""
+                            ),
+                            slice_provenance={
+                                "source": "validated_architecture",
+                                "proposalRevision": str(
+                                    architecture_handoff.get("proposalRevision") or ""
+                                ),
+                                "sourceSnapshotFingerprint": str(
+                                    architecture_handoff.get("sourceSnapshotFingerprint") or ""
+                                ),
+                                "featureIntentContract": dict(
+                                    architecture_handoff.get("featureIntentContract") or {}
+                                ),
+                            },
+                        )
+                        if not slice_registration.get("ok"):
+                            task_session_id = str(
+                                (task.get("taskAuthorization") or {}).get(
+                                    "taskSessionId"
+                                )
+                                or ""
+                            )
+                            if task_session_id:
+                                task_cancel(self.workspace, task_session_id)
+                            self.structured_tool_result(
+                                message_id,
+                                {
+                                    "ok": False,
+                                    "errorCode": "ARCHITECTURE_SLICE_BINDING_FAILED",
+                                    "error": (
+                                        slice_registration.get("error")
+                                        or "Validated architecture slices could not be bound to the task."
+                                    ),
+                                    "retryable": False,
+                                    "stopCurrentWorkflow": True,
+                                    "taskRouteTerminal": True,
+                                    "architectureHandoff": {
+                                        "serverOwned": True,
+                                        "proposalRevision": str(
+                                            architecture_handoff.get("proposalRevision") or ""
+                                        ),
+                                        "sliceCount": len(handoff_slices),
+                                    },
+                                    "agentInstruction": (
+                                        "Stop. The server rejected its architecture-to-task slice binding; "
+                                        "do not replace it with model-invented slices or start another task."
+                                    ),
+                                },
+                            )
+                            return
+                        task = {
+                            **task,
+                            "state": slice_registration.get("state") or task.get("state") or {},
+                            "taskAuthorization": (
+                                slice_registration.get("taskAuthorization")
+                                or task.get("taskAuthorization")
+                                or {}
+                            ),
+                            "toolRoute": (
+                                slice_registration.get("toolRoute")
+                                or task.get("toolRoute")
+                                or {}
+                            ),
+                        }
+                        payload["architectureHandoff"] = {
+                            "serverOwned": True,
+                            "proposalRevision": str(
+                                architecture_handoff.get("proposalRevision") or ""
+                            ),
+                            "sourceSnapshotFingerprint": str(
+                                architecture_handoff.get("sourceSnapshotFingerprint") or ""
+                            ),
+                            "sliceCount": len(handoff_slices),
+                            "activeSliceId": str(
+                                (handoff_slices[0] or {}).get("sliceId")
+                                if handoff_slices
+                                else ""
+                            ),
+                        }
                 self.notify_tools_list_changed()
                 task_state = task.get("state") or {}
                 task_authorization = dict(task.get("taskAuthorization") or {})
@@ -7192,6 +7691,16 @@ class McpServer:
                     ],
                 }
                 pending_gates = list(tool_route.get("pendingGates") or [])
+                selected_slice = (
+                    tool_route.get("selectedSlice")
+                    if isinstance(tool_route.get("selectedSlice"), dict)
+                    else {}
+                )
+                feature_slice_discovery = bool(
+                    pending_gates
+                    and str(pending_gates[0]) == FEATURE_INTENT_GATE
+                    and selected_slice.get("scopeRequired") is True
+                )
                 compile_diagnostic_first = (
                     str(payload.get("taskKind") or "")
                     in {"compile_fix", "reflection_fix", "module_fix"}
@@ -7200,6 +7709,8 @@ class McpServer:
                 next_action = (
                     "build_unreal_project"
                     if compile_diagnostic_first
+                    else "discover_bounded_feature_slice"
+                    if feature_slice_discovery
                     else (
                         str(pending_gates[0])
                         if pending_gates
@@ -7207,7 +7718,10 @@ class McpServer:
                     )
                 )
                 payload["nextAction"] = next_action
-                payload["nextActionIsTool"] = next_action != "continue_with_current_tool_route"
+                payload["nextActionIsTool"] = next_action not in {
+                    "continue_with_current_tool_route",
+                    "discover_bounded_feature_slice",
+                }
                 payload["nextActionArgs"] = (
                     {
                         "taskAuthorization": compact_task_authorization(
@@ -7252,12 +7766,16 @@ class McpServer:
                         else ""
                     )
                     + (
-                        "For unreal_feature_intent_resolve, make one model-facing call: when "
-                        "selectedSlice.files is empty, include every already-discovered concrete "
-                        "1-2 file slice in its slices argument. Selection, slice registration, "
-                        "snapshot capture, and binding are server-owned internal phases; never "
-                        "call unreal_task_define_slices separately for this gate. "
-                        if next_action == "unreal_feature_intent_resolve"
+                        "Use the active read/search route to discover one concrete 1-2 file feature "
+                        "slice first. Then call unreal_feature_intent_resolve exactly once with every "
+                        "discovered bounded slice in its slices argument. Selection, slice "
+                        "registration, snapshot capture, and binding are server-owned internal "
+                        "phases; never call unreal_task_define_slices separately for this gate. "
+                        if feature_slice_discovery
+                        else "For unreal_feature_intent_resolve, make one model-facing call with "
+                        "the already-bound selectedSlice. Selection, snapshot capture, and binding "
+                        "are server-owned internal phases. "
+                        if next_action == FEATURE_INTENT_GATE
                         else ""
                     )
                     + "For targetFiles, "
@@ -7651,7 +8169,13 @@ class McpServer:
         zero_result = match_count == 0
 
         structured: dict[str, Any] = {
-            "ok": not project_miss,
+            # A project-scope miss is a successful search observation, not an
+            # MCP execution failure. Direct source remains authoritative and
+            # the explicit search_files handoff advances the same workflow.
+            "ok": True,
+            "searchCompleted": True,
+            "projectEvidenceAvailable": not project_miss,
+            "projectMiss": project_miss,
             "matches": rows,
             "hybrid": use_hybrid,
             "scope": resolved_scope,
@@ -7768,7 +8292,7 @@ class McpServer:
             result_text,
             structured=structured,
             char_limit=char_limit,
-            is_error=bool(project_miss),
+            is_error=False,
         )
 
     def handle_symbol_lookup(self, message_id: Any, arguments: dict[str, Any]) -> None:

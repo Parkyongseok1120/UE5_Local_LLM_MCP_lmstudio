@@ -463,9 +463,16 @@ function collectControlFields(value, state) {
       }
     } else if (!protocolControl && key === "requiredNextToolArgs" && child && typeof child === "object") {
       directArgs = child;
+    } else if (key === "taskRouteTerminal" && child === true) {
+      state.taskRouteTerminal = true;
+      state.toolRoute = null;
+      state.taskRouteOwnership = null;
+      state.requiredNextTool = null;
+      state.requiredNextToolRef = null;
+      state.requiredNextToolArgs = null;
     } else if (["taskAuthorization", "routeAuthorization"].includes(key)) {
       const ownership = compactTaskRouteOwnership(child);
-      if (ownership) state.taskRouteOwnership = ownership;
+      if (ownership && state.taskRouteTerminal !== true) state.taskRouteOwnership = ownership;
     } else if (key === "constraints" && Array.isArray(child)) {
       state.constraints.push(...child.filter((item) => typeof item === "string"));
     } else if (["diagnosticCode", "errorCode", "errorKey", "errorSubkind", "firstError"].includes(key) && child != null) {
@@ -489,12 +496,14 @@ function collectControlFields(value, state) {
     } else if (key === "buildVerification" && child && typeof child === "object") {
       state.buildVerification = child;
     } else if (key === "toolRoute" && child && typeof child === "object") {
-      state.toolRoute = {
-        routeHash: child.routeHash || "",
-        phase: child.phase || "",
-        activeTools: Array.isArray(child.activeTools) ? child.activeTools.slice(0, 16) : [],
-        selectedSlice: child.selectedSlice || null,
-      };
+      if (state.taskRouteTerminal !== true) {
+        state.toolRoute = {
+          routeHash: child.routeHash || "",
+          phase: child.phase || "",
+          activeTools: Array.isArray(child.activeTools) ? child.activeTools.slice(0, 16) : [],
+          selectedSlice: child.selectedSlice || null,
+        };
+      }
     } else if (["invariants", "acceptanceCriteria", "postconditions"].includes(key) && Array.isArray(child)) {
       state.invariants.push(...child.filter((item) => typeof item === "string"));
     } else if (["automationCoverage", "engineHeaderLookup", "coverageStatus", "coverage"].includes(key)) {
@@ -986,6 +995,13 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     pendingToolCall: prior.pendingToolCall || null,
     pendingToolCalls: Array.isArray(prior.pendingToolCalls) ? [...prior.pendingToolCalls] : [],
     completedToolCallIds: Array.isArray(prior.completedToolCallIds) ? [...prior.completedToolCallIds].slice(-256) : [],
+    // RAG and Agent publish tool catalogs independently. Preserve the one-shot
+    // catalog refresh across its tool-result turn so a stale client catalog
+    // cannot send the model into an unbounded health/read recovery loop.
+    catalogRefresh: prior.catalogRefresh && typeof prior.catalogRefresh === "object"
+      && !Array.isArray(prior.catalogRefresh)
+      ? { ...prior.catalogRefresh }
+      : null,
     compactionGeneration: Number(prior.compactionGeneration || 0),
     sourceMessageCount: snapshots.length,
     sourceHistoryHash: sha256(stableStringify(snapshots)),
@@ -1098,8 +1114,17 @@ function isMajorGoalChange(priorObjective, latestObjective) {
 }
 
 function toolNamesMatch(expected, actual) {
-  const left = String(expected || "").trim().toLowerCase();
-  const right = String(actual || "").trim().toLowerCase();
+  // LM Studio SDK revisions have exposed the same MCP tool as either a plain
+  // function name or a provider-qualified path. Compare a separator-normalized
+  // form so `mcp/unreal-rag/unreal_agent_plan` and `unreal_agent_plan` bind to
+  // one contract without loosening ordinary suffix matching.
+  const normalize = (value) => String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const left = normalize(expected);
+  const right = normalize(actual);
   if (!left || !right) return false;
   return left === right || left.endsWith(`_${right}`) || right.endsWith(`_${left}`);
 }
@@ -1400,6 +1425,13 @@ function validateCheckpoint(checkpoint) {
     if (!Number.isFinite(count) || count < 0) return false;
   }
   if (checkpoint.sourceHistoryHash !== undefined && typeof checkpoint.sourceHistoryHash !== "string") return false;
+  if (checkpoint.catalogRefresh !== undefined && checkpoint.catalogRefresh !== null) {
+    if (typeof checkpoint.catalogRefresh !== "object" || Array.isArray(checkpoint.catalogRefresh)) return false;
+    if (typeof checkpoint.catalogRefresh.routeHash !== "string") return false;
+    const attempts = Number(checkpoint.catalogRefresh.attempts);
+    if (!Number.isInteger(attempts) || attempts < 0 || attempts > 1) return false;
+    if (!["requested", "synchronized", "failed"].includes(checkpoint.catalogRefresh.status)) return false;
+  }
   if (checkpoint.semanticBlocker !== undefined && checkpoint.semanticBlocker !== null) {
     if (typeof checkpoint.semanticBlocker !== "object" || Array.isArray(checkpoint.semanticBlocker)) return false;
     if (!Array.isArray(checkpoint.semanticBlocker.forbiddenTools)) return false;

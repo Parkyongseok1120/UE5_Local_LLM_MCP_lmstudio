@@ -150,6 +150,372 @@ test("task route ownership rule distinguishes available and missing planners", (
   assert.match(missingText, /do not claim implementation or attempt writes/);
 });
 
+test("server-owned task authorization is injected into eligible tool calls", () => {
+  const { enrichToolRequestControl } = require("../dist/generator.js");
+  const ownership = { taskSessionId: "task-session-1", ownerCapability: "owner-capability-1" };
+  const request = {
+    id: "sketch-1",
+    type: "function",
+    name: "unreal_code_sketch_claim_validate",
+    arguments: { sketch: "void Test() {}" },
+  };
+  const tools = [{
+    type: "function",
+    function: {
+      name: "unreal_code_sketch_claim_validate",
+      parameters: {
+        type: "object",
+        properties: {
+          sketch: { type: "string" },
+          taskAuthorization: { type: "object" },
+        },
+      },
+    },
+  }];
+
+  const enriched = enrichToolRequestControl(
+    request,
+    "compactor-session-1",
+    { taskRouteOwnership: ownership },
+    "implement the feature",
+    tools,
+  );
+
+  assert.deepEqual(enriched.arguments.taskAuthorization, ownership);
+  assert.equal(enriched.arguments.sketch, "void Test() {}");
+});
+
+test("provider-qualified required feature gate is forced with server-owned auth", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-feature-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-feature-1", ownerCapability: "owner-feature-1" };
+    const model = {
+      identifier: "required-feature-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(
+          opts.rawTools.tools.map((tool) => tool.function.name),
+          ["mcp/unreal-rag/unreal_feature_intent_resolve"],
+        );
+        assert.equal(opts.rawTools.tools[0].function.parameters.required.includes("taskAuthorization"), false);
+        opts.onToolCallRequestStart(1, { toolCallId: "feature-1" });
+        opts.onToolCallRequestNameReceived(1, "mcp/unreal-rag/unreal_feature_intent_resolve");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"selectedIntentId":"bounded_local"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "feature-1",
+            type: "function",
+            name: "mcp/unreal-rag/unreal_feature_intent_resolve",
+            arguments: { selectedIntentId: "bounded_local" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      toolRoute: {
+        routeHash: "route-feature-1",
+        phase: "planner",
+        activeTools: ["unreal_feature_intent_resolve"],
+      },
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "unreal_feature_intent_resolve",
+        nextActionIsTool: true,
+        retryPolicy: "none",
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "implement the bounded local feature" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "plan-feature-1", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "plan-feature-1", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+    ] });
+    const tools = [{
+      type: "function",
+      function: {
+        name: "mcp/unreal-rag/unreal_feature_intent_resolve",
+        parameters: {
+          type: "object",
+          properties: {
+            selectedIntentId: { type: "string" },
+            taskAuthorization: { type: "object" },
+          },
+          required: ["taskAuthorization"],
+        },
+      },
+    }];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    const end = emitted.find((event) => event.kind === "end");
+    assert.ok(end);
+    assert.equal(end.request.arguments.selectedIntentId, "bounded_local");
+    assert.deepEqual(end.request.arguments.taskAuthorization, ownership);
+    assert.equal(emitted.some((event) => event.kind === "failure"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("active project bootstrap forces planner with the exact current user goal", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-active-project-plan-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const exactGoal = "현재 O-Mock 프로젝트에서 가장 앞선 미완성 기능을 실제로 구현해줘";
+    const model = {
+      identifier: "active-project-plan-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(
+          opts.rawTools.tools.map((tool) => tool.function.name),
+          ["mcp/unreal-rag/unreal_agent_plan"],
+        );
+        opts.onToolCallRequestStart(1, { toolCallId: "plan-after-active-project" });
+        opts.onToolCallRequestNameReceived(1, "unreal_agent_plan");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"request":"continue"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "plan-after-active-project",
+            type: "function",
+            name: "unreal_agent_plan",
+            arguments: { request: "continue" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const bootstrap = {
+      activeProject: "C:/Projects/O-Mock/O_Mock.uproject",
+      projectContext: { ok: true, projectName: "O_Mock" },
+      requiredNextTool: "unreal_agent_plan",
+      control: {
+        version: 1,
+        phase: "unreal_get_active_project",
+        status: "NeedsAction",
+        nextAction: "unreal_agent_plan",
+        nextActionIsTool: true,
+        retryPolicy: "none",
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: exactGoal }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "active-project-1", type: "function", name: "unreal_get_active_project", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "active-project-1",
+        name: "unreal_get_active_project",
+        content: JSON.stringify(bootstrap),
+      }] },
+    ] });
+    const tools = [{
+      type: "function",
+      function: {
+        name: "mcp/unreal-rag/unreal_agent_plan",
+        parameters: {
+          type: "object",
+          properties: { request: { type: "string" } },
+          required: ["request"],
+        },
+      },
+    }];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    const end = emitted.find((event) => event.kind === "end");
+    assert.ok(end);
+    assert.equal(end.request.name, "unreal_agent_plan");
+    assert.equal(end.request.arguments.request, exactGoal);
+    assert.equal(emitted.some((event) => event.kind === "failure"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("fresh write task exposes only unreal_get_active_project before planner", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-initial-active-project-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let advertisedTools = [];
+    let bootstrapRule = "";
+    const model = {
+      identifier: "initial-active-project-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(history, opts) {
+        assert.equal(opts.rawTools.force, true);
+        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+        bootstrapRule = history.getMessagesArray()
+          .filter((message) => message.getRole() === "system")
+          .map((message) => message.getText()).join("\n");
+        opts.onToolCallRequestStart(1, { toolCallId: "initial-active-project-1" });
+        opts.onToolCallRequestNameReceived(1, "unreal_get_active_project");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "initial-active-project-1",
+            type: "function",
+            name: "unreal_get_active_project",
+            arguments: {},
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const tools = [
+      "unreal_get_active_project",
+      "get_workspace_info",
+      "unreal_agent_plan",
+      "read_file",
+      "apply_edit_bundle",
+    ].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+    const history = Chat.empty();
+    history.append("system", "rules");
+    history.append("user", "현재 O-Mock 프로젝트의 미완성 기능을 실제로 구현해줘");
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.deepEqual(advertisedTools, ["unreal_get_active_project"]);
+    assert.match(bootstrapRule, /Do not call workspace, directory, read, search/);
+    assert.equal(
+      emitted.some((event) => event.kind === "end" && event.request.name === "unreal_get_active_project"),
+      true,
+    );
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("natural-language independent system design requires architecture validation", () => {
+  const { requiresArchitectureValidation } = require("../dist/generator.js");
+  const tools = [{ type: "function", function: { name: "unreal_architecture_reasoning" } }];
+
+  assert.equal(
+    requiresArchitectureValidation(
+      "작은 독립 시스템으로 설계하고 구현해줘",
+      tools,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresArchitectureValidation(
+      "Create a standalone move history subsystem for local play",
+      tools,
+    ),
+    true,
+  );
+});
+
+test("bounded pre-route discovery forces one planner handoff for write goals", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-pre-route-planner-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let advertisedTools = [];
+    let forced = false;
+    let sawHandoffRule = false;
+    const model = {
+      identifier: "pre-route-planner-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(history, opts) {
+        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+        forced = opts.rawTools?.force === true;
+        sawHandoffRule = history.getMessagesArray().some(
+          (message) => message.getRole() === "system"
+            && message.getText().includes("[UNREAL_PRE_ROUTE_PLANNER_HANDOFF]"),
+        );
+        opts.onToolCallRequestStart(1, { toolCallId: "plan-after-discovery" });
+        opts.onToolCallRequestNameReceived(1, "unreal_agent_plan");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"request":"implement bounded rule fix"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "plan-after-discovery",
+            type: "function",
+            name: "unreal_agent_plan",
+            arguments: { request: "implement bounded rule fix" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const tools = ["read_file", "list_directory", "unreal_agent_plan", "evidence_record"].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+    const messages = [
+      { role: "system", content: [{ type: "text", text: "rules" }] },
+      { role: "user", content: [{ type: "text", text: "implement bounded rule fix" }] },
+    ];
+    for (let index = 0; index < 6; index += 1) {
+      const id = `pre-route-read-${index}`;
+      messages.push({
+        role: "assistant",
+        content: [{ type: "toolCallRequest", toolCallRequest: {
+          id,
+          type: "function",
+          name: "read_file",
+          arguments: { path: `Source/Rule${index}.cpp` },
+        } }],
+      });
+      messages.push({
+        role: "tool",
+        content: [{ type: "toolCallResult", toolCallId: id, content: `source-${index}` }],
+      });
+    }
+
+    const history = Chat.from({ messages });
+    await generate(
+      controllerFor(model, { preRouteDiscoveryLimit: 6 }, stateRoot, emitted, tools),
+      history,
+    );
+
+    assert.deepEqual(advertisedTools, ["unreal_agent_plan"]);
+    assert.equal(forced, true);
+    assert.equal(sawHandoffRule, true);
+    assert.equal(
+      emitted.some((event) => event.kind === "end" && event.request.name === "unreal_agent_plan"),
+      true,
+    );
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("unrouted agent catalog removes mutation schemas before prediction", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-unrouted-agent-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -269,6 +635,186 @@ test("routed work catalog hides checkpoint until server explicitly requires it",
   }
 });
 
+test("stale pre-route Agent catalog forces exactly one read-only catalog refresh", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-catalog-refresh-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let advertisedTools = [];
+    let forced = false;
+    let refreshRulePresent = false;
+    const model = {
+      identifier: "catalog-refresh-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(history, opts) {
+        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+        forced = opts.rawTools?.force === true;
+        refreshRulePresent = history.getMessagesArray().some(
+          (message) => message.getRole() === "system"
+            && message.getText().includes("[UNREAL_TOOL_CATALOG_REFRESH]"),
+        );
+        opts.onToolCallRequestStart(1, { toolCallId: "catalog-refresh-1" });
+        opts.onToolCallRequestNameReceived(1, "get_active_project");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "catalog-refresh-1",
+            type: "function",
+            name: "get_active_project",
+            arguments: {},
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: {
+        taskSessionId: "task-catalog-refresh",
+        ownerCapability: "owner-catalog-refresh",
+      },
+      toolRoute: {
+        routeHash: "route-catalog-refresh",
+        phase: "executor",
+        activeTools: ["apply_edit_bundle", "static_validate_project"],
+      },
+      control: {
+        version: 1,
+        phase: "code_sketch_claim_validate",
+        status: "NeedsAction",
+        nextAction: "implement_next_slice",
+        nextActionIsTool: false,
+        retryPolicy: "none",
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "implement the bounded change" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "route-1", type: "function", name: "code_sketch_claim_validate", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "route-1", name: "code_sketch_claim_validate", content: JSON.stringify(route),
+      }] },
+    ] });
+    const staleTools = ["get_active_project", "unreal_rag_health", "read_file"].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, staleTools), history);
+
+    assert.deepEqual(advertisedTools, ["get_active_project"]);
+    assert.equal(forced, true);
+    assert.equal(refreshRulePresent, true);
+    assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "get_active_project"), true);
+    assert.deepEqual(activeCheckpoint(stateRoot).catalogRefresh, {
+      routeHash: "route-catalog-refresh",
+      attempts: 1,
+      status: "requested",
+      tool: "get_active_project",
+      requestedAt: activeCheckpoint(stateRoot).catalogRefresh.requestedAt,
+    });
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("stale Agent catalog fails closed after the single refresh instead of polling health or reads", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-catalog-refresh-bounded-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let respondCount = 0;
+    const model = {
+      identifier: "catalog-refresh-bounded-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        respondCount += 1;
+        opts.onToolCallRequestStart(1, { toolCallId: "catalog-refresh-bounded-1" });
+        opts.onToolCallRequestNameReceived(1, "get_active_project");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "catalog-refresh-bounded-1",
+            type: "function",
+            name: "get_active_project",
+            arguments: {},
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: {
+        taskSessionId: "task-catalog-refresh-bounded",
+        ownerCapability: "owner-catalog-refresh-bounded",
+      },
+      toolRoute: {
+        routeHash: "route-catalog-refresh-bounded",
+        phase: "executor",
+        activeTools: ["apply_edit_bundle"],
+      },
+      control: {
+        version: 1,
+        phase: "code_sketch_claim_validate",
+        status: "NeedsAction",
+        nextAction: "implement_next_slice",
+        nextActionIsTool: false,
+        retryPolicy: "none",
+      },
+    };
+    const baseMessages = [
+      { role: "user", content: [{ type: "text", text: "implement the bounded change" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "route-bounded-1", type: "function", name: "code_sketch_claim_validate", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "route-bounded-1", name: "code_sketch_claim_validate", content: JSON.stringify(route),
+      }] },
+    ];
+    const staleTools = ["get_active_project", "unreal_rag_health", "read_file"].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+
+    await generate(
+      controllerFor(model, {}, stateRoot, emitted, staleTools),
+      Chat.from({ messages: baseMessages }),
+    );
+    assert.equal(respondCount, 1);
+
+    const continued = Chat.from({ messages: [
+      ...baseMessages,
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "catalog-refresh-bounded-1", type: "function", name: "get_active_project", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "catalog-refresh-bounded-1",
+        name: "get_active_project",
+        content: JSON.stringify({ ok: true, activeProject: "O-Mock" }),
+      }] },
+    ] });
+    await assert.rejects(
+      generate(controllerFor(model, {}, stateRoot, emitted, staleTools), continued),
+      /did not expose .* mutation schemas after one bounded refresh/,
+    );
+    assert.equal(respondCount, 1, "A failed refresh must not start another model prediction");
+    assert.equal(activeCheckpoint(stateRoot).catalogRefresh.status, "failed");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("atomic output streams reasoning progress but withholds final text until completion", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-reasoning-progress-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -332,7 +878,7 @@ test("atomic output streams reasoning progress but withholds final text until co
   }
 });
 
-test("RAG search tool calls receive a stable compactor session id", async () => {
+test("RAG, architecture, and planner calls receive one stable compactor session id", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-rag-session-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -373,6 +919,17 @@ test("RAG search tool calls receive a stable compactor session id", async () => 
             arguments: { proposal: { decision: "lobby" } },
           },
         });
+        opts.onToolCallRequestStart(3, { toolCallId: "planner-1" });
+        opts.onToolCallRequestNameReceived(3, "unreal_agent_plan");
+        opts.onToolCallRequestArgumentFragmentGenerated(3, '{"request":"implement lobby"}');
+        opts.onToolCallRequestEnd(3, {
+          toolCallRequest: {
+            id: "planner-1",
+            type: "function",
+            name: "unreal_agent_plan",
+            arguments: { request: "implement lobby" },
+          },
+        });
         return { async result() { return {}; } };
       },
     };
@@ -382,28 +939,41 @@ test("RAG search tool calls receive a stable compactor session id", async () => 
       strictToolControlPlane: false,
       targetModel: "",
     };
-    const tools = ["unreal_rag_search", "unreal_architecture_reasoning"].map((name) => ({
+    const tools = ["unreal_rag_search", "unreal_architecture_reasoning", "unreal_agent_plan"].map((name) => ({
       type: "function",
       function: {
         name,
-        parameters: { type: "object", properties: { query: { type: "string" }, sessionId: { type: "string" } } },
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            sessionId: { type: "string" },
+            latestUserMessage: { type: "string" },
+          },
+        },
       },
     }));
     const controller = controllerFor(model, config, stateRoot, emitted, tools);
     const history = Chat.empty();
     history.append("system", "rules");
     history.append("user", "investigate the lobby architecture");
+    history.append("assistant", "I will continue from the active objective.");
+    history.append("user", "continue");
 
     await generate(controller, history);
 
     const ends = emitted.filter((event) => event.kind === "end");
-    assert.equal(ends.length, 2);
+    assert.equal(ends.length, 3);
     assert.ok(ends[0].request.arguments.sessionId);
     assert.equal(ends[0].request.arguments.query, "lobby");
     assert.equal(ends[1].request.arguments.sessionId, ends[0].request.arguments.sessionId);
+    assert.equal(ends[2].request.arguments.sessionId, ends[0].request.arguments.sessionId);
+    assert.equal(ends[2].request.arguments.request, "implement lobby");
+    assert.equal(ends[2].request.arguments.latestUserMessage, "investigate the lobby architecture");
     const args = emitted.filter((event) => event.kind === "args");
     assert.equal(JSON.parse(args[0].content).sessionId, ends[0].request.arguments.sessionId);
     assert.equal(JSON.parse(args[1].content).sessionId, ends[0].request.arguments.sessionId);
+    assert.equal(JSON.parse(args[2].content).sessionId, ends[0].request.arguments.sessionId);
     assert.equal(sawArchitectureGate, true);
     assert.equal(architectureMaxTokens, 6144);
   } finally {
@@ -614,7 +1184,21 @@ function fullArchitectureToolSchema() {
             type: "object",
             properties: {
               decision: { type: "string" },
-              invariants: { ...array },
+              scope: {
+                type: "object",
+                properties: {
+                  networked: { type: "boolean" },
+                  runtime: { type: "string" },
+                  validationLevel: { type: "string" },
+                },
+              },
+              invariants: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: { id: { type: "string" }, statement: { type: "string" } },
+                },
+              },
               impactedSurfaces: { ...array },
               validationPlan: { ...array },
               alternatives: { type: "array", items: { type: "object" } },
@@ -644,13 +1228,26 @@ function fullArchitectureToolSchema() {
               migrationPlan: { ...array },
               validationMatrix: {
                 type: "array",
-                items: { type: "object", properties: { invariant: { type: "string" } } },
+                items: {
+                  type: "object",
+                  properties: {
+                    invariant: { type: "string" },
+                    invariantId: { type: "string" },
+                    checks: { ...array },
+                  },
+                },
               },
               implementationSlices: {
                 type: "array",
                 items: {
                   type: "object",
-                  properties: { invariants: { ...array } },
+                  properties: {
+                    sliceId: { type: "string" },
+                    files: { ...array },
+                    invariants: { ...array },
+                    invariantIds: { ...array },
+                    validation: { ...array },
+                  },
                 },
               },
             },
@@ -660,6 +1257,232 @@ function fullArchitectureToolSchema() {
     },
   };
 }
+
+test("architecture evidence blockers reopen bounded discovery without forcing a replan", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-architecture-evidence-refill-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { architectureGateStatus, generate } = require("../dist/generator.js");
+    const emitted = [];
+    let capturedTools = null;
+    const model = {
+      identifier: "architecture-evidence-refill-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        capturedTools = opts.rawTools;
+        opts.onToolCallRequestStart(1, { toolCallId: "refill-read" });
+        opts.onToolCallRequestNameReceived(1, "search_files");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"query":"MissingWorker"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "refill-read",
+            type: "function",
+            name: "search_files",
+            arguments: { query: "MissingWorker" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const messages = [
+      { role: "system", content: [{ type: "text", text: "rules" }] },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Implement a small independent local move-history system." }],
+      },
+    ];
+    for (let index = 0; index < 4; index += 1) {
+      const id = `evidence-read-${index}`;
+      messages.push({
+        role: "assistant",
+        content: [{
+          type: "toolCallRequest",
+          toolCallRequest: { id, type: "function", name: "read_file", arguments: { path: `Source/${index}.cpp` } },
+        }],
+      });
+      messages.push({
+        role: "tool",
+        content: [{ type: "toolCallResult", toolCallId: id, content: `source-${index}` }],
+      });
+    }
+    messages.push(
+      {
+        role: "assistant",
+        content: [{
+          type: "toolCallRequest",
+          toolCallRequest: {
+            id: "architecture-evidence-rejected",
+            type: "function",
+            name: "unreal_architecture_reasoning",
+            arguments: { proposal: { decision: "local history" } },
+          },
+        }],
+      },
+      {
+        role: "tool",
+        content: [{
+          type: "toolCallResult",
+          toolCallId: "architecture-evidence-rejected",
+          content: JSON.stringify({
+            ok: false,
+            errorCode: "ARCHITECTURE_EVIDENCE_INCOMPLETE",
+            proposalValidation: {
+              ok: false,
+              repairStrategy: "evidence_refill",
+              designContract: { requiresFullReplan: false, stagedImplementation: true },
+              implementationGate: { writesAllowed: false },
+            },
+            requiredNextAction: "collect_architecture_evidence",
+            nextActionIsTool: false,
+          }),
+        }],
+      },
+    );
+
+    const history = Chat.from({ messages });
+    const evidenceStatus = architectureGateStatus(history, null);
+    assert.equal(evidenceStatus.lastRepairStrategy, "evidence_refill");
+    assert.equal(evidenceStatus.requiresFullProposal, false);
+
+    await generate(
+      controllerFor(model, {
+        enabled: true,
+        targetModel: "",
+        architectureReplanEvidenceReadBudget: 4,
+      }, stateRoot, emitted, [
+        { type: "function", function: { name: "read_file", parameters: { type: "object" } } },
+        { type: "function", function: { name: "search_files", parameters: { type: "object" } } },
+        fullArchitectureToolSchema(),
+      ]),
+      history,
+    );
+
+    assert.equal(capturedTools.force, undefined);
+    assert.deepEqual(
+      capturedTools.tools.map((tool) => tool.function.name),
+      ["read_file", "search_files", "unreal_architecture_reasoning"],
+    );
+    assert.equal(
+      capturedTools.tools[2].function.parameters.required?.includes("proposal") || false,
+      true,
+    );
+    assert.equal(emitted.filter((event) => event.kind === "end").length, 1);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("local bounded architecture schema uses explicit scope and invariant ids without strict ceremony", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-local-bound-schema-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let capturedTools = null;
+    const proposal = {
+      decision: "local move history owner",
+      scope: { networked: false, runtime: "local_hotseat", validationLevel: "Bound" },
+      invariants: [{ id: "I1", statement: "board remains rule-engine owned" }],
+      impactedSurfaces: ["Source/Feature.cpp"],
+      validationPlan: ["compile"],
+      implementationFiles: ["Source/Feature.cpp"],
+      ownership: {
+        stateOwner: "local history",
+        dataOwner: "rule engine",
+        lifecycleOwner: "game state",
+        failurePolicy: "no mutation",
+        recoveryPolicy: "clear history",
+      },
+      stateInventory: [{ state: "history" }],
+      lifecycleTransitions: [{ event: "undo" }],
+      validationMatrix: [{ invariantId: "I1", checks: ["compile"] }],
+      implementationSlices: [{
+        sliceId: "local-undo",
+        files: ["Source/Feature.cpp"],
+        invariantIds: ["I1"],
+        validation: ["compile"],
+      }],
+    };
+    const model = {
+      identifier: "local-bound-schema-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        capturedTools = opts.rawTools;
+        opts.onToolCallRequestStart(1, { toolCallId: "local-bound" });
+        opts.onToolCallRequestNameReceived(1, "unreal_architecture_reasoning");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, JSON.stringify({ proposal }));
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "local-bound",
+            type: "function",
+            name: "unreal_architecture_reasoning",
+            arguments: { proposal },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const messages = [
+      { role: "system", content: [{ type: "text", text: "rules" }] },
+      {
+        role: "user",
+        content: [{
+          type: "text",
+          text: "Implement a small independent local hotseat move-history system. Do not change network or server features.",
+        }],
+      },
+    ];
+    for (let index = 0; index < 4; index += 1) {
+      const id = `local-read-${index}`;
+      messages.push({
+        role: "assistant",
+        content: [{
+          type: "toolCallRequest",
+          toolCallRequest: {
+            id,
+            type: "function",
+            name: "read_file",
+            arguments: { path: `Source/Local${index}.cpp` },
+          },
+        }],
+      });
+      messages.push({
+        role: "tool",
+        content: [{ type: "toolCallResult", toolCallId: id, content: `source-${index}` }],
+      });
+    }
+
+    await generate(
+      controllerFor(model, { enabled: true, targetModel: "" }, stateRoot, emitted, [
+        { type: "function", function: { name: "read_file", parameters: { type: "object" } } },
+        fullArchitectureToolSchema(),
+      ]),
+      Chat.from({ messages }),
+    );
+
+    const schema = capturedTools.tools[0].function.parameters.properties.proposal;
+    assert.ok(schema.required.includes("scope"));
+    assert.ok(schema.required.includes("ownership"));
+    assert.equal(schema.required.includes("alternatives"), false);
+    assert.equal(schema.required.includes("networking"), false);
+    assert.equal(schema.required.includes("migrationPlan"), false);
+    assert.deepEqual(schema.properties.invariants.items.required, ["id", "statement"]);
+    assert.deepEqual(
+      schema.properties.validationMatrix.items.required,
+      ["invariantId", "checks"],
+    );
+    assert.ok(schema.properties.implementationSlices.items.required.includes("invariantIds"));
+    assert.equal(emitted.filter((event) => event.kind === "end").length, 1);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
 
 test("negative network scope does not require the network architecture contract", async () => {
   const { networkedArchitectureContractRequired } = require("../dist/generator.js");
@@ -800,7 +1623,8 @@ test("semantic blocker rejects forbidden evidence calls but allows forward mutat
 function completeArchitectureProposal(decision = "replanned") {
   return {
     decision,
-    invariants: ["server authority"],
+    scope: { networked: true, runtime: "dedicated_server", validationLevel: "Strict" },
+    invariants: [{ id: "I1", statement: "server authority" }],
     impactedSurfaces: ["existing runtime surface"],
     validationPlan: ["static validation"],
     alternatives: [{ name: "A" }, { name: "B" }],
@@ -826,8 +1650,13 @@ function completeArchitectureProposal(decision = "replanned") {
     stateInventory: [{ state: "authoritative state" }],
     lifecycleTransitions: [{ event: "join" }],
     migrationPlan: ["migrate one bounded slice"],
-    validationMatrix: [{ invariant: "server authority" }],
-    implementationSlices: [{ invariants: ["server authority"] }],
+    validationMatrix: [{ invariantId: "I1", checks: ["static validation"] }],
+    implementationSlices: [{
+      sliceId: "feature",
+      files: ["Source/Feature.cpp"],
+      invariantIds: ["I1"],
+      validation: ["static validation"],
+    }],
   };
 }
 
@@ -1670,7 +2499,7 @@ test("recovery checkpoint bypasses a stale required work-tool gate", async () =>
   }
 });
 
-test("control plane rejects the right required tool with wrong server-owned arguments", async () => {
+test("control plane injects server-owned required arguments", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-args-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -1681,7 +2510,14 @@ test("control plane rejects the right required tool with wrong server-owned argu
       async applyPromptTemplate() { return "formatted"; },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
-      respond(_history, opts) {
+      respond(history, opts) {
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name), ["mcp/unreal-agent/search_files"]);
+        assert.equal(history.getMessagesArray().some(
+          (message) => message.getRole() === "system"
+            && message.getText().includes("[UNREAL_SERVER_REQUIRED_TOOL]")
+            && message.getText().includes("HandlePlaceStone"),
+        ), true);
         opts.onToolCallRequestStart(1, { toolCallId: "wrong-search" });
         opts.onToolCallRequestNameReceived(1, "search_files");
         opts.onToolCallRequestArgumentFragmentGenerated(1, '{"query":"RestartMatch","path":"project://Source"}');
@@ -1702,10 +2538,20 @@ test("control plane rejects the right required tool with wrong server-owned argu
       requiredNextTool: "search_files",
       requiredNextToolArgs: { query: "HandlePlaceStone", path: "project://Source" },
     }));
-    await generate(controllerFor(model, {}, stateRoot, emitted, [{ type: "function", function: { name: "search_files" } }]), history);
+    await generate(controllerFor(model, {}, stateRoot, emitted, [
+      { type: "function", function: { name: "read_file" } },
+      { type: "function", function: { name: "unreal_rag_health" } },
+      { type: "function", function: { name: "mcp/unreal-agent/search_files" } },
+    ]), history);
 
-    assert.equal(emitted.some((event) => event.kind === "end"), false);
-    assert.equal(emitted.some((event) => event.kind === "failure" && /requiredNextToolArgs/.test(event.error)), true);
+    const end = emitted.find((event) => event.kind === "end");
+    assert.ok(end);
+    assert.equal(end.request.arguments.query, "HandlePlaceStone");
+    assert.equal(end.request.arguments.path, "project://Source");
+    assert.ok(end.request.arguments.sessionId);
+    const args = emitted.find((event) => event.kind === "args");
+    assert.deepEqual(JSON.parse(args.content), end.request.arguments);
+    assert.equal(emitted.some((event) => event.kind === "failure"), false);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });

@@ -86,6 +86,17 @@ SCOPE_SUPPORTING_GATES = frozenset(
     }
 )
 GATE_POLICY_VERSION = 2
+SLICE_DISCOVERY_TOOLS = frozenset(
+    {
+        "unreal_agent_session",
+        "unreal_rag_search",
+        "unreal_symbol_lookup",
+        "list_directory",
+        "search_files",
+        "read_file",
+        "read_file_range",
+    }
+)
 
 
 class TaskStateReadError(RuntimeError):
@@ -1160,11 +1171,19 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
 def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
     job = _active_job(workspace, state)
     ux = task_phase_from_state(state, job)
-    route = compact_tool_route(state.get("toolRoute"))
+    terminal = str(state.get("status") or "") in TERMINAL_TASK_STATUSES
+    route = {} if terminal else compact_tool_route(state.get("toolRoute"))
+    public_state = _public_state(state)
+    if terminal:
+        # The persisted route remains internal recovery history, but it is no
+        # longer callable and must not be rebound by a client-side compactor.
+        public_state.pop("toolRoute", None)
+        public_state.pop("toolRouteUsage", None)
     return {
         "ok": True,
         "taskSessionId": state.get("taskSessionId"),
         "status": state.get("status"),
+        "taskRouteTerminal": terminal,
         **ux,
         "toolRoute": route,
         "routeAuthorization": {
@@ -1175,7 +1194,7 @@ def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
         "selectedCandidateId": str(state.get("selectedCandidateId") or ""),
         "selectedIntentId": str(state.get("selectedIntentId") or ""),
         "intentContractHash": str(state.get("intentContractHash") or ""),
-        "state": _public_state(state),
+        "state": public_state,
         "job": job,
     }
 
@@ -3191,6 +3210,22 @@ def _iter_discoverable_task_entries(
             else {}
         )
         route_missing = not isinstance(state.get("toolRoute"), dict)
+        pending_gates = [
+            str(item)
+            for item in (
+                route.get("pendingGates")
+                if isinstance(route.get("pendingGates"), list)
+                else state.get("pendingGates") or []
+            )
+            if str(item).strip()
+        ]
+        route_next_action = (
+            "unreal_task_status"
+            if route_missing
+            else pending_gates[0]
+            if pending_gates
+            else "continue_with_current_tool_route"
+        )
         entries.append(
             {
                 "taskSessionId": str(state.get("taskSessionId") or task_session_id),
@@ -3204,6 +3239,9 @@ def _iter_discoverable_task_entries(
                 "conversationId": str(state.get("conversationId") or ""),
                 "routePhase": str(route.get("phase") or ""),
                 "routeMissing": route_missing,
+                "pendingGates": pending_gates,
+                "routeNextAction": route_next_action,
+                "routeNextActionIsTool": bool(route_missing or pending_gates),
                 "ownsActiveToolRoute": task_owns_active_tool_route(
                     state,
                     conversation_id=conversation_id,
@@ -3294,20 +3332,46 @@ def task_list_active(
         public.pop("ownerCapability", None)
         tasks.append(public)
     corrupt = [item for item in tasks if item.get("status") == "corrupt"]
+    owned = [
+        item
+        for item in tasks
+        if item.get("status") == "running"
+        and item.get("connectionMatches") is True
+        and item.get("ownsActiveToolRoute") is True
+    ]
+    if corrupt:
+        next_action = "unreal_task_quarantine_corrupt"
+        next_action_is_tool = True
+    elif len(owned) == 1:
+        next_action = str(
+            owned[0].get("routeNextAction")
+            or "continue_with_current_tool_route"
+        )
+        next_action_is_tool = owned[0].get("routeNextActionIsTool") is True
+    elif tasks:
+        next_action = "active_task_requires_explicit_user_decision"
+        next_action_is_tool = False
+    else:
+        next_action = "unreal_agent_plan"
+        next_action_is_tool = True
     return {
         "ok": True,
         "count": len(tasks),
         "runningCount": sum(1 for item in tasks if item.get("status") == "running"),
         "corruptCount": len(corrupt),
         "tasks": tasks,
-        "nextAction": (
-            "unreal_task_quarantine_corrupt"
-            if corrupt
-            else (
-                "unreal_task_cancel_active"
-                if tasks
-                else "unreal_agent_plan"
-            )
+        "nextAction": next_action,
+        "nextActionIsTool": next_action_is_tool,
+        **(
+            {
+                "agentInstruction": (
+                    "Task listing is diagnostic. A healthy task is never cancelled "
+                    "automatically. Resume or cancel only after explicit ownership "
+                    "and user intent are established."
+                )
+            }
+            if tasks and not corrupt and len(owned) != 1
+            else {}
         ),
     }
 
@@ -4697,6 +4761,7 @@ def task_define_slices(
     task_authorization: dict[str, Any],
     slices: list[dict[str, Any]],
     active_slice_id: str = "",
+    slice_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Register concrete bounded slices discovered after the initial plan."""
 
@@ -4828,6 +4893,13 @@ def task_define_slices(
             "completedSlices": [],
             "pendingSlices": [item["sliceId"] for item in normalized if item["sliceId"] != selected],
         }
+        if isinstance(slice_provenance, dict) and slice_provenance:
+            # This is server-issued provenance, never a model-owned slice
+            # field. It lets later gates reuse a validated architecture
+            # contract without asking the model to copy or reinterpret it.
+            state["sliceProvenance"] = dict(slice_provenance)
+        else:
+            state.pop("sliceProvenance", None)
         state["authToken"] = uuid.uuid4().hex
         state["completedGates"] = {}
         state["failedGateAttempts"] = {}
@@ -4854,6 +4926,7 @@ def task_define_slices(
             "activeSliceId": selected,
             "slices": normalized,
             "pendingSlices": list(state["sliceProgress"]["pendingSlices"]),
+            "sliceProvenance": dict(state.get("sliceProvenance") or {}),
         }
         return state
 
@@ -5390,8 +5463,15 @@ def task_checkpoint(
                     ),
                 }
             )
-            if requested_work_tool_active:
-                mutation_result["requiredNextTool"] = requested_work_tool
+            if mutation_result["nextActionIsTool"]:
+                # ``nextAction`` is the route authority.  A checkpoint may
+                # carry the pre-checkpoint work tool while a pending semantic
+                # gate has become the current first action.  Advertising the
+                # old work tool here produced two contradictory required tools
+                # in the same response and made frontends choose by field
+                # precedence.  Always bind the compatibility field to the
+                # authoritative route action instead.
+                mutation_result["requiredNextTool"] = next_action
                 mutation_result["requiredNextToolArgs"] = {
                     "taskAuthorization": compact_task_authorization(
                         mutation_result.get("taskAuthorization") or {}
@@ -6028,11 +6108,11 @@ def authorize_task_tool(
         if (
             state.get("slicePlanningRequired") is True
             and tool_name not in CONTROL_PLANE_TOOLS
-            # Feature intent owns SelectIntent -> ResolveSlice ->
-            # CaptureSnapshot -> BindIntent as one server transaction.  It must
-            # be allowed to enter while the initial broad plan still has no
-            # executable slice; the handler will register the supplied bounded
-            # slices before it captures or records any target binding.
+            # Bounded read/search calls are the evidence phase that discovers
+            # the exact slice. They remain route-authorized and budgeted, but
+            # cannot write. Feature intent then owns SelectIntent ->
+            # ResolveSlice -> CaptureSnapshot -> BindIntent as one transaction.
+            and tool_name not in SLICE_DISCOVERY_TOOLS
             and not (
                 tool_name == "unreal_feature_intent_resolve"
                 and "unreal_feature_intent_resolve"

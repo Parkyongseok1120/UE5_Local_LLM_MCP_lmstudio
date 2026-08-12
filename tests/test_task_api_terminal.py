@@ -122,6 +122,12 @@ def test_task_resume_restores_confirmed_cancel_and_discards_expired_gates(
     resumed = task_resume(tmp_path, task_id)
 
     assert cancelled["status"] == "cancelled"
+    assert cancelled["taskRouteTerminal"] is True
+    assert cancelled["toolRoute"] == {}
+    assert cancelled["routeAuthorization"] == {"routeHash": "", "routePhase": ""}
+    assert "toolRoute" not in cancelled["state"]
+    assert cancelled["resumeAction"] == "unreal_task_resume"
+    assert "nextAction" not in cancelled
     assert resumed["ok"] is True
     assert resumed["status"] == "running"
     assert resumed["state"]["completedGates"] == {}

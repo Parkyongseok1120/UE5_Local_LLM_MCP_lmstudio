@@ -10,6 +10,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from feature_intent_contract import (  # noqa: E402
     DIMENSIONS,
     analyze_feature_intent_ambiguity,
+    can_auto_bind_architecture_feature_intent,
+    resolve_architecture_bound_feature_intent,
     resolve_feature_intent,
     target_snapshot_hash,
 )
@@ -112,6 +114,81 @@ def test_detailed_local_feature_summary_stays_bounded_without_class_names() -> N
     assert analysis["boundedScope"] is True
     assert analysis["recommendedAction"] == "bounded_assumption"
     assert analysis["requiresResolution"] is False
+
+
+def test_validated_local_architecture_contract_resolves_without_model_reselection() -> None:
+    contract = {
+        "decision": "Add one bounded helper without changing existing behavior",
+        "scope": {
+            "networked": False,
+            "runtime": "standalone",
+            "validationLevel": "Bound",
+            "risk": "low",
+            "nonGoals": ["No persistence", "No replication"],
+        },
+        "ownership": {"lifecycleOwner": "existing module"},
+        "validationPlan": ["compile", "run focused helper regression"],
+        "hasMigrationPlan": False,
+    }
+    provenance = {
+        "source": "validated_architecture",
+        "featureIntentContract": contract,
+    }
+
+    assert can_auto_bind_architecture_feature_intent(
+        slice_provenance=provenance,
+        target_files=["Source/Demo/NewHelper.cpp"],
+        snapshot_issues=[],
+        explicit_semantic_input=False,
+    ) is True
+
+    result = resolve_architecture_bound_feature_intent(
+        "Create the helper",
+        architecture_contract=contract,
+        target_files=["Source/Demo/NewHelper.cpp"],
+        include_full=True,
+    )
+
+    assert result["ok"] is True
+    assert result["selectedIntentId"] == "architecture_bound_local"
+    assert result["candidateCount"] == 3
+    assert result["architectureBound"]["serverOwned"] is True
+    assert all(
+        criterion["observer"] and criterion["oracle"]
+        for criterion in result["selectedCandidate"]["acceptanceCriteria"]
+    )
+
+
+def test_strict_or_network_architecture_contract_cannot_auto_bind() -> None:
+    base = {
+        "source": "validated_architecture",
+        "featureIntentContract": {
+            "scope": {
+                "networked": False,
+                "runtime": "standalone",
+                "validationLevel": "Strict",
+                "risk": "low",
+            },
+            "hasMigrationPlan": False,
+        },
+    }
+    assert can_auto_bind_architecture_feature_intent(
+        slice_provenance=base,
+        target_files=["Source/Demo/Thing.cpp"],
+        snapshot_issues=[],
+        explicit_semantic_input=False,
+    ) is False
+
+    networked = copy.deepcopy(base)
+    networked["featureIntentContract"]["scope"].update(
+        {"networked": True, "runtime": "listen_server", "validationLevel": "Bound"}
+    )
+    assert can_auto_bind_architecture_feature_intent(
+        slice_provenance=networked,
+        target_files=["Source/Demo/Thing.cpp"],
+        snapshot_issues=[],
+        explicit_semantic_input=False,
+    ) is False
 
 
 def test_broad_vague_cross_cutting_write_is_high_ambiguity() -> None:

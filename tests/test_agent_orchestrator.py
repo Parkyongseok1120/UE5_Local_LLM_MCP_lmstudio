@@ -67,6 +67,22 @@ def test_feature_prompt_with_build_acceptance_remains_edit_work():
     ) == "compile_fix"
 
 
+def test_korean_do_not_stop_at_planning_is_implementation_work():
+    prompt = (
+        "현재 구현 상태를 먼저 확인하고 아직 완료되지 않은 핵심 기능을 실제로 완성해줘. "
+        "문서나 계획만 만드는 데 그치지 말고 기능 구현을 우선해."
+    )
+    assert classify_task(prompt, "auto") == "edit"
+
+
+def test_implementation_status_inventory_is_not_write_intent():
+    assert classify_task(
+        "Read GameMode and PlayerController to assess current implementation status "
+        "and identify the most critical missing feature.",
+        "auto",
+    ) == "inspect_only"
+
+
 def test_classify_answer_only():
     assert classify_task("What is UActorComponent?", "api_lookup") == "answer_only"
 
@@ -194,6 +210,37 @@ def test_invented_refactor_plan_is_suppressed_by_latest_user_bug_hunt():
     assert plan.task_kind == "inspect_only"
     assert plan.write_gate["writesAllowed"] is False
     assert any("overridden" in note.lower() or "invented" in note.lower() for note in plan.notes)
+
+
+def test_latest_user_write_goal_cannot_be_replaced_by_model_read_subtask():
+    from agent_orchestrator import resolve_plan_request
+
+    latest = "Implement the first incomplete local-play feature and run tests and build."
+    restatement = (
+        "Read GameMode and PlayerController to assess implementation status and "
+        "identify one missing feature."
+    )
+    resolved = resolve_plan_request(restatement, latest)
+
+    assert resolved["modelRequestSuppressed"] is True
+    assert resolved["usedLatestUserMessage"] is True
+    assert resolved["request"] == latest
+    assert build_agent_plan(
+        restatement,
+        "auto",
+        latest_user_message=latest,
+    ).task_kind == "edit"
+
+
+def test_raw_continuation_does_not_replace_the_active_planner_objective():
+    from agent_orchestrator import resolve_plan_request
+
+    objective = "Implement local move history and undo, then build and test it."
+    resolved = resolve_plan_request(objective, "계속해")
+
+    assert resolved["request"] == objective
+    assert resolved["usedLatestUserMessage"] is False
+    assert resolved["modelRequestSuppressed"] is False
 
 
 def test_invented_implementation_plan_without_latest_user_fails_closed():

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from phase_tool_router import (  # noqa: E402
+    CONTROL_PLANE_TOOLS,
     MUTATION_TOOLS,
     derive_tool_route,
     selection_binding,
@@ -35,6 +36,10 @@ from task_api import (  # noqa: E402
     task_status,
     task_validate_build_recovery_sketch,
 )
+
+
+def test_initial_active_project_discovery_is_safe_before_route_ownership() -> None:
+    assert "unreal_get_active_project" in CONTROL_PLANE_TOOLS
 
 
 def test_recorded_gate_remains_valid_for_long_running_gui_slice(
@@ -807,6 +812,45 @@ def test_server_required_checkpoint_resets_budget_and_binds_next_work_tool(
     assert state["toolRouteUsage"]["count"] == 0
     assert state["toolRouteUsage"]["calls"] == []
     assert state["toolRouteUsage"]["resetReason"] == "checkpoint_record"
+
+
+def test_checkpoint_pending_gate_overrides_deferred_work_tool_everywhere(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """One response must never advertise two different required tools."""
+
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    plan = _plan(writes=True, files=["Source/Demo/Foo.cpp"])
+    plan["orchestration"] = {
+        "requiredBeforeWrite": ["unreal_feature_intent_resolve"]
+    }
+    started = task_start(
+        tmp_path,
+        request="Implement Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        plan_payload=plan,
+    )
+    deferred_work_tool = "read_file_range"
+    assert deferred_work_tool in started["toolRoute"]["activeTools"]
+
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        action="record",
+        phase="planner",
+        modified_files=[],
+        required_next_action=deferred_work_tool,
+        validation={},
+        include_git_changes=False,
+    )
+
+    assert recorded["ok"] is True
+    assert recorded["nextAction"] == "unreal_feature_intent_resolve"
+    assert recorded["nextActionIsTool"] is True
+    assert recorded["requiredNextTool"] == recorded["nextAction"]
+    assert recorded["requiredNextTool"] != deferred_work_tool
+    assert recorded["requiredNextToolArgs"]["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
 
 
 def test_identical_checkpoint_is_heartbeat_only_and_does_not_advance_generation(

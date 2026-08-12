@@ -15,6 +15,7 @@ from task_api import (  # noqa: E402
     task_complete_after_successful_build,
     task_define_slices,
     task_continue_active,
+    task_list_active,
     task_record_gate,
     task_record_gate_failure,
     task_root,
@@ -49,6 +50,45 @@ def test_task_start_and_status_phase_fields(tmp_path: Path) -> None:
     status = task_status(tmp_path, task_id)
     assert status["phase"] == "planning"
     assert (task_root(tmp_path, task_id) / "logs" / "task.log").is_file()
+
+
+def test_active_task_listing_continues_owned_gate_and_never_auto_cancels(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        conversation_id="conv-owned-list",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
+    )
+
+    owned = task_list_active(
+        tmp_path,
+        conversation_id="conv-owned-list",
+        owner_capability=started["taskAuthorization"]["ownerCapability"],
+    )
+    assert owned["count"] == 1
+    assert owned["nextAction"] == "unreal_code_sketch_claim_validate"
+    assert owned["nextActionIsTool"] is True
+    assert owned["tasks"][0]["routeNextAction"] == owned["nextAction"]
+
+    foreign = task_list_active(tmp_path, conversation_id="conv-other")
+    assert foreign["count"] == 1
+    assert foreign["nextAction"] == "active_task_requires_explicit_user_decision"
+    assert foreign["nextActionIsTool"] is False
+    assert "cancel" not in foreign["nextAction"].casefold()
 
 
 def test_task_status_hides_future_expiry_route_from_public_state(tmp_path: Path) -> None:
@@ -458,8 +498,16 @@ def test_short_ambiguous_feature_requires_concrete_runtime_slice(tmp_path: Path)
     )
 
     assert started["state"]["slicePlanningRequired"] is True
-    assert started["nextAction"] == "unreal_feature_intent_resolve"
-    assert started["nextActionIsTool"] is True
+    assert started["nextAction"] == "discover_bounded_feature_slice"
+    assert started["nextActionIsTool"] is False
+    assert started["featureIntent"]["discoveryRequiredBeforeResolve"] is True
+    discovery = authorize_task_tool(
+        tmp_path,
+        tool_name="read_file",
+        task_authorization=started["taskAuthorization"],
+        arguments={"path": "Source/Demo/StateSubsystem.cpp"},
+    )
+    assert discovery["ok"] is True
     authorized = authorize_task_tool(
         tmp_path,
         tool_name="unreal_feature_intent_resolve",
@@ -665,7 +713,8 @@ def test_terminal_and_approval_states_never_report_write_ready() -> None:
         )
         assert payload["writeReadiness"]["ready"] is False
         if status == "cancelled":
-            assert payload["nextAction"] == "unreal_task_resume"
+            assert payload["resumeAction"] == "unreal_task_resume"
+            assert "nextAction" not in payload
         elif status != "completed":
             assert payload["nextAction"] == "start_new_unreal_agent_plan"
 
@@ -680,6 +729,22 @@ def test_terminal_and_approval_states_never_report_write_ready() -> None:
     assert approval["phase"] == "awaiting_approval"
     assert approval["writeReadiness"]["ready"] is False
     assert approval["nextAction"] == "unreal_task_approve"
+
+
+def test_ready_running_task_keeps_cancel_as_user_affordance_not_next_action() -> None:
+    payload = task_phase_from_state(
+        {
+            "status": "running",
+            "writesAllowed": True,
+            "requiredBeforeWrite": [],
+            "completedGates": {},
+        }
+    )
+
+    assert payload["writeReadiness"]["ready"] is True
+    assert payload["cancellable"] is True
+    assert payload["resumeAction"] == "unreal_task_cancel"
+    assert "nextAction" not in payload
 
 
 def test_active_background_job_temporarily_closes_write_readiness() -> None:

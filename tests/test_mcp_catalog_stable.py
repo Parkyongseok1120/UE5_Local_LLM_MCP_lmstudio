@@ -27,15 +27,12 @@ RAG_SCRIPT = ROOT / "scripts" / "unreal_rag_mcp.py"
 
 
 def _agent_phase_catalog(route: dict | None = None) -> set[str]:
-    allowed = set(MANIFEST["agentEssential"])
-    visible = set(MANIFEST["agentAlwaysDiscoverable"])
-    if isinstance(route, dict):
-        visible.update(str(item) for item in route.get("activeTools") or [])
-    return allowed & visible
+    del route
+    return set(MANIFEST["agentEssential"])
 
 
 def _agent_unrouted_catalog() -> set[str]:
-    return set(MANIFEST["agentEssential"]) & set(MANIFEST["agentUnroutedDiscoverable"])
+    return set(MANIFEST["agentEssential"])
 
 
 def _node_exe() -> str:
@@ -181,7 +178,7 @@ def test_clean_startup_advertises_manifest_agent_essential(tmp_path: Path) -> No
     assert "unreal-agent" in stderr
 
 
-def test_active_route_exposes_only_phase_agent_tools_and_controls(tmp_path: Path) -> None:
+def test_active_route_keeps_transport_catalog_profile_stable(tmp_path: Path) -> None:
     require_agent_mcp_deps()
     from task_api import task_start
 
@@ -201,7 +198,7 @@ def test_active_route_exposes_only_phase_agent_tools_and_controls(tmp_path: Path
     try:
         names = _list_agent_tools(client)
         assert names == _agent_phase_catalog(started["state"]["toolRoute"])
-        assert names < set(MANIFEST["agentEssential"])
+        assert names == set(MANIFEST["agentEssential"])
     finally:
         client.close()
 
@@ -319,7 +316,8 @@ def test_scope_mismatch_keeps_catalog_but_blocks_mutation(tmp_path: Path) -> Non
     )
     try:
         # No activeProject is configured, so the project-bound task cannot own
-        # this catalog yet; retain the discovery profile until project selection.
+        # calls yet. The transport schema set remains stable; CallTool enforces
+        # the project/route boundary.
         assert _list_agent_tools(client) == _agent_unrouted_catalog()
     finally:
         client.close()

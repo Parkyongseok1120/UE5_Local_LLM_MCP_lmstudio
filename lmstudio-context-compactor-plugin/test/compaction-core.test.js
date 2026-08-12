@@ -309,6 +309,61 @@ test("checkpoint validation rejects malformed pending tool state", () => {
   }), false);
 });
 
+test("checkpoint preserves and validates the bounded Agent catalog refresh state", () => {
+  const prior = core.buildCheckpoint([{ role: "user", content: "implement the bounded change" }]);
+  prior.catalogRefresh = {
+    routeHash: "route-1",
+    attempts: 1,
+    status: "requested",
+    tool: "get_active_project",
+  };
+  const next = core.buildCheckpoint(
+    [{ role: "user", content: "implement the bounded change" }],
+    prior,
+  );
+  assert.deepEqual(next.catalogRefresh, prior.catalogRefresh);
+  assert.equal(core.validateCheckpoint(next), true);
+  assert.equal(core.validateCheckpoint({ ...next, catalogRefresh: { ...next.catalogRefresh, attempts: 2 } }), false);
+  assert.equal(core.validateCheckpoint({ ...next, catalogRefresh: { ...next.catalogRefresh, status: "pending" } }), false);
+});
+
+test("terminal task response clears stale route ownership and exact tool gates", () => {
+  const route = {
+    ok: true,
+    taskAuthorization: { taskSessionId: "task-terminal", ownerCapability: "owner-terminal" },
+    toolRoute: { routeHash: "route-terminal", phase: "executor", activeTools: ["apply_edit_bundle"] },
+    requiredNextTool: "apply_edit_bundle",
+  };
+  const messages = [
+    { role: "user", content: "implement the bounded change" },
+    { role: "assistant", toolCalls: [{ id: "route", name: "unreal_agent_plan", arguments: {} }] },
+    { role: "tool", toolResults: [{ toolCallId: "route", name: "unreal_agent_plan", content: JSON.stringify(route) }] },
+  ];
+  const active = core.buildCheckpoint(messages);
+  assert.equal(active.toolRoute.routeHash, "route-terminal");
+  assert.equal(active.taskRouteOwnership.taskSessionId, "task-terminal");
+
+  const terminal = core.buildCheckpoint([
+    ...messages,
+    { role: "assistant", toolCalls: [{ id: "cancel", name: "unreal_task_cancel", arguments: {} }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "cancel",
+      name: "unreal_task_cancel",
+      content: JSON.stringify({
+        ok: true,
+        status: "cancelled",
+        taskRouteTerminal: true,
+        toolRoute: {},
+        routeAuthorization: { routeHash: "", routePhase: "" },
+        resumeAction: "unreal_task_resume",
+      }),
+    }] },
+  ], active);
+  assert.equal(terminal.toolRoute, null);
+  assert.equal(terminal.taskRouteOwnership, null);
+  assert.equal(terminal.requiredNextTool, null);
+});
+
 test("latest user message replaces sticky first-turn objective", () => {
   const messages = [
     { role: "user", content: "현재 프로젝트 찾고 코드 구조 전체 적으로 확인해줘" },
@@ -519,6 +574,15 @@ test("mutation tool classifier recognizes provider-prefixed write routes only", 
   for (const name of ["read_file", "static_validate_project", "unreal_agent_plan"]) {
     assert.equal(core.mutationToolName(name), false, name);
   }
+});
+
+test("tool name matching accepts LM Studio provider-qualified MCP paths", () => {
+  assert.equal(
+    core.toolNamesMatch("unreal_feature_intent_resolve", "mcp/unreal-rag/unreal_feature_intent_resolve"),
+    true,
+  );
+  assert.equal(core.toolNamesMatch("read_file", "mcp/unreal-agent/read_file"), true);
+  assert.equal(core.toolNamesMatch("read_file", "read_unreal_logs"), false);
 });
 
 test("zero retained turns keeps only the minimum recent tail", () => {

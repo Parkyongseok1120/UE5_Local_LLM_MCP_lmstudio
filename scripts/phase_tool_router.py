@@ -23,6 +23,10 @@ MAX_PATCH_CANDIDATES = 4
 CONTROL_PLANE_TOOLS = frozenset(
     {
         "unreal_agent_plan",
+        # Pure shared-config discovery is safe before a conversation owns a
+        # route. Blocking it on a task in another chat creates an authorization
+        # retry before the planner can mint this chat's capability.
+        "unreal_get_active_project",
         "unreal_task_start",
         "unreal_task_status",
         "unreal_task_list_active",

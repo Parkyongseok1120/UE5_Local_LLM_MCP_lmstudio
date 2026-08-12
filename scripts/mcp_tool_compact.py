@@ -341,10 +341,13 @@ def compact_agent_plan_payload(
             "taskAuthorizationRequiredForWrites",
             "writeToolAuthorizationArgs",
             "authorizationRetryPolicy",
+            "architectureHandoff",
             "contextCompactorRouting",
             "nextAction",
             "nextActionIsTool",
             "nextActionArgs",
+            "requiredNextTool",
+            "requiredNextToolArgs",
             "executionContract",
             "agentInstruction",
         )
@@ -398,6 +401,8 @@ def compact_agent_plan_payload(
             "nextAction",
             "nextActionIsTool",
             "nextActionArgs",
+            "requiredNextTool",
+            "requiredNextToolArgs",
             "executionContract",
             "agentInstruction",
             "_structuredTruncated",
@@ -443,12 +448,43 @@ def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> di
         specialized = compact_metadata_status_payload(payload)
     elif "rebuild" in payload or "chunkCount" in payload:
         specialized = compact_sync_metadata_payload(payload)
-    elif payload.get("primary") is not None or payload.get("matchCount") is not None:
+    elif (
+        payload.get("primary") is not None
+        or "assetKind" in payload
+        or "assetClass" in payload
+        or "taxonomy" in payload
+    ):
         specialized = compact_asset_graph_payload(payload)
 
     if isinstance(specialized, dict):
         specialized = dict(specialized)
-        for protected_key in ("control", "architectureState"):
+        # Specialized data compactors must never erase the common control and
+        # recovery contract. `matchCount` is shared by RAG search and asset
+        # lookup, and previously misrouted a project RAG miss through the asset
+        # compactor, reducing its actionable handoff to `{query:null}`.
+        for protected_key in (
+            "control",
+            "architectureState",
+            "errorCode",
+            "error",
+            "message",
+            "summary",
+            "retryable",
+            "doNotRetry",
+            "doNotRetryTools",
+            "stopCurrentWorkflow",
+            "stopCurrentPhase",
+            "phaseBoundary",
+            "agentInstruction",
+            "requiredNextAction",
+            "requiredNextTool",
+            "requiredNextToolArgs",
+            "nextAction",
+            "nextActionArgs",
+            "nextActionIsTool",
+            "nextSteps",
+            "suggestedToolCalls",
+        ):
             if protected_key in payload:
                 specialized[protected_key] = payload[protected_key]
 

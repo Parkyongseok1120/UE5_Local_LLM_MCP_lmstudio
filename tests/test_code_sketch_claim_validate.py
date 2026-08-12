@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 from code_sketch_claim_validate import (  # noqa: E402
     MAX_SKETCH_CHARS,
     _cpp_types_compatible,
+    _numeric_conversion_kind,
     _lookup_many_exact,
     _normalized_cpp_type,
     extract_member_call_claims,
@@ -23,11 +24,69 @@ from code_sketch_claim_validate import (  # noqa: E402
     validate_sketch,
 )
 from unreal_api_denylist import check_denylist  # noqa: E402
+import engine_header_evidence  # noqa: E402
 from engine_header_evidence import _signature_contracts  # noqa: E402
 
 # A path that does not exist, so validate_sketch takes the deterministic
 # "index not found" branch (no dependency on a built RAG index).
 NO_INDEX = Path(__file__).resolve().parent / "_no_such_index.sqlite"
+
+
+def test_engine_header_catalog_python_fallback_avoids_per_file_resolve(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    header_root = tmp_path / "Engine" / "Source" / "Runtime" / "Core" / "Public"
+    header_root.mkdir(parents=True)
+    for index in range(40):
+        (header_root / f"Synthetic{index}.h").write_text(
+            f"struct FSynthetic{index} {{}};\n",
+            encoding="utf-8",
+        )
+    engine_header_evidence.clear_engine_header_catalog_cache()
+    monkeypatch.setattr(engine_header_evidence.shutil, "which", lambda _name: None)
+
+    def reject_slow_resolve(*_args, **_kwargs):
+        raise AssertionError("trusted os.walk catalog must not resolve each header")
+
+    monkeypatch.setattr(engine_header_evidence, "_contained", reject_slow_resolve)
+
+    catalog = engine_header_evidence._header_catalog(tmp_path)
+
+    assert len(catalog) == 40
+    assert "synthetic39.h" in catalog
+    engine_header_evidence.clear_engine_header_catalog_cache()
+
+
+def test_large_engine_tree_without_rg_skips_unbounded_python_content_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = tmp_path / "Engine" / "Source" / "Runtime"
+    runtime.mkdir(parents=True)
+    catalog = {
+        f"synthetic{index}.h": [runtime / f"Synthetic{index}.h"]
+        for index in range(
+            engine_header_evidence._MAX_PYTHON_DECLARATION_SCAN_FILES + 1
+        )
+    }
+    engine_header_evidence.clear_engine_header_catalog_cache()
+    monkeypatch.setattr(engine_header_evidence.shutil, "which", lambda _name: None)
+
+    def reject_file_scan(*_args, **_kwargs):
+        raise AssertionError("large SDK fallback must escalate instead of reading every header")
+
+    monkeypatch.setattr(engine_header_evidence, "_contained", reject_file_scan)
+    resolved, inspected = engine_header_evidence._discover_type_declaration_paths(
+        tmp_path,
+        catalog,
+        ["FTypeDeclaredInAnotherHeader"],
+        max_header_chars=1_000_000,
+    )
+
+    assert resolved == {"FTypeDeclaredInAnotherHeader": []}
+    assert inspected == 0
+    engine_header_evidence.clear_engine_header_catalog_cache()
 
 
 def test_cpp_type_normalization_preserves_multiword_builtin_types():
@@ -42,6 +101,43 @@ def test_unreal_real_aliases_are_numeric_compatible_with_builtin_floats():
     assert _cpp_types_compatible("float", "FRealSingle") is True
     assert _cpp_types_compatible("FRealDouble", "double") is True
     assert _cpp_types_compatible("double", "FReal") is True
+
+
+@pytest.mark.parametrize(
+    ("actual", "expected"),
+    [
+        ("int8", "int32"),
+        ("uint32", "int64"),
+        ("float", "double"),
+        ("int32", "double"),
+        ("uint16", "float"),
+        ("long", "int64"),
+    ],
+)
+def test_numeric_widening_is_compatible_on_all_supported_platforms(actual, expected):
+    assert _numeric_conversion_kind(actual, expected) == "widening"
+    assert _cpp_types_compatible(actual, expected) is True
+
+
+@pytest.mark.parametrize(
+    ("actual", "expected"),
+    [
+        ("double", "float"),
+        ("int64", "int8"),
+        ("uint64", "int32"),
+        ("int32", "uint32"),
+        ("uint64", "double"),
+        ("long", "int32"),
+    ],
+)
+def test_numeric_narrowing_is_not_semantically_compatible(actual, expected):
+    assert _numeric_conversion_kind(actual, expected) == "narrowing"
+    assert _cpp_types_compatible(actual, expected) is False
+
+
+def test_pointer_types_never_gain_numeric_conversion_compatibility():
+    assert _numeric_conversion_kind("int64*", "int64") == "incompatible"
+    assert _cpp_types_compatible("int64*", "int64") is False
 
 
 def test_extract_symbols_finds_unreal_types():
@@ -1131,6 +1227,86 @@ def test_project_graph_accepts_member_declared_on_local_base_class():
     assert result["ok"] is True
 
 
+def test_project_enum_value_must_exist_in_exact_declaration(tmp_path: Path):
+    header = tmp_path / "Source" / "Game" / "GomokuMinigameTypes.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        """
+UENUM(BlueprintType)
+enum class EMatchPhase : uint8
+{
+    Waiting,
+    Playing UMETA(DisplayName = "Playing"),
+    GameOver = 4,
+};
+""",
+        encoding="utf-8",
+    )
+    graph = {
+        "symbols": [
+            {
+                "symbol_name": "EMatchPhase",
+                "symbol_kind": "enum",
+                "file_path": str(header),
+                "line_start": 3,
+            }
+        ]
+    }
+
+    result = validate_sketch(
+        "EMatchPhase Phase = EMatchPhase::Ended;",
+        NO_INDEX,
+        graph=graph,
+        declaration_context=header.read_text(encoding="utf-8"),
+    )
+
+    issue = next(
+        item
+        for item in result["results"]
+        if item.get("errorCode") == "PROJECT_ENUM_VALUE_NOT_DECLARED"
+    )
+    assert result["ok"] is False
+    assert issue["symbol"] == "EMatchPhase::Ended"
+    assert issue["verdict"] == "known_bad"
+    assert issue["evidence"][0]["declaredValues"] == [
+        "GameOver",
+        "Playing",
+        "Waiting",
+    ]
+
+
+def test_project_enum_value_accepts_declared_value(tmp_path: Path):
+    header = tmp_path / "Source" / "Game" / "GomokuMinigameTypes.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "enum class EMatchPhase : uint8 { Waiting, Playing, GameOver };\n",
+        encoding="utf-8",
+    )
+    graph = {
+        "symbols": [
+            {
+                "symbol_name": "EMatchPhase",
+                "symbol_kind": "enum",
+                "file_path": str(header),
+                "line_start": 1,
+            }
+        ]
+    }
+
+    result = validate_sketch(
+        "EMatchPhase Phase = EMatchPhase::GameOver;",
+        NO_INDEX,
+        graph=graph,
+        declaration_context=header.read_text(encoding="utf-8"),
+    )
+
+    assert not any(
+        item.get("errorCode") == "PROJECT_ENUM_VALUE_NOT_DECLARED"
+        for item in result["results"]
+    )
+    assert result["ok"] is True
+
+
 def test_engine_header_fallback_verifies_exact_type_and_owned_method(tmp_path):
     header = (
         tmp_path
@@ -1326,6 +1502,46 @@ public:
     assert mismatch["receiverType"] == "UNiagaraFunctionLibrary"
     assert "called with 0 argument" in mismatch["note"]
     assert result["knownBadCount"] >= 1
+    assert result["ok"] is False
+
+
+def test_engine_header_contract_rejects_narrowing_numeric_argument(tmp_path):
+    header = (
+        tmp_path
+        / "UE_5.8"
+        / "Engine"
+        / "Source"
+        / "Runtime"
+        / "Demo"
+        / "Public"
+        / "DemoMathLibrary.h"
+    )
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        """
+class UDemoMathLibrary : public UBlueprintFunctionLibrary
+{
+public:
+    static void SetSmallValue(float Value);
+};
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = validate_sketch(
+        "UDemoMathLibrary::SetSmallValue(1.0);",
+        NO_INDEX,
+        graph={"symbols": []},
+        engine_root=tmp_path / "UE_5.8",
+    )
+
+    mismatch = next(
+        item
+        for item in result["results"]
+        if item.get("errorCode") == "ENGINE_PARAMETER_TYPE_MISMATCH"
+    )
+    assert "double" in mismatch["note"]
+    assert "float" in mismatch["note"]
     assert result["ok"] is False
 
 
