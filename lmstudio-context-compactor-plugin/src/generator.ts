@@ -387,6 +387,10 @@ const ARCHITECTURE_GATE_MARKER = "[UNREAL_ARCHITECTURE_VALIDATION_GATE]";
 const ARCHITECTURE_SUBMISSION_MARKER = "[UNREAL_ARCHITECTURE_SUBMISSION_REQUIRED]";
 const ARCHITECTURE_PAYLOAD_REPAIR_MARKER = "[UNREAL_ARCHITECTURE_PAYLOAD_REPAIR_REQUIRED]";
 const ARCHITECTURE_TOOL_NAME = "unreal_architecture_reasoning";
+const FEATURE_INTENT_ATOMIC_MARKER = "[UNREAL_FEATURE_INTENT_ATOMIC_GATE]";
+const FEATURE_INTENT_TOOL_NAME = "unreal_feature_intent_resolve";
+const TASK_PLANNER_TOOL_NAME = "unreal_agent_plan";
+const TASK_ROUTE_OWNERSHIP_MARKER = "[UNREAL_TASK_ROUTE_OWNERSHIP_GATE]";
 const ARCHITECTURE_EVIDENCE_TOOLS = [
   "read_file",
   "read_file_range",
@@ -409,6 +413,37 @@ function latestUserGoalText(messages: ChatMessage[]): string {
     if (value && !core.isMetaUserMessage(value)) return value;
   }
   return "";
+}
+
+function injectTaskRouteOwnershipRule(chat: Chat, plannerAvailable: boolean): boolean {
+  const rule = (
+    `${TASK_ROUTE_OWNERSHIP_MARKER}\n`
+    + "Project mutation tools are unavailable until an MCP server returns a server-issued task route. "
+    + "Never construct, guess, or repair taskAuthorization. "
+    + (plannerAvailable
+      ? "Before any write, call unreal_agent_plan once with the original user request and continue with its returned route."
+      : "The mcp/unreal-rag planner provider is missing from this chat. You may inspect source, but do not claim implementation or attempt writes; report that mcp/unreal-rag must be enabled.")
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(TASK_ROUTE_OWNERSHIP_MARKER)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    chat.append("system", rule);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function architectureContractGoalText(
@@ -469,6 +504,39 @@ function injectArchitectureValidationRule(chat: Chat): boolean {
       if (message.getRole() !== "system") continue;
       const current = String(message.getText() || "");
       if (current.includes(ARCHITECTURE_GATE_MARKER)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    if (typeof (chat as any).append === "function") {
+      (chat as any).append("system", rule);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function injectFeatureIntentAtomicRule(chat: Chat): boolean {
+  const rule = (
+    `${FEATURE_INTENT_ATOMIC_MARKER}\n`
+    + "Submit exactly one unreal_feature_intent_resolve model-facing call for this gate. If selectedSlice.files "
+    + "is empty, include every already-discovered bounded 1-2 file slice in its slices argument and select one "
+    + "with activeSliceId. SelectIntent, ResolveSlice, CaptureSnapshot, and BindIntent are server-owned internal "
+    + "phases. Never call unreal_task_define_slices separately for feature intent."
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(FEATURE_INTENT_ATOMIC_MARKER)) return true;
       if (typeof (message as any).appendText === "function") {
         (message as any).appendText(`\n${rule}`);
         return true;
@@ -974,9 +1042,21 @@ function stagedArchitectureContractRequired(goal: string): boolean {
 }
 
 function networkedArchitectureContractRequired(goal: string): boolean {
-  return /authoritative|authority|multiplayer|replication|network|\brpc\b|\bserver\b|\bclient\b|멀티플레이|네트워크|리플리케이션|서버|클라이언트|권한/i.test(
-    String(goal || ""),
-  );
+  const source = String(goal || "");
+  const term = /authoritative|authority|multiplayer|replication|network|\brpc\b|\bserver\b|\bclient\b|멀티플레이|네트워크|리플리케이션|서버|클라이언트|권한/gi;
+  for (const match of source.matchAll(term)) {
+    const start = Number(match.index || 0);
+    const before = source.slice(Math.max(0, start - 48), start);
+    const after = source.slice(start + String(match[0] || "").length, start + 120);
+    const negated = (
+      /(?:do\s+not|don't|dont|without|exclude|excluding|out\s+of\s+scope)[^.!?\n]{0,48}$/i.test(before)
+      || /^(?:[^.!?\n]{0,72})(?:do\s+not|don't|dont|without|exclude|excluding|out\s+of\s+scope)/i.test(after)
+      || /(?:하지\s*마|말고|제외|건드리지|필요\s*없|사용하지|대상\s*아님)[^.!?\n]{0,32}$/i.test(before)
+      || /^(?:[^.!?\n]{0,72})(?:하지\s*마|말고|제외|건드리지|필요\s*없|사용하지|대상\s*아님)/i.test(after)
+    );
+    if (!negated) return true;
+  }
+  return false;
 }
 
 function architectureDiscoveryToolAllowed(name: string): boolean {
@@ -988,6 +1068,11 @@ const SESSION_SCOPED_ANALYSIS_TOOLS = [
   "unreal_rag_search",
   "unreal_agent_session",
   "unreal_architecture_reasoning",
+  "list_directory",
+  "read_file",
+  "read_file_range",
+  "read_symbol",
+  "search_files",
 ];
 
 function enrichToolRequestSession(request: any, sessionId: string): any {
@@ -1018,8 +1103,82 @@ const RECOVERY_CONTROL_TOOLS = [
   "unreal_task_cancel_active",
 ];
 
+// tools/list can be refreshed independently by the unreal-rag and
+// unreal-agent MCP servers. LM Studio may therefore hand the generator a
+// short-lived union containing a tool from the previous task phase. Keep the
+// server call-time authorization as the final authority, but defensively
+// intersect Unreal work tools with the latest server-owned route before the
+// model sees them. Non-Unreal MCP tools are deliberately left untouched.
+const ALWAYS_DISCOVERABLE_UNREAL_TOOLS = [
+  "unreal_get_active_project",
+  "unreal_set_active_project",
+  "unreal_rag_health",
+  "unreal_agent_plan",
+  "unreal_task_status",
+  "unreal_task_list_active",
+  "unreal_task_recover_active",
+  "unreal_task_cancel_active",
+  "unreal_task_quarantine_corrupt",
+  "unreal_task_retry_job_cancel",
+  "unreal_task_define_slices",
+  "unreal_task_resume",
+  "unreal_task_cancel",
+  "get_workspace_info",
+  "get_active_project",
+  "list_active_tasks",
+  "cancel_active_task",
+  "quarantine_corrupt_task",
+];
+
+const UNPREFIXED_UNREAL_AGENT_TOOLS = [
+  ...ALWAYS_DISCOVERABLE_UNREAL_TOOLS.filter((name) => !name.startsWith("unreal_")),
+  "list_directory",
+  "read_file",
+  "read_file_range",
+  "read_symbol",
+  "search_files",
+  "write_file",
+  "replace_in_file",
+  "apply_edit_bundle",
+  "static_validate_project",
+  "build_unreal_project",
+  "run_unreal_automation_tests",
+  "read_unreal_logs",
+  "write_session_handoff",
+  "record_bootstrap_step",
+];
+
+const TASK_CHECKPOINT_TOOL_NAME = "unreal_task_checkpoint";
+
 function isRecoveryControlTool(name: string): boolean {
   return RECOVERY_CONTROL_TOOLS.some((control) => toolNamesMatch(control, name));
+}
+
+function isUnrealStackTool(name: string): boolean {
+  const normalized = String(name || "").trim().toLowerCase();
+  return normalized.includes("unreal_")
+    || UNPREFIXED_UNREAL_AGENT_TOOLS.some((known) => toolNamesMatch(known, normalized));
+}
+
+function routeAllowsTool(tool: any, checkpoint: any): boolean {
+  const name = String(tool?.function?.name || tool?.name || "").trim();
+  if (!isUnrealStackTool(name)) return true;
+
+  const required = String(checkpoint?.requiredNextTool?.name || "").trim();
+  if (required && !core.isNonToolNextAction(required) && toolNamesMatch(required, name)) {
+    return true;
+  }
+  // A checkpoint is not a normal always-visible status control. It is exposed
+  // only for an exact server-requested continuity handoff, otherwise compact
+  // models tend to poll it instead of performing routed work.
+  if (toolNamesMatch(TASK_CHECKPOINT_TOOL_NAME, name)) return false;
+  if (ALWAYS_DISCOVERABLE_UNREAL_TOOLS.some((control) => toolNamesMatch(control, name))) {
+    return true;
+  }
+  const activeTools = Array.isArray(checkpoint?.toolRoute?.activeTools)
+    ? checkpoint.toolRoute.activeTools.map((item: any) => String(item || "").trim()).filter(Boolean)
+    : [];
+  return activeTools.some((active: string) => toolNamesMatch(active, name));
 }
 
 function validateToolRequest(request: any, checkpoint: any): { ok: boolean; reason?: string } {
@@ -1032,6 +1191,14 @@ function validateToolRequest(request: any, checkpoint: any): { ok: boolean; reas
     && !isRecoveryControlTool(actual)
   ) {
     return { ok: false, reason: `requiredNextTool=${required}; received=${actual}` };
+  }
+  if (
+    required
+    && toolNamesMatch(required, actual)
+    && !core.toolArgumentsSatisfy(checkpoint?.requiredNextTool?.args, request?.arguments)
+    && !isRecoveryControlTool(actual)
+  ) {
+    return { ok: false, reason: `requiredNextTool=${required} arguments do not satisfy the server-owned requiredNextToolArgs` };
   }
   const completed = new Set(checkpoint?.completedToolCallIds || []);
   if (request?.id && completed.has(request.id)) {
@@ -1246,6 +1413,39 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   if (architectureValidationRequired) {
     injectArchitectureValidationRule(history);
   }
+  if (toolNamesMatch(
+    FEATURE_INTENT_TOOL_NAME,
+    String(nextCheckpoint?.requiredNextTool?.name || ""),
+  )) {
+    injectFeatureIntentAtomicRule(history);
+  }
+  const plannerAvailable = toolDefinitions.some((tool: any) => toolNamesMatch(
+    TASK_PLANNER_TOOL_NAME,
+    tool?.function?.name || tool?.name || "",
+  ));
+  const routeOwnershipAvailable = Boolean(nextCheckpoint?.taskRouteOwnership);
+  const exactToolRouteAvailable = Boolean(
+    nextCheckpoint?.toolRoute?.routeHash
+    && Array.isArray(nextCheckpoint?.toolRoute?.activeTools)
+    && nextCheckpoint.toolRoute.activeTools.length > 0
+  );
+  const projectAgentDiscoveryAvailable = [
+    "get_workspace_info",
+    "get_active_project",
+    "list_active_tasks",
+  ].some((expected) => toolDefinitions.some((tool: any) => toolNamesMatch(
+    expected,
+    tool?.function?.name || tool?.name || "",
+  )));
+  const unroutedMutationDefinitionsPresent = Boolean(
+    !routeOwnershipAvailable
+    && toolDefinitions.some((tool: any) => core.mutationToolName(
+      tool?.function?.name || tool?.name || "",
+    )),
+  );
+  if (!routeOwnershipAvailable && (projectAgentDiscoveryAvailable || unroutedMutationDefinitionsPresent)) {
+    injectTaskRouteOwnershipRule(history, plannerAvailable);
+  }
   const architectureEvidenceReadThreshold = Math.floor(finiteNumber(
     configValue(ctl, "architectureEvidenceReadThreshold", 4), 4, 1, 64,
   ));
@@ -1327,8 +1527,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       networkedContract: networkedContractRequired,
     },
   );
-  const effectiveToolDefinitions = architectureToolForced
-    ? [architectureContractTool]
+  const semanticForbiddenTools = Array.isArray(nextCheckpoint?.semanticBlocker?.forbiddenTools)
+    ? nextCheckpoint.semanticBlocker.forbiddenTools.map((name: any) => String(name || "").trim()).filter(Boolean)
+    : [];
+  const toolAllowedBySemanticBlocker = (tool: any): boolean => {
+    const name = String(tool?.function?.name || tool?.name || "").trim();
+    return !semanticForbiddenTools.some((forbidden: string) => toolNamesMatch(forbidden, name));
+  };
+  const phaseToolDefinitions = architectureToolForced
+    ? [architectureContractTool].filter(toolAllowedBySemanticBlocker)
     : (architectureEvidenceRefillActive
       ? toolDefinitions
         .filter((tool: any) => architectureDiscoveryToolAllowed(
@@ -1339,7 +1546,35 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             ? architectureContractTool
             : tool
         ))
-      : toolDefinitions);
+        .filter(toolAllowedBySemanticBlocker)
+      : toolDefinitions.filter(toolAllowedBySemanticBlocker));
+  // Exact catalog/state enforcement: a generated write is intent, not proof of
+  // ownership. Remove mutation schemas until a server result has supplied the
+  // compact taskSessionId + ownerCapability pair. This also protects older
+  // agent MCP revisions that advertised write tools on a clean startup.
+  const checkpointExplicitlyRequired = toolNamesMatch(
+    TASK_CHECKPOINT_TOOL_NAME,
+    String(nextCheckpoint?.requiredNextTool?.name || ""),
+  );
+  // Exact phase filtering also closes the tools/list refresh race between the
+  // two Unreal MCP providers. Architecture recovery already constructs its
+  // own narrower catalog, so it remains authoritative while active.
+  const routedToolDefinitions = routeOwnershipAvailable
+    && exactToolRouteAvailable
+    && !architectureToolForced
+    && !architectureEvidenceRefillActive
+    ? phaseToolDefinitions.filter((tool: any) => routeAllowsTool(tool, nextCheckpoint))
+    : (checkpointExplicitlyRequired
+      ? phaseToolDefinitions
+      : phaseToolDefinitions.filter((tool: any) => !toolNamesMatch(
+        TASK_CHECKPOINT_TOOL_NAME,
+        tool?.function?.name || tool?.name || "",
+      )));
+  const effectiveToolDefinitions = routeOwnershipAvailable
+    ? routedToolDefinitions
+    : routedToolDefinitions.filter((tool: any) => !core.mutationToolName(
+      tool?.function?.name || tool?.name || "",
+    ));
   const currentFormatted = await model.applyPromptTemplate(history);
   const inputTokens = await model.countTokens(currentFormatted);
   const toolSchemaTokens = await model.countTokens(JSON.stringify(effectiveToolDefinitions));
@@ -1357,6 +1592,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     observeOnly,
     strictToolControlPlane: Boolean(configValue(ctl, "strictToolControlPlane", false)),
     bufferUntilPredictionComplete: Boolean(configValue(ctl, "bufferUntilPredictionComplete", true)),
+    streamReasoningProgress: Boolean(configValue(ctl, "streamReasoningProgress", true)),
     rejectTruncatedPredictions: Boolean(configValue(ctl, "rejectTruncatedPredictions", true)),
     requireCheckpointPersistence,
     softRemainingTokens: finiteNumber(configValue(ctl, "softRemainingTokens", 14000), 14000, hardRemainingTokens),
@@ -1412,6 +1648,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     architectureStagedContractRequired: stagedContractRequired,
     architectureNetworkedContractRequired: networkedContractRequired,
     requireCompleteArchitectureProposal,
+    plannerAvailable,
+    routeOwnershipAvailable,
+    projectAgentDiscoveryAvailable,
+    unroutedMutationDefinitionsPresent,
   });
 
   let modelChat = history;
@@ -1576,7 +1816,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const toolControlPlaneEnforced = strictToolControlPlane
     || requiredToolGateActive
     || architectureToolForced
-    || architectureEvidenceRefillActive;
+    || architectureEvidenceRefillActive
+    || semanticForbiddenTools.length > 0;
   const bufferUntilPredictionComplete = Boolean(config.bufferUntilPredictionComplete)
     || requireCheckpointPersistence
     || Boolean(config.rejectTruncatedPredictions);
@@ -1588,8 +1829,23 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     else if (event.kind === "end") ctl.toolCallGenerationEnded(event.request);
     else if (event.kind === "failure") ctl.toolCallGenerationFailed(new Error(event.error));
   };
+  let streamedReasoningEventCount = 0;
   const recordEvent = (event: any) => {
-    if (toolControlPlaneEnforced || bufferUntilPredictionComplete) events.push(event);
+    const outputBuffered = toolControlPlaneEnforced || bufferUntilPredictionComplete;
+    const reasoningType = String(event?.opts?.reasoningType || "none");
+    const streamAsProgress = Boolean(
+      outputBuffered
+      && config.streamReasoningProgress
+      && event.kind === "fragment"
+      && reasoningType !== "none"
+    );
+    if (streamAsProgress) {
+      // Reasoning is transient progress, not a committed final answer or tool
+      // request. Streaming it keeps the UI alive while atomic final/tool output
+      // and truncation rejection remain intact.
+      streamedReasoningEventCount += 1;
+      emitEvent(event);
+    } else if (outputBuffered) events.push(event);
     else emitEvent(event);
   };
   const runPrediction = async (predictionTools: any[], forceTool: boolean): Promise<string> => {
@@ -1652,6 +1908,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       at: new Date().toISOString(),
       stopReason: reason || "unspecified",
       bufferedEventCount: events.length,
+      streamedReasoningEventCount,
       toolRequestCount: requests.length,
       outputCommitted: false,
       outputCommitPending: !truncatedPrediction,
@@ -1666,7 +1923,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     throw new Error(
       `Model prediction was discarded because it did not complete safely (stopReason=${stopReason}). `
       + (safelyBuffered
-        ? "No buffered text or tool call was committed; compact the context or increase the model context/output limit."
+        ? "No buffered final text or tool call was committed; transient reasoning progress may already be visible. Compact the context or increase the model context/output limit."
         : "Atomic output was explicitly disabled, so already-streamed output may be partial. Enable atomic output before retrying."),
     );
   }
@@ -1845,7 +2102,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       && !toolNamesMatch(ARCHITECTURE_TOOL_NAME, requestedName);
     const discoveryToolRejected = architectureEvidenceRefillActive
       && !architectureDiscoveryToolAllowed(requestedName);
-    const verdict = architectureToolRejected
+    const semanticToolRejected = semanticForbiddenTools.some(
+      (forbidden: string) => toolNamesMatch(forbidden, requestedName),
+    );
+    const verdict = semanticToolRejected
+      ? {
+        ok: false,
+        reason: `semantic blocker forbids ${requestedName || "<unnamed>"}; errorCode=${nextCheckpoint?.semanticBlocker?.errorCode || "BLOCKED"}`,
+      }
+      : (architectureToolRejected
       ? {
         ok: false,
         reason: `Architecture submission is required; expected ${ARCHITECTURE_TOOL_NAME}, got ${requestedName || "<unnamed>"}.`,
@@ -1862,7 +2127,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         }
       : (toolControlPlaneEnforced
         ? validateToolRequest(entry.request, nextCheckpoint)
-        : { ok: true })));
+        : { ok: true }))));
     verdictByCallId.set(entry.callId, verdict);
     if (!verdict.ok) {
       await appendEventBestEffort(sessionId, {
@@ -1918,10 +2183,18 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     at: new Date().toISOString(),
     stopReason: stopReason || "unspecified",
     emittedEventCount: events.length,
+    streamedReasoningEventCount,
     toolRequestCount: requests.length,
     outputCommitted: true,
   });
 }
 
-export { architectureGateStatus, generate, reconcilePendingToolCalls };
+export {
+  architectureGateStatus,
+  generate,
+  injectFeatureIntentAtomicRule,
+  injectTaskRouteOwnershipRule,
+  networkedArchitectureContractRequired,
+  reconcilePendingToolCalls,
+};
 // End of module.

@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { compactTaskAuthorization } = require("./public-contract.js");
 const { taskStateDir, resolveAgentStateRoot, ensureStateRootLayout } = require("./state-root");
 const { atomicWriteJson } = require("./atomic-io");
 const {
@@ -11,6 +12,7 @@ const {
 } = require("./write-locks");
 const {
   getMcpConnectionId,
+  getMcpClientInstanceId,
   taskOwnsActiveToolRoute,
   taskConnectionMatches,
   taskIsForeignHealthy,
@@ -577,7 +579,7 @@ function validateToolRoute(state, fields, args, toolName) {
       toolRoute: activeRoute,
       taskAuthorization: authorization,
       nextAction: requiredFirstTool,
-      nextActionArgs: { taskAuthorization: authorization },
+      nextActionArgs: { taskAuthorization: compactTaskAuthorization(authorization) },
       retryable: true,
       agentInstruction: `Call ${requiredFirstTool} now with the returned taskAuthorization. Do not inspect or edit files first.`,
     };
@@ -636,10 +638,8 @@ function validateToolRoute(state, fields, args, toolName) {
         toolRoute: activeRoute,
         taskAuthorization: taskAuthorizationForState(state),
         nextAction: "unreal_code_sketch_claim_validate",
-        nextActionArgs: {
-          targetFileLimit: maxFiles,
-          taskAuthorization: taskAuthorizationForState(state),
-        },
+        nextActionArgs: { taskAuthorization: compactTaskAuthorization(taskAuthorizationForState(state)) },
+        maxFilesPerSlice: maxFiles,
       };
     }
     if (requestedPaths.length > maxFiles) {
@@ -650,10 +650,8 @@ function validateToolRoute(state, fields, args, toolName) {
         toolRoute: activeRoute,
         taskAuthorization: taskAuthorizationForState(state),
         nextAction: "unreal_code_sketch_claim_validate",
-        nextActionArgs: {
-          targetFileLimit: maxFiles,
-          taskAuthorization: taskAuthorizationForState(state),
-        },
+        nextActionArgs: { taskAuthorization: compactTaskAuthorization(taskAuthorizationForState(state)) },
+        maxFilesPerSlice: maxFiles,
       };
     }
     const outsideSlice = requestedPaths.filter(
@@ -669,10 +667,8 @@ function validateToolRoute(state, fields, args, toolName) {
         toolRoute: activeRoute,
         taskAuthorization: taskAuthorizationForState(state),
         nextAction: "unreal_code_sketch_claim_validate",
-        nextActionArgs: {
-          targetFileLimit: maxFiles,
-          taskAuthorization: taskAuthorizationForState(state),
-        },
+        nextActionArgs: { taskAuthorization: compactTaskAuthorization(taskAuthorizationForState(state)) },
+        maxFilesPerSlice: maxFiles,
       };
     }
   }
@@ -921,8 +917,10 @@ function mutateRouteBudget(
           phase: String(route.phase || "working"),
           requiredNextAction: String(toolName || ""),
           includeGitChanges: false,
-          taskSessionId: checkpointAuthorization.taskSessionId,
-          ownerCapability: checkpointAuthorization.ownerCapability,
+          taskAuthorization: {
+            taskSessionId: checkpointAuthorization.taskSessionId,
+            ownerCapability: checkpointAuthorization.ownerCapability,
+          },
         },
         nextActions: [
           "unreal_task_checkpoint",
@@ -1745,6 +1743,13 @@ function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], opti
   const stdinPayload = options.stdinPayload && typeof options.stdinPayload === "object"
     ? options.stdinPayload
     : null;
+  // Node and Python are two halves of one MCP bridge. Pass the already-resolved
+  // instance identity into the child so Python never performs its own Windows
+  // parent/WMI discovery and cannot rotate ownership mid-call.
+  const bridgeEnv = {
+    ...process.env,
+    MCP_CLIENT_INSTANCE_ID: getMcpClientInstanceId(),
+  };
   const code = [
     "import json, sys",
     "from pathlib import Path",
@@ -1761,7 +1766,7 @@ function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], opti
     ["-c", code, String(workspaceRoot), ...extraArgs.map(String)],
     {
       encoding: "utf8",
-      env: process.env,
+      env: bridgeEnv,
       windowsHide: true,
       timeout: 120000,
       killSignal: "SIGKILL",
@@ -1972,15 +1977,31 @@ function listActiveTasks(workspaceRoot, activeProject = "", options = {}) {
   try {
     const tasks = listRunningTasksForProject(workspaceRoot, activeProject, options);
     const corrupt = tasks.filter((item) => item.status === "corrupt");
+    const activeProjectSelected = Boolean(String(activeProject || "").trim());
+    const nextAction = corrupt.length
+      ? "quarantine_corrupt_task"
+      : (tasks.length
+        ? "cancel_active_task"
+        : (activeProjectSelected
+          ? "enable_or_call_unreal_agent_plan"
+          : "get_active_project"));
     return {
       ok: true,
       count: tasks.length,
       runningCount: tasks.filter((item) => item.status === "running").length,
       corruptCount: corrupt.length,
       tasks,
-      nextAction: corrupt.length
-        ? "quarantine_corrupt_task"
-        : (tasks.length ? "cancel_active_task" : "get_active_project"),
+      nextAction,
+      nextActionIsTool: Boolean(corrupt.length || tasks.length || !activeProjectSelected),
+      ...(!tasks.length && !corrupt.length && activeProjectSelected ? {
+        requiredProvider: "mcp/unreal-rag",
+        requiredTool: "unreal_agent_plan",
+        doNotFabricateTaskAuthorization: true,
+        agentInstruction: (
+          "No server-owned task route exists for the active project. Ensure mcp/unreal-rag is enabled, "
+          + "then call unreal_agent_plan with the original request. This response does not grant write authority."
+        ),
+      } : {}),
     };
   } catch (error) {
     if (error && error.errorCode === "TASK_STATE_ROOT_UNAVAILABLE") {
@@ -2187,7 +2208,7 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
       nextAction: ownershipRetry ? toolName : routeRecoveryNextAction(errorCode),
       ...(ownershipRetry ? {
         retryable: true,
-        nextActionArgs: { requiresCompleteTaskAuthorization: true },
+        requiredArgument: "taskAuthorization",
         agentInstruction: (
           "Retry the same tool once with the complete taskAuthorization previously "
           + "returned by the plan, gate, or checkpoint. Do not recover or cancel the task."
@@ -2577,7 +2598,7 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       taskSessionId: sanitized.taskSessionId,
       taskAuthorization,
       nextAction: "unreal_task_define_slices",
-      nextActionArgs: { taskAuthorization },
+      nextActionArgs: { taskAuthorization: compactTaskAuthorization(taskAuthorization) },
       retryable: true,
     };
   }

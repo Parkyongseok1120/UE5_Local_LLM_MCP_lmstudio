@@ -65,7 +65,234 @@ test("checkpoint recovery nextAction outranks its post-checkpoint requiredNextAc
   ]);
 
   assert.equal(checkpoint.requiredNextTool?.name, "unreal_task_checkpoint");
-  assert.equal(checkpoint.requiredNextTool?.args?.requiredNextAction, "read_file");
+  assert.equal(checkpoint.requiredNextTool?.args, null);
+});
+
+test("nextActionArgs remain guidance while requiredNextToolArgs are equality constraints", () => {
+  const guided = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "tool", content: JSON.stringify({
+      nextAction: "replace_in_file",
+      nextActionIsTool: true,
+      nextActionArgs: {
+        path: "A.cpp",
+        oldText: "<exact excerpt>",
+        newText: "<replacement>",
+      },
+    }) },
+  ]);
+  assert.equal(guided.requiredNextTool?.name, "replace_in_file");
+  assert.equal(guided.requiredNextTool?.args, null);
+
+  const constrained = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "tool", content: JSON.stringify({
+      requiredNextTool: "search_files",
+      requiredNextToolArgs: { query: "Exact", path: "project://Source" },
+      nextActionArgs: { query: "template" },
+    }) },
+  ]);
+  assert.deepEqual(constrained.requiredNextTool?.args, {
+    query: "Exact",
+    path: "project://Source",
+  });
+});
+
+test("semantic evidence blocker survives completed controls and hard compaction", () => {
+  const blocker = {
+    ok: false,
+    errorCode: "EVIDENCE_STAGNATION_REPEAT",
+    stopCurrentWorkflow: false,
+    stopCurrentPhase: true,
+    phaseBoundary: "evidence",
+    doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
+    agentInstruction: "Do not call another evidence tool. Continue from retained evidence.",
+    control: {
+      version: 1,
+      phase: "search_files",
+      status: "Blocked",
+      nextActionIsTool: false,
+      retryPolicy: "forbidden",
+      blockerFingerprint: "evidence-loop-1",
+    },
+  };
+  const completed = {
+    ok: true,
+    control: {
+      version: 1,
+      phase: "list_directory",
+      status: "Completed",
+      nextActionIsTool: false,
+      retryPolicy: "none",
+    },
+  };
+  const messages = [
+    { role: "user", content: "구현을 완료해줘" },
+    { role: "assistant", toolCalls: [{ id: "blocked", name: "search_files", arguments: { query: "RestartMatch" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "blocked", name: "search_files", content: JSON.stringify(blocker) }] },
+    { role: "assistant", toolCalls: [{ id: "later", name: "list_directory", arguments: { path: "Source" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "later", name: "list_directory", content: JSON.stringify(completed) }] },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.equal(checkpoint.protocolControl.status, "Completed");
+  assert.equal(checkpoint.semanticBlocker.active, true);
+  assert.equal(checkpoint.semanticBlocker.scope, "evidence_phase");
+  assert.equal(checkpoint.semanticBlocker.errorCode, "EVIDENCE_STAGNATION_REPEAT");
+  assert.ok(checkpoint.semanticBlocker.forbiddenTools.includes("search_files"));
+  assert.equal(core.validateCheckpoint(checkpoint), true);
+  assert.match(core.summarizeOldMessages(messages, checkpoint), /semanticBlockerInstruction=/);
+
+  const rebuilt = core.buildCheckpoint(messages, checkpoint);
+  assert.deepEqual(rebuilt.semanticBlocker, checkpoint.semanticBlocker);
+});
+
+test("semantic blocker clears only on a new goal or successful mutation", () => {
+  const blocker = {
+    ok: false,
+    errorCode: "EVIDENCE_STAGNATION",
+    stopCurrentWorkflow: false,
+    stopCurrentPhase: true,
+    phaseBoundary: "evidence",
+    doNotRetry: ["search_files"],
+    control: {
+      version: 1,
+      phase: "search_files",
+      status: "Blocked",
+      nextActionIsTool: false,
+      retryPolicy: "forbidden",
+      blockerFingerprint: "loop-2",
+    },
+  };
+  const base = [
+    { role: "user", content: "구현을 완료해줘" },
+    { role: "assistant", toolCalls: [{ id: "search", name: "search_files", arguments: {} }] },
+    { role: "tool", toolResults: [{ toolCallId: "search", name: "search_files", content: JSON.stringify(blocker) }] },
+  ];
+  const prior = core.buildCheckpoint(base);
+
+  const continued = core.buildCheckpoint([...base, { role: "user", content: "계속해" }], prior);
+  assert.equal(continued.semanticBlocker.active, true);
+
+  const changed = core.buildCheckpoint([...base, { role: "user", content: "새 UI 버그를 고쳐줘" }], prior);
+  assert.equal(changed.semanticBlocker, null);
+
+  const mutated = core.buildCheckpoint([...base,
+    { role: "assistant", toolCalls: [{ id: "write", name: "replace_in_file", arguments: { path: "A.cpp" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "write", name: "replace_in_file", content: JSON.stringify({ ok: true }) }] },
+  ], prior);
+  assert.equal(mutated.semanticBlocker, null);
+});
+
+test("ordinary same-path cache response does not globally forbid the read tool", () => {
+  const messages = [
+    { role: "user", content: "여러 파일을 분석해줘" },
+    { role: "assistant", toolCalls: [{ id: "read", name: "read_file", arguments: { path: "A.cpp" } }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "read",
+      name: "read_file",
+      content: JSON.stringify({
+        ok: true,
+        cached: true,
+        errorCode: "READ_REPEAT_DETECTED",
+        retryable: false,
+        stopCurrentWorkflow: false,
+        control: { version: 1, status: "Completed", retryPolicy: "forbidden" },
+      }),
+    }] },
+  ];
+  assert.equal(core.buildCheckpoint(messages).semanticBlocker, null);
+});
+
+test("corrected retry recovery does not turn doNotRetry into a tool-family ban", () => {
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "구현해줘" },
+    { role: "assistant", toolCalls: [{ id: "write", name: "replace_in_file", arguments: { path: "A.cpp", oldText: "wrong", newText: "x" } }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "write",
+      name: "replace_in_file",
+      isError: true,
+      content: JSON.stringify({
+        ok: false,
+        errorCode: "OLD_TEXT_NOT_FOUND",
+        retryable: true,
+        stopCurrentWorkflow: false,
+        doNotRetry: ["replace_in_file"],
+        nextAction: "replace_in_file",
+        nextActionIsTool: true,
+        nextActionArgs: { path: "A.cpp", oldText: "<exact excerpt>", newText: "<replacement>" },
+      }),
+    }] },
+  ]);
+  assert.equal(checkpoint.semanticBlocker, null);
+  assert.equal(checkpoint.requiredNextTool.name, "replace_in_file");
+});
+
+test("RAG repeat handoff blocks only RAG until required source search succeeds", () => {
+  const handoff = {
+    ok: false,
+    errorCode: "RAG_QUERY_REPEAT_BLOCKED",
+    stopCurrentWorkflow: false,
+    doNotRetry: true,
+    doNotRetryTools: ["unreal_rag_search"],
+    requiredNextTool: "search_files",
+    nextAction: "search_files",
+    nextActionIsTool: true,
+    control: { version: 1, status: "NeedsAction", retryPolicy: "once", nextAction: "search_files", nextActionIsTool: true },
+  };
+  const base = [
+    { role: "user", content: "구현해줘" },
+    { role: "assistant", toolCalls: [{ id: "rag", name: "unreal_rag_search", arguments: { query: "foo" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "rag", name: "unreal_rag_search", content: JSON.stringify(handoff) }] },
+  ];
+  const blocked = core.buildCheckpoint(base);
+  assert.equal(blocked.semanticBlocker.scope, "until_required_tool_success");
+  assert.deepEqual(blocked.semanticBlocker.forbiddenTools, ["unreal_rag_search"]);
+  assert.equal(blocked.semanticBlocker.clearOnTool, "search_files");
+  assert.equal(blocked.requiredNextTool.name, "search_files");
+
+  const completed = core.buildCheckpoint([...base,
+    { role: "assistant", toolCalls: [{ id: "search", name: "search_files", arguments: { query: "foo" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "search", name: "search_files", content: JSON.stringify({ results: [], searchComplete: true }) }] },
+  ], blocked);
+  assert.equal(completed.semanticBlocker, null);
+  assert.equal(completed.requiredNextTool, null);
+});
+
+test("RAG handoff remains blocked when the required search fails or uses wrong arguments", () => {
+  const args = { query: "HandlePlaceStone", path: "project://Source", maxResults: 40 };
+  const handoff = {
+    ok: false,
+    errorCode: "RAG_QUERY_REPEAT_BLOCKED",
+    stopCurrentWorkflow: false,
+    doNotRetry: true,
+    doNotRetryTools: ["unreal_rag_search"],
+    requiredNextTool: "search_files",
+    requiredNextToolArgs: args,
+    nextAction: "search_files",
+    nextActionArgs: args,
+    nextActionIsTool: true,
+    control: { version: 1, status: "NeedsAction", retryPolicy: "once", nextAction: "search_files", nextActionIsTool: true },
+  };
+  const base = [
+    { role: "user", content: "구현해줘" },
+    { role: "assistant", toolCalls: [{ id: "rag", name: "unreal_rag_search", arguments: { query: "foo" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "rag", name: "unreal_rag_search", content: JSON.stringify(handoff) }] },
+  ];
+  const prior = core.buildCheckpoint(base);
+  assert.deepEqual(prior.semanticBlocker.clearOnToolArgs, args);
+
+  const wrong = core.buildCheckpoint([...base,
+    { role: "assistant", toolCalls: [{ id: "wrong", name: "search_files", arguments: { ...args, query: "RestartMatch" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "wrong", name: "search_files", content: JSON.stringify({ results: [], searchComplete: true }) }] },
+  ], prior);
+  assert.equal(wrong.semanticBlocker.scope, "until_required_tool_success");
+
+  const failed = core.buildCheckpoint([...base,
+    { role: "assistant", toolCalls: [{ id: "failed", name: "search_files", arguments: args }] },
+    { role: "tool", toolResults: [{ toolCallId: "failed", name: "search_files", isError: true, content: JSON.stringify({ ok: false, errorCode: "SEARCH_FAILED" }) }] },
+  ], prior);
+  assert.equal(failed.semanticBlocker.scope, "until_required_tool_success");
 });
 
 test("checkpoint validation rejects malformed pending tool state", () => {
@@ -264,6 +491,36 @@ test("rebuilding an unchanged checkpoint does not double count mutations", () =>
   assert.equal(second.mutationGeneration, 1);
 });
 
+test("mutation generation advances only after a successful mutation result", () => {
+  const failed = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "assistant", content: "", toolCalls: [{ id: "write-1", name: "write_file", arguments: {} }] },
+    { role: "tool", content: "", toolResults: [{ toolCallId: "write-1", content: JSON.stringify({ ok: false, errorCode: "WRITE_REJECTED" }), isError: true }] },
+  ]);
+  assert.equal(failed.mutationGeneration, 0);
+
+  const reported = core.buildCheckpoint([
+    { role: "user", content: "fix" },
+    { role: "assistant", content: "", toolCalls: [{ id: "bundle-1", name: "apply_edit_bundle", arguments: {} }] },
+    { role: "tool", content: "", toolResults: [{ toolCallId: "bundle-1", content: JSON.stringify({ ok: true, mutationGeneration: 7 }) }] },
+  ]);
+  assert.equal(reported.mutationGeneration, 7);
+});
+
+test("mutation tool classifier recognizes provider-prefixed write routes only", () => {
+  for (const name of [
+    "write_file",
+    "replace_in_file",
+    "apply_edit_bundle",
+    "mcp_unreal_agent_apply_edit_bundle",
+  ]) {
+    assert.equal(core.mutationToolName(name), true, name);
+  }
+  for (const name of ["read_file", "static_validate_project", "unreal_agent_plan"]) {
+    assert.equal(core.mutationToolName(name), false, name);
+  }
+});
+
 test("zero retained turns keeps only the minimum recent tail", () => {
   const messages = [
     { role: "system", content: "rules" },
@@ -310,6 +567,19 @@ test("session markers isolate identical first prompts across chats", () => {
     core.sessionFingerprint(chatB, "workspace\nmodel"),
   );
   assert.equal(core.extractSessionMarker(chatA), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+});
+
+test("continuation user message preserves the active objective and constraints", () => {
+  const messages = [
+    { role: "user", content: "오목 착수 기능을 구현하고 검증해" },
+    { role: "assistant", content: "working" },
+    { role: "user", content: "중단한 곳부터 계속해" },
+  ];
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.equal(checkpoint.objective, "오목 착수 기능을 구현하고 검증해");
+  assert.ok(checkpoint.constraints.includes("active_goal:오목 착수 기능을 구현하고 검증해"));
+  assert.equal(core.isContinuationUserMessage("계속 작업해"), true);
+  assert.equal(core.isContinuationUserMessage("다시해: 네트워크는 제외해"), false);
 });
 
 test("session markers are idempotent session identities", () => {
@@ -387,6 +657,29 @@ test("required next tool clears only after its matching successful result", () =
     { role: "tool", content: JSON.stringify({ ok: true }), toolResults: [{ toolCallId: "lookup-1", content: "{}" }] },
   ], prior);
   assert.equal(next.requiredNextTool, null);
+});
+
+test("required next tool does not clear when server-owned required arguments differ", () => {
+  const required = {
+    requiredNextTool: "search_files",
+    requiredNextToolArgs: { query: "HandlePlaceStone", path: "project://Source" },
+  };
+  const base = [
+    { role: "user", content: "fix" },
+    { role: "tool", content: JSON.stringify(required) },
+  ];
+  const prior = core.buildCheckpoint(base);
+  const wrong = core.buildCheckpoint([...base,
+    { role: "assistant", toolCalls: [{ id: "search", name: "search_files", arguments: { query: "RestartMatch", path: "project://Source" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "search", name: "search_files", content: JSON.stringify({ results: [], searchComplete: true }) }] },
+  ], prior);
+  assert.equal(wrong.requiredNextTool.name, "search_files");
+
+  const exact = core.buildCheckpoint([...base,
+    { role: "assistant", toolCalls: [{ id: "search", name: "search_files", arguments: { ...required.requiredNextToolArgs, sessionId: "server-injected" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "search", name: "search_files", content: JSON.stringify({ results: [], searchComplete: true }) }] },
+  ], prior);
+  assert.equal(exact.requiredNextTool, null);
 });
 
 test("required next tool remains pending after call dispatch without a result", () => {
@@ -575,9 +868,46 @@ test("checkpoint normalizes LM Studio content blocks and preserves negative disc
     fileNameResultCount: 0,
     searchComplete: true,
     matchedFiles: [],
+    cached: false,
+    repeatDetected: false,
   });
   assert.match(summary, /GomokuMinigameSubsystem\.h/);
   assert.match(summary, /resultCount":0/);
+});
+
+test("cached search repeat cannot erase prior positive search evidence", () => {
+  const args = { query: "RestartMatch", path: "project://Source" };
+  const messages = [
+    { role: "user", content: "implement restart" },
+    { role: "assistant", toolCalls: [{ id: "search-1", name: "search_files", arguments: args }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "search-1",
+      name: "search_files",
+      content: JSON.stringify({
+        results: [{ file: "project://Source/O_Mock/GomokuGameMode.cpp", line: 120 }],
+        searchComplete: true,
+      }),
+    }] },
+    { role: "assistant", toolCalls: [{ id: "search-2", name: "search_files", arguments: args }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "search-2",
+      name: "search_files",
+      content: JSON.stringify({
+        ok: true,
+        cached: true,
+        repeatDetected: true,
+        errorCode: "READ_REPEAT_DETECTED",
+        cachedLineCount: 12,
+      }),
+    }] },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  const fact = checkpoint.evidenceFacts.find((row) => row.query === "RestartMatch");
+  assert.equal(fact.resultCount, 1);
+  assert.equal(fact.searchComplete, true);
+  assert.deepEqual(fact.matchedFiles, ["project://Source/O_Mock/GomokuGameMode.cpp"]);
+  assert.equal(fact.repeatDetected, true);
 });
 
 test("checkpoint retains bounded semantic anchors from LM Studio read_file source results", () => {
@@ -831,6 +1161,10 @@ test("structured control outranks concise text and nested legacy actions", () =>
           nextAction: "read_file",
           nextActionIsTool: true,
           nextActionArgs: {
+            path: "Source/Demo.cpp",
+            requiredNextAction: "submit_full_architecture_proposal",
+          },
+          requiredNextToolArgs: {
             path: "Source/Demo.cpp",
             requiredNextAction: "submit_full_architecture_proposal",
           },

@@ -122,9 +122,57 @@ def test_feature_intent_schema_is_compact_for_local_tool_calling(monkeypatch, tm
         "selectedIntentId",
         "selectionRationale",
         "blockingQuestionAnswers",
+        "slices",
+        "activeSliceId",
+        "targetFiles",
         "taskAuthorization",
     }
+    assert properties["slices"]["maxItems"] == 24
+    assert properties["slices"]["items"]["additionalProperties"] is False
+    assert properties["targetFiles"]["maxItems"] <= 2
     assert properties["taskAuthorization"]["additionalProperties"] is False
+
+
+def test_task_status_binds_schema_valid_recovery_arguments_only_for_verified_owner(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    authorization = {
+        "taskSessionId": "task-1",
+        "authToken": "token",
+        "ownerCapability": "capability",
+        "planId": "plan-1",
+        "planRevision": "1",
+        "activeSliceId": "slice-1",
+        "routeHash": "route-1",
+        "routePhase": "executor",
+    }
+    payload = {
+        "ok": True,
+        "taskSessionId": "task-1",
+        "nextAction": "unreal_task_checkpoint:recover",
+        "nextActionIsTool": True,
+    }
+
+    anonymous = mod._bind_task_status_next_action_args(payload, None)
+    assert "nextActionArgs" not in anonymous
+
+    owned = mod._bind_task_status_next_action_args(payload, authorization)
+    assert owned["nextActionArgs"] == {
+        "action": "recover",
+        "taskAuthorization": {
+            "taskSessionId": "task-1",
+            "ownerCapability": "capability",
+        },
+    }
+
+    resume = mod._bind_task_status_next_action_args(
+        {**payload, "nextAction": "unreal_task_resume"},
+        authorization,
+    )
+    assert resume["nextActionArgs"] == {"taskSessionId": "task-1"}
 
 
 def test_checkpoint_uses_compact_server_resolved_authorization(monkeypatch, tmp_path):
@@ -799,6 +847,10 @@ def test_agent_write_plan_allows_direct_model_under_advisory_policy(
     assert payload["taskAuthorization"]["taskSessionId"]
     assert payload["taskAuthorization"]["ownerCapability"]
     assert payload["nextAction"] in payload["toolRoute"]["pendingGates"]
+    assert payload["nextActionIsTool"] is True
+    assert payload["nextActionArgs"] == {
+        "taskAuthorization": payload["taskAuthorization"]
+    }
     assert payload["executionContract"]["maxFilesPerSlice"] == 2
     assert payload["executionContract"]["splitBeforeFirstGate"] is True
     assert payload["executionContract"]["existingFileMutationTool"] == "replace_in_file"
@@ -806,6 +858,9 @@ def test_agent_write_plan_allows_direct_model_under_advisory_policy(
     assert payload["executionContract"]["maxCombinedPatchChars"] == 8000
     assert payload["executionContract"]["fullExistingFileContentInBundleAllowed"] is False
     assert "ownerCapability" in payload["agentInstruction"]
+    if payload["nextAction"] == "unreal_feature_intent_resolve":
+        assert "make one model-facing call" in payload["agentInstruction"]
+        assert "never call unreal_task_define_slices separately" in payload["agentInstruction"]
     assert "Never send a full existing file" in payload["agentInstruction"]
     routing = payload["contextCompactorRouting"]
     assert routing["policy"] == "advisory"
@@ -896,8 +951,11 @@ def test_compile_fix_plan_reproduces_build_before_requesting_fix_sketch(
     payload = sent[-1]["result"]["structuredContent"]
     assert payload["taskKind"] == "compile_fix"
     assert payload["nextAction"] == "build_unreal_project"
-    assert payload["nextActionArgs"]["responseMode"] == "compact"
     assert payload["nextActionArgs"]["taskAuthorization"] == payload["taskAuthorization"]
+    # build_unreal_project is provided by unreal-agent, not this RAG catalog.
+    # Keep this bridge contract deliberately minimal so it remains valid for
+    # every advertised agent build schema.
+    assert set(payload["nextActionArgs"]) == {"taskAuthorization"}
     assert "build_unreal_project" in payload["toolRoute"]["activeTools"]
     assert "requiredFirstTool" not in payload["toolRoute"]
     assert "static_validate_project" in payload["toolRoute"]["activeTools"]
@@ -1400,12 +1458,13 @@ def test_code_sketch_text_result_names_blocking_symbols(monkeypatch, tmp_path):
     assert payload["firstBlocker"]["symbol"] == "UDefinitelyMissingApi"
     assert payload["firstBlocker"]["verdict"] == "unverified"
     assert payload["nextAction"] == "unreal_project_status"
-    assert payload["nextActionArgs"]["blockers"][0]["symbol"] == "UDefinitelyMissingApi"
+    assert payload["nextActionArgs"] == {}
+    assert payload["recoveryContext"]["blockers"][0]["symbol"] == "UDefinitelyMissingApi"
     assert payload["doNotRetryUnchanged"] is True
     assert text_result.startswith("GATE_FAILED: writes remain closed")
     assert "blockingSymbols=UDefinitelyMissingApi:unverified" in text_result
     assert "firstBlocker=UDefinitelyMissingApi:unverified" in text_result
-    assert 'nextAction=unreal_project_status {"blockers":' in text_result
+    assert "nextAction=unreal_project_status {}" in text_result
     assert "Do not rerun the unchanged sketch" in text_result
     assert "Never move responsibility to another class" in text_result
 
@@ -1443,7 +1502,10 @@ def test_code_sketch_rejects_labeled_files_outside_active_target_slice(
     assert payload["firstBlocker"]["verdict"] == "contract"
     assert "Second.cpp" in payload["firstBlocker"]["note"]
     assert payload["nextAction"] == "unreal_code_sketch_claim_validate"
-    assert payload["nextActionArgs"]["allowedTargetFiles"] == [
+    assert payload["nextActionArgs"]["targetFiles"] == [
+        "Source/Demo/First.cpp"
+    ]
+    assert payload["recoveryContext"]["allowedTargetFiles"] == [
         "Source/Demo/First.cpp"
     ]
 
@@ -1773,7 +1835,7 @@ def test_failed_task_sketch_gate_preserves_executable_recovery(monkeypatch, tmp_
     assert completion["errorCode"] == "GATE_VALIDATION_FAILED"
     assert completion["nextAction"] == "unreal_project_status"
     assert (
-        completion["nextActionArgs"]["blockers"][0]["symbol"]
+        completion["recoveryContext"]["blockers"][0]["symbol"]
         == "InitializeDefinitelyMissingBoard"
     )
     assert completion["firstBlocker"]["note"]

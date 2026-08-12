@@ -21,10 +21,14 @@ const cp = require("child_process");
 const os = require("os");
 const crypto = require("crypto");
 const { AsyncLocalStorage } = require("async_hooks");
-const { sanitizeModelPayload } = require("./public-contract.js");
+const {
+  sanitizeModelPayload,
+  withCompactTaskAuthorization,
+} = require("./public-contract.js");
 const {
   attachControlEnvelope,
-  conciseControlText,
+  looksLikeToolAction,
+  modelVisibleControlText,
 } = require("./control-envelope.js");
 const {
   SAME_CALL_RETRY_CODES,
@@ -449,7 +453,11 @@ function text(content) {
     structuredContent = sanitizeModelPayload(
       attachControlEnvelope(JSON.parse(publicContent), String(context.toolName || ""))
     );
-    publicContent = conciseControlText(structuredContent);
+    publicContent = modelVisibleControlText(
+      structuredContent,
+      process.env.MCP_FRONTEND || "",
+      MCP_AGENT_RESULT_MAX_CHARS
+    );
   } catch {
     // Plain text tool responses have no protocol object to sanitize.
   }
@@ -506,6 +514,7 @@ function mutationSemanticGuardFailure(guard, relPath) {
     retryable: true,
     stopCurrentWorkflow: false,
     nextAction: "unreal_code_sketch_claim_validate",
+    nextActionIsTool: true,
     semanticGuard: guard,
     agentInstruction: (
       "The actual prospective file content failed the same semantic denylist used by the code-sketch gate. "
@@ -779,6 +788,9 @@ function enforceTaskAuth(args, options = {}) {
       ...(recoveryNextSteps.length ? { nextSteps: recoveryNextSteps } : {}),
       ...(auth.taskAuthorization ? { taskAuthorization: auth.taskAuthorization } : {}),
       ...(auth.nextAction ? { nextAction: auth.nextAction } : {}),
+      ...(auth.nextActionIsTool !== undefined
+        ? { nextActionIsTool: Boolean(auth.nextActionIsTool) }
+        : {}),
       ...(auth.nextActionArgs && typeof auth.nextActionArgs === "object"
         ? { nextActionArgs: auth.nextActionArgs }
         : {}),
@@ -793,12 +805,14 @@ function enforceTaskAuth(args, options = {}) {
       ...(authMismatch ? {
         doNotRetry: [String(options.toolName || "write_tool")],
         nextAction: "unreal_agent_plan",
+        nextActionIsTool: true,
         suggestedToolCalls: [{ tool: "unreal_agent_plan", args: { request: "<original user request>" } }],
         agentInstruction: "Plan identity changed and this error intentionally does not expose a live authToken. Do not copy its incomplete taskAuthorization or retry the write. Call unreal_agent_plan once with the original request; the active task will replan or return the current server-owned route.",
       } : {}),
       ...(invalidFormat || missingState ? {
         doNotRetry: [String(options.toolName || "write_tool")],
         nextAction: "unreal_agent_plan",
+        nextActionIsTool: true,
         suggestedToolCalls: [{ tool: "unreal_agent_plan", args: { request: "<original user request>" } }],
         agentInstruction: "The supplied taskAuthorization was not server-issued or no longer exists. Never fabricate authorization. Call unreal_agent_plan once, then continue with the returned route.",
       } : {}),
@@ -852,6 +866,11 @@ function routeAuthorizationFailureOptions(result = {}, toolName = "") {
     : [];
   const recoveryActionRequired = Boolean(nextAction || advertisedActions.length);
   const canContinueWorkflow = sameCallRetry || recoveryActionRequired;
+  const nextActionIsTool = nextActionIsPolicyRecovery
+    ? policyRecovery.isTool
+    : result.nextActionIsTool === undefined
+      ? looksLikeToolAction(nextAction)
+      : Boolean(result.nextActionIsTool);
   const instruction = errorCode === "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
     ? "Do not retry the budgeted work tool. Call unreal_task_checkpoint with nextActionArgs exactly as returned (action=record); action=status does not renew the budget. Continue requiredNextAction with the returned taskAuthorization."
     : errorCode === "TASK_AUTH_INVALID_FORMAT" || errorCode === "TASK_STATE_MISSING"
@@ -860,8 +879,10 @@ function routeAuthorizationFailureOptions(result = {}, toolName = "") {
         ? "Retry the same tool once with the complete taskAuthorization previously returned by unreal_agent_plan, a successful gate, or a continuity checkpoint. Do not recover, cancel, or create another task."
       : sameCallRetry
         ? "Retry the same tool once using the complete server-issued taskAuthorization returned by the latest response."
-        : recoveryActionRequired
+        : recoveryActionRequired && nextActionIsTool
           ? `Do not retry ${String(toolName || "the blocked tool")}. Call ${nextAction || advertisedActions[0]} and continue the same user workflow.`
+          : recoveryActionRequired
+            ? `Do not retry ${String(toolName || "the blocked tool")}. Follow the routing instruction '${nextAction || advertisedActions[0]}'; it is not a tool name and must not be called.`
           : "Stop the current workflow and report the exact routing integrity failure.";
   return {
     errorCode,
@@ -874,11 +895,7 @@ function routeAuthorizationFailureOptions(result = {}, toolName = "") {
     ...(nextAction ? { nextAction } : {}),
     // The shared recovery policy is authoritative for its own action. A stale
     // lower-level flag must not turn a callable recovery tool into prose.
-    nextActionIsTool: nextActionIsPolicyRecovery
-      ? policyRecovery.isTool
-      : result.nextActionIsTool === undefined
-        ? false
-        : Boolean(result.nextActionIsTool),
+    nextActionIsTool,
     ...(result.nextActionArgs && typeof result.nextActionArgs === "object"
       ? { nextActionArgs: result.nextActionArgs }
       : {}),
@@ -1428,6 +1445,7 @@ function buildReadEvidenceContext(target, stat, resolution, options = {}) {
     scopeSignature: options.scopeSignature || null,
     evidenceHash: options.evidenceHash || null,
     taskSessionId: String(options.taskSessionId || ""),
+    evidenceSessionId: String(options.evidenceSessionId || ""),
     taskAuthorization: options.taskAuthorization && typeof options.taskAuthorization === "object"
       ? options.taskAuthorization
       : null,
@@ -1460,9 +1478,22 @@ function summarizeCachedRead(content) {
   };
 }
 
+function evidenceSessionSchemaProperty() {
+  return {
+    sessionId: {
+      type: "string",
+      description:
+        "Optional conversation evidence scope. The context-compactor injects this automatically; omit it in ordinary model calls.",
+    },
+  };
+}
+
 function cachedReadSuccess(content, options = {}) {
   const errorCode = options.errorCode || "READ_REPEAT_DETECTED";
-  const summary = summarizeCachedRead(content);
+  const source = String(content || "");
+  const summary = summarizeCachedRead(source);
+  const includeContent = options.includeContent === true && source.length <= 24_000;
+  const defaultInstruction = cachedReadInstruction(errorCode);
   const payload = {
     ok: true,
     cached: true,
@@ -1474,12 +1505,18 @@ function cachedReadSuccess(content, options = {}) {
     errorCode,
     retryable: false,
     phase: "evidence_cached",
-    userMessage: options.userMessage || cachedReadInstruction(errorCode),
-    agentInstruction: options.agentInstruction || cachedReadInstruction(errorCode),
-    contentSuppressed: true,
+    userMessage: options.userMessage || defaultInstruction,
+    agentInstruction: options.agentInstruction || (
+      options.includeContent === true && !includeContent
+        ? `${defaultInstruction} The cached range is too large to resend; request one narrower exact range if edit text is missing.`
+        : defaultInstruction
+    ),
+    contentSuppressed: !includeContent,
     ...summary,
     readAttempts: options.readAttempts || 2,
   };
+  if (includeContent) payload.content = source;
+  if (options.includeContent === true && !includeContent) payload.cachedContentTruncated = true;
   if (options.readCount != null) payload.readCount = options.readCount;
   if (options.fullyCovered) payload.fullyCovered = true;
   if (options.coveredBy) payload.coveredBy = options.coveredBy;
@@ -1516,8 +1553,11 @@ function evidenceStagnationFail(tool, guard, options = {}) {
         errorCode,
         retryable: true,
         stopCurrentWorkflow: false,
+        stopCurrentPhase: true,
+        phaseBoundary: "evidence",
         doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
         nextAction: "replace_in_file",
+        nextActionIsTool: true,
         agentInstruction:
           "Do not call another evidence tool. Reuse the file content already in context and apply a bounded "
           + `replace_in_file (newText <= ${MAX_PATCH_CHANGED_LINES} lines, oldText+newText <= ${MAX_PATCH_ARGUMENT_CHARS} chars).`,
@@ -1541,12 +1581,16 @@ function evidenceStagnationFail(tool, guard, options = {}) {
       errorCode,
       retryable: false,
       doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
-      stopCurrentWorkflow: true,
+      // Evidence exhaustion is a phase boundary, not a reason to abandon an
+      // implementation request. Mutations and validation remain available.
+      stopCurrentWorkflow: false,
+      stopCurrentPhase: true,
+      phaseBoundary: "evidence",
       agentInstruction: cachedReadInstruction(errorCode),
       userMessage: cachedReadInstruction(errorCode),
       nextSteps: [
         "Do not call another evidence tool.",
-        "Produce the final analysis from evidence already in the conversation.",
+        "For implementation, continue with a supported write/validation step; for analysis-only work, answer from retained evidence.",
       ],
       readAttempts: guard.attempts,
       pingPong: Boolean(guard.pingPong),
@@ -1603,6 +1647,7 @@ function applyBuildRecoveryEvidenceGuard(tool, context = {}) {
         retryable: true,
         stopCurrentWorkflow: false,
         nextAction: "unreal_task_checkpoint",
+        nextActionIsTool: true,
         agentInstruction: "Checkpoint the active task once, then retry the exact required source range.",
       });
     }
@@ -1611,15 +1656,20 @@ function applyBuildRecoveryEvidenceGuard(tool, context = {}) {
   const contract = recovery.recoveryContract || {};
   if (recovery.reason === "build_recovery_required_tool_mismatch"
       || recovery.reason === "build_recovery_target_mismatch") {
+    const requiredNextToolArgs = withCompactTaskAuthorization(
+      contract.requiredNextToolArgs || {},
+      context.taskAuthorization
+    );
     return fail("Build recovery requires the first compiler diagnostic's exact source range.", {
       errorCode: "BUILD_RECOVERY_REQUIRED_EVIDENCE",
       retryable: true,
       stopCurrentWorkflow: false,
       doNotRetry: [tool],
       requiredNextTool: contract.requiredNextTool || "read_file_range",
-      requiredNextToolArgs: contract.requiredNextToolArgs || {},
+      requiredNextToolArgs,
       nextAction: contract.requiredNextTool || "read_file_range",
-      nextActionArgs: contract.requiredNextToolArgs || {},
+      nextActionArgs: requiredNextToolArgs,
+      nextActionIsTool: true,
       agentInstruction:
         "Do not inspect another file or the whole source file. Call requiredNextTool exactly once with requiredNextToolArgs, then move to the bounded repair plan.",
       nextSteps: [
@@ -1633,7 +1683,10 @@ function applyBuildRecoveryEvidenceGuard(tool, context = {}) {
       ? "unreal_code_sketch_claim_validate"
       : "unreal_agent_plan";
     const nextActionArgs = taskSessionId
-      ? { targetFiles: [contract.targetFile].filter(Boolean) }
+      ? withCompactTaskAuthorization(
+        { targetFiles: [contract.targetFile].filter(Boolean) },
+        context.taskAuthorization
+      )
       : {
         request: `Fix the first compiler error in ${contract.targetFile || "the reported source file"} and rebuild until successful.`,
         mode: "compile_fix",
@@ -1701,6 +1754,7 @@ function applyReadGuard(tool, guard, context) {
       readAttempts: guard.attempts,
       fullyCovered: guard.fullyCovered,
       coveredBy: guard.coveredBy,
+      includeContent: tool === "read_file_range",
     });
   }
   return null;
@@ -2130,6 +2184,7 @@ function allAgentTools() {
         name: "list_directory",
         description: "List immediate children of a workspace:// or project:// directory (non-recursive). Prefer shallow discovery; repeated/same-path listing is budget-limited. Prefer search_files for deep lookup.",
         inputSchema: makeJsonSchema({
+          ...evidenceSessionSchemaProperty(),
           path: { type: "string", description: "Relative path inside workspace, e.g. '.', 'Source'." },
           maxEntries: { type: "number", description: "Max entries to show. Default 200." }
         }, ["path"])
@@ -2138,6 +2193,7 @@ function allAgentTools() {
         name: "read_file",
         description: "Read a UTF-8 file under workspace:// or project://. Active-project source may be outside WORKSPACE_ROOT. Required before writes; large source should use read_file_range.",
         inputSchema: makeJsonSchema({
+          ...evidenceSessionSchemaProperty(),
           path: { type: "string", description: "Relative path inside workspace." },
           maxBytes: { type: "number", description: "Optional max bytes. Capped by detailLevel tier." },
           detailLevel: {
@@ -2151,6 +2207,7 @@ function allAgentTools() {
         name: "read_file_range",
         description: "Read a line range under workspace:// or project://. Prefer this over read_file for large project sources. Line span is capped by detailLevel.",
         inputSchema: makeJsonSchema({
+          ...evidenceSessionSchemaProperty(),
           path: { type: "string", description: "Relative path inside workspace." },
           startLine: { type: "number", description: "1-based start line (inclusive)." },
           endLine: { type: "number", description: "1-based end line (inclusive)." },
@@ -2165,6 +2222,7 @@ function allAgentTools() {
         name: "read_symbol",
         description: "Read one C++ function body and record it as direct source evidence. Prefer this for function-level analysis.",
         inputSchema: makeJsonSchema({
+          ...evidenceSessionSchemaProperty(),
           path: { type: "string", description: "Source file containing the function." },
           symbol: { type: "string", description: "Function or qualified function, e.g. UFoo::Tick or Tick." },
           contextLines: { type: "number", description: "Extra lines around the function. Default 3, max 30." }
@@ -2265,14 +2323,15 @@ function allAgentTools() {
       },
       {
         name: "search_files",
-        description: "Search text under workspace:// or project://. For current Unreal code, scope to project://Source or project://Plugins and use direct source evidence.",
+        description: "Search text under workspace:// or project://. For current Unreal code, scope to project://Source or project://Plugins and use direct source evidence. Filename-extension-shaped queries such as \\.cpp$ are also matched against basenames unless matchFileNames=false is explicit.",
         inputSchema: makeJsonSchema({
+          ...evidenceSessionSchemaProperty(),
           query: { type: "string", description: "Regex or plain text to search." },
           path: { type: "string", description: "Relative directory/file to search. Default '.'." },
           regex: { type: "boolean", description: "Use query as regex. Default false." },
           matchFileNames: {
             type: "boolean",
-            description: "Also return file paths whose basename matches query. Default false; use for exact component/class discovery."
+            description: "Also return file paths whose basename matches query. Explicit true/false wins; when omitted, filename-extension-shaped queries are inferred as filename discovery."
           },
           maxResults: { type: "number", description: "Max matching lines. Default 100." }
         }, ["query"])
@@ -2401,6 +2460,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         retryable: blocked.retryable,
         userMessage: blocked.userMessage,
         agentInstruction: blocked.agentInstruction,
+      });
+    }
+    if (
+      currentRouteContext.status === "none"
+      && ROUTE_MUTATION_TOOLS.has(name)
+    ) {
+      return fail("A server-owned task route is required before project mutation.", {
+        errorCode: "TASK_PLANNER_ROUTE_REQUIRED",
+        retryable: false,
+        stopCurrentWorkflow: false,
+        recoveryActionRequired: true,
+        doNotRetry: [name],
+        doNotFabricateTaskAuthorization: true,
+        requiredProvider: "mcp/unreal-rag",
+        requiredTool: "unreal_agent_plan",
+        nextAction: "enable_or_call_unreal_agent_plan",
+        nextActionIsTool: false,
+        agentInstruction: (
+          "Do not retry this write and do not invent taskAuthorization. Ensure mcp/unreal-rag is enabled, "
+          + "then call unreal_agent_plan once with the original user request. Continue only with its server-issued route."
+        ),
       });
     }
     if (
@@ -2821,7 +2901,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         || "."
       ).replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
       const activeProject = getActiveProject(CONFIG_PATH);
-      const budgetScope = String(activeProject || WORKSPACE_ROOT || "workspace");
+      const conversationScope = String(args.sessionId || "").trim();
+      const budgetScope = `${conversationScope}\u0000${String(activeProject || WORKSPACE_ROOT || "workspace")}`;
       const budgetCheck = LIST_DIRECTORY_BUDGET.check(budgetScope, relative || ".");
       if (!budgetCheck.ok) {
         return fail(
@@ -3148,6 +3229,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const readContext = buildReadEvidenceContext(target, s, resolution, {
         mutationGeneration,
         taskSessionId: requiredFields(args).taskSessionId,
+        evidenceSessionId: args.sessionId,
         taskAuthorization: args.taskAuthorization,
       });
       const guard = prepareReadGuard("read_file", args, readContext);
@@ -3205,6 +3287,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const readContext = buildReadEvidenceContext(target, s, resolution, {
         mutationGeneration,
         taskSessionId: requiredFields(args).taskSessionId,
+        evidenceSessionId: args.sessionId,
         taskAuthorization: args.taskAuthorization,
       });
       const guard = prepareReadGuard("read_file_range", args, readContext);
@@ -3265,6 +3348,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const readContext = buildReadEvidenceContext(target, stat, resolution, {
         mutationGeneration,
         taskSessionId: requiredFields(args).taskSessionId,
+        evidenceSessionId: args.sessionId,
         taskAuthorization: args.taskAuthorization,
       });
       const guard = prepareReadGuard("read_symbol", args, readContext);
@@ -3380,6 +3464,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           retryable: true,
           stopCurrentWorkflow: false,
           nextAction: "write_file",
+          nextActionIsTool: true,
           limits: {
             maxContentChars: MAX_NEW_FILE_ARGUMENT_CHARS,
             maxLines: MAX_NEW_FILE_LINES,
@@ -3601,6 +3686,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             stopCurrentWorkflow: false,
             doNotRetry: ["read_file", "read_file_range"],
             nextAction: "replace_in_file",
+            nextActionIsTool: true,
             nextActionArgs: {
               path: display,
               oldText: "<exact contiguous excerpt already in context, <=60 lines>",
@@ -3629,6 +3715,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           retryable: true,
           stopCurrentWorkflow: false,
           nextAction: "read_file_range",
+          nextActionIsTool: true,
           nextActionArgs: {
             path: display,
             startLine: 1,
@@ -3692,6 +3779,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             retryable: true,
             doNotRetry: hadFresh ? ["read_file", "read_file_range", "replace_in_file"] : ["replace_in_file"],
             nextAction: hadFresh ? "replace_in_file" : "read_file_range",
+            nextActionIsTool: true,
             nextActionArgs: hadFresh
               ? {
                 path: displayPath(writeResolution),
@@ -4037,6 +4125,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             retryable: true,
             stopCurrentWorkflow: false,
             nextAction: "replace_in_file",
+            nextActionIsTool: true,
             agentInstruction: "Use a bounded exact patch for the existing file. Never resend its complete content in apply_edit_bundle.files; split larger work into read_file_range + replace_in_file calls.",
           });
         }
@@ -4068,6 +4157,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             retryable: true,
             stopCurrentWorkflow: false,
             nextAction: "read_file_range",
+            nextActionIsTool: true,
             limits: {
               maxCombinedPatchChars: MAX_PATCH_ARGUMENT_CHARS,
               maxChangedLines: MAX_PATCH_CHANGED_LINES,
@@ -4113,6 +4203,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             errorCode: "MUTATION_SEMANTIC_GUARD_FAILED",
             semanticGuard: tx.validation.semanticGuard,
             nextAction: "unreal_code_sketch_claim_validate",
+            nextActionIsTool: true,
             retryable: true,
             stopCurrentWorkflow: false,
             agentInstruction: "Correct the first known-bad pattern, revalidate the exact target sketch, then retry the bounded bundle.",
@@ -4306,9 +4397,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const base = resolution.absolutePath;
       const maxResults = Math.max(1, Math.min(Number(args.maxResults || 100), 1000));
       const useRegex = !!args.regex;
-      const matchFileNames = args.matchFileNames === true;
       const query = String(args.query || "");
       if (!query) return fail("query must not be empty");
+      const explicitFileNameMode = typeof args.matchFileNames === "boolean";
+      const looksLikeFileNameQuery = useRegex
+        ? /\\\.(?:h|hpp|cpp|c|cc|cxx|inl|cs|uproject|uplugin)(?:\\?\$|\$|\)|\]|$)/i.test(query)
+        : /(?:^|[\\/.])[^\\/]+\.(?:h|hpp|cpp|c|cc|cxx|inl|cs|uproject|uplugin)$/i.test(query.trim());
+      const matchFileNames = args.matchFileNames === true
+        || (!explicitFileNameMode && looksLikeFileNameQuery);
+      const effectiveSearchArgs = matchFileNames && !explicitFileNameMode
+        ? { ...args, matchFileNames: true }
+        : args;
 
       const baseStat = await statSafe(base);
       if (!baseStat) {
@@ -4330,9 +4429,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         mutationGeneration,
         scopeSignature: fileStatSignature(baseStat),
         taskSessionId: requiredFields(args).taskSessionId,
+        evidenceSessionId: args.sessionId,
         taskAuthorization: args.taskAuthorization,
       });
-      const guard = prepareReadGuard("search_files", args, readContext);
+      const guard = prepareReadGuard("search_files", effectiveSearchArgs, readContext);
       const blocked = applyReadGuard("search_files", guard, readContext);
       if (blocked) return blocked;
       const recoveryBlocked = applyBuildRecoveryEvidenceGuard("search_files", readContext);
@@ -4456,6 +4556,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         incompleteReasons: filesSkippedBySize > 0 ? ["large_files_skipped"] : [],
       };
       if (matchFileNames) payload.fileNameResults = fileNameResults;
+      if (!explicitFileNameMode && matchFileNames) {
+        payload.fileNameMatchMode = "inferred_from_filename_shaped_query";
+      }
+      if (results.length === 0 && !matchFileNames) {
+        payload.discoveryHint = "No content match was found. If the query names a file or extension, retry once with matchFileNames=true.";
+        payload.suggestedToolCalls = [{
+          tool: "search_files",
+          args: { ...args, matchFileNames: true },
+        }];
+      }
       const output = JSON.stringify(payload, null, 2);
       const budgetFail = commitDeferredBudgetOrFail();
       if (budgetFail) return budgetFail;

@@ -61,6 +61,7 @@ from route_recovery_policy import (
     route_recovery_action,
     route_recovery_next_action,
 )
+from mcp_public_contract import compact_task_authorization
 
 TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled", "failed", "cancellation_uncertain"})
 APPROVABLE_TASK_STATUSES = frozenset({"pending_approval", "awaiting_approval"})
@@ -2368,7 +2369,9 @@ def task_validate_build_recovery_sketch(
         return {"ok": True, "active": False}
     if recovery.get("evidenceSatisfied") is not True:
         next_args = dict(recovery.get("requiredNextToolArgs") or {})
-        next_args["taskAuthorization"] = task_authorization_for_state(state)
+        next_args["taskAuthorization"] = compact_task_authorization(
+            task_authorization_for_state(state)
+        )
         return {
             "ok": False,
             "active": True,
@@ -4349,7 +4352,9 @@ def task_replan(
                 "nextActionArgs": {
                     "action": "record",
                     "includeGitChanges": False,
-                    "taskAuthorization": authorization,
+                    "taskAuthorization": compact_task_authorization(
+                        authorization
+                    ),
                 },
                 # A fresh chat can legitimately inherit the one active task
                 # through unreal_agent_plan. Without the current authorization
@@ -4402,7 +4407,9 @@ def task_replan(
                 "taskSessionId": str(state.get("taskSessionId") or ""),
                 "planRevision": str(state.get("planRevision") or ""),
                 "nextAction": next_action,
-                "nextActionArgs": {"taskAuthorization": authorization},
+                "nextActionArgs": {
+                    "taskAuthorization": compact_task_authorization(authorization)
+                },
                 "taskAuthorization": authorization,
                 "toolRoute": dict(state.get("toolRoute") or {}),
                 "agentInstruction": (
@@ -4954,12 +4961,16 @@ def task_checkpoint(
     authorization_identity: dict[str, str] = {}
     prior_route: dict[str, str] = {}
     advanced_gate_snapshots: list[str] = []
+    checkpoint_recorded = False
+    checkpoint_substantive = False
 
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
         nonlocal mutation_result
         nonlocal authorization_identity
         nonlocal prior_route
         nonlocal advanced_gate_snapshots
+        nonlocal checkpoint_recorded
+        nonlocal checkpoint_substantive
         mismatches = _task_authorization_mismatches(state, authorization)
         if mismatches:
             mutation_result = _auth_refresh_failure(
@@ -5040,7 +5051,7 @@ def task_checkpoint(
                     if isinstance(continuity.get("checkpoint"), dict)
                     else {}
                 )
-                state["continuity"] = record_checkpoint(
+                candidate_continuity = record_checkpoint(
                     continuity,
                     phase=phase or "working",
                     active_slice_id=str(state.get("activeSliceId") or ""),
@@ -5060,10 +5071,34 @@ def task_checkpoint(
                     validation=validation,
                     note=note,
                 )
-                state["checkpointGeneration"] = (
-                    int(state.get("checkpointGeneration") or 0) + 1
+                candidate_checkpoint = dict(
+                    candidate_continuity.get("checkpoint") or {}
                 )
-                if advance_gate_snapshots:
+                checkpoint_substantive = bool(
+                    not prior_checkpoint.get("sequence")
+                    or str(prior_checkpoint.get("checkpointStateHash") or "")
+                    != str(candidate_checkpoint.get("checkpointStateHash") or "")
+                    or str(prior_checkpoint.get("targetHash") or "")
+                    != str(candidate_checkpoint.get("targetHash") or "")
+                    or dict(prior_checkpoint.get("validation") or {})
+                    != dict(candidate_checkpoint.get("validation") or {})
+                )
+                checkpoint_recorded = checkpoint_substantive
+                if checkpoint_substantive:
+                    state["continuity"] = candidate_continuity
+                    state["checkpointGeneration"] = (
+                        int(state.get("checkpointGeneration") or 0) + 1
+                    )
+                else:
+                    # Repeating an identical checkpoint is only a lease
+                    # heartbeat.  Do not manufacture a new progress sequence or
+                    # allow a control call to look like completed work.
+                    state["continuity"] = renew_lease(
+                        continuity,
+                        reason="checkpoint_no_substantive_change",
+                        lease_seconds=lease_seconds,
+                    )
+                if advance_gate_snapshots and checkpoint_substantive:
                     advanced_gate_snapshots = _advance_authorized_mutation_snapshots(
                         workspace,
                         state,
@@ -5090,6 +5125,11 @@ def task_checkpoint(
                 state,
                 action=required_next_action or f"checkpoint:{phase or 'working'}",
                 error=_validation_error_text(validation),
+                count_retry=bool(
+                    checkpoint_substantive
+                    or required_next_action
+                    or _validation_error_text(validation)
+                ),
             )
             prior_usage = (
                 state.get("toolRouteUsage")
@@ -5100,11 +5140,21 @@ def task_checkpoint(
                 (state.get("continuity", {}).get("checkpoint") or {}).get("checkpointHash")
                 or ""
             )
-            if preserve_route_usage:
+            # Only the server-issued phase-budget handoff includes a concrete
+            # requiredNextAction.  An arbitrary or repeated checkpoint must not
+            # reset the work-call budget; otherwise the recovery control itself
+            # becomes an infinite budget-renewal loop.
+            reset_route_usage = bool(
+                checkpoint_substantive
+                and str(required_next_action or "").strip()
+                and not preserve_route_usage
+            )
+            if preserve_route_usage or not reset_route_usage:
                 state["toolRouteUsage"] = {
                     **prior_usage,
                     "checkpointHash": checkpoint_hash,
                     "checkpointRecordedWithoutBudgetReset": True,
+                    "checkpointSubstantive": checkpoint_substantive,
                 }
             else:
                 state["toolRouteUsage"] = {
@@ -5276,6 +5326,11 @@ def task_checkpoint(
                 "taskSessionId": task_session_id,
                 "continuity": state.get("continuity") or {},
                 "advancedGateSnapshots": advanced_gate_snapshots,
+                "checkpointRecorded": checkpoint_recorded,
+                "checkpointSubstantive": checkpoint_substantive,
+                "heartbeatOnly": normalized_action == "heartbeat" or (
+                    normalized_action == "record" and not checkpoint_substantive
+                ),
             }
         return state
 
@@ -5295,6 +5350,22 @@ def task_checkpoint(
             pending_gates = [
                 str(item) for item in current_route.get("pendingGates") or []
             ]
+            requested_work_tool = str(required_next_action or "").strip()
+            active_tools = [
+                str(item)
+                for item in current_route.get("activeTools") or []
+                if str(item).strip()
+            ]
+            requested_work_tool_active = bool(
+                requested_work_tool and requested_work_tool in active_tools
+            )
+            next_action = (
+                pending_gates[0]
+                if pending_gates
+                else requested_work_tool
+                if requested_work_tool_active
+                else "continue_with_current_tool_route"
+            )
             mutation_result.update(
                 {
                     "checkpointPhaseIsMetadataOnly": True,
@@ -5306,18 +5377,26 @@ def task_checkpoint(
                         or str(current_route.get("phase") or "")
                         != prior_route.get("phase", "")
                     ),
-                    "nextAction": (
-                        pending_gates[0]
-                        if pending_gates
-                        else "continue_with_current_tool_route"
+                    "nextAction": next_action,
+                    "nextActionIsTool": bool(
+                        pending_gates or requested_work_tool_active
                     ),
                     "agentInstruction": (
                         "The checkpoint phase label was recorded as metadata; it did not "
-                        "select a role or route. Follow nextAction on currentRoutePhase "
-                        "using the complete returned taskAuthorization."
+                        "select a role or route. Do not call unreal_task_checkpoint again "
+                        "unless a later server response explicitly requires it. Follow "
+                        "nextAction on currentRoutePhase using the complete returned "
+                        "taskAuthorization."
                     ),
                 }
             )
+            if requested_work_tool_active:
+                mutation_result["requiredNextTool"] = requested_work_tool
+                mutation_result["requiredNextToolArgs"] = {
+                    "taskAuthorization": compact_task_authorization(
+                        mutation_result.get("taskAuthorization") or {}
+                    )
+                }
         return mutation_result
     return result
 
@@ -5949,6 +6028,16 @@ def authorize_task_tool(
         if (
             state.get("slicePlanningRequired") is True
             and tool_name not in CONTROL_PLANE_TOOLS
+            # Feature intent owns SelectIntent -> ResolveSlice ->
+            # CaptureSnapshot -> BindIntent as one server transaction.  It must
+            # be allowed to enter while the initial broad plan still has no
+            # executable slice; the handler will register the supplied bounded
+            # slices before it captures or records any target binding.
+            and not (
+                tool_name == "unreal_feature_intent_resolve"
+                and "unreal_feature_intent_resolve"
+                in {str(item) for item in state.get("requiredBeforeWrite") or []}
+            )
         ):
             current_authorization = task_authorization_for_state(state)
             return {
@@ -5957,7 +6046,12 @@ def authorize_task_tool(
                 "error": "Concrete executable slices must be registered before routed work continues.",
                 "taskAuthorization": current_authorization,
                 "nextAction": "unreal_task_define_slices",
-                "nextActionArgs": {"taskAuthorization": current_authorization},
+                "nextActionIsTool": True,
+                "nextActionArgs": {
+                    "taskAuthorization": compact_task_authorization(
+                        current_authorization
+                    )
+                },
                 "retryable": True,
                 "agentInstruction": (
                     "Call unreal_task_define_slices now with every discovered concrete 1-4 file "
@@ -6056,7 +6150,9 @@ def authorize_task_tool(
                 "toolRoute": compact_tool_route(route),
                 "taskAuthorization": authorization,
                 "nextAction": required_first_tool,
-                "nextActionArgs": {"taskAuthorization": authorization},
+                "nextActionArgs": {
+                    "taskAuthorization": compact_task_authorization(authorization)
+                },
                 "retryable": True,
                 "agentInstruction": (
                     f"Call {required_first_tool} now with the returned taskAuthorization. "
@@ -6082,11 +6178,17 @@ def authorize_task_tool(
                 "toolRoute": compact_tool_route(route),
             }
             if issue_code == "TASK_ROUTE_SCOPE_EXCEEDED":
+                current_authorization = task_authorization_for_state(state)
                 failure.update(
                     {
-                        "taskAuthorization": task_authorization_for_state(state),
+                        "taskAuthorization": current_authorization,
                         "nextAction": tool_name,
                         "nextActionArgs": {
+                            "taskAuthorization": compact_task_authorization(
+                                current_authorization
+                            )
+                        },
+                        "scopeLimits": {
                             "maxFilesPerSlice": int(
                                 route.get("maxFilesPerSlice") or 2
                             ),
@@ -6166,8 +6268,9 @@ def authorize_task_tool(
                         "phase": str(route.get("phase") or "working"),
                         "requiredNextAction": tool_name,
                         "includeGitChanges": False,
-                        "taskSessionId": checkpoint_authorization["taskSessionId"],
-                        "ownerCapability": checkpoint_authorization["ownerCapability"],
+                        "taskAuthorization": compact_task_authorization(
+                            checkpoint_authorization
+                        ),
                     },
                     "nextActions": [
                         "unreal_task_checkpoint",
@@ -6289,9 +6392,7 @@ def authorize_active_task_tool(
             failure.update(
                 {
                     "retryable": True,
-                    "nextActionArgs": {
-                        "requiresCompleteTaskAuthorization": True,
-                    },
+                    "requiredArgument": "taskAuthorization",
                     "agentInstruction": (
                         "Retry the same tool once with the complete taskAuthorization "
                         "previously returned by the plan, gate, or checkpoint. Do not "
@@ -6482,7 +6583,9 @@ def task_gate_failure_preflight(
             return {
                 "ok": True,
                 **preflight,
-                "taskAuthorization": task_authorization_for_state(state),
+                "taskAuthorization": compact_task_authorization(
+                    task_authorization_for_state(state)
+                ),
                 "toolRoute": compact_tool_route(state.get("toolRoute") or {}),
             }
     except (ValueError, RuntimeError, TaskStateReadError) as exc:

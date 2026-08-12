@@ -206,6 +206,55 @@ def _route_authorization_failure_payload(
     return payload
 
 
+def _bind_task_status_next_action_args(
+    payload: dict[str, Any],
+    task_authorization: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Bind an executable phase action to arguments accepted by its public schema.
+
+    Task status is intentionally readable by id, but authorization-bearing next
+    steps are emitted only after the caller supplied ownership that the generic
+    compact-auth expansion already verified against server state.
+    """
+
+    result = dict(payload)
+    authorization = (
+        task_authorization if isinstance(task_authorization, dict) else {}
+    )
+    task_session_id = str(result.get("taskSessionId") or "").strip()
+    if (
+        not task_session_id
+        or str(authorization.get("taskSessionId") or "").strip()
+        != task_session_id
+        or not _has_complete_task_authorization(authorization)
+    ):
+        return result
+    raw_action = str(result.get("nextAction") or "").strip()
+    if not raw_action or result.get("nextActionIsTool") is not True:
+        return result
+    tool_name, _, action_suffix = raw_action.partition(":")
+    compact_ownership = {
+        "taskSessionId": task_session_id,
+        "ownerCapability": str(authorization.get("ownerCapability") or ""),
+    }
+    if tool_name == "unreal_task_checkpoint":
+        result["nextActionArgs"] = {
+            "action": action_suffix or "status",
+            "taskAuthorization": compact_ownership,
+        }
+    elif tool_name in {"unreal_task_approve", "unreal_task_resume"}:
+        result["nextActionArgs"] = {"taskSessionId": task_session_id}
+    elif tool_name == "unreal_task_status":
+        result["nextActionArgs"] = {"taskAuthorization": compact_ownership}
+    elif tool_name == "unreal_task_define_slices":
+        # The caller must still derive the concrete slices; only the
+        # server-issued ownership fields are safe to prefill.
+        result["nextActionArgs"] = {"taskAuthorization": authorization}
+    elif tool_name.startswith("unreal_"):
+        result["nextActionArgs"] = {"taskAuthorization": authorization}
+    return result
+
+
 def annotate_other_project_rows(rows: list[dict[str, Any]], active_names: list[str]) -> list[dict[str, Any]]:
     active = {str(name).strip().lower() for name in active_names if str(name).strip()}
     annotated: list[dict[str, Any]] = []
@@ -1000,6 +1049,7 @@ def _record_prewrite_gate(
             "validationErrorCode": str(evidence.get("errorCode") or ""),
             "nextAction": str(evidence.get("nextAction") or gate_name),
             "nextActionArgs": evidence.get("nextActionArgs") or {},
+            "recoveryContext": evidence.get("recoveryContext") or {},
             "firstBlocker": evidence.get("firstBlocker") or {},
             "doNotRetryUnchanged": evidence.get("doNotRetryUnchanged") is True,
             "reuseCurrentTaskAuthorization": evidence.get("reuseCurrentTaskAuthorization") is True,
@@ -1113,11 +1163,15 @@ def _attach_code_sketch_recovery(
     symbol = str(first_blocker.get("symbol") or "").strip()
     if contract_issue:
         next_action = "unreal_code_sketch_claim_validate"
-        next_action_args = {
+        recovery_context = {
             "requiredChange": "fix_generation_contract",
             "contractIssue": contract_issue,
             "allowedTargetFiles": list(arguments.get("targetFiles") or []),
             "blockers": blockers,
+        }
+        next_action_args = {
+            "targetFiles": list(arguments.get("targetFiles") or []),
+            "changeKind": str(arguments.get("changeKind") or "modify_existing"),
         }
         instruction = (
             "The write gate is closed by the generation contract. Correct changeKind/targetFiles "
@@ -1129,7 +1183,8 @@ def _attach_code_sketch_recovery(
         )
     elif verdict in {"unverified", "weak"}:
         next_action = "unreal_project_status"
-        next_action_args = {"blockers": blockers}
+        next_action_args = {}
+        recovery_context = {"blockers": blockers}
         instruction = (
             "The engine/project source oracle is unavailable, so unresolved claims remain blocked. "
             "Check project/engine readiness once, then revalidate all changed claims together. Do not "
@@ -1138,7 +1193,8 @@ def _attach_code_sketch_recovery(
         )
     elif verdict == "known_bad" and symbol:
         next_action = "unreal_code_sketch_claim_validate"
-        next_action_args = {
+        next_action_args = {}
+        recovery_context = {
             "requiredChanges": [
                 {
                     "symbol": str(item.get("symbol") or ""),
@@ -1159,7 +1215,8 @@ def _attach_code_sketch_recovery(
         )
     elif verdict == "skipped_graph":
         next_action = "unreal_code_sketch_claim_validate"
-        next_action_args = {"requiredChange": "restore_project_graph"}
+        next_action_args = {}
+        recovery_context = {"requiredChange": "restore_project_graph"}
         instruction = (
             "The write gate is closed because the project graph was unavailable. Confirm the active "
             "project/root, repair that graph condition, and only then validate the slice once. "
@@ -1168,7 +1225,8 @@ def _attach_code_sketch_recovery(
         )
     else:
         next_action = "unreal_code_sketch_claim_validate"
-        next_action_args = {
+        next_action_args = {}
+        recovery_context = {
             "contractIssue": str(
                 ((payload.get("generationContract") or {}).get("issues") or [""])[0]
             )
@@ -1188,6 +1246,7 @@ def _attach_code_sketch_recovery(
             "blockerCount": len(blockers),
             "nextAction": next_action,
             "nextActionArgs": next_action_args,
+            "recoveryContext": recovery_context,
             "reuseCurrentTaskAuthorization": isinstance(
                 arguments.get("taskAuthorization") or arguments.get("task_authorization"),
                 dict,
@@ -1273,6 +1332,111 @@ def _handle_unreal_feature_intent_resolve(
         server.structured_tool_result(message_id, status)
         return
     task_state = status.get("state") if isinstance(status.get("state"), dict) else {}
+    internal_phases = ["SelectIntent"]
+    slice_registration: dict[str, Any] | None = None
+    initial_route = (
+        task_state.get("toolRoute")
+        if isinstance(task_state.get("toolRoute"), dict)
+        else {}
+    )
+    initial_slice = (
+        initial_route.get("selectedSlice")
+        if isinstance(initial_route.get("selectedSlice"), dict)
+        else {}
+    )
+    initial_targets = [
+        str(item or "").strip()
+        for item in (initial_slice.get("files") or [])
+        if str(item or "").strip()
+    ]
+    if not initial_targets:
+        supplied_slices = arguments.get("slices")
+        if not isinstance(supplied_slices, list) or not supplied_slices:
+            supplied_targets, supplied_error = _string_list_argument(
+                arguments.get("targetFiles"),
+                "targetFiles",
+            )
+            if supplied_error:
+                supplied_targets = []
+            supplied_slices = (
+                [{"sliceId": "feature_scope", "files": supplied_targets}]
+                if supplied_targets
+                else []
+            )
+        if not supplied_slices:
+            server.structured_tool_result(
+                message_id,
+                {
+                    "ok": False,
+                    "status": "blocked",
+                    "errorCode": "FEATURE_INTENT_SLICE_INPUT_REQUIRED",
+                    "error": (
+                        "The active broad plan has no exact executable slice. Supply all "
+                        "discovered bounded slices in this same feature-intent call."
+                    ),
+                    "taskAuthorization": authorization,
+                    "requiredNextTool": FEATURE_INTENT_GATE,
+                    "requiredNextToolArgs": {
+                        "taskAuthorization": compact_task_authorization(
+                            authorization
+                        ),
+                    },
+                    "nextAction": FEATURE_INTENT_GATE,
+                    "nextActionArgs": {
+                        "taskAuthorization": compact_task_authorization(
+                            authorization
+                        ),
+                        "slices": [
+                            {
+                                "sliceId": "<stable_slice_id>",
+                                "files": ["Source/<Module>/<ExactTarget>.cpp"],
+                            }
+                        ],
+                    },
+                    "nextActionIsTool": True,
+                    "retryable": True,
+                    "stopCurrentWorkflow": False,
+                    "agentInstruction": (
+                        "Reissue unreal_feature_intent_resolve once with the current semantic "
+                        "selection plus every already-discovered concrete 1-2 file slice. Do not "
+                        "call unreal_task_define_slices separately."
+                    ),
+                    "internalPhases": internal_phases,
+                },
+            )
+            return
+        from task_api import task_define_slices
+
+        server.progress_phase(message_id, "Resolving and registering bounded executable slices")
+        slice_registration = task_define_slices(
+            server.workspace,
+            task_authorization=authorization,
+            slices=supplied_slices,
+            active_slice_id=str(arguments.get("activeSliceId") or "").strip(),
+        )
+        if not slice_registration.get("ok"):
+            failure = dict(slice_registration)
+            failure.setdefault("nextAction", FEATURE_INTENT_GATE)
+            failure.setdefault("nextActionIsTool", True)
+            failure.setdefault("retryable", True)
+            failure.setdefault("stopCurrentWorkflow", False)
+            failure.setdefault(
+                "agentInstruction",
+                "Correct the bounded slices and retry this same feature-intent call; do not call a separate slice tool.",
+            )
+            failure["internalPhases"] = internal_phases
+            server.structured_tool_result(message_id, failure)
+            return
+        internal_phases.append("ResolveSlice")
+        refreshed_authorization = slice_registration.get("taskAuthorization")
+        if isinstance(refreshed_authorization, dict):
+            authorization = dict(refreshed_authorization)
+            arguments["taskAuthorization"] = dict(refreshed_authorization)
+        status = task_status(server.workspace, task_session_id)
+        if not status.get("ok"):
+            server.structured_tool_result(message_id, status)
+            return
+        task_state = status.get("state") if isinstance(status.get("state"), dict) else {}
     request = str(task_state.get("request") or "").strip()
     route = (
         task_state.get("toolRoute")
@@ -1381,6 +1545,7 @@ def _handle_unreal_feature_intent_resolve(
         project_root,
         target_files,
     )
+    internal_phases.append("CaptureSnapshot")
     from feature_intent_fast_path import (
         bounded_local_question_answers,
         evaluate_bounded_local_fast_path,
@@ -1531,6 +1696,16 @@ def _handle_unreal_feature_intent_resolve(
     )
     if gate_completion is not None:
         payload["gateCompletion"] = gate_completion
+    if gate_completion and gate_completion.get("ok"):
+        internal_phases.append("BindIntent")
+    payload["internalPhases"] = internal_phases
+    if slice_registration is not None:
+        payload["sliceResolution"] = {
+            "serverOwned": True,
+            "activeSliceId": str(slice_registration.get("activeSliceId") or ""),
+            "sliceCount": len(slice_registration.get("slices") or []),
+            "pendingSlices": list(slice_registration.get("pendingSlices") or []),
+        }
     server.structured_tool_result(message_id, payload)
 
 
@@ -3899,10 +4074,17 @@ class McpServer:
                 ensure_ascii=False,
                 indent=2,
             )
-        if isinstance(public_structured, dict) and text_was_json:
-            from mcp_control_envelope import concise_control_text
+        frontend = os.environ.get("MCP_FRONTEND", "").strip().casefold()
+        if isinstance(public_structured, dict) and (
+            text_was_json or frontend == "lmstudio"
+        ):
+            from mcp_control_envelope import model_visible_control_text
 
-            public_text = concise_control_text(public_structured)
+            public_text = model_visible_control_text(
+                public_structured,
+                frontend=frontend,
+                max_chars=min(limit, 32_000),
+            )
         payload: dict[str, Any] = {
             "content": [{"type": "text", "text": truncate_text(public_text, limit)}],
             "isError": is_error,
@@ -4709,8 +4891,13 @@ class McpServer:
                 "name": "unreal_feature_intent_resolve",
                 "title": "Resolve Ambiguous Feature Intent",
                 "description": (
-                    "For an active task, pass only the current taskAuthorization; the server "
-                    "binds the original request and active slice files. Generate or normalize "
+                    "Resolve feature intent in one model-facing call. For a task that already has "
+                    "an exact active slice, pass the current taskAuthorization and the server binds "
+                    "the original request and active slice. When bounded discovery followed a broad "
+                    "plan with no exact slice, include every discovered concrete 1-2 file slice in "
+                    "this same call; the server internally performs SelectIntent, ResolveSlice, "
+                    "CaptureSnapshot, and BindIntent. Never call unreal_task_define_slices as a "
+                    "separate ceremony for feature intent. Generate or normalize "
                     "three to five deterministic feature-intent "
                     "candidates, require explicit observer/oracle acceptance criteria, "
                     "resolve ties and blocking questions fail-closed, and bind the selected "
@@ -4734,6 +4921,39 @@ class McpServer:
                                 "blockingQuestions. Required only when the prior response reports "
                                 "FEATURE_INTENT_BLOCKING_QUESTIONS."
                             ),
+                        },
+                        "slices": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 24,
+                            "description": (
+                                "Only when the active plan has no exact slice: all already-discovered "
+                                "executable slices. Each slice is registered internally in this same call."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "sliceId": {"type": "string"},
+                                    "files": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "maxItems": 2,
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": ["sliceId", "files"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "activeSliceId": {
+                            "type": "string",
+                            "description": "Optional sliceId to bind first; defaults to the first supplied slice.",
+                        },
+                        "targetFiles": {
+                            "type": "array",
+                            "maxItems": 2,
+                            "items": {"type": "string"},
+                            "description": "Single-slice shorthand when a broad plan has exactly one bounded target set.",
                         },
                         "taskAuthorization": _task_authorization_schema(),
                     },
@@ -5508,6 +5728,8 @@ class McpServer:
                     "server response names unreal_task_checkpoint even if the active work route is planner/executor. "
                     "When a phase-budget response provides nextActionArgs, copy them exactly and use action=record; "
                     "action=status is read-only and does not renew the work-call budget. "
+                    "Do not call this as an ordinary planning, reading, editing, or progress step, and never repeat "
+                    "an unchanged record unless a later server response explicitly requires another checkpoint. "
                     "File conflicts close the write gate until an explicit rebase accepts current files."
                 ),
                 "inputSchema": self._schema(
@@ -6251,6 +6473,10 @@ class McpServer:
                         conversation_id=ownership["conversation_id"],
                         owner_capability=ownership["owner_capability"],
                     )
+                payload = _bind_task_status_next_action_args(
+                    payload,
+                    arguments.get("taskAuthorization"),
+                )
                 self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_list_active":
                 from task_api import task_list_active
@@ -6981,17 +7207,26 @@ class McpServer:
                     )
                 )
                 payload["nextAction"] = next_action
+                payload["nextActionIsTool"] = next_action != "continue_with_current_tool_route"
                 payload["nextActionArgs"] = (
                     {
-                        "taskAuthorization": task_authorization,
-                        "responseMode": "compact",
+                        "taskAuthorization": compact_task_authorization(
+                            task_authorization
+                        ),
                     }
                     if compile_diagnostic_first
                     else {
-                        "taskAuthorization": task_authorization,
-                        "targetFileLimit": int(tool_route.get("maxFilesPerSlice") or 2),
+                        "taskAuthorization": compact_task_authorization(
+                            task_authorization
+                        )
                     }
                 )
+                if payload["nextActionIsTool"]:
+                    payload["requiredNextToolArgs"] = {
+                        "taskAuthorization": compact_task_authorization(
+                            task_authorization
+                        )
+                    }
                 payload["executionContract"] = {
                     "maxFilesPerSlice": int(tool_route.get("maxFilesPerSlice") or 2),
                     "splitBeforeFirstGate": True,
@@ -7016,6 +7251,15 @@ class McpServer:
                         if compile_diagnostic_first
                         else ""
                     )
+                    + (
+                        "For unreal_feature_intent_resolve, make one model-facing call: when "
+                        "selectedSlice.files is empty, include every already-discovered concrete "
+                        "1-2 file slice in its slices argument. Selection, slice registration, "
+                        "snapshot capture, and binding are server-owned internal phases; never "
+                        "call unreal_task_define_slices separately for this gate. "
+                        if next_action == "unreal_feature_intent_resolve"
+                        else ""
+                    )
                     + "For targetFiles, "
                     "submit only one or two files per slice; use changeKind=new_file for exactly "
                     "one new target and changeKind=multifile for a new header/source pair. Keep "
@@ -7036,6 +7280,7 @@ class McpServer:
                     "activeTools": (compact_plan.get("toolRoute") or {}).get("activeTools") or [],
                     "maxFilesPerSlice": (compact_plan.get("toolRoute") or {}).get("maxFilesPerSlice") or 2,
                     "nextAction": compact_plan.get("nextAction"),
+                    "nextActionIsTool": compact_plan.get("nextActionIsTool") is True,
                     "nextActionArgs": compact_plan.get("nextActionArgs") or {},
                     "executionContract": compact_plan.get("executionContract") or {},
                     "agentInstruction": compact_plan.get("agentInstruction"),

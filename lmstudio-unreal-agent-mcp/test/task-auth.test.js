@@ -161,8 +161,9 @@ test("mutation authorization blocks placeholder slice plans until concrete slice
     assert.strictEqual(result.errorCode, "SLICE_PLAN_REQUIRED");
     assert.strictEqual(result.nextAction, "unreal_task_define_slices");
     assert.strictEqual(result.nextActionArgs.taskAuthorization.taskSessionId, authorization.taskSessionId);
-    assert.strictEqual(result.nextActionArgs.taskAuthorization.authToken, authorization.authToken);
-    assert.strictEqual(result.nextActionArgs.taskAuthorization.activeSliceId, authorization.activeSliceId);
+    assert.strictEqual(result.nextActionArgs.taskAuthorization.ownerCapability, "owner-capability");
+    assert.strictEqual(result.nextActionArgs.taskAuthorization.authToken, undefined);
+    assert.strictEqual(result.nextActionArgs.taskAuthorization.activeSliceId, undefined);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
@@ -943,10 +944,15 @@ test("route-aware auth rejects stale route and suffix path escape", () => {
     assert.strictEqual(suffixEscape.nextAction, "unreal_code_sketch_claim_validate");
     assert.strictEqual(suffixEscape.taskAuthorization.routePhase, "executor");
     assert.strictEqual(suffixEscape.taskAuthorization.routeHash, "route-1");
-    assert.strictEqual(suffixEscape.nextActionArgs.targetFileLimit, 2);
+    assert.strictEqual(suffixEscape.maxFilesPerSlice, 2);
+    assert.strictEqual(suffixEscape.nextActionArgs.targetFileLimit, undefined);
     assert.strictEqual(
       suffixEscape.nextActionArgs.taskAuthorization.routeHash,
-      "route-1"
+      undefined
+    );
+    assert.strictEqual(
+      suffixEscape.nextActionArgs.taskAuthorization.ownerCapability,
+      undefined
     );
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
@@ -1449,12 +1455,10 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
     assert.strictEqual(blocked.nextActionArgs.action, "record");
     assert.strictEqual(blocked.nextActionArgs.requiredNextAction, "read_file");
     assert.strictEqual(blocked.nextActionArgs.includeGitChanges, false);
-    assert.strictEqual(blocked.nextActionArgs.taskSessionId, authorization.taskSessionId);
-    assert.strictEqual(blocked.nextActionArgs.ownerCapability, "owner-capability");
-    assert.strictEqual(
-      Object.prototype.hasOwnProperty.call(blocked.nextActionArgs, "taskAuthorization"),
-      false
-    );
+    assert.deepStrictEqual(blocked.nextActionArgs.taskAuthorization, {
+      taskSessionId: authorization.taskSessionId,
+      ownerCapability: "owner-capability",
+    });
     assert.match(blocked.agentInstruction, /action=record/);
     assert.strictEqual(
       commitRouteReservation(
@@ -1799,9 +1803,10 @@ test("conversation-scoped tasks require ownerCapability for CallTool authorize",
     assert.strictEqual(omittedCapability.nextAction, "read_file");
     assert.strictEqual(omittedCapability.retryable, true);
     assert.strictEqual(
-      omittedCapability.nextActionArgs.requiresCompleteTaskAuthorization,
-      true
+      omittedCapability.requiredArgument,
+      "taskAuthorization"
     );
+    assert.strictEqual(omittedCapability.nextActionArgs, undefined);
     assert.ok(String(omittedCapability.agentInstruction).includes("Do not recover or cancel"));
 
     const wrongCap = authorizeActiveRouteTool(
@@ -2127,6 +2132,15 @@ test("legacy-only task + arbitrary ownerCapability fails closed", () => {
       process.env.AGENT_STATE_ROOT = previousRoot;
       fs.rmSync(badRoot, { force: true });
     }
+
+    fs.rmSync(dir, { recursive: true, force: true });
+    const noTasks = listActiveTasks(workspace, projectFile);
+    assert.strictEqual(noTasks.count, 0);
+    assert.strictEqual(noTasks.nextAction, "enable_or_call_unreal_agent_plan");
+    assert.strictEqual(noTasks.nextActionIsTool, false);
+    assert.strictEqual(noTasks.requiredProvider, "mcp/unreal-rag");
+    assert.strictEqual(noTasks.requiredTool, "unreal_agent_plan");
+    assert.strictEqual(noTasks.doNotFabricateTaskAuthorization, true);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;

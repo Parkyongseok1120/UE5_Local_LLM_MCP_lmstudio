@@ -602,7 +602,11 @@ def test_oversized_gate_slice_returns_executable_bounded_retry(
     assert denied["ok"] is False
     assert denied["errorCode"] == "TASK_ROUTE_SCOPE_EXCEEDED"
     assert denied["nextAction"] == "unreal_code_sketch_claim_validate"
-    assert denied["nextActionArgs"]["maxFilesPerSlice"] == 2
+    assert denied["scopeLimits"]["maxFilesPerSlice"] == 2
+    assert denied["nextActionArgs"]["taskAuthorization"] == {
+        "taskSessionId": started["taskSessionId"],
+        "ownerCapability": started["taskAuthorization"]["ownerCapability"],
+    }
     assert denied["taskAuthorization"] == started["taskAuthorization"]
     assert "Do not replan or stop" in denied["agentInstruction"]
 
@@ -714,12 +718,10 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     assert exhausted["nextActionArgs"]["action"] == "record"
     assert exhausted["nextActionArgs"]["requiredNextAction"] == active_tool
     assert exhausted["nextActionArgs"]["includeGitChanges"] is False
-    assert exhausted["nextActionArgs"]["taskSessionId"] == started["taskSessionId"]
-    assert (
-        exhausted["nextActionArgs"]["ownerCapability"]
-        == started["taskAuthorization"]["ownerCapability"]
-    )
-    assert "taskAuthorization" not in exhausted["nextActionArgs"]
+    assert exhausted["nextActionArgs"]["taskAuthorization"] == {
+        "taskSessionId": started["taskSessionId"],
+        "ownerCapability": started["taskAuthorization"]["ownerCapability"],
+    }
     assert set(exhausted["nextActions"]) == {
         "unreal_task_status",
         "unreal_task_checkpoint",
@@ -727,7 +729,7 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     }
 
 
-def test_checkpoint_record_resets_budget_without_phase_change(
+def test_checkpoint_without_server_required_action_preserves_budget(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -759,9 +761,90 @@ def test_checkpoint_record_resets_budget_without_phase_change(
             task_root(tmp_path, started["taskSessionId"]) / "state.json"
         ).read_text(encoding="utf-8")
     )
+    assert state["toolRouteUsage"]["count"] == 1
+    assert state["toolRouteUsage"]["calls"] == [active_tool]
+    assert state["toolRouteUsage"]["checkpointRecordedWithoutBudgetReset"] is True
+
+
+def test_server_required_checkpoint_resets_budget_and_binds_next_work_tool(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Inspect code",
+        mode="read_only",
+        plan_payload=_plan(writes=False),
+    )
+    active_tool = started["toolRoute"]["activeTools"][0]
+    assert authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={"taskAuthorization": started["taskAuthorization"]},
+    )["ok"]
+
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        action="record",
+        phase="planning",
+        modified_files=[],
+        required_next_action=active_tool,
+        validation={},
+        include_git_changes=False,
+    )
+
+    assert recorded["ok"] is True
+    assert recorded["checkpointRecorded"] is True
+    assert recorded["nextAction"] == active_tool
+    assert recorded["nextActionIsTool"] is True
+    assert recorded["requiredNextTool"] == active_tool
+    assert recorded["requiredNextToolArgs"]["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
+    state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(encoding="utf-8")
+    )
     assert state["toolRouteUsage"]["count"] == 0
     assert state["toolRouteUsage"]["calls"] == []
     assert state["toolRouteUsage"]["resetReason"] == "checkpoint_record"
+
+
+def test_identical_checkpoint_is_heartbeat_only_and_does_not_advance_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Inspect code",
+        mode="read_only",
+        plan_payload=_plan(writes=False),
+    )
+    first = task_checkpoint(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        action="record",
+        phase="planning",
+        modified_files=[],
+        validation={},
+        include_git_changes=False,
+    )
+    second = task_checkpoint(
+        tmp_path,
+        task_authorization=first["taskAuthorization"],
+        action="record",
+        phase="planning",
+        modified_files=[],
+        validation={},
+        include_git_changes=False,
+    )
+
+    assert first["checkpointRecorded"] is True
+    assert second["checkpointRecorded"] is False
+    assert second["checkpointSubstantive"] is False
+    assert second["heartbeatOnly"] is True
+    assert second["continuity"]["checkpoint"]["sequence"] == first["continuity"]["checkpoint"]["sequence"]
+    assert "Do not call unreal_task_checkpoint again" in second["agentInstruction"]
 
 
 def test_automatic_checkpoint_preserves_phase_budget(
@@ -960,7 +1043,10 @@ def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
     assert denied["nextActionArgs"] == {
         "action": "record",
         "includeGitChanges": False,
-        "taskAuthorization": denied["taskAuthorization"],
+        "taskAuthorization": {
+            "taskSessionId": denied["taskAuthorization"]["taskSessionId"],
+            "ownerCapability": denied["taskAuthorization"]["ownerCapability"],
+        },
     }
     assert "humanCheckpointRequired" not in denied
 
@@ -1795,7 +1881,8 @@ def test_foreign_connection_write_task_does_not_own_tool_route(
     assert denied["errorCode"] == "TASK_ROUTE_OWNERSHIP_REQUIRED"
     assert denied["nextAction"] == "read_file"
     assert denied["retryable"] is True
-    assert denied["nextActionArgs"]["requiresCompleteTaskAuthorization"] is True
+    assert denied["requiredArgument"] == "taskAuthorization"
+    assert "nextActionArgs" not in denied
     assert "Do not recover or cancel" in denied["agentInstruction"]
     allowed = authorize_active_task_tool(
         tmp_path,

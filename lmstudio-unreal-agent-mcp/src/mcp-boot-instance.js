@@ -11,6 +11,7 @@ const {
 } = require("./write-locks");
 
 const ID_RE = /^[A-Za-z0-9_.:-]{8,128}$/;
+let windowsProcessSnapshotCache;
 
 function validId(value) {
   return Boolean(value && ID_RE.test(String(value)));
@@ -33,20 +34,51 @@ function pidAlive(pid) {
   }
 }
 
+function windowsProcessSnapshot() {
+  if (process.platform !== "win32") return new Map();
+  if (windowsProcessSnapshotCache !== undefined) return windowsProcessSnapshotCache;
+  const snapshot = new Map();
+  try {
+    // One bounded WMI snapshot replaces multiple PowerShell startups for every
+    // parent/name/start-time lookup. Slow or unavailable WMI falls back to the
+    // direct parent without delaying MCP startup for tens of seconds.
+    const script = [
+      "Get-CimInstance Win32_Process | ForEach-Object {",
+      "[pscustomobject]@{",
+      "ProcessId=[int]$_.ProcessId;",
+      "ParentProcessId=[int]$_.ParentProcessId;",
+      "Name=[string]$_.Name;",
+      "StartedAt=if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')} else {''}",
+      "}",
+      "} | ConvertTo-Json -Compress",
+    ].join(" ");
+    const result = spawnSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { encoding: "utf8", windowsHide: true, timeout: 2500, maxBuffer: 4 * 1024 * 1024 }
+    );
+    if (result.status === 0 && String(result.stdout || "").trim()) {
+      const parsed = JSON.parse(String(result.stdout || ""));
+      for (const row of Array.isArray(parsed) ? parsed : [parsed]) {
+        const pid = Number(row?.ProcessId || 0);
+        if (pid > 0) snapshot.set(pid, {
+          parentPid: Number(row?.ParentProcessId || 0),
+          name: String(row?.Name || ""),
+          startedAt: String(row?.StartedAt || ""),
+        });
+      }
+    }
+  } catch {
+    // Empty snapshot intentionally triggers the fast direct-parent fallback.
+  }
+  windowsProcessSnapshotCache = snapshot;
+  return snapshot;
+}
+
 function parentPid(pid) {
   if (!Number.isFinite(pid) || pid <= 0) return 0;
   if (process.platform === "win32") {
-    const result = spawnSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-Command",
-        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($null -eq $p) { exit 1 }; Write-Output $p.ParentProcessId`,
-      ],
-      { encoding: "utf8", windowsHide: true, timeout: 5000 }
-    );
-    if (result.status !== 0) return 0;
-    return Number(String(result.stdout || "").trim() || 0) || 0;
+    return Number(windowsProcessSnapshot().get(pid)?.parentPid || 0);
   }
   try {
     if (fs.existsSync(`/proc/${pid}/stat`)) {
@@ -69,17 +101,7 @@ function parentPid(pid) {
 function processName(pid) {
   if (!Number.isFinite(pid) || pid <= 0) return "";
   if (process.platform === "win32") {
-    const result = spawnSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-Command",
-        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($null -eq $p) { exit 1 }; Write-Output $p.Name`,
-      ],
-      { encoding: "utf8", windowsHide: true, timeout: 5000 }
-    );
-    if (result.status !== 0) return "";
-    return String(result.stdout || "").trim();
+    return String(windowsProcessSnapshot().get(pid)?.name || "");
   }
   try {
     if (fs.existsSync(`/proc/${pid}/comm`)) {
@@ -138,17 +160,7 @@ function atomicWriteJson(filePath, payload) {
 function processStartedAt(pid) {
   if (!Number.isFinite(pid) || pid <= 0) return "";
   if (process.platform === "win32") {
-    const result = spawnSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-Command",
-        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($null -eq $p) { exit 1 }; Write-Output ($p.CreationDate.ToUniversalTime().ToString('o'))`,
-      ],
-      { encoding: "utf8", windowsHide: true, timeout: 5000 }
-    );
-    if (result.status !== 0) return "";
-    return String(result.stdout || "").trim();
+    return String(windowsProcessSnapshot().get(pid)?.startedAt || "");
   }
   const ticks = processStartTicks(pid);
   if (ticks != null) return `ticks:${ticks}`;

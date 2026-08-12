@@ -412,6 +412,7 @@ def test_broad_feature_task_requires_and_registers_runtime_slices(tmp_path: Path
     assert blocked_gate["ok"] is False
     assert blocked_gate["errorCode"] == "SLICE_PLAN_REQUIRED"
     assert blocked_gate["nextAction"] == "unreal_task_define_slices"
+    assert blocked_gate["nextActionIsTool"] is True
     premature = task_complete_after_successful_build(
         tmp_path, task_authorization=auth, proof_level="Built"
     )
@@ -457,7 +458,19 @@ def test_short_ambiguous_feature_requires_concrete_runtime_slice(tmp_path: Path)
     )
 
     assert started["state"]["slicePlanningRequired"] is True
-    assert started["nextAction"] == "unreal_task_define_slices"
+    assert started["nextAction"] == "unreal_feature_intent_resolve"
+    assert started["nextActionIsTool"] is True
+    authorized = authorize_task_tool(
+        tmp_path,
+        tool_name="unreal_feature_intent_resolve",
+        task_authorization=started["taskAuthorization"],
+        arguments={
+            "slices": [
+                {"sliceId": "state", "files": ["Source/Demo/StateSubsystem.cpp"]}
+            ]
+        },
+    )
+    assert authorized["ok"] is True
 
 
 def test_feature_request_path_is_bound_to_server_selected_slice(tmp_path: Path) -> None:

@@ -21,6 +21,12 @@ const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const RECENT_KEY_WINDOW = 12;
 /** Soft cap for non-range tools (search_files / read_file / read_symbol) per file version. */
 const DEFAULT_NON_RANGE_BUDGET = 8;
+/**
+ * A whole-file read proves line coverage, but compacted chats may no longer retain
+ * the exact edit text. Permit a bounded number of exact range materializations
+ * instead of returning an unrelated whole-file cache body.
+ */
+const DEFAULT_COVERED_RANGE_MATERIALIZATION_BUDGET = 8;
 
 // evidenceKey -> { content, at, tool, attempts, lineRange }
 const successCache = new Map();
@@ -32,6 +38,11 @@ const stagnationEntries = new Map();
 
 function evidenceContextKey(context = {}) {
   const hash = crypto.createHash("sha256");
+  // Read/search history is process-global, so the generator-owned conversation
+  // session must participate in every cache key. Otherwise a fresh LM Studio
+  // chat inherits the prior chat's 30-minute evidence budget.
+  hash.update(String(context.evidenceSessionId || context.taskSessionId || ""));
+  hash.update("\u0000");
   hash.update(String(context.fileSignature || context.scopeSignature || ""));
   hash.update("\u0000");
   hash.update(String(context.mutationGeneration ?? 0));
@@ -50,7 +61,8 @@ function buildEvidenceKey(tool, args, context = {}) {
 
 function fileVersionKey(context = {}) {
   if (!context.fileAbsPath || !context.fileSignature) return null;
-  return `${context.fileAbsPath}\u0000${context.fileSignature}\u0000${context.mutationGeneration ?? 0}`;
+  const sessionId = String(context.evidenceSessionId || context.taskSessionId || "");
+  return `${sessionId}\u0000${context.fileAbsPath}\u0000${context.fileSignature}\u0000${context.mutationGeneration ?? 0}`;
 }
 
 function prune(now, maxEntries, ttlMs) {
@@ -132,19 +144,6 @@ function detectPingPong(key) {
   return false;
 }
 
-function findCoveringCachedContent(requested, versionKey) {
-  if (!requested || !versionKey) return null;
-  for (const entry of successCache.values()) {
-    if (!entry.lineRange) continue;
-    if (entry.fileVersionKey !== versionKey) continue;
-    const r = entry.lineRange;
-    if (requested.start >= r.start && requested.end <= r.end) {
-      return entry.content;
-    }
-  }
-  return null;
-}
-
 /**
  * Check whether this read should return cached evidence or hard-stop.
  * @returns {{ action: 'allow'|'cache'|'stagnation', ... }}
@@ -204,29 +203,31 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
   if (tool === "read_file_range" && requested) {
     const priorRanges = coverage ? coverage.ranges : [];
     if (isFullyCovered(requested, priorRanges)) {
-      const covering = findCoveringCachedContent(requested, versionKey);
-      if (coverage) {
-        coverage.coveredRepeatCount = (coverage.coveredRepeatCount || 0) + 1;
-        fileCoverage.set(versionKey, coverage);
-        if (coverage.coveredRepeatCount >= 2) {
-          return {
-            action: "stagnation",
-            repeat: true,
-            reason: "EVIDENCE_STAGNATION",
-            key,
-            attempts: coverage.coveredRepeatCount + 1,
-            fullyCovered: true,
-            coveredBy: priorRanges,
-          };
-        }
+      const materializationBudget = Number.isFinite(options.coveredRangeMaterializationBudget)
+        ? options.coveredRangeMaterializationBudget
+        : DEFAULT_COVERED_RANGE_MATERIALIZATION_BUDGET;
+      const materialized = Number(coverage?.materializedCoveredRangeCount || 0);
+      if (materialized >= materializationBudget) {
+        return {
+          action: "stagnation",
+          repeat: true,
+          reason: "EVIDENCE_STAGNATION",
+          key,
+          attempts: materialized + 1,
+          fullyCovered: true,
+          coveredBy: priorRanges,
+        };
       }
+      // Coverage alone is not enough after context compaction. Read the exact
+      // requested range once so replace_in_file can use text that is actually
+      // present in the current model context. An identical range still takes
+      // the exact-key cache/stagnation path above.
       return {
-        action: "cache",
-        repeat: true,
-        reason: "READ_REPEAT_DETECTED",
+        action: "allow",
+        repeat: false,
         key,
-        cachedContent: covering || null,
-        attempts: 2,
+        materializeCoveredRange: true,
+        materializationCount: materialized + 1,
         fullyCovered: true,
         coveredBy: priorRanges,
       };
@@ -286,6 +287,7 @@ function recordReadStagnation(tool, args, context = {}, options = {}) {
       nonRangeCount: 0,
       stagnationCount: 0,
       coveredRepeatCount: 0,
+      materializedCoveredRangeCount: 0,
       lastKey: null,
     };
     coverage.stagnationCount = (coverage.stagnationCount || 0) + 1;
@@ -332,11 +334,16 @@ function recordReadSuccess(tool, args, context = {}, content, options = {}) {
       nonRangeCount: 0,
       stagnationCount: 0,
       coveredRepeatCount: 0,
+      materializedCoveredRangeCount: 0,
       lastKey: null,
     };
     if (lineRange) {
+      const alreadyCovered = isFullyCovered(lineRange, coverage.ranges);
       coverage.ranges = mergeRanges([...coverage.ranges, lineRange]);
       coverage.coveredRepeatCount = 0;
+      if (tool === "read_file_range" && alreadyCovered) {
+        coverage.materializedCoveredRangeCount = Number(coverage.materializedCoveredRangeCount || 0) + 1;
+      }
     } else {
       coverage.nonRangeCount += 1;
     }
@@ -392,7 +399,9 @@ function cachedReadInstruction(reason) {
   ) {
     return (
       "Evidence read budget exhausted or stagnating. "
-      + "Do not call another evidence tool. Produce the final analysis now."
+      + "The evidence phase is complete. Do not call another evidence tool. "
+      + "Continue with an evidence-supported write/validation step when the user requested implementation; "
+      + "otherwise produce the final analysis."
     );
   }
   return (
@@ -437,6 +446,7 @@ module.exports = {
   DEFAULT_MAX_ENTRIES,
   DEFAULT_TTL_MS,
   DEFAULT_NON_RANGE_BUDGET,
+  DEFAULT_COVERED_RANGE_MATERIALIZATION_BUDGET,
   /** @deprecated use DEFAULT_NON_RANGE_BUDGET; kept for callers */
   DEFAULT_FILE_READ_BUDGET: DEFAULT_NON_RANGE_BUDGET,
 };

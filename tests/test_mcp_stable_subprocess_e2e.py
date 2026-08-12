@@ -175,14 +175,13 @@ def test_agent_mcp_subprocess_tools_list_stable_essential(tmp_path: Path) -> Non
         tools_result = client.request("tools/list", {}, req_id=2)
         tools = tools_result["result"]["tools"]
         names = {tool["name"] for tool in tools}
-        assert names == set(MANIFEST["agentEssential"])
-        assert "apply_edit_bundle" in names
+        assert names == (
+            set(MANIFEST["agentEssential"])
+            & set(MANIFEST["agentUnroutedDiscoverable"])
+        )
+        assert "apply_edit_bundle" not in names
         definitions = {tool["name"]: tool for tool in tools}
-        for mutation_tool in ("write_file", "replace_in_file"):
-            schema = definitions[mutation_tool]["inputSchema"]
-            assert "taskAuthorization" not in schema["required"]
-            assert "taskAuthorization" in schema["properties"]
-            assert "ownerCapability" in schema["properties"]["taskAuthorization"]["required"]
+        assert "read_file" in definitions
         invalid = client.request("tools/call", {"name": "read_file", "arguments": {}}, req_id=3)
         invalid_result = invalid["result"]
         invalid_payload = _tool_payload(invalid_result)
@@ -823,6 +822,98 @@ def _start_agent_client(tmp_path: Path, *, extra_env: dict[str, str] | None = No
     return client
 
 
+def test_lmstudio_agent_text_preserves_directory_and_inferred_filename_results(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "Source" / "O_Mock" / "Private"
+    source_dir.mkdir(parents=True)
+    (source_dir / "O_MockGame.cpp").write_text(
+        "void FO_MockGame::Start() {}\n",
+        encoding="utf-8",
+    )
+
+    client = _start_agent_client(tmp_path, extra_env={"MCP_FRONTEND": "lmstudio"})
+    try:
+        listed = client.request(
+            "tools/call",
+            {"name": "list_directory", "arguments": {"path": "workspace://Source"}},
+            2,
+        )
+        # Simulate LM Studio 0.4.20: only content text survives in the model's
+        # next conversation turn; top-level structuredContent is discarded.
+        visible_list = json.loads(listed["result"]["content"][0]["text"])
+        assert [row["name"] for row in visible_list["entries"]] == ["O_Mock"]
+        assert visible_list["path"]["displayPath"] == "workspace://Source"
+
+        searched = client.request(
+            "tools/call",
+            {
+                "name": "search_files",
+                "arguments": {
+                    "query": r"\.cpp$",
+                    "path": "workspace://Source",
+                    "regex": True,
+                },
+            },
+            3,
+        )
+        visible_search = json.loads(searched["result"]["content"][0]["text"])
+        assert visible_search["fileNameMatchMode"] == "inferred_from_filename_shaped_query"
+        assert visible_search["fileNameResults"] == [
+            {
+                "file": "workspace://Source/O_Mock/Private/O_MockGame.cpp",
+                "basename": "O_MockGame.cpp",
+            }
+        ]
+    finally:
+        client.close()
+
+
+def test_lmstudio_rag_text_preserves_active_project_without_structured_content(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "O_Mock" / "O_Mock.uproject"
+    project.parent.mkdir()
+    project.write_text('{"FileVersion": 3}', encoding="utf-8")
+    (project.parent / "Source" / "O_Mock").mkdir(parents=True)
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(json.dumps({"activeProject": str(project)}), encoding="utf-8")
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"")
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "MCP_FRONTEND": "lmstudio",
+            "SHARED_UNREAL_CONFIG": str(shared),
+            "UNREAL58_ROOT": str(ROOT),
+        }
+    )
+    client = _StdioJsonRpc([_python_exe(), str(RAG_SCRIPT), "--index", str(index)], env=env)
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "lmstudio-regression", "version": "1.0"},
+            },
+            1,
+        )
+        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        response = client.request(
+            "tools/call",
+            {"name": "unreal_get_active_project", "arguments": {}},
+            2,
+        )
+        visible = json.loads(response["result"]["content"][0]["text"])
+        assert Path(visible["activeProject"]).resolve() == project.resolve()
+        assert "O_Mock" in visible["activeProjectNames"]
+        assert visible["projectContext"]["ok"] is True
+    finally:
+        client.close()
+
+
 def test_agent_read_file_range_success(tmp_path: Path) -> None:
     source_dir = tmp_path / "Source" / "Demo"
     source_dir.mkdir(parents=True)
@@ -963,12 +1054,14 @@ def test_agent_successful_read_repeat_returns_cached(tmp_path: Path) -> None:
         assert payload.get("repeatDetected") is True
         assert payload.get("doNotRepeatRead") is True
         assert payload.get("errorCode") == "READ_REPEAT_DETECTED"
-        assert payload.get("contentSuppressed") is True
+        # Exact range text is intentionally replayed once so a compacted chat
+        # can still form a bounded replace_in_file oldText.
+        assert payload.get("contentSuppressed") is False
         assert payload.get("cachedContentBytes", 0) > 0
         assert payload.get("cachedLineCount", 0) > 0
         assert len(payload.get("evidenceHash", "")) == 64
         assert any("UDemo::BeginPlay" in anchor for anchor in payload.get("semanticAnchors", []))
-        assert "content" not in payload
+        assert "UDemo::BeginPlay" in payload.get("content", "")
     finally:
         client.close()
 
@@ -1050,6 +1143,9 @@ def test_agent_evidence_stagnation_is_error_without_wrong_body(tmp_path: Path) -
         payload = _tool_payload(blocked)
         assert payload.get("errorCode") == "EVIDENCE_STAGNATION"
         assert payload.get("ok") is False
+        assert payload.get("stopCurrentWorkflow") is False
+        assert payload.get("stopCurrentPhase") is True
+        assert payload.get("phaseBoundary") == "evidence"
         assert "content" not in payload or not str(payload.get("content") or "").strip()
 
         # Second identical stagnation attempt escalates to a distinct error code.
@@ -1218,7 +1314,12 @@ def test_agent_subprocess_exposes_apply_edit_bundle_but_requires_authorization(t
             req_id=2,
         )
         assert result["result"].get("isError") is True
-        assert "TASK_SESSION_REQUIRED" in result["result"]["content"][0]["text"]
+        assert "TASK_PLANNER_ROUTE_REQUIRED" in result["result"]["content"][0]["text"]
+        payload = _tool_payload(result["result"])
+        assert payload["requiredProvider"] == "mcp/unreal-rag"
+        assert payload["requiredTool"] == "unreal_agent_plan"
+        assert payload["nextActionIsTool"] is False
+        assert payload["doNotFabricateTaskAuthorization"] is True
     finally:
         client.close()
 

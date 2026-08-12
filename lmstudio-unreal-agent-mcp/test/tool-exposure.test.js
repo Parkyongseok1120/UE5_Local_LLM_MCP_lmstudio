@@ -2,7 +2,11 @@
 
 const assert = require("assert");
 const test = require("node:test");
-const { projectSwitchGuidance, stableAgentToolNames } = require("../src/tool-exposure");
+const {
+  phaseVisibleAgentToolNames,
+  projectSwitchGuidance,
+  stableAgentToolNames,
+} = require("../src/tool-exposure");
 
 test("stableAgentToolNames keeps build and edit lifecycle tools available", () => {
   const stable = stableAgentToolNames([
@@ -46,4 +50,15 @@ test("projectSwitchGuidance uses set_active_project in extended profile", () => 
       process.env.MCP_EXTENDED_TOOLS = previous;
     }
   }
+});
+
+test("clean startup hides route-owned mutation and build tools", () => {
+  const visible = phaseVisibleAgentToolNames(new Set([
+    "get_active_project",
+    "read_file",
+    "apply_edit_bundle",
+    "static_validate_project",
+    "build_unreal_project",
+  ]), { status: "none" });
+  assert.deepStrictEqual([...visible].sort(), ["get_active_project", "read_file"]);
 });

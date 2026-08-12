@@ -111,6 +111,227 @@ test("default mode preserves multiple tool calls and fragment metadata", async (
   }
 });
 
+test("feature intent atomic rule survives repeated generator preparation without duplicate ceremony", () => {
+  const { injectFeatureIntentAtomicRule } = require("../dist/generator.js");
+  const history = Chat.empty();
+  history.append("system", "base rules");
+  history.append("user", "implement the bounded feature");
+
+  assert.equal(injectFeatureIntentAtomicRule(history), true);
+  assert.equal(injectFeatureIntentAtomicRule(history), true);
+
+  const systemText = history.getMessagesArray()
+    .filter((message) => message.getRole() === "system")
+    .map((message) => message.getText())
+    .join("\n");
+  assert.equal((systemText.match(/\[UNREAL_FEATURE_INTENT_ATOMIC_GATE\]/g) || []).length, 1);
+  assert.match(systemText, /one unreal_feature_intent_resolve model-facing call/);
+  assert.match(systemText, /Never call unreal_task_define_slices separately/);
+});
+
+test("task route ownership rule distinguishes available and missing planners", () => {
+  const { injectTaskRouteOwnershipRule } = require("../dist/generator.js");
+  const available = Chat.empty();
+  available.append("system", "base rules");
+  available.append("user", "implement the feature");
+  assert.equal(injectTaskRouteOwnershipRule(available, true), true);
+  assert.equal(injectTaskRouteOwnershipRule(available, true), true);
+  const availableText = available.getMessagesArray().map((message) => message.getText()).join("\n");
+  assert.equal((availableText.match(/\[UNREAL_TASK_ROUTE_OWNERSHIP_GATE\]/g) || []).length, 1);
+  assert.match(availableText, /call unreal_agent_plan once/);
+  assert.match(availableText, /Never construct, guess, or repair taskAuthorization/);
+
+  const missing = Chat.empty();
+  missing.append("system", "base rules");
+  missing.append("user", "implement the feature");
+  assert.equal(injectTaskRouteOwnershipRule(missing, false), true);
+  const missingText = missing.getMessagesArray().map((message) => message.getText()).join("\n");
+  assert.match(missingText, /mcp\/unreal-rag planner provider is missing/);
+  assert.match(missingText, /do not claim implementation or attempt writes/);
+});
+
+test("unrouted agent catalog removes mutation schemas before prediction", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-unrouted-agent-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let advertisedTools = [];
+    let routeRule = "";
+    const model = {
+      identifier: "unrouted-agent-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(history, opts) {
+        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+        routeRule = history.getMessagesArray()
+          .filter((message) => message.getRole() === "system")
+          .map((message) => message.getText()).join("\n");
+        opts.onToolCallRequestStart(1, { toolCallId: "read-1" });
+        opts.onToolCallRequestNameReceived(1, "read_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: { id: "read-1", type: "function", name: "read_file", arguments: {} },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const tools = ["get_active_project", "read_file", "apply_edit_bundle"].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+    const history = Chat.empty();
+    history.append("system", "rules");
+    history.append("user", "implement O-Mock rules");
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.deepEqual(advertisedTools, ["get_active_project", "read_file"]);
+    assert.match(routeRule, /mcp\/unreal-rag planner provider is missing/);
+    assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "read_file"), true);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("routed work catalog hides checkpoint until server explicitly requires it", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-routed-checkpoint-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let advertisedTools = [];
+    const model = {
+      identifier: "routed-checkpoint-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+        opts.onToolCallRequestStart(1, { toolCallId: "write-1" });
+        opts.onToolCallRequestNameReceived(1, "replace_in_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: { id: "write-1", type: "function", name: "replace_in_file", arguments: {} },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: {
+        taskSessionId: "task-routed-checkpoint",
+        ownerCapability: "owner-routed-checkpoint",
+      },
+      toolRoute: {
+        routeHash: "route-routed-checkpoint",
+        phase: "executor",
+        activeTools: ["replace_in_file"],
+      },
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "continue_with_current_tool_route",
+        nextActionIsTool: false,
+        retryPolicy: "none",
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "implement the bounded change" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "plan-1", type: "function", name: "unreal_agent_plan", arguments: { request: "implement" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "plan-1", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+    ] });
+    const tools = [
+      "replace_in_file",
+      "unreal_rag_search",
+      "write_file",
+      "unreal_task_checkpoint",
+      "get_active_project",
+      "evidence_record",
+    ].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.deepEqual(advertisedTools, ["replace_in_file", "get_active_project", "evidence_record"]);
+    assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "replace_in_file"), true);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("atomic output streams reasoning progress but withholds final text until completion", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-reasoning-progress-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let releasePrediction;
+    let signalPredictionStarted;
+    let reasoningWasImmediate = false;
+    let finalWasBuffered = false;
+    const predictionBarrier = new Promise((resolve) => { releasePrediction = resolve; });
+    const predictionStarted = new Promise((resolve) => { signalPredictionStarted = resolve; });
+    const model = {
+      identifier: "reasoning-progress-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onPredictionFragment({
+          content: "Inspecting project structure...",
+          tokensCount: 3,
+          containsDrafted: false,
+          reasoningType: "reasoning",
+          isStructural: false,
+        });
+        opts.onPredictionFragment({
+          content: "Complete.",
+          tokensCount: 1,
+          containsDrafted: false,
+          reasoningType: "none",
+          isStructural: false,
+        });
+        reasoningWasImmediate = emitted.some(
+          (event) => event.kind === "fragment" && event.content.includes("Inspecting"),
+        );
+        finalWasBuffered = !emitted.some(
+          (event) => event.kind === "fragment" && event.content.includes("Complete"),
+        );
+        signalPredictionStarted();
+        return { async result() { await predictionBarrier; return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "inspect and explain");
+    const running = generate(controllerFor(model, {}, stateRoot, emitted, []), history);
+    await predictionStarted;
+
+    assert.equal(reasoningWasImmediate, true);
+    assert.equal(finalWasBuffered, true);
+    assert.deepEqual(emitted.map((event) => event.content), ["Inspecting project structure..."]);
+
+    releasePrediction();
+    await running;
+    assert.deepEqual(
+      emitted.filter((event) => event.kind === "fragment").map((event) => event.content),
+      ["Inspecting project structure...", "Complete."],
+    );
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("RAG search tool calls receive a stable compactor session id", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-rag-session-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -439,6 +660,142 @@ function fullArchitectureToolSchema() {
     },
   };
 }
+
+test("negative network scope does not require the network architecture contract", async () => {
+  const { networkedArchitectureContractRequired } = require("../dist/generator.js");
+  assert.equal(networkedArchitectureContractRequired(
+    "네트워크, 매치메이킹, 서버 기능은 이번에는 건드리지 말고 로컬 2인 기능만 구현해.",
+  ), false);
+  assert.equal(networkedArchitectureContractRequired(
+    "Implement authoritative multiplayer RPC ownership and server replication.",
+  ), true);
+  assert.equal(networkedArchitectureContractRequired(
+    "Do not change network or server features; implement local hotseat only.",
+  ), false);
+});
+
+test("conversation session is injected into direct evidence tools", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-evidence-session-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const model = {
+      identifier: "evidence-session-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onToolCallRequestStart(1, { toolCallId: "read-1" });
+        opts.onToolCallRequestNameReceived(1, "read_file_range");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"A.cpp","startLine":1,"endLine":10}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "read-1",
+            type: "function",
+            name: "read_file_range",
+            arguments: { path: "A.cpp", startLine: 1, endLine: 10 },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const tools = [{
+      type: "function",
+      function: {
+        name: "read_file_range",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" }, sessionId: { type: "string" } },
+        },
+      },
+    }];
+    const history = Chat.empty();
+    history.append("user", "inspect A.cpp");
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    const end = emitted.find((event) => event.kind === "end");
+    assert.ok(end.request.arguments.sessionId);
+    assert.equal(JSON.parse(emitted.find((event) => event.kind === "args").content).sessionId, end.request.arguments.sessionId);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("semantic blocker rejects forbidden evidence calls but allows forward mutation", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-semantic-blocker-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let advertisedTools = [];
+    const model = {
+      identifier: "semantic-blocker-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+        for (const [callId, name] of [[1, "search_files"], [2, "replace_in_file"]]) {
+          opts.onToolCallRequestStart(callId, { toolCallId: `call-${callId}` });
+          opts.onToolCallRequestNameReceived(callId, name);
+          opts.onToolCallRequestArgumentFragmentGenerated(callId, "{}");
+          opts.onToolCallRequestEnd(callId, {
+            toolCallRequest: { id: `call-${callId}`, type: "function", name, arguments: {} },
+          });
+        }
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const blocker = {
+      ok: false,
+      errorCode: "EVIDENCE_STAGNATION_REPEAT",
+      taskAuthorization: {
+        taskSessionId: "task-semantic-forward",
+        ownerCapability: "owner-semantic-forward",
+      },
+      stopCurrentWorkflow: false,
+      stopCurrentPhase: true,
+      phaseBoundary: "evidence",
+      doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
+      agentInstruction: "Do not call another evidence tool.",
+      control: {
+        version: 1,
+        phase: "search_files",
+        status: "Blocked",
+        nextActionIsTool: false,
+        retryPolicy: "forbidden",
+        blockerFingerprint: "loop-1",
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "구현을 완료해줘" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "old-search", type: "function", name: "search_files", arguments: { query: "RestartMatch" },
+      } }] },
+      { role: "tool", content: [{ type: "toolCallResult", toolCallId: "old-search", name: "search_files", content: JSON.stringify(blocker) }] },
+    ] });
+    const tools = ["search_files", "read_file", "replace_in_file"].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+    const controller = controllerFor(model, {}, stateRoot, emitted, tools);
+
+    await generate(controller, history);
+
+    assert.deepEqual(advertisedTools, ["replace_in_file"]);
+    assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "search_files"), false);
+    assert.equal(emitted.some((event) => event.kind === "failure" && /semantic blocker forbids search_files/.test(event.error)), true);
+    assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "replace_in_file"), true);
+    assert.deepEqual(activeCheckpoint(stateRoot).semanticBlocker.forbiddenTools.sort(), [
+      "read_file", "read_file_range", "read_symbol", "search_files",
+    ]);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
 
 function completeArchitectureProposal(decision = "replanned") {
   return {
@@ -1259,7 +1616,7 @@ test("one LM Studio conversation keeps one checkpoint session across mutable lin
     const sessionDirs = fs.readdirSync(stateRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && entry.name !== "_base");
     assert.equal(sessionDirs.length, 1);
-    assert.equal(activeCheckpoint(stateRoot).objective, "continue");
+    assert.equal(activeCheckpoint(stateRoot).objective, "inspect the project");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -1307,6 +1664,48 @@ test("recovery checkpoint bypasses a stale required work-tool gate", async () =>
 
     assert.equal(emitted.filter((event) => event.kind === "end").length, 1);
     assert.equal(emitted.filter((event) => event.kind === "failure").length, 0);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("control plane rejects the right required tool with wrong server-owned arguments", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-args-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const model = {
+      identifier: "required-args-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onToolCallRequestStart(1, { toolCallId: "wrong-search" });
+        opts.onToolCallRequestNameReceived(1, "search_files");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"query":"RestartMatch","path":"project://Source"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "wrong-search",
+            type: "function",
+            name: "search_files",
+            arguments: { query: "RestartMatch", path: "project://Source" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "continue");
+    history.append("assistant", JSON.stringify({
+      requiredNextTool: "search_files",
+      requiredNextToolArgs: { query: "HandlePlaceStone", path: "project://Source" },
+    }));
+    await generate(controllerFor(model, {}, stateRoot, emitted, [{ type: "function", function: { name: "search_files" } }]), history);
+
+    assert.equal(emitted.some((event) => event.kind === "end"), false);
+    assert.equal(emitted.some((event) => event.kind === "failure" && /requiredNextToolArgs/.test(event.error)), true);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -1558,7 +1957,29 @@ test("tool call stream is identical before and after forced context compaction",
   const beforeLimit = await runScenario(false);
   const afterLimit = await runScenario(true);
 
-  assert.deepEqual(afterLimit.emitted, beforeLimit.emitted);
+  const normalizeInjectedSession = (events) => events.map((event) => {
+    if (event.kind === "args" && event.content) {
+      const parsed = JSON.parse(event.content);
+      if (parsed.sessionId) parsed.sessionId = "<conversation-session>";
+      return { ...event, content: JSON.stringify(parsed) };
+    }
+    if (event.kind === "end" && event.request?.arguments?.sessionId) {
+      return {
+        ...event,
+        request: {
+          ...event.request,
+          arguments: { ...event.request.arguments, sessionId: "<conversation-session>" },
+        },
+      };
+    }
+    return event;
+  });
+  assert.deepEqual(normalizeInjectedSession(afterLimit.emitted), normalizeInjectedSession(beforeLimit.emitted));
+  assert.notEqual(
+    afterLimit.emitted.find((event) => event.kind === "end").request.arguments.sessionId,
+    beforeLimit.emitted.find((event) => event.kind === "end").request.arguments.sessionId,
+    "independent LM Studio conversations must not share evidence-cache scope",
+  );
   assert.deepEqual(afterLimit.captured.rawTools, beforeLimit.captured.rawTools);
   assert.equal(afterLimit.emitted.filter((event) => event.kind === "start").length, 2);
   assert.equal(afterLimit.emitted.filter((event) => event.kind === "end").length, 2);

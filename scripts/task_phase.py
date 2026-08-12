@@ -226,7 +226,15 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
         elif status == "completed":
             next_action = ""
         elif slice_plan_required:
-            next_action = "unreal_task_define_slices"
+            # Feature intent resolves the slice and binds exact snapshots inside
+            # the same model-facing call. Exposing define_slices here recreates
+            # the resolver -> define -> resolver ceremony that the atomic gate
+            # is specifically intended to remove.
+            next_action = (
+                "unreal_feature_intent_resolve"
+                if "unreal_feature_intent_resolve" in pending_gates
+                else "unreal_task_define_slices"
+            )
         elif job_in_progress:
             next_action = "unreal_task_status"
         elif checkpoint_conflicts:
@@ -343,6 +351,16 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             }
         if next_action:
             payload["nextAction"] = next_action
+            payload["nextActionIsTool"] = bool(
+                next_action in required_gates
+                or next_action in {
+                    "unreal_task_approve",
+                    "unreal_task_resume",
+                    "unreal_task_define_slices",
+                    "unreal_task_status",
+                }
+                or next_action.startswith("unreal_task_checkpoint:")
+            )
         if runtime_status:
             payload["runtimeDebug"] = {
                 "status": runtime_status,

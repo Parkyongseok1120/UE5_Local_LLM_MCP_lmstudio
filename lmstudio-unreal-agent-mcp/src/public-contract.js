@@ -9,6 +9,17 @@ function compactTaskAuthorization(value) {
   return compact;
 }
 
+function withCompactTaskAuthorization(argumentsValue, authorization) {
+  const args = argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)
+    ? { ...argumentsValue }
+    : {};
+  const ownership = compactTaskAuthorization(authorization);
+  if (ownership && typeof ownership === "object" && Object.keys(ownership).length) {
+    args.taskAuthorization = ownership;
+  }
+  return args;
+}
+
 function sanitizeModelPayload(value) {
   if (Array.isArray(value)) return value.map((item) => sanitizeModelPayload(item));
   if (!value || typeof value !== "object") return value;
@@ -24,4 +35,5 @@ function sanitizeModelPayload(value) {
 module.exports = {
   compactTaskAuthorization,
   sanitizeModelPayload,
+  withCompactTaskAuthorization,
 };

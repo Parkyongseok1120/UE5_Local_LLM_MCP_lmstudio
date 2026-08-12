@@ -230,6 +230,120 @@ function compactTaskRouteOwnership(value) {
   return { taskSessionId, ownerCapability };
 }
 
+function normalizeToolNames(value, sourceTool = "") {
+  const candidates = Array.isArray(value)
+    ? value
+    : (value === true ? [sourceTool] : (typeof value === "string" ? [value] : []));
+  return [...new Set(candidates
+    .map((item) => String(item || "").trim())
+    .filter((item) => /^[a-z][a-z0-9_-]{1,160}$/i.test(item)))];
+}
+
+function collectSemanticBlockerFields(value, state, sourceTool = "") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const control = compactProtocolControl(value.control);
+  const retryTargets = normalizeToolNames(value.doNotRetry, sourceTool);
+  const explicitForbiddenTools = normalizeToolNames(value.doNotRetryTools, sourceTool);
+  const errorCode = String(value.errorCode || "");
+  const stopCurrentWorkflow = value.stopCurrentWorkflow === true;
+  const evidencePhaseBoundary = (
+    (value.stopCurrentPhase === true && String(value.phaseBoundary || "").toLowerCase() === "evidence")
+    || /^EVIDENCE_STAGNATION(?:_REPEAT)?$/i.test(errorCode)
+  );
+  const forbiddenTools = [...new Set([
+    ...explicitForbiddenTools,
+    ...((evidencePhaseBoundary || stopCurrentWorkflow) ? retryTargets : []),
+  ])];
+  const requiredNextTool = String(value.requiredNextTool || (
+    value.nextActionIsTool === true ? value.nextAction : ""
+  ) || "").trim();
+  const handoffBoundary = Boolean(requiredNextTool && explicitForbiddenTools.length > 0);
+
+  // retryPolicy=forbidden is often derived from retryable=false and does not
+  // mean an entire tool family is forbidden. READ_REPEAT_DETECTED and corrected
+  // write retries must remain possible with different arguments.
+  if (!evidencePhaseBoundary && !handoffBoundary && !(stopCurrentWorkflow && forbiddenTools.length > 0)) return;
+
+  const scope = evidencePhaseBoundary
+    ? "evidence_phase"
+    : (handoffBoundary ? "until_required_tool_success" : "workflow");
+
+  const prior = state.semanticBlocker && typeof state.semanticBlocker === "object"
+    ? state.semanticBlocker
+    : {};
+  const preserveEvidencePhase = (
+    prior.active === true
+    && prior.scope === "evidence_phase"
+    && evidencePhaseBoundary
+  );
+  state.semanticBlocker = {
+    active: true,
+    scope: preserveEvidencePhase ? prior.scope : scope,
+    errorCode: String(preserveEvidencePhase ? prior.errorCode : (errorCode || prior.errorCode || "")).slice(0, 120),
+    blockerFingerprint: String(
+      control?.blockerFingerprint || value.blockerFingerprint || prior.blockerFingerprint || "",
+    ).slice(0, 160),
+    stopCurrentWorkflow: preserveEvidencePhase
+      ? prior.stopCurrentWorkflow === true
+      : stopCurrentWorkflow,
+    stopCurrentPhase: preserveEvidencePhase
+      ? prior.stopCurrentPhase === true
+      : evidencePhaseBoundary,
+    phaseBoundary: preserveEvidencePhase ? prior.phaseBoundary : (evidencePhaseBoundary ? "evidence" : ""),
+    forbiddenTools: [...new Set([
+      ...(preserveEvidencePhase && Array.isArray(prior.forbiddenTools) ? prior.forbiddenTools : []),
+      ...forbiddenTools,
+    ])].slice(-32),
+    clearOnTool: String(preserveEvidencePhase ? prior.clearOnTool : (requiredNextTool || "")).slice(0, 160),
+    clearOnToolArgs: preserveEvidencePhase
+      ? (prior.clearOnToolArgs || null)
+      : (requiredNextTool && value.requiredNextToolArgs && typeof value.requiredNextToolArgs === "object"
+        ? value.requiredNextToolArgs
+        : null),
+    agentInstruction: String(
+      preserveEvidencePhase
+        ? prior.agentInstruction
+        : (value.agentInstruction || value.userMessage || prior.agentInstruction || ""),
+    ).slice(0, 800),
+  };
+}
+
+function isContinuationUserMessage(text) {
+  const source = String(text || "").trim();
+  return /^(?:continue|resume|retry|keep\s+going|go\s+on|계속(?:해|해서|\s*진행(?:해|하세요)?|\s*작업(?:해|하세요)?)?|이어(?:서)?(?:\s*진행(?:해|하세요)?)?|재개(?:해|하세요)?|중단한\s*곳부터\s*(?:계속|진행)(?:해|하세요)?|다시\s*시도(?:해|하세요)?)[\s.!?]*$/i.test(source);
+}
+
+function mutationToolName(name) {
+  const normalized = String(name || "").trim().toLowerCase();
+  return ["replace_in_file", "write_file", "apply_edit_bundle"].some(
+    (candidate) => normalized === candidate || normalized.endsWith(`_${candidate}`),
+  );
+}
+
+function toolArgumentsSatisfy(requiredArgs, actualArgs) {
+  if (!requiredArgs || typeof requiredArgs !== "object" || Array.isArray(requiredArgs)) return true;
+  const actual = actualArgs && typeof actualArgs === "object" && !Array.isArray(actualArgs)
+    ? actualArgs
+    : {};
+  const matches = (expected, received, key = "") => {
+    if (key === "sessionId" || key === "session_id") return true;
+    if (typeof expected === "string" && /^<[^>]+>$/.test(expected.trim())) return true;
+    if (Array.isArray(expected)) {
+      return Array.isArray(received)
+        && expected.length === received.length
+        && expected.every((item, index) => matches(item, received[index]));
+    }
+    if (expected && typeof expected === "object") {
+      if (!received || typeof received !== "object" || Array.isArray(received)) return false;
+      return Object.entries(expected).every(([childKey, child]) => (
+        matches(child, received[childKey], childKey)
+      ));
+    }
+    return stableStringify(received) === stableStringify(expected);
+  };
+  return Object.entries(requiredArgs).every(([key, expected]) => matches(expected, actual[key], key));
+}
+
 function boundedArchitecturePatchPreview(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const allowed = [
@@ -327,8 +441,11 @@ function collectControlFields(value, state) {
   let directRequiredNextTool = null;
   let directAction = protocolControl?.nextAction || "";
   let directActionField = protocolControl?.nextAction ? "control.nextAction" : "";
-  let directArgs = protocolControl && value.nextActionArgs && typeof value.nextActionArgs === "object"
-    ? value.nextActionArgs
+  // Only requiredNextToolArgs are server-owned equality constraints. Ordinary
+  // nextActionArgs are model-facing templates/defaults and may deliberately
+  // contain placeholders or omit values the model must derive.
+  let directArgs = value.requiredNextToolArgs && typeof value.requiredNextToolArgs === "object"
+    ? value.requiredNextToolArgs
     : null;
   for (const [key, child] of Object.entries(value)) {
     if (key === "control") {
@@ -344,8 +461,8 @@ function collectControlFields(value, state) {
           directActionField = key;
         }
       }
-    } else if (!protocolControl && ["requiredNextToolArgs", "nextActionArgs"].includes(key) && child && typeof child === "object") {
-      if (!directArgs || key === "nextActionArgs") directArgs = child;
+    } else if (!protocolControl && key === "requiredNextToolArgs" && child && typeof child === "object") {
+      directArgs = child;
     } else if (["taskAuthorization", "routeAuthorization"].includes(key)) {
       const ownership = compactTaskRouteOwnership(child);
       if (ownership) state.taskRouteOwnership = ownership;
@@ -427,6 +544,25 @@ function collectControlFields(value, state) {
   if (directArgs && state.requiredNextTool) state.requiredNextToolArgs = directArgs;
 }
 
+function semanticBlockerClearToolSucceeded(blocker, matchedCallName, matchedCall, payload) {
+  if (!blocker || blocker.scope !== "until_required_tool_success") return false;
+  if (!blocker.clearOnTool || !toolNamesMatch(blocker.clearOnTool, matchedCallName)) return false;
+  const requiredArgs = blocker.clearOnToolArgs && typeof blocker.clearOnToolArgs === "object"
+    ? blocker.clearOnToolArgs
+    : null;
+  if (requiredArgs) {
+    const actualArgs = matchedCall?.arguments && typeof matchedCall.arguments === "object"
+      ? matchedCall.arguments
+      : {};
+    if (!toolArgumentsSatisfy(requiredArgs, actualArgs)) return false;
+  }
+  const normalized = String(matchedCallName || "").toLowerCase();
+  if (normalized.endsWith("search_files")) {
+    return payload?.searchComplete === true || Array.isArray(payload?.results) || Array.isArray(payload?.fileNameResults);
+  }
+  return true;
+}
+
 function semanticAnchors(content) {
   const lines = String(content || "").replace(/^\[path-metadata:[^\n]*\]\r?\n?/, "")
     .replace(/^\[line-endings:[^\n]*\]\r?\n?/, "")
@@ -483,6 +619,8 @@ function compactToolEvidence(call, payload, resultContent = "") {
       fileNameResultCount: Array.isArray(payload?.fileNameResults) ? payload.fileNameResults.length : 0,
       searchComplete: payload?.searchComplete === true,
       matchedFiles: [...new Set(matches.map((row) => String(row?.file || "")).filter(Boolean))].slice(0, 12),
+      cached: payload?.cached === true,
+      repeatDetected: payload?.repeatDetected === true,
     };
   }
   if (normalized.endsWith("list_directory")) {
@@ -605,6 +743,9 @@ function extractControlState(messages, prior = {}, options = {}) {
     architectureControl: canResume && prior.architectureControl
       ? { ...prior.architectureControl }
       : null,
+    semanticBlocker: canResume && prior.semanticBlocker
+      ? { ...prior.semanticBlocker }
+      : null,
     failedToolResults: canResume && Array.isArray(prior.failedToolResults) ? [...prior.failedToolResults] : [],
     facts: canResume && Array.isArray(prior.facts) ? [...prior.facts] : [],
     evidenceFacts: canResume && Array.isArray(prior.evidenceFacts) ? [...prior.evidenceFacts] : [],
@@ -620,6 +761,19 @@ function extractControlState(messages, prior = {}, options = {}) {
       // Latest real user message always wins — pinning the first turn causes goal drift.
       // Synthetic LM Studio title prompts must not replace the active goal.
       const userText = snapshot.text.trim();
+      const continuation = Boolean(state.objective) && isContinuationUserMessage(userText);
+      if (
+        state.semanticBlocker?.active
+        && state.objective
+        && userText !== state.objective
+        && !continuation
+      ) {
+        state.semanticBlocker = null;
+      }
+      // A continuation utterance advances the existing task; it is not a new
+      // objective. Replacing the objective here loses intent after compaction
+      // and can silently turn an implementation task into a generic "continue".
+      if (continuation) continue;
       state.objective = userText.slice(0, 1200);
       state.constraints = state.constraints.filter((item) =>
         typeof item === "string" && !item.startsWith("active_goal:") && !item.startsWith("read_only_"));
@@ -638,10 +792,6 @@ function extractControlState(messages, prior = {}, options = {}) {
       state.facts.push(`tool:${call.name}`);
       if (call.id) toolCallsById.set(call.id, call);
       else anonymousToolCalls.push(call);
-      const normalizedName = String(call.name || "").toLowerCase();
-      if (["replace_in_file", "write_file"].some((name) => normalizedName === name || normalizedName.endsWith(`_${name}`))) {
-        state.mutationGeneration += 1;
-      }
     }
     for (const result of snapshot.toolResults) {
       const matchedCall = result.toolCallId
@@ -677,6 +827,7 @@ function extractControlState(messages, prior = {}, options = {}) {
       const resultPayloads = parseJsonObjects(result.content);
       for (const payload of resultPayloads) {
         collectControlFields(payload, state);
+        collectSemanticBlockerFields(payload, state, matchedCallName);
       }
       if (toolResultSucceeded(result)) {
         const evidence = compactToolEvidence(matchedCall, resultPayloads.slice(-1)[0] || {}, result.content);
@@ -694,12 +845,39 @@ function extractControlState(messages, prior = {}, options = {}) {
           ).slice(0, 400),
         });
       }
+      if (toolResultSucceeded(result) && mutationToolName(matchedCallName)) {
+        const reportedMutationGeneration = resultPayloads
+          .map((payload) => Number(payload?.mutationGeneration))
+          .filter((value) => Number.isFinite(value) && value >= 0)
+          .at(-1);
+        if (reportedMutationGeneration === undefined) {
+          state.mutationGeneration += 1;
+        } else {
+          state.mutationGeneration = Math.max(state.mutationGeneration, reportedMutationGeneration);
+        }
+        // Evidence-level stop/do-not-retry controls remain authoritative until
+        // the user changes the goal or a successful mutation changes the source
+        // snapshot that made the evidence stale.
+        state.semanticBlocker = null;
+      }
+      if (
+        toolResultSucceeded(result)
+        && semanticBlockerClearToolSucceeded(
+          state.semanticBlocker,
+          matchedCallName,
+          matchedCall,
+          resultPayloads.slice(-1)[0] || {},
+        )
+      ) {
+        state.semanticBlocker = null;
+      }
       // A generated call is only intent. Keep the required tool gate until the
       // paired result is observed and is explicitly non-failing.
       if (
         state.requiredNextTool
         && toolNamesMatch(state.requiredNextTool, matchedCallName)
         && toolResultSucceeded(result)
+        && toolArgumentsSatisfy(state.requiredNextToolArgs, matchedCall.arguments)
       ) {
         state.requiredNextTool = null;
         state.requiredNextToolRef = null;
@@ -736,6 +914,22 @@ function extractControlState(messages, prior = {}, options = {}) {
           merged.semanticAnchors = priorFact.semanticAnchors || [];
         }
         evidenceByKey.set(key, merged);
+      } else if (priorFact && tool.endsWith("search_files")) {
+        const merged = { ...priorFact, ...fact };
+        const repeatedWithoutFreshRows = fact.cached === true || fact.repeatDetected === true;
+        if (repeatedWithoutFreshRows) {
+          merged.resultCount = Math.max(Number(priorFact.resultCount || 0), Number(fact.resultCount || 0));
+          merged.fileNameResultCount = Math.max(
+            Number(priorFact.fileNameResultCount || 0),
+            Number(fact.fileNameResultCount || 0),
+          );
+          merged.searchComplete = priorFact.searchComplete === true || fact.searchComplete === true;
+          merged.matchedFiles = [...new Set([
+            ...(Array.isArray(priorFact.matchedFiles) ? priorFact.matchedFiles : []),
+            ...(Array.isArray(fact.matchedFiles) ? fact.matchedFiles : []),
+          ])].slice(0, 12);
+        }
+        evidenceByKey.set(key, merged);
       } else {
         evidenceByKey.set(key, fact);
       }
@@ -748,6 +942,15 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
   const control = extractControlState(messages, prior, options);
   const snapshots = snapshotMessages(messages || []);
   const generation = Number(prior.checkpointGeneration || 0) + 1;
+  if (
+    control.semanticBlocker?.active
+    && control.requiredNextTool
+    && control.semanticBlocker.forbiddenTools.some((name) => toolNamesMatch(name, control.requiredNextTool))
+  ) {
+    control.requiredNextTool = null;
+    control.requiredNextToolRef = null;
+    control.requiredNextToolArgs = null;
+  }
   return {
     schemaVersion: COMPACTION_SCHEMA_VERSION,
     checkpointGeneration: generation,
@@ -769,6 +972,7 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     architectureProposal: control.architectureProposal,
     protocolControl: control.protocolControl,
     architectureControl: control.architectureControl,
+    semanticBlocker: control.semanticBlocker,
     failedToolResults: control.failedToolResults,
     requiredNextTool: control.requiredNextTool ? {
       name: control.requiredNextTool,
@@ -1045,6 +1249,15 @@ function summarizeOldMessages(messages, checkpoint) {
   if (checkpoint.architectureControl) {
     lines.push(`architectureControl=${JSON.stringify(checkpoint.architectureControl)}`);
   }
+  if (checkpoint.semanticBlocker?.active) {
+    lines.push(`semanticBlocker=${JSON.stringify(checkpoint.semanticBlocker)}`);
+    lines.push(
+      "semanticBlockerInstruction=This server-owned blocker survives compaction. Do not call any forbiddenTools. "
+      + "If scope=evidence_phase, only discovery is closed: continue from retained evidence with an allowed "
+      + "write/validation/final action. If scope=until_required_tool_success, call clearOnTool once. "
+      + "Never retry a forbidden tool merely because older tool results were compacted.",
+    );
+  }
   if (checkpoint.failedToolResults?.length) {
     lines.push(`failedToolResults=${JSON.stringify(checkpoint.failedToolResults)}`);
   }
@@ -1187,6 +1400,11 @@ function validateCheckpoint(checkpoint) {
     if (!Number.isFinite(count) || count < 0) return false;
   }
   if (checkpoint.sourceHistoryHash !== undefined && typeof checkpoint.sourceHistoryHash !== "string") return false;
+  if (checkpoint.semanticBlocker !== undefined && checkpoint.semanticBlocker !== null) {
+    if (typeof checkpoint.semanticBlocker !== "object" || Array.isArray(checkpoint.semanticBlocker)) return false;
+    if (!Array.isArray(checkpoint.semanticBlocker.forbiddenTools)) return false;
+    if (checkpoint.semanticBlocker.forbiddenTools.some((name) => typeof name !== "string" || !name.trim())) return false;
+  }
   if (checkpoint.evidenceFacts !== undefined && !Array.isArray(checkpoint.evidenceFacts)) return false;
   if (
     checkpoint.taskRouteOwnership !== undefined
@@ -1211,6 +1429,10 @@ module.exports = {
   toolResultSucceeded,
   isNonToolNextAction,
   compactTaskRouteOwnership,
+  collectSemanticBlockerFields,
+  isContinuationUserMessage,
+  mutationToolName,
+  toolArgumentsSatisfy,
   collectControlFields,
   isReadOnlyUserGoal,
   isMetaUserMessage,

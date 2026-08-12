@@ -62,8 +62,16 @@ function stableAgentToolNames(allRegistered) {
 function phaseVisibleAgentToolNames(profileAllowed, context = {}) {
   const allowed = new Set(profileAllowed || []);
   const status = String(context.status || "none");
-  if (status === "none") return allowed;
   const manifest = loadStableManifest();
+  if (status === "none") {
+    // The planner and task state live in unreal-rag. Advertising route-owned
+    // build/write tools before that provider has created a route invites the
+    // model to invent taskAuthorization. A clean startup therefore exposes
+    // only controls and source discovery; tools/list expands after the
+    // server-owned task route appears.
+    const unrouted = new Set(manifest.agentUnroutedDiscoverable || []);
+    return new Set([...allowed].filter((name) => unrouted.has(name)));
+  }
   const always = new Set(manifest.agentAlwaysDiscoverable || []);
   const route = context.route && typeof context.route === "object"
     ? context.route

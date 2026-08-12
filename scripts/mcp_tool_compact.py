@@ -47,6 +47,7 @@ def _compact_gate_completion(value: Any) -> dict[str, Any] | None:
             "error",
             "nextAction",
             "nextActionArgs",
+            "recoveryContext",
             "firstBlocker",
             "doNotRetryUnchanged",
             "reuseCurrentTaskAuthorization",
@@ -181,6 +182,7 @@ def compact_code_sketch_payload(
             "blockerCount",
             "nextAction",
             "nextActionArgs",
+            "recoveryContext",
             "doNotRetryUnchanged",
             "reuseCurrentTaskAuthorization",
             "guidance",
@@ -341,6 +343,7 @@ def compact_agent_plan_payload(
             "authorizationRetryPolicy",
             "contextCompactorRouting",
             "nextAction",
+            "nextActionIsTool",
             "nextActionArgs",
             "executionContract",
             "agentInstruction",
@@ -393,6 +396,7 @@ def compact_agent_plan_payload(
             "writeToolAuthorizationArgs",
             "authorizationRetryPolicy",
             "nextAction",
+            "nextActionIsTool",
             "nextActionArgs",
             "executionContract",
             "agentInstruction",
@@ -462,8 +466,33 @@ def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> di
 
     return {
         "ok": payload.get("ok"),
-        "control": payload.get("control"),
-        "architectureState": payload.get("architectureState"),
+        "errorCode": payload.get("errorCode"),
+        "error": _shrink_value(payload.get("error"), max_str=800, max_list=3),
+        "control": _shrink_value(
+            payload.get("control"), max_str=500, max_list=12
+        ),
+        "architectureState": _shrink_value(
+            payload.get("architectureState"), max_str=500, max_list=12
+        ),
+        "retryable": payload.get("retryable"),
+        "doNotRetry": _shrink_value(payload.get("doNotRetry"), max_str=200, max_list=8),
+        "doNotRetryTools": _shrink_value(
+            payload.get("doNotRetryTools"), max_str=200, max_list=8
+        ),
+        "stopCurrentWorkflow": payload.get("stopCurrentWorkflow"),
+        "stopCurrentPhase": payload.get("stopCurrentPhase"),
+        "phaseBoundary": payload.get("phaseBoundary"),
+        "agentInstruction": _shrink_value(
+            payload.get("agentInstruction"), max_str=1_200, max_list=3
+        ),
+        "requiredNextTool": payload.get("requiredNextTool"),
+        "requiredNextToolArgs": _shrink_value(
+            payload.get("requiredNextToolArgs"), max_str=500, max_list=8
+        ),
+        "nextAction": payload.get("nextAction"),
+        "nextActionArgs": _shrink_value(
+            payload.get("nextActionArgs"), max_str=500, max_list=8
+        ),
         "_structuredTruncated": True,
         "summaryKeys": list(payload.keys())[:20],
     }
@@ -709,7 +738,15 @@ def compact_architecture_payload(payload: dict[str, Any], detail_level: str = "c
         "gateCompletion": payload.get("gateCompletion"),
         "errorCode": payload.get("errorCode"),
         "retryable": payload.get("retryable"),
+        "doNotRetry": payload.get("doNotRetry"),
+        "doNotRetryTools": payload.get("doNotRetryTools"),
         "stopCurrentWorkflow": payload.get("stopCurrentWorkflow"),
+        "stopCurrentPhase": payload.get("stopCurrentPhase"),
+        "phaseBoundary": payload.get("phaseBoundary"),
+        "requiredNextTool": payload.get("requiredNextTool"),
+        "requiredNextToolArgs": payload.get("requiredNextToolArgs"),
+        "nextAction": payload.get("nextAction"),
+        "nextActionArgs": payload.get("nextActionArgs"),
         "requiredNextAction": payload.get("requiredNextAction"),
         "nextActionIsTool": payload.get("nextActionIsTool"),
         "agentInstruction": payload.get("agentInstruction"),

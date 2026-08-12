@@ -34,6 +34,10 @@ def _agent_phase_catalog(route: dict | None = None) -> set[str]:
     return allowed & visible
 
 
+def _agent_unrouted_catalog() -> set[str]:
+    return set(MANIFEST["agentEssential"]) & set(MANIFEST["agentUnroutedDiscoverable"])
+
+
 def _node_exe() -> str:
     node = shutil.which("node")
     if not node:
@@ -169,7 +173,7 @@ def test_clean_startup_advertises_manifest_agent_essential(tmp_path: Path) -> No
     )
     try:
         names = _list_agent_tools(client)
-        assert names == set(MANIFEST["agentEssential"])
+        assert names == _agent_unrouted_catalog()
     finally:
         client.close()
     stderr = stderr_path.read_text(encoding="utf-8")
@@ -316,7 +320,7 @@ def test_scope_mismatch_keeps_catalog_but_blocks_mutation(tmp_path: Path) -> Non
     try:
         # No activeProject is configured, so the project-bound task cannot own
         # this catalog yet; retain the discovery profile until project selection.
-        assert _list_agent_tools(client) == set(MANIFEST["agentEssential"])
+        assert _list_agent_tools(client) == _agent_unrouted_catalog()
     finally:
         client.close()
 
@@ -413,7 +417,7 @@ def test_cross_server_clean_startup_tools_list_matches_manifest(tmp_path: Path) 
         )
         rag_listed = rag.request("tools/list", {}, req_id=2)
         rag_names = {tool["name"] for tool in rag_listed["result"]["tools"]}
-        assert agent_names == set(MANIFEST["agentEssential"])
+        assert agent_names == _agent_unrouted_catalog()
         assert rag_names == set(MANIFEST["ragEssential"])
     finally:
         agent.close()

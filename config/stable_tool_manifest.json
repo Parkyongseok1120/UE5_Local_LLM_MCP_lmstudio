@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Default install tool exposure. With no active task the essential discovery catalog is visible; with an active task tools/list is reduced to always-discoverable controls plus the server-owned route activeTools. Call-time route authorization remains authoritative.",
+  "description": "Default install tool exposure. With no active task only agent controls and source discovery are visible; route-owned writes/builds appear after unreal-rag creates the server-owned task route. Call-time route authorization remains authoritative.",
   "ragEssential": [
     "unreal_get_active_project",
     "unreal_set_active_project",
@@ -84,6 +84,18 @@
     "list_active_tasks",
     "cancel_active_task",
     "quarantine_corrupt_task"
+  ],
+  "agentUnroutedDiscoverable": [
+    "get_workspace_info",
+    "get_active_project",
+    "list_active_tasks",
+    "cancel_active_task",
+    "quarantine_corrupt_task",
+    "list_directory",
+    "read_file",
+    "read_file_range",
+    "read_symbol",
+    "search_files"
   ],
   "projectSwitchCanonical": "unreal_set_active_project",
   "docReferencedTools": [

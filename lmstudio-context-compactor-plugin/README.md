@@ -8,10 +8,13 @@ compacted `Chat` to the configured underlying local model when the remaining bud
 With zero or multiple loaded LLMs, the plugin fails with a list of candidates and asks for an
 exact model key. The existing `mcp/unreal-agent` and `mcp/unreal-rag` plugins remain tool providers.
 
-Version 0.3.5 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
+Version 0.4.13 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
 before every prediction and buffers model text/tool calls until LM Studio confirms a safe stop.
 Context-limit and max-output truncations are discarded instead of being presented as completed work.
-Strict tool-call rejection remains off by default, so multiple tool calls are preserved.
+Explicit reasoning fragments stream as live progress while final text and tool calls remain atomic.
+The latest server-owned `activeTools` route is also intersected with the combined LM Studio catalog
+before prediction, preventing stale cross-MCP tool schemas from causing avoidable rejected calls.
+Strict tool-call rejection remains off by default, so multiple valid tool calls are preserved.
 
 > **Important — you must select this plugin as the chat model**  
 > 1. Load the underlying LLM (e.g. Qwen) once; leave it loaded.  

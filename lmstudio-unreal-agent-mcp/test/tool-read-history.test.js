@@ -89,7 +89,7 @@ test("novel line ranges are allowed after many prior reads", () => {
   assert.ok(decision.novelLines > 0);
 });
 
-test("fully covered sub-range is cache/covered, not stagnation with wrong body", () => {
+test("fully covered sub-range is materialized once instead of returning a wider wrong body", () => {
   clearReadSuccessHistory();
   const tool = "read_file_range";
   const wide = normalizeReadToolArgs(tool, { path: "Source/Foo.cpp", startLine: 100, endLine: 200 });
@@ -97,13 +97,13 @@ test("fully covered sub-range is cache/covered, not stagnation with wrong body",
 
   const nested = normalizeReadToolArgs(tool, { path: "Source/Foo.cpp", startLine: 120, endLine: 150 });
   const decision = checkReadRepeat(tool, nested, CONTEXT);
-  assert.strictEqual(decision.action, "cache");
-  assert.strictEqual(decision.reason, "READ_REPEAT_DETECTED");
+  assert.strictEqual(decision.action, "allow");
+  assert.strictEqual(decision.materializeCoveredRange, true);
   assert.strictEqual(decision.fullyCovered, true);
-  assert.strictEqual(decision.cachedContent, "wide-100-200");
+  assert.strictEqual(decision.cachedContent, undefined);
 });
 
-test("different fully covered sub-ranges share one file stagnation budget", () => {
+test("covered sub-range materialization is bounded per file version", () => {
   clearReadSuccessHistory();
   const tool = "read_file_range";
   const wide = normalizeReadToolArgs(tool, { path: "Source/Foo.cpp", startLine: 1, endLine: 200 });
@@ -118,8 +118,15 @@ test("different fully covered sub-ranges share one file stagnation budget", () =
     { path: "Source/Foo.cpp", startLine: 90, endLine: 140 }
   );
 
-  assert.strictEqual(checkReadRepeat(tool, firstNested, CONTEXT).action, "cache");
-  const blocked = checkReadRepeat(tool, secondNested, CONTEXT);
+  const first = checkReadRepeat(tool, firstNested, CONTEXT, { coveredRangeMaterializationBudget: 1 });
+  assert.strictEqual(first.action, "allow");
+  recordReadSuccess(tool, firstNested, CONTEXT, "exact-20-80");
+  const blocked = checkReadRepeat(
+    tool,
+    secondNested,
+    CONTEXT,
+    { coveredRangeMaterializationBudget: 1 },
+  );
   assert.strictEqual(blocked.action, "stagnation");
   assert.strictEqual(blocked.reason, "EVIDENCE_STAGNATION");
   assert.strictEqual(blocked.fullyCovered, true);
@@ -194,9 +201,21 @@ test("covering cache does not leak content across files", () => {
   recordReadSuccess(tool, wideB, ctxB, "FILE-B-BODY");
   const nestedOnB = normalizeReadToolArgs(tool, { path: "Source/B.cpp", startLine: 20, endLine: 40 });
   const covered = checkReadRepeat(tool, nestedOnB, ctxB);
-  assert.strictEqual(covered.action, "cache");
-  assert.strictEqual(covered.cachedContent, "FILE-B-BODY");
+  assert.strictEqual(covered.action, "allow");
+  assert.strictEqual(covered.cachedContent, undefined);
   assert.notStrictEqual(covered.cachedContent, "FILE-A-BODY");
+});
+
+test("conversation session isolates process-global evidence cache and budgets", () => {
+  clearReadSuccessHistory();
+  const tool = "search_files";
+  const args = normalizeReadToolArgs(tool, { query: "RestartMatch", path: "project://Source" });
+  const chatA = { ...CONTEXT, evidenceSessionId: "chat-a" };
+  const chatB = { ...CONTEXT, evidenceSessionId: "chat-b" };
+  recordReadSuccess(tool, args, chatA, '{"results":[{"file":"A.cpp"}]}');
+
+  assert.strictEqual(checkReadRepeat(tool, args, chatA).action, "cache");
+  assert.strictEqual(checkReadRepeat(tool, args, chatB).action, "allow");
 });
 
 test("READ_REPEAT instruction does not force whole-workflow stop wording", () => {
@@ -205,5 +224,6 @@ test("READ_REPEAT instruction does not force whole-workflow stop wording", () =>
   assert.match(text, /Continue with other unread/i);
   assert.doesNotMatch(text, /Finish the analysis from existing evidence/);
   const stagnate = cachedReadInstruction("EVIDENCE_STAGNATION");
-  assert.match(stagnate, /Produce the final analysis now/);
+  assert.match(stagnate, /evidence phase is complete/i);
+  assert.match(stagnate, /write\/validation step/i);
 });

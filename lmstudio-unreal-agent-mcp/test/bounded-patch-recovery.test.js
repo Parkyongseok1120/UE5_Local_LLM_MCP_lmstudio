@@ -37,7 +37,7 @@ test("prior full-file read marks coverage so recovery can skip re-read", () => {
   assert.equal(hasPriorEvidence, true);
 });
 
-test("covered range repeat escalates to stagnation (deadlock trigger)", () => {
+test("covered range is materialized exactly before repeat cache/stagnation", () => {
   clearReadSuccessHistory();
   const context = {
     fileAbsPath: "C:/proj/Source/Mod/File.cpp",
@@ -55,12 +55,26 @@ test("covered range repeat escalates to stagnation (deadlock trigger)", () => {
     { path: "Source/Mod/File.cpp", startLine: 1, endLine: 120 },
     context
   );
-  assert.equal(first.action, "cache");
+  assert.equal(first.action, "allow");
+  assert.equal(first.materializeCoveredRange, true);
+  recordReadSuccess(
+    "read_file_range",
+    { path: "Source/Mod/File.cpp", startLine: 1, endLine: 120 },
+    context,
+    "exact lines 1-120",
+  );
   const second = checkReadRepeat(
     "read_file_range",
     { path: "Source/Mod/File.cpp", startLine: 1, endLine: 120 },
     context
   );
-  assert.equal(second.action, "stagnation");
-  assert.equal(second.reason, "EVIDENCE_STAGNATION");
+  assert.equal(second.action, "cache");
+  assert.equal(second.cachedContent, "exact lines 1-120");
+  const third = checkReadRepeat(
+    "read_file_range",
+    { path: "Source/Mod/File.cpp", startLine: 1, endLine: 120 },
+    context
+  );
+  assert.equal(third.action, "stagnation");
+  assert.equal(third.reason, "EVIDENCE_STAGNATION");
 });

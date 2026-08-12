@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
+_WINDOWS_PROCESS_SNAPSHOT: dict[int, dict[str, Any]] | None = None
 
 
 def _utc_now() -> datetime:
@@ -28,10 +29,61 @@ def _valid_id(value: str) -> bool:
     return bool(value and _ID_RE.match(value))
 
 
+def _windows_process_snapshot() -> dict[int, dict[str, Any]]:
+    """Return one bounded Windows process snapshot for all identity lookups."""
+
+    global _WINDOWS_PROCESS_SNAPSHOT
+    if sys.platform != "win32":
+        return {}
+    if _WINDOWS_PROCESS_SNAPSHOT is not None:
+        return _WINDOWS_PROCESS_SNAPSHOT
+    snapshot: dict[int, dict[str, Any]] = {}
+    try:
+        from process_probe import ProbeTimeout, run_probe
+
+        script = " ".join(
+            (
+                "Get-CimInstance Win32_Process | ForEach-Object {",
+                "[pscustomobject]@{",
+                "ProcessId=[int]$_.ProcessId;",
+                "ParentProcessId=[int]$_.ParentProcessId;",
+                "Name=[string]$_.Name;",
+                "StartedAt=if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')} else {''}",
+                "}",
+                "} | ConvertTo-Json -Compress",
+            )
+        )
+        result = run_probe(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            timeout_sec=2.5,
+        )
+        if not isinstance(result, ProbeTimeout) and result.returncode == 0:
+            parsed = json.loads(str(result.stdout or "null"))
+            for row in parsed if isinstance(parsed, list) else [parsed]:
+                if not isinstance(row, dict):
+                    continue
+                pid = int(row.get("ProcessId") or 0)
+                if pid > 0:
+                    snapshot[pid] = {
+                        "parentPid": int(row.get("ParentProcessId") or 0),
+                        "name": str(row.get("Name") or ""),
+                        "startedAt": str(row.get("StartedAt") or ""),
+                    }
+    except Exception:
+        # Empty snapshot intentionally triggers the direct-parent fallback.
+        pass
+    _WINDOWS_PROCESS_SNAPSHOT = snapshot
+    return snapshot
+
+
 def _pid_alive(pid: int) -> str:
     if pid <= 0:
         return "dead"
     try:
+        if sys.platform == "win32":
+            snapshot = _windows_process_snapshot()
+            if snapshot:
+                return "alive" if pid in snapshot else "dead"
         from process_probe import probe_process_alive
 
         return str(probe_process_alive(pid) or "unknown")
@@ -50,22 +102,7 @@ def _process_name(pid: int) -> str:
         return ""
     try:
         if sys.platform == "win32":
-            from process_probe import ProbeTimeout, run_probe
-
-            result = run_probe(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    (
-                        f"$p = Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\"; "
-                        "if ($null -eq $p) { exit 1 }; Write-Output $p.Name"
-                    ),
-                ],
-            )
-            if isinstance(result, ProbeTimeout) or result.returncode != 0:
-                return ""
-            return str((result.stdout or "").strip())
+            return str(_windows_process_snapshot().get(pid, {}).get("name") or "")
         if Path(f"/proc/{pid}/comm").is_file():
             return Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
         from process_probe import ProbeTimeout, run_probe
@@ -101,23 +138,7 @@ def _process_started_at(pid: int) -> str:
         return ""
     try:
         if sys.platform == "win32":
-            from process_probe import ProbeTimeout, run_probe
-
-            result = run_probe(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    (
-                        f"$p = Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\"; "
-                        "if ($null -eq $p) { exit 1 }; "
-                        "Write-Output ($p.CreationDate.ToUniversalTime().ToString('o'))"
-                    ),
-                ],
-            )
-            if isinstance(result, ProbeTimeout) or result.returncode != 0:
-                return ""
-            return str((result.stdout or "").strip())
+            return str(_windows_process_snapshot().get(pid, {}).get("startedAt") or "")
         ticks = _process_start_ticks(pid)
         if ticks is not None:
             return f"ticks:{ticks}"
@@ -136,22 +157,7 @@ def _parent_pid(pid: int) -> int:
         return 0
     try:
         if sys.platform == "win32":
-            from process_probe import ProbeTimeout, run_probe
-
-            result = run_probe(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    (
-                        f"$p = Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\"; "
-                        "if ($null -eq $p) { exit 1 }; Write-Output $p.ParentProcessId"
-                    ),
-                ],
-            )
-            if isinstance(result, ProbeTimeout) or result.returncode != 0:
-                return 0
-            return int(str((result.stdout or "").strip() or "0"))
+            return int(_windows_process_snapshot().get(pid, {}).get("parentPid") or 0)
         if Path(f"/proc/{pid}/stat").is_file():
             stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
             close = stat.rfind(")")

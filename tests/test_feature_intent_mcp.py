@@ -310,6 +310,96 @@ def test_mcp_feature_intent_resolver_records_compact_bound_gate(
     ] == str(target.resolve())
 
 
+def test_feature_intent_registers_slice_and_binds_in_one_model_call(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "StateOwner.h"
+    source = project / "Source" / "Demo" / "StateOwner.cpp"
+    header.parent.mkdir(parents=True)
+    header.write_text("class FStateOwner {};\n", encoding="utf-8")
+    source.write_text('#include "StateOwner.h"\n', encoding="utf-8")
+    project_file = project / "Demo.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    request = "Add a subsystem to manage transient local state and fail closed."
+    started = task_start(
+        tmp_path,
+        request=request,
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "featureIntent": {"requiresResolution": True},
+            "orchestration": {"requiredBeforeWrite": [GATE]},
+        },
+    )
+    assert started["state"]["slicePlanningRequired"] is True
+    probe = resolve_feature_intent(request, write_intent=True)
+    selected = probe["candidates"][0]["intentId"]
+    answers = {
+        dimension: f"explicit {dimension}"
+        for dimension in probe["ambiguity"]["missingDimensions"][:3]
+    }
+    server = McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        803,
+        {
+            "name": GATE,
+            "arguments": {
+                "taskAuthorization": started["taskAuthorization"],
+                "selectedIntentId": selected,
+                "selectionRationale": "Use one existing transient local owner.",
+                "blockingQuestionAnswers": answers,
+                "slices": [
+                    {
+                        "sliceId": "local_state",
+                        "files": [
+                            "Source/Demo/StateOwner.h",
+                            "Source/Demo/StateOwner.cpp",
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True, payload
+    assert payload["internalPhases"] == [
+        "SelectIntent",
+        "ResolveSlice",
+        "CaptureSnapshot",
+        "BindIntent",
+    ]
+    assert payload["sliceResolution"] == {
+        "serverOwned": True,
+        "activeSliceId": "local_state",
+        "sliceCount": 1,
+        "pendingSlices": [],
+    }
+    current = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert current["slicePlanningRequired"] is False
+    assert current["activeSliceId"] == "local_state"
+    assert current["planScope"]["slices"] == [
+        {
+            "sliceId": "local_state",
+            "files": [
+                "Source/Demo/StateOwner.h",
+                "Source/Demo/StateOwner.cpp",
+            ],
+        }
+    ]
+    assert GATE in current["completedGates"]
+    assert len(current["completedGates"][GATE]["targetSnapshots"]) == 2
+
+
 def test_mcp_feature_intent_resolver_never_completes_without_exact_target(
     tmp_path: Path,
     monkeypatch,

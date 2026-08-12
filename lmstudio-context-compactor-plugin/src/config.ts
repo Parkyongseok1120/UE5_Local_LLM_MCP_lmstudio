@@ -20,6 +20,12 @@ export const configSchematics = createConfigSchematics()
     true,
   )
   .field(
+    "streamReasoningProgress",
+    "boolean",
+    { displayName: "Stream reasoning progress", subtitle: "Show model reasoning fragments immediately while final text and tool calls remain atomically buffered." },
+    true,
+  )
+  .field(
     "rejectTruncatedPredictions",
     "boolean",
     { displayName: "Reject truncated output", subtitle: "Discard output stopped by the context or max-token limit instead of presenting a partial result as complete." },
