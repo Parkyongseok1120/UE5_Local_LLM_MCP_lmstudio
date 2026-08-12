@@ -226,6 +226,44 @@ def _auth_refresh_failure(
     }
 
 
+def _checkpoint_conflict_recovery(
+    state: dict[str, Any],
+    conflicts: list[dict[str, Any]],
+    *,
+    error: str = "Task checkpoint conflicts with current files.",
+) -> dict[str, Any]:
+    """Return one executable, same-task recovery path for checkpoint drift."""
+
+    authorization = task_authorization_for_state(state)
+    next_args = {
+        "action": "rebase",
+        "acceptCurrentFiles": True,
+        # Rebase only the task-owned snapshot boundary. Unrelated dirty files
+        # remain user-owned and must not be absorbed into this task.
+        "includeGitChanges": False,
+        "taskAuthorization": authorization,
+    }
+    return {
+        "ok": False,
+        "error": error,
+        "errorCode": "TASK_CHECKPOINT_CONFLICT",
+        "conflicts": list(conflicts),
+        "taskAuthorization": authorization,
+        "nextAction": "unreal_task_checkpoint",
+        "nextActionIsTool": True,
+        "nextActionArgs": next_args,
+        "nextActions": ["unreal_task_checkpoint", "unreal_task_status"],
+        "retryable": False,
+        "stopCurrentWorkflow": False,
+        "recoveryActionRequired": True,
+        "agentInstruction": (
+            "Call unreal_task_checkpoint exactly once with nextActionArgs to "
+            "rebase the same task. Do not cancel, quarantine, or create a new "
+            "task for an ordinary checkpoint conflict."
+        ),
+    }
+
+
 def resolve_scope_authority_gate(required_gates: list[str] | None) -> str:
     required = {str(item) for item in (required_gates or [])}
     for gate in SCOPE_AUTHORITY_PRIORITY:
@@ -2484,6 +2522,12 @@ def _checkpoint_conflicts(
         workspace,
         state,
         list(caller_paths or []),
+        # Automated route checkpoints deliberately use
+        # includeGitChanges=false so unrelated pre-existing worktree edits do
+        # not enter task ownership. Recovery must preserve that same boundary;
+        # turning global discovery back on here creates an unrecoverable
+        # new_git_change loop immediately after a successful rebase.
+        include_git_changes=bool(checkpoint.get("gitDiscoveryEnabled", True)),
     )
     prior_git = {
         str(item)
@@ -2551,12 +2595,7 @@ def _continuity_write_issue(state: dict[str, Any]) -> dict[str, Any] | None:
         }
     conflicts = recovery_conflicts(continuity)
     if conflicts:
-        return {
-            "ok": False,
-            "error": "Task checkpoint conflicts with current files.",
-            "errorCode": "TASK_CHECKPOINT_CONFLICT",
-            "conflicts": conflicts,
-        }
+        return _checkpoint_conflict_recovery(state, conflicts)
     supervisor_conflicts = autonomy_blockers(state.get("autonomySupervisor"))
     if supervisor_conflicts:
         return {
@@ -5139,6 +5178,7 @@ def task_checkpoint(
                     ],
                     file_snapshots=snapshots,
                     git_changed_files=list(discovered["gitChangedFiles"]),
+                    git_discovery_enabled=include_git_changes,
                     discovery_warnings=list(discovered["warnings"]),
                     required_next_action=required_next_action,
                     validation=validation,
@@ -5266,10 +5306,11 @@ def task_checkpoint(
                     ),
                 )
                 mutation_result = {
-                    "ok": False,
-                    "error": "Checkpoint files changed; explicit rebase is required.",
-                    "errorCode": "TASK_CHECKPOINT_CONFLICT",
-                    "conflicts": conflicts,
+                    **_checkpoint_conflict_recovery(
+                        state,
+                        conflicts,
+                        error="Checkpoint files changed; explicit rebase is required.",
+                    ),
                     "discoveryWarnings": discovery_warnings,
                 }
             elif normalized_action == "rebase":
@@ -5330,6 +5371,7 @@ def task_checkpoint(
                         ],
                         file_snapshots=snapshots,
                         git_changed_files=list(discovered["gitChangedFiles"]),
+                        git_discovery_enabled=include_git_changes,
                         discovery_warnings=list(discovered["warnings"]),
                         required_next_action=(
                             required_next_action
@@ -5419,6 +5461,19 @@ def task_checkpoint(
                 owner_capability=authorization_identity.get("ownerCapability", ""),
                 conversation_id=authorization_identity.get("conversationId", ""),
             )
+            if mutation_result.get("ok") is not True:
+                # A failed recover call may have persisted the newly observed
+                # conflict into task state. Keep its executable rebase action;
+                # the generic successful-checkpoint route summary below must
+                # not overwrite it with "continue_with_current_tool_route".
+                recovery_next = str(mutation_result.get("nextAction") or "")
+                if mutation_result.get("nextActionIsTool") and recovery_next:
+                    mutation_result.setdefault("requiredNextTool", recovery_next)
+                    mutation_result.setdefault(
+                        "requiredNextToolArgs",
+                        dict(mutation_result.get("nextActionArgs") or {}),
+                    )
+                return mutation_result
             current_route = dict(mutation_result.get("toolRoute") or {})
             pending_gates = [
                 str(item) for item in current_route.get("pendingGates") or []
@@ -5684,15 +5739,37 @@ def task_record_gate(
                 owner_snapshots = normalized_selection_snapshots(
                     state.get("selectedTargetSnapshots")
                 )
-                if owner_snapshots and normalized and owner_snapshots != normalized:
+                # A downstream validator may prove a narrower patch than the
+                # slice authorized by Feature Intent.  Requiring exact set
+                # equality made the model re-submit unchanged, unrelated
+                # files solely to satisfy ceremony.  A subset is safe because
+                # it cannot expand or replace the server-owned write scope;
+                # each supplied snapshot must still exactly match its owner
+                # entry (path, existence, and hash).
+                owner_by_path = {
+                    str(item.get("path") or "").casefold(): item
+                    for item in owner_snapshots
+                    if str(item.get("path") or "")
+                }
+                outside_or_changed = [
+                    item
+                    for item in normalized
+                    if owner_by_path.get(
+                        str(item.get("path") or "").casefold()
+                    )
+                    != item
+                ]
+                if owner_snapshots and normalized and outside_or_changed:
                     record_result = {
                         "ok": False,
                         "errorCode": "SCOPE_AUTHORITY_MISMATCH",
                         "error": (
-                            f"{gate} target snapshots must match the active scope "
-                            f"owner ({authority_gate}); it cannot replace write scope."
+                            f"{gate} target snapshots must be an unchanged subset of "
+                            f"the active scope owner ({authority_gate}); they cannot "
+                            "expand or replace write scope."
                         ),
                         "scopeAuthority": dict(state.get("scopeAuthority") or {}),
+                        "invalidTargets": outside_or_changed,
                     }
                     return None
         if feature_binding:
@@ -5774,6 +5851,11 @@ def task_record_gate(
     if record_result:
         if result.get("ok"):
             current_state = result.get("state") or {}
+            # The mutate callback builds its compact lifecycle fields before
+            # _mutate_task_state refreshes the authoritative route. Recompute
+            # them from the persisted post-mutation state so nextAction cannot
+            # point back to the gate that just completed.
+            record_result.update(task_phase_from_state(current_state))
             record_result["toolRoute"] = result.get("toolRoute") or {}
             record_result["taskAuthorization"] = _task_authorization_for_mutation_response(
                 current_state,
@@ -5961,12 +6043,11 @@ def _explicit_route_state_issue(state: dict[str, Any]) -> dict[str, Any] | None:
         }
     conflicts = recovery_conflicts(continuity)
     if conflicts:
-        return {
-            "ok": False,
-            "errorCode": "TASK_CHECKPOINT_CONFLICT",
-            "error": "Task checkpoint conflicts with current files",
-            "conflicts": conflicts,
-        }
+        return _checkpoint_conflict_recovery(
+            state,
+            conflicts,
+            error="Task checkpoint conflicts with current files",
+        )
     blockers = autonomy_blockers(state.get("autonomySupervisor"))
     if blockers:
         return {

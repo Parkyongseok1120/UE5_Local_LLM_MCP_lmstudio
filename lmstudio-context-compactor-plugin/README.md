@@ -8,7 +8,7 @@ compacted `Chat` to the configured underlying local model when the remaining bud
 With zero or multiple loaded LLMs, the plugin fails with a list of candidates and asks for an
 exact model key. The existing `mcp/unreal-agent` and `mcp/unreal-rag` plugins remain tool providers.
 
-Version 0.4.19 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
+Version 0.4.20 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
 before every prediction and buffers model text/tool calls until LM Studio confirms a safe stop.
 Context-limit and max-output truncations are discarded instead of being presented as completed work.
 Architecture proposals now carry an explicit local/network scope and stable invariant IDs. Bounded local

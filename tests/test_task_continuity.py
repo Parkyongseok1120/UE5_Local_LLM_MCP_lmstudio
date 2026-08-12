@@ -93,6 +93,14 @@ def test_checkpoint_conflict_blocks_then_explicit_rebase_recovers(tmp_path: Path
     )
     assert recovery["ok"] is False
     assert recovery["errorCode"] == "TASK_CHECKPOINT_CONFLICT"
+    assert recovery["stopCurrentWorkflow"] is False
+    assert recovery["nextAction"] == "unreal_task_checkpoint"
+    assert recovery["nextActionArgs"]["action"] == "rebase"
+    assert recovery["nextActionArgs"]["acceptCurrentFiles"] is True
+    assert recovery["nextActionArgs"]["includeGitChanges"] is False
+    assert recovery["nextActionArgs"]["taskAuthorization"]["taskSessionId"] == started[
+        "taskSessionId"
+    ]
     blocked = task_status(tmp_path, started["taskSessionId"])
     assert blocked["writeReadiness"]["ready"] is False
     assert "checkpoint_conflict" in blocked["writeReadiness"]["blockedReasons"]

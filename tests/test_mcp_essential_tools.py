@@ -846,6 +846,33 @@ def test_route_authorization_recovery_is_not_converted_to_hard_stop(monkeypatch)
     assert "paste-ready" in payload["agentInstruction"]
 
 
+def test_checkpoint_conflict_routes_to_same_task_rebase_instead_of_cancel(monkeypatch):
+    mod = _load_rag_mcp_module()
+    authorization = {
+        "taskSessionId": "task-1",
+        "ownerCapability": "owner-1",
+    }
+    payload = mod._route_authorization_failure_payload(
+        {
+            "ok": False,
+            "errorCode": "TASK_CHECKPOINT_CONFLICT",
+            "taskAuthorization": authorization,
+            "nextActionArgs": {
+                "action": "rebase",
+                "acceptCurrentFiles": True,
+                "includeGitChanges": False,
+                "taskAuthorization": authorization,
+            },
+        },
+        "unreal_feature_intent_resolve",
+    )
+    assert payload["stopCurrentWorkflow"] is False
+    assert payload["nextAction"] == "unreal_task_checkpoint"
+    assert payload["nextActionIsTool"] is True
+    assert payload["nextActionArgs"]["action"] == "rebase"
+    assert payload["nextActionArgs"]["taskAuthorization"] == authorization
+
+
 def test_terminal_route_integrity_failure_still_stops(monkeypatch):
     mod = _load_rag_mcp_module()
     payload = mod._route_authorization_failure_payload(

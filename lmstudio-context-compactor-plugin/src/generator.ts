@@ -1801,6 +1801,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const architectureEvidenceHardLimit = Math.floor(finiteNumber(
     configValue(ctl, "architectureEvidenceHardLimit", 8), 8, architectureEvidenceReadThreshold, 128,
   ));
+  const featureIntentEvidenceReadThreshold = Math.floor(finiteNumber(
+    configValue(ctl, "featureIntentEvidenceReadThreshold", 3), 3, 1, 16,
+  ));
   const architectureReplanEvidenceReadBudget = Math.floor(finiteNumber(
     configValue(ctl, "architectureReplanEvidenceReadBudget", 4), 4, 0, 32,
   ));
@@ -1808,6 +1811,65 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     configValue(ctl, "preRouteDiscoveryLimit", 6), 6, 1, 32,
   ));
   const architectureStatus = architectureGateStatus(messages, nextCheckpoint);
+  const advertisedRequiredToolName = String(nextCheckpoint?.requiredNextTool?.name || "").trim();
+  const advertisedRequiredToolExists = Boolean(advertisedRequiredToolName && toolDefinitions.some((tool: any) => (
+    toolNamesMatch(advertisedRequiredToolName, tool?.function?.name || tool?.name || "")
+  )));
+  const advertisedRequiredToolIsRouted = Boolean(advertisedRequiredToolName && (
+    nextCheckpoint?.toolRoute?.activeTools || []
+  ).some((name: any) => toolNamesMatch(advertisedRequiredToolName, String(name || ""))));
+  const invalidRequiredToolContract = Boolean(
+    advertisedRequiredToolName
+    && !advertisedRequiredToolExists
+    && !advertisedRequiredToolIsRouted
+  );
+  if (invalidRequiredToolContract) {
+    // A server-owned exact-tool contract must resolve either to an advertised
+    // definition or to the authoritative active route. Older RAG envelopes
+    // inferred tool-ness from snake_case prose and could otherwise create an
+    // impossible gate such as `read_project_source_or_answer` forever.
+    nextCheckpoint.requiredNextTool = null;
+    if (
+      nextCheckpoint?.protocolControl
+      && toolNamesMatch(nextCheckpoint.protocolControl.nextAction || "", advertisedRequiredToolName)
+    ) {
+      nextCheckpoint.protocolControl.nextActionIsTool = false;
+    }
+    await appendEventBestEffort(sessionId, {
+      type: "invalid_required_tool_contract_cleared",
+      at: new Date().toISOString(),
+      requiredTool: advertisedRequiredToolName,
+      reason: "not_advertised_and_not_in_active_route",
+    });
+  }
+  const featureIntentTool = toolDefinitions.find((tool: any) => toolNamesMatch(
+    FEATURE_INTENT_TOOL_NAME,
+    tool?.function?.name || tool?.name || "",
+  ));
+  const featureIntentRouted = Boolean((nextCheckpoint?.toolRoute?.activeTools || []).some(
+    (name: any) => toolNamesMatch(FEATURE_INTENT_TOOL_NAME, String(name || "")),
+  ));
+  const selectedSliceFiles = Array.isArray(nextCheckpoint?.toolRoute?.selectedSlice?.files)
+    ? nextCheckpoint.toolRoute.selectedSlice.files.filter((path: any) => String(path || "").trim())
+    : [];
+  const featureIntentDiscoveryHandoffForced = Boolean(
+    routeOwnershipAvailable
+    && featureIntentTool
+    && featureIntentRouted
+    && String(nextCheckpoint?.toolRoute?.phase || "").toLowerCase() === "planner"
+    && selectedSliceFiles.length === 0
+    && !nextCheckpoint?.requiredNextTool
+    && !architectureValidationRequired
+    && architectureStatus.directEvidenceCount >= featureIntentEvidenceReadThreshold
+  );
+  if (featureIntentDiscoveryHandoffForced) {
+    nextCheckpoint.requiredNextTool = {
+      name: FEATURE_INTENT_TOOL_NAME,
+      reference: { sourceField: "compactor.boundedEvidenceHandoff", value: FEATURE_INTENT_TOOL_NAME },
+      args: null,
+    };
+    injectFeatureIntentAtomicRule(history);
+  }
   const architectureContractGoal = architectureContractGoalText(
     messages,
     authoritativeGoal,
@@ -2125,6 +2187,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     catalogRefreshBlocked,
     exactRequiredToolForced,
     exactRequiredToolName,
+    invalidRequiredToolContract,
+    invalidRequiredToolName: invalidRequiredToolContract ? advertisedRequiredToolName : "",
+    featureIntentDiscoveryHandoffForced,
   });
 
   let modelChat = history;

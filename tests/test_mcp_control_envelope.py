@@ -70,7 +70,7 @@ def test_existing_server_control_survives_a_second_envelope_pass() -> None:
     }
 
 
-def test_tool_shaped_next_action_is_marked_executable_without_duplicate_hint() -> None:
+def test_tool_shaped_next_action_requires_an_explicit_executable_contract() -> None:
     payload = attach_control_envelope(
         {
             "ok": False,
@@ -81,13 +81,13 @@ def test_tool_shaped_next_action_is_marked_executable_without_duplicate_hint() -
         tool_name="unreal_feature_intent_resolve",
     )
     assert payload["control"]["nextAction"] == "unreal_task_define_slices"
-    assert payload["control"]["nextActionIsTool"] is True
+    assert payload["control"]["nextActionIsTool"] is False
 
 
-def test_agent_getter_and_validator_actions_are_executable_tools() -> None:
+def test_agent_getter_and_validator_actions_are_executable_only_when_declared() -> None:
     for next_action in ("get_active_project", "static_validate_project"):
         payload = attach_control_envelope(
-            {"ok": True, "nextAction": next_action},
+            {"ok": True, "nextAction": next_action, "nextActionIsTool": True},
             tool_name="bridge",
         )
         assert payload["control"]["nextActionIsTool"] is True
@@ -97,6 +97,16 @@ def test_agent_getter_and_validator_actions_are_executable_tools() -> None:
         tool_name="bridge",
     )
     assert prose["control"]["nextActionIsTool"] is False
+
+
+def test_informational_read_action_never_becomes_a_fake_tool_gate() -> None:
+    payload = attach_control_envelope(
+        {"ok": True, "requiredNextAction": "read_project_source_or_answer"},
+        tool_name="unreal_rag_search",
+    )
+
+    assert payload["control"]["nextAction"] == "read_project_source_or_answer"
+    assert payload["control"]["nextActionIsTool"] is False
 
 
 def test_control_envelope_survives_hard_structured_compaction() -> None:

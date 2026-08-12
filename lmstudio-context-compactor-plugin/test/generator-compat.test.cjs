@@ -274,6 +274,149 @@ test("provider-qualified required feature gate is forced with server-owned auth"
   }
 });
 
+test("bounded source evidence clears a fake RAG action and hands off to feature intent", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-handoff-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-feature-handoff", ownerCapability: "owner-feature-handoff" };
+    const model = {
+      identifier: "feature-handoff-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(
+          opts.rawTools.tools.map((tool) => tool.function.name),
+          ["unreal_feature_intent_resolve"],
+        );
+        opts.onToolCallRequestStart(1, { toolCallId: "feature-handoff-1" });
+        opts.onToolCallRequestNameReceived(1, "unreal_feature_intent_resolve");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, JSON.stringify({
+          selectedIntentId: "bounded_local",
+          slices: [{ sliceId: "input", files: ["Source/Demo/Controller.cpp"] }],
+          activeSliceId: "input",
+        }));
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "feature-handoff-1",
+            type: "function",
+            name: "unreal_feature_intent_resolve",
+            arguments: {
+              selectedIntentId: "bounded_local",
+              slices: [{ sliceId: "input", files: ["Source/Demo/Controller.cpp"] }],
+              activeSliceId: "input",
+            },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      toolRoute: {
+        routeHash: "route-feature-handoff",
+        phase: "planner",
+        activeTools: ["read_file", "unreal_rag_search", "unreal_feature_intent_resolve"],
+        selectedSlice: { sliceId: "task", files: [] },
+      },
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "discover_bounded_feature_slice",
+        nextActionIsTool: false,
+      },
+    };
+    const fakeRagHandoff = {
+      ok: true,
+      requiredNextAction: "read_project_source_or_answer",
+      control: {
+        version: 1,
+        phase: "unreal_rag_search",
+        status: "NeedsAction",
+        nextAction: "read_project_source_or_answer",
+        nextActionIsTool: true,
+      },
+    };
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "implement the bounded local input fix" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "plan-handoff", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "plan-handoff", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+    ];
+    for (const [index, file] of [
+      "Source/Demo/Controller.cpp",
+      "Source/Demo/GameState.cpp",
+      "Source/Demo/RuleEngine.cpp",
+    ].entries()) {
+      messages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: `read-${index}`, type: "function", name: "read_file", arguments: { path: file },
+      } }] });
+      messages.push({ role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: `read-${index}`,
+        name: "read_file",
+        content: JSON.stringify({ ok: true, path: file, content: `// ${file}` }),
+      }] });
+    }
+    messages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+      id: "rag-handoff", type: "function", name: "unreal_rag_search", arguments: { request: "input" },
+    } }] });
+    messages.push({ role: "tool", content: [{
+      type: "toolCallResult",
+      toolCallId: "rag-handoff",
+      name: "unreal_rag_search",
+      content: JSON.stringify(fakeRagHandoff),
+    }] });
+    const history = Chat.from({ messages });
+    const tools = [
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "unreal_rag_search", parameters: { type: "object", properties: {} } } },
+      {
+        type: "function",
+        function: {
+          name: "unreal_feature_intent_resolve",
+          parameters: {
+            type: "object",
+            properties: {
+              selectedIntentId: { type: "string" },
+              slices: { type: "array" },
+              activeSliceId: { type: "string" },
+              taskAuthorization: { type: "object" },
+            },
+            required: ["selectedIntentId", "slices", "activeSliceId", "taskAuthorization"],
+          },
+        },
+      },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    const end = emitted.find((event) => event.kind === "end");
+    assert.ok(end);
+    assert.equal(end.request.name, "unreal_feature_intent_resolve");
+    assert.deepEqual(end.request.arguments.taskAuthorization, ownership);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => event.type === "invalid_required_tool_contract_cleared"));
+    assert.ok(events.some((event) => (
+      event.type === "context_measurement" && event.featureIntentDiscoveryHandoffForced === true
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("active project bootstrap forces planner with the exact current user goal", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-active-project-plan-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;

@@ -94,6 +94,7 @@ def initialize_continuity(
             "modifiedFiles": [],
             "fileSnapshots": [],
             "gitChangedFiles": [],
+            "gitDiscoveryEnabled": True,
             "discoveryWarnings": [],
             "requiredNextAction": "",
             "recordedAt": "",
@@ -194,6 +195,7 @@ def record_checkpoint(
     file_snapshots: list[dict[str, Any]],
     required_next_action: str,
     git_changed_files: list[str] | None = None,
+    git_discovery_enabled: bool = True,
     discovery_warnings: list[str] | None = None,
     validation: dict[str, Any] | None = None,
     note: str = "",
@@ -268,6 +270,7 @@ def record_checkpoint(
         "modifiedFiles": unique_modified,
         "fileSnapshots": normalized_snapshots,
         "gitChangedFiles": unique_git_changed,
+        "gitDiscoveryEnabled": bool(git_discovery_enabled),
         "discoveryWarnings": list(
             dict.fromkeys(
                 str(item)

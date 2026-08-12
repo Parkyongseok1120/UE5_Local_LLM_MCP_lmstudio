@@ -30,6 +30,13 @@ test("auth mismatch routes to the same executable action as Python", () => {
   );
 });
 
+test("checkpoint conflict routes to an executable same-task checkpoint", () => {
+  assert.deepStrictEqual(
+    recoveryAction("TASK_CHECKPOINT_CONFLICT"),
+    { action: "unreal_task_checkpoint", isTool: true }
+  );
+});
+
 test("unknown recovery code uses the stable fallback", () => {
   assert.deepStrictEqual(
     recoveryAction("SOMETHING_NEW"),

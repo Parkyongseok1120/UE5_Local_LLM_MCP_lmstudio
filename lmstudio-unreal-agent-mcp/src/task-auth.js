@@ -536,6 +536,33 @@ function authRefreshFailure(result, state, mismatchedFields = null) {
   };
 }
 
+function checkpointConflictFailure(state, conflicts, error = "Task checkpoint conflicts with current files.") {
+  const taskAuthorization = taskAuthorizationForState(state);
+  return {
+    ok: false,
+    errorCode: "TASK_CHECKPOINT_CONFLICT",
+    error,
+    conflicts: Array.isArray(conflicts) ? conflicts : [],
+    taskAuthorization,
+    nextAction: "unreal_task_checkpoint",
+    nextActionIsTool: true,
+    nextActionArgs: {
+      action: "rebase",
+      acceptCurrentFiles: true,
+      includeGitChanges: false,
+      taskAuthorization,
+    },
+    nextActions: ["unreal_task_checkpoint", "unreal_task_status"],
+    retryable: false,
+    stopCurrentWorkflow: false,
+    recoveryActionRequired: true,
+    agentInstruction: (
+      "Call unreal_task_checkpoint exactly once with nextActionArgs to rebase the same task. "
+      + "Do not cancel, quarantine, or create a new task for an ordinary checkpoint conflict."
+    ),
+  };
+}
+
 function validateToolRoute(state, fields, args, toolName) {
   const route = effectiveToolRouteForState(state);
   if (
@@ -2477,11 +2504,7 @@ function authorizeTaskRouteTool(
     ? continuity.recovery
     : {};
   if (Array.isArray(recovery.conflicts) && recovery.conflicts.length) {
-    return {
-      ok: false,
-      errorCode: "TASK_CHECKPOINT_CONFLICT",
-      error: "Task checkpoint conflicts with current files.",
-    };
+    return checkpointConflictFailure(state, recovery.conflicts);
   }
   const supervisor = state.autonomySupervisor
     && typeof state.autonomySupervisor === "object"
@@ -2682,13 +2705,11 @@ function validateMutationAuth(workspaceRoot, args = {}, options = {}) {
       String(recovery.status || "") === "blocked_by_checkpoint_conflict"
       || conflicts.length > 0
     ) {
-      return {
-        ok: false,
-        error: "Task checkpoint conflicts with current files; recover or explicitly rebase first.",
-        errorCode: "TASK_CHECKPOINT_CONFLICT",
-        taskSessionId: sanitized.taskSessionId,
+      return checkpointConflictFailure(
+        state,
         conflicts,
-      };
+        "Task checkpoint conflicts with current files; explicitly rebase first."
+      );
     }
   }
   const autonomySupervisor = state.autonomySupervisor

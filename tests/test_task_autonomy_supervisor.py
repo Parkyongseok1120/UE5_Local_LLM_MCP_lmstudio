@@ -188,6 +188,110 @@ def test_checkpoint_without_git_discovery_preserves_baseline_and_task_mutations(
     assert recovered["continuity"]["recovery"]["conflicts"] == []
 
 
+def test_checkpoint_without_git_discovery_does_not_claim_preexisting_dirty_files(
+    tmp_path: Path,
+) -> None:
+    project, uproject = _project(tmp_path)
+    task_file = _write(project, "Source/Demo/Task.cpp")
+    unrelated = _write(project, "Source/Demo/UserWork.cpp")
+    _initialize_git(project)
+    unrelated.write_text("pre-existing user edit", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Edit only Task.cpp",
+        project_file=str(uproject),
+        plan_payload={"writeGate": {"writesAllowed": True}},
+    )
+    authorization = _authorization(started)
+    task_file.write_text("task edit", encoding="utf-8")
+
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=authorization,
+        action="record",
+        modified_files=["Source/Demo/Task.cpp"],
+        include_git_changes=False,
+    )
+    assert recorded["ok"] is True
+    checkpoint = recorded["continuity"]["checkpoint"]
+    assert checkpoint["gitDiscoveryEnabled"] is False
+    assert checkpoint["gitChangedFiles"] == ["Source/Demo/Task.cpp"]
+
+    recovered = task_checkpoint(
+        tmp_path,
+        task_authorization=authorization,
+        action="recover",
+    )
+    assert recovered["ok"] is True
+    assert recovered["continuity"]["recovery"]["conflicts"] == []
+
+
+def test_server_rebase_args_recover_same_task_with_preexisting_dirty_worktree(
+    tmp_path: Path,
+) -> None:
+    project, uproject = _project(tmp_path)
+    task_file = _write(project, "Source/Demo/Task.cpp")
+    unrelated = _write(project, "Source/Demo/UserWork.cpp")
+    _initialize_git(project)
+    unrelated.write_text("pre-existing user edit", encoding="utf-8")
+    gate = "unreal_feature_intent_resolve"
+    started = task_start(
+        tmp_path,
+        request="Continue the same bounded Task.cpp edit",
+        project_file=str(uproject),
+        plan_payload={
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {"requiredBeforeWrite": [gate]},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Task.cpp"]}
+            ],
+        },
+    )
+    task_file.write_text("task-owned checkpoint", encoding="utf-8")
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=_authorization(started),
+        action="record",
+        modified_files=["Source/Demo/Task.cpp"],
+        include_git_changes=False,
+    )
+    assert recorded["ok"] is True
+
+    task_file.write_text("accepted current task content", encoding="utf-8")
+    conflict = task_checkpoint(
+        tmp_path,
+        task_authorization=recorded["taskAuthorization"],
+        action="recover",
+    )
+    assert conflict["ok"] is False
+    assert conflict["errorCode"] == "TASK_CHECKPOINT_CONFLICT"
+    assert conflict["stopCurrentWorkflow"] is False
+    assert conflict["nextAction"] == "unreal_task_checkpoint"
+    args = conflict["nextActionArgs"]
+
+    rebased = task_checkpoint(
+        tmp_path,
+        task_authorization=args["taskAuthorization"],
+        action=args["action"],
+        accept_current_files=args["acceptCurrentFiles"],
+        include_git_changes=args["includeGitChanges"],
+    )
+    assert rebased["ok"] is True
+    assert rebased["continuity"]["checkpoint"]["gitDiscoveryEnabled"] is False
+
+    recovered = task_checkpoint(
+        tmp_path,
+        task_authorization=rebased["taskAuthorization"],
+        action="recover",
+    )
+    assert recovered["ok"] is True
+    assert recovered["continuity"]["recovery"]["conflicts"] == []
+    status = task_status(tmp_path, started["taskSessionId"])
+    assert status["state"]["status"] == "running"
+    assert status["nextAction"] == gate
+    assert status["nextAction"] != "unreal_task_cancel"
+
+
 def test_checkpoint_preserves_prior_files_and_non_git_projects_warn(
     tmp_path: Path,
 ) -> None:

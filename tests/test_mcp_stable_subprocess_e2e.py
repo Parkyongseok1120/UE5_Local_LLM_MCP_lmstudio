@@ -175,11 +175,12 @@ def test_agent_mcp_subprocess_tools_list_stable_essential(tmp_path: Path) -> Non
         tools_result = client.request("tools/list", {}, req_id=2)
         tools = tools_result["result"]["tools"]
         names = {tool["name"] for tool in tools}
-        assert names == (
-            set(MANIFEST["agentEssential"])
-            & set(MANIFEST["agentUnroutedDiscoverable"])
-        )
-        assert "apply_edit_bundle" not in names
+        # Transport schemas remain profile-stable for LM Studio 0.4.x, whose
+        # current chat generator does not reliably rebuild its catalog after a
+        # tools/list_changed notification. Route enforcement happens at
+        # CallTool time and in the context-compactor intersection.
+        assert names == set(MANIFEST["agentEssential"])
+        assert "apply_edit_bundle" in names
         definitions = {tool["name"]: tool for tool in tools}
         assert "read_file" in definitions
         invalid = client.request("tools/call", {"name": "read_file", "arguments": {}}, req_id=3)
@@ -764,14 +765,27 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
         names = {tool["name"] for tool in listed["result"]["tools"]}
         state_path = task_root(ROOT, started["taskSessionId"]) / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        expected = set(MANIFEST["agentAlwaysDiscoverable"])
-        expected.update(state["toolRoute"]["activeTools"])
-        expected &= set(MANIFEST["agentEssential"])
-        assert names == expected
+        assert names == set(MANIFEST["agentEssential"])
         assert "read_file" in names
         assert "replace_in_file" in names
-        assert "list_directory" not in names
-        assert "build_unreal_project" not in names
+        assert "list_directory" in names
+        assert "build_unreal_project" in names
+
+        denied = client.request(
+            "tools/call",
+            {
+                "name": "list_directory",
+                "arguments": {
+                    "taskAuthorization": started["taskAuthorization"],
+                    "path": "Source/DemoGame",
+                },
+            },
+            3,
+        )
+        denied_payload = _tool_payload(denied["result"])
+        assert denied["result"].get("isError") is True
+        assert denied_payload["errorCode"] == "TASK_TOOL_NOT_ACTIVE"
+        assert denied_payload["stopCurrentWorkflow"] is False
 
         read = client.request(
             "tools/call",
@@ -855,7 +869,7 @@ def test_lmstudio_agent_text_preserves_directory_and_inferred_filename_results(
                     "regex": True,
                 },
             },
-            3,
+            4,
         )
         visible_search = json.loads(searched["result"]["content"][0]["text"])
         assert visible_search["fileNameMatchMode"] == "inferred_from_filename_shaped_query"

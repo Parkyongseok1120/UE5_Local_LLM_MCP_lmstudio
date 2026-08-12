@@ -12,6 +12,7 @@ from task_api import (  # noqa: E402
     task_approve_feature_intent,
     task_consume_feature_approval,
     task_issue_feature_approval,
+    task_checkpoint,
     task_record_gate,
     task_start,
     task_status,
@@ -141,6 +142,100 @@ def test_feature_intent_gate_rejects_missing_or_mismatched_target_binding(
 
     assert result["ok"] is False
     assert result["errorCode"] == "FEATURE_INTENT_TARGET_MISMATCH"
+
+
+def test_downstream_gate_accepts_unchanged_scope_subset_but_rejects_expansion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "Demo"
+    first = project / "Source" / "Demo" / "First.cpp"
+    second = project / "Source" / "Demo" / "Second.cpp"
+    outside = project / "Source" / "Demo" / "Outside.cpp"
+    first.parent.mkdir(parents=True)
+    for target in (first, second, outside):
+        target.write_text(f"// {target.stem}\n", encoding="utf-8")
+    project_file = project / "Demo.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    validation_gate = "unreal_code_sketch_claim_validate"
+    plan = _plan()
+    plan["orchestration"]["requiredBeforeWrite"] = [GATE, validation_gate]
+    plan["executablePlanSlices"][0]["files"] = [
+        "Source/Demo/First.cpp",
+        "Source/Demo/Second.cpp",
+    ]
+    started = task_start(
+        tmp_path,
+        request="Modify the smallest required part of a two-file slice",
+        project_file=str(project_file),
+        plan_payload=plan,
+    )
+    checkpointed = task_checkpoint(
+        tmp_path,
+        task_authorization=_authorization(started),
+        action="record",
+        phase="verifier",
+        required_next_action=validation_gate,
+        include_git_changes=False,
+    )
+    assert checkpointed["ok"] is True
+
+    def snapshot(target: Path) -> dict:
+        return {
+            "path": f"Source/Demo/{target.name}",
+            "absolutePath": str(target.resolve()),
+            "exists": True,
+            "fileHash": hashlib.sha1(target.read_bytes()).hexdigest(),
+        }
+
+    owner_snapshots = [snapshot(first), snapshot(second)]
+    feature = task_record_gate(
+        tmp_path,
+        gate_name=GATE,
+        task_authorization=checkpointed["taskAuthorization"],
+        input_payload={"selectedIntentId": "bounded_local"},
+        evidence={"ok": True},
+        target_snapshots=owner_snapshots,
+        intent_binding={
+            "selectedIntentId": "bounded_local",
+            "intentContractHash": "a" * 64,
+            "acceptanceOracleHash": "b" * 64,
+            "targetSnapshotHash": target_snapshot_hash(owner_snapshots),
+        },
+    )
+    assert feature["ok"] is True
+
+    expanded = task_record_gate(
+        tmp_path,
+        gate_name=validation_gate,
+        task_authorization=feature["taskAuthorization"],
+        input_payload={"sketch": "outside scope"},
+        evidence={"ok": True},
+        target_snapshots=[snapshot(outside)],
+    )
+    assert expanded["ok"] is False
+    assert expanded["errorCode"] == "SCOPE_AUTHORITY_MISMATCH"
+
+    narrowed = task_record_gate(
+        tmp_path,
+        gate_name=validation_gate,
+        task_authorization=feature["taskAuthorization"],
+        input_payload={"sketch": "only Second.cpp changes"},
+        evidence={"ok": True},
+        target_snapshots=[snapshot(second)],
+    )
+    assert narrowed["ok"] is True
+    assert narrowed["writeReadiness"]["ready"] is True
+    assert narrowed.get("nextAction") != validation_gate
+    state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert state["selectedTargetSnapshots"] == [
+        {"path": "Source/Demo/First.cpp", "exists": True, "fileHash": snapshot(first)["fileHash"]},
+        {"path": "Source/Demo/Second.cpp", "exists": True, "fileHash": snapshot(second)["fileHash"]},
+    ]
+    assert state["gateTargetSnapshots"][validation_gate] == [
+        {"path": "Source/Demo/Second.cpp", "exists": True, "fileHash": snapshot(second)["fileHash"]}
+    ]
 
 
 def test_checkpoint_change_makes_feature_intent_gate_stale() -> None:

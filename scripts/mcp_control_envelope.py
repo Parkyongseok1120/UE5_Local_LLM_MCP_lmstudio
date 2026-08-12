@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 from typing import Any
 
 
@@ -13,17 +12,6 @@ def _action_name(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("name") or value.get("tool") or "")
     return str(value or "")
-
-
-def _looks_like_tool_action(value: Any) -> bool:
-    return bool(
-        re.fullmatch(
-            r"(?:unreal_|get_|set_|open_|read_|write_|replace_|apply_|delete_|build_|run_|search_|list_|detect_|record_|cancel_|quarantine_|static_|refactor_|propose_)"
-            r"[a-z0-9_]*(?::[a-z0-9_-]+)?",
-            _action_name(value).strip(),
-            flags=re.IGNORECASE,
-        )
-    )
 
 
 def _fingerprint(payload: dict[str, Any]) -> str:
@@ -80,7 +68,12 @@ def attach_control_envelope(
     elif "requiredNextTool" in result:
         next_is_tool = bool(result.get("requiredNextTool"))
     elif has_direct_action:
-        next_is_tool = _looks_like_tool_action(next_action)
+        # A snake_case action is not proof that an MCP tool exists. Informational
+        # handoffs such as ``read_project_source_or_answer`` deliberately look
+        # imperative, and prefix inference used to turn them into impossible
+        # exact-tool gates in the context compactor. Executable handoffs must be
+        # declared explicitly through requiredNextTool or nextActionIsTool.
+        next_is_tool = False
     else:
         next_is_tool = existing.get("nextActionIsTool") is True
     resolved_status = str(

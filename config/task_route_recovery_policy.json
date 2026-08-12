@@ -15,6 +15,7 @@
   ],
   "recoveryActionCodes": [
     "MULTIPLE_HEALTHY_ROUTE_TASKS",
+    "TASK_CHECKPOINT_CONFLICT",
     "TASK_AUTH_INCOMPLETE",
     "TASK_AUTH_INVALID_FORMAT",
     "TASK_AUTH_MISMATCH",
@@ -39,6 +40,10 @@
     "MULTIPLE_HEALTHY_ROUTE_TASKS": {
       "action": "pass_ownerCapability_to_select_task",
       "isTool": false
+    },
+    "TASK_CHECKPOINT_CONFLICT": {
+      "action": "unreal_task_checkpoint",
+      "isTool": true
     },
     "TASK_AUTH_INCOMPLETE": {
       "action": "retry_same_tool_with_returned_taskAuthorization",

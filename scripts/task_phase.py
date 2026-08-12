@@ -180,6 +180,16 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             valid_completed.append(gate)
 
     pending_gates = [gate for gate in required_gates if gate not in valid_completed]
+    # A checkpoint can name the gate that was required at the handoff. Once
+    # that gate is valid, presenting the same name as the next action sends
+    # compact models back through a completed validator and creates a needless
+    # round trip. The refreshed tool route remains the authority for normal
+    # executor/validator actions.
+    if (
+        checkpoint_next_action in required_gates
+        and checkpoint_next_action not in pending_gates
+    ):
+        checkpoint_next_action = ""
     active_job_status = str((job or {}).get("status") or "")
     job_in_progress = active_job_status in {"created", "starting", "queued", "running"}
 
