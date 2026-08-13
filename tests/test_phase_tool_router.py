@@ -18,6 +18,7 @@ from phase_tool_router import (  # noqa: E402
 )
 from plan_consistency import validate_phase_tool_route  # noqa: E402
 from feature_intent_contract import target_snapshot_hash  # noqa: E402
+from task_phase import task_phase_from_state  # noqa: E402
 from task_api import (  # noqa: E402
     _refresh_server_owned_state,
     active_task_route_context,
@@ -632,6 +633,69 @@ def test_build_recovery_scope_is_shared_and_fail_closed(
         target_files=[target],
     )
     assert exact == {"ok": True, "active": True, "targetFile": target}
+
+
+def test_build_recovery_does_not_expand_beyond_active_slice(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Complete the bounded local input slice",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {
+                    "sliceId": "local_input",
+                    "files": [
+                        "Source/Demo/DemoPlayerController.h",
+                        "Source/Demo/DemoPlayerController.cpp",
+                    ],
+                }
+            ],
+        },
+    )
+
+    recorded = task_record_build_recovery(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        recovery={
+            "category": "linker_missing_definition",
+            "ownerSymbol": "ADemoGameMode",
+            "missingSymbol": "SetPlayerReady",
+            "semanticEvidenceRequired": True,
+            "mutationPermittedWithoutSemanticEvidence": False,
+            "requiredNextTool": "unreal_symbol_lookup",
+            "requiredNextToolArgs": {"query": "SetPlayerReady"},
+            "firstError": "error LNK2019: ADemoGameMode::SetPlayerReady",
+            "mutationGeneration": 7,
+        },
+    )
+
+    assert recorded["ok"] is True
+    assert recorded["active"] is False
+    assert recorded["scopeDisposition"] == "out_of_slice"
+    assert recorded["errorCode"] == "BUILD_FAILURE_OUTSIDE_ACTIVE_SLICE"
+    assert recorded["activeSliceFiles"] == [
+        "Source/Demo/DemoPlayerController.h",
+        "Source/Demo/DemoPlayerController.cpp",
+    ]
+    state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "buildRecovery" not in state
+    assert state["buildBlocker"]["ownerSymbol"] == "ADemoGameMode"
+    assert task_validate_build_recovery_sketch(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        target_files=["Source/Demo/DemoGameMode.cpp"],
+    ) == {"ok": True, "active": False}
 
 
 def test_linker_recovery_blocks_invented_state_and_accepts_existing_project_state(
@@ -1272,6 +1336,8 @@ def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
     assert denied["ok"] is False
     assert denied["errorCode"] == "REPLAN_BUDGET_EXHAUSTED"
     assert denied["checkpointRecordRequired"] is True
+    assert denied["nextActionIsTool"] is True
+    assert denied["requiredNextTool"] == "unreal_task_checkpoint"
     assert denied["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
     assert denied["taskAuthorization"]["authToken"]
     assert denied["taskAuthorization"]["ownerCapability"]
@@ -1283,7 +1349,152 @@ def test_atomic_replan_keeps_one_session_and_stales_old_authorization(
             "ownerCapability": denied["taskAuthorization"]["ownerCapability"],
         },
     }
+    assert denied["requiredNextToolArgs"] == denied["nextActionArgs"]
     assert "humanCheckpointRequired" not in denied
+
+
+def test_replan_recomputes_runtime_slice_requirement_for_unbound_feature_work(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement Source/Demo/Old.cpp",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": ["unreal_feature_intent_resolve"]},
+            "executablePlanSlices": [
+                {"sliceId": "old", "files": ["Source/Demo/Old.cpp"]}
+            ],
+        },
+    )
+
+    replanned = task_replan(
+        tmp_path,
+        task_session_id=started["taskSessionId"],
+        request="Inspect the project and implement the earliest incomplete feature",
+        mode="agent_edit",
+        project_file="",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": ["unreal_feature_intent_resolve"]},
+            "executablePlanSlices": [{"sliceId": "feature", "files": []}],
+        },
+    )
+
+    assert replanned["ok"] is True, replanned
+    assert replanned["state"]["slicePlanningRequired"] is True
+    assert replanned["state"]["planScope"]["slices"][0]["files"] == []
+    route = active_task_route_context(tmp_path)
+    assert route["state"]["toolRoute"]["roleSession"] == "planner"
+    phase = task_phase_from_state(route["state"])
+    assert phase["nextAction"] == "discover_bounded_feature_slice"
+    assert phase["nextActionIsTool"] is False
+
+
+def test_atomic_replan_discards_prior_plan_recovery_and_execution_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Fix missing SetPlayerReady definition",
+        mode="agent_edit",
+        plan_payload=_plan(
+            writes=True,
+            files=["Source/Demo/DemoGameMode.cpp"],
+        ),
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.update(
+        {
+            "buildRecovery": {
+                "status": "evidence_required",
+                "category": "linker_missing_definition",
+                "ownerSymbol": "ADemoGameMode",
+                "missingSymbol": "SetPlayerReady",
+            },
+            "buildVerification": {"status": "pending_automation"},
+            "completionEvidence": {"sliceId": "old_slice"},
+            "sliceProvenance": {"source": "old_architecture"},
+            "routeFacts": {
+                "requiredFirstToolAttempt": {
+                    "tool": "build_unreal_project",
+                    "planRevision": state["planRevision"],
+                }
+            },
+            "approvalNote": "approval for the replaced plan",
+            "runtimeDebugSession": {"status": "ready_for_experiment"},
+            "featureApproval": {"status": "approved"},
+            "gateTargetSnapshots": {
+                "unreal_code_sketch_claim_validate": [
+                    {"path": "Source/Demo/DemoGameMode.cpp"}
+                ]
+            },
+            "scopeAuthority": {"gate": "unreal_code_sketch_claim_validate"},
+            "selectedTargetSliceId": "old_slice",
+            "mutationGeneration": 199,
+            "buildProofHistory": [
+                {"sliceId": "old_slice", "proofLevel": "Built"}
+            ],
+        }
+    )
+    state = _refresh_server_owned_state(state)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    replanned = task_replan(
+        tmp_path,
+        task_session_id=started["taskSessionId"],
+        request="Implement local board input",
+        mode="agent_edit",
+        project_file="",
+        plan_payload=_plan(
+            writes=True,
+            files=["Source/Demo/DemoBoard.cpp"],
+        ),
+    )
+
+    assert replanned["ok"] is True, replanned
+    current = replanned["state"]
+    for key in (
+        "buildRecovery",
+        "buildVerification",
+        "completionEvidence",
+        "sliceProvenance",
+        "routeFacts",
+        "approvalNote",
+    ):
+        assert key not in current
+    assert current["runtimeDebugSession"] == {}
+    assert current["featureApproval"] == {}
+    assert current["selectedTargetSnapshots"] == []
+    assert current["gateTargetSnapshots"] == {}
+    assert current["scopeAuthority"] == {}
+    assert current["selectedTargetSliceId"] == ""
+    assert current["activeSliceId"] == "slice-1"
+    assert current["taskSessionId"] == started["taskSessionId"]
+    assert (
+        replanned["taskAuthorization"]["ownerCapability"]
+        == started["taskAuthorization"]["ownerCapability"]
+    )
+    assert current["mutationGeneration"] == 199
+    assert current["buildProofHistory"] == [
+        {"sliceId": "old_slice", "proofLevel": "Built"}
+    ]
+
+    recovery_scope = task_validate_build_recovery_sketch(
+        tmp_path,
+        task_authorization=replanned["taskAuthorization"],
+        sketch="void ADemoBoard::HandlePrimaryClick() {}",
+        target_files=["Source/Demo/DemoBoard.cpp"],
+    )
+    assert recovery_scope == {"ok": True, "active": False}
 
 
 def test_checkpoint_restores_omitted_owner_capability_and_does_not_fake_phase(
@@ -2210,6 +2421,6 @@ def test_project_identity_bridges_rag_and_node_workspaces_without_cross_project_
     assert names == set(
         phase_visible_rag_tool_names(rag_essential_tool_names(), route_context)
     )
-    assert "unreal_rag_search" not in names
+    assert "unreal_rag_search" in names
     assert "unreal_code_sketch_claim_validate" in names
-    assert "unreal_semantic_refactor_guard" not in names
+    assert "unreal_semantic_refactor_guard" in names

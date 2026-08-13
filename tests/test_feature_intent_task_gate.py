@@ -16,6 +16,7 @@ from task_api import (  # noqa: E402
     task_record_gate,
     task_start,
     task_status,
+    task_validate_code_sketch_scope,
 )
 from task_phase import task_phase_from_state  # noqa: E402
 
@@ -206,6 +207,29 @@ def test_downstream_gate_accepts_unchanged_scope_subset_but_rejects_expansion(
     )
     assert feature["ok"] is True
 
+    outside_scope = task_validate_code_sketch_scope(
+        tmp_path,
+        task_authorization=feature["taskAuthorization"],
+        target_files=["Source/Demo/Outside.cpp"],
+    )
+    assert outside_scope["ok"] is False
+    assert outside_scope["errorCode"] == "CODE_SKETCH_TARGET_SCOPE_MISMATCH"
+    assert outside_scope["serverOwnedTargetFiles"] == [
+        "Source/Demo/First.cpp",
+        "Source/Demo/Second.cpp",
+    ]
+    assert outside_scope["outOfScopeTargetFiles"] == [
+        "Source/Demo/Outside.cpp"
+    ]
+
+    narrowed_scope = task_validate_code_sketch_scope(
+        tmp_path,
+        task_authorization=feature["taskAuthorization"],
+        target_files=["project://Source/Demo/Second.cpp"],
+    )
+    assert narrowed_scope["ok"] is True
+    assert narrowed_scope["allowedSubset"] is True
+
     expanded = task_record_gate(
         tmp_path,
         gate_name=validation_gate,
@@ -216,6 +240,21 @@ def test_downstream_gate_accepts_unchanged_scope_subset_but_rejects_expansion(
     )
     assert expanded["ok"] is False
     assert expanded["errorCode"] == "SCOPE_AUTHORITY_MISMATCH"
+
+    empty = task_record_gate(
+        tmp_path,
+        gate_name=validation_gate,
+        task_authorization=feature["taskAuthorization"],
+        input_payload={"sketch": "generic sketch with no bound target"},
+        evidence={"ok": True},
+        target_snapshots=[],
+    )
+    assert empty["ok"] is False
+    assert empty["errorCode"] == "SCOPE_AUTHORITY_MISMATCH"
+    assert empty["missingTargetFiles"] == [
+        "Source/Demo/First.cpp",
+        "Source/Demo/Second.cpp",
+    ]
 
     narrowed = task_record_gate(
         tmp_path,

@@ -640,6 +640,12 @@ test("tool name matching accepts LM Studio provider-qualified MCP paths", () => 
   );
   assert.equal(core.toolNamesMatch("read_file", "mcp/unreal-agent/read_file"), true);
   assert.equal(core.toolNamesMatch("read_file", "read_unreal_logs"), false);
+  assert.equal(core.toolNamesMatch("get_active_project", "unreal_get_active_project"), false);
+  assert.equal(core.toolNamesMatch("unreal_get_active_project", "get_active_project"), false);
+  assert.equal(
+    core.toolNamesMatch("unreal_get_active_project", "mcp/unreal-rag/unreal_get_active_project"),
+    true,
+  );
 });
 
 test("zero retained turns keeps only the minimum recent tail", () => {
@@ -858,6 +864,9 @@ test("read-only classifier does not capture a request that also asks for a fix",
   assert.equal(core.isReadOnlyUserGoal("프로젝트 구조를 분석하고 문제를 고쳐줘"), false);
   assert.equal(core.isReadOnlyUserGoal("분석만 하지 말고 실제 문제를 고쳐줘"), false);
   assert.equal(core.isReadOnlyUserGoal("현재 브랜치가 뭐야?"), true);
+  assert.equal(core.isReadOnlyUserGoal(
+    "현재 O-Mock 프로젝트의 구현 상태를 먼저 확인하고, 오목 규칙과 로컬 플레이부터 시작하는 개발 순서에서 아직 완료되지 않은 가장 앞 단계의 핵심 기능 하나를 실제로 완성해줘. 문서나 계획만 만드는 데 그치지 말고 기능 구현을 우선해. 기존 동작과 현재 상태 소유권은 깨지 말고, 필요한 자동화 테스트와 Unreal 빌드까지 실행해서 결과를 알려줘.",
+  ), false);
   assert.equal(core.classifyUserTurnIntent("계속해", { hasActiveTask: true }), "CONTINUE_ACTIVE_TASK");
   assert.equal(core.classifyUserTurnIntent("프로젝트 상태만 보여줘", {
     hasActiveTask: true,

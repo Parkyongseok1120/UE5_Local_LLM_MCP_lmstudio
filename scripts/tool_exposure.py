@@ -83,21 +83,18 @@ def phase_visible_rag_tool_names(
     profile_allowed: Iterable[str],
     route_context: dict,
 ) -> frozenset[str]:
-    """Shrink an active/blocked catalog without changing CallTool authority."""
+    """Keep the transport catalog stable; route checks remain CallTool-owned.
 
-    allowed = frozenset(str(item) for item in profile_allowed)
-    status = str((route_context or {}).get("status") or "none")
-    if status == "none":
-        return allowed
-    always = set(load_stable_manifest().get("ragAlwaysDiscoverable") or [])
-    state = (
-        route_context.get("state")
-        if isinstance(route_context.get("state"), dict)
-        else {}
-    )
-    route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
-    active = {str(item) for item in route.get("activeTools") or [] if str(item)}
-    return frozenset(name for name in allowed if name in always or name in active)
+    LM Studio can acknowledge ``notifications/tools/list_changed`` without
+    rebuilding the generator catalog for the current chat. Route-shrinking the
+    RAG schema set therefore strands a newly required gate when a prior task's
+    phase was active at chat startup. The context compactor intersects this
+    stable profile with the latest server-owned route before each prediction,
+    while CallTool remains the final authority for every client.
+    """
+
+    del route_context
+    return frozenset(str(item) for item in profile_allowed)
 
 
 def callable_rag_tool_names(all_registered: Iterable[str]) -> frozenset[str]:

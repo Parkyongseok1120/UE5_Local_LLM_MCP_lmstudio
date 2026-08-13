@@ -407,6 +407,40 @@ def _reset_slice_selection_authority(
     state["featureIntent"] = feature_state
 
 
+def _reset_plan_execution_state_for_replan(
+    state: dict[str, Any],
+    *,
+    active_slice_id: str,
+) -> None:
+    """Discard evidence that is owned by the plan being replaced.
+
+    ``task_replan`` intentionally preserves the task/session owner, mutation
+    generation, retry accounting, and historical proof records.  Recovery,
+    verification, approval, and slice-provenance records are different: they
+    describe one exact plan revision and must never authorize or block its
+    replacement.  Keeping those records produced split-brain tasks where a new
+    feature slice was validated as if an older compiler error were still the
+    active objective.
+    """
+
+    _reset_slice_selection_authority(
+        state,
+        active_slice_id=active_slice_id,
+    )
+    for key in (
+        "buildRecovery",
+        "buildBlocker",
+        "buildVerification",
+        "completionEvidence",
+        "sliceProvenance",
+        "routeFacts",
+        "approvalNote",
+    ):
+        state.pop(key, None)
+    state["runtimeDebugSession"] = {}
+    state["featureApproval"] = {}
+
+
 def _migrate_gate_policy(state: dict[str, Any]) -> bool:
     version = int(state.get("gatePolicyVersion") or 1)
     if version >= GATE_POLICY_VERSION:
@@ -1238,6 +1272,7 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
     public = dict(state)
     public.pop("authToken", None)
     public.pop("ownerCapability", None)
+    public.pop("directSourceEvidence", None)
     # expiryTransition contains a speculative future route, including a phase
     # that may intentionally hide the current executor/build tools. Exposing
     # that internal fallback through task_status made compact models reason
@@ -1973,6 +2008,36 @@ def task_record_build_recovery(
         }
     outcome: dict[str, Any] = {}
 
+    def active_slice_files(state: dict[str, Any]) -> list[str]:
+        scope = state.get("planScope") if isinstance(state.get("planScope"), dict) else {}
+        active_slice_id = str(state.get("activeSliceId") or "").strip()
+        for item in scope.get("slices") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("sliceId") or "").strip() != active_slice_id:
+                continue
+            return list(
+                dict.fromkeys(
+                    str(path or "").replace("\\", "/").strip("/")
+                    for path in item.get("files") or []
+                    if str(path or "").strip()
+                )
+            )
+        return []
+
+    def recovery_belongs_to_active_slice(
+        slice_files: list[str],
+    ) -> bool | None:
+        if not slice_files:
+            return None
+        if target_file:
+            target_folded = target_file.casefold()
+            return any(path.casefold() == target_folded for path in slice_files)
+        if semantic_scoped:
+            owner_stem = _linker_owner_stem(owner_symbol).casefold()
+            return any(Path(path).stem.casefold() == owner_stem for path in slice_files)
+        return None
+
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
         nonlocal outcome
         mismatches = _task_authorization_mismatches(state, authorization)
@@ -1994,6 +2059,35 @@ def task_record_build_recovery(
                 "error": "Task is not running",
             }
             return None
+        slice_files = active_slice_files(state)
+        belongs_to_slice = recovery_belongs_to_active_slice(slice_files)
+        if belongs_to_slice is False:
+            state.pop("buildRecovery", None)
+            state["buildBlocker"] = {
+                "status": "out_of_slice",
+                "category": category,
+                "targetFile": target_file,
+                "ownerSymbol": owner_symbol,
+                "missingSymbol": missing_symbol,
+                "firstError": str(payload.get("firstError") or ""),
+                "activeSliceId": str(state.get("activeSliceId") or ""),
+                "activeSliceFiles": slice_files,
+                "mutationGeneration": int(payload.get("mutationGeneration") or 0),
+                "recordedAt": _utc_now(),
+            }
+            state["updatedAt"] = _utc_now()
+            outcome = {
+                "ok": True,
+                "active": False,
+                "scopeDisposition": "out_of_slice",
+                "errorCode": "BUILD_FAILURE_OUTSIDE_ACTIVE_SLICE",
+                "taskSessionId": task_session_id,
+                "activeSliceId": str(state.get("activeSliceId") or ""),
+                "activeSliceFiles": slice_files,
+                "buildBlocker": dict(state["buildBlocker"]),
+            }
+            return state
+        state.pop("buildBlocker", None)
         state["buildRecovery"] = {
             "status": "evidence_required",
             "category": category,
@@ -3117,6 +3211,11 @@ def task_start(
         "selectedCandidateId": "",
         "selectedTargetSnapshots": [],
         "featureTargetSnapshots": [],
+        "directSourceEvidence": {
+            "version": 1,
+            "planRevision": resolved_plan_revision,
+            "files": {},
+        },
         "createdAt": _utc_now(),
         "updatedAt": _utc_now(),
         "toolDiscoveryCandidates": [
@@ -4739,6 +4838,13 @@ def task_replan(
             and int(replan_ledger.get("count") or 0) >= 1
         ):
             authorization = task_authorization_for_state(state)
+            checkpoint_args = {
+                "action": "record",
+                "includeGitChanges": False,
+                "taskAuthorization": compact_task_authorization(
+                    authorization
+                ),
+            }
             outcome = {
                 "ok": False,
                 "error": (
@@ -4747,13 +4853,10 @@ def task_replan(
                 ),
                 "errorCode": "REPLAN_BUDGET_EXHAUSTED",
                 "nextAction": "unreal_task_checkpoint",
-                "nextActionArgs": {
-                    "action": "record",
-                    "includeGitChanges": False,
-                    "taskAuthorization": compact_task_authorization(
-                        authorization
-                    ),
-                },
+                "nextActionIsTool": True,
+                "nextActionArgs": checkpoint_args,
+                "requiredNextTool": "unreal_task_checkpoint",
+                "requiredNextToolArgs": checkpoint_args,
                 # A fresh chat can legitimately inherit the one active task
                 # through unreal_agent_plan. Without the current authorization
                 # this recovery instruction was impossible to execute and the
@@ -4945,6 +5048,12 @@ def task_replan(
                 "taskKind": task_kind,
                 "editStrategy": str(plan_payload.get("editStrategy") or ""),
                 "planScope": plan_scope,
+                "slicePlanningRequired": _requires_runtime_slice_plan(
+                    request,
+                    task_kind,
+                    plan_scope,
+                    require_concrete_scope=feature_required,
+                ),
                 "sliceProgress": {
                     "activeSliceId": active_slice_id,
                     "completedSlices": [],
@@ -5009,6 +5118,10 @@ def task_replan(
                 "updatedAt": _utc_now(),
             }
         )
+        _reset_plan_execution_state_for_replan(
+            state,
+            active_slice_id=active_slice_id,
+        )
         # A replan is not a retry-budget reset. An autonomy-blocked task may
         # advance strategy once, but its accumulated retry counters, ceilings,
         # and prior history remain intact.
@@ -5032,6 +5145,11 @@ def task_replan(
             "count": 0,
             "calls": [],
             "resetReason": "atomic_replan",
+        }
+        state["directSourceEvidence"] = {
+            "version": 1,
+            "planRevision": next_revision,
+            "files": {},
         }
         _append_log(
             workspace,
@@ -5089,6 +5207,152 @@ def task_replan(
     return outcome
 
 
+def _validate_task_slice_plan(
+    workspace: Path,
+    state: dict[str, Any],
+    slices: list[dict[str, Any]],
+    active_slice_id: str = "",
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Validate a concrete slice plan without mutating persisted task state."""
+
+    progress = state.get("sliceProgress") if isinstance(state.get("sliceProgress"), dict) else {}
+    if progress.get("completedSlices") or state.get("buildProofHistory"):
+        return None, {
+            "ok": False,
+            "errorCode": "SLICE_PLAN_ALREADY_EXECUTING",
+            "error": "Slices must be defined before the first slice is completed.",
+        }
+    project_root = _continuity_project_root(workspace, state)
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    declared_files: set[str] = set()
+    for item in slices:
+        if not isinstance(item, dict):
+            return None, {
+                "ok": False,
+                "errorCode": "INVALID_SLICE",
+                "error": "Each slice must be an object.",
+            }
+        slice_id = str(item.get("sliceId") or item.get("slice_id") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", slice_id):
+            return None, {
+                "ok": False,
+                "errorCode": "INVALID_SLICE_ID",
+                "error": f"Invalid sliceId: {slice_id}",
+            }
+        if slice_id in seen_ids:
+            return None, {
+                "ok": False,
+                "errorCode": "DUPLICATE_SLICE_ID",
+                "error": f"Duplicate sliceId: {slice_id}",
+            }
+        raw_files = _path_values(item.get("files"))
+        if not 1 <= len(raw_files) <= MAX_FILES_PER_SLICE:
+            return None, {
+                "ok": False,
+                "errorCode": (
+                    "PLAN_SLICE_TOO_LARGE"
+                    if len(raw_files) > MAX_FILES_PER_SLICE
+                    else "SLICE_FILES_REQUIRED"
+                ),
+                "error": f"Slice {slice_id} must contain 1-{MAX_FILES_PER_SLICE} files.",
+            }
+        files: list[str] = []
+        slice_files: set[str] = set()
+        for raw_path in raw_files:
+            relative, issue = _resolve_checkpoint_relative_path(project_root, str(raw_path))
+            if issue:
+                return None, {
+                    "ok": False,
+                    "errorCode": "INVALID_SLICE_PATH",
+                    "error": issue,
+                }
+            first = relative.split("/", 1)[0].casefold()
+            if first not in {"source", "plugins", "config"}:
+                return None, {
+                    "ok": False,
+                    "errorCode": "INVALID_SLICE_PATH",
+                    "error": f"Slice paths must be under Source, Plugins, or Config: {relative}",
+                }
+            if relative in slice_files:
+                return None, {
+                    "ok": False,
+                    "errorCode": "DUPLICATE_SLICE_FILE",
+                    "error": f"A file may appear only once within slice {slice_id}: {relative}",
+                }
+            files.append(relative)
+            slice_files.add(relative)
+            declared_files.add(relative)
+        seen_ids.add(slice_id)
+        normalized.append({"sliceId": slice_id, "files": files})
+    if len(declared_files) > MAX_CHECKPOINT_FILES:
+        return None, {
+            "ok": False,
+            "errorCode": "PLAN_SCOPE_OVERFLOW",
+            "error": f"Slice plan exceeds {MAX_CHECKPOINT_FILES} files.",
+        }
+    selected = str(active_slice_id or normalized[0]["sliceId"]).strip()
+    if selected not in seen_ids:
+        return None, {
+            "ok": False,
+            "errorCode": "ACTIVE_SLICE_UNKNOWN",
+            "error": f"activeSliceId is not declared: {selected}",
+        }
+    return {
+        "slices": normalized,
+        "activeSliceId": selected,
+        "declaredFiles": declared_files,
+    }, None
+
+
+def _apply_validated_task_slice_plan(
+    state: dict[str, Any],
+    *,
+    task_session_id: str,
+    validated_plan: dict[str, Any],
+    slice_provenance: dict[str, Any] | None = None,
+) -> None:
+    normalized = list(validated_plan.get("slices") or [])
+    selected = str(validated_plan.get("activeSliceId") or "")
+    declared_files = set(validated_plan.get("declaredFiles") or [])
+    scope = dict(state.get("planScope") or {})
+    scope["slices"] = normalized
+    scope["declaredFileCount"] = len(declared_files) + len(scope.get("impactContractFiles") or [])
+    scope["overflow"] = False
+    state["planScope"] = scope
+    state["slicePlanningRequired"] = False
+    state["activeSliceId"] = selected
+    _reset_slice_selection_authority(state, active_slice_id=selected)
+    state["sliceProgress"] = {
+        "activeSliceId": selected,
+        "completedSlices": [],
+        "pendingSlices": [item["sliceId"] for item in normalized if item["sliceId"] != selected],
+    }
+    if isinstance(slice_provenance, dict) and slice_provenance:
+        state["sliceProvenance"] = dict(slice_provenance)
+    else:
+        state.pop("sliceProvenance", None)
+    state["authToken"] = uuid.uuid4().hex
+    state["completedGates"] = {}
+    state["failedGateAttempts"] = {}
+    state["compilerProof"] = {
+        "required": False,
+        "status": "not_required",
+        "symbols": [],
+    }
+    state["pendingGates"] = list(state.get("requiredBeforeWrite") or [])
+    write_gate = dict(state.get("writeGate") or {})
+    write_gate["completedBeforeWrite"] = []
+    write_gate["pendingBeforeWrite"] = list(state["pendingGates"])
+    state["writeGate"] = write_gate
+    state["continuity"] = initialize_continuity(
+        task_session_id=task_session_id,
+        plan_id=str(state.get("planId") or ""),
+        plan_revision=str(state.get("planRevision") or ""),
+        active_slice_id=selected,
+    )
+
+
 def task_define_slices(
     workspace: Path,
     *,
@@ -5139,121 +5403,27 @@ def task_define_slices(
                 "error": "Task is not running",
             }
             return None
-        progress = state.get("sliceProgress") if isinstance(state.get("sliceProgress"), dict) else {}
-        if progress.get("completedSlices") or state.get("buildProofHistory"):
-            outcome = {
-                "ok": False,
-                "errorCode": "SLICE_PLAN_ALREADY_EXECUTING",
-                "error": "Slices must be defined before the first slice is completed.",
-            }
-            return None
-
-        project_root = _continuity_project_root(workspace, state)
-        normalized: list[dict[str, Any]] = []
-        seen_ids: set[str] = set()
-        declared_files: set[str] = set()
-        for item in slices:
-            if not isinstance(item, dict):
-                outcome = {"ok": False, "errorCode": "INVALID_SLICE", "error": "Each slice must be an object."}
-                return None
-            slice_id = str(item.get("sliceId") or item.get("slice_id") or "").strip()
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", slice_id):
-                outcome = {"ok": False, "errorCode": "INVALID_SLICE_ID", "error": f"Invalid sliceId: {slice_id}"}
-                return None
-            if slice_id in seen_ids:
-                outcome = {"ok": False, "errorCode": "DUPLICATE_SLICE_ID", "error": f"Duplicate sliceId: {slice_id}"}
-                return None
-            raw_files = _path_values(item.get("files"))
-            if not 1 <= len(raw_files) <= MAX_FILES_PER_SLICE:
-                outcome = {
-                    "ok": False,
-                    "errorCode": "PLAN_SLICE_TOO_LARGE" if len(raw_files) > MAX_FILES_PER_SLICE else "SLICE_FILES_REQUIRED",
-                    "error": f"Slice {slice_id} must contain 1-{MAX_FILES_PER_SLICE} files.",
-                }
-                return None
-            files: list[str] = []
-            slice_files: set[str] = set()
-            for raw_path in raw_files:
-                relative, issue = _resolve_checkpoint_relative_path(project_root, str(raw_path))
-                if issue:
-                    outcome = {"ok": False, "errorCode": "INVALID_SLICE_PATH", "error": issue}
-                    return None
-                first = relative.split("/", 1)[0].casefold()
-                if first not in {"source", "plugins", "config"}:
-                    outcome = {
-                        "ok": False,
-                        "errorCode": "INVALID_SLICE_PATH",
-                        "error": f"Slice paths must be under Source, Plugins, or Config: {relative}",
-                    }
-                    return None
-                if relative in slice_files:
-                    outcome = {
-                        "ok": False,
-                        "errorCode": "DUPLICATE_SLICE_FILE",
-                        "error": f"A file may appear only once within slice {slice_id}: {relative}",
-                    }
-                    return None
-                files.append(relative)
-                slice_files.add(relative)
-                declared_files.add(relative)
-            seen_ids.add(slice_id)
-            normalized.append({"sliceId": slice_id, "files": files})
-
-        if len(declared_files) > MAX_CHECKPOINT_FILES:
-            outcome = {
-                "ok": False,
-                "errorCode": "PLAN_SCOPE_OVERFLOW",
-                "error": f"Slice plan exceeds {MAX_CHECKPOINT_FILES} files.",
-            }
-            return None
-        selected = str(active_slice_id or normalized[0]["sliceId"]).strip()
-        if selected not in seen_ids:
-            outcome = {
-                "ok": False,
-                "errorCode": "ACTIVE_SLICE_UNKNOWN",
-                "error": f"activeSliceId is not declared: {selected}",
-            }
-            return None
-
-        scope = dict(state.get("planScope") or {})
-        scope["slices"] = normalized
-        scope["declaredFileCount"] = len(declared_files) + len(scope.get("impactContractFiles") or [])
-        scope["overflow"] = False
-        state["planScope"] = scope
-        state["slicePlanningRequired"] = False
-        state["activeSliceId"] = selected
-        _reset_slice_selection_authority(state, active_slice_id=selected)
-        state["sliceProgress"] = {
-            "activeSliceId": selected,
-            "completedSlices": [],
-            "pendingSlices": [item["sliceId"] for item in normalized if item["sliceId"] != selected],
-        }
-        if isinstance(slice_provenance, dict) and slice_provenance:
-            # This is server-issued provenance, never a model-owned slice
-            # field. It lets later gates reuse a validated architecture
-            # contract without asking the model to copy or reinterpret it.
-            state["sliceProvenance"] = dict(slice_provenance)
-        else:
-            state.pop("sliceProvenance", None)
-        state["authToken"] = uuid.uuid4().hex
-        state["completedGates"] = {}
-        state["failedGateAttempts"] = {}
-        state["compilerProof"] = {
-            "required": False,
-            "status": "not_required",
-            "symbols": [],
-        }
-        state["pendingGates"] = list(state.get("requiredBeforeWrite") or [])
-        write_gate = dict(state.get("writeGate") or {})
-        write_gate["completedBeforeWrite"] = []
-        write_gate["pendingBeforeWrite"] = list(state["pendingGates"])
-        state["writeGate"] = write_gate
-        state["continuity"] = initialize_continuity(
-            task_session_id=task_session_id,
-            plan_id=str(state.get("planId") or ""),
-            plan_revision=str(state.get("planRevision") or ""),
-            active_slice_id=selected,
+        validated_plan, validation_error = _validate_task_slice_plan(
+            workspace,
+            state,
+            slices,
+            active_slice_id,
         )
+        if validation_error or validated_plan is None:
+            outcome = validation_error or {
+                "ok": False,
+                "errorCode": "INVALID_SLICE",
+                "error": "Slice validation failed.",
+            }
+            return None
+        _apply_validated_task_slice_plan(
+            state,
+            task_session_id=task_session_id,
+            validated_plan=validated_plan,
+            slice_provenance=slice_provenance,
+        )
+        normalized = list(validated_plan["slices"])
+        selected = str(validated_plan["activeSliceId"])
         state["updatedAt"] = _utc_now()
         outcome = {
             "ok": True,
@@ -5835,6 +6005,222 @@ def task_checkpoint(
 DEFAULT_GATE_TTL_SECONDS = 2 * 60 * 60
 
 
+def _task_project_root(state: dict[str, Any]) -> Path | None:
+    project_file = str(state.get("projectFile") or "").strip()
+    if not project_file:
+        return None
+    candidate = Path(project_file).expanduser()
+    return candidate.parent if candidate.suffix.casefold() == ".uproject" else candidate
+
+
+def _normalize_task_scope_target(
+    state: dict[str, Any],
+    raw_path: Any,
+) -> tuple[str, str, str]:
+    """Normalize one task-owned source path without weakening host FS semantics."""
+
+    value = str(raw_path or "").strip()
+    if not value:
+        return "", "", "target path is empty"
+    if value.casefold().startswith("project://"):
+        value = value[len("project://") :]
+    if _is_logical_or_placeholder_path(value):
+        return "", "", f"target path is not a concrete project file: {raw_path}"
+
+    root = _task_project_root(state)
+    candidate = Path(value).expanduser()
+    if root is not None:
+        try:
+            resolved_root = root.resolve()
+            resolved = (
+                candidate.resolve()
+                if candidate.is_absolute()
+                else (resolved_root / candidate).resolve()
+            )
+            display = resolved.relative_to(resolved_root).as_posix()
+        except (OSError, ValueError):
+            return "", "", f"target path is outside the active project: {raw_path}"
+    else:
+        if candidate.is_absolute() or ".." in candidate.parts:
+            return "", "", f"target path cannot be bound without an active project: {raw_path}"
+        display = candidate.as_posix().removeprefix("./").strip("/")
+
+    # normcase preserves case on case-sensitive hosts and folds it on Windows.
+    # This avoids accepting a wrong-case Linux path while retaining native
+    # Windows/macOS project behavior.
+    key = os.path.normcase(display).replace("\\", "/")
+    return display, key, ""
+
+
+def _code_sketch_target_scope_contract(
+    state: dict[str, Any],
+    target_files: list[str] | None,
+) -> dict[str, Any]:
+    """Compare model-supplied sketch targets with the bound Feature Intent scope."""
+
+    required = [str(item) for item in state.get("requiredBeforeWrite") or []]
+    completed = (
+        state.get("completedGates")
+        if isinstance(state.get("completedGates"), dict)
+        else {}
+    )
+    authority_gate = resolve_scope_authority_gate(required)
+    if (
+        authority_gate != "unreal_feature_intent_resolve"
+        or "unreal_feature_intent_resolve" not in completed
+    ):
+        return {
+            "ok": True,
+            "enforced": False,
+            "scopeAuthorityGate": authority_gate,
+        }
+
+    route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
+    selected_slice = (
+        route.get("selectedSlice")
+        if isinstance(route.get("selectedSlice"), dict)
+        else {}
+    )
+    route_files = [
+        str(item).strip()
+        for item in selected_slice.get("files") or []
+        if str(item).strip()
+    ]
+    owner_snapshots = normalized_selection_snapshots(
+        state.get("selectedTargetSnapshots")
+    )
+    owner_files = [
+        str(item.get("path") or "").strip()
+        for item in owner_snapshots
+        if str(item.get("path") or "").strip()
+    ]
+
+    def normalize_many(values: list[str]) -> tuple[list[str], dict[str, str], list[str]]:
+        displays: list[str] = []
+        by_key: dict[str, str] = {}
+        issues: list[str] = []
+        for raw in values:
+            display, key, issue = _normalize_task_scope_target(state, raw)
+            if issue:
+                issues.append(issue)
+                continue
+            if key not in by_key:
+                displays.append(display)
+                by_key[key] = display
+        return displays, by_key, issues
+
+    route_displays, route_by_key, route_issues = normalize_many(route_files)
+    owner_displays, owner_by_key, owner_issues = normalize_many(owner_files)
+    if (
+        not route_by_key
+        or not owner_by_key
+        or set(route_by_key) != set(owner_by_key)
+        or route_issues
+        or owner_issues
+    ):
+        return {
+            "ok": False,
+            "enforced": True,
+            "errorCode": "CODE_SKETCH_SCOPE_AUTHORITY_STALE",
+            "error": (
+                "The active Feature Intent slice and its bound target snapshots do not "
+                "describe the same concrete files."
+            ),
+            "scopeAuthorityGate": authority_gate,
+            "serverOwnedTargetFiles": route_displays or owner_displays,
+            "submittedTargetFiles": [],
+            "outOfScopeTargetFiles": [],
+            "missingTargetFiles": route_displays or owner_displays,
+            "scopeIssues": [*route_issues, *owner_issues],
+        }
+
+    submitted_raw = [str(item) for item in target_files or [] if str(item).strip()]
+    submitted_displays, submitted_by_key, submitted_issues = normalize_many(
+        submitted_raw
+    )
+    outside = [
+        submitted_by_key[key]
+        for key in submitted_by_key
+        if key not in route_by_key
+    ]
+    if not submitted_by_key or outside or submitted_issues:
+        reported_outside = list(outside)
+        if submitted_issues and not reported_outside:
+            reported_outside = submitted_raw
+        return {
+            "ok": False,
+            "enforced": True,
+            "errorCode": "CODE_SKETCH_TARGET_SCOPE_MISMATCH",
+            "error": (
+                "Code-sketch targetFiles must be a non-empty unchanged subset of the "
+                "server-owned Feature Intent slice."
+            ),
+            "scopeAuthorityGate": authority_gate,
+            "serverOwnedTargetFiles": route_displays,
+            "submittedTargetFiles": submitted_displays,
+            "outOfScopeTargetFiles": reported_outside,
+            "missingTargetFiles": route_displays if not submitted_by_key else [],
+            "scopeIssues": submitted_issues,
+            "allowedSubset": True,
+        }
+
+    return {
+        "ok": True,
+        "enforced": True,
+        "scopeAuthorityGate": authority_gate,
+        "serverOwnedTargetFiles": route_displays,
+        "submittedTargetFiles": submitted_displays,
+        "outOfScopeTargetFiles": [],
+        "missingTargetFiles": [],
+        "allowedSubset": True,
+    }
+
+
+def task_validate_code_sketch_scope(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any] | None,
+    target_files: list[str] | None,
+) -> dict[str, Any]:
+    """Fail closed before expensive sketch validation when Feature Intent owns scope."""
+
+    authorization = (
+        task_authorization if isinstance(task_authorization, dict) else {}
+    )
+    task_session_id = str(
+        authorization.get("taskSessionId")
+        or authorization.get("task_session_id")
+        or ""
+    ).strip()
+    if not task_session_id:
+        return {"ok": True, "enforced": False, "legacy": True}
+
+    with _task_lock(workspace, task_session_id):
+        try:
+            state = _read_state(workspace, task_session_id)
+        except TaskStateReadError as exc:
+            return _task_state_error(task_session_id, exc)
+        if not state:
+            return {
+                "ok": False,
+                "errorCode": "TASK_STATE_MISSING",
+                "error": f"Unknown task: {task_session_id}",
+            }
+        state = _refresh_server_owned_state(state)
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            return _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                },
+                state,
+                mismatched_fields=mismatches,
+            )
+        return _code_sketch_target_scope_contract(state, target_files)
+
+
 def task_record_gate(
     workspace: Path,
     *,
@@ -5844,6 +6230,7 @@ def task_record_gate(
     evidence: dict[str, Any],
     target_snapshots: list[dict[str, Any]] | None = None,
     intent_binding: dict[str, Any] | None = None,
+    slice_plan: dict[str, Any] | None = None,
     ttl_seconds: int = DEFAULT_GATE_TTL_SECONDS,
 ) -> dict[str, Any]:
     """Record one successful pre-write gate against its exact plan and evidence."""
@@ -5899,6 +6286,36 @@ def task_record_gate(
             }
             return None
         gate_set_hash = str(state.get("requiredGateSetHash") or "")
+        validated_slice_plan: dict[str, Any] | None = None
+        if isinstance(slice_plan, dict) and slice_plan:
+            if gate != "unreal_feature_intent_resolve":
+                record_result = {
+                    "ok": False,
+                    "errorCode": "SLICE_BINDING_GATE_MISMATCH",
+                    "error": "Atomic slice binding is available only to Feature Intent.",
+                }
+                return None
+            candidate_slices = slice_plan.get("slices")
+            if not isinstance(candidate_slices, list) or not candidate_slices:
+                record_result = {
+                    "ok": False,
+                    "errorCode": "SLICE_PLAN_REQUIRED",
+                    "error": "Atomic Feature Intent binding requires concrete slices.",
+                }
+                return None
+            validated_slice_plan, slice_error = _validate_task_slice_plan(
+                workspace,
+                state,
+                candidate_slices,
+                str(slice_plan.get("activeSliceId") or ""),
+            )
+            if slice_error or validated_slice_plan is None:
+                record_result = slice_error or {
+                    "ok": False,
+                    "errorCode": "INVALID_SLICE",
+                    "error": "Atomic slice validation failed.",
+                }
+                return None
         feature_binding: dict[str, Any] = {}
         if gate == "unreal_feature_intent_resolve":
             from feature_intent_contract import target_snapshot_hash
@@ -5937,6 +6354,52 @@ def task_record_gate(
                     "errorCode": "FEATURE_INTENT_TARGET_MISMATCH",
                 }
                 return None
+            if validated_slice_plan is not None:
+                active_slice_id = str(validated_slice_plan.get("activeSliceId") or "")
+                active_slice = next(
+                    (
+                        item
+                        for item in validated_slice_plan.get("slices") or []
+                        if str(item.get("sliceId") or "") == active_slice_id
+                    ),
+                    {},
+                )
+                bound_paths = {
+                    str(path or "").replace("\\", "/").strip("/").casefold()
+                    for path in active_slice.get("files") or []
+                    if str(path or "").strip()
+                }
+                snapshot_paths = {
+                    str(item.get("path") or "").replace("\\", "/").strip("/").casefold()
+                    for item in target_snapshots or []
+                    if isinstance(item, dict) and str(item.get("path") or "").strip()
+                }
+                if not bound_paths or snapshot_paths != bound_paths:
+                    record_result = {
+                        "ok": False,
+                        "errorCode": "FEATURE_INTENT_SLICE_SNAPSHOT_MISMATCH",
+                        "error": "Feature Intent snapshots must exactly match the proposed active slice.",
+                    }
+                    return None
+                _apply_validated_task_slice_plan(
+                    state,
+                    task_session_id=task_session_id,
+                    validated_plan=validated_slice_plan,
+                )
+                # The active slice participates in the gate-set identity.  An
+                # atomic Feature Intent rebind therefore needs the *new* hash
+                # before its gate record is created.  Keeping the pre-rebind
+                # hash makes _refresh_server_owned_state correctly treat the
+                # just-created record as stale and erase it on persistence.
+                gate_set_hash = required_gate_set_hash(
+                    task_session_id=str(state.get("taskSessionId") or ""),
+                    plan_id=str(state.get("planId") or ""),
+                    plan_revision=str(state.get("planRevision") or ""),
+                    active_slice_id=str(state.get("activeSliceId") or ""),
+                    project_file=str(state.get("projectFile") or ""),
+                    required_gates=required,
+                )
+                state["requiredGateSetHash"] = gate_set_hash
             continuity = dict(state.get("continuity") or {})
             checkpoint = dict(continuity.get("checkpoint") or {})
             checkpoint_hash = str(
@@ -5959,6 +6422,28 @@ def task_record_gate(
                 "checkpointHash": checkpoint_hash,
                 "targetSnapshotHash": actual_target_hash,
             }
+        if gate == "unreal_code_sketch_claim_validate":
+            scope_contract = _code_sketch_target_scope_contract(
+                state,
+                [
+                    str(item.get("path") or "")
+                    for item in target_snapshots or []
+                    if isinstance(item, dict)
+                ],
+            )
+            if scope_contract.get("ok") is False:
+                record_result = {
+                    **scope_contract,
+                    "ok": False,
+                    "errorCode": "SCOPE_AUTHORITY_MISMATCH",
+                    "error": (
+                        "unreal_code_sketch_claim_validate target snapshots must be a "
+                        "non-empty unchanged subset of the active Feature Intent scope."
+                    ),
+                    "scopeAuthority": dict(state.get("scopeAuthority") or {}),
+                    "invalidTargets": list(target_snapshots or []),
+                }
+                return None
         record = {
             "gate": gate,
             "status": "completed",
@@ -6145,6 +6630,15 @@ def task_record_gate(
             "scopeAuthority": dict(state.get("scopeAuthority") or {}),
             **task_phase_from_state(state),
         }
+        if validated_slice_plan is not None:
+            record_result["sliceResolution"] = {
+                "serverOwned": True,
+                "activeSliceId": str(validated_slice_plan.get("activeSliceId") or ""),
+                "sliceCount": len(validated_slice_plan.get("slices") or []),
+                "pendingSlices": list(
+                    (state.get("sliceProgress") or {}).get("pendingSlices") or []
+                ),
+            }
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
@@ -7280,6 +7774,42 @@ def task_status(workspace: Path, task_session_id: str) -> dict[str, Any]:
         if not state:
             return {"ok": False, "error": f"Unknown task: {task_session_id}"}
         return _task_response(workspace, state)
+
+
+def task_direct_source_evidence(
+    workspace: Path,
+    task_session_id: str,
+) -> dict[str, Any]:
+    """Return the internal, bounded successful source-read ledger for one task.
+
+    The public task projection intentionally omits this server-owned ledger. It
+    is consumed by cross-process pre-write gates so model claims cannot replace
+    successful Agent read_file/read_file_range evidence.
+    """
+    try:
+        state = _read_state(workspace, task_session_id)
+    except TaskStateReadError as exc:
+        return _task_state_error(task_session_id, exc)
+    if not state:
+        return {"ok": False, "error": f"Unknown task: {task_session_id}"}
+    ledger = (
+        state.get("directSourceEvidence")
+        if isinstance(state.get("directSourceEvidence"), dict)
+        else {}
+    )
+    raw_files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
+    files = {
+        str(key): dict(value)
+        for key, value in raw_files.items()
+        if isinstance(value, dict)
+    }
+    return {
+        "ok": True,
+        "taskSessionId": task_session_id,
+        "planRevision": str(state.get("planRevision") or ""),
+        "evidencePlanRevision": str(ledger.get("planRevision") or ""),
+        "files": files,
+    }
 
 
 def task_approve(workspace: Path, task_session_id: str, *, note: str = "") -> dict[str, Any]:

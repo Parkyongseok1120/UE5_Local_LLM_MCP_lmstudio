@@ -3,12 +3,49 @@
 const assert = require("assert");
 const test = require("node:test");
 const {
+  applyBuildRecoveryScopeBinding,
   buildResponsePayload,
   buildToolDisposition,
   extractLikelyCompileErrors,
   compactCompilerDiagnostic,
   firstErrorCluster,
 } = require("../src/context-ux");
+
+test("out-of-slice build recovery stops instead of authorizing ownership expansion", () => {
+  const payload = buildResponsePayload({
+    result: {
+      ok: false,
+      exitCode: 6,
+      stdout: 'Module.Demo.gen.cpp.obj : error LNK2019: "public: bool __cdecl ADemoGameMode::SetPlayerReady(class APlayerController *,bool)"',
+      stderr: "",
+      error: "",
+    },
+    build: { target: "DemoEditor", platform: "Win64", configuration: "Development" },
+    planResult: { ok: true },
+    projectPath: "C:\\Game\\Demo.uproject",
+    command: "UnrealBuildTool.exe DemoEditor Win64 Development",
+    logPath: "C:\\Game\\.agent\\logs\\latest-build.log",
+    verbose: false,
+  });
+
+  applyBuildRecoveryScopeBinding(payload, {
+    scopeDisposition: "out_of_slice",
+    activeSliceId: "local_input",
+    activeSliceFiles: [
+      "Source/Demo/DemoPlayerController.h",
+      "Source/Demo/DemoPlayerController.cpp",
+    ],
+  });
+  const disposition = buildToolDisposition(payload);
+
+  assert.strictEqual(payload.errorCode, "BUILD_FAILURE_OUTSIDE_ACTIVE_SLICE");
+  assert.strictEqual(payload.stopCurrentWorkflow, true);
+  assert.strictEqual(payload.requiredNextTool, null);
+  assert.strictEqual(payload.recovery.scopeStrategy, "out_of_slice_blocker");
+  assert.deepStrictEqual(payload.suggestedToolCalls, []);
+  assert.strictEqual(disposition.recoverable, false);
+  assert.strictEqual(disposition.mcpIsError, true);
+});
 
 test("compiler failure is a recoverable build outcome, not an MCP tool error", () => {
   const payload = buildResponsePayload({

@@ -84,6 +84,23 @@ def _compact_generation_contract(value: Any) -> dict[str, Any]:
                 if item not in (None, "", [])
             }
         )
+    raw_binding = (
+        value.get("surfaceBinding")
+        if isinstance(value.get("surfaceBinding"), dict)
+        else {}
+    )
+    surface_binding = {
+        key: item
+        for key, item in {
+            "ok": raw_binding.get("ok"),
+            "targetFiles": (raw_binding.get("targetFiles") or [])[:4],
+            "definitionClaims": (raw_binding.get("definitionClaims") or [])[:8],
+            "outsideDefinitionOwners": (
+                raw_binding.get("outsideDefinitionOwners") or []
+            )[:8],
+        }.items()
+        if item not in (None, "", [])
+    }
     return {
         key: item
         for key, item in {
@@ -98,6 +115,8 @@ def _compact_generation_contract(value: Any) -> dict[str, Any]:
             "issues": value.get("issues") or [],
             "warnings": value.get("warnings") or [],
             "writeGate": value.get("writeGate") or {},
+            "surfaceBinding": surface_binding,
+            "materialDelta": value.get("materialDelta") or {},
             "architectureImplementationGate": value.get("architectureImplementationGate") or {},
             "proofBoundary": value.get("proofBoundary"),
         }.items()
@@ -149,6 +168,7 @@ def compact_code_sketch_payload(
         key: payload[key]
         for key in (
             "ok",
+            "status",
             "errorCode",
             "error",
             "retryable",
@@ -237,6 +257,7 @@ def compact_code_sketch_payload(
         key: compact[key]
         for key in (
             "ok",
+            "status",
             "errorCode",
             "error",
             "verdictSummary",

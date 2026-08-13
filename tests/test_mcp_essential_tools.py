@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import shutil
 import sys
@@ -579,9 +580,12 @@ def test_autonomy_blocked_route_lists_and_dispatches_bounded_replan(
     assert denied["ok"] is False
     assert denied["errorCode"] == "REPLAN_BUDGET_EXHAUSTED"
     assert denied["checkpointRecordRequired"] is True
+    assert denied["nextActionIsTool"] is True
+    assert denied["requiredNextTool"] == "unreal_task_checkpoint"
     assert denied["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
     assert denied["nextActionArgs"]["action"] == "record"
     assert denied["nextActionArgs"]["taskAuthorization"] == denied["taskAuthorization"]
+    assert denied["requiredNextToolArgs"] == denied["nextActionArgs"]
     assert "Do not call unreal_agent_plan again" in denied["agentInstruction"]
 
 
@@ -597,7 +601,6 @@ def test_blocked_routes_keep_catalog_but_reject_replan_at_call_time(
     from tool_exposure import load_stable_manifest
 
     essential = set(load_stable_manifest()["ragEssential"])
-    always = set(load_stable_manifest()["ragAlwaysDiscoverable"])
     started = task_start(
         tmp_path,
         request="Edit Source/Demo/Foo.cpp",
@@ -621,9 +624,7 @@ def test_blocked_routes_keep_catalog_but_reject_replan_at_call_time(
         return {tool["name"] for tool in server.all_tool_definitions()}
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    phase_catalog = essential & (
-        always | set(state["toolRoute"]["activeTools"])
-    )
+    phase_catalog = essential
     state["continuity"]["lease"]["expiresAt"] = "2000-01-01T00:00:00+00:00"
     state_path.write_text(json.dumps(state), encoding="utf-8")
     assert catalog_names() == phase_catalog
@@ -719,7 +720,7 @@ def test_clean_startup_advertises_manifest_rag_essential(monkeypatch, tmp_path) 
     assert diag["routeContextStatus"] == "none"
 
 
-def test_active_route_exposes_only_phase_rag_tools_and_controls(monkeypatch, tmp_path) -> None:
+def test_active_route_keeps_transport_rag_catalog_profile_stable(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     mod = _load_rag_mcp_module()
@@ -742,12 +743,9 @@ def test_active_route_exposes_only_phase_rag_tools_and_controls(monkeypatch, tmp
     )
     server = mod.McpServer(tmp_path / "missing.sqlite")
     server.workspace = tmp_path
-    expected = essential & (
-        set(load_stable_manifest()["ragAlwaysDiscoverable"])
-        | set(started["state"]["toolRoute"]["activeTools"])
-    )
+    expected = essential
     assert {tool["name"] for tool in server.all_tool_definitions()} == expected
-    assert expected < essential
+    assert "unreal_feature_intent_resolve" in expected
     diag = server.tool_catalog_diagnostics()
     assert diag["routeContextStatus"] == "active"
     assert diag["advertisedCount"] == len(expected)
@@ -760,7 +758,7 @@ def test_corrupt_route_keeps_catalog_and_recovery_controls(monkeypatch, tmp_path
     from task_api import task_root, task_start
     from tool_exposure import load_stable_manifest
 
-    always = set(load_stable_manifest()["ragAlwaysDiscoverable"])
+    essential = set(load_stable_manifest()["ragEssential"])
     started = task_start(
         tmp_path,
         request="Edit Source/Demo/Foo.cpp",
@@ -781,7 +779,7 @@ def test_corrupt_route_keeps_catalog_and_recovery_controls(monkeypatch, tmp_path
     sent: list[dict] = []
     server.send = sent.append
     names = {tool["name"] for tool in server.all_tool_definitions()}
-    assert names == always
+    assert names == essential
     assert "unreal_task_quarantine_corrupt" in names
     diag = server.tool_catalog_diagnostics()
     assert diag["routeContextStatus"] == "ambiguous_or_corrupt"
@@ -1194,6 +1192,203 @@ def test_architecture_handoff_is_not_reused_by_another_chat(monkeypatch, tmp_pat
         project,
         session_id="chat-a",
     ) == {}
+
+
+def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE", "0")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "agent-state"))
+    project = tmp_path / "Demo" / "Demo.uproject"
+    source = project.parent / "Source" / "Demo"
+    source.mkdir(parents=True)
+    project.write_text("{}", encoding="utf-8")
+    (source / "RuleEngine.h").write_text("class FRuleEngine {};\n", encoding="utf-8")
+    (source / "RuleEngine.cpp").write_text('#include "RuleEngine.h"\n', encoding="utf-8")
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(json.dumps({"activeProject": str(project)}), encoding="utf-8")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    from task_api import task_root, task_start, task_status
+
+    started = task_start(
+        tmp_path,
+        request="Inspect the implementation and select the earliest incomplete feature",
+        mode="agent_edit",
+        project_file=str(project),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": [
+                    "unreal_feature_intent_resolve",
+                    "unreal_code_sketch_claim_validate",
+                ]
+            },
+            "executablePlanSlices": [{"sliceId": "task", "files": []}],
+        },
+    )
+    before = task_status(tmp_path, started["taskSessionId"])["state"]
+    before_scope = before["planScope"]
+    before_slice = before["activeSliceId"]
+    before_auth = started["taskAuthorization"]
+
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        17004,
+        {
+            "name": "unreal_feature_intent_resolve",
+            "arguments": {
+                "taskAuthorization": before_auth,
+                "selectionRationale": "A semantic selection is still required.",
+                "slices": [
+                    {
+                        "sliceId": "invented-rebind",
+                        "files": [
+                            "Source/Demo/RuleEngine.h",
+                            "Source/Demo/RuleEngine.cpp",
+                        ],
+                    }
+                ],
+                "activeSliceId": "invented-rebind",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "FEATURE_INTENT_SELECTION_REQUIRED"
+    assert payload["internalPhases"] == ["SelectIntent"]
+    after = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert after["planScope"] == before_scope
+    assert after["activeSliceId"] == before_slice
+    assert after["slicePlanningRequired"] is True
+    assert after["selectedIntentId"] == ""
+    assert after["toolRoute"]["selectedSlice"]["files"] == []
+    persisted = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["authToken"] == before_auth["authToken"]
+    persisted["directSourceEvidence"] = {
+        "version": 1,
+        "planRevision": persisted["planRevision"],
+        "files": {
+            relative.casefold(): {
+                "path": relative,
+                "contentHash": hashlib.sha256(
+                    (project.parent / relative).read_bytes()
+                ).hexdigest(),
+                "sourceKind": "declaration" if relative.endswith(".h") else "implementation",
+                "lineRanges": ["1-200"],
+                "tools": ["read_file"],
+            }
+            for relative in ["Source/Demo/RuleEngine.h"]
+        },
+    }
+    (task_root(tmp_path, started["taskSessionId"]) / "state.json").write_text(
+        json.dumps(persisted),
+        encoding="utf-8",
+    )
+
+    probe = mod.resolve_feature_intent(
+        "Inspect the implementation and select the earliest incomplete feature",
+        write_intent=True,
+    )
+    selected = probe["candidates"][0]["intentId"]
+    answers = {
+        dimension: f"explicit {dimension}"
+        for dimension in probe["ambiguity"]["missingDimensions"][:3]
+    }
+    feature_args = {
+        "taskAuthorization": before_auth,
+        "selectedIntentId": selected,
+        "selectionRationale": "Bind the earliest incomplete bounded implementation slice.",
+        "blockingQuestionAnswers": answers,
+        "slices": [
+            {
+                "sliceId": "verified-rebind",
+                "files": [
+                    "Source/Demo/RuleEngine.h",
+                    "Source/Demo/RuleEngine.cpp",
+                ],
+            }
+        ],
+        "activeSliceId": "verified-rebind",
+    }
+    server.handle_tool_call(
+        17005,
+        {
+            "name": "unreal_feature_intent_resolve",
+            "arguments": feature_args,
+        },
+    )
+    evidence_blocked = sent[-1]["result"]["structuredContent"]
+    assert evidence_blocked["errorCode"] == "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED"
+    assert evidence_blocked["directSourceEvidence"]["verifiedTargetFiles"] == [
+        "Source/Demo/RuleEngine.h"
+    ]
+    assert evidence_blocked["directSourceEvidence"]["missingTargetFiles"] == [
+        "Source/Demo/RuleEngine.cpp"
+    ]
+    assert evidence_blocked["internalPhases"] == [
+        "SelectIntent",
+        "ResolveSlice",
+        "CaptureSnapshot",
+    ]
+    persisted = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    relative = "Source/Demo/RuleEngine.cpp"
+    persisted["directSourceEvidence"]["files"][relative.casefold()] = {
+        "path": relative,
+        "contentHash": hashlib.sha256((project.parent / relative).read_bytes()).hexdigest(),
+        "sourceKind": "implementation",
+        "lineRanges": ["1-200"],
+        "tools": ["read_file"],
+    }
+    (task_root(tmp_path, started["taskSessionId"]) / "state.json").write_text(
+        json.dumps(persisted),
+        encoding="utf-8",
+    )
+    server.handle_tool_call(
+        17006,
+        {"name": "unreal_feature_intent_resolve", "arguments": feature_args},
+    )
+    resolved = sent[-1]["result"]["structuredContent"]
+    assert resolved["ok"] is True, resolved
+    assert resolved["internalPhases"] == [
+        "SelectIntent",
+        "ResolveSlice",
+        "CaptureSnapshot",
+        "BindIntent",
+    ]
+    assert resolved["sliceResolution"]["activeSliceId"] == "verified-rebind"
+    final = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert final["activeSliceId"] == "verified-rebind"
+    assert final["planScope"]["slices"] == [
+        {
+            "sliceId": "verified-rebind",
+            "files": [
+                "Source/Demo/RuleEngine.h",
+                "Source/Demo/RuleEngine.cpp",
+            ],
+        }
+    ]
+    assert final["selectedIntentId"] == "bounded_local"
+    assert "unreal_feature_intent_resolve" in final["completedGates"], (
+        resolved,
+        final,
+    )
+    assert final["completedGates"]["unreal_feature_intent_resolve"]["status"] == "completed"
 
 
 def test_pure_continuation_reuses_active_task_without_replanning(monkeypatch, tmp_path):
@@ -1690,6 +1885,242 @@ def test_greenfield_sketch_gate_advances_to_executor(monkeypatch, tmp_path):
     assert "server resolves current route fields" in text_result
 
 
+def test_code_sketch_rejects_target_outside_bound_feature_intent_before_graph(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    project = tmp_path / "O_Mock"
+    source = project / "Source" / "O_Mock"
+    source.mkdir(parents=True)
+    targets = [
+        source / "GomokuGameMode.cpp",
+        source / "GomokuPlayerController.cpp",
+    ]
+    outside = source / "O_Mock.cpp"
+    for target in [*targets, outside]:
+        target.write_text(f"// {target.name}\n", encoding="utf-8")
+    uproject = project / "O_Mock.uproject"
+    uproject.write_text("{}", encoding="utf-8")
+
+    from feature_intent_contract import target_snapshot_hash
+    from task_api import task_record_gate, task_start, task_status
+
+    feature_gate = "unreal_feature_intent_resolve"
+    sketch_gate = "unreal_code_sketch_claim_validate"
+    started = task_start(
+        tmp_path,
+        request="Implement the earliest unfinished local Gomoku feature",
+        project_file=str(uproject),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "featureIntent": {
+                "ambiguity": {
+                    "ambiguityScore": 0.6,
+                    "recommendedAction": "resolve_before_write",
+                },
+                "candidateCount": 1,
+                "candidates": [
+                    {
+                        "intentId": "bounded_local",
+                        "title": "Bounded local play",
+                        "score": 90,
+                    }
+                ],
+                "requiresResolution": True,
+            },
+            "orchestration": {
+                "requiredBeforeWrite": [feature_gate, sketch_gate],
+            },
+            "executablePlanSlices": [
+                {
+                    "sliceId": "bounded_local",
+                    "files": [
+                        "Source/O_Mock/GomokuGameMode.cpp",
+                        "Source/O_Mock/GomokuPlayerController.cpp",
+                    ],
+                }
+            ],
+        },
+    )
+    snapshots = [
+        {
+            "path": f"Source/O_Mock/{target.name}",
+            "absolutePath": str(target.resolve()),
+            "exists": True,
+            "fileHash": hashlib.sha1(target.read_bytes()).hexdigest(),
+        }
+        for target in targets
+    ]
+    feature = task_record_gate(
+        tmp_path,
+        gate_name=feature_gate,
+        task_authorization=started["taskAuthorization"],
+        input_payload={"selectedIntentId": "bounded_local"},
+        evidence={"ok": True},
+        target_snapshots=snapshots,
+        intent_binding={
+            "selectedIntentId": "bounded_local",
+            "intentContractHash": "a" * 64,
+            "acceptanceOracleHash": "b" * 64,
+            "targetSnapshotHash": target_snapshot_hash(snapshots),
+        },
+    )
+    assert feature["ok"] is True
+    before = task_status(tmp_path, started["taskSessionId"])["state"]
+
+    def graph_must_not_run(*_args, **_kwargs):
+        raise AssertionError("out-of-scope sketch must fail before graph construction")
+
+    server.architecture_graph = graph_must_not_run
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        182,
+        {
+            "name": sketch_gate,
+            "arguments": {
+                "sketch": (
+                    "// Source/O_Mock/O_Mock.cpp\n"
+                    "void FOutOfScopeAutomationProbe() {}\n"
+                ),
+                "request": "Implement the earliest unfinished local Gomoku feature",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/O_Mock/O_Mock.cpp"],
+                "changeKind": "modify_existing",
+                "taskAuthorization": feature["taskAuthorization"],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "CODE_SKETCH_TARGET_SCOPE_MISMATCH"
+    assert payload["gatePassed"] is False
+    assert payload["writeGateClosed"] is True
+    assert payload["serverOwnedTargetFiles"] == [
+        "Source/O_Mock/GomokuGameMode.cpp",
+        "Source/O_Mock/GomokuPlayerController.cpp",
+    ]
+    assert payload["submittedTargetFiles"] == ["Source/O_Mock/O_Mock.cpp"]
+    assert payload["outOfScopeTargetFiles"] == ["Source/O_Mock/O_Mock.cpp"]
+    assert "graphStatus" not in payload
+    assert "intentionally skipped" in payload["generationContract"]["proofBoundary"]
+    assert payload["gateCompletion"]["ok"] is False
+
+    after = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert after["planRevision"] == before["planRevision"]
+    assert after["activeSliceId"] == before["activeSliceId"]
+    assert sketch_gate in after["pendingGates"]
+    assert sketch_gate not in after["completedGates"]
+    assert after["selectedTargetSnapshots"] == before["selectedTargetSnapshots"]
+
+
+def test_task_bound_code_sketch_rejects_existing_source_restatement(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    project = tmp_path / "Demo"
+    target = project / "Source" / "Demo" / "Worker.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "class FWorker {};\nvoid FWorker::Run() { return; }\n",
+        encoding="utf-8",
+    )
+    uproject = project / "Demo.uproject"
+    uproject.write_text("{}", encoding="utf-8")
+
+    from feature_intent_contract import target_snapshot_hash
+    from task_api import task_record_gate, task_start, task_status
+
+    feature_gate = "unreal_feature_intent_resolve"
+    sketch_gate = "unreal_code_sketch_claim_validate"
+    started = task_start(
+        tmp_path,
+        request="Implement the first missing local behavior.",
+        project_file=str(uproject),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "featureIntent": {"requiresResolution": True},
+            "orchestration": {
+                "requiredBeforeWrite": [feature_gate, sketch_gate],
+            },
+            "executablePlanSlices": [
+                {"sliceId": "worker", "files": ["Source/Demo/Worker.cpp"]}
+            ],
+        },
+    )
+    snapshots = [
+        {
+            "path": "Source/Demo/Worker.cpp",
+            "absolutePath": str(target.resolve()),
+            "exists": True,
+            "fileHash": hashlib.sha1(target.read_bytes()).hexdigest(),
+        }
+    ]
+    feature = task_record_gate(
+        tmp_path,
+        gate_name=feature_gate,
+        task_authorization=started["taskAuthorization"],
+        input_payload={"selectedIntentId": "bounded_local"},
+        evidence={"ok": True},
+        target_snapshots=snapshots,
+        intent_binding={
+            "selectedIntentId": "bounded_local",
+            "intentContractHash": "a" * 64,
+            "acceptanceOracleHash": "b" * 64,
+            "targetSnapshotHash": target_snapshot_hash(snapshots),
+        },
+    )
+    assert feature["ok"] is True
+    server.architecture_graph = lambda *_args, **_kwargs: (
+        {"symbols": []},
+        "fresh",
+        0.0,
+    )
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        183,
+        {
+            "name": sketch_gate,
+            "arguments": {
+                "sketch": "void FWorker::Run() { return; }",
+                "request": "Implement the first missing local behavior.",
+                "projectRoot": str(project),
+                "targetFiles": ["Source/Demo/Worker.cpp"],
+                "changeKind": "modify_existing",
+                "taskAuthorization": feature["taskAuthorization"],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["status"] == "blocked"
+    assert payload["errorCode"] == "CODE_SKETCH_NO_MATERIAL_DELTA"
+    assert payload["gatePassed"] is False
+    assert payload["writeGateClosed"] is True
+    assert payload["generationContract"]["materialDelta"]["status"] == (
+        "no_material_delta"
+    )
+    state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert sketch_gate in state["pendingGates"]
+    assert sketch_gate not in state["completedGates"]
+
+
 def test_build_cs_and_header_sketch_does_not_stall_prewrite_gate(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
     mod = _load_rag_mcp_module()
@@ -2031,6 +2462,64 @@ def test_existing_file_gate_rejects_prose_api_summary(monkeypatch, tmp_path):
     assert payload["nextAction"] == "unreal_code_sketch_claim_validate"
 
 
+def test_code_sketch_gate_rejects_definition_owned_by_file_outside_active_slice(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    project = tmp_path / "Demo"
+    source = project / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "GomokuPlayerController.h").write_text(
+        "class AGomokuPlayerController {};\n",
+        encoding="utf-8",
+    )
+    (source / "GomokuPlayerController.cpp").write_text(
+        '#include "GomokuPlayerController.h"\n',
+        encoding="utf-8",
+    )
+    (source / "GomokuGameState.h").write_text(
+        "class AGomokuGameState { void HandlePlaceStone(); };\n",
+        encoding="utf-8",
+    )
+    (source / "GomokuGameState.cpp").write_text(
+        "void AGomokuGameState::HandlePlaceStone() {}\n",
+        encoding="utf-8",
+    )
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        18321,
+        {
+            "name": "unreal_code_sketch_claim_validate",
+            "arguments": {
+                "sketch": "void AGomokuGameState::HandlePlaceStone() {}",
+                "projectRoot": str(project),
+                "targetFiles": [
+                    "Source/Demo/GomokuPlayerController.h",
+                    "Source/Demo/GomokuPlayerController.cpp",
+                ],
+                "changeKind": "multifile",
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    contract = payload["generationContract"]
+    assert payload["gatePassed"] is False
+    assert contract["writeGate"]["reason"] == (
+        "sketch definition owner is outside active targetFiles"
+    )
+    assert contract["surfaceBinding"]["outsideDefinitionOwners"][0]["owner"] == (
+        "AGomokuGameState"
+    )
+    assert payload["firstBlocker"]["verdict"] == "contract"
+    assert "qualified method definition" in payload["agentInstruction"]
+
+
 def test_existing_file_gate_rejects_requested_behavior_placeholder(
     monkeypatch,
     tmp_path,
@@ -2158,6 +2647,7 @@ def test_failed_task_sketch_gate_preserves_executable_recovery(monkeypatch, tmp_
     )
 
     payload = sent[-1]["result"]["structuredContent"]
+    assert "gateCompletion" in payload, payload
     completion = payload["gateCompletion"]
     assert completion["errorCode"] == "GATE_VALIDATION_FAILED"
     assert completion["nextAction"] == "unreal_project_status"

@@ -1144,6 +1144,8 @@ def _record_prewrite_gate(
     gate_passed: bool,
     target_snapshots: list[dict[str, Any]] | None = None,
     intent_binding: dict[str, Any] | None = None,
+    slice_plan: dict[str, Any] | None = None,
+    failure_input_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     authorization = arguments.get("taskAuthorization") or arguments.get("task_authorization")
     if not isinstance(authorization, dict):
@@ -1178,6 +1180,8 @@ def _record_prewrite_gate(
                 for key, value in arguments.items()
                 if key not in {"taskAuthorization", "task_authorization"}
             }
+            if isinstance(failure_input_context, dict):
+                input_payload.update(failure_input_context)
             recorded = task_record_gate_failure(
                 server.workspace,
                 gate_name=gate_name,
@@ -1217,10 +1221,75 @@ def _record_prewrite_gate(
         evidence=evidence,
         target_snapshots=target_snapshots,
         intent_binding=intent_binding,
+        slice_plan=slice_plan,
     )
     if result.get("ok"):
         server.notify_tools_list_changed()
     return result
+
+
+def _reconcile_gate_completion(
+    payload: dict[str, Any],
+    gate_completion: dict[str, Any] | None,
+) -> bool:
+    """Make the public result agree with the authoritative task gate.
+
+    Local analysis can pass while task-owned scope, snapshots, or continuity
+    reject the same evidence.  Returning the local success in that case makes a
+    model believe writes are open even though task_api correctly kept them
+    closed.  The task gate is authoritative; a local failure keeps its more
+    specific diagnostic, while a task-only failure becomes the public blocker.
+    """
+
+    if gate_completion is None:
+        return bool(payload.get("ok"))
+    payload["gateCompletion"] = gate_completion
+    if gate_completion.get("ok") is not False:
+        return bool(gate_completion.get("ok"))
+
+    local_failed = payload.get("ok") is False
+    payload["ok"] = False
+    payload["status"] = "blocked"
+    payload["gatePassed"] = False
+    payload["writeGateClosed"] = True
+    write_gate = payload.get("writeGate")
+    if isinstance(write_gate, dict):
+        write_gate["writesAllowed"] = False
+    generation_gate = (payload.get("generationContract") or {}).get("writeGate")
+    if isinstance(generation_gate, dict):
+        generation_gate["writesAllowed"] = False
+
+    if not local_failed:
+        payload["errorCode"] = str(
+            gate_completion.get("errorCode") or "TASK_GATE_COMPLETION_FAILED"
+        )
+        payload["error"] = str(
+            gate_completion.get("error")
+            or "The authoritative task gate rejected this otherwise valid analysis."
+        )
+    else:
+        payload.setdefault(
+            "errorCode",
+            str(gate_completion.get("validationErrorCode") or "GATE_VALIDATION_FAILED"),
+        )
+        payload.setdefault("error", str(gate_completion.get("error") or ""))
+
+    for key in (
+        "nextAction",
+        "nextActionArgs",
+        "nextActionIsTool",
+        "taskAuthorization",
+        "toolRoute",
+        "retryable",
+        "doNotRetryUnchanged",
+        "reuseCurrentTaskAuthorization",
+        "stopCurrentWorkflow",
+        "agentInstruction",
+        "blockerFingerprint",
+    ):
+        if key in gate_completion and (not local_failed or key not in payload):
+            payload[key] = gate_completion[key]
+    return False
 
 
 def _attach_code_sketch_recovery(
@@ -1240,6 +1309,11 @@ def _attach_code_sketch_recovery(
         (payload.get("generationContract") or {}).get("issues") or []
     )
     contract_issue = str(contract_issues[0]) if contract_issues else ""
+    material_delta = (payload.get("generationContract") or {}).get("materialDelta")
+    no_material_delta = bool(
+        isinstance(material_delta, dict)
+        and material_delta.get("status") == "no_material_delta"
+    )
     blocking_verdicts = {"known_bad", "unverified", "weak", "skipped_graph"}
     blockers: list[dict[str, Any]] = []
     for issue in contract_issues[:12]:
@@ -1282,12 +1356,23 @@ def _attach_code_sketch_recovery(
             "changeKind": str(arguments.get("changeKind") or "modify_existing"),
         }
         instruction = (
-            "The write gate is closed by the generation contract. Correct changeKind/targetFiles "
-            "and remove every labeled source section outside the active targetFiles slice. Then call "
-            "unreal_code_sketch_claim_validate once with a concise changed, slice-only claim sketch "
-            "(not the full file; aim for at most 40 lines / 3000 characters) and current "
-            "taskAuthorization. Do not perform symbol lookup for out-of-scope code, rerun unchanged, "
-            "replan, or present manual paste-ready code."
+            (
+                "The submitted sketch only restates code already present in the active slice. "
+                "Use the source evidence already read to identify one concrete missing or defective "
+                "behavior in the same owner, then submit a concise sketch containing the actual changed "
+                "statement or declaration. Do not rewrite an existing implementation or inline an "
+                "unchanged delegate body."
+            )
+            if no_material_delta
+            else (
+                "The write gate is closed by the generation contract. Correct changeKind/targetFiles, "
+                "remove every labeled source section outside the active targetFiles slice, and ensure every "
+                "qualified method definition belongs to the active target or its paired declaration surface. Then call "
+                "unreal_code_sketch_claim_validate once with a concise changed, slice-only claim sketch "
+                "(not the full file; aim for at most 40 lines / 3000 characters) and current "
+                "taskAuthorization. Do not perform symbol lookup for out-of-scope code, rerun unchanged, "
+                "replan, or present manual paste-ready code."
+            )
         )
     elif verdict in {"unverified", "weak"}:
         next_action = "unreal_project_status"
@@ -1347,6 +1432,22 @@ def _attach_code_sketch_recovery(
 
     payload.update(
         {
+            "ok": False,
+            "status": "blocked",
+            "errorCode": str(
+                payload.get("errorCode")
+                or (
+                    "CODE_SKETCH_NO_MATERIAL_DELTA"
+                    if no_material_delta
+                    else "CODE_SKETCH_VALIDATION_FAILED"
+                )
+            ),
+            "error": str(
+                payload.get("error")
+                or contract_issue
+                or first_blocker.get("note")
+                or "The code-sketch write gate is closed."
+            ),
             "gatePassed": False,
             "writeGateClosed": True,
             "firstBlocker": first_blocker,
@@ -1413,6 +1514,72 @@ def _feature_intent_target_snapshots(
     return snapshots, issues
 
 
+def _feature_intent_direct_source_evidence(
+    target_snapshots: list[dict[str, Any]],
+    ledger: dict[str, Any],
+) -> dict[str, Any]:
+    current_revision = str(ledger.get("planRevision") or "")
+    evidence_revision = str(ledger.get("evidencePlanRevision") or "")
+    raw_files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
+    evidence_files = {
+        str(key).replace("\\", "/").strip("/").casefold(): value
+        for key, value in raw_files.items()
+        if isinstance(value, dict)
+    }
+    required: list[str] = []
+    verified: list[str] = []
+    missing: list[str] = []
+    stale: list[str] = []
+    revision_matches = bool(current_revision and evidence_revision == current_revision)
+    for snapshot in target_snapshots:
+        if not isinstance(snapshot, dict) or snapshot.get("exists") is not True:
+            continue
+        relative = str(snapshot.get("path") or "").replace("\\", "/").strip("/")
+        if not relative:
+            continue
+        required.append(relative)
+        entry = evidence_files.get(relative.casefold()) if revision_matches else None
+        if not isinstance(entry, dict):
+            missing.append(relative)
+            continue
+        absolute = Path(str(snapshot.get("absolutePath") or "")).expanduser()
+        try:
+            current_hash = hashlib.sha256(absolute.read_bytes()).hexdigest()
+        except OSError:
+            stale.append(relative)
+            continue
+        if str(entry.get("contentHash") or "").strip().casefold() != current_hash:
+            stale.append(relative)
+            continue
+        verified.append(relative)
+    result = {
+        "ok": len(verified) == len(required),
+        "planRevision": current_revision,
+        "evidencePlanRevision": evidence_revision,
+        "requiredTargetFiles": required,
+        "verifiedTargetFiles": verified,
+        "missingTargetFiles": missing,
+        "staleTargetFiles": stale,
+        "acceptedTools": ["read_file", "read_file_range"],
+    }
+    result["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            {
+                "planRevision": current_revision,
+                "evidencePlanRevision": evidence_revision,
+                "required": required,
+                "verified": verified,
+                "missing": missing,
+                "stale": stale,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return result
+
+
 def _handle_unreal_feature_intent_resolve(
     server: McpServer,
     message_id: Any,
@@ -1433,7 +1600,7 @@ def _handle_unreal_feature_intent_resolve(
             "taskAuthorization.taskSessionId is required",
         )
         return
-    from task_api import task_status
+    from task_api import task_direct_source_evidence, task_status
 
     status = task_status(server.workspace, task_session_id)
     if not status.get("ok"):
@@ -1441,7 +1608,6 @@ def _handle_unreal_feature_intent_resolve(
         return
     task_state = status.get("state") if isinstance(status.get("state"), dict) else {}
     internal_phases = ["SelectIntent"]
-    slice_registration: dict[str, Any] | None = None
     initial_route = (
         task_state.get("toolRoute")
         if isinstance(task_state.get("toolRoute"), dict)
@@ -1457,8 +1623,6 @@ def _handle_unreal_feature_intent_resolve(
         for item in (initial_slice.get("files") or [])
         if str(item or "").strip()
     ]
-    if initial_targets:
-        internal_phases.append("ResolveSlice")
     supplied_slices = arguments.get("slices")
     if not isinstance(supplied_slices, list) or not supplied_slices:
         supplied_targets, supplied_error = _string_list_argument(
@@ -1553,53 +1717,6 @@ def _handle_unreal_feature_intent_resolve(
                 },
             )
             return
-        from task_api import task_define_slices
-
-        server.progress_phase(message_id, "Resolving and registering bounded executable slices")
-        slice_registration = task_define_slices(
-            server.workspace,
-            task_authorization=authorization,
-            slices=supplied_slices,
-            active_slice_id=requested_active_slice_id,
-        )
-        if not slice_registration.get("ok"):
-            failure = dict(slice_registration)
-            failure.setdefault("nextAction", FEATURE_INTENT_GATE)
-            failure.setdefault("nextActionIsTool", True)
-            failure.setdefault("retryable", True)
-            failure.setdefault("stopCurrentWorkflow", False)
-            failure.setdefault(
-                "agentInstruction",
-                "Correct the bounded slices and retry this same feature-intent call; do not call a separate slice tool.",
-            )
-            failure["internalPhases"] = internal_phases
-            server.structured_tool_result(message_id, failure)
-            return
-        internal_phases.append("ResolveSlice")
-        refreshed_authorization = slice_registration.get("taskAuthorization")
-        if isinstance(refreshed_authorization, dict):
-            authorization = dict(refreshed_authorization)
-            arguments["taskAuthorization"] = dict(refreshed_authorization)
-        status = task_status(server.workspace, task_session_id)
-        if not status.get("ok"):
-            server.structured_tool_result(message_id, status)
-            return
-        task_state = status.get("state") if isinstance(status.get("state"), dict) else {}
-        refreshed_route = (
-            task_state.get("toolRoute")
-            if isinstance(task_state.get("toolRoute"), dict)
-            else {}
-        )
-        refreshed_slice = (
-            refreshed_route.get("selectedSlice")
-            if isinstance(refreshed_route.get("selectedSlice"), dict)
-            else {}
-        )
-        initial_targets = [
-            str(item or "").strip()
-            for item in (refreshed_slice.get("files") or [])
-            if str(item or "").strip()
-        ]
     request = str(task_state.get("request") or "").strip()
     route = (
         task_state.get("toolRoute")
@@ -1611,7 +1728,31 @@ def _handle_unreal_feature_intent_resolve(
         if isinstance(route.get("selectedSlice"), dict)
         else {}
     )
-    raw_target_files = selected_slice.get("files")
+    proposed_active_slice: dict[str, Any] = {}
+    if slice_rebind_required:
+        proposed_active_slice = next(
+            (
+                item
+                for item in supplied_slices
+                if isinstance(item, dict)
+                and str(item.get("sliceId") or item.get("slice_id") or "").strip()
+                == requested_active_slice_id
+            ),
+            {},
+        )
+        if not proposed_active_slice:
+            _invalid_tool_argument(
+                server,
+                message_id,
+                FEATURE_INTENT_GATE,
+                "activeSliceId must identify one of the supplied slices",
+            )
+            return
+    raw_target_files = (
+        proposed_active_slice.get("files")
+        if slice_rebind_required
+        else selected_slice.get("files")
+    )
     target_files, argument_error = _string_list_argument(
         raw_target_files,
         "targetFiles",
@@ -1658,11 +1799,40 @@ def _handle_unreal_feature_intent_resolve(
     )
     candidate_count = max(3, min(5, int(feature_state.get("candidateCount") or 3)))
 
+    server.progress_phase(message_id, "Capturing server-owned target snapshots")
+    target_snapshots, snapshot_issues = _feature_intent_target_snapshots(
+        project_root,
+        target_files,
+    )
+    direct_source_evidence = _feature_intent_direct_source_evidence(
+        target_snapshots,
+        task_direct_source_evidence(server.workspace, task_session_id),
+    )
+    from feature_intent_fast_path import (
+        bounded_local_question_answers,
+        evaluate_bounded_local_fast_path,
+    )
+
+    fast_path = evaluate_bounded_local_fast_path(
+        request,
+        target_files=target_files,
+        target_snapshots=target_snapshots,
+    )
+    failure_input_context = {
+        "_serverDirectSourceEvidenceFingerprint": str(
+            direct_source_evidence.get("fingerprint") or ""
+        )
+    }
     gate_input = {
         key: value
         for key, value in arguments.items()
         if key not in {"taskAuthorization", "task_authorization"}
     }
+    if (
+        fast_path.get("eligible")
+        or str(arguments.get("selectedIntentId") or "").strip()
+    ):
+        gate_input.update(failure_input_context)
     from task_api import task_gate_failure_preflight
 
     preflight = task_gate_failure_preflight(
@@ -1703,22 +1873,6 @@ def _handle_unreal_feature_intent_resolve(
         )
         return
 
-    server.progress_phase(message_id, "Capturing server-owned target snapshots")
-    target_snapshots, snapshot_issues = _feature_intent_target_snapshots(
-        project_root,
-        target_files,
-    )
-    internal_phases.append("CaptureSnapshot")
-    from feature_intent_fast_path import (
-        bounded_local_question_answers,
-        evaluate_bounded_local_fast_path,
-    )
-
-    fast_path = evaluate_bounded_local_fast_path(
-        request,
-        target_files=target_files,
-        target_snapshots=target_snapshots,
-    )
     explicit_semantic_input = bool(
         str(arguments.get("selectedIntentId") or "").strip()
         or str(arguments.get("selectionRationale") or "").strip()
@@ -1866,6 +2020,46 @@ def _handle_unreal_feature_intent_resolve(
         payload["error"] = "Selected acceptance criteria require explicit observer and oracle."
         payload.setdefault("writeGate", {})["writesAllowed"] = False
 
+    if payload.get("ok") and not snapshot_issues and not direct_source_evidence.get("ok"):
+        missing = list(direct_source_evidence.get("missingTargetFiles") or [])
+        stale = list(direct_source_evidence.get("staleTargetFiles") or [])
+        required_reads = list(dict.fromkeys(missing + stale))
+        payload.update(
+            {
+                "ok": False,
+                "status": "blocked",
+                "errorCode": "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED",
+                "error": (
+                    "Every existing active-slice target must have a successful current-version "
+                    "read_file/read_file_range record before Feature Intent can bind."
+                ),
+                "directSourceEvidence": direct_source_evidence,
+                "targetSnapshots": target_snapshots,
+                "requiredNextTool": "read_file",
+                "requiredNextToolArgs": (
+                    {"path": required_reads[0]} if required_reads else {}
+                ),
+                "nextAction": "read_file",
+                "nextActionArgs": (
+                    {"path": required_reads[0]} if required_reads else {}
+                ),
+                "nextActionIsTool": True,
+                "retryable": True,
+                "stopCurrentWorkflow": False,
+                "doNotRetryUnchanged": True,
+                "agentInstruction": (
+                    "Read each missing or stale existing target exactly once with read_file or "
+                    "read_file_range, following any route checkpoint returned by the server. Then "
+                    "retry unreal_feature_intent_resolve once with the same semantic selection."
+                ),
+                "suggestedToolCalls": [
+                    {"tool": "read_file", "args": {"path": item}}
+                    for item in required_reads[:2]
+                ],
+                "internalPhases": internal_phases + ["ResolveSlice", "CaptureSnapshot"],
+            }
+        )
+
     intent_binding = {
         "selectedIntentId": str(full_resolution.get("selectedIntentId") or ""),
         "intentContractHash": str(full_resolution.get("intentContractHash") or ""),
@@ -1876,6 +2070,14 @@ def _handle_unreal_feature_intent_resolve(
             (full_resolution.get("ambiguity") or {}).get("recommendedAction") or ""
         ),
     }
+    atomic_slice_plan = (
+        {
+            "slices": supplied_slices,
+            "activeSliceId": requested_active_slice_id,
+        }
+        if slice_rebind_required
+        else None
+    )
     server.progress_phase(message_id, "Recording feature intent gate")
     gate_completion = _record_prewrite_gate(
         server,
@@ -1885,20 +2087,16 @@ def _handle_unreal_feature_intent_resolve(
         gate_passed=bool(payload.get("ok") and oracle_valid and not snapshot_issues),
         target_snapshots=target_snapshots,
         intent_binding=intent_binding,
+        slice_plan=atomic_slice_plan,
+        failure_input_context=failure_input_context,
     )
-    if gate_completion is not None:
-        payload["gateCompletion"] = gate_completion
-    if gate_completion and gate_completion.get("ok"):
-        internal_phases.append("BindIntent")
-    payload["internalPhases"] = internal_phases
-    if slice_registration is not None:
-        payload["sliceResolution"] = {
-            "serverOwned": True,
-            "activeSliceId": str(slice_registration.get("activeSliceId") or ""),
-            "sliceCount": len(slice_registration.get("slices") or []),
-            "pendingSlices": list(slice_registration.get("pendingSlices") or []),
-        }
-    elif initial_targets:
+    gate_completed = _reconcile_gate_completion(payload, gate_completion)
+    if gate_completed:
+        internal_phases.extend(["ResolveSlice", "CaptureSnapshot", "BindIntent"])
+    payload.setdefault("internalPhases", internal_phases)
+    if gate_completion and isinstance(gate_completion.get("sliceResolution"), dict):
+        payload["sliceResolution"] = dict(gate_completion["sliceResolution"])
+    elif gate_completion and gate_completion.get("ok") and initial_targets:
         plan_scope = (
             task_state.get("planScope")
             if isinstance(task_state.get("planScope"), dict)
@@ -1981,6 +2179,107 @@ def _handle_unreal_code_sketch_claim_validate(
         if argument_error:
             _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
             return
+        if task_session_id:
+            from task_api import task_validate_code_sketch_scope
+
+            scope_contract = task_validate_code_sketch_scope(
+                server.workspace,
+                task_authorization=authorization,
+                target_files=target_files,
+            )
+            if scope_contract.get("ok") is False:
+                error_code = str(
+                    scope_contract.get("errorCode")
+                    or "CODE_SKETCH_TARGET_SCOPE_MISMATCH"
+                )
+                server_targets = list(
+                    scope_contract.get("serverOwnedTargetFiles") or []
+                )
+                scope_issue = str(
+                    scope_contract.get("error")
+                    or "Code-sketch targets are outside the active Feature Intent slice."
+                )
+                target_scope_retry = (
+                    error_code == "CODE_SKETCH_TARGET_SCOPE_MISMATCH"
+                )
+                next_action = (
+                    "unreal_code_sketch_claim_validate"
+                    if target_scope_retry
+                    else str(scope_contract.get("nextAction") or "unreal_task_status")
+                )
+                next_action_args = (
+                    {
+                        "targetFiles": server_targets,
+                        "taskAuthorization": compact_task_authorization(
+                            authorization
+                        ),
+                    }
+                    if target_scope_retry
+                    else dict(scope_contract.get("nextActionArgs") or {})
+                )
+                payload = {
+                    **scope_contract,
+                    "ok": False,
+                    "errorCode": error_code,
+                    "error": scope_issue,
+                    "gatePassed": False,
+                    "writeGateClosed": True,
+                    "retryable": target_scope_retry,
+                    "stopCurrentWorkflow": not target_scope_retry,
+                    "reuseCurrentTaskAuthorization": True,
+                    "doNotRetryUnchanged": True,
+                    "nextAction": next_action,
+                    "nextActionIsTool": True,
+                    "nextActionArgs": next_action_args,
+                    "agentInstruction": (
+                        (
+                            "Keep the current task, Feature Intent, plan revision, and selected slice. "
+                            "Do not read, validate, or edit the out-of-scope files and do not replan. "
+                            "Submit one changed concise code sketch whose targetFiles are a non-empty "
+                            "subset of serverOwnedTargetFiles, then continue with the returned task "
+                            "authorization."
+                        )
+                        if target_scope_retry
+                        else (
+                            "The server-owned task scope is stale or unreadable. Stop code validation "
+                            "and follow nextAction once; do not invent target files, replan, or write."
+                        )
+                    ),
+                    "generationContract": {
+                        "ok": False,
+                        "mode": "task_scope_mismatch",
+                        "targets": [
+                            {"path": path, "serverOwned": True}
+                            for path in server_targets
+                        ],
+                        "issues": [scope_issue],
+                        "writeGate": {
+                            "writesAllowed": False,
+                            "reason": "code sketch targets are outside server-owned task scope",
+                        },
+                        "proofBoundary": (
+                            "Project graph and API validation were intentionally skipped because "
+                            "the submitted targets could not be safely bound to the active Feature "
+                            "Intent slice."
+                        ),
+                    },
+                }
+                gate_completion = _record_prewrite_gate(
+                    server,
+                    gate_name="unreal_code_sketch_claim_validate",
+                    arguments=arguments,
+                    evidence=payload,
+                    gate_passed=False,
+                    failure_input_context={
+                        "serverOwnedTargetFiles": server_targets,
+                        "submittedTargetFiles": list(
+                            scope_contract.get("submittedTargetFiles") or []
+                        ),
+                    },
+                )
+                _reconcile_gate_completion(payload, gate_completion)
+                server.structured_tool_result(message_id, payload)
+                return
         if isinstance(authorization, dict):
             from task_api import task_validate_build_recovery_sketch
 
@@ -2116,6 +2415,7 @@ def _handle_unreal_code_sketch_claim_validate(
             target_files=target_files,
             generation_contract=generation_contract,
             graph=graph,
+            require_material_delta=bool(task_session_id),
         )
         declaration_context, declaration_context_files = load_declaration_context(
             generation_contract
@@ -2291,8 +2591,8 @@ def _handle_unreal_code_sketch_claim_validate(
         gate_passed=gate_passed,
         target_snapshots=target_snapshots,
     )
-    if gate_completion is not None:
-        payload["gateCompletion"] = gate_completion
+    gate_completed = _reconcile_gate_completion(payload, gate_completion)
+    gate_passed = bool(gate_passed and gate_completed)
     compact_payload = compact_code_sketch_payload(payload)
     graph_summary = compact_payload.get("graphStatus") or {}
     gate_summary = compact_payload.get("gateCompletion") or {}
@@ -2514,8 +2814,7 @@ def _handle_unreal_semantic_refactor_guard(
         ),
         target_snapshots=target_snapshots,
     )
-    if gate_completion is not None:
-        payload["gateCompletion"] = gate_completion
+    _reconcile_gate_completion(payload, gate_completion)
     server.structured_tool_result(message_id, payload)
 
 
@@ -3001,8 +3300,7 @@ def _handle_unreal_architecture_reasoning(
             evidence=payload,
             gate_passed=False,
         )
-        if gate_completion is not None:
-            payload["gateCompletion"] = gate_completion
+        _reconcile_gate_completion(payload, gate_completion)
         persist_proposal_draft(payload)
         record_proposal_delivery()
         server.structured_tool_result(
@@ -3094,8 +3392,8 @@ def _handle_unreal_architecture_reasoning(
         evidence=payload,
         gate_passed=gate_passed,
     )
-    if gate_completion is not None:
-        payload["gateCompletion"] = gate_completion
+    gate_completed = _reconcile_gate_completion(payload, gate_completion)
+    gate_passed = bool(gate_passed and gate_completed)
     persist_proposal_draft(payload)
     if isinstance(proposal, dict):
         if gate_passed:

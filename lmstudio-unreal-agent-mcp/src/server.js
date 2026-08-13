@@ -142,6 +142,7 @@ const {
   clearMutationHistory
 } = require("./mutation-history.js");
 const {
+  applyBuildRecoveryScopeBinding,
   buildResponsePayload,
   buildToolDisposition,
   compactLogPayload,
@@ -2664,7 +2665,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     ]);
     let pendingBudgetReservation = null;
     const budgetFields = requiredFields(args || {});
-    const runBudgetOp = (op, reservationId = "") => {
+    const runBudgetOp = (op, reservationId = "", callMetadata = null) => {
       if (hasExplicitTaskAuthorization) {
         return op(
           WORKSPACE_ROOT,
@@ -2672,7 +2673,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           budgetFields,
           args,
           name,
-          reservationId
+          reservationId,
+          callMetadata
         );
       }
       const active = discoverActiveTaskContext(
@@ -2695,7 +2697,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         },
         args,
         name,
-        reservationId
+        reservationId,
+        callMetadata
       );
     };
     if (
@@ -2755,11 +2758,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!pendingBudgetReservation || !pendingBudgetReservation.id) return;
       runBudgetOp(heartbeatRouteReservation, String(pendingBudgetReservation.id));
     };
-    const commitDeferredBudgetOrFail = () => {
+    const commitDeferredBudgetOrFail = (callMetadata = null) => {
       if (!pendingBudgetReservation) return null;
       const reservationId = String(pendingBudgetReservation.id || "");
       pendingBudgetReservation = null;
-      const committed = runBudgetOp(commitRouteReservation, reservationId);
+      const committed = runBudgetOp(commitRouteReservation, reservationId, callMetadata);
       if (!committed.ok) {
         if (reservationId) {
           runBudgetOp(rollbackRouteReservation, reservationId);
@@ -3310,7 +3313,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const output = metadataHeader + out;
       // Finish all I/O (including full-file evidence hash) before committing budget.
       const contentHash = sha256Buffer(await fsp.readFile(target));
-      const budgetFail = commitDeferredBudgetOrFail();
+      const budgetFail = commitDeferredBudgetOrFail({
+        directSourceEvidence: {
+          projectRelativePath: resolution.projectRelativePath,
+          contentHash,
+          lineRange: `1-${truncated.endLine}`,
+        },
+      });
       if (budgetFail) return budgetFail;
       rememberReadEvidence(
         target,
@@ -3373,14 +3382,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const slice = lines.slice(startLine - 1, endLine);
       const numbered = slice.map((line, idx) => `${startLine + idx}|${line}`).join("\n");
       const output = `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`;
-      const budgetFail = commitDeferredBudgetOrFail();
+      const contentHash = sha256Text(content);
+      const budgetFail = commitDeferredBudgetOrFail({
+        directSourceEvidence: {
+          projectRelativePath: resolution.projectRelativePath,
+          contentHash,
+          lineRange: `${startLine}-${Math.min(endLine, lines.length)}`,
+        },
+      });
       if (budgetFail) return budgetFail;
       rememberReadEvidence(
         target,
         s,
         resolution,
         `${startLine}-${Math.min(endLine, lines.length)}`,
-        sha256Text(content)
+        contentHash
       );
       recordReadSuccess("read_file_range", normalizedArgs, {
         ...readContext,
@@ -4966,6 +4982,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
           );
           payload.recovery.taskScopeBound = recoveryBinding?.ok === true;
+          applyBuildRecoveryScopeBinding(payload, recoveryBinding);
           if (recoveryBinding?.ok !== true) {
             payload.recovery.taskScopeBindingErrorCode = String(
               recoveryBinding?.errorCode || "BUILD_RECOVERY_TASK_BINDING_FAILED"
@@ -4975,7 +4992,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!taskBindableRecovery) {
           payload.recovery.taskScopeBound = false;
           payload.recovery.scopeStrategy = "unbound_recovery";
-        } else if (semanticScopedRecovery) {
+        } else if (
+          semanticScopedRecovery
+          && payload.recovery.scopeStrategy !== "out_of_slice_blocker"
+        ) {
           payload.recovery.scopeStrategy = "symbol_lookup_then_semantic_evidence";
         }
         if (!hasTaskAuthorization && sourceScopedRecovery) {

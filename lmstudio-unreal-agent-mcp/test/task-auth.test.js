@@ -2015,6 +2015,82 @@ test("explicit ownerCapability disables legacy connection ownership", () => {
   }
 });
 
+test("successful direct source reads persist bounded target evidence on commit", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-source-evidence-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-source-evidence-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    ownerCapability: "owner-capability",
+    status: "running",
+    planRevision: "4",
+    writeGate: { writesAllowed: true },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-source-evidence",
+      phase: "planner",
+      activeTools: ["read_file"],
+      allowedPathScopes: ["Source"],
+      maxToolCallsPerPhase: 2,
+    },
+    toolRouteUsage: {
+      routeHash: "route-source-evidence",
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = { routeHash: "route-source-evidence", routePhase: "planner" };
+  try {
+    const reserved = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file"
+    );
+    const contentHash = "a".repeat(64);
+    const committed = commitRouteReservation(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file",
+      reserved.reservationId,
+      {
+        directSourceEvidence: {
+          projectRelativePath: "Source/Demo/RuleEngine.cpp",
+          contentHash,
+          lineRange: "1-80",
+        },
+      }
+    );
+    assert.strictEqual(committed.ok, true);
+    const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    assert.strictEqual(state.directSourceEvidence.planRevision, "4");
+    assert.deepStrictEqual(
+      state.directSourceEvidence.files["source/demo/ruleengine.cpp"],
+      {
+        path: "Source/Demo/RuleEngine.cpp",
+        contentHash,
+        sourceKind: "implementation",
+        lineRanges: ["1-80"],
+        tools: ["read_file"],
+        recordedAt: state.directSourceEvidence.files["source/demo/ruleengine.cpp"].recordedAt,
+      }
+    );
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("compact task ownership expands to current full route authorization", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-compact-auth-workspace-"));
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-compact-auth-state-"));

@@ -134,7 +134,41 @@ def _agent_env(tmp_path: Path, state_root: Path) -> dict[str, str]:
     return env
 
 
+def _rag_env(
+    tmp_path: Path,
+    state_root: Path,
+    shared_config: Path,
+) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(tmp_path),
+            "AGENT_STATE_ROOT": str(state_root),
+            "SHARED_UNREAL_CONFIG": str(shared_config),
+        }
+    )
+    env.pop("ALLOW_CONTROL_PLANE_TOOLS", None)
+    env.pop("MCP_EXTENDED_TOOLS", None)
+    return env
+
+
 def _list_agent_tools(client: _StdioJsonRpc) -> set[str]:
+    client.request(
+        "initialize",
+        {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "pytest", "version": "1.0"},
+        },
+        req_id=1,
+    )
+    client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    listed = client.request("tools/list", {}, req_id=2)
+    return {tool["name"] for tool in listed["result"]["tools"]}
+
+
+def _list_rag_tools(client: _StdioJsonRpc) -> set[str]:
     client.request(
         "initialize",
         {
@@ -372,6 +406,54 @@ def test_scope_mismatch_keeps_catalog_but_blocks_mutation(tmp_path: Path) -> Non
     finally:
         client.close()
 
+
+def test_active_route_keeps_rag_stdio_catalog_profile_stable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from task_api import task_start
+
+    state_root = tmp_path / "state"
+    project = tmp_path / "Demo.uproject"
+    project.write_text("{}", encoding="utf-8")
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(
+        json.dumps({"activeProject": str(project)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
+    started = task_start(
+        tmp_path,
+        request="Edit Source/Demo/Foo.cpp",
+        mode="agent_edit",
+        project_file=str(project),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
+    )
+    assert "unreal_feature_intent_resolve" not in set(
+        started["state"]["toolRoute"]["activeTools"]
+    )
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"")
+    client = _StdioJsonRpc(
+        [sys.executable, str(RAG_SCRIPT), "--index", str(index)],
+        env=_rag_env(tmp_path, state_root, shared),
+        cwd=ROOT,
+    )
+    try:
+        names = _list_rag_tools(client)
+        assert names == set(MANIFEST["ragEssential"])
+        assert "unreal_feature_intent_resolve" in names
+    finally:
+        client.close()
 
 def test_cross_server_clean_startup_tools_list_matches_manifest(tmp_path: Path) -> None:
     require_agent_mcp_deps()

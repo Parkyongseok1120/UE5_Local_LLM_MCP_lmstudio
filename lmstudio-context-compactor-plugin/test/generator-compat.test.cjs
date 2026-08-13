@@ -111,6 +111,61 @@ test("default mode preserves multiple tool calls and fragment metadata", async (
   }
 });
 
+test("GUI abort cancels an in-flight prediction without waiting for the backend result", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-abort-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const abortController = new AbortController();
+    let predictionStarted;
+    const started = new Promise((resolve) => { predictionStarted = resolve; });
+    let cancelCalled = false;
+    const model = {
+      identifier: "abort-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        predictionStarted();
+        return {
+          cancel() { cancelCalled = true; },
+          result() { return new Promise(() => {}); },
+        };
+      },
+    };
+    const controller = controllerFor(
+      model,
+      { requireCheckpointPersistence: false },
+      stateRoot,
+      emitted,
+      [],
+    );
+    controller.abortSignal = abortController.signal;
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Explain the current state." }] },
+    ] });
+
+    const generation = generate(controller, history);
+    await started;
+    abortController.abort(new Error("user stopped generation"));
+    await assert.rejects(
+      Promise.race([
+        generation,
+        new Promise((_resolve, reject) => setTimeout(
+          () => reject(new Error("abort did not return within 1000ms")),
+          1000,
+        )),
+      ]),
+      /user stopped generation/,
+    );
+    assert.equal(cancelCalled, true);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("feature intent atomic rule survives repeated generator preparation without duplicate ceremony", () => {
   const { injectFeatureIntentAtomicRule } = require("../dist/generator.js");
   const history = Chat.empty();
@@ -402,7 +457,8 @@ test("provider-qualified required feature gate is forced with server-owned auth"
       toolRoute: {
         routeHash: "route-feature-1",
         phase: "planner",
-        activeTools: ["unreal_feature_intent_resolve"],
+        activeTools: ["read_file", "unreal_feature_intent_resolve"],
+        selectedSlice: { sliceId: "task", files: [] },
       },
       requiredNextTool: "unreal_feature_intent_resolve",
       requiredNextToolArgs: { taskAuthorization: ownership },
@@ -415,7 +471,7 @@ test("provider-qualified required feature gate is forced with server-owned auth"
         retryPolicy: "none",
       },
     };
-    const history = Chat.from({ messages: [
+    const messages = [
       { role: "user", content: [{ type: "text", text: "implement the bounded local feature" }] },
       { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
         id: "plan-feature-1", type: "function", name: "unreal_agent_plan", arguments: {},
@@ -423,8 +479,27 @@ test("provider-qualified required feature gate is forced with server-owned auth"
       { role: "tool", content: [{
         type: "toolCallResult", toolCallId: "plan-feature-1", name: "unreal_agent_plan", content: JSON.stringify(route),
       }] },
-    ] });
+    ];
+    for (const [index, file] of [
+      "Source/Demo/RuleEngine.h",
+      "Source/Demo/RuleEngine.cpp",
+      "Source/Demo/Controller.h",
+    ].entries()) {
+      messages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: `required-feature-read-${index}`, type: "function", name: "read_file", arguments: { path: file },
+      } }] });
+      messages.push({ role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: `required-feature-read-${index}`,
+        name: "read_file",
+        content: JSON.stringify({ ok: true, path: file, content: `// ${file}` }),
+      }] });
+    }
+    const history = Chat.from({ messages });
     const tools = [{
+      type: "function",
+      function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } },
+    }, {
       type: "function",
       function: {
         name: "mcp/unreal-rag/unreal_feature_intent_resolve",
@@ -446,6 +521,373 @@ test("provider-qualified required feature gate is forced with server-owned auth"
     assert.equal(end.request.arguments.selectedIntentId, "bounded_local");
     assert.deepEqual(end.request.arguments.taskAuthorization, ownership);
     assert.equal(emitted.some((event) => event.kind === "failure"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("required feature intent is suspended until completion-audit evidence is grounded", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-refill-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let systemText = "";
+    const ownership = { taskSessionId: "task-feature-refill", ownerCapability: "owner-feature-refill" };
+    const model = {
+      identifier: "feature-refill-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(modelHistory, opts) {
+        systemText = modelHistory.getMessagesArray()
+          .filter((message) => message.getRole() === "system")
+          .map((message) => message.getText()).join("\n");
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(
+          opts.rawTools.tools.map((tool) => tool.function.name).sort(),
+          ["read_file", "search_files"],
+        );
+        opts.onToolCallRequestStart(1, { toolCallId: "feature-refill-read" });
+        opts.onToolCallRequestNameReceived(1, "read_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"Source/O_Mock/GomokuRuleEngine.h"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "feature-refill-read",
+            type: "function",
+            name: "read_file",
+            arguments: { path: "Source/O_Mock/GomokuRuleEngine.h" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      toolRoute: {
+        routeHash: "route-feature-refill",
+        phase: "planner",
+        activeTools: ["read_file", "search_files", "unreal_feature_intent_resolve"],
+        selectedSlice: { sliceId: "task", files: [] },
+      },
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "unreal_feature_intent_resolve",
+        nextActionIsTool: true,
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Check current implementation status and implement the earliest incomplete feature." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "plan-feature-refill", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "plan-feature-refill", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+    ] });
+    const tools = [
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+      { type: "function", function: { name: "search_files", parameters: { type: "object", properties: { query: { type: "string" } } } } },
+      { type: "function", function: { name: "unreal_feature_intent_resolve", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "unreal_get_active_project", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "unreal_set_active_project", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "unreal_agent_plan", parameters: { type: "object", properties: {} } } },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.match(systemText, /UNREAL_FEATURE_INTENT_EVIDENCE_REFILL/);
+    assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => (
+      event.type === "context_measurement"
+      && event.featureIntentEvidenceRefillActive === true
+      && event.featureIntentEvidenceReady === false
+      && event.effectiveFeatureIntentEvidenceReadThreshold === 6
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("empty symbol lookup cannot substitute for the sixth direct source read", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-direct-read-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-direct-read", ownerCapability: "owner-direct-read" };
+    const model = {
+      identifier: "direct-read-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        const names = opts.rawTools.tools.map((tool) => tool.function.name);
+        assert.ok(names.includes("read_file"));
+        assert.ok(names.includes("unreal_symbol_lookup"));
+        assert.equal(names.includes("unreal_feature_intent_resolve"), false);
+        opts.onToolCallRequestStart(1, { toolCallId: "sixth-real-read" });
+        opts.onToolCallRequestNameReceived(1, "read_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(
+          1,
+          '{"path":"Source/O_Mock/GomokuGameState.cpp"}',
+        );
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "sixth-real-read",
+            type: "function",
+            name: "read_file",
+            arguments: { path: "Source/O_Mock/GomokuGameState.cpp" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      toolRoute: {
+        routeHash: "route-direct-read",
+        phase: "planner",
+        activeTools: ["read_file", "unreal_symbol_lookup", "unreal_feature_intent_resolve"],
+        selectedSlice: { sliceId: "task", files: [] },
+      },
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "unreal_feature_intent_resolve",
+        nextActionIsTool: true,
+      },
+    };
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "Check current implementation status and implement the earliest incomplete feature." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "plan-direct-read", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "plan-direct-read", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "evidence-contract", type: "function", name: "evidence_first_contract", arguments: { mode: "codegen" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "evidence-contract", name: "evidence_first_contract", content: '{"ok":true}',
+      }] },
+    ];
+    const paths = [
+      "Source/O_Mock/GomokuRuleEngine.h",
+      "Source/O_Mock/GomokuRuleEngine.cpp",
+      "Source/O_Mock/GomokuTypes.h",
+      "Source/O_Mock/GomokuGameMode.h",
+      "Source/O_Mock/GomokuGameMode.cpp",
+    ];
+    paths.forEach((filePath, index) => {
+      const id = `direct-read-${index}`;
+      messages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id, type: "function", name: "read_file", arguments: { path: filePath },
+      } }] });
+      messages.push({ role: "tool", content: [{
+        type: "toolCallResult", toolCallId: id, name: "read_file", content: '{"ok":true}',
+      }] });
+    });
+    messages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+      id: "empty-symbol", type: "function", name: "unreal_symbol_lookup", arguments: { query: "MissingType" },
+    } }] });
+    messages.push({ role: "tool", content: [{
+      type: "toolCallResult", toolCallId: "empty-symbol", name: "unreal_symbol_lookup", content: '{"matches":[]}',
+    }] });
+    const history = Chat.from({ messages });
+    const tools = [
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+      { type: "function", function: { name: "unreal_symbol_lookup", parameters: { type: "object", properties: { query: { type: "string" } } } } },
+      { type: "function", function: { name: "unreal_feature_intent_resolve", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "evidence_first_contract", parameters: { type: "object", properties: {} } } },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    const measurement = events.find((event) => event.type === "context_measurement");
+    assert.equal(measurement.directSourceFileEvidenceCount, 5);
+    assert.equal(measurement.featureIntentEvidenceReady, false);
+    assert.equal(measurement.featureIntentEvidenceRefillActive, true);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("an active route keeps an explicitly server-required replan tool", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-replan-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-required-replan", ownerCapability: "owner-required-replan" };
+    const model = {
+      identifier: "required-replan-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name), ["unreal_agent_plan"]);
+        opts.onToolCallRequestStart(1, { toolCallId: "required-replan" });
+        opts.onToolCallRequestNameReceived(1, "unreal_agent_plan");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "required-replan",
+            type: "function",
+            name: "unreal_agent_plan",
+            arguments: {},
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Implement the earliest incomplete local-play feature." }] },
+      { role: "assistant", content: [{ type: "text", text: JSON.stringify({
+        ok: true,
+        taskAuthorization: ownership,
+        requiredNextTool: "unreal_agent_plan",
+        requiredNextToolArgs: { taskAuthorization: ownership },
+        toolRoute: {
+          routeHash: "route-required-replan",
+          phase: "planner",
+          activeTools: ["read_file", "unreal_agent_plan"],
+          selectedSlice: { sliceId: "task", files: [] },
+        },
+      }) }] },
+    ] });
+    const tools = [
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: {
+        name: "unreal_agent_plan",
+        parameters: { type: "object", properties: { request: { type: "string" } } },
+      } },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    const end = emitted.find((event) => event.kind === "end");
+    assert.ok(end);
+    assert.equal(end.request.name, "unreal_agent_plan");
+    assert.equal(end.request.arguments.request, "Implement the earliest incomplete local-play feature.");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("evidence-first contract is forced once after task routing and before business discovery", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-evidence-first-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let systemText = "";
+    const ownership = { taskSessionId: "task-evidence-first", ownerCapability: "owner-evidence-first" };
+    const model = {
+      identifier: "evidence-first-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(modelHistory, opts) {
+        systemText = modelHistory.getMessagesArray()
+          .filter((message) => message.getRole() === "system")
+          .map((message) => message.getText()).join("\n");
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name), ["evidence_first_contract"]);
+        opts.onToolCallRequestStart(1, { toolCallId: "evidence-first-contract" });
+        opts.onToolCallRequestNameReceived(1, "evidence_first_contract");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "evidence-first-contract",
+            type: "function",
+            name: "evidence_first_contract",
+            arguments: {},
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      toolRoute: {
+        routeHash: "route-evidence-first",
+        phase: "planner",
+        activeTools: ["read_file", "unreal_feature_intent_resolve"],
+        selectedSlice: { sliceId: "task", files: [] },
+      },
+      requiredNextTool: "unreal_feature_intent_resolve",
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "unreal_feature_intent_resolve",
+        nextActionIsTool: true,
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "현재 O-Mock 프로젝트의 구현 상태를 먼저 확인하고, 오목 규칙과 로컬 플레이부터 시작하는 개발 순서에서 아직 완료되지 않은 가장 앞 단계의 핵심 기능 하나를 실제로 완성해줘. 문서나 계획만 만드는 데 그치지 말고 기능 구현을 우선해. 기존 동작과 현재 상태 소유권은 깨지 말고, 필요한 자동화 테스트와 Unreal 빌드까지 실행해서 결과를 알려줘." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "plan-evidence-first", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "plan-evidence-first", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+    ] });
+    const tools = [
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "unreal_feature_intent_resolve", parameters: { type: "object", properties: {} } } },
+      {
+        type: "function",
+        function: {
+          name: "evidence_first_contract",
+          parameters: {
+            type: "object",
+            properties: { mode: { type: "string" } },
+            required: ["mode"],
+          },
+        },
+      },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.match(systemText, /EVIDENCE_FIRST_CONTRACT_REQUIRED/);
+    const end = emitted.find((event) => event.kind === "end");
+    assert.equal(end.request.name, "evidence_first_contract");
+    assert.deepEqual(end.request.arguments, { mode: "codegen" });
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => (
+      event.type === "context_measurement" && event.evidenceFirstContractForced === true
+    )));
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -521,7 +963,7 @@ test("bounded source evidence clears a fake RAG action and hands off to feature 
       },
     };
     const messages = [
-      { role: "user", content: [{ type: "text", text: "implement the bounded local input fix" }] },
+      { role: "user", content: [{ type: "text", text: "현재 구현 상태를 확인하고 가장 앞선 미완성 기능을 구현해줘" }] },
       { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
         id: "plan-handoff", type: "function", name: "unreal_agent_plan", arguments: {},
       } }] },
@@ -530,9 +972,12 @@ test("bounded source evidence clears a fake RAG action and hands off to feature 
       }] },
     ];
     for (const [index, file] of [
-      "Source/Demo/Controller.cpp",
-      "Source/Demo/GameState.cpp",
+      "Source/Demo/RuleEngine.h",
       "Source/Demo/RuleEngine.cpp",
+      "Source/Demo/GameState.h",
+      "Source/Demo/GameState.cpp",
+      "Source/Demo/Controller.h",
+      "Source/Demo/Controller.cpp",
     ].entries()) {
       messages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
         id: `read-${index}`, type: "function", name: "read_file", arguments: { path: file },
@@ -588,6 +1033,11 @@ test("bounded source evidence clears a fake RAG action and hands off to feature 
     assert.ok(events.some((event) => event.type === "invalid_required_tool_contract_cleared"));
     assert.ok(events.some((event) => (
       event.type === "context_measurement" && event.featureIntentDiscoveryHandoffForced === true
+    )));
+    assert.ok(events.some((event) => (
+      event.type === "context_measurement"
+      && event.featureCompletionAuditRequired === true
+      && event.effectiveFeatureIntentEvidenceReadThreshold === 6
     )));
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -722,7 +1172,7 @@ test("fresh write task exposes only unreal_get_active_project before planner", a
     }));
     const history = Chat.empty();
     history.append("system", "rules");
-    history.append("user", "현재 O-Mock 프로젝트의 미완성 기능을 실제로 구현해줘");
+    history.append("user", "현재 O-Mock 프로젝트의 구현 상태를 먼저 확인하고, 오목 규칙과 로컬 플레이부터 시작하는 개발 순서에서 아직 완료되지 않은 가장 앞 단계의 핵심 기능 하나를 실제로 완성해줘. 문서나 계획만 만드는 데 그치지 말고 기능 구현을 우선해. 기존 동작과 현재 상태 소유권은 깨지 말고, 필요한 자동화 테스트와 Unreal 빌드까지 실행해서 결과를 알려줘.");
 
     await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
 
@@ -2971,6 +3421,226 @@ test("control plane injects server-owned required arguments", async () => {
     const args = emitted.find((event) => event.kind === "args");
     assert.deepEqual(JSON.parse(args.content), end.request.arguments);
     assert.equal(emitted.some((event) => event.kind === "failure"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("routed required tool missing from the chat catalog stops before model invocation", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-schema-missing-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let modelInvocations = 0;
+    const ownership = { taskSessionId: "task-stale-catalog", ownerCapability: "owner-stale-catalog" };
+    const model = {
+      identifier: "required-schema-missing-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        modelInvocations += 1;
+        throw new Error("target model must not run for an impossible required-tool contract");
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "implement the first missing local-play feature");
+    history.append("assistant", JSON.stringify({
+      ok: true,
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+      taskAuthorization: ownership,
+      toolRoute: {
+        routeHash: "route-stale-catalog",
+        phase: "planner",
+        activeTools: ["read_file", "unreal_feature_intent_resolve"],
+        selectedSlice: { sliceId: "task", files: [] },
+      },
+    }));
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, [{
+      type: "function",
+      function: { name: "read_file", parameters: { type: "object" } },
+    }]), history);
+
+    assert.equal(modelInvocations, 0);
+    assert.equal(emitted.filter((event) => event.kind === "end").length, 0);
+    assert.equal(emitted.filter((event) => event.kind === "failure").length, 0);
+    const final = emitted.find((event) => event.kind === "fragment");
+    assert.ok(final);
+    assert.match(final.content, /current chat catalog does not expose that tool schema/);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.requiredNextTool.name, "unreal_feature_intent_resolve");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    assert.equal(events.some((event) => (
+      event.type === "context_measurement"
+        && event.requiredToolSchemaMissing === true
+        && event.missingRequiredToolName === "unreal_feature_intent_resolve"
+    )), true);
+    assert.equal(events.some((event) => (
+      event.type === "required_tool_schema_missing_final_emitted"
+        && event.targetModelInvoked === false
+    )), true);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("wrong forced tool name gets one bounded required-tool serialization repair", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-tool-repair-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let predictionCount = 0;
+    const ownership = { taskSessionId: "task-repair-1", ownerCapability: "owner-repair-1" };
+    const model = {
+      identifier: "required-tool-repair-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(history, opts) {
+        predictionCount += 1;
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(
+          opts.rawTools.tools.map((tool) => tool.function.name),
+          ["unreal_feature_intent_resolve"],
+        );
+        const repaired = predictionCount === 2;
+        if (repaired) {
+          assert.equal(history.getMessagesArray().some(
+            (message) => message.getRole() === "system"
+              && message.getText().includes("[UNREAL_SERVER_REQUIRED_TOOL_REPAIR]")
+              && message.getText().includes("read_file")
+              && message.getText().includes("unreal_feature_intent_resolve"),
+          ), true);
+        }
+        const name = repaired ? "unreal_feature_intent_resolve" : "read_file";
+        const args = repaired
+          ? { request: "complete local gomoku placement" }
+          : { path: "Git/O-Mock/Source/O_Mock/GomokuBoardActor.h" };
+        opts.onToolCallRequestStart(predictionCount, { toolCallId: `repair-${predictionCount}` });
+        opts.onToolCallRequestNameReceived(predictionCount, name);
+        opts.onToolCallRequestArgumentFragmentGenerated(predictionCount, JSON.stringify(args));
+        opts.onToolCallRequestEnd(predictionCount, {
+          toolCallRequest: {
+            id: `repair-${predictionCount}`,
+            type: "function",
+            name,
+            arguments: args,
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "implement the first missing local-play feature");
+    history.append("assistant", JSON.stringify({
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+    }));
+    await generate(controllerFor(model, {}, stateRoot, emitted, [{
+      type: "function",
+      function: {
+        name: "unreal_feature_intent_resolve",
+        parameters: {
+          type: "object",
+          properties: {
+            request: { type: "string" },
+            taskAuthorization: { type: "object" },
+          },
+          required: ["request", "taskAuthorization"],
+        },
+      },
+    }]), history);
+
+    assert.equal(predictionCount, 2);
+    assert.equal(emitted.filter((event) => event.kind === "failure").length, 0);
+    const ends = emitted.filter((event) => event.kind === "end");
+    assert.equal(ends.length, 1);
+    assert.equal(ends[0].request.name, "unreal_feature_intent_resolve");
+    assert.deepEqual(ends[0].request.arguments.taskAuthorization, ownership);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.pendingToolCalls.length, 1);
+    assert.equal(checkpoint.pendingToolCalls[0].name, "unreal_feature_intent_resolve");
+    assert.equal(
+      checkpoint.pendingToolCalls.some((call) => call.name === "read_file"),
+      false,
+    );
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    assert.equal(events.some((event) => event.type === "server_required_tool_repair_started"), true);
+    assert.equal(events.some((event) => event.type === "server_required_tool_repair_completed"), true);
+    assert.equal(events.some((event) => event.type === "tool_call_rejected"), false);
+    assert.equal(events.some((event) => (
+      event.type === "prediction_completion"
+        && event.recoveryKind === "required_tool_serialization"
+        && event.architectureFinalRecoveryAttempt === false
+    )), true);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("required-tool serialization repair fails closed after exactly one retry", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-tool-fail-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let predictionCount = 0;
+    const model = {
+      identifier: "required-tool-fail-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        predictionCount += 1;
+        opts.onToolCallRequestStart(predictionCount, { toolCallId: `wrong-${predictionCount}` });
+        opts.onToolCallRequestNameReceived(predictionCount, "read_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(predictionCount, '{"path":"Source/Wrong.cpp"}');
+        opts.onToolCallRequestEnd(predictionCount, {
+          toolCallRequest: {
+            id: `wrong-${predictionCount}`,
+            type: "function",
+            name: "read_file",
+            arguments: { path: "Source/Wrong.cpp" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "continue the bounded implementation");
+    history.append("assistant", JSON.stringify({
+      requiredNextTool: "unreal_feature_intent_resolve",
+    }));
+    await assert.rejects(
+      generate(controllerFor(model, {}, stateRoot, emitted, [{
+        type: "function",
+        function: { name: "unreal_feature_intent_resolve", parameters: { type: "object" } },
+      }]), history),
+      /after one bounded repair/,
+    );
+
+    assert.equal(predictionCount, 2);
+    assert.deepEqual(emitted, []);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    assert.equal(events.filter((event) => event.type === "server_required_tool_repair_started").length, 1);
+    assert.equal(events.filter((event) => event.type === "server_required_tool_repair_failed").length, 1);
+    assert.equal(activeCheckpoint(stateRoot).requiredNextTool.name, "unreal_feature_intent_resolve");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });

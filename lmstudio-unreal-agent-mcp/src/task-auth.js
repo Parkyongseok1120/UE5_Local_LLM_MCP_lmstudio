@@ -782,6 +782,67 @@ function purgeExpiredReservations(usage, nowMs = Date.now()) {
   return list;
 }
 
+const DIRECT_SOURCE_EXTENSIONS = new Set([
+  ".h", ".hpp", ".inl", ".cpp", ".c", ".cc", ".cxx", ".cs",
+]);
+
+function recordDirectSourceEvidence(state, toolName, callMetadata) {
+  if (!["read_file", "read_file_range"].includes(String(toolName || ""))) return;
+  const metadata = callMetadata && typeof callMetadata === "object"
+    ? callMetadata.directSourceEvidence
+    : null;
+  if (!metadata || typeof metadata !== "object") return;
+  const relPath = String(metadata.projectRelativePath || "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/^\/+|\/+$/g, "");
+  const contentHash = String(metadata.contentHash || "").trim().toLowerCase();
+  if (
+    !relPath
+    || path.posix.isAbsolute(relPath)
+    || relPath.split("/").includes("..")
+    || !DIRECT_SOURCE_EXTENSIONS.has(path.posix.extname(relPath).toLowerCase())
+    || !/^[0-9a-f]{64}$/.test(contentHash)
+  ) {
+    return;
+  }
+  const planRevision = String(state.planRevision || "");
+  let ledger = state.directSourceEvidence && typeof state.directSourceEvidence === "object"
+    ? { ...state.directSourceEvidence }
+    : {};
+  if (String(ledger.planRevision || "") !== planRevision) {
+    ledger = { version: 1, planRevision, files: {} };
+  }
+  const files = ledger.files && typeof ledger.files === "object"
+    ? { ...ledger.files }
+    : {};
+  const key = relPath.toLowerCase();
+  const prior = files[key] && typeof files[key] === "object" ? files[key] : {};
+  const ranges = new Set(Array.isArray(prior.lineRanges) ? prior.lineRanges.map(String) : []);
+  const lineRange = String(metadata.lineRange || "").trim();
+  if (lineRange) ranges.add(lineRange);
+  const tools = new Set(Array.isArray(prior.tools) ? prior.tools.map(String) : []);
+  tools.add(String(toolName));
+  files[key] = {
+    path: relPath,
+    contentHash,
+    sourceKind: [".h", ".hpp", ".inl"].includes(path.posix.extname(relPath).toLowerCase())
+      ? "declaration"
+      : "implementation",
+    lineRanges: Array.from(ranges).slice(-8),
+    tools: Array.from(tools).slice(-2),
+    recordedAt: new Date().toISOString(),
+  };
+  const boundedEntries = Object.entries(files)
+    .sort((left, right) => String(right[1]?.recordedAt || "").localeCompare(String(left[1]?.recordedAt || "")))
+    .slice(0, 32);
+  state.directSourceEvidence = {
+    version: 1,
+    planRevision,
+    files: Object.fromEntries(boundedEntries),
+  };
+}
+
 function mutateRouteBudget(
   workspaceRoot,
   taskSessionId,
@@ -789,7 +850,8 @@ function mutateRouteBudget(
   args,
   toolName,
   mode = "consume",
-  reservationId = ""
+  reservationId = "",
+  callMetadata = null
 ) {
   if (!toolName) return { ok: true };
   const stateRoot = resolveAgentStateRoot(workspaceRoot);
@@ -895,6 +957,7 @@ function mutateRouteBudget(
       usage.count = count + 1;
       usage.calls = calls.slice(-limit);
       current.toolRouteUsage = usage;
+      recordDirectSourceEvidence(current, toolName, callMetadata);
       current.updatedAt = new Date().toISOString();
       atomicWriteJson(statePath, current);
       return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
@@ -1039,7 +1102,15 @@ function reserveRouteCall(workspaceRoot, taskSessionId, fields, args, toolName) 
   return mutateRouteBudget(workspaceRoot, taskSessionId, fields, args, toolName, "reserve");
 }
 
-function commitRouteReservation(workspaceRoot, taskSessionId, fields, args, toolName, reservationId = "") {
+function commitRouteReservation(
+  workspaceRoot,
+  taskSessionId,
+  fields,
+  args,
+  toolName,
+  reservationId = "",
+  callMetadata = null
+) {
   return mutateRouteBudget(
     workspaceRoot,
     taskSessionId,
@@ -1047,7 +1118,8 @@ function commitRouteReservation(workspaceRoot, taskSessionId, fields, args, tool
     args,
     toolName,
     "commit",
-    reservationId
+    reservationId,
+    callMetadata
   );
 }
 

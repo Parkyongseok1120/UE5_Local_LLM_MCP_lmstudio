@@ -645,6 +645,49 @@ function buildToolDisposition(payload = {}) {
   };
 }
 
+function applyBuildRecoveryScopeBinding(payload = {}, binding = {}) {
+  if (String(binding?.scopeDisposition || "") !== "out_of_slice") return payload;
+  const recovery = payload.recovery && typeof payload.recovery === "object"
+    ? payload.recovery
+    : {};
+  payload.recovery = {
+    ...recovery,
+    taskScopeBound: false,
+    scopeStrategy: "out_of_slice_blocker",
+    requiredNextTool: null,
+    requiredNextToolArgs: {},
+    requiredSequence: [],
+    mutationPermittedWithoutSemanticEvidence: false,
+  };
+  payload.errorCode = "BUILD_FAILURE_OUTSIDE_ACTIVE_SLICE";
+  payload.error = "The first build failure belongs to a file or owner outside the active task slice.";
+  payload.stopCurrentWorkflow = true;
+  payload.retryable = false;
+  payload.recoverable = false;
+  payload.requiredNextTool = null;
+  payload.requiredNextToolArgs = {};
+  payload.suggestedToolCalls = [];
+  payload.doNotRetry = [
+    "unreal_symbol_lookup",
+    "unreal_code_sketch_claim_validate",
+    "replace_in_file",
+    "build_unreal_project",
+  ];
+  payload.activeSliceId = String(binding?.activeSliceId || "");
+  payload.activeSliceFiles = Array.isArray(binding?.activeSliceFiles)
+    ? binding.activeSliceFiles.map(String)
+    : [];
+  payload.nextSteps = [
+    "Stop the current workflow and report this build blocker without editing outside selectedSlice.",
+    "Start a new explicitly scoped plan only if the user authorizes repairing the unrelated owner.",
+  ];
+  payload.agentInstruction = (
+    "Do not look up or repair this symbol in the current task. The build failure is outside selectedSlice; "
+    + "stop and report the blocker without expanding file ownership."
+  );
+  return payload;
+}
+
 function buildResponsePayload({ result, build, planResult, projectPath, command, logPath, verbose = false }) {
   const errorLines = extractLikelyCompileErrors(result.stdout, result.stderr);
   const compactErrorLines = errorLines.map((line) => compactCompilerDiagnostic(line)).filter(Boolean);
@@ -952,6 +995,7 @@ module.exports = {
   DEFAULT_LOG_RESULT_MAX_CHARS,
   DEFAULT_VALIDATION_FINDING_CAP,
   buildFailureRecovery,
+  applyBuildRecoveryScopeBinding,
   buildResponsePayload,
   buildToolDisposition,
   clampInt,

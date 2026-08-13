@@ -383,18 +383,63 @@ function toolNamesMatch(expected: string, actual: string): boolean {
   return core.toolNamesMatch(expected, actual);
 }
 
+function guardGeneratorAbort(ctl: GeneratorController): void {
+  const guard = (ctl as any)?.guardAbort;
+  if (typeof guard === "function") {
+    guard.call(ctl);
+    return;
+  }
+  const signal = (ctl as any)?.abortSignal;
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("Generation aborted");
+  }
+}
+
+async function predictionResultWithAbort(prediction: any, ctl: GeneratorController): Promise<any> {
+  guardGeneratorAbort(ctl);
+  const signal = (ctl as any)?.abortSignal;
+  if (!signal || typeof signal.addEventListener !== "function") {
+    return prediction.result();
+  }
+
+  let abortListener: (() => void) | null = null;
+  const abortResult = new Promise<never>((_resolve, reject) => {
+    abortListener = () => {
+      try {
+        Promise.resolve(prediction?.cancel?.()).catch(() => {});
+      } catch {
+        // The abort still terminates this generator even if the backend's
+        // cancellation hook itself is already closed or throws synchronously.
+      }
+      reject(signal.reason instanceof Error ? signal.reason : new Error("Generation aborted"));
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+  try {
+    return await Promise.race([Promise.resolve(prediction.result()), abortResult]);
+  } finally {
+    if (abortListener) signal.removeEventListener("abort", abortListener);
+  }
+}
+
 const ARCHITECTURE_GATE_MARKER = "[UNREAL_ARCHITECTURE_VALIDATION_GATE]";
 const ARCHITECTURE_SUBMISSION_MARKER = "[UNREAL_ARCHITECTURE_SUBMISSION_REQUIRED]";
 const ARCHITECTURE_PAYLOAD_REPAIR_MARKER = "[UNREAL_ARCHITECTURE_PAYLOAD_REPAIR_REQUIRED]";
 const ARCHITECTURE_TOOL_NAME = "unreal_architecture_reasoning";
 const FEATURE_INTENT_ATOMIC_MARKER = "[UNREAL_FEATURE_INTENT_ATOMIC_GATE]";
+const FEATURE_INTENT_EVIDENCE_REFILL_MARKER = "[UNREAL_FEATURE_INTENT_EVIDENCE_REFILL]";
 const FEATURE_INTENT_TOOL_NAME = "unreal_feature_intent_resolve";
+const EVIDENCE_FIRST_CONTRACT_MARKER = "[EVIDENCE_FIRST_CONTRACT_REQUIRED]";
+const EVIDENCE_FIRST_CONTRACT_TOOL_NAME = "evidence_first_contract";
 const TASK_PLANNER_TOOL_NAME = "unreal_agent_plan";
 const TASK_ROUTE_OWNERSHIP_MARKER = "[UNREAL_TASK_ROUTE_OWNERSHIP_GATE]";
 const PRE_ROUTE_PLANNER_HANDOFF_MARKER = "[UNREAL_PRE_ROUTE_PLANNER_HANDOFF]";
 const INITIAL_ACTIVE_PROJECT_BOOTSTRAP_MARKER = "[UNREAL_INITIAL_ACTIVE_PROJECT_BOOTSTRAP]";
 const TOOL_CATALOG_REFRESH_MARKER = "[UNREAL_TOOL_CATALOG_REFRESH]";
 const SERVER_REQUIRED_TOOL_MARKER = "[UNREAL_SERVER_REQUIRED_TOOL]";
+const SERVER_REQUIRED_TOOL_REPAIR_MARKER = "[UNREAL_SERVER_REQUIRED_TOOL_REPAIR]";
 const DETACHED_SIDE_QUERY_MARKER = "[UNREAL_DETACHED_SIDE_QUERY]";
 const WORKFLOW_STOP_MARKER = "[UNREAL_SERVER_WORKFLOW_STOP]";
 const ARCHITECTURE_EVIDENCE_TOOLS = [
@@ -403,6 +448,7 @@ const ARCHITECTURE_EVIDENCE_TOOLS = [
   "read_symbol",
   "unreal_symbol_lookup",
 ];
+const DIRECT_SOURCE_FILE_TOOLS = ["read_file", "read_file_range"];
 const ARCHITECTURE_DISCOVERY_TOOLS = [
   ...ARCHITECTURE_EVIDENCE_TOOLS,
   "search_files",
@@ -575,6 +621,11 @@ function requiresTaskRoutePlanning(goal: string): boolean {
   return /\b(?:implement|create|add|build|fix|patch|edit|modify|refactor|write)\b|구현|만들|추가|수정|고쳐|리팩터|작성|빌드/i.test(source);
 }
 
+function requiresFeatureCompletionAudit(goal: string): boolean {
+  const source = String(goal || "");
+  return /\b(?:current\s+implementation|implementation\s+status|earliest\s+incomplete|first\s+incomplete|what\s+remains)\b|현재\s*(?:구현\s*)?상태|구현\s*상태|가장\s*(?:앞선|이른|먼저인)\s*미완성|아직\s*완료되지\s*않은|미완성\s*(?:기능|단계)/i.test(source);
+}
+
 function injectPreRoutePlannerHandoffRule(chat: Chat): boolean {
   const rule = (
     `${PRE_ROUTE_PLANNER_HANDOFF_MARKER}\n`
@@ -694,6 +745,43 @@ function injectServerRequiredToolRule(chat: Chat, toolName: string, requiredArgs
   }
 }
 
+function injectServerRequiredToolRepairRule(
+  chat: Chat,
+  toolName: string,
+  receivedToolNames: string[],
+): boolean {
+  const received = receivedToolNames.length > 0
+    ? receivedToolNames.join(", ")
+    : "prose/no tool call";
+  const rule = (
+    `${SERVER_REQUIRED_TOOL_REPAIR_MARKER}\n`
+    + `Your previous output requested ${received}, but the server requires ${toolName}. `
+    + `That output was discarded and no tool ran. Serialize exactly one ${toolName} call now using the only `
+    + "available tool schema. Derive model-owned fields from retained evidence; server-owned fields are injected. "
+    + "Do not explain, read, search, checkpoint, call another function name, or return a final answer."
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(SERVER_REQUIRED_TOOL_REPAIR_MARKER)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    chat.append("system", rule);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function architectureRecoveryContinuationRequested(goal: string): boolean {
   return /\b(?:continue|resume|retry|same\s+validation|this\s+validation)\b|계속|이어|재개|검증|그대로/i.test(
     String(goal || ""),
@@ -753,7 +841,11 @@ function injectFeatureIntentAtomicRule(chat: Chat): boolean {
     + "Submit exactly one unreal_feature_intent_resolve model-facing call for this gate. If selectedSlice.files "
     + "is empty, include every already-discovered bounded 1-2 file slice in its slices argument and select one "
     + "with activeSliceId. SelectIntent, ResolveSlice, CaptureSnapshot, and BindIntent are server-owned internal "
-    + "phases. Never call unreal_task_define_slices separately for feature intent."
+    + "phases. Never call unreal_task_define_slices separately for feature intent. When the user asks for the "
+    + "current implementation status or the earliest incomplete feature, bind only a candidate whose owning "
+    + "declaration and implementation were both read and whose unmet behavior is concrete in that evidence. "
+    + "If the evidence shows a candidate is already complete, continue bounded discovery or select the next "
+    + "proven gap; never invent a robustness-only mutation to make a completed feature look incomplete."
   );
   try {
     const messages = chat.getMessagesArray();
@@ -761,6 +853,79 @@ function injectFeatureIntentAtomicRule(chat: Chat): boolean {
       if (message.getRole() !== "system") continue;
       const current = String(message.getText() || "");
       if (current.includes(FEATURE_INTENT_ATOMIC_MARKER)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    if (typeof (chat as any).append === "function") {
+      (chat as any).append("system", rule);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function injectFeatureIntentEvidenceRefillRule(
+  chat: Chat,
+  threshold: number,
+  declarationCount: number,
+  implementationCount: number,
+): boolean {
+  const rule = (
+    `${FEATURE_INTENT_EVIDENCE_REFILL_MARKER}\n`
+    + "Feature Intent is temporarily unavailable because the current implementation audit is not grounded yet. "
+    + `Collect at least ${threshold} distinct direct-source reads, including at least two owning declarations and two `
+    + `owning implementations (currently declarations=${declarationCount}, implementations=${implementationCount}). `
+    + "Use only the exposed bounded read/search/symbol/list tools. Inspect the real project paths and declaration/implementation "
+    + "pairs for the earliest candidate feature. Do not call unreal_feature_intent_resolve, invent a path, infer a missing "
+    + "feature from filenames alone, or manufacture a robustness-only change. Once the evidence threshold is satisfied, "
+    + "the resolver will be exposed automatically."
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(FEATURE_INTENT_EVIDENCE_REFILL_MARKER)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    if (typeof (chat as any).append === "function") {
+      (chat as any).append("system", rule);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function injectEvidenceFirstContractRule(chat: Chat): boolean {
+  const rule = (
+    `${EVIDENCE_FIRST_CONTRACT_MARKER}\n`
+    + "The infrastructure bootstrap and task route are already established. Before business-source discovery or Feature "
+    + "Intent selection, call evidence_first_contract exactly once with mode=codegen. This is a model-facing audit contract, "
+    + "not another task-planning phase. Do not inspect project files or submit Feature Intent until that call succeeds."
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(EVIDENCE_FIRST_CONTRACT_MARKER)) return true;
       if (typeof (message as any).appendText === "function") {
         (message as any).appendText(`\n${rule}`);
         return true;
@@ -924,6 +1089,9 @@ function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
   directEvidenceCount: number;
   declarationEvidenceCount: number;
   implementationEvidenceCount: number;
+  directSourceFileEvidenceCount: number;
+  directSourceDeclarationCount: number;
+  directSourceImplementationCount: number;
   evidenceCallsSinceLastAttempt: number;
   discoveryCallsSinceLastAttempt: number;
   uniqueEvidenceSinceLastAttempt: number;
@@ -966,6 +1134,9 @@ function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
   const evidence = new Set<string>();
   const declarationEvidence = new Set<string>();
   const implementationEvidence = new Set<string>();
+  const directSourceFileEvidence = new Set<string>();
+  const directSourceDeclarationEvidence = new Set<string>();
+  const directSourceImplementationEvidence = new Set<string>();
   const evidenceSinceLastAttempt = new Set<string>();
   let evidenceCallsSinceLastAttempt = 0;
   let discoveryCallsSinceLastAttempt = 0;
@@ -1065,6 +1236,21 @@ function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
       ) {
         implementationEvidence.add(identity);
       }
+      if (DIRECT_SOURCE_FILE_TOOLS.some((tool) => toolNamesMatch(tool, name))) {
+        // Completion-audit readiness is intentionally stricter than the
+        // architecture evidence pool: count unique successful source files,
+        // not line ranges, symbol queries, or empty lookup results. Otherwise
+        // one zero-match symbol lookup can unlock Feature Intent after only
+        // five real reads while the UI says six direct-source reads are needed.
+        const fileIdentity = normalizedSource.replace(/^project:\/\//, "");
+        directSourceFileEvidence.add(fileIdentity);
+        if (/\.(?:h|hh|hpp|hxx|inl)$/.test(fileIdentity)) {
+          directSourceDeclarationEvidence.add(fileIdentity);
+        }
+        if (/\.(?:c|cc|cpp|cxx|m|mm|cs)$/.test(fileIdentity)) {
+          directSourceImplementationEvidence.add(fileIdentity);
+        }
+      }
     }
   }
   return {
@@ -1073,6 +1259,9 @@ function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
     directEvidenceCount: evidence.size,
     declarationEvidenceCount: declarationEvidence.size,
     implementationEvidenceCount: implementationEvidence.size,
+    directSourceFileEvidenceCount: directSourceFileEvidence.size,
+    directSourceDeclarationCount: directSourceDeclarationEvidence.size,
+    directSourceImplementationCount: directSourceImplementationEvidence.size,
     evidenceCallsSinceLastAttempt,
     discoveryCallsSinceLastAttempt,
     uniqueEvidenceSinceLastAttempt: evidenceSinceLastAttempt.size,
@@ -1553,6 +1742,26 @@ const ALWAYS_DISCOVERABLE_UNREAL_TOOLS = [
   "quarantine_corrupt_task",
 ];
 
+// These tools establish or replace task ownership. Once a server-owned route
+// exists, advertising them as generic discovery controls lets a compact model
+// accidentally bootstrap again and replan the live task. That destroys
+// plan-scoped read evidence during evidence refill. The exact server-required
+// tool remains an override for intentional recovery and task replacement.
+const ACTIVE_ROUTE_BOOTSTRAP_TOOLS = [
+  "unreal_get_active_project",
+  "unreal_set_active_project",
+  TASK_PLANNER_TOOL_NAME,
+];
+
+function activeRouteBootstrapToolAllowed(tool: any, checkpoint: any): boolean {
+  const name = String(tool?.function?.name || tool?.name || "").trim();
+  const required = String(checkpoint?.requiredNextTool?.name || "").trim();
+  if (required && !core.isNonToolNextAction(required) && toolNamesMatch(required, name)) {
+    return true;
+  }
+  return !ACTIVE_ROUTE_BOOTSTRAP_TOOLS.some((bootstrap) => toolNamesMatch(bootstrap, name));
+}
+
 const UNPREFIXED_UNREAL_AGENT_TOOLS = [
   ...ALWAYS_DISCOVERABLE_UNREAL_TOOLS.filter((name) => !name.startsWith("unreal_")),
   "list_directory",
@@ -1639,6 +1848,36 @@ function repeatedUnchangedControlTools(messages: ChatMessage[]): string[] {
       fingerprints.length >= 2 && fingerprints[0] === fingerprints[1]
     ))
     .map(([name]) => name);
+}
+
+function successfulToolCalledSinceLatestUser(messages: ChatMessage[], toolName: string): boolean {
+  const snapshots = core.snapshotMessages(messages);
+  let start = 0;
+  for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+    if (snapshots[index]?.role === "user") {
+      start = index + 1;
+      break;
+    }
+  }
+  const calls = new Map<string, any>();
+  for (const snapshot of snapshots.slice(start)) {
+    for (const call of snapshot.toolCalls || []) {
+      if (!toolNamesMatch(toolName, String(call?.name || ""))) continue;
+      const callId = String(call?.id || "").trim();
+      if (callId) calls.set(callId, call);
+    }
+    for (const result of snapshot.toolResults || []) {
+      const callId = String(result?.toolCallId || "").trim();
+      const resultName = String(result?.name || calls.get(callId)?.name || "");
+      if (
+        (calls.has(callId) || toolNamesMatch(toolName, resultName))
+        && core.toolResultSucceeded(result)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function injectRepeatedControlBoundaryRule(history: Chat, tools: string[]): void {
@@ -1769,6 +2008,7 @@ function reconcilePendingToolCalls(pendingCalls: any[], currentSnapshots: any[])
 }
 
 async function generate(ctl: GeneratorController, history: Chat): Promise<void> {
+  guardGeneratorAbort(ctl);
   const enabled = Boolean(configValue(ctl, "enabled", true));
   const observeOnly = Boolean(configValue(ctl, "observeOnly", false));
   const requireCheckpointPersistence = Boolean(configValue(ctl, "requireCheckpointPersistence", true));
@@ -1953,12 +2193,6 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   if (architectureValidationRequired) {
     injectArchitectureValidationRule(history);
   }
-  if (toolNamesMatch(
-    FEATURE_INTENT_TOOL_NAME,
-    String(nextCheckpoint?.requiredNextTool?.name || ""),
-  )) {
-    injectFeatureIntentAtomicRule(history);
-  }
   const plannerTool = toolDefinitions.find((tool: any) => toolNamesMatch(
     TASK_PLANNER_TOOL_NAME,
     tool?.function?.name || tool?.name || "",
@@ -2035,6 +2269,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     configValue(ctl, "preRouteDiscoveryLimit", 6), 6, 1, 32,
   ));
   const architectureStatus = architectureGateStatus(messages, nextCheckpoint);
+  const featureCompletionAuditRequired = requiresFeatureCompletionAudit(authoritativeGoal);
+  const effectiveFeatureIntentEvidenceReadThreshold = featureCompletionAuditRequired
+    ? Math.max(featureIntentEvidenceReadThreshold, 6)
+    : featureIntentEvidenceReadThreshold;
   const advertisedRequiredToolName = String(nextCheckpoint?.requiredNextTool?.name || "").trim();
   const advertisedRequiredToolExists = Boolean(advertisedRequiredToolName && toolDefinitions.some((tool: any) => (
     toolNamesMatch(advertisedRequiredToolName, tool?.function?.name || tool?.name || "")
@@ -2047,6 +2285,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && advertisedRequiredToolName
     && !advertisedRequiredToolExists
     && !advertisedRequiredToolIsRouted
+  );
+  const requiredToolSchemaMissing = Boolean(
+    !detachedSideQueryActive
+    && advertisedRequiredToolName
+    && !advertisedRequiredToolExists
+    && advertisedRequiredToolIsRouted
   );
   if (invalidRequiredToolContract) {
     // A server-owned exact-tool contract must resolve either to an advertised
@@ -2077,16 +2321,112 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const selectedSliceFiles = Array.isArray(nextCheckpoint?.toolRoute?.selectedSlice?.files)
     ? nextCheckpoint.toolRoute.selectedSlice.files.filter((path: any) => String(path || "").trim())
     : [];
-  const featureIntentDiscoveryHandoffForced = Boolean(
+  const plannerPhaseActive = String(nextCheckpoint?.toolRoute?.phase || "").toLowerCase() === "planner";
+  const featureIntentEvidenceReady = Boolean(
+    architectureStatus.directSourceFileEvidenceCount >= effectiveFeatureIntentEvidenceReadThreshold
+    && architectureStatus.directSourceImplementationCount >= (featureCompletionAuditRequired ? 2 : 1)
+    && architectureStatus.directSourceDeclarationCount >= (featureCompletionAuditRequired ? 2 : 1)
+  );
+  const checkpointRecoveryRequired = toolNamesMatch(
+    TASK_CHECKPOINT_TOOL_NAME,
+    String(nextCheckpoint?.requiredNextTool?.name || ""),
+  );
+  const evidenceFirstContractTool: any = toolDefinitions.find((tool: any) => toolNamesMatch(
+    EVIDENCE_FIRST_CONTRACT_TOOL_NAME,
+    tool?.function?.name || tool?.name || "",
+  ));
+  const evidenceFirstContractSatisfied = successfulToolCalledSinceLatestUser(
+    messages,
+    EVIDENCE_FIRST_CONTRACT_TOOL_NAME,
+  );
+  if (
+    evidenceFirstContractSatisfied
+    && toolNamesMatch(
+      EVIDENCE_FIRST_CONTRACT_TOOL_NAME,
+      String(nextCheckpoint?.requiredNextTool?.name || ""),
+    )
+  ) {
+    nextCheckpoint.requiredNextTool = null;
+  }
+  const requiredBeforeEvidenceFirst = String(nextCheckpoint?.requiredNextTool?.name || "").trim();
+  const evidenceFirstMayPreemptRequired = Boolean(
+    !requiredBeforeEvidenceFirst
+    || toolNamesMatch(FEATURE_INTENT_TOOL_NAME, requiredBeforeEvidenceFirst)
+  );
+  const evidenceFirstContractForced = Boolean(
     !detachedSideQueryActive
+    && !workflowStopActive
+    && routeOwnershipAvailable
+    && plannerPhaseActive
+    && featureIntentTool
+    && featureIntentRouted
+    && selectedSliceFiles.length === 0
+    && !architectureValidationRequired
+    && !checkpointRecoveryRequired
+    && evidenceFirstMayPreemptRequired
+    && evidenceFirstContractTool
+    && !evidenceFirstContractSatisfied
+  );
+  if (evidenceFirstContractForced) {
+    nextCheckpoint.requiredNextTool = {
+      name: EVIDENCE_FIRST_CONTRACT_TOOL_NAME,
+      reference: { sourceField: "compactor.evidenceFirstContract", value: EVIDENCE_FIRST_CONTRACT_TOOL_NAME },
+      args: { mode: "codegen" },
+    };
+    injectEvidenceFirstContractRule(history);
+  }
+  const evidenceFirstContractReady = Boolean(
+    !evidenceFirstContractTool || evidenceFirstContractSatisfied,
+  );
+  const requiredBeforeEvidenceRefill = String(nextCheckpoint?.requiredNextTool?.name || "").trim();
+  const evidenceRefillMaySuspendRequired = Boolean(
+    !requiredBeforeEvidenceRefill
+    || toolNamesMatch(FEATURE_INTENT_TOOL_NAME, requiredBeforeEvidenceRefill)
+  );
+  const featureIntentEvidenceRefillActive = Boolean(
+    !detachedSideQueryActive
+    && !workflowStopActive
+    && !evidenceFirstContractForced
+    && evidenceFirstContractReady
     && routeOwnershipAvailable
     && featureIntentTool
     && featureIntentRouted
-    && String(nextCheckpoint?.toolRoute?.phase || "").toLowerCase() === "planner"
+    && plannerPhaseActive
     && selectedSliceFiles.length === 0
-    && !nextCheckpoint?.requiredNextTool
     && !architectureValidationRequired
-    && architectureStatus.directEvidenceCount >= featureIntentEvidenceReadThreshold
+    && !checkpointRecoveryRequired
+    && evidenceRefillMaySuspendRequired
+    && !featureIntentEvidenceReady
+  );
+  if (featureIntentEvidenceRefillActive) {
+    nextCheckpoint.requiredNextTool = null;
+    injectFeatureIntentEvidenceRefillRule(
+      history,
+      effectiveFeatureIntentEvidenceReadThreshold,
+      architectureStatus.directSourceDeclarationCount,
+      architectureStatus.directSourceImplementationCount,
+    );
+  }
+  const requiredBeforeFeatureHandoff = String(nextCheckpoint?.requiredNextTool?.name || "").trim();
+  const featureHandoffMayUseRequired = Boolean(
+    !requiredBeforeFeatureHandoff
+    || toolNamesMatch(FEATURE_INTENT_TOOL_NAME, requiredBeforeFeatureHandoff)
+  );
+  const featureIntentDiscoveryHandoffForced = Boolean(
+    !detachedSideQueryActive
+    && !workflowStopActive
+    && !evidenceFirstContractForced
+    && !featureIntentEvidenceRefillActive
+    && evidenceFirstContractReady
+    && routeOwnershipAvailable
+    && featureIntentTool
+    && featureIntentRouted
+    && plannerPhaseActive
+    && selectedSliceFiles.length === 0
+    && !architectureValidationRequired
+    && !checkpointRecoveryRequired
+    && featureHandoffMayUseRequired
+    && featureIntentEvidenceReady
   );
   if (featureIntentDiscoveryHandoffForced) {
     nextCheckpoint.requiredNextTool = {
@@ -2249,6 +2589,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && exactRequiredToolDefinition
     && !architectureToolForced
     && !architectureEvidenceRefillActive
+    && !featureIntentEvidenceRefillActive
     && !initialActiveProjectBootstrapForced
     && !preRoutePlannerForced
     && !catalogRefreshForced
@@ -2295,6 +2636,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         ? [catalogRefreshTool].filter(toolAllowedBySemanticBlocker)
       : (exactRequiredToolForced
         ? [exactRequiredToolDefinition].filter(toolAllowedBySemanticBlocker)
+      : (featureIntentEvidenceRefillActive
+      ? toolDefinitions
+        .filter((tool: any) => ARCHITECTURE_DISCOVERY_TOOLS.some((name) => toolNamesMatch(
+          name,
+          tool?.function?.name || tool?.name || "",
+        )))
+        .filter(toolAllowedBySemanticBlocker)
       : (architectureEvidenceRefillActive
       ? toolDefinitions
         .filter((tool: any) => architectureDiscoveryToolAllowed(
@@ -2306,7 +2654,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             : tool
         ))
         .filter(toolAllowedBySemanticBlocker)
-      : toolDefinitions.filter(toolAllowedBySemanticBlocker)))))));
+      : toolDefinitions.filter(toolAllowedBySemanticBlocker))))))));
   // Exact catalog/state enforcement: a generated write is intent, not proof of
   // ownership. Remove mutation schemas until a server result has supplied the
   // compact taskSessionId + ownerCapability pair. This also protects older
@@ -2318,16 +2666,20 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   // Exact phase filtering also closes the tools/list refresh race between the
   // two Unreal MCP providers. Architecture recovery already constructs its
   // own narrower catalog, so it remains authoritative while active.
+  const routeSafePhaseToolDefinitions = routeOwnershipAvailable
+    ? phaseToolDefinitions.filter((tool: any) => activeRouteBootstrapToolAllowed(tool, nextCheckpoint))
+    : phaseToolDefinitions;
   const routedToolDefinitions = detachedSideQueryActive
-    ? phaseToolDefinitions
+    ? routeSafePhaseToolDefinitions
     : routeOwnershipAvailable
     && exactToolRouteAvailable
     && !architectureToolForced
     && !architectureEvidenceRefillActive
-    ? phaseToolDefinitions.filter((tool: any) => routeAllowsTool(tool, nextCheckpoint))
+    && !featureIntentEvidenceRefillActive
+    ? routeSafePhaseToolDefinitions.filter((tool: any) => routeAllowsTool(tool, nextCheckpoint))
     : (checkpointExplicitlyRequired
-      ? phaseToolDefinitions
-      : phaseToolDefinitions.filter((tool: any) => !toolNamesMatch(
+      ? routeSafePhaseToolDefinitions
+      : routeSafePhaseToolDefinitions.filter((tool: any) => !toolNamesMatch(
         TASK_CHECKPOINT_TOOL_NAME,
         tool?.function?.name || tool?.name || "",
       )));
@@ -2413,6 +2765,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     architectureDirectEvidenceCount: architectureStatus.directEvidenceCount,
     architectureDeclarationEvidenceCount: architectureStatus.declarationEvidenceCount,
     architectureImplementationEvidenceCount: architectureStatus.implementationEvidenceCount,
+    directSourceFileEvidenceCount: architectureStatus.directSourceFileEvidenceCount,
+    directSourceDeclarationCount: architectureStatus.directSourceDeclarationCount,
+    directSourceImplementationCount: architectureStatus.directSourceImplementationCount,
     architectureEvidenceCallsSinceLastAttempt: architectureStatus.evidenceCallsSinceLastAttempt,
     architectureDiscoveryCallsSinceLastAttempt: architectureStatus.discoveryCallsSinceLastAttempt,
     architectureUniqueEvidenceSinceLastAttempt: architectureStatus.uniqueEvidenceSinceLastAttempt,
@@ -2438,7 +2793,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     workflowStopActive,
     invalidRequiredToolContract,
     invalidRequiredToolName: invalidRequiredToolContract ? advertisedRequiredToolName : "",
+    requiredToolSchemaMissing,
+    missingRequiredToolName: requiredToolSchemaMissing ? advertisedRequiredToolName : "",
+    evidenceFirstContractForced,
+    evidenceFirstContractSatisfied,
     featureIntentDiscoveryHandoffForced,
+    featureIntentEvidenceReady,
+    featureIntentEvidenceRefillActive,
+    featureCompletionAuditRequired,
+    effectiveFeatureIntentEvidenceReadThreshold,
     detachedSideQueryActive,
     detachedSideQueryRequest: detachedSideQueryActive
       ? String(nextCheckpoint?.sideQuery?.request || "").slice(0, 240)
@@ -2571,6 +2934,23 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       + "Generation stopped before another health/read loop. Restart or re-enable mcp/unreal-agent, then continue the same task."
     );
   }
+  if (requiredToolSchemaMissing) {
+    const content = (
+      `Work stopped safely: the server requires ${advertisedRequiredToolName}, but LM Studio's current chat `
+      + "catalog does not expose that tool schema. No generated tool call was executed. Restart or re-enable "
+      + "the affected Unreal MCP provider, open a new chat, and retry the same request."
+    );
+    ctl.fragmentGenerated(content, { reasoningType: "none" });
+    await appendEventBestEffort(sessionId, {
+      type: "required_tool_schema_missing_final_emitted",
+      at: new Date().toISOString(),
+      requiredTool: advertisedRequiredToolName,
+      routeHash,
+      targetModelInvoked: false,
+      toolRequestCount: 0,
+    });
+    return;
+  }
   if (decision.action === "hard_compact" && (!enabled || observeOnly)) {
     await appendEventBestEffort(sessionId, {
       type: "generation_blocked",
@@ -2646,6 +3026,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     || requiredToolGateActive
     || architectureToolForced
     || architectureEvidenceRefillActive
+    || featureIntentEvidenceRefillActive
     || initialActiveProjectBootstrapForced
     || preRoutePlannerForced
     || catalogRefreshForced
@@ -2684,6 +3065,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     else emitEvent(event);
   };
   const runPrediction = async (predictionTools: any[], forceTool: boolean): Promise<string> => {
+    guardGeneratorAbort(ctl);
     const prediction = model.respond(modelChat, {
       maxTokens: Number(config.maxOutputReserve),
       temperature: Number(config.temperature),
@@ -2731,7 +3113,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
       },
     });
-    const predictionResult: any = await prediction.result();
+    const predictionResult: any = await predictionResultWithAbort(prediction, ctl);
+    guardGeneratorAbort(ctl);
     return String(predictionResult?.stats?.stopReason || "");
   };
   const unsafeStopReasons = new Set(["contextLengthReached", "failed", "modelUnloaded"]);
@@ -2741,7 +3124,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   );
   const recordPredictionCompletion = async (
     reason: string,
-    recoveryAttempt: boolean,
+    recoveryKind = "",
   ): Promise<void> => {
     const truncatedPrediction = predictionTruncated(reason);
     await appendEventBestEffort(sessionId, {
@@ -2753,23 +3136,83 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       toolRequestCount: requests.length,
       outputCommitted: false,
       outputCommitPending: !truncatedPrediction,
-      architectureFinalRecoveryAttempt: recoveryAttempt,
+      recoveryAttempt: Boolean(recoveryKind),
+      recoveryKind,
+      architectureFinalRecoveryAttempt: recoveryKind.startsWith("architecture_"),
     });
   };
 
   let stopReason = await runPrediction(
     modelFacingToolDefinitions,
-    architectureToolForced || initialActiveProjectBootstrapForced || preRoutePlannerForced || catalogRefreshForced || exactRequiredToolForced,
+    architectureToolForced
+      || featureIntentEvidenceRefillActive
+      || initialActiveProjectBootstrapForced
+      || preRoutePlannerForced
+      || catalogRefreshForced
+      || exactRequiredToolForced,
   );
-  await recordPredictionCompletion(stopReason, false);
+  await recordPredictionCompletion(stopReason);
   if (predictionTruncated(stopReason)) {
     const safelyBuffered = toolControlPlaneEnforced || bufferUntilPredictionComplete;
     throw new Error(
       `Model prediction was discarded because it did not complete safely (stopReason=${stopReason}). `
       + (safelyBuffered
         ? "No buffered final text or tool call was committed; transient reasoning progress may already be visible. Compact the context or increase the model context/output limit."
-        : "Atomic output was explicitly disabled, so already-streamed output may be partial. Enable atomic output before retrying."),
+      : "Atomic output was explicitly disabled, so already-streamed output may be partial. Enable atomic output before retrying."),
     );
+  }
+  const exactRequiredCallComplete = (): boolean => Boolean(
+    exactRequiredToolForced
+    && requests.length === 1
+    && toolNamesMatch(exactRequiredToolName, requestedToolName(requests[0]?.request))
+    && core.toolArgumentsSatisfy(
+      nextCheckpoint?.requiredNextTool?.args,
+      requests[0]?.request?.arguments,
+    )
+  );
+  if (exactRequiredToolForced && !exactRequiredCallComplete()) {
+    const rejectedToolNames = requests
+      .map((entry) => requestedToolName(entry.request))
+      .filter(Boolean);
+    await appendEventBestEffort(sessionId, {
+      type: "server_required_tool_repair_started",
+      at: new Date().toISOString(),
+      requiredTool: exactRequiredToolName,
+      receivedTools: rejectedToolNames,
+      priorToolRequestCount: requests.length,
+    });
+    events.length = 0;
+    requests.length = 0;
+    injectServerRequiredToolRepairRule(modelChat, exactRequiredToolName, rejectedToolNames);
+    stopReason = await runPrediction(modelFacingToolDefinitions, true);
+    await recordPredictionCompletion(stopReason, "required_tool_serialization");
+    if (predictionTruncated(stopReason)) {
+      throw new Error(
+        `Required-tool repair was discarded because it did not complete safely (stopReason=${stopReason}).`,
+      );
+    }
+    const repaired = exactRequiredCallComplete();
+    await appendEventBestEffort(sessionId, {
+      type: repaired
+        ? "server_required_tool_repair_completed"
+        : "server_required_tool_repair_failed",
+      at: new Date().toISOString(),
+      requiredTool: exactRequiredToolName,
+      receivedTools: requests.map((entry) => requestedToolName(entry.request)).filter(Boolean),
+      toolRequestCount: requests.length,
+    });
+    if (!repaired) {
+      await persistCheckpoint(
+        sessionId,
+        nextCheckpoint,
+        requireCheckpointPersistence,
+        "server_required_tool_repair_failed",
+      );
+      throw new Error(
+        `The model did not serialize exactly one ${exactRequiredToolName} call after one bounded repair. `
+        + "No generated tool call was committed.",
+      );
+    }
   }
   if (requiredToolGateActive && !architectureValidationRequired && requests.length === 0) {
     await persistCheckpoint(
@@ -2844,7 +3287,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     requests.length = 0;
     injectArchitecturePayloadRepairRule(modelChat, incompleteArchitecturePaths);
     stopReason = await runPrediction([architectureContractTool], true);
-    await recordPredictionCompletion(stopReason, true);
+    await recordPredictionCompletion(stopReason, "architecture_payload");
     if (predictionTruncated(stopReason)) {
       throw new Error(
         `Forced architecture payload repair was discarded because it did not complete safely (stopReason=${stopReason}).`,
@@ -2915,7 +3358,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     requests.length = 0;
     injectArchitectureSubmissionRule(modelChat);
     stopReason = await runPrediction([architectureContractTool], true);
-    await recordPredictionCompletion(stopReason, true);
+    await recordPredictionCompletion(stopReason, "architecture_final");
     if (predictionTruncated(stopReason)) {
       throw new Error(
         `Forced architecture recovery was discarded because it did not complete safely (stopReason=${stopReason}).`

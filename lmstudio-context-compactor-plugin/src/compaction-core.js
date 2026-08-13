@@ -691,9 +691,13 @@ function isReadOnlyUserGoal(text) {
   // still explicitly asking for an implementation. Mutation intent wins;
   // otherwise ordinary show/describe/status questions are read-only even
   // when the user does not spell out "do not edit".
+  const mutationSource = source
+    .replace(/\b(?:do\s+not|don't|dont)\s+(?:fix|edit|patch|change|modify|write|delete|rename|build)\b/gi, " ")
+    .replace(/(?:구현|완성|개발|만들|추가|고쳐|수정|패치|리팩터|작성|삭제|적용|반영|편집|변경|이름\s*바꿔|빌드)(?:은|는|을|를|이|가|도)?\s*하(?:지\s*)?(?:마(?:라|세요)?|말(?:아|고|라|자|기)?)/g, " ");
   const mutationIntent = (
-    /\b(?:implement|create|add|fix|patch|edit|modify|refactor|write|delete|rename|build)\b/i.test(source)
-    || /(?:구현|만들|추가|고쳐|수정|패치|리팩터|작성|삭제|이름\s*바꿔|빌드)(?:해|하|할|해서|하고|해줘|하세요|할까|해야|줘|주세요)/.test(source)
+    /\b(?:implement|create|add|fix|patch|edit|modify|refactor|write|delete|rename|build)\b/i.test(mutationSource)
+    || /(?:구현|완성|개발|만들|추가|고쳐|수정|패치|리팩터|작성|삭제|적용|반영|이름\s*바꿔|빌드)(?:(?:을|를|이|가|은|는|부터|까지|도|에|으로|로)\s*)?(?:해|하|할|해서|하고|해줘|하세요|할까|해야|시작|진행|우선|실행|줘|주세요)/.test(mutationSource)
+    || /(?:실제로|직접)\s*(?:구현|완성|개발|수정|적용|반영)/.test(mutationSource)
   );
   if (mutationIntent) return false;
   if (explicitNoWrite) return true;
@@ -1198,7 +1202,9 @@ function toolNamesMatch(expected, actual) {
   // LM Studio SDK revisions have exposed the same MCP tool as either a plain
   // function name or a provider-qualified path. Compare a separator-normalized
   // form so `mcp/unreal-rag/unreal_agent_plan` and `unreal_agent_plan` bind to
-  // one contract without loosening ordinary suffix matching.
+  // one contract. Only an explicit MCP-qualified name may use suffix matching:
+  // ordinary tools such as `get_active_project` and
+  // `unreal_get_active_project` are different contracts.
   const normalize = (value) => String(value || "")
     .trim()
     .toLowerCase()
@@ -1207,7 +1213,11 @@ function toolNamesMatch(expected, actual) {
   const left = normalize(expected);
   const right = normalize(actual);
   if (!left || !right) return false;
-  return left === right || left.endsWith(`_${right}`) || right.endsWith(`_${left}`);
+  if (left === right) return true;
+  const providerMatches = (qualified, plain) => (
+    qualified.startsWith("mcp_") && qualified.endsWith(`_${plain}`)
+  );
+  return providerMatches(left, right) || providerMatches(right, left);
 }
 
 function expectedToolReserve(toolName, config = {}) {
