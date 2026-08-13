@@ -19,6 +19,7 @@ const {
 } = require("./mcp-connection");
 const { spawnSync } = require("child_process");
 const { recoveryAction } = require("./route-recovery-policy");
+const { stripProjectNamePrefix } = require("./read-path-resolver");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -113,7 +114,14 @@ function requestedMutationPaths(args = {}, state = {}) {
     : projectFile;
   return [...new Set(raw.map((value) => {
     const text = String(value || "").trim();
-    return path.resolve(path.isAbsolute(text) ? text : path.join(projectRoot || process.cwd(), text));
+    const normalized = path.isAbsolute(text)
+      ? text
+      : stripProjectNamePrefix(text, projectRoot);
+    return path.resolve(
+      path.isAbsolute(normalized)
+        ? normalized
+        : path.join(projectRoot || process.cwd(), normalized)
+    );
   }))];
 }
 
@@ -398,6 +406,11 @@ function selectionBindingForState(state) {
     selectedIntentId: String(state.selectedIntentId || ""),
     intentContractHash: String(state.intentContractHash || ""),
   };
+  if (Object.prototype.hasOwnProperty.call(state, "selectedTargetSliceId")) {
+    binding.targetSnapshotSliceId = String(
+      state.selectedTargetSliceId || state.activeSliceId || ""
+    );
+  }
   binding.bindingHash = canonicalHash(binding);
   return binding;
 }

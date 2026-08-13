@@ -262,7 +262,12 @@ function collectSemanticBlockerFields(value, state, sourceTool = "") {
   // retryPolicy=forbidden is often derived from retryable=false and does not
   // mean an entire tool family is forbidden. READ_REPEAT_DETECTED and corrected
   // write retries must remain possible with different arguments.
-  if (!evidencePhaseBoundary && !handoffBoundary && !(stopCurrentWorkflow && forbiddenTools.length > 0)) return;
+  // A fail-closed workflow stop is authoritative even when the server does not
+  // enumerate a tool deny-list.  Semantic recovery gates intentionally return
+  // nextActionIsTool=false when only a user/project contract can unblock the
+  // work.  Dropping that signal here lets the prediction loop immediately start
+  // another read/search cycle after the tool result.
+  if (!evidencePhaseBoundary && !handoffBoundary && !stopCurrentWorkflow) return;
 
   const scope = evidencePhaseBoundary
     ? "evidence_phase"
@@ -310,7 +315,12 @@ function collectSemanticBlockerFields(value, state, sourceTool = "") {
 
 function isContinuationUserMessage(text) {
   const source = String(text || "").trim();
-  return /^(?:continue|resume|retry|keep\s+going|go\s+on|계속(?:해|해서|\s*진행(?:해|하세요)?|\s*작업(?:해|하세요)?)?|이어(?:서)?(?:\s*진행(?:해|하세요)?)?|재개(?:해|하세요)?|중단한\s*곳부터\s*(?:계속|진행)(?:해|하세요)?|다시\s*시도(?:해|하세요)?)[\s.!?]*$/i.test(source);
+  const directContinuation = /^(?:continue|resume|retry|keep\s+going|go\s+on|계속(?:해|해서|\s*진행(?:해|하세요)?|\s*작업(?:해|하세요)?)?|이어(?:서)?(?:\s*진행(?:해|하세요)?)?|재개(?:해|하세요)?|중단한\s*곳부터\s*(?:계속|진행)(?:해|하세요)?|다시\s*시도(?:해|하세요)?)[\s.!?]*$/i;
+  const contextualContinuation = /^(?:(?:아까|이전|전에|기존|중단한)\s*(?:하던\s*)?(?:작업|일|것|내용)|그\s*(?:작업|일|것|내용))(?:을|를)?\s*(?:계속(?:해|하세요)?|재개(?:해|하세요)?|이어(?:서)?\s*진행(?:해|하세요)?)[\s.!?]*$/i;
+  const englishContextualContinuation = /^(?:continue|resume)\s+(?:the\s+)?(?:previous|prior|active|same)\s+(?:task|work)[\s.!?]*$/i;
+  return directContinuation.test(source)
+    || contextualContinuation.test(source)
+    || englishContextualContinuation.test(source);
 }
 
 function mutationToolName(name) {
@@ -664,27 +674,60 @@ function compactToolEvidence(call, payload, resultContent = "") {
 function isReadOnlyUserGoal(text) {
   const source = String(text || "");
   const lower = source.toLowerCase();
-  if (
+  const explicitNoWrite = (
     /수정은\s*하(?:지\s*)?마/.test(source)
     || /수정하지\s*말/.test(source)
     || /찾기만하고/.test(source)
     || /분석만/.test(source)
     || /보고만/.test(source)
-  ) {
-    return true;
-  }
-  return (
+    ||
     /\b(?:do\s+not|don't|dont)\s+(?:fix|edit|patch|change|modify|write)\b/.test(lower)
     || /\b(?:no|without)\s+(?:fixes|edits|patches)\b/.test(lower)
     || /\bfind\s+bugs?\s+only\b/.test(lower)
     || /\banalysis only\b/.test(lower)
     || /\breport only\b/.test(lower)
   );
+  // A question can contain words such as "structure" or "analysis" while
+  // still explicitly asking for an implementation. Mutation intent wins;
+  // otherwise ordinary show/describe/status questions are read-only even
+  // when the user does not spell out "do not edit".
+  const mutationIntent = (
+    /\b(?:implement|create|add|fix|patch|edit|modify|refactor|write|delete|rename|build)\b/i.test(source)
+    || /(?:구현|만들|추가|고쳐|수정|패치|리팩터|작성|삭제|이름\s*바꿔|빌드)(?:해|하|할|해서|하고|해줘|하세요|할까|해야|줘|주세요)/.test(source)
+  );
+  if (mutationIntent) return false;
+  if (explicitNoWrite) return true;
+  return Boolean(
+    /\b(?:what|which|where|show|list|describe|explain|summari[sz]e|inspect|analy[sz]e|review|report)\b/i.test(source)
+    || /(?:구조|상태|현황|진행\s*상황|어디까지|의미|내용|목록|경로|문제점|원인)(?:을|를|이|가|은|는|만|부터|에)?\s*(?:알려|보여|설명|요약|분석|확인|말해|찾아|점검)/.test(source)
+    || /(?:구조|상태|현황|진행\s*상황|내용|목록|경로)[\s\S]{0,100}(?:봐|살펴)/.test(source)
+    || /(?:알려|보여|설명|요약|분석|확인|말해)\s*(?:줘|주세요|봐|보자)?[.!?\s]*$/.test(source)
+    || /(?:뭐|무엇|어떤|어디)(?:야|인가|인지|예요|입니까|냐)?[.!?\s]*$/.test(source)
+  );
+}
+
+function classifyUserTurnIntent(text, context = {}) {
+  const value = String(text || "").trim();
+  if (isContinuationUserMessage(value)) return "CONTINUE_ACTIVE_TASK";
+  const activeObjective = String(context.activeObjective || "").trim();
+  if (
+    context.hasActiveTask === true
+    && activeObjective
+    && value !== activeObjective
+    && isReadOnlyUserGoal(value)
+  ) {
+    return "SIDE_QUERY";
+  }
+  return "NEW_TASK";
 }
 
 function isMetaUserMessage(text) {
   const source = String(text || "");
   const lower = source.toLowerCase();
+  // An upstream console/automation encoding failure can collapse a real prompt
+  // into question-mark placeholders. Such text carries no recoverable intent
+  // and must not replace an existing task objective or clear its blocker.
+  if (/^(?:\?+\s*)+[.!?]*$/.test(source.trim())) return true;
   // LM Studio auto-names chats by injecting a synthetic user prompt mid-turn.
   // Treating it as a real goal wipe causes zero-tail compaction and tool-loop amnesia.
   if (/come up with a .{0,80}title for this conversation/i.test(source)) return true;
@@ -716,6 +759,9 @@ function extractControlState(messages, prior = {}, options = {}) {
   const canResume = priorCount > 0
     && priorCount <= snapshots.length
     && prior.sourceHistoryHash === sha256(stableStringify(snapshots.slice(0, priorCount)))
+    // Recover legacy checkpoints that persisted an encoding placeholder as the
+    // objective by rescanning the bounded conversation and ignoring that row.
+    && !isMetaUserMessage(prior.objective)
     // Revision 22 migration: old checkpoints discarded ownerCapability. When
     // an active task route is present, rescan the bounded conversation once so
     // compact route ownership can be recovered from an earlier tool result.
@@ -755,6 +801,9 @@ function extractControlState(messages, prior = {}, options = {}) {
     semanticBlocker: canResume && prior.semanticBlocker
       ? { ...prior.semanticBlocker }
       : null,
+    sideQuery: canResume && prior.sideQuery?.active === true
+      ? { ...prior.sideQuery }
+      : null,
     failedToolResults: canResume && Array.isArray(prior.failedToolResults) ? [...prior.failedToolResults] : [],
     facts: canResume && Array.isArray(prior.facts) ? [...prior.facts] : [],
     evidenceFacts: canResume && Array.isArray(prior.evidenceFacts) ? [...prior.evidenceFacts] : [],
@@ -770,7 +819,20 @@ function extractControlState(messages, prior = {}, options = {}) {
       // Latest real user message always wins — pinning the first turn causes goal drift.
       // Synthetic LM Studio title prompts must not replace the active goal.
       const userText = snapshot.text.trim();
-      const continuation = Boolean(state.objective) && isContinuationUserMessage(userText);
+      const turnIntent = classifyUserTurnIntent(userText, {
+        hasActiveTask: Boolean(state.taskRouteOwnership && state.toolRoute?.routeHash),
+        activeObjective: state.objective,
+      });
+      const continuation = Boolean(state.objective) && turnIntent === "CONTINUE_ACTIVE_TASK";
+      if (turnIntent === "SIDE_QUERY") {
+        state.sideQuery = {
+          active: true,
+          request: userText.slice(0, 1200),
+          taskSessionId: String(state.taskRouteOwnership?.taskSessionId || ""),
+          activeObjective: String(state.objective || "").slice(0, 1200),
+        };
+        continue;
+      }
       if (
         state.semanticBlocker?.active
         && state.objective
@@ -782,7 +844,11 @@ function extractControlState(messages, prior = {}, options = {}) {
       // A continuation utterance advances the existing task; it is not a new
       // objective. Replacing the objective here loses intent after compaction
       // and can silently turn an implementation task into a generic "continue".
-      if (continuation) continue;
+      if (continuation) {
+        state.sideQuery = null;
+        continue;
+      }
+      state.sideQuery = null;
       state.objective = userText.slice(0, 1200);
       state.constraints = state.constraints.filter((item) =>
         typeof item === "string" && !item.startsWith("active_goal:") && !item.startsWith("read_only_"));
@@ -954,7 +1020,13 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
   if (
     control.semanticBlocker?.active
     && control.requiredNextTool
-    && control.semanticBlocker.forbiddenTools.some((name) => toolNamesMatch(name, control.requiredNextTool))
+    && (
+      (
+        control.semanticBlocker.stopCurrentWorkflow === true
+        && !String(control.semanticBlocker.clearOnTool || "").trim()
+      )
+      || control.semanticBlocker.forbiddenTools.some((name) => toolNamesMatch(name, control.requiredNextTool))
+    )
   ) {
     control.requiredNextTool = null;
     control.requiredNextToolRef = null;
@@ -982,6 +1054,7 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     protocolControl: control.protocolControl,
     architectureControl: control.architectureControl,
     semanticBlocker: control.semanticBlocker,
+    sideQuery: control.sideQuery,
     failedToolResults: control.failedToolResults,
     requiredNextTool: control.requiredNextTool ? {
       name: control.requiredNextTool,
@@ -1095,7 +1168,15 @@ function isMajorGoalChange(priorObjective, latestObjective) {
   const latestReadOnly = isReadOnlyUserGoal(latest);
   if (priorReadOnly !== latestReadOnly) return true;
   const goalBucket = (text) => {
-    if (isReadOnlyUserGoal(text)) return "readonly";
+    if (isReadOnlyUserGoal(text)) {
+      if (/\b(?:bug|error|failure|diagnos|root cause)\b|버그|오류|에러|문제점|원인/i.test(text)) {
+        return "readonly_diagnostic";
+      }
+      if (/\b(?:structure|architecture|layout|tree)\b|구조|아키텍처|폴더|목록/i.test(text)) {
+        return "readonly_structure";
+      }
+      return "readonly";
+    }
     if (/\b(implement|refactor|fix|patch|edit|write|compile|build|구현|수정|리팩터)\b/i.test(text)) {
       return "write";
     }
@@ -1283,6 +1364,14 @@ function summarizeOldMessages(messages, checkpoint) {
       + "Never retry a forbidden tool merely because older tool results were compacted.",
     );
   }
+  if (checkpoint.sideQuery?.active) {
+    lines.push(`detachedSideQuery=${JSON.stringify(checkpoint.sideQuery)}`);
+    lines.push(
+      "detachedSideQueryInstruction=Answer only this read-only observation request. Do not advance, "
+      + "replan, checkpoint, cancel, validate, or mutate the suspended task. A later continuation "
+      + "returns to the retained task objective and server route.",
+    );
+  }
   if (checkpoint.failedToolResults?.length) {
     lines.push(`failedToolResults=${JSON.stringify(checkpoint.failedToolResults)}`);
   }
@@ -1437,6 +1526,10 @@ function validateCheckpoint(checkpoint) {
     if (!Array.isArray(checkpoint.semanticBlocker.forbiddenTools)) return false;
     if (checkpoint.semanticBlocker.forbiddenTools.some((name) => typeof name !== "string" || !name.trim())) return false;
   }
+  if (checkpoint.sideQuery !== undefined && checkpoint.sideQuery !== null) {
+    if (typeof checkpoint.sideQuery !== "object" || Array.isArray(checkpoint.sideQuery)) return false;
+    if (checkpoint.sideQuery.active !== true || typeof checkpoint.sideQuery.request !== "string") return false;
+  }
   if (checkpoint.evidenceFacts !== undefined && !Array.isArray(checkpoint.evidenceFacts)) return false;
   if (
     checkpoint.taskRouteOwnership !== undefined
@@ -1467,6 +1560,7 @@ module.exports = {
   toolArgumentsSatisfy,
   collectControlFields,
   isReadOnlyUserGoal,
+  classifyUserTurnIntent,
   isMetaUserMessage,
   findLatestRealUserIndex,
   extractControlState,

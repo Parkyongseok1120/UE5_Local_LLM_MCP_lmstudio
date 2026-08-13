@@ -184,6 +184,47 @@ test("semantic blocker clears only on a new goal or successful mutation", () => 
   assert.equal(mutated.semanticBlocker, null);
 });
 
+test("workflow stop without a deny-list remains fail-closed", () => {
+  const messages = [
+    { role: "user", content: "Fix the linker failure without inventing behavior" },
+    { role: "assistant", toolCalls: [{
+      id: "gate",
+      name: "unreal_code_sketch_claim_validate",
+      arguments: { sketch: "invented state" },
+    }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "gate",
+      name: "unreal_code_sketch_claim_validate",
+      content: JSON.stringify({
+        ok: false,
+        errorCode: "LINKER_RECOVERY_SEMANTIC_INVENTION",
+        stopCurrentWorkflow: true,
+        nextAction: "request_or_locate_semantic_contract",
+        nextActionIsTool: false,
+        agentInstruction: "Ask for the missing behavioral contract and stop.",
+        control: {
+          version: 1,
+          phase: "unreal_code_sketch_claim_validate",
+          status: "Blocked",
+          nextAction: "request_or_locate_semantic_contract",
+          nextActionIsTool: false,
+          retryPolicy: "forbidden",
+          blockerFingerprint: "semantic-invention-1",
+        },
+      }),
+    }] },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.equal(checkpoint.semanticBlocker.active, true);
+  assert.equal(checkpoint.semanticBlocker.scope, "workflow");
+  assert.equal(checkpoint.semanticBlocker.stopCurrentWorkflow, true);
+  assert.deepEqual(checkpoint.semanticBlocker.forbiddenTools, []);
+  assert.equal(checkpoint.semanticBlocker.clearOnTool, "");
+  assert.equal(checkpoint.protocolControl.nextActionIsTool, false);
+  assert.equal(core.validateCheckpoint(checkpoint), true);
+});
+
 test("ordinary same-path cache response does not globally forbid the read tool", () => {
   const messages = [
     { role: "user", content: "여러 파일을 분석해줘" },
@@ -546,6 +587,22 @@ test("rebuilding an unchanged checkpoint does not double count mutations", () =>
   assert.equal(second.mutationGeneration, 1);
 });
 
+test("encoding placeholders cannot replace or pin the active objective", () => {
+  const messages = [
+    { role: "user", content: "오목 빌드 오류를 검증해" },
+    { role: "assistant", content: "working" },
+    { role: "user", content: "?? ?? ???." },
+  ];
+  const clean = core.buildCheckpoint(messages);
+  assert.equal(clean.objective, "오목 빌드 오류를 검증해");
+  assert.equal(core.isMetaUserMessage("?? ?? ???."), true);
+  assert.equal(core.isMetaUserMessage("무슨 문제야???"), false);
+
+  const legacy = { ...clean, objective: "?? ?? ???." };
+  const recovered = core.buildCheckpoint(messages, legacy);
+  assert.equal(recovered.objective, "오목 빌드 오류를 검증해");
+});
+
 test("mutation generation advances only after a successful mutation result", () => {
   const failed = core.buildCheckpoint([
     { role: "user", content: "fix" },
@@ -643,7 +700,169 @@ test("continuation user message preserves the active objective and constraints",
   assert.equal(checkpoint.objective, "오목 착수 기능을 구현하고 검증해");
   assert.ok(checkpoint.constraints.includes("active_goal:오목 착수 기능을 구현하고 검증해"));
   assert.equal(core.isContinuationUserMessage("계속 작업해"), true);
+  assert.equal(core.isContinuationUserMessage("아까 작업 계속해."), true);
+  assert.equal(core.isContinuationUserMessage("이전 작업을 재개하세요"), true);
+  assert.equal(core.isContinuationUserMessage("전에 하던 일 이어서 진행해"), true);
+  assert.equal(core.isContinuationUserMessage("continue the active task"), true);
   assert.equal(core.isContinuationUserMessage("다시해: 네트워크는 제외해"), false);
+  assert.equal(core.isContinuationUserMessage("아까 작업은 취소하고 구조만 알려줘"), false);
+});
+
+test("contextual continuation preserves a fail-closed semantic blocker", () => {
+  const base = [
+    { role: "user", content: "오목 빌드 오류를 근거가 있을 때만 고쳐" },
+    { role: "assistant", toolCalls: [{
+      id: "semantic-stop",
+      name: "unreal_code_sketch_claim_validate",
+      arguments: { sketch: "invented state" },
+    }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "semantic-stop",
+      name: "unreal_code_sketch_claim_validate",
+      content: JSON.stringify({
+        ok: false,
+        active: true,
+        stopCurrentWorkflow: true,
+        nextAction: "request_or_locate_semantic_contract",
+        nextActionIsTool: false,
+        errorCode: "LINKER_RECOVERY_SEMANTIC_INVENTION",
+      }),
+    }] },
+  ];
+  const blocked = core.buildCheckpoint(base);
+  const continued = core.buildCheckpoint([
+    ...base,
+    { role: "user", content: "아까 작업 계속해." },
+  ], blocked);
+
+  assert.equal(continued.objective, blocked.objective);
+  assert.equal(continued.semanticBlocker.active, true);
+  assert.equal(continued.semanticBlocker.stopCurrentWorkflow, true);
+  assert.equal(continued.semanticBlocker.errorCode, "LINKER_RECOVERY_SEMANTIC_INVENTION");
+});
+
+test("workflow stop discards a later generic required tool control", () => {
+  const messages = [
+    { role: "user", content: "링커 오류를 검증해" },
+    { role: "assistant", toolCalls: [{ id: "stop", name: "unreal_code_sketch_claim_validate", arguments: {} }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "stop",
+      name: "unreal_code_sketch_claim_validate",
+      content: JSON.stringify({
+        ok: false,
+        stopCurrentWorkflow: true,
+        nextAction: "request_or_locate_semantic_contract",
+        nextActionIsTool: false,
+        errorCode: "LINKER_RECOVERY_SEMANTIC_INVENTION",
+      }),
+    }] },
+    { role: "assistant", toolCalls: [{ id: "status", name: "unreal_task_status", arguments: {} }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "status",
+      name: "unreal_task_status",
+      content: JSON.stringify({
+        ok: true,
+        control: {
+          version: 1,
+          phase: "unreal_task_status",
+          status: "NeedsAction",
+          nextAction: "unreal_code_sketch_claim_validate",
+          nextActionIsTool: true,
+        },
+      }),
+    }] },
+  ];
+  const checkpoint = core.buildCheckpoint(messages);
+
+  assert.equal(checkpoint.semanticBlocker.stopCurrentWorkflow, true);
+  assert.equal(checkpoint.requiredNextTool, null);
+});
+
+test("read-only side query suspends and continuation restores an active write objective", () => {
+  const ownership = { taskSessionId: "task-side-query", ownerCapability: "owner-side-query" };
+  const initial = core.buildCheckpoint([
+    { role: "user", content: "로컬 입력 변경을 검증하고 필요한 최소 수정 후 빌드해" },
+    { role: "assistant", toolCalls: [{ id: "plan-1", name: "unreal_agent_plan", arguments: {} }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "plan-1",
+      name: "unreal_agent_plan",
+      content: JSON.stringify({
+        ok: true,
+        taskAuthorization: ownership,
+        toolRoute: {
+          routeHash: "route-side-query",
+          phase: "verifier",
+          activeTools: ["unreal_code_sketch_claim_validate"],
+          pendingGates: ["unreal_code_sketch_claim_validate"],
+        },
+        requiredNextTool: "unreal_code_sketch_claim_validate",
+      }),
+    }] },
+  ]);
+  const side = core.buildCheckpoint([
+    { role: "user", content: "로컬 입력 변경을 검증하고 필요한 최소 수정 후 빌드해" },
+    { role: "assistant", toolCalls: [{ id: "plan-1", name: "unreal_agent_plan", arguments: {} }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "plan-1",
+      name: "unreal_agent_plan",
+      content: JSON.stringify({
+        ok: true,
+        taskAuthorization: ownership,
+        toolRoute: {
+          routeHash: "route-side-query",
+          phase: "verifier",
+          activeTools: ["unreal_code_sketch_claim_validate"],
+          pendingGates: ["unreal_code_sketch_claim_validate"],
+        },
+        requiredNextTool: "unreal_code_sketch_claim_validate",
+      }),
+    }] },
+    { role: "user", content: "지금 프로젝트 구조만 알려줘" },
+  ], initial);
+
+  assert.equal(side.objective, initial.objective);
+  assert.equal(side.sideQuery.active, true);
+  assert.equal(side.sideQuery.request, "지금 프로젝트 구조만 알려줘");
+  assert.equal(side.requiredNextTool.name, "unreal_code_sketch_claim_validate");
+  assert.deepEqual(side.taskRouteOwnership, ownership);
+
+  const resumed = core.buildCheckpoint([
+    { role: "user", content: "로컬 입력 변경을 검증하고 필요한 최소 수정 후 빌드해" },
+    { role: "assistant", toolCalls: [{ id: "plan-1", name: "unreal_agent_plan", arguments: {} }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "plan-1",
+      name: "unreal_agent_plan",
+      content: JSON.stringify({
+        ok: true,
+        taskAuthorization: ownership,
+        toolRoute: {
+          routeHash: "route-side-query",
+          phase: "verifier",
+          activeTools: ["unreal_code_sketch_claim_validate"],
+          pendingGates: ["unreal_code_sketch_claim_validate"],
+        },
+        requiredNextTool: "unreal_code_sketch_claim_validate",
+      }),
+    }] },
+    { role: "user", content: "지금 프로젝트 구조만 알려줘" },
+    { role: "assistant", content: "Source와 Config가 있습니다." },
+    { role: "user", content: "계속해" },
+  ], side);
+  assert.equal(resumed.objective, initial.objective);
+  assert.equal(resumed.sideQuery, null);
+  assert.equal(resumed.requiredNextTool.name, "unreal_code_sketch_claim_validate");
+});
+
+test("read-only classifier does not capture a request that also asks for a fix", () => {
+  assert.equal(core.isReadOnlyUserGoal("지금 프로젝트 구조만 알려줘"), true);
+  assert.equal(core.isReadOnlyUserGoal("프로젝트 구조를 분석하고 문제를 고쳐줘"), false);
+  assert.equal(core.isReadOnlyUserGoal("분석만 하지 말고 실제 문제를 고쳐줘"), false);
+  assert.equal(core.isReadOnlyUserGoal("현재 브랜치가 뭐야?"), true);
+  assert.equal(core.classifyUserTurnIntent("계속해", { hasActiveTask: true }), "CONTINUE_ACTIVE_TASK");
+  assert.equal(core.classifyUserTurnIntent("프로젝트 상태만 보여줘", {
+    hasActiveTask: true,
+    activeObjective: "기능을 구현해",
+  }), "SIDE_QUERY");
 });
 
 test("session markers are idempotent session identities", () => {

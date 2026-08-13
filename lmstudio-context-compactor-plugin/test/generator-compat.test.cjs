@@ -185,6 +185,184 @@ test("server-owned task authorization is injected into eligible tool calls", () 
   assert.equal(enriched.arguments.sketch, "void Test() {}");
 });
 
+test("active write task exposes a detached read-only side-query route and preserves its gate", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-side-query-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-side-query", ownerCapability: "owner-side-query" };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      toolRoute: {
+        routeHash: "route-side-query",
+        phase: "verifier",
+        activeTools: ["unreal_code_sketch_claim_validate"],
+        pendingGates: ["unreal_code_sketch_claim_validate"],
+      },
+      requiredNextTool: "unreal_code_sketch_claim_validate",
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "unreal_code_sketch_claim_validate",
+        nextActionIsTool: true,
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "system", content: [{ type: "text", text: "base rules" }] },
+      { role: "user", content: [{ type: "text", text: "로컬 입력을 검증하고 필요한 최소 수정 후 빌드해" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "plan-side", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "plan-side", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+      { role: "user", content: [{ type: "text", text: "지금 프로젝트 구조만 알려줘" }] },
+    ] });
+    const tools = [
+      { type: "function", function: { name: "list_directory", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+      { type: "function", function: { name: "list_active_tasks", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "unreal_code_sketch_claim_validate", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "apply_edit_bundle", parameters: { type: "object", properties: {} } } },
+    ];
+    const model = {
+      identifier: "side-query-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(modelHistory, opts) {
+        assert.equal(opts.rawTools.force, undefined);
+        assert.deepEqual(
+          opts.rawTools.tools.map((tool) => tool.function.name).sort(),
+          ["list_directory", "read_file"],
+        );
+        const systemText = modelHistory.getMessagesArray()
+          .filter((message) => message.getRole() === "system")
+          .map((message) => message.getText()).join("\n");
+        assert.match(systemText, /UNREAL_DETACHED_SIDE_QUERY/);
+        opts.onToolCallRequestStart(1, { toolCallId: "side-list" });
+        opts.onToolCallRequestNameReceived(1, "list_directory");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"project://"}');
+        opts.onToolCallRequestEnd(1, { toolCallRequest: {
+          id: "side-list",
+          type: "function",
+          name: "list_directory",
+          arguments: { path: "project://" },
+        } });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    const end = emitted.find((event) => event.kind === "end");
+    assert.ok(end);
+    assert.deepEqual(end.request.arguments, { path: "project://" });
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.objective, "로컬 입력을 검증하고 필요한 최소 수정 후 빌드해");
+    assert.equal(checkpoint.sideQuery.request, "지금 프로젝트 구조만 알려줘");
+    assert.equal(checkpoint.requiredNextTool.name, "unreal_code_sketch_claim_validate");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("detached read injects ownership fields only when its schema declares them", () => {
+  const { enrichToolRequestControl } = require("../dist/generator.js");
+  const ownership = { taskSessionId: "task-observe", ownerCapability: "owner-observe" };
+  const tools = [{
+    type: "function",
+    function: {
+      name: "read_file",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          sessionId: { type: "string" },
+          taskAuthorization: { type: "object" },
+          taskObservation: { type: "object" },
+        },
+      },
+    },
+  }];
+  const enriched = enrichToolRequestControl(
+    { name: "read_file", arguments: { path: "project://README.md" } },
+    "compactor-observe",
+    {
+      taskRouteOwnership: ownership,
+      sideQuery: { active: true, request: "구조만 알려줘" },
+    },
+    "구조만 알려줘",
+    tools,
+  );
+
+  assert.equal(enriched.arguments.sessionId, "compactor-observe");
+  assert.deepEqual(enriched.arguments.taskAuthorization, ownership);
+  assert.equal(enriched.arguments.taskObservation.mode, "detached_read_only");
+  assert.match(enriched.arguments.taskObservation.requestHash, /^[a-f0-9]{64}$/);
+});
+
+test("two unchanged active-task listings are bounded within one user turn", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-control-boundary-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let advertisedTools = [];
+    let systemText = "";
+    const model = {
+      identifier: "control-boundary-model",
+      async getContextLength() { return 100000; },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      respond(modelHistory, opts) {
+        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+        systemText = modelHistory.getMessagesArray()
+          .filter((message) => message.getRole() === "system")
+          .map((message) => message.getText()).join("\n");
+        return { async result() { return { stats: { stopReason: "endOfSequence" } }; } };
+      },
+    };
+    const repeatedPayload = {
+      ok: true,
+      tasks: [{ taskSessionId: "task-1", status: "running", activeSliceId: "slice-a" }],
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "프로젝트 기능 구현을 계속해" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "list-1", type: "function", name: "list_active_tasks", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "list-1", name: "list_active_tasks",
+        content: JSON.stringify({ ...repeatedPayload, updatedAt: "2026-08-13T01:00:00Z" }),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "list-2", type: "function", name: "list_active_tasks", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "list-2", name: "list_active_tasks",
+        content: JSON.stringify({ ...repeatedPayload, updatedAt: "2026-08-13T01:00:05Z" }),
+      }] },
+    ] });
+    const tools = ["list_active_tasks", "read_file"].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.deepEqual(advertisedTools, ["read_file"]);
+    assert.match(systemText, /UNREAL_UNCHANGED_CONTROL_BOUNDARY/);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("provider-qualified required feature gate is forced with server-owned auth", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-feature-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -1763,6 +1941,94 @@ test("semantic blocker rejects forbidden evidence calls but allows forward mutat
   }
 });
 
+test("server workflow stop exposes no tools and emits only a final blocker response", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-workflow-stop-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let advertisedTools = null;
+    let modelRespondCalls = 0;
+    const model = {
+      identifier: "workflow-stop-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(history, opts) {
+        modelRespondCalls += 1;
+        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const blocker = {
+      ok: false,
+      errorCode: "LINKER_RECOVERY_SEMANTIC_INVENTION",
+      stopCurrentWorkflow: true,
+      nextAction: "request_or_locate_semantic_contract",
+      nextActionIsTool: false,
+      agentInstruction: "Do not invent readiness state.",
+      control: {
+        version: 1,
+        phase: "unreal_code_sketch_claim_validate",
+        status: "Blocked",
+        nextAction: "request_or_locate_semantic_contract",
+        nextActionIsTool: false,
+        retryPolicy: "forbidden",
+        blockerFingerprint: "semantic-stop-1",
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "링커 오류를 고쳐줘" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "gate", type: "function", name: "unreal_code_sketch_claim_validate", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "gate",
+        name: "unreal_code_sketch_claim_validate",
+        content: JSON.stringify(blocker),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "later-status", type: "function", name: "unreal_task_status", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "later-status",
+        name: "unreal_task_status",
+        content: JSON.stringify({
+          ok: true,
+          control: {
+            version: 1,
+            phase: "unreal_task_status",
+            status: "NeedsAction",
+            nextAction: "unreal_code_sketch_claim_validate",
+            nextActionIsTool: true,
+          },
+        }),
+      }] },
+    ] });
+    const tools = ["search_files", "read_file", "replace_in_file"].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.equal(modelRespondCalls, 0);
+    assert.equal(advertisedTools, null);
+    assert.equal(emitted.some((event) => event.kind === "end"), false);
+    assert.equal(emitted.some((event) => event.kind === "fragment" && /서버 검증에서 중단/.test(event.content)), true);
+    assert.equal(emitted.some((event) => event.kind === "fragment" && /<tool_call>/.test(event.content)), false);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.semanticBlocker.scope, "workflow");
+    assert.equal(checkpoint.semanticBlocker.stopCurrentWorkflow, true);
+    assert.equal(checkpoint.requiredNextTool, null);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 function completeArchitectureProposal(decision = "replanned") {
   return {
     decision,
@@ -2684,7 +2950,17 @@ test("control plane injects server-owned required arguments", async () => {
     await generate(controllerFor(model, {}, stateRoot, emitted, [
       { type: "function", function: { name: "read_file" } },
       { type: "function", function: { name: "unreal_rag_health" } },
-      { type: "function", function: { name: "mcp/unreal-agent/search_files" } },
+      { type: "function", function: {
+        name: "mcp/unreal-agent/search_files",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            path: { type: "string" },
+            sessionId: { type: "string" },
+          },
+        },
+      } },
     ]), history);
 
     const end = emitted.find((event) => event.kind === "end");
@@ -2863,8 +3139,22 @@ test("tool call stream is identical before and after forced context compaction",
     { callId: 2, request: { id: "call-b", type: "function", name: "read_file_range", arguments: { path: "project://Source/B.cpp", startLine: 10, endLine: 20 } } },
   ];
   const toolDefinitions = [
-    { type: "function", function: { name: "read_file" } },
-    { type: "function", function: { name: "read_file_range" } },
+    { type: "function", function: {
+      name: "read_file",
+      parameters: { type: "object", properties: { path: { type: "string" }, sessionId: { type: "string" } } },
+    } },
+    { type: "function", function: {
+      name: "read_file_range",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          startLine: { type: "integer" },
+          endLine: { type: "integer" },
+          sessionId: { type: "string" },
+        },
+      },
+    } },
   ];
 
   async function runScenario(forceCompaction) {

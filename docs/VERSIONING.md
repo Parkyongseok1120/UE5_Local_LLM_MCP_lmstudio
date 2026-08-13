@@ -5,8 +5,8 @@ This repository uses **independent version numbers** per component. They are not
 | Component | Version | Location | Meaning |
 |-----------|---------|----------|---------|
 | **Product** | 1.3.0 RC1 | [`installer/manifest.json`](../installer/manifest.json), [`README.md`](../README.md) | User-facing release label and installable product metadata |
-| **Node agent MCP** | 0.3.10 | [`lmstudio-unreal-agent-mcp/package.json`](../lmstudio-unreal-agent-mcp/package.json) | npm package semver for the agent server |
-| **Context compactor plugin** | 0.4.20 / revision 66 | [`lmstudio-context-compactor-plugin/package.json`](../lmstudio-context-compactor-plugin/package.json), [`manifest.json`](../lmstudio-context-compactor-plugin/manifest.json) | LM Studio generator plugin behavior, route telemetry, and installed revision |
+| **Node agent MCP** | 0.3.12 | [`lmstudio-unreal-agent-mcp/package.json`](../lmstudio-unreal-agent-mcp/package.json) | npm package semver for the agent server |
+| **Context compactor plugin** | 0.4.27 / revision 73 | [`lmstudio-context-compactor-plugin/package.json`](../lmstudio-context-compactor-plugin/package.json), [`manifest.json`](../lmstudio-context-compactor-plugin/manifest.json) | LM Studio generator plugin behavior, route telemetry, and installed revision |
 | **Portable manifest** | 2.1.3 | [`installer/manifest.json`](../installer/manifest.json) | Portable ZIP bundle metadata (layout + required files) |
 
 ## When to bump

@@ -172,6 +172,7 @@ module.exports = {
   PROJECT_PREFIXES,
   WORKSPACE_PREFIXES,
   isWithin,
+  stripProjectNamePrefix,
   resolveReadPath,
   assertReadChildContained,
   displayPath,

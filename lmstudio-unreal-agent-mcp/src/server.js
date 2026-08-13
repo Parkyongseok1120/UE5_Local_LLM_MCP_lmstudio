@@ -1449,6 +1449,7 @@ function buildReadEvidenceContext(target, stat, resolution, options = {}) {
     taskAuthorization: options.taskAuthorization && typeof options.taskAuthorization === "object"
       ? options.taskAuthorization
       : null,
+    detachedReadOnlyObservation: options.detachedReadOnlyObservation === true,
     activeProject: resolution?.activeProject || getActiveProject(CONFIG_PATH) || null,
   };
 }
@@ -1605,6 +1606,9 @@ function prepareReadGuard(tool, args, context) {
 }
 
 function applyBuildRecoveryEvidenceGuard(tool, context = {}) {
+  // Detached observations answer a separate user question while the write
+  // task is suspended; they cannot satisfy or consume its recovery evidence.
+  if (context.detachedReadOnlyObservation === true) return null;
   const activeProject = String(context.activeProject || getActiveProject(CONFIG_PATH) || "");
   if (!activeProject) return null;
   const taskSessionId = String(context.taskSessionId || "");
@@ -2504,7 +2508,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       nestedTaskAuthorization
       || String(args.taskSessionId || args.task_session_id || "").trim()
     );
-    if (hasExplicitTaskAuthorization && !SAFE_ROUTE_RECOVERY_TOOLS.has(name)) {
+    const requestedObservation = args.taskObservation && typeof args.taskObservation === "object"
+      ? args.taskObservation
+      : {};
+    const detachedObservationCandidate = Boolean(
+      String(requestedObservation.mode || "") === "detached_read_only"
+      && UNROUTED_INSPECTION_TOOLS.has(name)
+      && hasExplicitTaskAuthorization
+    );
+    if (
+      hasExplicitTaskAuthorization
+      && !SAFE_ROUTE_RECOVERY_TOOLS.has(name)
+      && !detachedObservationCandidate
+    ) {
       const compactExpansion = expandCompactTaskAuthorization(
         WORKSPACE_ROOT,
         name,
@@ -2523,9 +2539,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         hasExplicitTaskAuthorization = true;
       }
     }
+    let detachedReadOnlyObservation = false;
+    const observation = requestedObservation;
+    if (
+      String(observation.mode || "") === "detached_read_only"
+      && UNROUTED_INSPECTION_TOOLS.has(name)
+      && hasExplicitTaskAuthorization
+    ) {
+      const observationOwner = discoverActiveTaskContext(
+        WORKSPACE_ROOT,
+        activeProjectForRoute,
+        {
+          ...routeOwnershipFromArgs(args),
+          requireOwnerCapability: true,
+        }
+      );
+      const observationFields = requiredFields(args);
+      detachedReadOnlyObservation = Boolean(
+        observationOwner.status === "active"
+        && String(observationOwner.taskSessionId || "") === observationFields.taskSessionId
+        && /^[a-f0-9]{64}$/i.test(String(observation.requestHash || ""))
+      );
+      if (!detachedReadOnlyObservation) {
+        return fail("Detached read-only observation could not be bound to the active task owner.", {
+          errorCode: "DETACHED_OBSERVATION_AUTH_FAILED",
+          retryable: false,
+          stopCurrentWorkflow: false,
+          agentInstruction: "Do not retry or fall back to task control tools. Resume the active task or ask the read-only question in a fresh chat.",
+        });
+      }
+    }
     let routePreflight = { ok: true };
     if (SAFE_ROUTE_RECOVERY_TOOLS.has(name)) {
       routePreflight = { ok: true, controlSurface: true };
+    } else if (detachedReadOnlyObservation) {
+      routePreflight = { ok: true, detachedReadOnlyObservation: true };
     } else if (hasExplicitTaskAuthorization) {
       if (!ROUTE_MUTATION_TOOLS.has(name)) {
         routePreflight = authorizeTaskRouteTool(
@@ -2653,6 +2701,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (
       !ROUTE_MUTATION_TOOLS.has(name)
       && !SAFE_ROUTE_RECOVERY_TOOLS.has(name)
+      && !detachedReadOnlyObservation
       && (hasExplicitTaskAuthorization || routePreflight.taskSessionId)
     ) {
       if (DEFER_BUDGET_UNTIL_SUCCESS.has(name)) {
@@ -3231,6 +3280,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         taskSessionId: requiredFields(args).taskSessionId,
         evidenceSessionId: args.sessionId,
         taskAuthorization: args.taskAuthorization,
+        detachedReadOnlyObservation,
       });
       const guard = prepareReadGuard("read_file", args, readContext);
       const blocked = applyReadGuard("read_file", guard, readContext);
@@ -3289,6 +3339,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         taskSessionId: requiredFields(args).taskSessionId,
         evidenceSessionId: args.sessionId,
         taskAuthorization: args.taskAuthorization,
+        detachedReadOnlyObservation,
       });
       const guard = prepareReadGuard("read_file_range", args, readContext);
       const blocked = applyReadGuard("read_file_range", guard, readContext);
@@ -3350,6 +3401,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         taskSessionId: requiredFields(args).taskSessionId,
         evidenceSessionId: args.sessionId,
         taskAuthorization: args.taskAuthorization,
+        detachedReadOnlyObservation,
       });
       const guard = prepareReadGuard("read_symbol", args, readContext);
       const blocked = applyReadGuard("read_symbol", guard, readContext);
@@ -4431,6 +4483,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         taskSessionId: requiredFields(args).taskSessionId,
         evidenceSessionId: args.sessionId,
         taskAuthorization: args.taskAuthorization,
+        detachedReadOnlyObservation,
       });
       const guard = prepareReadGuard("search_files", effectiveSearchArgs, readContext);
       const blocked = applyReadGuard("search_files", guard, readContext);
@@ -4886,6 +4939,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             String(payload.recovery.requiredNextTool || "")
           )
         );
+        const semanticScopedRecovery = Boolean(
+          payload.recovery.category === "linker_missing_definition"
+          && String(payload.recovery.ownerSymbol || "").trim()
+          && String(payload.recovery.missingSymbol || "").trim()
+        );
+        const taskBindableRecovery = sourceScopedRecovery || semanticScopedRecovery;
         if (sourceScopedRecovery) {
           recordBuildRecoveryContract(
             projectRoot,
@@ -4897,7 +4956,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args.taskAuthorization && typeof args.taskAuthorization === "object"
           && args.taskAuthorization.taskSessionId
         );
-        if (hasTaskAuthorization && sourceScopedRecovery) {
+        if (hasTaskAuthorization && taskBindableRecovery) {
           const recoveryBinding = recordBuildRecoveryViaPython(
             WORKSPACE_ROOT,
             args,
@@ -4913,9 +4972,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             );
           }
         }
-        if (!sourceScopedRecovery) {
+        if (!taskBindableRecovery) {
           payload.recovery.taskScopeBound = false;
-          payload.recovery.scopeStrategy = "symbol_lookup_then_replan";
+          payload.recovery.scopeStrategy = "unbound_recovery";
+        } else if (semanticScopedRecovery) {
+          payload.recovery.scopeStrategy = "symbol_lookup_then_semantic_evidence";
         }
         if (!hasTaskAuthorization && sourceScopedRecovery) {
           payload.recovery.requiredSequence = [

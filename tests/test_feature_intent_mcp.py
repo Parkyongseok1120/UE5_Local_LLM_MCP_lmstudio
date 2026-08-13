@@ -71,6 +71,74 @@ def test_bounded_existing_file_uses_one_call_server_fast_path(
     assert state["completedGates"][GATE]["targetSnapshots"][0]["exists"] is True
 
 
+def test_redefining_slice_clears_old_intent_snapshots_before_route_refresh(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A linker-recovery slice must never inherit the previous slice's files."""
+
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "Demo"
+    first = project / "Source" / "Demo" / "Controller.cpp"
+    owner_header = project / "Source" / "Demo" / "GameMode.h"
+    owner_source = project / "Source" / "Demo" / "GameMode.cpp"
+    for target in (first, owner_header, owner_source):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("// source\n", encoding="utf-8")
+    project_file = project / "Demo.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Add a bounded controller guard",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "featureIntent": {"requiresResolution": True},
+            "orchestration": {"requiredBeforeWrite": [GATE]},
+            "executablePlanSlices": [
+                {"sliceId": "controller", "files": ["Source/Demo/Controller.cpp"]}
+            ],
+        },
+    )
+    server = McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        811,
+        {"name": GATE, "arguments": {"taskAuthorization": started["taskAuthorization"]}},
+    )
+    first_payload = sent[-1]["result"]["structuredContent"]
+    assert first_payload["ok"] is True
+
+    rebound = task_define_slices(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        slices=[
+            {
+                "sliceId": "linker_owner",
+                "files": ["Source/Demo/GameMode.h", "Source/Demo/GameMode.cpp"],
+            }
+        ],
+        active_slice_id="linker_owner",
+    )
+    assert rebound["ok"] is True, rebound
+    assert rebound["toolRoute"]["selectedSlice"] == {
+        "sliceId": "linker_owner",
+        "files": ["Source/Demo/GameMode.h", "Source/Demo/GameMode.cpp"],
+        "declaredFileCount": 2,
+        "truncated": False,
+        "scopeRequired": False,
+    }
+    state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert state["selectedTargetSnapshots"] == []
+    assert state["featureTargetSnapshots"] == []
+    assert state["selectedIntentId"] == ""
+    assert state["featureIntent"]["status"] == "pending"
+
+
 def test_strict_network_architecture_provenance_disables_local_fast_path(
     tmp_path: Path,
     monkeypatch,

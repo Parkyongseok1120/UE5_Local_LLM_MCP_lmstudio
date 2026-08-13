@@ -395,6 +395,8 @@ const PRE_ROUTE_PLANNER_HANDOFF_MARKER = "[UNREAL_PRE_ROUTE_PLANNER_HANDOFF]";
 const INITIAL_ACTIVE_PROJECT_BOOTSTRAP_MARKER = "[UNREAL_INITIAL_ACTIVE_PROJECT_BOOTSTRAP]";
 const TOOL_CATALOG_REFRESH_MARKER = "[UNREAL_TOOL_CATALOG_REFRESH]";
 const SERVER_REQUIRED_TOOL_MARKER = "[UNREAL_SERVER_REQUIRED_TOOL]";
+const DETACHED_SIDE_QUERY_MARKER = "[UNREAL_DETACHED_SIDE_QUERY]";
+const WORKFLOW_STOP_MARKER = "[UNREAL_SERVER_WORKFLOW_STOP]";
 const ARCHITECTURE_EVIDENCE_TOOLS = [
   "read_file",
   "read_file_range",
@@ -408,6 +410,97 @@ const ARCHITECTURE_DISCOVERY_TOOLS = [
   "unreal_get_active_project",
   "get_workspace_info",
 ];
+const DETACHED_SIDE_QUERY_TOOLS = [
+  "get_workspace_info",
+  "get_active_project",
+  "list_directory",
+  "read_file",
+  "read_file_range",
+  "read_symbol",
+  "search_files",
+  "read_unreal_logs",
+];
+
+function detachedSideQueryToolAllowed(name: string): boolean {
+  return DETACHED_SIDE_QUERY_TOOLS.some((tool) => toolNamesMatch(tool, name));
+}
+
+function injectDetachedSideQueryRule(chat: Chat, request: string): boolean {
+  const rule = (
+    `${DETACHED_SIDE_QUERY_MARKER}\n`
+    + `The active write task is suspended while answering this detached read-only request: ${request.slice(0, 800)}\n`
+    + "Use only the read-only observation tools currently exposed. Do not call task status/list/control, "
+    + "do not complete a pending gate, do not plan or mutate, and do not replace the active task objective. "
+    + "Answer from bounded evidence, then stop; a later continuation resumes the suspended task."
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(DETACHED_SIDE_QUERY_MARKER)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+    }
+    chat.append("system", rule);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function injectWorkflowStopRule(chat: Chat, blocker: any): boolean {
+  const errorCode = String(blocker?.errorCode || "SERVER_WORKFLOW_BLOCKED").slice(0, 120);
+  const instruction = String(blocker?.agentInstruction || "").trim().slice(0, 800);
+  const rule = (
+    `${WORKFLOW_STOP_MARKER}\n`
+    + `The latest server result stopped the current workflow (${errorCode}) and supplied no tool next action. `
+    + "Do not call, propose, or simulate another tool. Give one concise final response that explains the verified "
+    + "blocker and the exact missing user/project evidence, then end this turn. Do not claim success or a code change."
+    + (instruction ? ` Server instruction: ${instruction}` : "")
+  );
+  try {
+    const messages = chat.getMessagesArray();
+    for (const message of messages) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(WORKFLOW_STOP_MARKER)) return true;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return true;
+      }
+      if (typeof (message as any).replaceText === "function") {
+        (message as any).replaceText(`${current}\n${rule}`);
+        return true;
+      }
+    }
+    chat.append("system", rule);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function workflowStopFinalResponse(blocker: any, objective: string): string {
+  const errorCode = String(blocker?.errorCode || "SERVER_WORKFLOW_BLOCKED")
+    .replace(/[^A-Z0-9_.:-]/gi, "")
+    .slice(0, 120) || "SERVER_WORKFLOW_BLOCKED";
+  const korean = /[가-힣]/.test(String(objective || ""));
+  if (korean) {
+    return (
+      `현재 작업은 서버 검증에서 중단되었습니다 (${errorCode}). `
+      + "프로젝트 근거로 확인되지 않은 상태·정책을 추측해 구현할 수 없으므로 추가 도구 호출이나 수정을 진행하지 않습니다. "
+      + "해당 동작의 소유자, 저장 위치, 기대 규칙에 대한 프로젝트 근거를 제공하거나 명시적으로 새 목표를 지정해 주세요."
+    );
+  }
+  return (
+    `The current workflow is stopped by server validation (${errorCode}). `
+    + "The required project evidence for the state or policy is missing, so no additional tool call or speculative edit will be attempted. "
+    + "Provide the project-owned semantic contract or explicitly set a new objective."
+  );
+}
 
 function latestUserGoalText(messages: ChatMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -1250,16 +1343,20 @@ const SESSION_SCOPED_ANALYSIS_TOOLS = [
   "search_files",
 ];
 
-function enrichToolRequestSession(request: any, sessionId: string): any {
+function enrichToolRequestSession(request: any, sessionId: string, toolDefinitions: any[]): any {
   const name = requestedToolName(request);
   if (!SESSION_SCOPED_ANALYSIS_TOOLS.some((tool) => toolNamesMatch(tool, name))) return request;
   const args = request?.arguments && typeof request.arguments === "object"
     ? request.arguments
     : {};
   if (String(args.sessionId || args.session_id || "").trim()) return request;
+  const sessionArgument = toolAcceptsArgument(toolDefinitions, name, "sessionId")
+    ? "sessionId"
+    : (toolAcceptsArgument(toolDefinitions, name, "session_id") ? "session_id" : "");
+  if (!sessionArgument) return request;
   return {
     ...request,
-    arguments: { ...args, sessionId },
+    arguments: { ...args, [sessionArgument]: sessionId },
   };
 }
 
@@ -1352,7 +1449,7 @@ function enrichToolRequestControl(
   latestUserGoal: string,
   toolDefinitions: any[],
 ): any {
-  const sessionBound = enrichToolRequestSession(request, sessionId);
+  const sessionBound = enrichToolRequestSession(request, sessionId, toolDefinitions);
   const name = requestedToolName(sessionBound);
   const sourceArgs = sessionBound?.arguments && typeof sessionBound.arguments === "object"
     ? sessionBound.arguments
@@ -1387,7 +1484,26 @@ function enrichToolRequestControl(
   }
 
   const ownership = core.compactTaskRouteOwnership(checkpoint?.taskRouteOwnership);
-  if (ownership && toolAcceptsArgument(toolDefinitions, name, "taskAuthorization")) {
+  const detachedSideQuery = checkpoint?.sideQuery?.active === true
+    && detachedSideQueryToolAllowed(name);
+  if (detachedSideQuery && ownership) {
+    // Detached tools can come from unrelated LM Studio plugins. Inject task
+    // context only when the exact advertised schema declares it; adding
+    // unknown properties makes LM Studio reject the call before dispatch and
+    // causes compact models to retry the same read indefinitely.
+    if (toolAcceptsArgument(toolDefinitions, name, "taskAuthorization")) {
+      args = { ...args, taskAuthorization: ownership };
+    }
+    if (toolAcceptsArgument(toolDefinitions, name, "taskObservation")) {
+      args = {
+        ...args,
+        taskObservation: {
+        mode: "detached_read_only",
+        requestHash: core.sha256(String(checkpoint.sideQuery.request || "")),
+        },
+      };
+    }
+  } else if (ownership && toolAcceptsArgument(toolDefinitions, name, "taskAuthorization")) {
     args = { ...args, taskAuthorization: ownership };
   }
 
@@ -1461,6 +1577,91 @@ const TOOL_CATALOG_REFRESH_TOOLS = [
   "get_workspace_info",
   "list_active_tasks",
 ];
+
+const BOUNDED_CONTROL_POLL_TOOLS = [
+  "list_active_tasks",
+  "unreal_task_list_active",
+];
+
+function stableControlObservation(value: any): any {
+  if (Array.isArray(value)) return value.map(stableControlObservation);
+  if (!value || typeof value !== "object") return value;
+  const result: Record<string, any> = {};
+  const volatileKeys = new Set([
+    "authToken", "ownerCapability", "createdAt", "updatedAt", "recordedAt",
+    "lastSeenAt", "heartbeatAt", "leaseExpiresAt", "expiresAt",
+  ]);
+  for (const key of Object.keys(value).sort()) {
+    if (volatileKeys.has(key)) continue;
+    result[key] = stableControlObservation(value[key]);
+  }
+  return result;
+}
+
+function repeatedUnchangedControlTools(messages: ChatMessage[]): string[] {
+  const snapshots = core.snapshotMessages(messages);
+  let start = 0;
+  for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+    if (snapshots[index]?.role === "user") {
+      start = index + 1;
+      break;
+    }
+  }
+  const calls = new Map<string, any>();
+  const observations = new Map<string, string[]>();
+  for (const snapshot of snapshots.slice(start)) {
+    for (const call of snapshot.toolCalls || []) {
+      const name = String(call.name || "");
+      if (!BOUNDED_CONTROL_POLL_TOOLS.some((known) => toolNamesMatch(known, name))) continue;
+      calls.set(String(call.id || ""), call);
+    }
+    for (const result of snapshot.toolResults || []) {
+      if (!core.toolResultSucceeded(result)) continue;
+      const call = calls.get(String(result.toolCallId || ""));
+      const name = String(result.name || call?.name || "");
+      const known = BOUNDED_CONTROL_POLL_TOOLS.find((candidate) => toolNamesMatch(candidate, name));
+      if (!known) continue;
+      const parsed = core.parseJsonObjects(result.content || "");
+      const semanticResult = parsed.length > 0
+        ? stableControlObservation(parsed[parsed.length - 1])
+        : String(result.content || "").replace(/\s+/g, " ").trim();
+      const fingerprint = core.stableStringify({
+        arguments: stableControlObservation(call?.arguments || {}),
+        result: semanticResult,
+      });
+      const prior = observations.get(known) || [];
+      prior.push(fingerprint);
+      observations.set(known, prior.slice(-2));
+    }
+  }
+  return [...observations.entries()]
+    .filter(([, fingerprints]) => (
+      fingerprints.length >= 2 && fingerprints[0] === fingerprints[1]
+    ))
+    .map(([name]) => name);
+}
+
+function injectRepeatedControlBoundaryRule(history: Chat, tools: string[]): void {
+  if (tools.length === 0) return;
+  const marker = "[UNREAL_UNCHANGED_CONTROL_BOUNDARY]";
+  const rule = marker + "\n"
+    + `Two unchanged successful control observations already completed (${tools.join(", ")}). `
+    + "Do not poll them again in this user turn. Continue with the routed work tool or answer from retained state.";
+  try {
+    for (const message of history.getMessagesArray()) {
+      if (message.getRole() !== "system") continue;
+      const current = String(message.getText() || "");
+      if (current.includes(marker)) return;
+      if (typeof (message as any).appendText === "function") {
+        (message as any).appendText(`\n${rule}`);
+        return;
+      }
+    }
+    history.append("system", rule);
+  } catch {
+    // Tool catalog filtering still enforces the boundary if rule injection fails.
+  }
+}
 
 function isRecoveryControlTool(name: string): boolean {
   return RECOVERY_CONTROL_TOOLS.some((control) => toolNamesMatch(control, name));
@@ -1710,11 +1911,31 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   nextCheckpoint.compactionGeneration = Number(checkpoint?.compactionGeneration || 0);
   const trailingMetaUser = trailingMetaUserMessage(messages);
   const architectureGoal = latestUserGoalText(messages);
+  const detachedSideQueryActive = Boolean(nextCheckpoint?.sideQuery?.active);
+  if (detachedSideQueryActive) {
+    injectDetachedSideQueryRule(
+      history,
+      String(nextCheckpoint.sideQuery.request || architectureGoal),
+    );
+  }
   // buildCheckpoint retains the active objective across context-dependent
   // utterances such as "continue".  Use that authoritative goal for routing
   // and planner binding while keeping the raw latest text only for detecting
   // an explicit recovery continuation below.
-  const authoritativeGoal = String(nextCheckpoint?.objective || architectureGoal).trim();
+  const authoritativeGoal = String(
+    detachedSideQueryActive
+      ? nextCheckpoint?.sideQuery?.request
+      : (nextCheckpoint?.objective || architectureGoal),
+  ).trim();
+  const workflowStopActive = Boolean(
+    !detachedSideQueryActive
+    && nextCheckpoint?.semanticBlocker?.active === true
+    && nextCheckpoint.semanticBlocker.stopCurrentWorkflow === true
+    && !String(nextCheckpoint.semanticBlocker.clearOnTool || "").trim()
+  );
+  if (workflowStopActive) {
+    injectWorkflowStopRule(history, nextCheckpoint.semanticBlocker);
+  }
   const persistedArchitectureRecovery = Boolean(
     nextCheckpoint?.architectureProposal?.validationOk === false
     && architectureRecoveryContinuationRequested(architectureGoal),
@@ -1723,7 +1944,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   // authoritative. Legacy heuristic orchestration remains only for histories
   // that predate the envelope/checkpoint migration.
   const serverOwnedArchitectureControl = Boolean(nextCheckpoint?.architectureControl);
-  const architectureValidationRequired = !serverOwnedArchitectureControl && !trailingMetaUser && (
+  const architectureValidationRequired = !detachedSideQueryActive
+    && !workflowStopActive
+    && !serverOwnedArchitectureControl && !trailingMetaUser && (
     requiresArchitectureValidation(authoritativeGoal, toolDefinitions)
     || persistedArchitectureRecovery
   );
@@ -1765,7 +1988,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       tool?.function?.name || tool?.name || "",
     )),
   );
-  if (!routeOwnershipAvailable && (projectAgentDiscoveryAvailable || unroutedMutationDefinitionsPresent)) {
+  if (!detachedSideQueryActive && !routeOwnershipAvailable && (projectAgentDiscoveryAvailable || unroutedMutationDefinitionsPresent)) {
     injectTaskRouteOwnershipRule(history, plannerAvailable);
   }
   const routeHash = String(nextCheckpoint?.toolRoute?.routeHash || "").trim();
@@ -1788,7 +2011,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ? checkpoint.catalogRefresh
     : null;
   const catalogRefreshNeeded = Boolean(
-    routeOwnershipAvailable
+    !detachedSideQueryActive
+    && routeOwnershipAvailable
     && exactToolRouteAvailable
     && routedMutationTools.length > 0
     && !rawMutationDefinitionsPresent
@@ -1819,7 +2043,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     nextCheckpoint?.toolRoute?.activeTools || []
   ).some((name: any) => toolNamesMatch(advertisedRequiredToolName, String(name || ""))));
   const invalidRequiredToolContract = Boolean(
-    advertisedRequiredToolName
+    !detachedSideQueryActive
+    && advertisedRequiredToolName
     && !advertisedRequiredToolExists
     && !advertisedRequiredToolIsRouted
   );
@@ -1853,7 +2078,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ? nextCheckpoint.toolRoute.selectedSlice.files.filter((path: any) => String(path || "").trim())
     : [];
   const featureIntentDiscoveryHandoffForced = Boolean(
-    routeOwnershipAvailable
+    !detachedSideQueryActive
+    && routeOwnershipAvailable
     && featureIntentTool
     && featureIntentRouted
     && String(nextCheckpoint?.toolRoute?.phase || "").toLowerCase() === "planner"
@@ -1933,7 +2159,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     }
   }
   const initialActiveProjectBootstrapForced = Boolean(
-    !routeOwnershipAvailable
+    !workflowStopActive
+    && !routeOwnershipAvailable
     && activeProjectBootstrapTool
     && plannerTool
     && !trailingMetaUser
@@ -1948,7 +2175,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     );
   }
   const preRoutePlannerForced = Boolean(
-    !routeOwnershipAvailable
+    !workflowStopActive
+    && !routeOwnershipAvailable
     && plannerTool
     && !trailingMetaUser
     && requiresTaskRoutePlanning(authoritativeGoal)
@@ -1963,7 +2191,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   );
   if (preRoutePlannerForced) injectPreRoutePlannerHandoffRule(history);
   const catalogRefreshPhaseEligible = Boolean(
-    !architectureToolForced
+    !workflowStopActive
+    && !architectureToolForced
     && !architectureEvidenceRefillActive
     && !initialActiveProjectBootstrapForced
     && !preRoutePlannerForced
@@ -2008,13 +2237,16 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     nextCheckpoint.catalogRefresh = null;
   }
   const exactRequiredToolName = String(nextCheckpoint?.requiredNextTool?.name || "").trim();
-  const exactRequiredToolDefinition: any = taskOwnedRequiredToolDefinition(
-    nextCheckpoint,
-    toolDefinitions,
-    sessionId,
+  const unchangedControlTools = repeatedUnchangedControlTools(messages).filter(
+    (name) => !toolNamesMatch(name, exactRequiredToolName),
   );
+  injectRepeatedControlBoundaryRule(history, unchangedControlTools);
+  const exactRequiredToolDefinition: any = detachedSideQueryActive
+    ? null
+    : taskOwnedRequiredToolDefinition(nextCheckpoint, toolDefinitions, sessionId);
   const exactRequiredToolForced = Boolean(
-    exactRequiredToolDefinition
+    !workflowStopActive
+    && exactRequiredToolDefinition
     && !architectureToolForced
     && !architectureEvidenceRefillActive
     && !initialActiveProjectBootstrapForced
@@ -2047,7 +2279,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     const name = String(tool?.function?.name || tool?.name || "").trim();
     return !semanticForbiddenTools.some((forbidden: string) => toolNamesMatch(forbidden, name));
   };
-  const phaseToolDefinitions = architectureToolForced
+  const phaseToolDefinitions = workflowStopActive
+    ? []
+    : detachedSideQueryActive
+    ? toolDefinitions.filter((tool: any) => detachedSideQueryToolAllowed(
+      tool?.function?.name || tool?.name || "",
+    ))
+    : (architectureToolForced
     ? [architectureContractTool].filter(toolAllowedBySemanticBlocker)
     : (initialActiveProjectBootstrapForced
       ? [activeProjectBootstrapTool].filter(toolAllowedBySemanticBlocker)
@@ -2068,7 +2306,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             : tool
         ))
         .filter(toolAllowedBySemanticBlocker)
-      : toolDefinitions.filter(toolAllowedBySemanticBlocker))))));
+      : toolDefinitions.filter(toolAllowedBySemanticBlocker)))))));
   // Exact catalog/state enforcement: a generated write is intent, not proof of
   // ownership. Remove mutation schemas until a server result has supplied the
   // compact taskSessionId + ownerCapability pair. This also protects older
@@ -2080,7 +2318,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   // Exact phase filtering also closes the tools/list refresh race between the
   // two Unreal MCP providers. Architecture recovery already constructs its
   // own narrower catalog, so it remains authoritative while active.
-  const routedToolDefinitions = routeOwnershipAvailable
+  const routedToolDefinitions = detachedSideQueryActive
+    ? phaseToolDefinitions
+    : routeOwnershipAvailable
     && exactToolRouteAvailable
     && !architectureToolForced
     && !architectureEvidenceRefillActive
@@ -2091,9 +2331,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         TASK_CHECKPOINT_TOOL_NAME,
         tool?.function?.name || tool?.name || "",
       )));
-  const effectiveToolDefinitions = routeOwnershipAvailable
-    ? routedToolDefinitions
-    : routedToolDefinitions.filter((tool: any) => !core.mutationToolName(
+  const boundedToolDefinitions = routedToolDefinitions.filter((tool: any) => {
+    const name = String(tool?.function?.name || tool?.name || "");
+    return !unchangedControlTools.some((blocked) => toolNamesMatch(blocked, name));
+  });
+  const effectiveToolDefinitions = detachedSideQueryActive
+    ? boundedToolDefinitions
+    : routeOwnershipAvailable
+    ? boundedToolDefinitions
+    : boundedToolDefinitions.filter((tool: any) => !core.mutationToolName(
       tool?.function?.name || tool?.name || "",
     ));
   const modelFacingToolDefinitions = effectiveToolDefinitions.map((tool: any) => {
@@ -2104,7 +2350,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const currentFormatted = await model.applyPromptTemplate(history);
   const inputTokens = await model.countTokens(currentFormatted);
   const toolSchemaTokens = await model.countTokens(JSON.stringify(modelFacingToolDefinitions));
-  const persistedNextToolName = nextCheckpoint?.requiredNextTool?.name || "";
+  const persistedNextToolName = detachedSideQueryActive
+    ? ""
+    : (nextCheckpoint?.requiredNextTool?.name || "");
   const nextToolName = core.isNonToolNextAction(persistedNextToolName) ? "" : persistedNextToolName;
   const hardRemainingTokens = finiteNumber(configValue(ctl, "hardRemainingTokens", 8000), 8000);
   const configuredOutputReserve = finiteNumber(
@@ -2187,9 +2435,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     catalogRefreshBlocked,
     exactRequiredToolForced,
     exactRequiredToolName,
+    workflowStopActive,
     invalidRequiredToolContract,
     invalidRequiredToolName: invalidRequiredToolContract ? advertisedRequiredToolName : "",
     featureIntentDiscoveryHandoffForced,
+    detachedSideQueryActive,
+    detachedSideQueryRequest: detachedSideQueryActive
+      ? String(nextCheckpoint?.sideQuery?.request || "").slice(0, 240)
+      : "",
   });
 
   let modelChat = history;
@@ -2331,6 +2584,27 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     );
   }
 
+  // A server-owned workflow stop is already a terminal decision for this turn.
+  // Do not ask the target model to restate it: tool-trained models can emit
+  // literal <tool_call> markup even when no tool schemas are advertised. Emit a
+  // deterministic final response so both real and simulated tool calls are
+  // impossible and the user immediately sees why work stopped.
+  if (workflowStopActive) {
+    const content = workflowStopFinalResponse(
+      nextCheckpoint.semanticBlocker,
+      `${authoritativeGoal}\n${architectureGoal}`,
+    );
+    ctl.fragmentGenerated(content, { reasoningType: "none" });
+    await appendEventBestEffort(sessionId, {
+      type: "workflow_stop_final_emitted",
+      at: new Date().toISOString(),
+      errorCode: String(nextCheckpoint?.semanticBlocker?.errorCode || "SERVER_WORKFLOW_BLOCKED").slice(0, 120),
+      targetModelInvoked: false,
+      toolRequestCount: 0,
+    });
+    return;
+  }
+
   // Qwen multi_step_tool Jinja raises:
   //   raise_exception('No user query found in messages.')
   // which surfaces as applyPromptTemplate HTTP 400. Never send a user-less chat.
@@ -2364,7 +2638,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   // strict mode is disabled. Otherwise a model can emit an unrelated tool
   // call and the checkpoint would record progress that never happened.
   const requiredToolGateActive = Boolean(
-    nextCheckpoint?.requiredNextTool?.name
+    !detachedSideQueryActive
+    && nextCheckpoint?.requiredNextTool?.name
     && !core.isNonToolNextAction(nextCheckpoint.requiredNextTool.name),
   );
   const toolControlPlaneEnforced = strictToolControlPlane
@@ -2375,7 +2650,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     || preRoutePlannerForced
     || catalogRefreshForced
     || exactRequiredToolForced
-    || semanticForbiddenTools.length > 0;
+    || semanticForbiddenTools.length > 0
+    || workflowStopActive
+    || detachedSideQueryActive;
   const bufferUntilPredictionComplete = Boolean(config.bufferUntilPredictionComplete)
     || requireCheckpointPersistence
     || Boolean(config.rejectTruncatedPredictions);
@@ -2712,7 +2989,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     const semanticToolRejected = semanticForbiddenTools.some(
       (forbidden: string) => toolNamesMatch(forbidden, requestedName),
     );
-    const verdict = semanticToolRejected
+    const ordinaryVerdict = semanticToolRejected
       ? {
         ok: false,
         reason: `semantic blocker forbids ${requestedName || "<unnamed>"}; errorCode=${nextCheckpoint?.semanticBlocker?.errorCode || "BLOCKED"}`,
@@ -2750,6 +3027,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       : (toolControlPlaneEnforced
         ? validateToolRequest(entry.request, nextCheckpoint)
         : { ok: true })))))));
+    const verdict = detachedSideQueryActive
+      ? (detachedSideQueryToolAllowed(requestedName)
+        ? { ok: true }
+        : {
+          ok: false,
+          reason: `Detached read-only side query forbids ${requestedName || "<unnamed>"}.`,
+        })
+      : ordinaryVerdict;
     verdictByCallId.set(entry.callId, verdict);
     if (!verdict.ok) {
       await appendEventBestEffort(sessionId, {

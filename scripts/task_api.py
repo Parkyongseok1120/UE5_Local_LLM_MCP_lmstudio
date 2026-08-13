@@ -363,6 +363,50 @@ def _invalidate_selection_dependent_gates(
     state["writeGate"] = write_gate
 
 
+def _reset_slice_selection_authority(
+    state: dict[str, Any],
+    *,
+    active_slice_id: str,
+) -> None:
+    """Invalidate every file/intent authority owned by the previous slice.
+
+    A slice id, its selected target snapshots, and its feature-intent binding
+    form one authority unit.  Keeping any part while replacing ``activeSliceId``
+    creates a split-brain route: the new id is displayed while authorization
+    and fast paths still use the old files.
+    """
+
+    for key, empty in (
+        ("selectedHypothesisId", ""),
+        ("selectedCandidateId", ""),
+        ("selectedIntentId", ""),
+        ("intentContractHash", ""),
+        ("selectedTargetSnapshots", []),
+        ("featureTargetSnapshots", []),
+        ("gateTargetSnapshots", {}),
+        ("scopeAuthority", {}),
+        ("selectionBinding", {}),
+    ):
+        state[key] = empty
+    state["selectedTargetSliceId"] = ""
+    feature_state = dict(state.get("featureIntent") or {})
+    feature_state.update(
+        {
+            "status": "pending" if feature_state.get("required") else "not_required",
+            "selectedIntentId": "",
+            "intentContractHash": "",
+            "acceptanceOracleHash": "",
+            "checkpointHash": "",
+            "targetSnapshotHash": "",
+            "compactSummary": {},
+            "resolutionAction": "",
+            "planRevision": str(state.get("planRevision") or ""),
+            "activeSliceId": active_slice_id,
+        }
+    )
+    state["featureIntent"] = feature_state
+
+
 def _migrate_gate_policy(state: dict[str, Any]) -> bool:
     version = int(state.get("gatePolicyVersion") or 1)
     if version >= GATE_POLICY_VERSION:
@@ -1784,8 +1828,10 @@ def _advance_authorized_mutation_snapshots(
     state["selectedTargetSnapshots"] = normalized
     state["scopeAuthority"] = {
         "gate": authority_gate,
+        "activeSliceId": str(state.get("activeSliceId") or ""),
         "targetSnapshotsHash": _canonical_hash(normalized),
     }
+    state["selectedTargetSliceId"] = str(state.get("activeSliceId") or "")
 
     if authority_gate == "unreal_feature_intent_resolve":
         from feature_intent_contract import target_snapshot_hash
@@ -1904,17 +1950,26 @@ def task_record_build_recovery(
     ).strip()
     payload = recovery if isinstance(recovery, dict) else {}
     target_file = str(payload.get("targetFile") or "").replace("\\", "/").strip("/")
+    category = str(payload.get("category") or "").strip()
+    owner_symbol = str(payload.get("ownerSymbol") or "").strip()
+    missing_symbol = str(payload.get("missingSymbol") or "").strip()
+    semantic_scoped = bool(
+        category == "linker_missing_definition" and owner_symbol and missing_symbol
+    )
     required_tool = str(payload.get("requiredNextTool") or "read_file_range").strip()
     required_args = (
         dict(payload.get("requiredNextToolArgs") or {})
         if isinstance(payload.get("requiredNextToolArgs"), dict)
         else {}
     )
-    if not task_session_id or not target_file:
+    if not task_session_id or (not target_file and not semantic_scoped):
         return {
             "ok": False,
             "errorCode": "BUILD_RECOVERY_BINDING_REQUIRED",
-            "error": "taskAuthorization and recovery.targetFile are required",
+            "error": (
+                "taskAuthorization plus either recovery.targetFile or a linker "
+                "ownerSymbol/missingSymbol identity are required"
+            ),
         }
     outcome: dict[str, Any] = {}
 
@@ -1941,7 +1996,15 @@ def task_record_build_recovery(
             return None
         state["buildRecovery"] = {
             "status": "evidence_required",
+            "category": category,
             "targetFile": target_file,
+            "ownerSymbol": owner_symbol,
+            "missingSymbol": missing_symbol,
+            "semanticEvidenceRequired": bool(payload.get("semanticEvidenceRequired")),
+            "mutationPermittedWithoutSemanticEvidence": bool(
+                payload.get("mutationPermittedWithoutSemanticEvidence", True)
+            ),
+            "semanticEvidenceSources": list(payload.get("semanticEvidenceSources") or []),
             "requiredNextTool": required_tool,
             "requiredNextToolArgs": required_args,
             "firstError": str(payload.get("firstError") or ""),
@@ -2388,11 +2451,233 @@ def task_mark_build_recovery_evidence(
     return outcome or result
 
 
+_LINKER_SEMANTIC_EXTENSIONS = frozenset(
+    {".h", ".hpp", ".hh", ".inl", ".cpp", ".cc", ".cxx", ".ini", ".md", ".txt"}
+)
+_LINKER_SCAN_EXCLUDED_PARTS = frozenset(
+    {"binaries", "deriveddatacache", "intermediate", "saved", ".git", ".vs"}
+)
+_LINKER_NON_SEMANTIC_IDENTIFIERS = frozenset(
+    {
+        "Add", "Append", "Contains", "Find", "IsValid", "Num", "Remove", "Reset",
+        "SetNum", "Empty", "Get", "Set", "Super", "TEXT", "true", "false", "nullptr",
+        "bool", "const", "double", "float", "int", "int32", "int64", "return", "void",
+    }
+)
+
+
+def _linker_owner_stem(owner_symbol: str) -> str:
+    owner = str(owner_symbol or "").strip()
+    if len(owner) > 1 and owner[0] in "AUFISTE" and owner[1].isupper():
+        return owner[1:]
+    return owner
+
+
+def _bounded_project_semantic_corpus(project_root: Path) -> tuple[str, list[str]]:
+    chunks: list[str] = []
+    paths: list[str] = []
+    file_budget = 5000
+    byte_budget = 16 * 1024 * 1024
+    for source_root_name in ("Source", "Plugins", "Config"):
+        source_root = project_root / source_root_name
+        if not source_root.is_dir():
+            continue
+        for candidate in source_root.rglob("*"):
+            if file_budget <= 0 or byte_budget <= 0:
+                return "\n".join(chunks), paths
+            if not candidate.is_file() or candidate.suffix.lower() not in _LINKER_SEMANTIC_EXTENSIONS:
+                continue
+            if any(part.casefold() in _LINKER_SCAN_EXCLUDED_PARTS for part in candidate.parts):
+                continue
+            try:
+                size = candidate.stat().st_size
+                if size > 1024 * 1024:
+                    continue
+                raw = candidate.read_bytes()
+            except OSError:
+                continue
+            file_budget -= 1
+            byte_budget -= len(raw)
+            text = raw.decode("utf-8-sig", errors="replace")
+            chunks.append(text)
+            try:
+                paths.append(candidate.relative_to(project_root).as_posix())
+            except ValueError:
+                paths.append(candidate.as_posix())
+    return "\n".join(chunks), paths
+
+
+def _sketch_parameter_names(sketch: str, owner_symbol: str, missing_symbol: str) -> set[str]:
+    pattern = re.compile(
+        rf"\b{re.escape(owner_symbol)}\s*::\s*{re.escape(missing_symbol)}\s*\((.*?)\)",
+        re.DOTALL,
+    )
+    match = pattern.search(sketch)
+    if not match:
+        return set()
+    result: set[str] = set()
+    for parameter in match.group(1).split(","):
+        names = re.findall(r"\b([A-Za-z_]\w*)\b", parameter.split("=")[0])
+        if names:
+            result.add(names[-1])
+    return result
+
+
+def _validate_linker_recovery_semantics(
+    workspace: Path,
+    *,
+    state: dict[str, Any],
+    recovery: dict[str, Any],
+    target_files: list[str],
+    sketch: str,
+    project_root: str,
+) -> dict[str, Any]:
+    """Fail closed when a missing definition is expanded into unproven behavior."""
+
+    owner_symbol = str(recovery.get("ownerSymbol") or "").strip()
+    missing_symbol = str(recovery.get("missingSymbol") or "").strip()
+    normalized_targets = list(
+        dict.fromkeys(
+            str(item or "").replace("\\", "/").strip("/")
+            for item in target_files
+            if str(item or "").strip()
+        )
+    )
+    owner_stem = _linker_owner_stem(owner_symbol).casefold()
+    owner_targets = [
+        target for target in normalized_targets
+        if Path(target).stem.casefold() == owner_stem
+        and Path(target).suffix.casefold() in {".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh"}
+    ]
+    common = {
+        "ok": False,
+        "active": True,
+        "category": "linker_missing_definition",
+        "ownerSymbol": owner_symbol,
+        "missingSymbol": missing_symbol,
+        "semanticEvidenceRequired": True,
+        "mutationPermittedWithoutSemanticEvidence": False,
+        "retryable": False,
+        "doNotRetryUnchanged": True,
+        "stopCurrentWorkflow": True,
+        "nextAction": "request_or_locate_semantic_contract",
+        "nextActionIsTool": False,
+    }
+    if not owner_symbol or not missing_symbol or not owner_targets:
+        return {
+            **common,
+            "errorCode": "LINKER_RECOVERY_OWNER_SCOPE_MISMATCH",
+            "error": "The repair slice does not contain the missing symbol's owning source/header.",
+            "targetFiles": normalized_targets,
+            "expectedOwnerStem": _linker_owner_stem(owner_symbol),
+            "agentInstruction": (
+                "Stop this repair attempt. Rebind a slice containing the owning implementation "
+                "and obtain behavioral evidence before proposing code."
+            ),
+        }
+
+    authoritative_root = _continuity_project_root(workspace, state)
+    if project_root:
+        supplied_root = Path(project_root).expanduser().resolve()
+        if supplied_root.is_file() and supplied_root.suffix.lower() == ".uproject":
+            supplied_root = supplied_root.parent
+        if supplied_root != authoritative_root:
+            return {
+                **common,
+                "errorCode": "LINKER_RECOVERY_OWNER_SCOPE_MISMATCH",
+                "error": "projectRoot does not match the active task project.",
+                "agentInstruction": "Use the active task project; do not validate linker semantics against another workspace.",
+            }
+    corpus, corpus_paths = _bounded_project_semantic_corpus(authoritative_root)
+    if not corpus.strip() or not sketch.strip():
+        return {
+            **common,
+            "errorCode": "LINKER_RECOVERY_SEMANTICS_UNDERDETERMINED",
+            "error": "No verifiable project behavior is available for the missing definition.",
+            "evidenceFilesScanned": len(corpus_paths),
+            "agentInstruction": (
+                "A linker error proves that the definition is absent, not what it should do. "
+                "Locate an exact declaration plus project call sites, collaborating state, tests, "
+                "or requirements; otherwise ask the user for the contract."
+            ),
+        }
+
+    corpus_identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", corpus))
+    sketch_identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", sketch))
+    parameter_names = _sketch_parameter_names(sketch, owner_symbol, missing_symbol)
+    excluded = set(_LINKER_NON_SEMANTIC_IDENTIFIERS) | {
+        owner_symbol,
+        missing_symbol,
+        _linker_owner_stem(owner_symbol),
+        *parameter_names,
+    }
+    semantic_anchors = sorted(
+        identifier
+        for identifier in sketch_identifiers & corpus_identifiers
+        if identifier not in excluded and len(identifier) > 2
+    )
+
+    declared_storage = set(
+        re.findall(
+            r"\b(?:TMap|TSet|TArray|TQueue|std::(?:map|set|vector|unordered_map))\s*<[^;{}]+>\s*([A-Za-z_]\w*)",
+            sketch,
+        )
+    )
+    member_mutations = set(
+        re.findall(
+            r"\b([A-Za-z_]\w*)\s*\.\s*(?:Add|Append|Emplace|Insert|Remove|Reset|SetNum)\s*\(",
+            sketch,
+        )
+    )
+    explicit_members = set(re.findall(r"\bthis\s*->\s*([A-Za-z_]\w*)", sketch))
+    invented_state = sorted(
+        identifier
+        for identifier in declared_storage | member_mutations | explicit_members
+        if identifier not in corpus_identifiers and identifier not in parameter_names
+    )
+    if invented_state:
+        return {
+            **common,
+            "errorCode": "LINKER_RECOVERY_SEMANTIC_INVENTION",
+            "error": "The sketch invents persistent/project state not supported by the repository.",
+            "inventedIdentifiers": invented_state,
+            "semanticAnchors": semantic_anchors[:32],
+            "evidenceFilesScanned": len(corpus_paths),
+            "agentInstruction": (
+                "Do not add guessed maps, sets, flags, thresholds, defaults, or policy. Reuse "
+                "existing project-owned state only when its declaration and behavior are evidenced."
+            ),
+        }
+    if not semantic_anchors:
+        return {
+            **common,
+            "errorCode": "LINKER_RECOVERY_SEMANTICS_UNDERDETERMINED",
+            "error": "The sketch does not reference any verified project behavior beyond the missing signature.",
+            "evidenceFilesScanned": len(corpus_paths),
+            "agentInstruction": (
+                "Stop rather than synthesize behavior from the linker diagnostic. Read project "
+                "call sites/collaborators or obtain tests/requirements, then create a new evidence-backed sketch."
+            ),
+        }
+    return {
+        "ok": True,
+        "active": True,
+        "category": "linker_missing_definition",
+        "ownerSymbol": owner_symbol,
+        "missingSymbol": missing_symbol,
+        "ownerTargets": owner_targets,
+        "semanticAnchors": semantic_anchors[:32],
+        "evidenceFilesScanned": len(corpus_paths),
+    }
+
+
 def task_validate_build_recovery_sketch(
     workspace: Path,
     *,
     task_authorization: dict[str, Any],
     target_files: list[str],
+    sketch: str = "",
+    project_root: str = "",
 ) -> dict[str, Any]:
     """Require one exact first-error file in a build-recovery sketch."""
 
@@ -2422,6 +2707,16 @@ def task_validate_build_recovery_sketch(
         )
     recovery = dict(state.get("buildRecovery") or {})
     expected = str(recovery.get("targetFile") or "").replace("\\", "/").strip("/")
+    category = str(recovery.get("category") or "")
+    if category == "linker_missing_definition" and not expected:
+        return _validate_linker_recovery_semantics(
+            workspace,
+            state=state,
+            recovery=recovery,
+            target_files=target_files,
+            sketch=sketch,
+            project_root=project_root,
+        )
     if not expected:
         return {"ok": True, "active": False}
     if recovery.get("evidenceSatisfied") is not True:
@@ -4927,6 +5222,7 @@ def task_define_slices(
         state["planScope"] = scope
         state["slicePlanningRequired"] = False
         state["activeSliceId"] = selected
+        _reset_slice_selection_authority(state, active_slice_id=selected)
         state["sliceProgress"] = {
             "activeSliceId": selected,
             "completedSlices": [],
@@ -5719,8 +6015,12 @@ def task_record_gate(
                     state.get("selectedTargetSnapshots")
                 )
                 state["selectedTargetSnapshots"] = normalized
+                state["selectedTargetSliceId"] = str(
+                    state.get("activeSliceId") or ""
+                )
                 state["scopeAuthority"] = {
                     "gate": gate,
+                    "activeSliceId": str(state.get("activeSliceId") or ""),
                     "targetSnapshotsHash": _canonical_hash(normalized),
                 }
                 if previous != normalized:

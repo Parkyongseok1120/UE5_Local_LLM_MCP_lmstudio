@@ -173,6 +173,9 @@ test("clang linker blocks preserve undefined symbols and route to the missing de
   assert.strictEqual(payload.recovery.category, "linker_missing_definition");
   assert.strictEqual(payload.requiredNextTool, "unreal_symbol_lookup");
   assert.strictEqual(payload.requiredNextToolArgs.query, "SetHoveredCell");
+  assert.strictEqual(payload.recovery.ownerSymbol, "AGomokuGameState");
+  assert.strictEqual(payload.recovery.missingSymbol, "SetHoveredCell");
+  assert.strictEqual(payload.recovery.semanticEvidenceRequired, true);
   assert.ok(payload.recovery.requiredSequence.includes("unreal_agent_plan"));
   assert.ok(payload.recovery.requiredSequence.includes("unreal_code_sketch_claim_validate"));
   assert.ok(!payload.nextSteps.some((step) => step.includes("No actionable")));
@@ -199,7 +202,12 @@ test("MSVC LNK2019 routes the quoted unresolved method to symbol lookup", () => 
   assert.strictEqual(payload.recovery.category, "linker_missing_definition");
   assert.strictEqual(payload.requiredNextTool, "unreal_symbol_lookup");
   assert.strictEqual(payload.requiredNextToolArgs.query, "SetPlayerReady");
+  assert.strictEqual(payload.recovery.ownerSymbol, "AGomokuGameMode");
+  assert.strictEqual(payload.recovery.missingSymbol, "SetPlayerReady");
+  assert.strictEqual(payload.recovery.semanticEvidenceRequired, true);
+  assert.strictEqual(payload.recovery.mutationPermittedWithoutSemanticEvidence, false);
   assert.ok(payload.recovery.requiredSequence.includes("unreal_code_sketch_claim_validate"));
+  assert.ok(payload.nextSteps.some((step) => step.includes("do not invent persistent state")));
 });
 
 test("same-file incomplete type recovery includes the source preamble when bounded", () => {

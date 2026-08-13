@@ -149,7 +149,38 @@ def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
     )
     active_slice_id = str(state.get("activeSliceId") or "task").strip() or "task"
     declared: list[str] = []
+    active_plan_files: list[str] = []
+    for item in plan_scope.get("slices") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("sliceId") or "").strip() != active_slice_id:
+            continue
+        active_plan_files.extend(_clean_strings(item.get("files")))
+        break
+    snapshot_slice_id = str(state.get("selectedTargetSliceId") or "").strip()
     snapshot_items = state.get("selectedTargetSnapshots") or []
+    snapshot_paths = _clean_strings(
+        [
+            item.get("path") or item.get("relativePath")
+            for item in snapshot_items
+            if isinstance(item, dict)
+        ]
+    )
+    # New states bind snapshots to a slice explicitly.  For legacy states, only
+    # trust unbound snapshots when they are contained in the currently declared
+    # slice. This repairs persisted split-brain state from older revisions
+    # without weakening the snapshot authority of valid legacy tasks.
+    snapshots_match_active_slice = bool(
+        snapshot_slice_id == active_slice_id
+        or (
+            not snapshot_slice_id
+            and (
+                not active_plan_files
+                or set(snapshot_paths).issubset(set(active_plan_files))
+            )
+        )
+    )
+    snapshot_items = snapshot_items if snapshots_match_active_slice else []
     if isinstance(snapshot_items, list) and snapshot_items:
         declared.extend(
             str(item.get("path") or item.get("relativePath") or "")
@@ -157,6 +188,8 @@ def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
             if isinstance(item, dict)
         )
     elif (
+        snapshots_match_active_slice
+        and
         str(state.get("selectedIntentId") or "").strip()
         and str(state.get("intentContractHash") or "").strip()
     ):
@@ -165,15 +198,8 @@ def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
             for item in (state.get("featureTargetSnapshots") or [])
             if isinstance(item, dict)
         )
-    for item in plan_scope.get("slices") or []:
-        if declared:
-            break
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("sliceId") or "").strip() != active_slice_id:
-            continue
-        declared.extend(_clean_strings(item.get("files")))
-        break
+    if not declared:
+        declared.extend(active_plan_files)
     if not declared:
         declared.extend(_clean_strings(plan_scope.get("impactContractFiles")))
     if not declared:
@@ -923,5 +949,9 @@ def selection_binding(state: dict[str, Any]) -> dict[str, Any]:
         "selectedIntentId": str(state.get("selectedIntentId") or ""),
         "intentContractHash": str(state.get("intentContractHash") or ""),
     }
+    if "selectedTargetSliceId" in state:
+        binding["targetSnapshotSliceId"] = str(
+            state.get("selectedTargetSliceId") or state.get("activeSliceId") or ""
+        )
     binding["bindingHash"] = canonical_hash(binding)
     return binding

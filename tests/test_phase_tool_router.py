@@ -42,6 +42,67 @@ def test_initial_active_project_discovery_is_safe_before_route_ownership() -> No
     assert "unreal_get_active_project" in CONTROL_PLANE_TOOLS
 
 
+def test_legacy_unbound_snapshots_cannot_override_a_different_active_slice() -> None:
+    from phase_tool_router import derive_tool_route
+
+    state = {
+        "taskSessionId": "legacy-split-brain",
+        "status": "running",
+        "activeSliceId": "linker-fix",
+        "planScope": {
+            "slices": [{
+                "sliceId": "linker-fix",
+                "files": ["Source/Demo/DemoGameMode.cpp", "Source/Demo/DemoGameMode.h"],
+            }],
+        },
+        "selectedTargetSnapshots": [
+            {"path": "Source/Demo/OldGameState.cpp", "fileHash": "old"},
+            {"path": "Source/Demo/OldController.cpp", "fileHash": "old"},
+        ],
+        "selectedIntentId": "bounded_local",
+        "intentContractHash": "legacy",
+        "requiredBeforeWrite": [],
+        "completedGates": {},
+        "pendingGates": [],
+        "writeGate": {"writesAllowed": True},
+    }
+
+    route = derive_tool_route(state)
+
+    assert route["selectedSlice"]["sliceId"] == "linker-fix"
+    assert route["selectedSlice"]["files"] == [
+        "Source/Demo/DemoGameMode.cpp",
+        "Source/Demo/DemoGameMode.h",
+    ]
+
+
+def test_legacy_unbound_snapshots_remain_authoritative_inside_the_same_slice() -> None:
+    state = {
+        "taskSessionId": "legacy-valid",
+        "status": "running",
+        "activeSliceId": "input",
+        "planScope": {
+            "slices": [{
+                "sliceId": "input",
+                "files": ["Source/Demo/Controller.cpp", "Source/Demo/GameState.cpp"],
+            }],
+        },
+        "selectedTargetSnapshots": [
+            {"path": "Source/Demo/Controller.cpp", "fileHash": "current"},
+        ],
+        "selectedIntentId": "bounded_local",
+        "intentContractHash": "legacy",
+        "requiredBeforeWrite": [],
+        "completedGates": {},
+        "pendingGates": [],
+        "writeGate": {"writesAllowed": True},
+    }
+
+    route = derive_tool_route(state)
+
+    assert route["selectedSlice"]["files"] == ["Source/Demo/Controller.cpp"]
+
+
 def test_recorded_gate_remains_valid_for_long_running_gui_slice(
     tmp_path: Path,
     monkeypatch,
@@ -571,6 +632,136 @@ def test_build_recovery_scope_is_shared_and_fail_closed(
         target_files=[target],
     )
     assert exact == {"ok": True, "active": True, "targetFile": target}
+
+
+def test_linker_recovery_blocks_invented_state_and_accepts_existing_project_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "DemoGameMode.h").write_text(
+        "class ADemoGameMode { bool SetPlayerReady(APlayerController* Player, bool bReady); };\n",
+        encoding="utf-8",
+    )
+    (source / "DemoGameMode.cpp").write_text(
+        '#include "DemoGameMode.h"\n', encoding="utf-8"
+    )
+    (source / "DemoPlayerState.h").write_text(
+        "class ADemoPlayerState { bool bReady; void SetReady(bool bInReady); };\n",
+        encoding="utf-8",
+    )
+    started = task_start(
+        tmp_path,
+        request="Fix missing SetPlayerReady definition",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "compile_fix",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [],
+        },
+    )
+    authorization = started["taskAuthorization"]
+    recorded = task_record_build_recovery(
+        tmp_path,
+        task_authorization=authorization,
+        recovery={
+            "category": "linker_missing_definition",
+            "ownerSymbol": "ADemoGameMode",
+            "missingSymbol": "SetPlayerReady",
+            "semanticEvidenceRequired": True,
+            "mutationPermittedWithoutSemanticEvidence": False,
+            "requiredNextTool": "unreal_symbol_lookup",
+            "requiredNextToolArgs": {"query": "SetPlayerReady"},
+            "firstError": "error LNK2019: ADemoGameMode::SetPlayerReady",
+        },
+    )
+    assert recorded["ok"] is True
+    assert recorded["buildRecovery"]["targetFile"] == ""
+
+    invented = task_validate_build_recovery_sketch(
+        tmp_path,
+        task_authorization=authorization,
+        target_files=["Source/Demo/DemoGameMode.cpp"],
+        sketch="""
+        bool ADemoGameMode::SetPlayerReady(APlayerController* Player, bool bReady)
+        {
+            TMap<APlayerController*, bool> PlayerReadiness;
+            PlayerReadiness.Add(Player, bReady);
+            return true;
+        }
+        """,
+        project_root=str(tmp_path),
+    )
+    assert invented["errorCode"] == "LINKER_RECOVERY_SEMANTIC_INVENTION"
+    assert invented["inventedIdentifiers"] == ["PlayerReadiness"]
+    assert invented["nextActionIsTool"] is False
+    assert invented["stopCurrentWorkflow"] is True
+
+    evidence_backed = task_validate_build_recovery_sketch(
+        tmp_path,
+        task_authorization=authorization,
+        target_files=["Source/Demo/DemoGameMode.cpp"],
+        sketch="""
+        bool ADemoGameMode::SetPlayerReady(APlayerController* Player, bool bReady)
+        {
+            ADemoPlayerState* PlayerState = Player ? Player->GetPlayerState<ADemoPlayerState>() : nullptr;
+            if (!PlayerState) return false;
+            PlayerState->SetReady(bReady);
+            return PlayerState->bReady == bReady;
+        }
+        """,
+        project_root=str(tmp_path),
+    )
+    assert evidence_backed["ok"] is True
+    assert "ADemoPlayerState" in evidence_backed["semanticAnchors"]
+
+
+def test_linker_recovery_without_behavioral_anchor_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    (source / "DemoGameMode.h").write_text(
+        "class ADemoGameMode { bool SetPlayerReady(bool bReady); };\n",
+        encoding="utf-8",
+    )
+    (source / "DemoGameMode.cpp").write_text("", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Fix linker error",
+        mode="agent_edit",
+        plan_payload={"taskKind": "compile_fix", "executablePlanSlices": []},
+    )
+    authorization = started["taskAuthorization"]
+    assert task_record_build_recovery(
+        tmp_path,
+        task_authorization=authorization,
+        recovery={
+            "category": "linker_missing_definition",
+            "ownerSymbol": "ADemoGameMode",
+            "missingSymbol": "SetPlayerReady",
+            "semanticEvidenceRequired": True,
+            "mutationPermittedWithoutSemanticEvidence": False,
+            "requiredNextTool": "unreal_symbol_lookup",
+        },
+    )["ok"] is True
+
+    result = task_validate_build_recovery_sketch(
+        tmp_path,
+        task_authorization=authorization,
+        target_files=["Source/Demo/DemoGameMode.cpp"],
+        sketch="bool ADemoGameMode::SetPlayerReady(bool bReady) { return true; }",
+        project_root=str(tmp_path),
+    )
+    assert result["errorCode"] == "LINKER_RECOVERY_SEMANTICS_UNDERDETERMINED"
+    assert result["retryable"] is False
 
 
 def test_oversized_gate_slice_returns_executable_bounded_retry(

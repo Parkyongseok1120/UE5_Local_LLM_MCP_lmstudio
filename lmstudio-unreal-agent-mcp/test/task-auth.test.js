@@ -17,12 +17,35 @@ const {
   expandCompactTaskAuthorization,
   featureIntentTargetHash,
   requiredFields,
+  requestedMutationPaths,
   reserveRouteCall,
   commitRouteReservation,
   rollbackRouteReservation,
   selectionBindingForState,
   validateMutationAuth,
 } = require("../src/task-auth");
+
+test("mutation auth normalizes workspace-prefixed active-project paths", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-path-normalize-"));
+  const projectRoot = path.join(root, "Git", "Demo");
+  try {
+    const projectFile = path.join(projectRoot, "Demo.uproject");
+    const prefixed = requestedMutationPaths(
+      { patches: [{ path: "Git/Demo/Source/Demo/Thing.cpp" }] },
+      { projectFile },
+    );
+    const alreadyRelative = requestedMutationPaths(
+      { patches: [{ path: "Source/Demo/Thing.cpp" }] },
+      { projectFile },
+    );
+    const expected = path.resolve(projectRoot, "Source", "Demo", "Thing.cpp");
+
+    assert.deepEqual(prefixed, [expected]);
+    assert.deepEqual(alreadyRelative, [expected]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 const authorization = {
   taskSessionId: "task_12345678",

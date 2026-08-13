@@ -67,6 +67,27 @@ def test_long_tool_without_progress_token_emits_logging_heartbeat(tmp_path: Path
     assert sent[-1]["id"] == 42
 
 
+def test_cold_symbol_lookup_without_progress_token_emits_heartbeat(tmp_path: Path) -> None:
+    server = McpServer(tmp_path / "missing.sqlite")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server._begin_tool_progress(
+        44,
+        "unreal_symbol_lookup",
+        {},
+        interval_seconds=0.01,
+    )
+    time.sleep(0.025)
+    server.result(44, {"ok": True})
+
+    logs = [item for item in sent if item.get("method") == "notifications/message"]
+    assert logs
+    assert "Unreal and project symbol lookup" in logs[0]["params"]["data"]
+    assert "elapsed" in logs[0]["params"]["data"]
+    assert sent[-1]["id"] == 44
+
+
 def test_progress_interval_is_bounded_to_two_through_five_seconds(
     tmp_path: Path,
     monkeypatch,

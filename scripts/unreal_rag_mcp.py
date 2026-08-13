@@ -55,6 +55,7 @@ _LONG_RUNNING_PROGRESS_TOOLS = frozenset(
         "unreal_feature_intent_resolve",
         "unreal_project_prepare",
         "unreal_runtime_verify",
+        "unreal_symbol_lookup",
         "unreal_start_compile_loop",
         "unreal_start_rag_refresh",
         "unreal_task_checkpoint",
@@ -69,6 +70,7 @@ _TOOL_PROGRESS_LABELS = {
     "unreal_feature_intent_resolve": "Feature intent and target binding",
     "unreal_project_prepare": "Project metadata preparation",
     "unreal_runtime_verify": "Unreal runtime verification",
+    "unreal_symbol_lookup": "Unreal and project symbol lookup",
     "unreal_start_compile_loop": "Build workflow launch",
     "unreal_start_rag_refresh": "RAG refresh launch",
     "unreal_task_checkpoint": "Checkpoint and recovery validation",
@@ -1457,20 +1459,58 @@ def _handle_unreal_feature_intent_resolve(
     ]
     if initial_targets:
         internal_phases.append("ResolveSlice")
-    if not initial_targets:
-        supplied_slices = arguments.get("slices")
-        if not isinstance(supplied_slices, list) or not supplied_slices:
-            supplied_targets, supplied_error = _string_list_argument(
-                arguments.get("targetFiles"),
-                "targetFiles",
+    supplied_slices = arguments.get("slices")
+    if not isinstance(supplied_slices, list) or not supplied_slices:
+        supplied_targets, supplied_error = _string_list_argument(
+            arguments.get("targetFiles"),
+            "targetFiles",
+        )
+        if supplied_error:
+            supplied_targets = []
+        supplied_slice_id = str(
+            arguments.get("activeSliceId")
+            or initial_slice.get("sliceId")
+            or "feature_scope"
+        ).strip()
+        supplied_slices = (
+            [{"sliceId": supplied_slice_id, "files": supplied_targets}]
+            if supplied_targets
+            else []
+        )
+
+    def comparable_slices(items: Any) -> list[tuple[str, tuple[str, ...]]]:
+        comparable: list[tuple[str, tuple[str, ...]]] = []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            slice_id = str(item.get("sliceId") or item.get("slice_id") or "").strip()
+            files = tuple(
+                str(path or "").replace("\\", "/").strip("/").casefold()
+                for path in (item.get("files") or [])
+                if str(path or "").strip()
             )
-            if supplied_error:
-                supplied_targets = []
-            supplied_slices = (
-                [{"sliceId": "feature_scope", "files": supplied_targets}]
-                if supplied_targets
-                else []
-            )
+            comparable.append((slice_id, files))
+        return comparable
+
+    current_scope = (
+        task_state.get("planScope")
+        if isinstance(task_state.get("planScope"), dict)
+        else {}
+    )
+    requested_active_slice_id = str(
+        arguments.get("activeSliceId")
+        or (supplied_slices[0].get("sliceId") if supplied_slices and isinstance(supplied_slices[0], dict) else "")
+        or task_state.get("activeSliceId")
+        or ""
+    ).strip()
+    supplied_scope_matches = bool(
+        supplied_slices
+        and comparable_slices(supplied_slices)
+        == comparable_slices(current_scope.get("slices") or [])
+        and requested_active_slice_id == str(task_state.get("activeSliceId") or "").strip()
+    )
+    slice_rebind_required = bool(supplied_slices and not supplied_scope_matches)
+    if not initial_targets or slice_rebind_required:
         if not supplied_slices:
             server.structured_tool_result(
                 message_id,
@@ -1520,7 +1560,7 @@ def _handle_unreal_feature_intent_resolve(
             server.workspace,
             task_authorization=authorization,
             slices=supplied_slices,
-            active_slice_id=str(arguments.get("activeSliceId") or "").strip(),
+            active_slice_id=requested_active_slice_id,
         )
         if not slice_registration.get("ok"):
             failure = dict(slice_registration)
@@ -1545,6 +1585,21 @@ def _handle_unreal_feature_intent_resolve(
             server.structured_tool_result(message_id, status)
             return
         task_state = status.get("state") if isinstance(status.get("state"), dict) else {}
+        refreshed_route = (
+            task_state.get("toolRoute")
+            if isinstance(task_state.get("toolRoute"), dict)
+            else {}
+        )
+        refreshed_slice = (
+            refreshed_route.get("selectedSlice")
+            if isinstance(refreshed_route.get("selectedSlice"), dict)
+            else {}
+        )
+        initial_targets = [
+            str(item or "").strip()
+            for item in (refreshed_slice.get("files") or [])
+            if str(item or "").strip()
+        ]
     request = str(task_state.get("request") or "").strip()
     route = (
         task_state.get("toolRoute")
@@ -1933,6 +1988,8 @@ def _handle_unreal_code_sketch_claim_validate(
                 server.workspace,
                 task_authorization=authorization,
                 target_files=target_files,
+                sketch=sketch,
+                project_root=project_root,
             )
             if recovery_scope.get("ok") is False:
                 error_code = str(
@@ -1941,22 +1998,34 @@ def _handle_unreal_code_sketch_claim_validate(
                 )
                 target_file = str(recovery_scope.get("targetFile") or "")
                 evidence_required = error_code == "BUILD_RECOVERY_REQUIRED_EVIDENCE"
+                semantic_blocker = error_code in {
+                    "LINKER_RECOVERY_SEMANTICS_UNDERDETERMINED",
+                    "LINKER_RECOVERY_SEMANTIC_INVENTION",
+                    "LINKER_RECOVERY_OWNER_SCOPE_MISMATCH",
+                }
                 payload = {
                     **recovery_scope,
                     "ok": False,
                     "gatePassed": False,
                     "writeGateClosed": True,
-                    "stopCurrentWorkflow": False,
+                    "stopCurrentWorkflow": semantic_blocker,
                     "reuseCurrentTaskAuthorization": True,
                     "doNotRetryUnchanged": not evidence_required,
+                    "nextActionIsTool": bool(
+                        recovery_scope.get("nextActionIsTool", True)
+                    ),
                     "agentInstruction": (
                         "Call the exact required read with nextActionArgs, then validate one "
                         "repair sketch for only the returned targetFile."
                         if evidence_required
                         else (
-                            "Keep the current task. Validate exactly targetFiles=["
-                            f"{target_file}] for the first compiler error only; do not include "
-                            "parallel diagnostics or unrelated source sections."
+                            str(recovery_scope.get("agentInstruction") or "")
+                            if semantic_blocker
+                            else (
+                                "Keep the current task. Validate exactly targetFiles=["
+                                f"{target_file}] for the first compiler error only; do not include "
+                                "parallel diagnostics or unrelated source sections."
+                            )
                         )
                     ),
                     "generationContract": {

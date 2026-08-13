@@ -472,6 +472,20 @@ function symbolLeaf(value) {
   return leaf.replace(/^[*&\s]+|[&*\s]+$/g, "");
 }
 
+function qualifiedCppSymbol(value) {
+  const normalized = String(value || "")
+    .replace(/\b(?:class|struct|enum)\s+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const matches = [...normalized.matchAll(/\b([A-Za-z_]\w*)::([~A-Za-z_]\w*)\s*\(/g)];
+  if (!matches.length) return { ownerSymbol: "", missingSymbol: "" };
+  const match = matches[0];
+  return {
+    ownerSymbol: String(match[1] || ""),
+    missingSymbol: String(match[2] || "").replace(/^~/, ""),
+  };
+}
+
 function buildFailureRecovery(firstError) {
   const diagnostic = compilerDiagnosticDetails(firstError);
   const code = diagnostic.diagnosticCode;
@@ -479,10 +493,12 @@ function buildFailureRecovery(firstError) {
   const secondQuoted = diagnostic.quoted[1] || "";
   let category = "compile_error";
   let symbolQuery = "";
+  let linkerIdentity = { ownerSymbol: "", missingSymbol: "" };
 
   if (diagnostic.linkerSymbol) {
     category = "linker_missing_definition";
     symbolQuery = symbolLeaf(diagnostic.linkerSymbol.replace(/\([^)]*\).*$/, ""));
+    linkerIdentity = qualifiedCppSymbol(diagnostic.linkerSymbol);
   } else if (code === "C2039") {
     category = "missing_member";
     symbolQuery = symbolLeaf(firstQuoted);
@@ -502,6 +518,7 @@ function buildFailureRecovery(firstError) {
     const msvcSymbol = firstQuoted.replace(/\([^)]*\).*$/, "");
     symbolQuery = symbolLeaf(msvcSymbol);
     category = symbolQuery ? "linker_missing_definition" : "linker";
+    linkerIdentity = qualifiedCppSymbol(firstQuoted);
   } else if (code === "C1083") {
     category = "include_or_module";
   } else if (/\b(?:UHT|UnrealHeaderTool|generated\.h)\b/i.test(diagnostic.compact)) {
@@ -529,6 +546,15 @@ function buildFailureRecovery(firstError) {
       ...common,
       member: code === "C2039" ? symbolQuery : null,
       owner: code === "C2039" ? secondQuoted || null : null,
+      ownerSymbol: linkerMissingDefinition ? linkerIdentity.ownerSymbol || null : null,
+      missingSymbol: linkerMissingDefinition
+        ? linkerIdentity.missingSymbol || symbolQuery || null
+        : null,
+      semanticEvidenceRequired: linkerMissingDefinition,
+      mutationPermittedWithoutSemanticEvidence: !linkerMissingDefinition,
+      semanticEvidenceSources: linkerMissingDefinition
+        ? ["exact declaration", "project call sites or collaborating state", "tests or requirements"]
+        : [],
       requiredNextTool: "unreal_symbol_lookup",
       requiredNextToolArgs: args,
       requiredSequence: [
@@ -726,7 +752,8 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
       payload.nextSteps = recovery.category === "linker_missing_definition"
         ? [
           "Look up the first undefined symbol exactly once with requiredNextToolArgs.",
-          "Replan one owning implementation file, read its declaration/definition range, validate a bounded sketch, and add the smallest missing definition.",
+          "Replan one owning implementation file, then read the exact declaration and existing project collaborators that define its behavior.",
+          "Validate a bounded sketch before mutation. A missing definition proves only that code is absent; do not invent persistent state, thresholds, defaults, or gameplay policy.",
           "Rebuild only after a mutation; a new linker symbol starts a new recovery state."
         ]
         : [

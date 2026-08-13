@@ -787,6 +787,30 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
         assert denied_payload["errorCode"] == "TASK_TOOL_NOT_ACTIVE"
         assert denied_payload["stopCurrentWorkflow"] is False
 
+        detached = client.request(
+            "tools/call",
+            {
+                "name": "list_directory",
+                "arguments": {
+                    "taskAuthorization": {
+                        "taskSessionId": started["taskAuthorization"]["taskSessionId"],
+                        "ownerCapability": started["taskAuthorization"]["ownerCapability"],
+                    },
+                    "taskObservation": {
+                        "mode": "detached_read_only",
+                        "requestHash": "a" * 64,
+                    },
+                    "path": "Source/DemoGame",
+                },
+            },
+            4,
+        )
+        assert detached["result"].get("isError") is not True, detached
+        detached_payload = _tool_payload(detached["result"])
+        assert any(entry["name"] == "Demo.cpp" for entry in detached_payload["entries"])
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state.get("toolRouteUsage", {}).get("count", 0) == 0
+
         read = client.request(
             "tools/call",
             {
