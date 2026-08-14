@@ -13,8 +13,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from workspace_paths import canonical_workspace_root, find_workspace_root, normalize_locator
-
+from workspace_paths import (
+    canonical_workspace_root,
+    filesystem_path_identity,
+    find_workspace_root,
+    normalize_locator,
+)
 
 TOKEN_RE = re.compile(r"\S+")
 
@@ -523,17 +527,55 @@ def stable_module_graph_id(symbol_kind: str, key: str, title: str) -> str:
     return hashlib.sha1(f"{symbol_kind}:{key}:{title}".encode("utf-8")).hexdigest()
 
 
-def doc_matches_replace_project(source: str, metadata: dict, project_name: str) -> bool:
+def _path_has_project_segment(
+    value: object,
+    project_name: str,
+    host_platform: str | None = None,
+) -> bool:
+    candidate = filesystem_path_identity(
+        value,
+        host_platform,
+        trim_outer_slashes=True,
+        strip_project_uri=False,
+    )
+    project = filesystem_path_identity(
+        project_name,
+        host_platform,
+        trim_outer_slashes=True,
+        strip_project_uri=False,
+    )
+    if not candidate or not project:
+        return False
+    return f"/{project}/" in f"/{candidate}/"
+
+
+def doc_matches_replace_project(
+    source: str,
+    metadata: dict,
+    project_name: str,
+    *,
+    host_platform: str | None = None,
+) -> bool:
     if source not in REPLACE_PROJECT_SOURCES:
         return False
     project = str(metadata.get("project") or "").strip()
-    if project and project == project_name:
-        return True
+    if project:
+        return filesystem_path_identity(
+            project,
+            host_platform,
+            trim_outer_slashes=True,
+            strip_project_uri=False,
+        ) == filesystem_path_identity(
+            project_name,
+            host_platform,
+            trim_outer_slashes=True,
+            strip_project_uri=False,
+        )
     relative_path = str(metadata.get("relative_path") or metadata.get("path") or "").replace("\\", "/")
-    if relative_path.startswith(f"Projects/{project_name}/") or f"/{project_name}/" in relative_path:
+    if _path_has_project_segment(relative_path, project_name, host_platform):
         return True
     root = str(metadata.get("root") or "")
-    return project_name.lower() in root.lower()
+    return _path_has_project_segment(root, project_name, host_platform)
 
 
 def delete_project_chunks(conn: sqlite3.Connection, project_name: str) -> int:

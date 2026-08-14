@@ -19,11 +19,14 @@ from task_api import (  # noqa: E402
 )
 from unreal_rag_mcp import (  # noqa: E402
     McpServer,
+    _comparable_feature_slices,
     _feature_gap_statement_issues,
+    _feature_intent_direct_source_evidence,
     _feature_frontier_recovery_contract,
     _feature_negative_call_claim_issues,
     _validate_feature_completion_frontier,
 )
+from workspace_paths import filesystem_path_identity  # noqa: E402
 
 GATE = "unreal_feature_intent_resolve"
 
@@ -40,7 +43,7 @@ def _record_direct_source_reads(
     files = {}
     for target in targets:
         relative = target.resolve().relative_to(project.resolve()).as_posix()
-        files[relative.casefold()] = {
+        files[filesystem_path_identity(relative, trim_outer_slashes=True)] = {
             "path": relative,
             "contentHash": hashlib.sha256(target.read_bytes()).hexdigest(),
             "sourceKind": "declaration" if target.suffix.lower() in {".h", ".hpp", ".inl"} else "implementation",
@@ -1222,6 +1225,115 @@ void AGomokuGameMode::InitializeMatchFromSettings()
     )
 
 
+def test_feature_intent_evidence_and_slice_identity_preserve_unicode_spelling(
+    tmp_path: Path,
+) -> None:
+    composed_name = "\u0130mplementation.cpp"
+    decomposed_name = "I\u0307mplementation.cpp"
+    assert composed_name != decomposed_name
+    assert composed_name.casefold() == decomposed_name.casefold()
+
+    relative = f"Source/Demo/{composed_name}"
+    alias = f"Source/Demo/{decomposed_name}"
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    target.write_text("void FOwner::Run() {}\n", encoding="utf-8")
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    evidence = _feature_intent_direct_source_evidence(
+        [
+            {
+                "path": relative,
+                "absolutePath": str(target),
+                "exists": True,
+            }
+        ],
+        {
+            "planRevision": "7",
+            "evidencePlanRevision": "7",
+            "files": {
+                alias: {
+                    "path": alias,
+                    "contentHash": digest,
+                    "sourceKind": "implementation",
+                }
+            },
+        },
+    )
+
+    assert evidence["ok"] is False
+    assert evidence["verifiedTargetFiles"] == []
+    assert evidence["missingTargetFiles"] == [relative]
+    assert _comparable_feature_slices(
+        [{"sliceId": "implementation", "files": [relative]}]
+    ) != _comparable_feature_slices(
+        [{"sliceId": "implementation", "files": [alias]}]
+    )
+    assert McpServer._project_root_identity(
+        tmp_path / "\u0130Project"
+    ) != McpServer._project_root_identity(tmp_path / "I\u0307Project")
+
+
+def test_feature_frontier_rejects_unicode_casefold_alias_for_source_evidence(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "Demo"
+    header = project / "Source" / "Demo" / "Owner.h"
+    composed_relative = "Source/Demo/\u0130mplementation.cpp"
+    alias_relative = "Source/Demo/I\u0307mplementation.cpp"
+    source = project / composed_relative
+    source.parent.mkdir(parents=True)
+    header.write_text("struct FOwner { void Run(); };\n", encoding="utf-8")
+    source.write_text("void FOwner::Run() {}\n", encoding="utf-8")
+    ledger = {
+        "planRevision": "1",
+        "evidencePlanRevision": "1",
+        "files": {
+            filesystem_path_identity(
+                "Source/Demo/Owner.h", trim_outer_slashes=True
+            ): {
+                "contentHash": hashlib.sha256(header.read_bytes()).hexdigest(),
+                "sourceKind": "declaration",
+            },
+            alias_relative: {
+                "contentHash": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "sourceKind": "implementation",
+            },
+        },
+    }
+
+    result = _validate_feature_completion_frontier(
+        {
+            "milestone": "owner runtime behavior",
+            "candidateFeature": "update owner state",
+            "declarationEvidence": [
+                {"sourcePath": "Source/Demo/Owner.h", "locator": "FOwner"}
+            ],
+            "implementationEvidence": [
+                {"sourcePath": composed_relative, "locator": "FOwner::Run"}
+            ],
+            "implementedBehavior": ["Run exists."],
+            "unmetBehavior": {
+                "statement": "Run does not update the owner state",
+                "sourcePath": composed_relative,
+                "locator": "FOwner::Run",
+                "evidenceType": "direct_source",
+            },
+            "priorCandidatesComplete": [],
+        },
+        required=True,
+        request="complete the earliest unfinished owner behavior",
+        project_root=str(project),
+        target_files=[composed_relative],
+        ledger=ledger,
+    )
+
+    assert result["ok"] is False
+    assert any(
+        composed_relative in issue and "no successful direct source read" in issue
+        for issue in result["issues"]
+    )
+
+
 def test_feature_frontier_rejects_negative_call_claim_disproved_by_verified_source(
     tmp_path: Path,
 ) -> None:
@@ -1246,11 +1358,15 @@ void AMode::InitializeMatchFromSettings()
         "planRevision": "1",
         "evidencePlanRevision": "1",
         "files": {
-            "source/demo/mode.h": {
+            filesystem_path_identity(
+                "Source/Demo/Mode.h", trim_outer_slashes=True
+            ): {
                 "contentHash": hashlib.sha256(header.read_bytes()).hexdigest(),
                 "sourceKind": "declaration",
             },
-            "source/demo/mode.cpp": {
+            filesystem_path_identity(
+                "Source/Demo/Mode.cpp", trim_outer_slashes=True
+            ): {
                 "contentHash": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "sourceKind": "implementation",
             },
@@ -1317,11 +1433,15 @@ def test_feature_frontier_rejects_test_absence_and_comment_only_locator(
         "planRevision": "1",
         "evidencePlanRevision": "1",
         "files": {
-            "source/demo/board.h": {
+            filesystem_path_identity(
+                "Source/Demo/Board.h", trim_outer_slashes=True
+            ): {
                 "contentHash": hashlib.sha256(header.read_bytes()).hexdigest(),
                 "sourceKind": "declaration",
             },
-            "source/demo/board.cpp": {
+            filesystem_path_identity(
+                "Source/Demo/Board.cpp", trim_outer_slashes=True
+            ): {
                 "contentHash": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "sourceKind": "implementation",
             },

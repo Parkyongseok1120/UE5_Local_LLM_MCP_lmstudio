@@ -17,6 +17,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import filesystem_path_identity
+
 SOURCE_EXTENSIONS = {
     ".h", ".hpp", ".hh", ".inl", ".ipp", ".inc",
     ".cpp", ".c", ".cc", ".cxx", ".m", ".mm", ".cs",
@@ -79,12 +81,12 @@ def _paired_paths(path: Path, root: Path) -> list[Path]:
 def _known_symbols_in_file(graph: dict[str, Any] | None, path: Path) -> list[dict[str, Any]]:
     if not isinstance(graph, dict):
         return []
-    target = str(path.resolve()).replace("\\", "/").lower()
+    target = filesystem_path_identity(path.resolve())
     matches = []
     for row in graph.get("symbols") or []:
         if not isinstance(row, dict):
             continue
-        row_path = str(row.get("file_path") or "").replace("\\", "/").lower()
+        row_path = filesystem_path_identity(row.get("file_path"))
         if row_path == target:
             matches.append(row)
     return matches

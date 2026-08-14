@@ -6,6 +6,8 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from workspace_paths import ascii_windows_fold, filesystem_path_identity
+
 
 _DISALLOWED_MARKERS = (
     "subsystem",
@@ -63,27 +65,39 @@ def _test_filename_style(name: str) -> str:
     return ""
 
 
-def _scope_owner(path: str) -> str:
+def _scope_owner(path: str, *, host_platform: str | None = None) -> str:
     parts = PurePosixPath(path.replace("\\", "/")).parts
     if not parts:
         return ""
-    if parts[0].casefold() == "source" and len(parts) >= 2:
-        return f"source/{parts[1].casefold()}"
-    if parts[0].casefold() == "plugins" and len(parts) >= 4:
+    if ascii_windows_fold(parts[0]) == "source" and len(parts) >= 2:
+        return filesystem_path_identity(
+            "/".join(parts[:2]),
+            host_platform=host_platform,
+            trim_outer_slashes=True,
+        )
+    if ascii_windows_fold(parts[0]) == "plugins" and len(parts) >= 4:
         try:
             source_index = next(
-                index for index, part in enumerate(parts) if part.casefold() == "source"
+                index
+                for index, part in enumerate(parts)
+                if ascii_windows_fold(part) == "source"
             )
         except StopIteration:
             return ""
         if source_index + 1 < len(parts):
-            return "/".join(part.casefold() for part in parts[: source_index + 2])
+            return filesystem_path_identity(
+                "/".join(parts[: source_index + 2]),
+                host_platform=host_platform,
+                trim_outer_slashes=True,
+            )
     return ""
 
 
 def discover_project_test_convention(
     project_root: str | Path,
     target_file: str,
+    *,
+    host_platform: str | None = None,
 ) -> dict[str, Any]:
     """Prove a new test file follows an existing module-local convention."""
 
@@ -93,7 +107,7 @@ def discover_project_test_convention(
         relative = target.relative_to(root).as_posix()
     except ValueError:
         return {"conforms": False, "reason": "target escapes project root"}
-    owner = _scope_owner(relative)
+    owner = _scope_owner(relative, host_platform=host_platform)
     target_style = _test_filename_style(target.name)
     if not owner or not target_style or not target.parent.is_dir():
         return {
@@ -140,26 +154,46 @@ def evaluate_bounded_local_fast_path(
     *,
     target_files: list[str],
     target_snapshots: list[dict[str, Any]],
+    host_platform: str | None = None,
 ) -> dict[str, Any]:
     """Return an auditable decision; defaults to ineligible on uncertainty."""
 
     reasons: list[str] = []
     text = re.sub(r"\s+", " ", str(request or "")).strip().casefold()
     requests_automation_test = "test" in text or "테스트" in text
-    normalized_targets = list(
-        dict.fromkeys(str(path or "").strip().replace("\\", "/") for path in target_files)
-    )
+    normalized_targets: list[str] = []
+    seen_targets: set[str] = set()
+    for raw_path in target_files:
+        path = str(raw_path or "").strip().replace("\\", "/")
+        identity = filesystem_path_identity(
+            path,
+            host_platform=host_platform,
+            trim_outer_slashes=True,
+        )
+        if not path or identity in seen_targets:
+            continue
+        seen_targets.add(identity)
+        normalized_targets.append(path)
     if not 1 <= len(normalized_targets) <= 2:
         reasons.append("selected slice must contain one or two exact files")
     snapshot_by_path = {
-        str(item.get("path") or "").replace("\\", "/"): item
+        filesystem_path_identity(
+            item.get("path"),
+            host_platform=host_platform,
+            trim_outer_slashes=True,
+        ): item
         for item in target_snapshots
         if isinstance(item, dict)
     }
     new_automation_tests: list[str] = []
     for path in normalized_targets:
         lowered = path.casefold()
-        snapshot = snapshot_by_path.get(path)
+        path_identity = filesystem_path_identity(
+            path,
+            host_platform=host_platform,
+            trim_outer_slashes=True,
+        )
+        snapshot = snapshot_by_path.get(path_identity)
         if not lowered.endswith(_ALLOWED_SUFFIXES):
             reasons.append(f"{path}: only existing C++ source files are eligible")
         if lowered.endswith((".build.cs", ".target.cs")):
@@ -176,7 +210,12 @@ def evaluate_bounded_local_fast_path(
             and snapshot.get("parentExists") is True
             and lowered.endswith(".cpp")
             and convention.get("conforms") is True
-            and str(convention.get("owner") or "") == _scope_owner(path)
+            and filesystem_path_identity(
+                convention.get("owner"),
+                host_platform=host_platform,
+                trim_outer_slashes=True,
+            )
+            == _scope_owner(path, host_platform=host_platform)
             and requests_automation_test
         )
         if is_new_automation_test:
@@ -185,7 +224,10 @@ def evaluate_bounded_local_fast_path(
             reasons.append(f"{path}: fast path cannot create a new target")
     if len(new_automation_tests) > 1:
         reasons.append("fast path can add at most one bounded automation test source")
-    owners = {_scope_owner(path) for path in normalized_targets}
+    owners = {
+        _scope_owner(path, host_platform=host_platform)
+        for path in normalized_targets
+    }
     if "" in owners or len(owners) != 1:
         reasons.append("targets must stay inside one existing Source module owner")
 
@@ -210,7 +252,19 @@ def evaluate_bounded_local_fast_path(
         "owner": next(iter(owners), "") if len(owners) == 1 else "",
         "newAutomationTestFiles": new_automation_tests,
         "projectConventionEvidence": {
-            path: dict((snapshot_by_path.get(path) or {}).get("projectConventionEvidence") or {})
+            path: dict(
+                (
+                    snapshot_by_path.get(
+                        filesystem_path_identity(
+                            path,
+                            host_platform=host_platform,
+                            trim_outer_slashes=True,
+                        )
+                    )
+                    or {}
+                ).get("projectConventionEvidence")
+                or {}
+            )
             for path in new_automation_tests
         },
         "serverOwnedPhases": [

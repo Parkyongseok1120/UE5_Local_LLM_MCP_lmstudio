@@ -10,7 +10,6 @@ import os
 import re
 import secrets
 import subprocess
-import unicodedata
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -70,6 +69,12 @@ from route_recovery_policy import (
     route_recovery_next_action,
 )
 from mcp_public_contract import compact_task_authorization
+from workspace_paths import (
+    ascii_windows_fold,
+    filesystem_path_identity as shared_filesystem_path_identity,
+    is_windows_host_platform,
+    resolve_canonical_absolute_path,
+)
 
 TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled", "failed", "cancellation_uncertain"})
 APPROVABLE_TASK_STATUSES = frozenset({"pending_approval", "awaiting_approval"})
@@ -637,7 +642,8 @@ def task_root(workspace: Path, task_session_id: str) -> Path:
 
 
 def _canonical_workspace_root(value: Path | str) -> str:
-    return os.path.normcase(str(Path(value).expanduser().resolve()))
+    resolved = resolve_canonical_absolute_path(Path(value).expanduser())
+    return ascii_windows_fold(resolved) if is_windows_host_platform() else resolved
 
 
 def _canonical_project_identity(
@@ -649,9 +655,11 @@ def _canonical_project_identity(
     if not raw:
         return ""
     candidate = Path(raw).expanduser()
-    if not candidate.is_absolute() and workspace is not None:
-        candidate = workspace / candidate
-    return os.path.normcase(str(candidate.resolve()))
+    resolved = resolve_canonical_absolute_path(
+        candidate,
+        base_path=workspace,
+    )
+    return ascii_windows_fold(resolved) if is_windows_host_platform() else resolved
 
 
 def _task_project_proof_binding_issue(
@@ -2323,21 +2331,11 @@ _CONTROL_PATH_ARG_KEYS = {
 
 
 def _filesystem_path_identity(value: Any, *, host_platform: str | None = None) -> str:
-    normalized = unicodedata.normalize(
-        "NFC",
-        str(value or "").strip().replace("\\", "/"),
+    return shared_filesystem_path_identity(
+        value,
+        host_platform,
+        trim_outer_slashes=True,
     )
-    while normalized.startswith("./"):
-        normalized = normalized[2:]
-    if normalized.casefold().startswith("project://"):
-        normalized = normalized[len("project://") :]
-    normalized = normalized.strip("/")
-    windows = (
-        os.name == "nt"
-        if host_platform is None
-        else str(host_platform).strip().casefold() in {"win32", "windows", "nt"}
-    )
-    return normalized.casefold() if windows else normalized
 
 
 def _recovery_args_match(
@@ -7740,6 +7738,8 @@ def _task_project_root(state: dict[str, Any]) -> Path | None:
 def _normalize_task_scope_target(
     state: dict[str, Any],
     raw_path: Any,
+    *,
+    host_platform: str | None = None,
 ) -> tuple[str, str, str]:
     """Normalize one task-owned source path without weakening host FS semantics."""
 
@@ -7769,10 +7769,7 @@ def _normalize_task_scope_target(
             return "", "", f"target path cannot be bound without an active project: {raw_path}"
         display = candidate.as_posix().removeprefix("./").strip("/")
 
-    # normcase preserves case on case-sensitive hosts and folds it on Windows.
-    # This avoids accepting a wrong-case Linux path while retaining native
-    # Windows/macOS project behavior.
-    key = os.path.normcase(display).replace("\\", "/")
+    key = _filesystem_path_identity(display, host_platform=host_platform)
     return display, key, ""
 
 

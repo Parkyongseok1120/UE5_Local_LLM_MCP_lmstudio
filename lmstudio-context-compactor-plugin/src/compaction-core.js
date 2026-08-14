@@ -32,6 +32,26 @@ function sha256(value) {
   return crypto.createHash("sha256").update(String(value || ""), "utf8").digest("hex");
 }
 
+function isWindowsHostPlatform(hostPlatform = process.platform) {
+  return ["win32", "windows", "nt"].includes(
+    String(hostPlatform || "").trim().toLowerCase(),
+  );
+}
+
+function asciiWindowsFold(value) {
+  return String(value || "").replace(/[A-Z]/g, (character) => character.toLowerCase());
+}
+
+function normalizeProjectEvidencePath(value, hostPlatform = process.platform) {
+  let normalized = String(value || "").trim().replace(/\\/g, "/");
+  while (normalized.startsWith("./")) normalized = normalized.slice(2);
+  normalized = normalized.replace(/^project:\/\//i, "").replace(/\/{2,}/g, "/");
+  normalized = normalized.replace(/^\/+|\/+$/g, "");
+  return isWindowsHostPlatform(hostPlatform)
+    ? asciiWindowsFold(normalized)
+    : normalized;
+}
+
 function textOf(message) {
   if (!message) return "";
   if (typeof message === "string") return message;
@@ -345,8 +365,12 @@ function compactEvidenceLedger(value, absent = false) {
     if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) continue;
     const pathValue = String(rawEntry.path || rawKey || "").replace(/\\/g, "/").slice(0, 500);
     if (!pathValue) continue;
+    // The entry path retains authoritative spelling in checkpoints written by
+    // older releases whose lowercased object key may already be lossy.
+    const pathKey = normalizeProjectEvidencePath(pathValue);
+    if (!pathKey) continue;
     if (absent) {
-      compactFiles[String(rawKey).toLowerCase()] = {
+      compactFiles[pathKey] = {
         evidenceId: String(rawEntry.evidenceId || "").slice(0, 80),
         path: pathValue,
         searchComplete: rawEntry.searchComplete === true,
@@ -354,7 +378,7 @@ function compactEvidenceLedger(value, absent = false) {
         queries: Array.isArray(rawEntry.queries) ? rawEntry.queries.map(String).slice(0, 8) : [],
       };
     } else {
-      compactFiles[String(rawKey).toLowerCase()] = {
+      compactFiles[pathKey] = {
         evidenceId: String(rawEntry.evidenceId || "").slice(0, 80),
         path: pathValue,
         contentHash: String(rawEntry.contentHash || "").slice(0, 80),
@@ -900,9 +924,10 @@ function compactToolEvidence(call, payload, resultContent = "") {
 function normalizedProjectPath(value) {
   const source = String(value || "").replaceAll("\\", "/").replace(/^\/+/, "");
   const withoutScheme = source.replace(/^(?:project|workspace):\/\//i, "");
-  const sourceIndex = withoutScheme.toLowerCase().indexOf("source/");
-  const pluginsIndex = withoutScheme.toLowerCase().indexOf("plugins/");
-  const configIndex = withoutScheme.toLowerCase().indexOf("config/");
+  const folded = asciiWindowsFold(withoutScheme);
+  const sourceIndex = folded.indexOf("source/");
+  const pluginsIndex = folded.indexOf("plugins/");
+  const configIndex = folded.indexOf("config/");
   const indexes = [sourceIndex, pluginsIndex, configIndex].filter((index) => index >= 0);
   return indexes.length ? withoutScheme.slice(Math.min(...indexes)) : withoutScheme;
 }
@@ -919,7 +944,11 @@ function compactEditEvidence(call, payload, resultContent, selectedSlice) {
   const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
   const path = normalizedProjectPath(args.path || payload?.path?.displayPath || payload?.path || "");
   const selectedFiles = selectedSliceFiles(selectedSlice);
-  if (!path || !selectedFiles.some((file) => path === file || path.endsWith(`/${file}`))) return null;
+  const pathIdentity = normalizeProjectEvidencePath(path);
+  if (!pathIdentity || !selectedFiles.some((file) => {
+    const fileIdentity = normalizeProjectEvidencePath(file);
+    return pathIdentity === fileIdentity || pathIdentity.endsWith(`/${fileIdentity}`);
+  })) return null;
   const source = String(payload?.content || resultContent || "");
   if (!source.trim()) return null;
   return {
@@ -1226,7 +1255,10 @@ function extractControlState(messages, prior = {}, options = {}) {
         );
         if (editEvidence && resultPayloads.slice(-1)[0]?.repeatDetected !== true) {
           state.editEvidence = [
-            ...state.editEvidence.filter((item) => normalizedProjectPath(item?.path) !== editEvidence.path),
+            ...state.editEvidence.filter((item) => (
+              normalizeProjectEvidencePath(normalizedProjectPath(item?.path))
+              !== normalizeProjectEvidencePath(editEvidence.path)
+            )),
             editEvidence,
           ].slice(-MAX_EDIT_EVIDENCE_FILES);
         }
@@ -1267,18 +1299,18 @@ function extractControlState(messages, prior = {}, options = {}) {
           mutationArgs.path,
           ...(Array.isArray(mutationArgs.files) ? mutationArgs.files.map((item) => item?.path) : []),
           ...(Array.isArray(mutationArgs.patches) ? mutationArgs.patches.map((item) => item?.path) : []),
-        ].map((item) => String(item || "").replace(/\\/g, "/").replace(/^project:\/\//i, "").toLowerCase())
+        ].map((item) => normalizeProjectEvidencePath(item))
           .filter(Boolean);
         if (changedPaths.length) {
           const changed = new Set(changedPaths);
           state.evidenceFacts = state.evidenceFacts.filter((fact) => {
-            const factPath = String(fact?.path || "").replace(/\\/g, "/").replace(/^project:\/\//i, "").toLowerCase();
+            const factPath = normalizeProjectEvidencePath(fact?.path);
             return !changed.has(factPath);
           });
           if (state.sourceEvidence?.files) {
             state.sourceEvidence.files = Object.fromEntries(
               Object.entries(state.sourceEvidence.files).filter(([key, entry]) => {
-                const entryPath = String(entry?.path || key).replace(/\\/g, "/").replace(/^project:\/\//i, "").toLowerCase();
+                const entryPath = normalizeProjectEvidencePath(entry?.path || key);
                 return !changed.has(entryPath);
               }),
             );
@@ -1337,10 +1369,10 @@ function extractControlState(messages, prior = {}, options = {}) {
       const tool = String(fact?.tool || "").toLowerCase();
       let key = stableStringify(fact);
       if (tool.endsWith("read_file") || tool.endsWith("read_file_range")) {
-        key = `read:${fact.path}:${fact.contentHash || fact.evidenceHash || "unknown"}`;
+        key = `read:${normalizeProjectEvidencePath(fact.path)}:${fact.contentHash || fact.evidenceHash || "unknown"}`;
       }
-      else if (tool.endsWith("list_directory")) key = `list:${fact.path}`;
-      else if (tool.endsWith("search_files")) key = `search:${fact.path}:${fact.query}`;
+      else if (tool.endsWith("list_directory")) key = `list:${normalizeProjectEvidencePath(fact.path)}`;
+      else if (tool.endsWith("search_files")) key = `search:${normalizeProjectEvidencePath(fact.path)}:${fact.query}`;
       else if (tool.endsWith("get_active_project") || tool === "get_workspace_info") key = `project:${tool}`;
       const priorFact = evidenceByKey.get(key);
       if (priorFact && (tool.endsWith("read_file") || tool.endsWith("read_file_range"))) {
@@ -1394,18 +1426,14 @@ function extractControlState(messages, prior = {}, options = {}) {
   state.evidenceFacts = [...evidenceByKey.values()].slice(-cap);
   const selectedFiles = new Set(selectedSliceFiles(state.selectedSlice));
   state.editEvidence = state.editEvidence
-    .filter((item) => selectedFiles.has(normalizedProjectPath(item?.path)))
+    .filter((item) => {
+      const itemIdentity = normalizeProjectEvidencePath(normalizedProjectPath(item?.path));
+      return [...selectedFiles].some(
+        (selected) => normalizeProjectEvidencePath(selected) === itemIdentity,
+      );
+    })
     .slice(-MAX_EDIT_EVIDENCE_FILES);
   return state;
-}
-
-function normalizeProjectEvidencePath(value) {
-  return String(value || "")
-    .replace(/\\/g, "/")
-    .replace(/^project:\/\//i, "")
-    .replace(/^\.\/+/, "")
-    .replace(/^\/+|\/+$/g, "")
-    .toLowerCase();
 }
 
 function buildWorkingSet(control) {
@@ -1601,7 +1629,7 @@ function lmStudioConversationSessionFingerprint(workingDirectory, modelIdentifie
   // Include the model so switching generator targets cannot inherit an
   // incompatible checkpoint. Normalize Windows drive/path casing only.
   const pathIdentity = /^[A-Za-z]:\//.test(normalized)
-    ? normalized.toLowerCase()
+    ? asciiWindowsFold(normalized)
     : normalized;
   return sha256(`lmstudio-conversation\n${pathIdentity}\n${String(modelIdentifier || "")}`).slice(0, 32);
 }
@@ -2096,6 +2124,9 @@ module.exports = {
   DEFAULT_COMPACTION_CONFIG,
   stableStringify,
   sha256,
+  isWindowsHostPlatform,
+  asciiWindowsFold,
+  normalizeProjectEvidencePath,
   textOf,
   roleOf,
   toolRequestsOf,

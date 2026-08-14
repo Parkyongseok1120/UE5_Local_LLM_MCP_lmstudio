@@ -10,12 +10,36 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from phase_tool_router import commit_control_transition, derive_next_obligation  # noqa: E402
 from task_gate_history import (  # noqa: E402
+    canonical_gate_blocker_identity,
     canonical_gate_input_hash,
     completed_gate_input_preflight,
 )
 
 
 SKETCH_GATE = "unreal_code_sketch_claim_validate"
+
+
+def test_failed_gate_target_fingerprint_uses_host_aware_ascii_path_identity() -> None:
+    evidence = {"errorCode": "SKETCH_REJECTED", "nextAction": SKETCH_GATE}
+
+    def target_hash(target: str, host: str) -> str:
+        return canonical_gate_blocker_identity(
+            SKETCH_GATE,
+            evidence,
+            {"targetFiles": [target]},
+            host,
+        )["targetFilesHash"]
+
+    assert target_hash("Source/Foo/Thing.cpp", "win32") == target_hash(
+        "source/foo/thing.cpp", "win32"
+    )
+    assert target_hash("Source/Foo/Thing.cpp", "linux") != target_hash(
+        "source/foo/thing.cpp", "linux"
+    )
+    for host in ("linux", "darwin", "win32"):
+        assert target_hash("Source/\u0130/Thing.cpp", host) != target_hash(
+            "Source/I\u0307/Thing.cpp", host
+        )
 
 
 def _pipeline_state() -> dict:

@@ -114,6 +114,44 @@ def test_missing_file_claim_requires_complete_matching_absence(tmp_path: Path) -
     assert complete["ok"] is True, complete
 
 
+def test_missing_file_claim_rejects_unicode_casefold_path_alias(tmp_path: Path) -> None:
+    project = tmp_path / "PortableProject"
+    project.mkdir()
+    composed_path = "Source/Portable/\u0130nput.cpp"
+    alias_path = "Source/Portable/I\u0307nput.cpp"
+    assert composed_path != alias_path
+    assert composed_path.casefold() == alias_path.casefold()
+    result = validate_feature_frontier(
+        [
+            {
+                "claimType": "missing_file",
+                "path": composed_path,
+                "evidenceRefs": ["absent-evidence-alias"],
+            }
+        ],
+        project_root=project,
+        evidence_ledger={
+            "version": 2,
+            "planRevision": "2",
+            "files": {},
+            "absentEvidence": {
+                "version": 1,
+                "planRevision": "2",
+                "files": {
+                    alias_path: {
+                        "evidenceId": "absent-evidence-alias",
+                        "path": alias_path,
+                        "searchComplete": True,
+                    }
+                },
+            },
+        },
+    )
+
+    assert result["ok"] is False
+    assert any("matching absent evidence" in issue for issue in result["issues"])
+
+
 def test_rc2_replay_f_free_text_or_missing_claims_never_open_completion_frontier(
     tmp_path: Path,
 ) -> None:

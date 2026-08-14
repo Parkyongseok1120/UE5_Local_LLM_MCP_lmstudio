@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from feature_intent_fast_path import (
+    _scope_owner,
     discover_project_test_convention,
     evaluate_bounded_local_fast_path,
 )
@@ -64,7 +65,7 @@ def test_fast_path_accepts_one_new_test_source_under_existing_module_tests() -> 
                 "fileHash": "",
                 "projectConventionEvidence": {
                     "conforms": True,
-                    "owner": "source/o_mock",
+                    "owner": _scope_owner(target),
                     "targetStyle": "dot_spec",
                     "matchingSiblingCount": 1,
                 },
@@ -101,7 +102,7 @@ def test_project_convention_discovery_is_name_and_module_driven(
     evidence = discover_project_test_convention(project, relative)
 
     assert evidence["conforms"] is True
-    assert evidence["owner"] == "source/arbitraryruntime"
+    assert evidence["owner"] == _scope_owner(relative)
     assert evidence["targetStyle"] == expected_style
 
 
@@ -117,10 +118,53 @@ def test_new_test_fast_path_rejects_directory_name_without_convention_evidence()
             "fileHash": "",
             "projectConventionEvidence": {
                 "conforms": False,
-                "owner": "plugins/feature/source/featureruntime",
+                "owner": _scope_owner(target),
             },
         }],
     )
 
     assert decision["eligible"] is False
     assert any("cannot create" in reason for reason in decision["reasons"])
+
+
+def test_fast_path_module_grouping_uses_injected_host_case_rules() -> None:
+    targets = ["Source/Demo/One.cpp", "Source/demo/Two.cpp"]
+    snapshots = [{"path": path, "exists": True} for path in targets]
+
+    posix = evaluate_bounded_local_fast_path(
+        "Add local guards to both files.",
+        target_files=targets,
+        target_snapshots=snapshots,
+        host_platform="linux",
+    )
+    windows = evaluate_bounded_local_fast_path(
+        "Add local guards to both files.",
+        target_files=targets,
+        target_snapshots=snapshots,
+        host_platform="win32",
+    )
+
+    assert posix["eligible"] is False
+    assert any("one existing Source module owner" in reason for reason in posix["reasons"])
+    assert windows["eligible"] is True
+
+
+def test_fast_path_does_not_merge_unicode_casefold_module_owners() -> None:
+    composed = "Source/\u0130Module/One.cpp"
+    decomposed = "Source/I\u0307Module/Two.cpp"
+    assert composed.casefold().split("/")[1] == decomposed.casefold().split("/")[1]
+    targets = [composed, decomposed]
+    snapshots = [{"path": path, "exists": True} for path in targets]
+
+    for host_platform in ("linux", "win32"):
+        decision = evaluate_bounded_local_fast_path(
+            "Add local guards to both files.",
+            target_files=targets,
+            target_snapshots=snapshots,
+            host_platform=host_platform,
+        )
+        assert decision["eligible"] is False
+        assert any(
+            "one existing Source module owner" in reason
+            for reason in decision["reasons"]
+        )

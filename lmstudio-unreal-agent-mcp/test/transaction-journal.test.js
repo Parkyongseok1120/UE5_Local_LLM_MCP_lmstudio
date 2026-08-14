@@ -14,6 +14,7 @@ const {
   markJournalAwaitingBuild,
   listPendingJournals,
   finalizePendingJournals,
+  pathIdentity,
   projectPathIdentity,
   beginMutationJournal,
   commitMutationJournal,
@@ -36,6 +37,7 @@ const { sha256Text } = require("../src/safe-write");
 const {
   checkpointMutationViaPython,
   checkpointRollbackViaPython,
+  canonicalProjectIdentity,
   taskAuthorizationForState,
 } = require("../src/task-auth");
 
@@ -230,6 +232,170 @@ test("project path identity folds case only for Windows", () => {
     projectPathIdentity(mixed, "darwin"),
     projectPathIdentity(mixed.toUpperCase(), "darwin"),
   );
+});
+
+test("canonical project identity preserves POSIX case and Unicode spelling for missing paths", () => {
+  const missingBase = path.join(os.tmpdir(), "missing-project-identity");
+  const mixed = path.join(missingBase, "CaseSensitive", "Project");
+  assert.strictEqual(fs.existsSync(mixed), false);
+  assert.strictEqual(pathIdentity(mixed, "win32"), pathIdentity(mixed.toUpperCase(), "win32"));
+  assert.notStrictEqual(pathIdentity(mixed, "linux"), pathIdentity(mixed.toUpperCase(), "linux"));
+  assert.notStrictEqual(pathIdentity(mixed, "darwin"), pathIdentity(mixed.toUpperCase(), "darwin"));
+  assert.notStrictEqual(
+    pathIdentity(path.join(missingBase, "Cafe\u0301"), "linux"),
+    pathIdentity(path.join(missingBase, "Caf\u00e9"), "linux"),
+  );
+  assert.notStrictEqual(
+    pathIdentity(path.join(missingBase, "Cafe\u0301"), "darwin"),
+    pathIdentity(path.join(missingBase, "Caf\u00e9"), "darwin"),
+  );
+  assert.notStrictEqual(
+    pathIdentity(path.join(missingBase, "Cafe\u0301"), "win32"),
+    pathIdentity(path.join(missingBase, "Caf\u00e9"), "win32"),
+  );
+  assert.notStrictEqual(
+    pathIdentity(path.join(missingBase, "\u0130"), "win32"),
+    pathIdentity(path.join(missingBase, "i\u0307"), "win32"),
+  );
+});
+
+test("dual-existing POSIX Unicode projects keep pending build journals isolated", (t) => {
+  if (process.platform !== "linux") {
+    t.skip("dual NFC/NFD directory entries are verified on Linux filesystems");
+    return;
+  }
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tx-unicode-projects-"));
+  const nfcProject = path.join(fixtureRoot, "Caf\u00e9");
+  const nfdProject = path.join(fixtureRoot, "Cafe\u0301");
+  const stateRoot = tempStateRoot();
+  const previous = process.env.AGENT_STATE_ROOT;
+  fs.mkdirSync(nfcProject, { recursive: true });
+  fs.mkdirSync(nfdProject, { recursive: true });
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    assert.notStrictEqual(fs.realpathSync(nfcProject), fs.realpathSync(nfdProject));
+    assert.notStrictEqual(pathIdentity(nfcProject), pathIdentity(nfdProject));
+    const nfcJournal = beginMutationJournal({
+      operation: "write_file",
+      projectRoot: nfcProject,
+      taskSessionId: "task_unicode_nfc",
+      relativePath: "Source/Demo.cpp",
+      canonicalAbsolutePath: path.join(nfcProject, "Source", "Demo.cpp"),
+      existedBefore: false,
+      intendedPostContent: "nfc",
+    });
+    const nfdJournal = beginMutationJournal({
+      operation: "write_file",
+      projectRoot: nfdProject,
+      taskSessionId: "task_unicode_nfd",
+      relativePath: "Source/Demo.cpp",
+      canonicalAbsolutePath: path.join(nfdProject, "Source", "Demo.cpp"),
+      existedBefore: false,
+      intendedPostContent: "nfd",
+    });
+
+    assert.deepStrictEqual(
+      pendingBuildJournals({ projectRoot: nfcProject }).map((item) => item.transactionId),
+      [nfcJournal.transactionId],
+    );
+    assert.deepStrictEqual(
+      pendingBuildJournals({ projectRoot: nfdProject }).map((item) => item.transactionId),
+      [nfdJournal.transactionId],
+    );
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("existing directory aliases select the same pending project journal", (t) => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tx-project-alias-"));
+  const projectRoot = path.join(fixtureRoot, "CanonicalProject");
+  const aliasRoot = path.join(fixtureRoot, "ProjectAlias");
+  const stateRoot = tempStateRoot();
+  const previous = process.env.AGENT_STATE_ROOT;
+  fs.mkdirSync(projectRoot, { recursive: true });
+  try {
+    try {
+      fs.symlinkSync(
+        projectRoot,
+        aliasRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch (error) {
+      if (!["EPERM", "EACCES", "ENOTSUP", "UNKNOWN"].includes(String(error.code || ""))) {
+        throw error;
+      }
+      t.skip(`directory aliases are unavailable on this host: ${error.code || error.message}`);
+      return;
+    }
+
+    process.env.AGENT_STATE_ROOT = stateRoot;
+    const journal = createJournal({ operation: "canonical_project_alias" }, stateRoot);
+    journal.status = "awaiting_build";
+    // Simulate a journal persisted before canonical realpath identities were
+    // introduced: startup selection must canonicalize the stored alias too.
+    journal.projectRoot = aliasRoot;
+    journal.taskSessionId = "";
+    saveJournal(journal, stateRoot);
+
+    assert.strictEqual(pathIdentity(aliasRoot), pathIdentity(projectRoot));
+    assert.deepStrictEqual(
+      pendingBuildJournals({ projectRoot }).map((item) => item.transactionId),
+      [journal.transactionId],
+    );
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("existing Windows 8.3 aliases select the same pending project journal", (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Windows 8.3 aliases are host-specific");
+    return;
+  }
+  const longPath = String(process.env.ProgramFiles || "C:\\Program Files");
+  const shortPath = path.join(path.parse(longPath).root, "PROGRA~1");
+  if (!fs.existsSync(longPath) || !fs.existsSync(shortPath)) {
+    t.skip("8.3 Program Files alias is unavailable on this volume");
+    return;
+  }
+  if (fs.realpathSync.native(longPath) !== fs.realpathSync.native(shortPath)) {
+    t.skip("the available short path is not an alias of Program Files");
+    return;
+  }
+
+  assert.strictEqual(pathIdentity(shortPath), pathIdentity(longPath));
+  assert.strictEqual(
+    canonicalProjectIdentity(shortPath),
+    canonicalProjectIdentity(longPath),
+  );
+
+  const stateRoot = tempStateRoot();
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const journal = createJournal({ operation: "windows_8dot3_identity" }, stateRoot);
+    journal.status = "awaiting_build";
+    // Preserve the pre-fix lexical 8.3 identity in the fixture so the query
+    // proves backward-compatible journal selection, not only new writes.
+    journal.projectRoot = shortPath.replace(/\\/g, "/").toLowerCase();
+    journal.taskSessionId = "";
+    saveJournal(journal, stateRoot);
+    assert.deepStrictEqual(
+      pendingBuildJournals({ projectRoot: longPath }).map((item) => item.transactionId),
+      [journal.transactionId],
+    );
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("crash after filesystem write but before journal commit restores the pre-image", async () => {

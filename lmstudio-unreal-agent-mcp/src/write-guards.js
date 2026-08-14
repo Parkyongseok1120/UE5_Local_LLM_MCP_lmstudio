@@ -3,6 +3,10 @@
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
+const {
+  asciiWindowsFold,
+  filesystemPathIdentity,
+} = require("./filesystem-path-identity");
 
 const SOURCE_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
 const PATCH_ONLY_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs", ".ini", ".uproject", ".uplugin"]);
@@ -26,6 +30,10 @@ function isDefaultConfigIni(filePath) {
   const base = path.basename(String(filePath || "")).toLowerCase();
   const ext = path.extname(base).toLowerCase();
   return ext === ".ini" && base.startsWith("default");
+}
+
+function deletionCandidateIdentity(value, hostPlatform = process.platform) {
+  return filesystemPathIdentity(value, hostPlatform);
 }
 
 async function walkSourceFiles(sourceRoot, onFile) {
@@ -92,7 +100,10 @@ async function findSourceBasenameCollisions(targetAbsPath, workspaceRoot, active
   const matches = [];
   for (const sourceRoot of searchRoots) {
     await walkSourceFiles(sourceRoot, async (filePath) => {
-      if (path.basename(filePath).toLowerCase() !== basename.toLowerCase()) {
+      // Preserve non-ASCII filename spelling. Full Unicode lower/casefold can
+      // merge distinct filesystem names (for example U+0130 and I + U+0307).
+      // ASCII folding still catches source basenames that collide on Windows.
+      if (asciiWindowsFold(path.basename(filePath)) !== asciiWindowsFold(basename)) {
         return;
       }
       if (path.resolve(filePath) === normalizedTarget) {
@@ -244,6 +255,7 @@ module.exports = {
   SOURCE_EXTENSIONS,
   isPatchOnlyExistingFile,
   isDeniedPath,
+  deletionCandidateIdentity,
   findSourceBasenameCollisions,
   validateWriteTarget,
   shouldRollback,

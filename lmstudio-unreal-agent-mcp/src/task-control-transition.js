@@ -2,6 +2,10 @@
 
 const crypto = require("crypto");
 const path = require("path");
+const {
+  filesystemPathIdentity,
+  normalizePortablePath,
+} = require("./filesystem-path-identity");
 
 const DISCOVERY_TOOLS = new Set([
   "unreal_rag_search",
@@ -45,17 +49,11 @@ function nonNegativeInt(value) {
 }
 
 function normalizePath(value) {
-  let normalized = String(value || "").trim().replace(/\\/g, "/").normalize("NFC");
-  while (normalized.startsWith("./")) normalized = normalized.slice(2);
-  if (/^project:\/\//iu.test(normalized)) normalized = normalized.slice("project://".length);
-  return normalized.replace(/^\/+|\/+$/g, "");
+  return normalizePortablePath(value, { trimOuterSlashes: true });
 }
 
 function transitionPathIdentity(value, hostPlatform = process.platform) {
-  const normalized = normalizePath(value);
-  return ["win32", "windows", "nt"].includes(String(hostPlatform || "").toLowerCase())
-    ? normalized.toLowerCase()
-    : normalized;
+  return filesystemPathIdentity(value, hostPlatform, { trimOuterSlashes: true });
 }
 
 function authoritativeProjectRoot(state) {

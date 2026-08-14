@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import filesystem_path_identity
+
 
 FRONTIER_CLAIM_TYPES = frozenset(
     {
@@ -168,8 +170,11 @@ def validate_feature_frontier(
                 entry
                 for entry in resolved_absent
                 if entry.get("searchComplete") is True
-                and _normalized_project_path(entry.get("path") or entry.get("_key")).casefold()
-                == target_path.casefold()
+                and filesystem_path_identity(
+                    _normalized_project_path(entry.get("path") or entry.get("_key")),
+                    trim_outer_slashes=True,
+                )
+                == filesystem_path_identity(target_path, trim_outer_slashes=True)
             ]
             if not matching_absent:
                 issues.append(

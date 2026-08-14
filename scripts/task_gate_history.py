@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from task_autonomy_supervisor import observe_autonomy
+from workspace_paths import filesystem_path_identity
 
 
 def _canonical_hash(value: Any) -> str:
@@ -145,6 +146,7 @@ def canonical_gate_blocker_identity(
     gate: str,
     evidence: dict[str, Any],
     input_payload: dict[str, Any] | None = None,
+    host_platform: str | None = None,
 ) -> dict[str, str]:
     first_blocker = (
         evidence.get("firstBlocker")
@@ -201,7 +203,7 @@ def canonical_gate_blocker_identity(
             "validationIssuesHash": _canonical_hash(issues),
         }
     targets = [
-        str(item or "").replace("\\", "/").strip("/").casefold()
+        filesystem_path_identity(item, host_platform, trim_outer_slashes=True)
         for item in (payload.get("targetFiles") or [])
         if str(item or "").strip()
     ]

@@ -7,12 +7,12 @@ import hashlib
 import json
 import os
 import re
-import unicodedata
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
 from task_gate_history import failed_gate_attempt_for_current_scope
+from workspace_paths import filesystem_path_identity as shared_filesystem_path_identity
 
 ROUTE_VERSION = 1
 CONTROL_TRANSITION_VERSION = 2
@@ -137,25 +137,19 @@ def _clean_strings(values: Any) -> list[str]:
 
 
 def _normalize_path(value: Any) -> str:
-    text = unicodedata.normalize(
-        "NFC",
-        str(value or "").strip().replace("\\", "/"),
+    return shared_filesystem_path_identity(
+        value,
+        "linux",
+        trim_outer_slashes=True,
     )
-    while text.startswith("./"):
-        text = text[2:]
-    if text.casefold().startswith("project://"):
-        text = text[len("project://") :]
-    return text.strip("/")
 
 
 def _path_identity(value: Any, *, host_platform: str | None = None) -> str:
-    normalized = _normalize_path(value)
-    windows = (
-        os.name == "nt"
-        if host_platform is None
-        else str(host_platform).strip().casefold() in {"win32", "windows", "nt"}
+    return shared_filesystem_path_identity(
+        value,
+        host_platform,
+        trim_outer_slashes=True,
     )
-    return normalized.casefold() if windows else normalized
 
 
 def _authoritative_project_root(state: dict[str, Any]) -> str:

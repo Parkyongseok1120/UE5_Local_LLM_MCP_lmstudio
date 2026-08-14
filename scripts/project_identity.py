@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import canonical_absolute_path_identity
+
 
 def _read_uproject_modules(uproject: Path) -> list[str]:
     try:
@@ -39,7 +41,12 @@ def resolve_uproject(project: str | Path | None) -> Path | None:
     return None
 
 
-def project_identity(project: str | Path | None, *, engine_version: str = "") -> dict[str, Any]:
+def project_identity(
+    project: str | Path | None,
+    *,
+    engine_version: str = "",
+    host_platform: str | None = None,
+) -> dict[str, Any]:
     """Return a stable identity dict for the given .uproject path."""
     uproject = resolve_uproject(project)
     if not uproject:
@@ -59,7 +66,10 @@ def project_identity(project: str | Path | None, *, engine_version: str = "") ->
     engine = str(engine_version or "").strip()
     digest_input = "|".join(
         [
-            str(uproject.resolve()).lower(),
+            canonical_absolute_path_identity(
+                uproject,
+                host_platform=host_platform,
+            ),
             stem,
             engine,
             ",".join(modules),

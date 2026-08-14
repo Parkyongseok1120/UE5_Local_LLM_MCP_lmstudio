@@ -18,6 +18,9 @@ from typing import Any, Callable
 
 from workspace_paths import (
     active_project_names,
+    ascii_windows_fold,
+    canonical_absolute_path_identity,
+    filesystem_path_identity,
     find_workspace_root,
     load_shared_config,
     resolve_index_path,
@@ -80,7 +83,10 @@ _TOOL_PROGRESS_LABELS = {
 
 
 def _is_source_derived_project_row(
-    row: dict[str, Any], active_projects: list[str]
+    row: dict[str, Any],
+    active_projects: list[str],
+    *,
+    host_platform: str | None = None,
 ) -> bool:
     """Return whether a RAG row is generated from the active project's C++ source.
 
@@ -88,11 +94,21 @@ def _is_source_derived_project_row(
     not suppressed by a C++ source timestamp change.
     """
 
-    project = str(row.get("project") or "").strip().casefold()
-    active = {str(item).strip().casefold() for item in active_projects if str(item).strip()}
-    if active and project not in active:
+    project = str(row.get("project") or "").strip()
+    project_identity = filesystem_path_identity(
+        project,
+        host_platform=host_platform,
+    )
+    active = {
+        filesystem_path_identity(item, host_platform=host_platform)
+        for item in active_projects
+        if str(item).strip()
+    }
+    if active and project_identity not in active:
         return False
-    if not project or project in {item.casefold() for item in _ENGINE_PROJECTS}:
+    if not project or ascii_windows_fold(project) in {
+        ascii_windows_fold(item) for item in _ENGINE_PROJECTS
+    }:
         return False
     layer = str(row.get("layer") or "").strip().casefold()
     source = str(row.get("source") or "").strip().casefold()
@@ -258,13 +274,31 @@ def _bind_task_status_next_action_args(
     return result
 
 
-def annotate_other_project_rows(rows: list[dict[str, Any]], active_names: list[str]) -> list[dict[str, Any]]:
-    active = {str(name).strip().lower() for name in active_names if str(name).strip()}
+def annotate_other_project_rows(
+    rows: list[dict[str, Any]],
+    active_names: list[str],
+    *,
+    host_platform: str | None = None,
+) -> list[dict[str, Any]]:
+    active = {
+        filesystem_path_identity(name, host_platform=host_platform)
+        for name in active_names
+        if str(name).strip()
+    }
+    engine_projects = {ascii_windows_fold(item) for item in _ENGINE_PROJECTS}
     annotated: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
         project = str(item.get("project") or "").strip()
-        if project and project.lower() not in _ENGINE_PROJECTS and project.lower() not in active:
+        if (
+            project
+            and ascii_windows_fold(project) not in engine_projects
+            and filesystem_path_identity(
+                project,
+                host_platform=host_platform,
+            )
+            not in active
+        ):
             item["otherProject"] = True
         annotated.append(item)
     return annotated
@@ -1809,7 +1843,7 @@ def _feature_intent_direct_source_evidence(
     evidence_revision = str(ledger.get("evidencePlanRevision") or "")
     raw_files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
     evidence_files = {
-        str(key).replace("\\", "/").strip("/").casefold(): value
+        filesystem_path_identity(key, trim_outer_slashes=True): value
         for key, value in raw_files.items()
         if isinstance(value, dict)
     }
@@ -1825,7 +1859,13 @@ def _feature_intent_direct_source_evidence(
         if not relative:
             continue
         required.append(relative)
-        entry = evidence_files.get(relative.casefold()) if revision_matches else None
+        entry = (
+            evidence_files.get(
+                filesystem_path_identity(relative, trim_outer_slashes=True)
+            )
+            if revision_matches
+            else None
+        )
         if not isinstance(entry, dict):
             missing.append(relative)
             continue
@@ -2183,7 +2223,7 @@ def _validate_feature_completion_frontier(
     evidence_revision = str(ledger.get("evidencePlanRevision") or "")
     raw_files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
     files = {
-        str(key).replace("\\", "/").strip("/").casefold(): value
+        filesystem_path_identity(key, trim_outer_slashes=True): value
         for key, value in raw_files.items()
         if isinstance(value, dict)
     }
@@ -2192,7 +2232,7 @@ def _validate_feature_completion_frontier(
 
     root = Path(project_root).expanduser().resolve() if project_root else None
     normalized_targets = {
-        str(path or "").replace("\\", "/").strip("/").casefold()
+        filesystem_path_identity(path, trim_outer_slashes=True)
         for path in target_files
         if str(path or "").strip()
     }
@@ -2200,7 +2240,7 @@ def _validate_feature_completion_frontier(
     file_cache: dict[str, tuple[str, str]] = {}
 
     def current_source(source_path: str) -> tuple[str, str] | None:
-        key = source_path.casefold()
+        key = filesystem_path_identity(source_path, trim_outer_slashes=True)
         if key in file_cache:
             return file_cache[key]
         if root is None:
@@ -2261,7 +2301,9 @@ def _validate_feature_completion_frontier(
                 continue
             source_path = str(row.get("sourcePath") or "").replace("\\", "/").strip("/")
             locator = str(row.get("locator") or "").strip()
-            entry = files.get(source_path.casefold())
+            entry = files.get(
+                filesystem_path_identity(source_path, trim_outer_slashes=True)
+            )
             if not source_path or not locator:
                 issues.append(f"completionFrontier.{name}[{index}] requires sourcePath and locator")
                 continue
@@ -2291,10 +2333,14 @@ def _validate_feature_completion_frontier(
 
     declaration_paths = validate_evidence_rows("declarationEvidence", "declaration")
     implementation_paths = validate_evidence_rows("implementationEvidence", "implementation")
-    all_evidence = {path.casefold() for path in declaration_paths + implementation_paths}
-    if unmet_path and unmet_path.casefold() not in all_evidence:
+    all_evidence = {
+        filesystem_path_identity(path, trim_outer_slashes=True)
+        for path in declaration_paths + implementation_paths
+    }
+    unmet_identity = filesystem_path_identity(unmet_path, trim_outer_slashes=True)
+    if unmet_path and unmet_identity not in all_evidence:
         issues.append("unmetBehavior.sourcePath must be one of the verified frontier evidence files")
-    if unmet_path and normalized_targets and unmet_path.casefold() not in normalized_targets:
+    if unmet_path and normalized_targets and unmet_identity not in normalized_targets:
         issues.append("unmetBehavior.sourcePath must belong to the active target slice")
     semantic_claim_issues: list[str] = []
     if unmet_path and unmet_locator:
@@ -2310,7 +2356,7 @@ def _validate_feature_completion_frontier(
             issues.append(
                 "unmetBehavior.locator must identify executable/declarative source, not only a comment or string literal"
             )
-        elif evidence_type == "direct_source" and unmet_path.casefold() in all_evidence:
+        elif evidence_type == "direct_source" and unmet_identity in all_evidence:
             # Keep this bounded to explicit no-call assertions and source already
             # verified by the read ledger.  One same-owner delegation is enough
             # to disprove the claim without constructing a general call graph.
@@ -2376,10 +2422,9 @@ def _feature_frontier_recovery_contract(
     for path, row in raw_files.items():
         if not isinstance(row, dict):
             continue
-        # The map key is intentionally case-folded for identity checks.  Never
-        # return that comparison key as an executable path: Linux and macOS may
-        # use case-sensitive project volumes.  The ledger's canonical `path`
-        # is captured from the successful Agent read and is the portable value.
+        # Return the ledger's canonical path captured from the successful Agent
+        # read. Identity comparisons are host-aware so POSIX spellings remain
+        # distinct while Windows retains case-insensitive matching.
         normalized = str(row.get("path") or path or "").replace("\\", "/").strip("/")
         source_kind = str(row.get("sourceKind") or "").strip().lower()
         if source_kind == "declaration":
@@ -2469,6 +2514,23 @@ def _feature_frontier_recovery_contract(
     }
 
 
+def _comparable_feature_slices(items: Any) -> list[tuple[str, tuple[str, ...]]]:
+    """Return host-aware identities for task-bound Feature Intent slices."""
+
+    comparable: list[tuple[str, tuple[str, ...]]] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        slice_id = str(item.get("sliceId") or item.get("slice_id") or "").strip()
+        files = tuple(
+            filesystem_path_identity(path, trim_outer_slashes=True)
+            for path in (item.get("files") or [])
+            if str(path or "").strip()
+        )
+        comparable.append((slice_id, files))
+    return comparable
+
+
 def _handle_unreal_feature_intent_resolve(
     server: McpServer,
     message_id: Any,
@@ -2531,20 +2593,6 @@ def _handle_unreal_feature_intent_resolve(
             else []
         )
 
-    def comparable_slices(items: Any) -> list[tuple[str, tuple[str, ...]]]:
-        comparable: list[tuple[str, tuple[str, ...]]] = []
-        for item in items if isinstance(items, list) else []:
-            if not isinstance(item, dict):
-                continue
-            slice_id = str(item.get("sliceId") or item.get("slice_id") or "").strip()
-            files = tuple(
-                str(path or "").replace("\\", "/").strip("/").casefold()
-                for path in (item.get("files") or [])
-                if str(path or "").strip()
-            )
-            comparable.append((slice_id, files))
-        return comparable
-
     current_scope = (
         task_state.get("planScope")
         if isinstance(task_state.get("planScope"), dict)
@@ -2558,8 +2606,8 @@ def _handle_unreal_feature_intent_resolve(
     ).strip()
     supplied_scope_matches = bool(
         supplied_slices
-        and comparable_slices(supplied_slices)
-        == comparable_slices(current_scope.get("slices") or [])
+        and _comparable_feature_slices(supplied_slices)
+        == _comparable_feature_slices(current_scope.get("slices") or [])
         and requested_active_slice_id == str(task_state.get("activeSliceId") or "").strip()
     )
     slice_rebind_required = bool(supplied_slices and not supplied_scope_matches)
@@ -5476,8 +5524,7 @@ class McpServer:
         candidate = Path(project).expanduser().resolve()
         if candidate.is_file() and candidate.suffix.lower() == ".uproject":
             candidate = candidate.parent
-        value = str(candidate)
-        return value.casefold() if os.name == "nt" else value
+        return canonical_absolute_path_identity(candidate)
 
     def set_pending_architecture_handoff(
         self,
@@ -5587,7 +5634,7 @@ class McpServer:
         root = Path(project_root).expanduser().resolve()
         if root.is_file() and root.suffix.lower() == ".uproject":
             root = root.parent
-        key = os.path.normcase(str(root))
+        key = canonical_absolute_path_identity(root)
         signature = source_inventory_signature(root)
         cached = self._architecture_graph_cache.get(key)
         if cached and cached.get("signature") == signature:

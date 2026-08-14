@@ -14,6 +14,7 @@ from typing import Iterator
 
 from process_probe import ProcessAlive, probe_process_alive
 from state_root import ensure_state_root_layout, resolve_agent_state_root
+from workspace_paths import canonical_absolute_path_identity
 
 _OWNER = f"{os.getpid()}:{uuid.uuid4().hex}"
 _HEARTBEAT_INTERVAL_SEC = 60.0
@@ -21,11 +22,8 @@ _PENDING_GUARD = threading.Lock()
 _PENDING_PATHS: dict[str, int] = {}
 
 
-def _canonical_lock_key(abs_path: Path) -> str:
-    try:
-        return os.path.realpath(abs_path).lower()
-    except OSError:
-        return abs_path.resolve().as_posix().lower()
+def _canonical_lock_key(abs_path: Path, host_platform: str | None = None) -> str:
+    return canonical_absolute_path_identity(abs_path, host_platform)
 
 
 def lock_file_path(abs_path: Path, state_root: Path | None = None) -> Path:

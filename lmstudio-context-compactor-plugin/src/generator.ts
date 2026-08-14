@@ -1135,23 +1135,29 @@ function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
       }
       if (!ARCHITECTURE_EVIDENCE_TOOLS.some((tool) => toolNamesMatch(tool, name))) continue;
       const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
+      const rawPathIdentity = String(args.path || args.filePath || "").trim();
       const sourceIdentity = String(
-        args.path || args.filePath || args.symbol || args.symbolName || args.query || call.id || "",
+        rawPathIdentity || args.symbol || args.symbolName || args.query || call.id || "",
       ).trim();
+      const evidenceIdentity = rawPathIdentity
+        ? normalizeProjectSourcePath(rawPathIdentity)
+        : sourceIdentity;
       const rangeIdentity = [args.startLine, args.endLine, args.lineStart, args.lineEnd]
         .filter((value) => value !== undefined && value !== null && String(value).trim())
         .join(":");
-      const identity = sourceIdentity
-        ? `${name.toLowerCase()}:${sourceIdentity}${rangeIdentity ? `:${rangeIdentity}` : ""}`
+      const identity = evidenceIdentity
+        ? `${name.toLowerCase()}:${evidenceIdentity}${rangeIdentity ? `:${rangeIdentity}` : ""}`
         : "";
       if (!identity) continue;
       evidence.add(identity);
       evidenceSinceLastAttempt.add(identity);
       evidenceCallsSinceLastAttempt += 1;
-      const normalizedSource = sourceIdentity.replace(/\\/g, "/").toLowerCase();
-      if (/\.(?:h|hh|hpp|hxx|inl)$/.test(normalizedSource)) declarationEvidence.add(identity);
+      const normalizedSource = rawPathIdentity
+        ? normalizeProjectSourcePath(rawPathIdentity)
+        : sourceIdentity.replace(/\\/g, "/");
+      if (/\.(?:h|hh|hpp|hxx|inl)$/i.test(normalizedSource)) declarationEvidence.add(identity);
       if (
-        /\.(?:c|cc|cpp|cxx|m|mm|cs)$/.test(normalizedSource)
+        /\.(?:c|cc|cpp|cxx|m|mm|cs)$/i.test(normalizedSource)
         || ["read_symbol", "unreal_symbol_lookup"].some((tool) => toolNamesMatch(tool, name))
       ) {
         implementationEvidence.add(identity);
@@ -1162,12 +1168,12 @@ function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
         // not line ranges, symbol queries, or empty lookup results. Otherwise
         // one zero-match symbol lookup can unlock Feature Intent after only
         // five real reads while the UI says six direct-source reads are needed.
-        const fileIdentity = normalizedSource.replace(/^project:\/\//, "");
+        const fileIdentity = normalizeProjectSourcePath(rawPathIdentity || normalizedSource);
         directSourceFileEvidence.add(fileIdentity);
-        if (/\.(?:h|hh|hpp|hxx|inl)$/.test(fileIdentity)) {
+        if (/\.(?:h|hh|hpp|hxx|inl)$/i.test(fileIdentity)) {
           directSourceDeclarationEvidence.add(fileIdentity);
         }
-        if (/\.(?:c|cc|cpp|cxx|m|mm|cs)$/.test(fileIdentity)) {
+        if (/\.(?:c|cc|cpp|cxx|m|mm|cs)$/i.test(fileIdentity)) {
           directSourceImplementationEvidence.add(fileIdentity);
         }
       }
@@ -1516,20 +1522,38 @@ function featureIntentPayloadViolationPaths(request: any, tool: any): string[] {
   return [...new Set(schemaContractViolationPaths(parameters, args))].slice(0, 64);
 }
 
-function normalizeProjectSourcePath(value: any): string {
-  const normalized = String(value || "")
-    .replace(/\\/g, "/")
-    .replace(/^project:\/\//i, "")
-    .replace(/^\.\//, "")
-    .trim()
-    .replace(/^\/+|\/+$/g, "")
-    .toLowerCase();
-  if (!normalized) return "";
-  if (normalized.startsWith("source/") || normalized.startsWith("plugins/")) return normalized;
-  const sourceMarker = normalized.indexOf("/source/");
-  if (sourceMarker < 0) return normalized;
-  const pluginMarker = normalized.lastIndexOf("/plugins/", sourceMarker);
-  return normalized.slice((pluginMarker >= 0 ? pluginMarker : sourceMarker) + 1);
+function normalizeProjectSourcePath(
+  value: any,
+  hostPlatform: string = process.platform,
+): string {
+  const identity = core.normalizeProjectEvidencePath(value, hostPlatform as any);
+  if (!identity) return "";
+  const windows = core.isWindowsHostPlatform(hostPlatform as any);
+  const sourcePrefix = windows ? "source/" : "Source/";
+  const pluginsPrefix = windows ? "plugins/" : "Plugins/";
+  if (identity.startsWith(sourcePrefix) || identity.startsWith(pluginsPrefix)) return identity;
+  const sourceMarker = identity.indexOf(`/${sourcePrefix}`);
+  if (sourceMarker < 0) return identity;
+  const pluginMarker = identity.lastIndexOf(`/${pluginsPrefix}`, sourceMarker);
+  return identity.slice((pluginMarker >= 0 ? pluginMarker : sourceMarker) + 1);
+}
+
+function directSourcePairStem(value: any, hostPlatform: string = process.platform): string {
+  return normalizeProjectSourcePath(value, hostPlatform)
+    .replace(/\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|m|mm|cs)$/i, "");
+}
+
+function hasTargetBoundDirectSourcePair(
+  declarationPaths: string[],
+  implementationPaths: string[],
+  hostPlatform: string = process.platform,
+): boolean {
+  const declarationStems = new Set(
+    declarationPaths.map((value) => directSourcePairStem(value, hostPlatform)).filter(Boolean),
+  );
+  return implementationPaths.some((value) => (
+    declarationStems.has(directSourcePairStem(value, hostPlatform))
+  ));
 }
 
 function featureIntentRequestedTargetFiles(request: any): string[] {
@@ -1570,7 +1594,9 @@ function knownAbsentFeatureIntentTargetFiles(
       if (!toolNamesMatch("search_files", name) || !core.toolResultSucceeded(result)) continue;
       const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
       if (args.matchFileNames !== true) continue;
-      const query = String(args.query || "").replace(/\\/g, "/").split("/").pop()?.trim().toLowerCase();
+      const query = normalizeProjectSourcePath(
+        String(args.query || "").replace(/\\/g, "/").split("/").pop()?.trim() || "",
+      );
       if (!query) continue;
       const searchRoot = normalizeProjectSourcePath(args.path || "");
       for (const payload of core.parseJsonObjects(result?.content)) {
@@ -1597,8 +1623,8 @@ function unreadFeatureIntentTargetFiles(
   successfulPaths: string[],
   knownAbsentPaths: string[] = [],
 ): string[] {
-  const readable = new Set(successfulPaths.map(normalizeProjectSourcePath).filter(Boolean));
-  const absent = new Set(knownAbsentPaths.map(normalizeProjectSourcePath).filter(Boolean));
+  const readable = new Set(successfulPaths.map((path) => normalizeProjectSourcePath(path)).filter(Boolean));
+  const absent = new Set(knownAbsentPaths.map((path) => normalizeProjectSourcePath(path)).filter(Boolean));
   return featureIntentRequestedTargetFiles(request).filter((path) => (
     !readable.has(normalizeProjectSourcePath(path))
     && !absent.has(normalizeProjectSourcePath(path))
@@ -2600,15 +2626,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ? nextCheckpoint.toolRoute.selectedSlice.files.filter((path: any) => String(path || "").trim())
     : [];
   const plannerPhaseActive = String(nextCheckpoint?.toolRoute?.phase || "").toLowerCase() === "planner";
-  const directSourcePairStems = new Set(
-    architectureStatus.directSourceDeclarationPaths.map((path: string) => (
-      path.replace(/\\/g, "/").replace(/\.(?:h|hh|hpp|hxx|inl)$/i, "").toLowerCase()
-    )),
-  );
-  const targetBoundEvidencePairReady = architectureStatus.directSourceImplementationPaths.some(
-    (path: string) => directSourcePairStems.has(
-      path.replace(/\\/g, "/").replace(/\.(?:c|cc|cpp|cxx|m|mm|cs)$/i, "").toLowerCase(),
-    ),
+  const targetBoundEvidencePairReady = hasTargetBoundDirectSourcePair(
+    architectureStatus.directSourceDeclarationPaths,
+    architectureStatus.directSourceImplementationPaths,
   );
   const featureIntentEvidenceReady = Boolean(
     architectureStatus.directSourceFileEvidenceCount >= effectiveFeatureIntentEvidenceReadThreshold
@@ -4280,7 +4300,9 @@ export {
   injectPreRoutePlannerHandoffRule,
   injectServerRequiredToolRule,
   injectTaskRouteOwnershipRule,
+  hasTargetBoundDirectSourcePair,
   networkedArchitectureContractRequired,
+  normalizeProjectSourcePath,
   requiresArchitectureValidation,
   reconcilePendingToolCalls,
   upsertLeadingSystemRule,

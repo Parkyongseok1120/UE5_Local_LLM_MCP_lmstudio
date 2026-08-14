@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import ascii_windows_fold, filesystem_path_identity
+
 SOURCE_SUFFIXES = frozenset({".h", ".hpp", ".hh", ".inl", ".cpp", ".cc", ".cxx"})
 
 
@@ -21,7 +23,7 @@ _QUALIFIED_DEFINITION_RE = re.compile(
 
 
 def _surface_path(value: Any) -> str:
-    return str(value or "").replace("\\", "/").strip("/").casefold()
+    return filesystem_path_identity(value, trim_outer_slashes=True)
 
 
 def _path_in_surface(path: Any, surface_paths: set[str]) -> bool:
@@ -432,7 +434,9 @@ def _owner_surface_binding(
         sketch,
         include_qualified_definitions=False,
     )
-    target_stems = {Path(item).stem.casefold() for item in target_files}
+    target_stems = {
+        ascii_windows_fold(Path(item).stem) for item in target_files
+    }
     graph_locations: dict[str, set[str]] = {}
     for row in (graph or {}).get("symbols") or []:
         if not isinstance(row, dict):
@@ -462,7 +466,7 @@ def _owner_surface_binding(
         owner_leaf = claim["ownerLeaf"]
         owner_key = owner_leaf.casefold()
         canonical = owner_leaf[1:] if owner_leaf[:1] in {"A", "F", "I", "S", "T", "U", "W"} else owner_leaf
-        canonical_matches_target = canonical.casefold() in target_stems
+        canonical_matches_target = ascii_windows_fold(canonical) in target_stems
         locations = sorted(graph_locations.get(owner_key, set()))
         owned_in_surface = any(_path_in_surface(path, declaration_paths) for path in locations)
         declared_only_in_sketch = owner_key in sketch_declared_owners and not locations
@@ -518,14 +522,14 @@ def _quoted_include_contract(
         )
     )
     existing = {
-        match.strip().replace("\\", "/").casefold()
+        _surface_path(match)
         for match in re.findall(
             r'(?mi)^\s*#\s*include\s*"([^"]+)"',
             existing_target_text,
         )
         if match.strip()
     }
-    new_includes = [item for item in proposed if item.casefold() not in existing]
+    new_includes = [item for item in proposed if _surface_path(item) not in existing]
     root_value = str(contract.get("projectRoot") or "").strip()
     project_root = Path(root_value).expanduser().resolve() if root_value else None
     if project_root is None and not engine_root:
@@ -550,7 +554,7 @@ def _quoted_include_contract(
         return None
 
     target_module_roots = {
-        str(owner).casefold()
+        filesystem_path_identity(owner)
         for owner in (module_root(path) for path in target_paths)
         if owner is not None
     }
@@ -559,7 +563,7 @@ def _quoted_include_contract(
         owner = module_root(candidate)
         if owner is None:
             return False
-        if str(owner).casefold() in target_module_roots:
+        if filesystem_path_identity(owner) in target_module_roots:
             return True
         try:
             within_module = candidate.relative_to(owner)
@@ -570,21 +574,26 @@ def _quoted_include_contract(
         # merely because an equally named file exists somewhere in the tree.
         if first not in {"public", "classes"}:
             return False
-        normalized_include = include.casefold().strip("/")
-        module_name = owner.name.casefold()
+        normalized_include = _surface_path(include)
         visible_suffixes = {
-            within_module.as_posix().casefold(),
-            "/".join(within_module.parts[1:]).casefold(),
-            f"{module_name}/{'/'.join(within_module.parts[1:])}".casefold(),
+            _surface_path(within_module.as_posix()),
+            _surface_path("/".join(within_module.parts[1:])),
+            _surface_path(f"{owner.name}/{'/'.join(within_module.parts[1:])}"),
         }
         return normalized_include in visible_suffixes or "/" not in normalized_include
 
-    target_stems = {Path(path).stem.casefold() for path in target_files}
+    target_stems = {
+        filesystem_path_identity(Path(path).stem) for path in target_files
+    }
     results: list[dict[str, Any]] = []
 
     for include in new_includes:
         generated = include.casefold().endswith(".generated.h")
-        generated_stem = Path(include).name[: -len(".generated.h")].casefold() if generated else ""
+        generated_stem = (
+            filesystem_path_identity(Path(include).name[: -len(".generated.h")])
+            if generated
+            else ""
+        )
         if generated and generated_stem in target_stems:
             results.append({"include": include, "status": "generated", "matches": []})
             continue
@@ -610,11 +619,14 @@ def _quoted_include_contract(
                         for candidate in candidates:
                             if not candidate.is_file():
                                 continue
-                            folded = candidate.as_posix().casefold()
-                            if "/intermediate/" in folded or "/binaries/" in folded:
+                            candidate_path = candidate.as_posix()
+                            classified_path = candidate_path.casefold()
+                            if "/intermediate/" in classified_path or "/binaries/" in classified_path:
                                 continue
                             if (
-                                folded.endswith("/" + include.casefold())
+                                filesystem_path_identity(candidate_path).endswith(
+                                    "/" + _surface_path(include)
+                                )
                                 or "/" not in include
                             ) and compiler_visible_project_header(candidate.resolve(), include):
                                 matches.append(candidate.resolve())
@@ -687,13 +699,15 @@ def validate_active_slice_surface(
         for item in diff_surface.get("targetFiles") or []
         if str(item).strip()
     )
-    allowed_paths = {str(Path(item).as_posix()).casefold() for item in target_files}
-    allowed_names = {Path(item).name.casefold() for item in target_files}
+    allowed_paths = {_surface_path(Path(item).as_posix()) for item in target_files}
+    allowed_names = {
+        filesystem_path_identity(Path(item).name) for item in target_files
+    }
     outside_labels = [
         item
         for item in dict.fromkeys(labeled_files)
-        if str(Path(item).as_posix()).casefold() not in allowed_paths
-        and Path(item).name.casefold() not in allowed_names
+        if _surface_path(Path(item).as_posix()) not in allowed_paths
+        and filesystem_path_identity(Path(item).name) not in allowed_names
     ]
     if outside_labels:
         _close_gate(
@@ -708,7 +722,9 @@ def validate_active_slice_surface(
         r"(?:[A-Z][A-Z0-9_]*_API\s+)?([A-Za-z_]\w*)",
         live_sketch,
     )
-    target_stems = {Path(item).stem.casefold() for item in target_files}
+    target_stems = {
+        ascii_windows_fold(Path(item).stem) for item in target_files
+    }
     existing_target_text = ""
     for target in contract.get("targets") or []:
         if not isinstance(target, dict) or not target.get("exists"):
@@ -760,7 +776,7 @@ def validate_active_slice_surface(
         if not class_name.startswith(("A", "U")):
             invalid_reflected_prefixes.append(class_name)
         canonical = class_name[1:] if class_name[:1] in {"A", "U", "W"} else class_name
-        matches_target = canonical.casefold() in target_stems
+        matches_target = ascii_windows_fold(canonical) in target_stems
         already_owned_by_target = bool(
             re.search(
                 rf"\bclass\s+(?:[A-Z][A-Z0-9_]*_API\s+)?{re.escape(class_name)}\b",
@@ -793,15 +809,19 @@ def validate_active_slice_surface(
         symbol_name = str(row.get("symbol_name") or "").strip()
         file_name = Path(str(row.get("file_path") or "")).name
         if symbol_name and file_name:
-            reflected_headers[symbol_name.casefold()] = file_name
+            reflected_headers[ascii_windows_fold(symbol_name)] = file_name
             if len(symbol_name) > 1 and symbol_name[:1] in {"A", "U", "I", "F"}:
-                reflected_headers[symbol_name[1:].casefold()] = file_name
+                reflected_headers[ascii_windows_fold(symbol_name[1:])] = file_name
     wrong_reflected_includes: list[str] = []
     for include_path in re.findall(r'(?mi)^\s*#\s*include\s*"([^"]+)"', live_sketch):
         include_name = Path(include_path).name
         reflected_type = Path(include_name).stem
-        actual_header = reflected_headers.get(reflected_type.casefold(), "")
-        if actual_header and include_name.casefold() != actual_header.casefold():
+        actual_header = reflected_headers.get(ascii_windows_fold(reflected_type), "")
+        if (
+            actual_header
+            and filesystem_path_identity(include_name)
+            != filesystem_path_identity(actual_header)
+        ):
             wrong_reflected_includes.append(
                 f"{include_path} names {reflected_type}, but project source declares it in {actual_header}"
             )

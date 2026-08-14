@@ -38,6 +38,7 @@ const {
 const { attachCommittedToolOutcomeControl } = require("./post-read-route-control.js");
 const { verifyRuntimeComponent } = require("./runtime-identity.js");
 const { deriveValidationScope } = require("./validation-scope.js");
+const { absolutePathIsWithin } = require("./filesystem-path-identity.js");
 
 const {
   Server
@@ -162,6 +163,7 @@ const {
   validateWriteTarget,
   shouldRollback,
   isDeleteAllowedPath,
+  deletionCandidateIdentity,
   isPatchOnlyExistingFile: isPatchOnlyFile
 } = require("./write-guards.js");
 const {
@@ -1648,7 +1650,7 @@ async function buildDeletionProposal(rawFiles, completedEditsSummary, activeProj
       throw new Error(`not found or not file: ${item && item.path}`);
     }
     const relPath = displayPath(resolution);
-    const relKey = relPath.toLowerCase();
+    const relKey = deletionCandidateIdentity(relPath);
     if (seen.has(relKey)) {
       throw new Error(`duplicate deletion candidate: ${relPath}`);
     }
@@ -2448,7 +2450,7 @@ function sourceEvidenceSummary(activeProject) {
   const projectDir = activeProject ? path.dirname(path.resolve(activeProject)) : null;
   const filesRead = [];
   for (const [absolutePath, entry] of readEvidence.entries()) {
-    if (!projectDir || !absolutePath.toLowerCase().startsWith(projectDir.toLowerCase() + path.sep)) continue;
+    if (!projectDir || !absolutePathIsWithin(absolutePath, projectDir)) continue;
     if (![".h", ".hpp", ".cpp", ".c", ".cc", ".cs"].includes(path.extname(absolutePath).toLowerCase())) continue;
     filesRead.push({
       path: entry.path.projectRelativePath,

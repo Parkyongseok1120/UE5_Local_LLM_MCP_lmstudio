@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 WORKSPACE = Path(__file__).resolve().parents[1]
 SCRIPTS = WORKSPACE / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -38,6 +40,35 @@ def test_normalize_locator_rewrites_legacy_prefix(tmp_path, monkeypatch):
     legacy = str(physical / "data" / "foo.txt")
     normalized = normalize_locator(legacy, physical)
     assert normalized == str(workspace / "data" / "foo.txt")
+
+
+def test_normalize_locator_does_not_merge_i_dot_sibling_roots(tmp_path, monkeypatch):
+    physical = tmp_path / "\u0130Project"
+    canonical = tmp_path / "Canonical"
+    sibling = tmp_path / "I\u0307Project"
+    for root in (physical, canonical, sibling):
+        root.mkdir()
+    monkeypatch.setattr("workspace_paths.canonical_workspace_root", lambda _start=None: canonical)
+    candidate = sibling / "Source" / "Thing.cpp"
+    for host_platform in ("linux", "darwin", "win32"):
+        assert normalize_locator(
+            str(candidate),
+            physical,
+            host_platform=host_platform,
+        ) == str(candidate)
+
+
+def test_normalize_locator_folds_ascii_root_alias_only_on_windows(tmp_path, monkeypatch):
+    physical = tmp_path / "ProjectRoot"
+    canonical = tmp_path / "Canonical"
+    physical.mkdir()
+    canonical.mkdir()
+    monkeypatch.setattr("workspace_paths.canonical_workspace_root", lambda _start=None: canonical)
+    candidate = str(physical / "Source" / "Thing.cpp").replace("ProjectRoot", "PROJECTROOT")
+    assert normalize_locator(candidate, physical, host_platform="win32") == str(
+        canonical / "Source" / "Thing.cpp"
+    )
+    assert normalize_locator(candidate, physical, host_platform="linux") == candidate
 
 
 def test_active_project_names_from_shared_config(tmp_path, monkeypatch):
@@ -180,3 +211,16 @@ def test_engine_discovery_orders_semantic_versions(tmp_path):
         "UE_5.10",
         "UE_5.9",
     ]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="requires POSIX-distinct Unicode engine roots")
+def test_engine_discovery_windows_policy_does_not_unicode_casefold_i_dot_roots(tmp_path):
+    parent = tmp_path / "Epic Games"
+    for name in ("UE_5.8-\u0130", "UE_5.8-I\u0307"):
+        (parent / name / "Engine" / "Source").mkdir(parents=True)
+    roots = _discover_engine_roots(
+        "win32",
+        {"ProgramFiles": str(tmp_path), "ProgramFiles(x86)": ""},
+        tmp_path,
+    )
+    assert {path.name for path in roots} == {"UE_5.8-\u0130", "UE_5.8-I\u0307"}

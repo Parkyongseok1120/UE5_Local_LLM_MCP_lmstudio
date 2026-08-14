@@ -405,7 +405,7 @@ def test_static_validation_obligation_is_bound_to_authoritative_project_root() -
     }
 
 
-def test_python_node_transition_paths_fold_only_on_windows_and_normalize_unicode() -> None:
+def test_python_node_transition_paths_fold_only_on_windows_and_preserve_unicode_spelling() -> None:
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is unavailable")
@@ -419,6 +419,12 @@ def test_python_node_transition_paths_fold_only_on_windows_and_normalize_unicode
     unicode_state = {
         "selectedTargetSnapshots": [
             {"path": "Source/De\u0301mo/Foo.cpp", "exists": True, "fileHash": "nfc"}
+        ]
+    }
+    idot_route = {"selectedSlice": {"files": ["Source/\u0130/Foo.cpp"]}}
+    idot_state = {
+        "selectedTargetSnapshots": [
+            {"path": "Source/i\u0307/Foo.cpp", "exists": True, "fileHash": "idot"}
         ]
     }
     read_state = {
@@ -442,6 +448,9 @@ def test_python_node_transition_paths_fold_only_on_windows_and_normalize_unicode
         "unicodeLinux": _mutation_tool_for_state(
             unicode_state, unicode_route, host_platform="linux"
         ),
+        "idotWindows": _mutation_tool_for_state(
+            idot_state, idot_route, host_platform="win32"
+        ),
         "readLinux": _pre_gate_source_read_path(
             read_state,
             [SKETCH_GATE],
@@ -464,6 +473,7 @@ process.stdout.write(JSON.stringify({
   mutationLinux: mutationToolForState(payload.caseState, payload.route, 'linux'),
   mutationWindows: mutationToolForState(payload.caseState, payload.route, 'win32'),
   unicodeLinux: mutationToolForState(payload.unicodeState, payload.unicodeRoute, 'linux'),
+  idotWindows: mutationToolForState(payload.idotState, payload.idotRoute, 'win32'),
   readLinux: preGateSourceReadPath(payload.readState, [payload.gate], 'linux'),
   readWindows: preGateSourceReadPath(payload.readState, [payload.gate], 'win32'),
 }));
@@ -477,6 +487,8 @@ process.stdout.write(JSON.stringify({
                 "route": route,
                 "unicodeState": unicode_state,
                 "unicodeRoute": unicode_route,
+                "idotState": idot_state,
+                "idotRoute": idot_route,
                 "readState": read_state,
                 "gate": SKETCH_GATE,
             }
@@ -490,7 +502,8 @@ process.stdout.write(JSON.stringify({
     assert python_results == node_results == {
         "mutationLinux": "apply_edit_bundle",
         "mutationWindows": "replace_in_file",
-        "unicodeLinux": "replace_in_file",
+        "unicodeLinux": "apply_edit_bundle",
+        "idotWindows": "apply_edit_bundle",
         "readLinux": "Source/Demo/Foo.cpp",
         "readWindows": "",
     }
@@ -548,7 +561,13 @@ def test_python_node_required_args_subset_and_path_identity_are_in_parity() -> N
             "host": "linux",
             "expected": {"path": "Source/D\u00e9mo/Foo.cpp"},
             "observed": {"path": "Source/De\u0301mo/Foo.cpp"},
-            "matches": True,
+            "matches": False,
+        },
+        {
+            "host": "win32",
+            "expected": {"path": "Source/\u0130/Foo.cpp"},
+            "observed": {"path": "Source/i\u0307/Foo.cpp"},
+            "matches": False,
         },
     ]
     python_results = [

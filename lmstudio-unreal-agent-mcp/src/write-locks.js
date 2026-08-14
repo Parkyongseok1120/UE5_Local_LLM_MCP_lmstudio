@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { ensureStateRootLayout, resolveAgentStateRoot } = require("./state-root");
 
 const pendingPaths = new Map();
@@ -11,13 +12,8 @@ const OWNER = `${process.pid}:${crypto.randomUUID()}`;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const STALE_LOCK_AGE_MS = HEARTBEAT_INTERVAL_MS * 3;
 
-function canonicalLockKey(absPath) {
-  try {
-    const resolved = fs.realpathSync.native ? fs.realpathSync.native(absPath) : fs.realpathSync(absPath);
-    return resolved.toLowerCase();
-  } catch {
-    return path.resolve(absPath).toLowerCase();
-  }
+function canonicalLockKey(absPath, hostPlatform = process.platform) {
+  return canonicalAbsolutePathIdentity(absPath, hostPlatform);
 }
 
 function lockFilePath(absPath, stateRoot = resolveAgentStateRoot()) {

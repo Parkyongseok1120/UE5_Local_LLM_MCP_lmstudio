@@ -93,3 +93,76 @@ def test_doc_matches_replace_project_for_symbol_rows():
         {"project": "OtherGame"},
         "DemoGame",
     )
+
+
+def test_replace_project_explicit_mismatch_cannot_fall_through_to_path():
+    assert not doc_matches_replace_project(
+        "unreal_symbol",
+        {
+            "project": "OtherGame",
+            "relative_path": "Projects/DemoGame/Source/DemoGame/DemoActor.cpp",
+            "root": "/workspace/Projects/DemoGame",
+        },
+        "DemoGame",
+        host_platform="linux",
+    )
+
+
+def test_replace_project_fallback_requires_an_exact_project_segment():
+    assert doc_matches_replace_project(
+        "unreal_project_text",
+        {"relative_path": "Projects/Game/Source/Game/GameMode.cpp"},
+        "Game",
+        host_platform="linux",
+    )
+    assert not doc_matches_replace_project(
+        "unreal_project_text",
+        {"relative_path": "Projects/GameTools/Source/GameTools/Tool.cpp"},
+        "Game",
+        host_platform="linux",
+    )
+    assert not doc_matches_replace_project(
+        "unreal_symbol",
+        {"root": "/workspace/Projects/GameTools"},
+        "Game",
+        host_platform="linux",
+    )
+
+
+def test_replace_project_keeps_posix_unicode_names_distinct():
+    composed = "Caf\u00e9Game"
+    decomposed = "Cafe\u0301Game"
+
+    assert not doc_matches_replace_project(
+        "unreal_symbol",
+        {"project": decomposed, "root": f"/workspace/{composed}"},
+        composed,
+        host_platform="linux",
+    )
+    assert not doc_matches_replace_project(
+        "unreal_symbol",
+        {"root": f"/workspace/{decomposed}"},
+        composed,
+        host_platform="linux",
+    )
+
+
+def test_replace_project_folds_ascii_case_only_on_windows():
+    assert doc_matches_replace_project(
+        "unreal_symbol",
+        {"project": "gAmE"},
+        "Game",
+        host_platform="win32",
+    )
+    assert doc_matches_replace_project(
+        "unreal_symbol",
+        {"root": r"C:\Projects\GAME"},
+        "Game",
+        host_platform="win32",
+    )
+    assert not doc_matches_replace_project(
+        "unreal_symbol",
+        {"project": "i\u0307Game"},
+        "\u0130Game",
+        host_platform="win32",
+    )

@@ -9,6 +9,8 @@ import json
 import shutil
 from pathlib import Path
 
+from workspace_paths import canonical_absolute_path_identity
+
 
 TEXT_EXTENSIONS = {
     ".archive",
@@ -80,6 +82,28 @@ def find_projects(root: Path) -> list[Path]:
         return direct
 
     return sorted(path for path in root.rglob("*.uproject") if not has_skip_part(path))
+
+
+def _unique_project_files(
+    project_files: list[Path],
+    *,
+    host_platform: str | None = None,
+) -> list[Path]:
+    """Deduplicate project files using the current host's path semantics."""
+
+    seen: set[str] = set()
+    unique_projects: list[Path] = []
+    for project_file in project_files:
+        resolved = project_file.resolve()
+        key = canonical_absolute_path_identity(
+            resolved,
+            host_platform=host_platform,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_projects.append(resolved)
+    return unique_projects
 
 
 def safe_snapshot_path(copy_root: Path, project_name: str, relative: Path) -> Path:
@@ -187,14 +211,7 @@ def collect(args: argparse.Namespace) -> None:
     if not project_files:
         raise SystemExit("no .uproject files found under any --root")
 
-    seen: set[str] = set()
-    unique_projects: list[Path] = []
-    for project_file in project_files:
-        key = str(project_file.resolve()).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_projects.append(project_file.resolve())
+    unique_projects = _unique_project_files(project_files)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

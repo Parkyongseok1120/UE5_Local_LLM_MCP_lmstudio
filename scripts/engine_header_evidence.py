@@ -17,6 +17,13 @@ import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
+from workspace_paths import (
+    ascii_windows_fold,
+    canonical_absolute_path_identity,
+    filesystem_path_identity,
+    is_windows_host_platform,
+)
+
 
 _HEADER_CATALOGS: dict[str, dict[str, list[Path]]] = {}
 _TYPE_DECLARATION_PATHS: dict[tuple[str, str], list[Path]] = {}
@@ -31,9 +38,16 @@ _SKIP_DIRS = {
 }
 
 
-def _identity(path: Path) -> str:
-    resolved = str(path.resolve())
-    return resolved.casefold() if os.name == "nt" else resolved
+def _identity(path: Path, *, host_platform: str | None = None) -> str:
+    return canonical_absolute_path_identity(
+        path,
+        host_platform=host_platform,
+    )
+
+
+def _cache_root_identity(path: Path, *, host_platform: str | None = None) -> str:
+    host_kind = "windows" if is_windows_host_platform(host_platform) else "posix"
+    return f"{host_kind}:{_identity(path, host_platform=host_platform)}"
 
 
 def _contained(path: Path, root: Path) -> bool:
@@ -65,8 +79,12 @@ def _engine_source_roots(engine_root: Path) -> list[Path]:
     return [plugins] if plugins.is_dir() else []
 
 
-def _header_catalog(engine_root: Path) -> dict[str, list[Path]]:
-    key = _identity(engine_root)
+def _header_catalog(
+    engine_root: Path,
+    *,
+    host_platform: str | None = None,
+) -> dict[str, list[Path]]:
+    key = _cache_root_identity(engine_root, host_platform=host_platform)
     cached = _HEADER_CATALOGS.get(key)
     if cached is not None:
         return cached
@@ -90,7 +108,13 @@ def _header_catalog(engine_root: Path) -> dict[str, list[Path]]:
                 for raw_path in completed.stdout.splitlines():
                     path = Path(raw_path.strip())
                     if path.name and _lexically_contained(path, engine_root):
-                        catalog.setdefault(path.name.casefold(), []).append(path)
+                        catalog.setdefault(
+                            filesystem_path_identity(
+                                path.name,
+                                host_platform=host_platform,
+                            ),
+                            [],
+                        ).append(path)
                 continue
         for directory, names, files in os.walk(source_root):
             names[:] = [name for name in names if name not in _SKIP_DIRS]
@@ -110,7 +134,13 @@ def _header_catalog(engine_root: Path) -> dict[str, list[Path]]:
                 # checked again before their contents are read.
                 if not _lexically_contained(path, engine_root):
                     continue
-                catalog.setdefault(file_name.casefold(), []).append(path)
+                catalog.setdefault(
+                    filesystem_path_identity(
+                        file_name,
+                        host_platform=host_platform,
+                    ),
+                    [],
+                ).append(path)
     _HEADER_CATALOGS[key] = catalog
     return catalog
 
@@ -130,7 +160,9 @@ def _header_names(owner_or_symbol: str) -> list[str]:
     for stem in stems:
         for suffix in (".h", ".hpp", ".inl"):
             name = f"{stem}{suffix}"
-            if name.casefold() not in {item.casefold() for item in names}:
+            if ascii_windows_fold(name) not in {
+                ascii_windows_fold(item) for item in names
+            }:
                 names.append(name)
     return names
 
@@ -160,6 +192,7 @@ def _discover_type_declaration_paths(
     symbols: Iterable[str],
     *,
     max_header_chars: int,
+    host_platform: str | None = None,
 ) -> tuple[dict[str, list[Path]], int]:
     """Find declarations whose header name does not match the Unreal type.
 
@@ -169,7 +202,10 @@ def _discover_type_declaration_paths(
     root, so a persistent MCP process does not repeatedly walk the SDK.
     """
 
-    root_key = _identity(engine_root)
+    root_key = _cache_root_identity(
+        engine_root,
+        host_platform=host_platform,
+    )
     wanted = {
         _unqualified(symbol): (root_key, _unqualified(symbol).casefold())
         for symbol in symbols
@@ -375,14 +411,23 @@ def _signature_contracts(text: str, symbol: str) -> list[dict[str, Any]]:
     return contracts
 
 
-def _candidate_header_rank(path: Path) -> tuple[int, int, int, str]:
+def _candidate_header_rank(
+    path: Path,
+    *,
+    host_platform: str | None = None,
+) -> tuple[int, int, int, str]:
     """Prefer public engine declarations over experimental/third-party twins."""
 
     folded = path.as_posix().casefold()
     third_party = 1 if "/thirdparty/" in folded else 0
     experimental = 1 if "/experimental/" in folded else 0
     private = 1 if "/private/" in folded else 0
-    return (third_party, experimental, private, folded)
+    return (
+        third_party,
+        experimental,
+        private,
+        filesystem_path_identity(path.as_posix(), host_platform=host_platform),
+    )
 
 
 def lookup_engine_header_evidence(
@@ -391,6 +436,7 @@ def lookup_engine_header_evidence(
     *,
     max_files_per_claim: int = 12,
     max_header_chars: int = 1_000_000,
+    host_platform: str | None = None,
 ) -> dict[str, Any]:
     """Return exact source excerpts keyed by ``owner::symbol`` or symbol.
 
@@ -406,7 +452,7 @@ def lookup_engine_header_evidence(
             "catalogFileCount": 0,
             "results": {},
         }
-    catalog = _header_catalog(root)
+    catalog = _header_catalog(root, host_platform=host_platform)
     results: dict[str, list[dict[str, Any]]] = {}
     inspected_files = 0
     claim_list = [dict(claim) for claim in claims]
@@ -424,7 +470,11 @@ def lookup_engine_header_evidence(
             symbol
             and raw_claim.get("allowDeclarationScan") is True
             and not any(
-                catalog.get(name.casefold(), []) for name in _header_names(symbol)
+                catalog.get(
+                    filesystem_path_identity(name, host_platform=host_platform),
+                    [],
+                )
+                for name in _header_names(symbol)
             )
         ):
             unresolved_types.append(symbol)
@@ -433,6 +483,7 @@ def lookup_engine_header_evidence(
         catalog,
         unresolved_types,
         max_header_chars=max_header_chars,
+        host_platform=host_platform,
     )
     inspected_files += declaration_scan_count
     for raw_claim in claim_list:
@@ -448,15 +499,21 @@ def lookup_engine_header_evidence(
         for name in candidate_names:
             candidates.extend(
                 sorted(
-                    catalog.get(name.casefold(), []),
-                    key=_candidate_header_rank,
+                    catalog.get(
+                        filesystem_path_identity(name, host_platform=host_platform),
+                        [],
+                    ),
+                    key=lambda path: _candidate_header_rank(
+                        path,
+                        host_platform=host_platform,
+                    ),
                 )
             )
         if not owner:
             candidates.extend(declaration_paths.get(symbol, []))
         seen: set[str] = set()
         for header in candidates[:max_files_per_claim]:
-            identity = _identity(header)
+            identity = _identity(header, host_platform=host_platform)
             if identity in seen or not _contained(header, root):
                 continue
             seen.add(identity)
@@ -513,6 +570,8 @@ def lookup_engine_header_evidence(
 def resolve_engine_include_path(
     engine_root: str | Path | None,
     include_path: str,
+    *,
+    host_platform: str | None = None,
 ) -> dict[str, Any]:
     """Resolve an exact quoted include through the cached Engine header catalog."""
 
@@ -527,16 +586,36 @@ def resolve_engine_include_path(
         }
     if not normalized or Path(normalized).suffix.casefold() not in {".h", ".hpp", ".hh", ".inl"}:
         return {"ok": False, "status": "invalid_include", "include": normalized, "matches": []}
-    catalog = _header_catalog(root)
-    candidates = catalog.get(Path(normalized).name.casefold(), [])
-    suffix = "/" + normalized.casefold()
+    catalog = _header_catalog(root, host_platform=host_platform)
+    candidates = catalog.get(
+        filesystem_path_identity(
+            Path(normalized).name,
+            host_platform=host_platform,
+        ),
+        [],
+    )
+    suffix = "/" + filesystem_path_identity(
+        normalized,
+        host_platform=host_platform,
+        trim_outer_slashes=True,
+    )
     exact = [
         path
         for path in candidates
-        if path.as_posix().casefold().endswith(suffix) and _contained(path, root)
+        if filesystem_path_identity(
+            path.as_posix(),
+            host_platform=host_platform,
+        ).endswith(suffix)
+        and _contained(path, root)
     ]
     matches = exact or [path for path in candidates if _contained(path, root)]
-    matches = sorted(matches, key=_candidate_header_rank)
+    matches = sorted(
+        matches,
+        key=lambda path: _candidate_header_rank(
+            path,
+            host_platform=host_platform,
+        ),
+    )
     return {
         "ok": bool(matches),
         "status": "resolved" if matches else "not_found",

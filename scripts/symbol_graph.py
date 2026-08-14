@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import filesystem_path_identity
+
 
 GRAPH_ONLY_BEHAVIOR_LIMIT = (
     "Graph output is source-location/navigation evidence only. It cannot by itself prove "
@@ -54,15 +56,23 @@ def lookup_symbol(name: str, graph: dict[str, Any], limit: int = 20) -> list[dic
     return [*exact, *partial][:limit]
 
 
-def owner_build_cs_for_file(file_path: str, graph: dict[str, Any]) -> str:
-    target = str(file_path or "").replace("\\", "/").lower()
+def owner_build_cs_for_file(
+    file_path: str,
+    graph: dict[str, Any],
+    *,
+    host_platform: str | None = None,
+) -> str:
+    target = filesystem_path_identity(file_path, host_platform=host_platform)
     if not target:
         return ""
     rows = graph.get("symbols") if isinstance(graph, dict) else []
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        row_path = str(row.get("file_path") or "").replace("\\", "/").lower()
+        row_path = filesystem_path_identity(
+            row.get("file_path"),
+            host_platform=host_platform,
+        )
         if row_path == target:
             return str(row.get("owner_build_cs") or "")
     return ""

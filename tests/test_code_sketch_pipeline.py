@@ -451,3 +451,86 @@ def test_unrelated_module_private_header_does_not_prove_leaf_include(
     assert result["ok"] is False
     assert result["quotedIncludes"]["unresolved"][0]["include"] == "Ghost.h"
     assert result["writeGate"]["reason"] == "quoted include path is not source-backed"
+
+
+def test_unicode_casefold_alias_cannot_label_or_own_active_slice(tmp_path: Path) -> None:
+    composed_relative = "Source/Demo/\u0130mplementation.cpp"
+    alias_relative = "Source/Demo/I\u0307mplementation.cpp"
+    target = tmp_path / composed_relative
+    target.parent.mkdir(parents=True)
+    target.write_text("// active target\n", encoding="utf-8")
+    assert composed_relative != alias_relative
+    assert composed_relative.casefold() == alias_relative.casefold()
+
+    labeled = validate_active_slice_surface(
+        "\n".join(
+            [
+                f"--- a/{alias_relative}",
+                f"+++ b/{alias_relative}",
+                "@@ -0,0 +1 @@",
+                "+void Run() {}",
+            ]
+        ),
+        target_files=[composed_relative],
+        generation_contract=_contract(
+            {
+                "exists": True,
+                "absolutePath": str(target),
+                "path": composed_relative,
+            }
+        ),
+        graph=None,
+    )
+    assert labeled["ok"] is False
+    assert any("outside targetFiles" in issue for issue in labeled["issues"])
+
+    graph_bound = validate_active_slice_surface(
+        "void FGhost::Run() {}",
+        target_files=[composed_relative],
+        generation_contract=_contract(
+            {
+                "exists": True,
+                "absolutePath": str(target),
+                "path": composed_relative,
+            }
+        ),
+        graph={
+            "symbols": [
+                {
+                    "file_path": alias_relative,
+                    "qualified_name": "FGhost::Run",
+                    "symbol_name": "Run",
+                    "symbol_kind": "function",
+                }
+            ]
+        },
+    )
+    assert graph_bound["ok"] is False
+    assert graph_bound["surfaceBinding"]["outsideDefinitionOwners"]
+
+
+def test_generated_include_stem_preserves_unicode_spelling(tmp_path: Path) -> None:
+    composed_relative = "Source/Demo/\u0130nventory.h"
+    alias_stem = "I\u0307nventory"
+    target = tmp_path / composed_relative
+    target.parent.mkdir(parents=True)
+    target.write_text("struct FInventory {};\n", encoding="utf-8")
+    contract = _contract(
+        {
+            "exists": True,
+            "absolutePath": str(target),
+            "path": composed_relative,
+        }
+    )
+    contract["projectRoot"] = str(tmp_path)
+
+    result = validate_active_slice_surface(
+        f'#include "{alias_stem}.generated.h"\nvoid Run() {{}}',
+        target_files=[composed_relative],
+        generation_contract=contract,
+        graph=None,
+    )
+
+    assert result["ok"] is False
+    assert result["quotedIncludes"]["results"][0]["status"] != "generated"
+    assert result["quotedIncludes"]["unresolved"]

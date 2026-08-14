@@ -3,6 +3,7 @@
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
+const { filesystemPathIdentity } = require("./filesystem-path-identity");
 
 const PROJECT_PREFIXES = new Set(["Source", "Plugins", "Config", "Content", "Saved"]);
 const WORKSPACE_PREFIXES = new Set([
@@ -41,13 +42,18 @@ async function nearestExistingRealpath(candidate) {
   }
 }
 
-function stripProjectNamePrefix(input, projectDir) {
+function stripProjectNamePrefix(input, projectDir, hostPlatform = process.platform) {
   if (!projectDir) return input;
   const normalized = String(input || "").replace(/\\/g, "/");
   const projectName = path.basename(projectDir);
+  const projectIdentity = filesystemPathIdentity(projectName, hostPlatform, {
+    stripProjectUri: false,
+  });
   const parts = normalized.split("/").filter(Boolean);
   const projectIndex = parts.findIndex(
-    (part) => part.toLowerCase() === projectName.toLowerCase()
+    (part) => filesystemPathIdentity(part, hostPlatform, {
+      stripProjectUri: false,
+    }) === projectIdentity
   );
   if (projectIndex < 0 || projectIndex + 1 >= parts.length) {
     return input;
@@ -86,7 +92,7 @@ async function resolveReadPath(input, { workspaceRoot, activeProject } = {}) {
   let requested = input.trim();
   let selection;
 
-  if (requested.toLowerCase().startsWith("project://")) {
+  if (/^project:\/\//i.test(requested)) {
     if (!projectDir) {
       throw new Error("project:// requires an activeProject");
     }
@@ -95,7 +101,7 @@ async function resolveReadPath(input, { workspaceRoot, activeProject } = {}) {
       root: projectDir,
       relative: requested.slice("project://".length).replace(/^[/\\]+/, ""),
     };
-  } else if (requested.toLowerCase().startsWith("workspace://")) {
+  } else if (/^workspace:\/\//i.test(requested)) {
     selection = {
       rootType: "workspace",
       root: workspace,

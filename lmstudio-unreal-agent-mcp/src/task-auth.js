@@ -7,6 +7,11 @@ const { compactTaskAuthorization } = require("./public-contract.js");
 const { taskStateDir, resolveAgentStateRoot, ensureStateRootLayout } = require("./state-root");
 const { atomicWriteJson } = require("./atomic-io");
 const {
+  canonicalAbsolutePathIdentity,
+  filesystemPathIdentity: sharedFilesystemPathIdentity,
+  resolveCanonicalAbsolutePath,
+} = require("./filesystem-path-identity");
+const {
   tryAcquireCrossProcessLock,
   releaseCrossProcessLock,
 } = require("./write-locks");
@@ -290,15 +295,14 @@ function validateCompletedGates(state, args = {}) {
     }].filter((item) => Array.isArray(item.snapshots) && item.snapshots.length)
     : [];
   if (requestedPaths.length && snapshotGates.length) {
-    const caseFold = (value) => process.platform === "win32" ? value.toLowerCase() : value;
     for (const snapshotGate of snapshotGates) {
       const byPath = new Map(
         snapshotGate.snapshots
           .filter((item) => item && item.absolutePath)
-          .map((item) => [caseFold(path.resolve(String(item.absolutePath))), item])
+          .map((item) => [canonicalAbsolutePathIdentity(item.absolutePath), item])
       );
       for (const requestedPath of requestedPaths) {
-        const snapshot = byPath.get(caseFold(requestedPath));
+        const snapshot = byPath.get(canonicalAbsolutePathIdentity(requestedPath));
         if (!snapshot) {
           return {
             ok: false,
@@ -366,14 +370,14 @@ function canonicalHash(value) {
 function normalizeRoutePath(value) {
   let result = String(value || "").trim().replace(/\\/g, "/");
   while (result.startsWith("./")) result = result.slice(2);
-  if (result.toLowerCase().startsWith("project://")) result = result.slice("project://".length);
+  if (/^project:\/\//i.test(result)) result = result.slice("project://".length);
   return result.replace(/^\/+|\/+$/g, "");
 }
 
 function filesystemPathIdentity(value, hostPlatform = process.platform) {
-  const normalized = normalizeRoutePath(value).normalize("NFC");
-  const windows = ["win32", "windows", "nt"].includes(String(hostPlatform || "").toLowerCase());
-  return windows ? normalized.toLowerCase() : normalized;
+  return sharedFilesystemPathIdentity(value, hostPlatform, {
+    trimOuterSlashes: true,
+  });
 }
 
 function normalizedSelectionSnapshots(values) {
@@ -1673,37 +1677,20 @@ const SAFE_ROUTE_RECOVERY_TOOLS = new Set([
   "quarantine_corrupt_task",
 ]);
 
-function canonicalWorkspaceRoot(value) {
-  const resolved = path.resolve(String(value || ""));
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+function canonicalWorkspaceRoot(value, hostPlatform = process.platform) {
+  return canonicalAbsolutePathIdentity(String(value || "."), hostPlatform);
 }
 
 function resolvedFilesystemPath(value, workspaceRoot = "") {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  let resolved = path.resolve(
-    path.isAbsolute(raw) ? raw : path.join(workspaceRoot || process.cwd(), raw)
-  );
-  try {
-    if (fs.existsSync(resolved)) {
-      resolved = fs.realpathSync.native
-        ? fs.realpathSync.native(resolved)
-        : fs.realpathSync(resolved);
-    }
-  } catch {
-    // Preserve the lexical absolute path for a missing or temporarily
-    // unavailable path. Callers still compare it fail-closed.
-  }
-  return resolved;
+  return resolveCanonicalAbsolutePath(value, {
+    basePath: workspaceRoot || process.cwd(),
+  });
 }
 
 function canonicalProjectIdentity(value, workspaceRoot = "", hostPlatform = process.platform) {
-  const resolved = resolvedFilesystemPath(value, workspaceRoot);
-  if (!resolved) return "";
-  const windows = ["win32", "windows", "nt"].includes(
-    String(hostPlatform || "").toLowerCase()
-  );
-  return windows ? resolved.toLowerCase() : resolved;
+  return canonicalAbsolutePathIdentity(value, hostPlatform, {
+    basePath: workspaceRoot || process.cwd(),
+  });
 }
 
 function authoritativeTaskProjectFile(state, workspaceRoot = "") {

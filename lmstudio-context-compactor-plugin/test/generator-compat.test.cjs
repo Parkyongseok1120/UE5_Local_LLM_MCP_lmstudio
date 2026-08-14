@@ -5795,6 +5795,124 @@ test("anonymous multi-tool checkpoints clear one tool result at a time", async (
   }
 });
 
+test("generator project source identity preserves Unicode and follows host ASCII policy", () => {
+  const {
+    hasTargetBoundDirectSourcePair,
+    normalizeProjectSourcePath,
+  } = require("../dist/generator.js");
+  const dottedCapitalI = "project://Source/\u0130/Thing.cpp";
+  const decomposedDottedI = "project://Source/I\u0307/Thing.cpp";
+  const nfc = "project://Source/Caf\u00e9/Thing.cpp";
+  const nfd = "project://Source/Cafe\u0301/Thing.cpp";
+
+  for (const host of ["linux", "darwin", "win32"]) {
+    assert.notEqual(
+      normalizeProjectSourcePath(dottedCapitalI, host),
+      normalizeProjectSourcePath(decomposedDottedI, host),
+    );
+    assert.notEqual(
+      normalizeProjectSourcePath(nfc, host),
+      normalizeProjectSourcePath(nfd, host),
+    );
+    assert.equal(
+      hasTargetBoundDirectSourcePair(
+        ["Source/\u0130/Thing.h"],
+        ["Source/I\u0307/Thing.cpp"],
+        host,
+      ),
+      false,
+    );
+  }
+
+  assert.equal(
+    normalizeProjectSourcePath("C:/Work/Demo/SOURCE/FOO/Thing.cpp", "win32"),
+    normalizeProjectSourcePath("c:/work/demo/source/foo/thing.cpp", "win32"),
+  );
+  assert.notEqual(
+    normalizeProjectSourcePath("/work/Demo/Source/FOO/Thing.cpp", "linux"),
+    normalizeProjectSourcePath("/work/Demo/Source/foo/thing.cpp", "linux"),
+  );
+  assert.equal(
+    hasTargetBoundDirectSourcePair(
+      ["Source/Foo/Thing.h"],
+      ["source/foo/thing.cpp"],
+      "win32",
+    ),
+    true,
+  );
+  assert.equal(
+    hasTargetBoundDirectSourcePair(
+      ["Source/Foo/Thing.h"],
+      ["Source/foo/thing.cpp"],
+      "linux",
+    ),
+    false,
+  );
+  assert.equal(
+    normalizeProjectSourcePath("/mnt/\u0130Workspace/Demo/Source/Foo/Thing.cpp", "linux"),
+    "Source/Foo/Thing.cpp",
+  );
+});
+
+test("architecture evidence keeps I-dot source reads distinct", () => {
+  const { architectureGateStatus, normalizeProjectSourcePath } = require("../dist/generator.js");
+  const history = Chat.from({ messages: [
+    { role: "user", content: [{ type: "text", text: "inspect sources" }] },
+    {
+      role: "assistant",
+      content: [{
+        type: "toolCallRequest",
+        toolCallRequest: {
+          id: "read-i-dot-a",
+          type: "function",
+          name: "read_file",
+          arguments: { path: "Source/\u0130/Thing.cpp" },
+        },
+      }],
+    },
+    {
+      role: "tool",
+      content: [{
+        type: "toolCallResult",
+        toolCallId: "read-i-dot-a",
+        name: "read_file",
+        content: "int First = 1;",
+      }],
+    },
+    {
+      role: "assistant",
+      content: [{
+        type: "toolCallRequest",
+        toolCallRequest: {
+          id: "read-i-dot-b",
+          type: "function",
+          name: "read_file",
+          arguments: { path: "Source/I\u0307/Thing.cpp" },
+        },
+      }],
+    },
+    {
+      role: "tool",
+      content: [{
+        type: "toolCallResult",
+        toolCallId: "read-i-dot-b",
+        name: "read_file",
+        content: "int Second = 2;",
+      }],
+    },
+  ] });
+
+  const status = architectureGateStatus(history, null);
+  assert.equal(status.directSourceFileEvidenceCount, 2);
+  assert.deepEqual(
+    new Set(status.directSourceImplementationPaths),
+    new Set([
+      normalizeProjectSourcePath("Source/\u0130/Thing.cpp"),
+      normalizeProjectSourcePath("Source/I\u0307/Thing.cpp"),
+    ]),
+  );
+});
+
 test("forced compaction keeps an SDK tool request and result as a complete pair", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-tool-pair-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;

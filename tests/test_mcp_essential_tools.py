@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from workspace_paths import filesystem_path_identity  # noqa: E402
+
 RAG_ESSENTIAL = {
     "unreal_get_active_project",
     "unreal_set_active_project",
@@ -1381,7 +1383,7 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
         "version": 1,
         "planRevision": persisted["planRevision"],
         "files": {
-            relative.casefold(): {
+            filesystem_path_identity(relative, trim_outer_slashes=True): {
                 "path": relative,
                 "contentHash": hashlib.sha256(
                     (project.parent / relative).read_bytes()
@@ -1454,7 +1456,9 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
     assert evidence_blocked["control"]["requiredTool"]["name"] == "read_file"
     assert evidence_blocked["control"]["allowedTools"] == ["read_file"]
     relative = "Source/Demo/RuleEngine.cpp"
-    persisted["directSourceEvidence"]["files"][relative.casefold()] = {
+    persisted["directSourceEvidence"]["files"][
+        filesystem_path_identity(relative, trim_outer_slashes=True)
+    ] = {
         "path": relative,
         "contentHash": hashlib.sha256((project.parent / relative).read_bytes()).hexdigest(),
         "sourceKind": "implementation",

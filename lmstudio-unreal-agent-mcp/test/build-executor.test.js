@@ -220,6 +220,52 @@ test("build output decoder preserves UTF-8 and decodes Korean Windows output", (
   assert.strictEqual(localeOutputEncoding("ja-JP", "darwin"), "utf-8");
 });
 
+test("Windows engine containment folds ASCII case without merging I-dot lookalikes", () => {
+  const base = path.join(os.tmpdir(), "engine-containment-identity");
+  const asciiRoot = path.join(base, "ASCIIEngine");
+  const asciiChild = path.join(base, "asciiengine", "Engine", "Build.bat");
+  assert.doesNotThrow(() => assertEngineContainment(asciiChild, asciiRoot, "win32"));
+
+  const idotRoot = path.join(base, "\u0130Engine");
+  const lookalikeChild = path.join(base, "i\u0307engine", "Engine", "Build.bat");
+  assert.throws(
+    () => assertEngineContainment(lookalikeChild, idotRoot, "win32"),
+    /outside engine root/i,
+  );
+});
+
+test("engine containment resolves an existing directory alias before authorizing", (t) => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "engine-containment-alias-"));
+  const engineRoot = path.join(fixtureRoot, "EngineRoot");
+  const outsideRoot = path.join(fixtureRoot, "Outside");
+  const alias = path.join(engineRoot, "Engine", "Binaries");
+  const executable = path.join(alias, "UnrealBuildTool.exe");
+  fs.mkdirSync(path.dirname(alias), { recursive: true });
+  fs.mkdirSync(outsideRoot, { recursive: true });
+  fs.writeFileSync(path.join(outsideRoot, "UnrealBuildTool.exe"), "outside");
+  try {
+    try {
+      fs.symlinkSync(
+        outsideRoot,
+        alias,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch (error) {
+      if (!["EPERM", "EACCES", "ENOTSUP", "UNKNOWN"].includes(String(error.code || ""))) {
+        throw error;
+      }
+      t.skip(`directory aliases are unavailable on this host: ${error.code || error.message}`);
+      return;
+    }
+    assert.throws(
+      () => assertEngineContainment(executable, engineRoot),
+      /outside engine root/i,
+    );
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test("runUnrealBuildFromPlan reports timedOut", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ue-timeout-"));
   const batDir = path.join(root, "Engine", "Build", "BatchFiles");

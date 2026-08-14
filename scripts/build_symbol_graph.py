@@ -27,7 +27,10 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
-from workspace_paths import resolve_active_project_root  # noqa: E402
+from workspace_paths import (  # noqa: E402
+    canonical_absolute_path_identity,
+    resolve_active_project_root,
+)
 
 # C/C++ and C# keep the existing Unreal workflow working.  The remaining
 # extensions are intentionally handled by the same conservative parser so the
@@ -490,11 +493,18 @@ def _find_body_end(lines: list[str], start_line: int, language: str) -> int | No
     return None
 
 
-def _path_key(path: Path) -> str:
-    return os.path.normcase(os.path.abspath(path))
+def _path_key(path: Path, *, host_platform: str | None = None) -> str:
+    return canonical_absolute_path_identity(
+        path,
+        host_platform=host_platform,
+    )
 
 
-def source_inventory_signature(source_root: Path) -> str:
+def source_inventory_signature(
+    source_root: Path,
+    *,
+    host_platform: str | None = None,
+) -> str:
     """Return a cheap process-cache key for the current source inventory.
 
     This signature deliberately uses file identity/stat data instead of reading
@@ -504,7 +514,12 @@ def source_inventory_signature(source_root: Path) -> str:
     """
     root = source_root.resolve()
     digest = hashlib.sha1()
-    digest.update(os.path.normcase(str(root)).encode("utf-8", errors="replace"))
+    digest.update(
+        canonical_absolute_path_identity(
+            root,
+            host_platform=host_platform,
+        ).encode("utf-8", errors="replace")
+    )
     for path in _iter_source_files(root):
         try:
             stat = path.stat()

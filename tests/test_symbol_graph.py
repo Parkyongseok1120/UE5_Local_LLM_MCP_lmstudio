@@ -271,3 +271,125 @@ def test_missing_symbol_graph_results_do_not_share_mutable_lists(tmp_path):
     second = symbol_graph.load_symbol_graph(tmp_path)
 
     assert second["symbols"] == []
+
+
+def test_owner_build_cs_path_matching_uses_host_filesystem_rules() -> None:
+    graph = {
+        "symbols": [
+            {
+                "file_path": "Source/Demo/Worker.cpp",
+                "owner_build_cs": "Source/Demo/Demo.Build.cs",
+            }
+        ]
+    }
+
+    assert (
+        symbol_graph.owner_build_cs_for_file(
+            "source/demo/worker.cpp",
+            graph,
+            host_platform="linux",
+        )
+        == ""
+    )
+    assert symbol_graph.owner_build_cs_for_file(
+        "source/demo/worker.cpp",
+        graph,
+        host_platform="win32",
+    ).endswith("Demo.Build.cs")
+
+
+def test_owner_build_cs_rejects_unicode_casefold_path_alias() -> None:
+    composed = "Source/Demo/\u0130mplementation.cpp"
+    decomposed = "Source/Demo/I\u0307mplementation.cpp"
+    assert composed.casefold() == decomposed.casefold()
+    graph = {
+        "symbols": [
+            {
+                "file_path": decomposed,
+                "owner_build_cs": "Source/Alias/Alias.Build.cs",
+            }
+        ]
+    }
+
+    for host_platform in ("linux", "win32"):
+        assert (
+            symbol_graph.owner_build_cs_for_file(
+                composed,
+                graph,
+                host_platform=host_platform,
+            )
+            == ""
+        )
+
+
+def test_symbol_graph_path_keys_and_root_signatures_use_host_rules(
+    tmp_path: Path,
+) -> None:
+    upper = tmp_path / "UpperSource"
+    lower = tmp_path / "uppersource"
+    assert build_symbol_graph._path_key(
+        upper,
+        host_platform="linux",
+    ) != build_symbol_graph._path_key(lower, host_platform="linux")
+    assert build_symbol_graph._path_key(
+        upper,
+        host_platform="win32",
+    ) == build_symbol_graph._path_key(lower, host_platform="win32")
+    assert build_symbol_graph.source_inventory_signature(
+        upper,
+        host_platform="linux",
+    ) != build_symbol_graph.source_inventory_signature(
+        lower,
+        host_platform="linux",
+    )
+    assert build_symbol_graph.source_inventory_signature(
+        upper,
+        host_platform="win32",
+    ) == build_symbol_graph.source_inventory_signature(
+        lower,
+        host_platform="win32",
+    )
+
+
+def test_symbol_graph_root_identity_preserves_unicode_spelling(tmp_path: Path) -> None:
+    composed = tmp_path / "\u0130Source"
+    decomposed = tmp_path / "I\u0307Source"
+    assert str(composed).casefold() == str(decomposed).casefold()
+
+    for host_platform in ("linux", "win32"):
+        assert build_symbol_graph._path_key(
+            composed,
+            host_platform=host_platform,
+        ) != build_symbol_graph._path_key(
+            decomposed,
+            host_platform=host_platform,
+        )
+        assert build_symbol_graph.source_inventory_signature(
+            composed,
+            host_platform=host_platform,
+        ) != build_symbol_graph.source_inventory_signature(
+            decomposed,
+            host_platform=host_platform,
+        )
+
+
+def test_symbol_graph_path_keys_do_not_use_unicode_normcase(tmp_path: Path) -> None:
+    upper = tmp_path / "\u00c4Source"
+    lower = tmp_path / "\u00e4Source"
+    assert str(upper).lower() == str(lower).lower()
+
+    for host_platform in ("linux", "win32"):
+        assert build_symbol_graph._path_key(
+            upper,
+            host_platform=host_platform,
+        ) != build_symbol_graph._path_key(
+            lower,
+            host_platform=host_platform,
+        )
+        assert build_symbol_graph.source_inventory_signature(
+            upper,
+            host_platform=host_platform,
+        ) != build_symbol_graph.source_inventory_signature(
+            lower,
+            host_platform=host_platform,
+        )

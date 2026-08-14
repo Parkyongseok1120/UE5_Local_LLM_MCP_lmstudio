@@ -6,6 +6,7 @@ const os = require("os");
 const path = require("path");
 const test = require("node:test");
 const { commitControlTransition } = require("../src/task-control-transition");
+const { filesystemPathIdentity } = require("../src/filesystem-path-identity");
 
 const {
   authorizeActiveRouteTool,
@@ -29,6 +30,7 @@ const {
   selectionBindingForState,
   validateMutationAuth,
   validateResolvedTaskProject,
+  validateTaskRouteScope,
 } = require("../src/task-auth");
 
 test("complete absent filename evidence is scoped to its project-relative search root", () => {
@@ -285,6 +287,37 @@ test("explicit route authorization rejects a task bound to another active projec
     else process.env.AGENT_STATE_ROOT = previous;
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("dual-existing POSIX Unicode projects remain distinct task owners", (t) => {
+  if (process.platform !== "linux") {
+    t.skip("dual NFC/NFD directory entries are verified on Linux filesystems");
+    return;
+  }
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-unicode-owner-"));
+  const nfcProject = path.join(workspace, "Caf\u00e9", "Demo.uproject");
+  const nfdProject = path.join(workspace, "Cafe\u0301", "Demo.uproject");
+  fs.mkdirSync(path.dirname(nfcProject), { recursive: true });
+  fs.mkdirSync(path.dirname(nfdProject), { recursive: true });
+  fs.writeFileSync(nfcProject, "{}");
+  fs.writeFileSync(nfdProject, "{}");
+  try {
+    const state = {
+      projectFile: nfcProject,
+      routeScope: { workspaceRoot: workspace, projectFile: nfcProject },
+    };
+    assert.notStrictEqual(fs.realpathSync(nfcProject), fs.realpathSync(nfdProject));
+    assert.notStrictEqual(
+      canonicalProjectIdentity(nfcProject, workspace),
+      canonicalProjectIdentity(nfdProject, workspace),
+    );
+    assert.deepStrictEqual(validateTaskRouteScope(state, workspace, nfcProject), { ok: true });
+    const mismatch = validateTaskRouteScope(state, workspace, nfdProject);
+    assert.strictEqual(mismatch.ok, false);
+    assert.strictEqual(mismatch.errorCode, "TASK_PROJECT_MISMATCH");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
 
@@ -631,6 +664,54 @@ test("code-generation gate binds writes to validated target hash", () => {
       { requireAll: true }
     );
     assert.strictEqual(stale.errorCode, "GATE_TARGET_STALE");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("Windows gate snapshots do not merge Unicode I-dot lookalike targets", (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Windows snapshot identity is host-specific");
+    return;
+  }
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-idot-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-auth-idot-state-"));
+  const project = path.join(workspace, "Demo");
+  const snapshotTarget = path.join(project, "Source", "\u0130", "Thing.cpp");
+  const requestedRelative = "Source/i\u0307/Thing.cpp";
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, "Demo.uproject"), "{}");
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    projectFile: path.join(project, "Demo.uproject"),
+    writeGate: { writesAllowed: true },
+    requiredBeforeWrite: ["unreal_code_sketch_claim_validate"],
+    requiredGateSetHash: "gate-set",
+    completedGates: {
+      unreal_code_sketch_claim_validate: {
+        status: "completed",
+        gateSetHash: "gate-set",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        targetSnapshots: [{ absolutePath: snapshotTarget, exists: false, fileHash: "" }],
+      },
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const result = validateMutationAuth(
+      workspace,
+      { taskAuthorization: authorization, path: requestedRelative },
+      { requireAll: true },
+    );
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.errorCode, "GATE_TARGET_MISMATCH");
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
@@ -1030,7 +1111,10 @@ test("task project proof canonicalizes existing paths and rejects another projec
     routeScope: { workspaceRoot: root, projectFile: projectA },
   };
 
-  assert.equal(authoritativeTaskProjectFile(state, root), fs.realpathSync(projectA));
+  assert.equal(
+    canonicalProjectIdentity(authoritativeTaskProjectFile(state, root), root),
+    canonicalProjectIdentity(projectA, root)
+  );
   assert.equal(
     canonicalProjectIdentity(projectA, root),
     canonicalProjectIdentity(fs.realpathSync(projectA), root)
@@ -1046,6 +1130,41 @@ test("task project proof canonicalizes existing paths and rejects another projec
     assert.equal(validateResolvedTaskProject(state, root, alias).ok, true);
   } catch (error) {
     if (!(["EPERM", "EACCES", "UNKNOWN"].includes(String(error.code || "")))) throw error;
+  }
+});
+
+test("workspace ownership treats an existing directory alias as the same route", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-workspace-alias-"));
+  const workspace = path.join(root, "CanonicalWorkspace");
+  const alias = path.join(root, "WorkspaceAlias");
+  fs.mkdirSync(workspace, { recursive: true });
+  try {
+    try {
+      fs.symlinkSync(
+        workspace,
+        alias,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch (error) {
+      if (!["EPERM", "EACCES", "ENOTSUP", "UNKNOWN"].includes(String(error.code || ""))) {
+        throw error;
+      }
+      t.skip(`directory aliases are unavailable on this host: ${error.code || error.message}`);
+      return;
+    }
+
+    const aliasOwnedState = {
+      workspaceRoot: alias,
+      routeScope: { workspaceRoot: alias, projectFile: "" },
+    };
+    const canonicalOwnedState = {
+      workspaceRoot: workspace,
+      routeScope: { workspaceRoot: workspace, projectFile: "" },
+    };
+    assert.deepStrictEqual(validateTaskRouteScope(aliasOwnedState, workspace), { ok: true });
+    assert.deepStrictEqual(validateTaskRouteScope(canonicalOwnedState, alias), { ok: true });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -2453,16 +2572,17 @@ test("successful direct source reads persist bounded target evidence on commit",
     );
     assert.strictEqual(committed.ok, true);
     const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    const sourceEvidenceKey = filesystemPathIdentity("Source/Demo/RuleEngine.cpp");
     assert.strictEqual(state.directSourceEvidence.planRevision, "4");
     assert.deepStrictEqual(
-      state.directSourceEvidence.files["source/demo/ruleengine.cpp"],
+      state.directSourceEvidence.files[sourceEvidenceKey],
       {
         path: "Source/Demo/RuleEngine.cpp",
         contentHash,
         sourceKind: "implementation",
         lineRanges: ["1-80"],
         tools: ["read_file"],
-        recordedAt: state.directSourceEvidence.files["source/demo/ruleengine.cpp"].recordedAt,
+        recordedAt: state.directSourceEvidence.files[sourceEvidenceKey].recordedAt,
       }
     );
     const ranged = reserveRouteCall(
@@ -2491,7 +2611,7 @@ test("successful direct source reads persist bounded target evidence on commit",
     );
     assert.strictEqual(rangedCommit.ok, true);
     const rangedState = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
-    const source = rangedState.sourceEvidence.files["source/demo/ruleengine.cpp"];
+    const source = rangedState.sourceEvidence.files[sourceEvidenceKey];
     assert.strictEqual(rangedState.sourceEvidence.version, 2);
     assert.match(source.evidenceId, /^[0-9a-f]{24}$/u);
     assert.deepStrictEqual(source.coveredRanges, [[1, 120]]);
@@ -2523,12 +2643,12 @@ test("successful direct source reads persist bounded target evidence on commit",
     );
     assert.strictEqual(changedCommit.ok, true);
     const changedState = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
-    const changedSource = changedState.sourceEvidence.files["source/demo/ruleengine.cpp"];
+    const changedSource = changedState.sourceEvidence.files[sourceEvidenceKey];
     assert.deepStrictEqual(changedSource.coveredRanges, [[5, 10]]);
     assert.deepStrictEqual(changedSource.declarations, []);
     assert.deepStrictEqual(changedSource.implementations, []);
     assert.deepStrictEqual(
-      changedState.directSourceEvidence.files["source/demo/ruleengine.cpp"].lineRanges,
+      changedState.directSourceEvidence.files[sourceEvidenceKey].lineRanges,
       ["5-10"]
     );
   } finally {
@@ -2975,6 +3095,93 @@ test("one committed rediscovery tool reopens a repeatedly blocked gate", () => {
   }
 });
 
+test("dual-existing POSIX Unicode source files keep evidence ledgers isolated", (t) => {
+  if (process.platform !== "linux") {
+    t.skip("dual NFC/NFD source entries are verified on Linux filesystems");
+    return;
+  }
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-unicode-evidence-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-unicode-evidence-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  const nfcRelative = "Source/Caf\u00e9/Rule.cpp";
+  const nfdRelative = "Source/Cafe\u0301/Rule.cpp";
+  const nfcFile = path.join(workspace, ...nfcRelative.split("/"));
+  const nfdFile = path.join(workspace, ...nfdRelative.split("/"));
+  fs.mkdirSync(path.dirname(nfcFile), { recursive: true });
+  fs.mkdirSync(path.dirname(nfdFile), { recursive: true });
+  fs.writeFileSync(nfcFile, "nfc");
+  fs.writeFileSync(nfdFile, "nfd");
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    planRevision: "unicode-plan",
+    writeGate: { writesAllowed: true },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-unicode-evidence",
+      phase: "planner",
+      activeTools: ["read_file"],
+      allowedPathScopes: ["Source"],
+      maxToolCallsPerPhase: 2,
+    },
+    toolRouteUsage: {
+      routeHash: "route-unicode-evidence",
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = { routeHash: "route-unicode-evidence", routePhase: "planner" };
+  try {
+    assert.notStrictEqual(fs.realpathSync(nfcFile), fs.realpathSync(nfdFile));
+    for (const [projectRelativePath, contentHash] of [
+      [nfcRelative, "c".repeat(64)],
+      [nfdRelative, "d".repeat(64)],
+    ]) {
+      const reserved = reserveRouteCall(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        "read_file",
+      );
+      assert.strictEqual(reserved.ok, true);
+      const committed = commitRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        "read_file",
+        reserved.reservationId,
+        {
+          directSourceEvidence: {
+            projectRelativePath,
+            contentHash,
+            lineRange: "1-1",
+          },
+        },
+      );
+      assert.strictEqual(committed.ok, true);
+    }
+    const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    const nfcKey = filesystemPathIdentity(nfcRelative);
+    const nfdKey = filesystemPathIdentity(nfdRelative);
+    assert.notStrictEqual(nfcKey, nfdKey);
+    assert.deepStrictEqual(Object.keys(state.sourceEvidence.files).sort(), [nfcKey, nfdKey].sort());
+    assert.strictEqual(state.sourceEvidence.files[nfcKey].contentHash, "c".repeat(64));
+    assert.strictEqual(state.sourceEvidence.files[nfdKey].contentHash, "d".repeat(64));
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("RC2 replay D: NOT_FOUND then complete zero-result search records final absence without reread", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-absent-evidence-workspace-"));
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-absent-evidence-state-"));
@@ -3032,7 +3239,8 @@ test("RC2 replay D: NOT_FOUND then complete zero-result search records final abs
     );
     assert.strictEqual(rolledBack.ok, true);
     const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
-    const absent = state.absentEvidence.files["source/demo/missingrule.cpp"];
+    const absenceKey = filesystemPathIdentity("Source/Demo/MissingRule.cpp");
+    const absent = state.absentEvidence.files[absenceKey];
     assert.strictEqual(state.toolRouteUsage.count, 0);
     assert.strictEqual(state.toolRouteUsage.reserved, 0);
     assert.strictEqual(absent.path, "Source/Demo/MissingRule.cpp");
@@ -3068,7 +3276,7 @@ test("RC2 replay D: NOT_FOUND then complete zero-result search records final abs
     );
     assert.strictEqual(searchCommitted.ok, true);
     const completedState = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
-    const completedAbsence = completedState.absentEvidence.files["source/demo/missingrule.cpp"];
+    const completedAbsence = completedState.absentEvidence.files[absenceKey];
     assert.strictEqual(completedState.toolRouteUsage.count, 1);
     assert.strictEqual(completedAbsence.searchComplete, true);
     assert.deepStrictEqual(completedAbsence.tools, ["read_file", "search_files"]);

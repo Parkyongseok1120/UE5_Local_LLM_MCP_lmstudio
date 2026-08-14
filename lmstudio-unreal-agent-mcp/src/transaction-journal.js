@@ -5,6 +5,7 @@ const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
 const { atomicWriteText } = require("./atomic-io");
+const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { sha256Text } = require("./safe-write");
 const { ensureStateRootLayout, resolveAgentStateRoot, taskStateDir } = require("./state-root");
 const {
@@ -174,8 +175,7 @@ function markJournalAwaitingBuild(journal, metadata = {}, stateRoot = resolveAge
 }
 
 function projectPathIdentity(value, platform = process.platform) {
-  const resolved = path.resolve(String(value || "."));
-  return platform === "win32" ? resolved.toLowerCase() : resolved;
+  return canonicalAbsolutePathIdentity(String(value || "."), platform);
 }
 
 function listPendingJournals({ taskSessionId = "", projectPath = "" } = {}, stateRoot = resolveAgentStateRoot()) {
@@ -226,10 +226,8 @@ function markPendingBuildFailed(selector = {}, details = {}, stateRoot = resolve
   return { ok: true, transactionIds: journals.map((item) => item.transactionId) };
 }
 
-function pathIdentity(value) {
-  const resolved = path.resolve(String(value || ""));
-  const normalized = resolved.replace(/\\/g, "/");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+function pathIdentity(value, platform = process.platform) {
+  return canonicalAbsolutePathIdentity(String(value || "."), platform);
 }
 
 function requiresBuildValidation(filePath) {

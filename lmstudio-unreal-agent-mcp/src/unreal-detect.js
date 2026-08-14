@@ -7,6 +7,11 @@ const os = require("os");
 const cp = require("child_process");
 const { promisify } = require("util");
 const { atomicWriteText } = require("./atomic-io");
+const {
+  absolutePathIsWithin,
+  canonicalAbsolutePathIdentity,
+  filesystemPathIdentity,
+} = require("./filesystem-path-identity");
 
 const execFile = promisify(cp.execFile);
 
@@ -207,8 +212,7 @@ async function listUnrealProjects(workspaceRoot, configPath, options = {}) {
 }
 
 function pathIdentity(value, hostPlatform = process.platform) {
-  const resolved = path.resolve(String(value || "")).normalize("NFC");
-  return hostPlatform === "win32" ? resolved.toLowerCase() : resolved;
+  return canonicalAbsolutePathIdentity(String(value || "."), hostPlatform);
 }
 
 function searchRootDelimiter(hostPlatform = process.platform) {
@@ -368,7 +372,7 @@ async function findEngineInstalls(options = {}) {
   const addInstall = async (candidateRoot, source) => {
     if (!candidateRoot) return;
     const root = path.resolve(candidateRoot);
-    const key = hostPlatform === "win32" ? root.toLowerCase() : root;
+    const key = pathIdentity(root, hostPlatform);
     if (seen.has(key)) return;
     const buildTool = await resolveEngineBuildTool(root, hostPlatform);
     if (!buildTool) return;
@@ -436,7 +440,11 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
         buildBat: buildTool.path,
         source: "environment",
         requestedEngineAssociation: engineAssociation,
-        warning: requestedFolder && path.basename(resolved).toLowerCase() !== requestedFolder.toLowerCase()
+        warning: requestedFolder && filesystemPathIdentity(
+          path.basename(resolved),
+          hostPlatform,
+          { stripProjectUri: false },
+        ) !== filesystemPathIdentity(requestedFolder, hostPlatform, { stripProjectUri: false })
           ? `Using UNREAL_ENGINE_ROOT for EngineAssociation ${engineAssociation}.`
           : null,
       };
@@ -446,7 +454,14 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
   const installs = await findEngineInstalls({ ...options, hostPlatform, env });
 
   if (requestedFolder) {
-    const exact = installs.find((item) => item.folderName.toLowerCase() === requestedFolder.toLowerCase());
+    const requestedKey = filesystemPathIdentity(requestedFolder, hostPlatform, {
+      stripProjectUri: false,
+    });
+    const exact = installs.find((item) => filesystemPathIdentity(
+      item.folderName,
+      hostPlatform,
+      { stripProjectUri: false },
+    ) === requestedKey);
     if (exact) {
       return {
         engineRoot: exact.engineRoot,
@@ -584,14 +599,26 @@ async function walkForUProjects(root, maxDepth, depth = 0, results = []) {
 function scoreProjectMatch(candidate, hint, workspaceRoot, options = {}) {
   const hostPlatform = options.hostPlatform || process.platform;
   const env = options.env || process.env;
-  const lowerHint = String(hint || "").trim().toLowerCase();
+  const hintIdentity = filesystemPathIdentity(hint, hostPlatform, {
+    stripProjectUri: false,
+  });
   let score = 0;
   const projectDir = pathIdentity(candidate.projectDir, hostPlatform);
-  const projectFile = candidate.projectFile.toLowerCase();
-  const projectName = candidate.projectName.toLowerCase();
+  const projectFile = filesystemPathIdentity(candidate.projectFile, hostPlatform, {
+    stripProjectUri: false,
+  });
+  const projectName = filesystemPathIdentity(candidate.projectName, hostPlatform, {
+    stripProjectUri: false,
+  });
 
   const workspaceIdentity = workspaceRoot ? pathIdentity(workspaceRoot, hostPlatform) : "";
-  if (workspaceIdentity && (projectDir === workspaceIdentity || projectDir.startsWith(`${workspaceIdentity}${path.sep}`))) {
+  if (
+    workspaceIdentity
+    && (
+      projectDir === workspaceIdentity
+      || absolutePathIsWithin(candidate.projectDir, workspaceRoot, hostPlatform)
+    )
+  ) {
     score += 20;
   }
 
@@ -600,12 +627,16 @@ function scoreProjectMatch(candidate, hint, workspaceRoot, options = {}) {
     if (pathIdentity(candidate.projectPath, hostPlatform) === active) score += 100;
   }
 
-  if (lowerHint) {
-    if (projectName === lowerHint) score += 80;
-    if (projectFile === lowerHint || projectFile === `${lowerHint}.uproject`) score += 70;
-    if (projectName.includes(lowerHint)) score += 40;
-    if (projectDir.includes(lowerHint)) score += 30;
-  } else if (path.basename(candidate.projectDir).toLowerCase() === projectName) {
+  if (hintIdentity) {
+    if (projectName === hintIdentity) score += 80;
+    if (projectFile === hintIdentity || projectFile === `${hintIdentity}.uproject`) score += 70;
+    if (projectName.includes(hintIdentity)) score += 40;
+    if (projectDir.includes(hintIdentity)) score += 30;
+  } else if (filesystemPathIdentity(
+    path.basename(candidate.projectDir),
+    hostPlatform,
+    { stripProjectUri: false },
+  ) === projectName) {
     score += 10;
   }
 
@@ -648,7 +679,9 @@ async function discoverProjects(workspaceRoot, configPath, options = {}) {
 
   const byName = new Map();
   for (const project of projects) {
-    const key = String(project.projectName || "").toLowerCase();
+    const key = filesystemPathIdentity(project.projectName, hostPlatform, {
+      stripProjectUri: false,
+    });
     const existing = byName.get(key);
     if (!existing) {
       byName.set(key, project);
@@ -924,7 +957,11 @@ function defaultPlatform(hostPlatform = process.platform) {
   return "Linux";
 }
 
-function buildProjectBrowsePaths(activeProjectPath, workspaceRoot) {
+function buildProjectBrowsePaths(
+  activeProjectPath,
+  workspaceRoot,
+  hostPlatform = process.platform,
+) {
   const resolvedProject = path.resolve(activeProjectPath);
   const projectDir = path.dirname(resolvedProject);
   const projectName = projectNameFromPath(resolvedProject);
@@ -953,10 +990,10 @@ function buildProjectBrowsePaths(activeProjectPath, workspaceRoot) {
   const exportDir = path.join(projectDir, "Saved", "LmStudioMetadataExports");
   let browseAvailable = false;
   try {
-    const projectIdentity = pathIdentity(projectDir);
-    const workspaceIdentity = pathIdentity(workspace);
+    const projectIdentity = pathIdentity(projectDir, hostPlatform);
+    const workspaceIdentity = pathIdentity(workspace, hostPlatform);
     browseAvailable = projectIdentity === workspaceIdentity
-      || projectIdentity.startsWith(`${workspaceIdentity}${path.sep}`);
+      || absolutePathIsWithin(projectDir, workspace, hostPlatform);
   } catch {
     browseAvailable = false;
   }

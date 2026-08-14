@@ -4,6 +4,25 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const core = require("../src/compaction-core");
 
+test("project evidence identity is POSIX-exact and folds Windows ASCII only", () => {
+  assert.equal(
+    core.normalizeProjectEvidencePath("project://Source/Demo/Foo.cpp", "win32"),
+    core.normalizeProjectEvidencePath("source/demo/foo.cpp", "win32"),
+  );
+  assert.notEqual(
+    core.normalizeProjectEvidencePath("Source/Demo/Foo.cpp", "linux"),
+    core.normalizeProjectEvidencePath("source/demo/foo.cpp", "linux"),
+  );
+  assert.notEqual(
+    core.normalizeProjectEvidencePath("Source/\u0130/Foo.cpp", "win32"),
+    core.normalizeProjectEvidencePath("Source/i\u0307/Foo.cpp", "win32"),
+  );
+  assert.notEqual(
+    core.normalizeProjectEvidencePath("Source/Caf\u00e9/Foo.cpp", "linux"),
+    core.normalizeProjectEvidencePath("Source/Cafe\u0301/Foo.cpp", "linux"),
+  );
+});
+
 test("budget gate reserves output, tool schema, and build result space", () => {
   const soft = core.budgetDecision({
     contextLength: 32_000,
@@ -1160,6 +1179,16 @@ test("LM Studio conversation directories provide cross-platform stable session i
   assert.equal(a, core.lmStudioConversationSessionFingerprint(windowsSame, "qwen-model"));
   assert.notEqual(a, core.lmStudioConversationSessionFingerprint(windowsB, "qwen-model"));
   assert.notEqual(a, core.lmStudioConversationSessionFingerprint(windowsA, "other-model"));
+  assert.notEqual(
+    core.lmStudioConversationSessionFingerprint(
+      "C:\\Users\\\u0130\\.lmstudio\\working-directories\\1786265188981",
+      "qwen-model",
+    ),
+    core.lmStudioConversationSessionFingerprint(
+      "C:\\Users\\i\u0307\\.lmstudio\\working-directories\\1786265188981",
+      "qwen-model",
+    ),
+  );
   assert.match(
     core.lmStudioConversationSessionFingerprint(posix, "qwen-model"),
     /^[a-f0-9]{32}$/,
@@ -1577,6 +1606,94 @@ test("successful mutation invalidates the changed file from the exact working se
   const checkpoint = core.buildCheckpoint(messages);
   assert.deepEqual(checkpoint.workingSet, []);
   assert.equal(checkpoint.evidenceFacts.some((fact) => fact.path === sourcePath), false);
+});
+
+test("lookalike Unicode mutation does not invalidate another source evidence owner", () => {
+  const sourcePath = "Source/\u0130/RuleEngine.cpp";
+  const lookalikePath = "Source/i\u0307/RuleEngine.cpp";
+  const messages = [
+    { role: "user", content: "fix the lookalike source without crossing owners" },
+    { role: "tool", content: JSON.stringify({ selectedSlice: { files: [sourcePath] } }) },
+    { role: "assistant", toolCalls: [{ id: "read", name: "read_file", arguments: { path: sourcePath } }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "read",
+      name: "read_file",
+      content: JSON.stringify({ contentHash: "d".repeat(64), content: "int32 OwnerRule = 1;\n" }),
+    }] },
+    { role: "assistant", toolCalls: [{
+      id: "write",
+      name: "replace_in_file",
+      arguments: { path: lookalikePath, oldText: "1", newText: "2" },
+    }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "write",
+      name: "replace_in_file",
+      content: JSON.stringify({ ok: true, mutationGeneration: 1 }),
+    }] },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.equal(checkpoint.workingSet.length, 1);
+  assert.equal(checkpoint.workingSet[0].path, sourcePath);
+  assert.equal(checkpoint.evidenceFacts.some((fact) => fact.path === sourcePath), true);
+});
+
+test("compacted source ledger preserves distinct Unicode owner keys", () => {
+  const firstPath = "Source/\u0130/Rule.cpp";
+  const secondPath = "Source/i\u0307/Rule.cpp";
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "preserve both evidence owners" },
+    {
+      role: "tool",
+      content: JSON.stringify({
+        sourceEvidence: {
+          version: 2,
+          planRevision: "unicode",
+          files: {
+            [firstPath]: { path: firstPath, contentHash: "a".repeat(64) },
+            [secondPath]: { path: secondPath, contentHash: "b".repeat(64) },
+          },
+        },
+      }),
+    },
+  ]);
+
+  assert.deepEqual(
+    new Set(Object.keys(checkpoint.sourceEvidence.files)),
+    new Set([
+      core.normalizeProjectEvidencePath(firstPath),
+      core.normalizeProjectEvidencePath(secondPath),
+    ]),
+  );
+});
+
+test("legacy lowercased ledger keys migrate from the entry's exact path spelling", () => {
+  const exactPath = "Source/\u0130/Rule.cpp";
+  const staleLegacyKey = "source/i\u0307/rule.cpp";
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "resume exact source evidence" },
+    {
+      role: "tool",
+      content: JSON.stringify({
+        sourceEvidence: {
+          version: 2,
+          planRevision: "legacy-key",
+          files: {
+            [staleLegacyKey]: { path: exactPath, contentHash: "e".repeat(64) },
+          },
+        },
+      }),
+    },
+  ]);
+
+  assert.deepEqual(
+    Object.keys(checkpoint.sourceEvidence.files),
+    [core.normalizeProjectEvidencePath(exactPath)],
+  );
+  assert.equal(
+    Object.hasOwn(checkpoint.sourceEvidence.files, core.normalizeProjectEvidencePath(staleLegacyKey)),
+    false,
+  );
 });
 
 test("cached repeat reads keep semantic anchors and emit an explicit no-reread ledger", () => {

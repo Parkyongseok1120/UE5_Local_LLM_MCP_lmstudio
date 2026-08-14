@@ -14,9 +14,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from workspace_paths import (
+    ascii_windows_fold,
+    canonical_absolute_path_identity,
     default_editor_export_dir,
     editor_export_dir,
     find_workspace_root,
+    is_windows_host_platform,
     load_shared_config,
     normalize_editor_export_dir,
     resolve_active_project_path,
@@ -110,9 +113,14 @@ def resolve_editor_executable(engine_root: Path, host_platform: str | None = Non
     raise FileNotFoundError(f"Unreal Editor executable not found under: {binary_dir}")
 
 
-def project_editor_running(uproject: Path) -> bool:
-    project_text = str(uproject.resolve()).lower()
-    if sys.platform == "win32":
+def project_editor_running(
+    uproject: Path,
+    host_platform: str | None = None,
+) -> bool:
+    host = sys.platform if host_platform is None else host_platform
+    windows = is_windows_host_platform(host)
+    project_text = canonical_absolute_path_identity(uproject, host)
+    if windows:
         command = (
             "Get-CimInstance Win32_Process -Filter \"Name='UnrealEditor.exe' OR Name='UnrealEditor-Cmd.exe'\" "
             "| Select-Object -ExpandProperty CommandLine"
@@ -130,8 +138,10 @@ def project_editor_running(uproject: Path) -> bool:
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
-    output = (proc.stdout or "").lower()
-    return project_text in output and "unrealeditor" in output
+    raw_output = (proc.stdout or "").replace("\\", "/")
+    output = ascii_windows_fold(raw_output) if windows else raw_output
+    executable_output = ascii_windows_fold(raw_output)
+    return project_text in output and "unrealeditor" in executable_output
 
 
 def _clear_markers(export_dir: Path) -> None:

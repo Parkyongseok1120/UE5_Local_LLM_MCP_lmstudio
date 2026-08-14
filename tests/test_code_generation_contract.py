@@ -155,3 +155,34 @@ def test_generation_contract_enforces_change_kind_target_cardinality(tmp_path: P
     assert single["ok"] is False
     assert too_many["ok"] is False
     assert multifile["ok"] is True
+
+
+def test_generation_contract_does_not_attach_graph_symbols_from_unicode_path_alias(
+    tmp_path: Path,
+) -> None:
+    composed_relative = "Source/Demo/\u0130mplementation.cpp"
+    alias_relative = "Source/Demo/I\u0307mplementation.cpp"
+    target = tmp_path / composed_relative
+    target.parent.mkdir(parents=True)
+    target.write_text("void Run() {}\n", encoding="utf-8")
+    assert composed_relative.casefold() == alias_relative.casefold()
+
+    result = build_generation_contract(
+        "modify implementation",
+        project_root=tmp_path,
+        target_files=[composed_relative],
+        graph={
+            "symbols": [
+                {
+                    "file_path": str(tmp_path / alias_relative),
+                    "symbol_name": "FAliasOwner",
+                    "qualified_name": "FAliasOwner",
+                    "symbol_kind": "class",
+                }
+            ]
+        },
+    )
+
+    assert result["ok"] is True, result
+    assert result["targets"][0]["knownSymbolCount"] == 0
+    assert "preserveSymbols" not in result["targets"][0]

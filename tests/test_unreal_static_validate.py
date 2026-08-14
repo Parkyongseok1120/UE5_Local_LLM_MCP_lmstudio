@@ -24,6 +24,7 @@ from unreal_static_validate import (  # noqa: E402
     validate_static_mutable_container_members,
     validate_missing_super_lifecycle_call,
     validate_replication_setup,
+    validate_replicated_uproperty_without_doreplifetime,
     build_source_include_index,
     has_static_errors,
     has_blocking_write_errors,
@@ -137,6 +138,25 @@ def test_duplicate_source_basename_detected(tmp_path: Path) -> None:
 
     assert "DUPLICATE_SOURCE_BASENAME" in codes
     assert has_static_errors(findings)
+
+
+def test_duplicate_source_basename_identity_is_host_aware_and_unicode_exact(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    _write(project / "Source" / "Demo" / "Public" / "\u0130Thing.h", "#pragma once\n")
+    _write(project / "Source" / "Demo" / "Private" / "I\u0307Thing.h", "#pragma once\n")
+    for host_platform in ("linux", "darwin", "win32"):
+        assert validate_duplicate_source_basenames(project, host_platform) == []
+
+    _write(project / "Source" / "Demo" / "Public" / "AsciiThing.h", "#pragma once\n")
+    _write(project / "Source" / "Demo" / "Private" / "asciithing.h", "#pragma once\n")
+    assert not any(
+        item.code == "DUPLICATE_SOURCE_BASENAME"
+        for item in validate_duplicate_source_basenames(project, "linux")
+    )
+    assert any(
+        item.code == "DUPLICATE_SOURCE_BASENAME"
+        for item in validate_duplicate_source_basenames(project, "win32")
+    )
 
 
 def test_include_path_not_found_detected(tmp_path: Path) -> None:
@@ -876,9 +896,19 @@ void UHealth::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeP
     assert not any(item.code == "REPLICATION_SETUP_INCOMPLETE" for item in findings)
 
 
-def test_normalize_rel_path_handles_slashes_and_case() -> None:
-    assert normalize_rel_path("Source\\Foo\\Bar.h") == normalize_rel_path("Source/foo/BAR.h")
-    assert normalize_rel_path("Source/Foo/Bar.h") == "source/foo/bar.h"
+def test_normalize_rel_path_is_host_aware_without_unicode_case_folding() -> None:
+    assert normalize_rel_path("Source\\Foo\\Bar.h", "win32") == normalize_rel_path(
+        "Source/foo/BAR.h", "win32"
+    )
+    assert normalize_rel_path("Source/Foo/Bar.h", "win32") == "source/foo/bar.h"
+    assert normalize_rel_path("Source/Foo/Bar.h", "linux") == "Source/Foo/Bar.h"
+    assert normalize_rel_path("Source/Foo/Bar.h", "linux") != normalize_rel_path(
+        "Source/foo/BAR.h", "linux"
+    )
+    for host_platform in ("linux", "darwin", "win32"):
+        assert normalize_rel_path("Source/\u0130/Thing.cpp", host_platform) != normalize_rel_path(
+            "Source/I\u0307/Thing.cpp", host_platform
+        )
 
 
 def test_has_blocking_write_errors_scopes_to_written_file() -> None:
@@ -888,8 +918,18 @@ def test_has_blocking_write_errors_scopes_to_written_file() -> None:
     ]
     # Pre-existing error lives in a different file than the one just written.
     assert not has_blocking_write_errors(findings, "Source/Demo/New.h")
-    # Same file path, but backslash-separated and differently cased, must still match.
-    assert has_blocking_write_errors(findings, "Source\\OTHER\\existing.h")
+    # Windows treats ASCII case aliases as the same path; POSIX does not.
+    assert has_blocking_write_errors(findings, "Source\\OTHER\\existing.h", "win32")
+    assert not has_blocking_write_errors(findings, "Source\\OTHER\\existing.h", "linux")
+
+
+def test_has_blocking_write_errors_keeps_i_dot_targets_distinct() -> None:
+    findings = [
+        Finding("error", "Source/\u0130/Thing.cpp", 1, "UHT_MACRO_IN_CONDITIONAL_BLOCK", "invalid"),
+    ]
+    for host_platform in ("linux", "darwin", "win32"):
+        assert not has_blocking_write_errors(findings, "Source/I\u0307/Thing.cpp", host_platform)
+    assert has_blocking_write_errors(findings, "Source/\u0130/Thing.cpp", "linux")
 
 
 def test_has_blocking_write_errors_defers_counterpart_codes() -> None:
@@ -1071,6 +1111,37 @@ def test_replicated_property_missing_doreplifetime_per_property(tmp_path: Path) 
         for item in findings
     )
     assert not any("Health" in item.message for item in findings if item.code == "REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME")
+
+
+def test_replication_validator_does_not_pair_unicode_casefold_twin_stems(tmp_path: Path) -> None:
+    header = tmp_path / "Source" / "Demo" / "Public" / "\u0130.h"
+    cpp = tmp_path / "Source" / "Demo" / "Private" / "I\u0307.cpp"
+    header.parent.mkdir(parents=True)
+    cpp.parent.mkdir(parents=True)
+    header.write_text(
+        "class AMyActor {\n"
+        "  UPROPERTY(Replicated)\n"
+        "  int32 Health;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    cpp.write_text(
+        "void AMyActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out) const {\n"
+        "  DOREPLIFETIME(AMyActor, Health);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    for host_platform in ("linux", "darwin", "win32"):
+        findings = validate_replicated_uproperty_without_doreplifetime(
+            tmp_path,
+            host_platform=host_platform,
+        )
+        assert any(
+            item.code == "REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME"
+            and "Health" in item.message
+            for item in findings
+        )
 
 
 def test_doreplifetime_condition_counts_as_registered(tmp_path: Path) -> None:

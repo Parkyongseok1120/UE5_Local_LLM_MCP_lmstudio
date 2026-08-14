@@ -14,7 +14,7 @@ from typing import Any
 from rag_search import META_COLUMNS, expand_query_terms, rerank_row, resolve_mode, table_columns, tokenize
 from rag_types import SearchOptions
 from symbol_cache import get_cached, set_cached
-from workspace_paths import find_workspace_root
+from workspace_paths import filesystem_path_identity, find_workspace_root
 
 CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -379,16 +379,55 @@ def hybrid_search(
         if status.get("hybridV2Ready"):
             embed_rows = search_embeddings(index, query, top_k=max(top_k * 2, 12))
             if options.projects:
-                project_set = {p.lower() for p in options.projects}
                 embed_rows = [
                     row
                     for row in embed_rows
-                    if not row.get("project")
-                    or str(row.get("project")).lower() in project_set
-                    or any(p.lower() in str(row.get("locator") or "").lower() for p in options.projects)
+                    if _embedding_row_matches_projects(row, options.projects)
                 ]
             merged = merge_hybrid_results(merged, embed_rows, top_k)
     except Exception:
         pass
 
     return merged[:top_k]
+
+
+def _embedding_row_matches_projects(
+    row: dict[str, Any],
+    projects: list[str],
+    *,
+    host_platform: str | None = None,
+) -> bool:
+    """Apply host filesystem semantics to project/locator embedding filters."""
+
+    project_identities = {
+        filesystem_path_identity(
+            project,
+            host_platform=host_platform,
+            trim_outer_slashes=True,
+        )
+        for project in projects
+        if str(project or "").strip()
+    }
+    row_project = str(row.get("project") or "").strip()
+    if row_project:
+        return filesystem_path_identity(
+            row_project,
+            host_platform=host_platform,
+            trim_outer_slashes=True,
+        ) in project_identities
+    locator_identity = filesystem_path_identity(
+        row.get("locator"),
+        host_platform=host_platform,
+        trim_outer_slashes=True,
+    )
+    locator_parts = tuple(part for part in locator_identity.split("/") if part)
+    padded_locator = f"/{'/'.join(locator_parts)}/"
+    return any(
+        (
+            f"/{identity.strip('/')}/" in padded_locator
+            if "/" in identity
+            else identity in locator_parts
+        )
+        for identity in project_identities
+        if identity
+    )

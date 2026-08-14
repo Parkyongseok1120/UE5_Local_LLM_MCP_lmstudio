@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -317,6 +319,50 @@ def test_cli_task_scope_blocks_selected_file_error(tmp_path: Path) -> None:
     assert payload["hasBlockingErrors"] is True
     assert any(item["blocking"] is True for item in payload["findings"])
     assert result.returncode == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX exact-path scope regression")
+def test_cli_task_scope_does_not_promote_i_dot_twin_file_error(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    module = project / "Source" / "Demo"
+    selected = module / "Public" / "I\u0307" / "Thing.h"
+    other = module / "Public" / "\u0130" / "Thing.h"
+    selected.parent.mkdir(parents=True)
+    other.parent.mkdir(parents=True)
+    (module / "Demo.Build.cs").write_text(
+        "using UnrealBuildTool;\npublic class Demo : ModuleRules "
+        "{ public Demo(ReadOnlyTargetRules Target) : base(Target) {} }\n",
+        encoding="utf-8",
+    )
+    selected.write_text('#pragma once\n#include "\u0130/Thing.h"\n', encoding="utf-8")
+    other.write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n\nUCLASS()\n'
+        'class DEMO_API UBroken : public UObject\n{\n\tGENERATED_BODY()\n};\n'
+        '#include "Thing.generated.h"\n',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "validate_project_sources.py"),
+            "--project-root",
+            str(project),
+            "--json",
+            "--scope-target",
+            "Source/Demo/Public/I\u0307/Thing.h",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+    twin_findings = [item for item in payload["findings"] if "/\u0130/Thing.h" in item["path"].replace("\\", "/")]
+    assert twin_findings
+    assert all(item["blocking"] is False for item in twin_findings)
+    assert payload["hasBlockingErrors"] is False
+    assert result.returncode == 0
 
 
 def test_cli_write_target_scoped_scan_is_fast(tmp_path: Path) -> None:

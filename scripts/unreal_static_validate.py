@@ -30,6 +30,7 @@ from ue_cpp_signatures import (
     normalize_signature_params,
     parse_interface_virtual_methods,
 )
+from workspace_paths import filesystem_path_identity
 
 CPP_SOURCE_SUFFIXES = UNREAL_CPP_SOURCE_SUFFIXES
 CPP_IMPLEMENTATION_SUFFIXES = UNREAL_CPP_IMPLEMENTATION_SUFFIXES
@@ -2489,7 +2490,10 @@ ENGINE_INCLUDE_PREFIXES = (
 )
 
 
-def validate_duplicate_source_basenames(root: Path) -> list[Finding]:
+def validate_duplicate_source_basenames(
+    root: Path,
+    host_platform: str | None = None,
+) -> list[Finding]:
     counts: dict[str, list[str]] = {}
     source = root / "Source"
     if not source.is_dir():
@@ -2499,7 +2503,11 @@ def validate_duplicate_source_basenames(root: Path) -> list[Finding]:
             continue
         if should_ignore_project_path(path):
             continue
-        key = path.name.lower()
+        key = filesystem_path_identity(
+            path.name,
+            host_platform,
+            strip_project_uri=False,
+        )
         rel = str(path.relative_to(root)).replace("\\", "/")
         counts.setdefault(key, []).append(rel)
     findings: list[Finding] = []
@@ -3228,6 +3236,7 @@ def validate_replicated_uproperty_without_doreplifetime(
     *,
     scope_header_paths: list[Path] | None = None,
     scope_texts: dict[Path, str] | None = None,
+    host_platform: str | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
     header_paths = scope_header_paths
@@ -3237,14 +3246,31 @@ def validate_replicated_uproperty_without_doreplifetime(
     if scope_texts is not None:
         for path, text in scope_texts.items():
             if path.suffix.lower() in CPP_SOURCE_SUFFIXES:
-                cpp_text_by_stem[path.stem.lower()] = text
+                cpp_text_by_stem[
+                    filesystem_path_identity(
+                        path.stem,
+                        host_platform,
+                        strip_project_uri=False,
+                    )
+                ] = text
     else:
         for path in iter_source_files(root):
             if path.suffix.lower() in CPP_SOURCE_SUFFIXES:
-                cpp_text_by_stem[path.stem.lower()] = read_text(path)
+                cpp_text_by_stem[
+                    filesystem_path_identity(
+                        path.stem,
+                        host_platform,
+                        strip_project_uri=False,
+                    )
+                ] = read_text(path)
     for path in header_paths:
         header_text = scope_texts.get(path, read_text(path)) if scope_texts else read_text(path)
-        cpp_text = mask_comments_and_strings(cpp_text_by_stem.get(path.stem.lower(), ""))
+        stem_key = filesystem_path_identity(
+            path.stem,
+            host_platform,
+            strip_project_uri=False,
+        )
+        cpp_text = mask_comments_and_strings(cpp_text_by_stem.get(stem_key, ""))
         class_names = [
             match.group(1)
             for match in re.finditer(
@@ -3774,8 +3800,8 @@ def has_static_errors(findings: list[Finding]) -> bool:
     return any(finding.severity == "error" for finding in findings)
 
 
-def normalize_rel_path(value: str) -> str:
-    return str(value or "").strip().replace("\\", "/").lower()
+def normalize_rel_path(value: str, host_platform: str | None = None) -> str:
+    return filesystem_path_identity(value, host_platform, trim_outer_slashes=True)
 
 
 # Codes whose "error" is really "the counterpart file hasn't been written yet in this
@@ -3791,20 +3817,24 @@ DEFERRED_WRITE_COUNTERPART_CODES = frozenset(
 )
 
 
-def has_blocking_write_errors(findings: list[Finding], write_target: str) -> bool:
+def has_blocking_write_errors(
+    findings: list[Finding],
+    write_target: str,
+    host_platform: str | None = None,
+) -> bool:
     """Whether a validate-on-write should roll back the just-written file.
 
     Only errors that are (a) not a deferred counterpart code and (b) located on the
     file that was just written count as blocking. Pre-existing errors in other files,
     and deferred counterpart findings anywhere, are surfaced as advisories instead.
     """
-    target = normalize_rel_path(write_target)
+    target = normalize_rel_path(write_target, host_platform)
     for finding in findings:
         if finding.severity != "error":
             continue
         if finding.code in DEFERRED_WRITE_COUNTERPART_CODES:
             continue
-        if normalize_rel_path(finding.path) == target:
+        if normalize_rel_path(finding.path, host_platform) == target:
             return True
     return False
 

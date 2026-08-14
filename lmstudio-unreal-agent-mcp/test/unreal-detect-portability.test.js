@@ -6,6 +6,7 @@ const os = require("os");
 const path = require("path");
 const test = require("node:test");
 const {
+  buildProjectBrowsePaths,
   resolveProjectSelection,
   resolveSearchRoots,
   findEngineInstalls,
@@ -118,6 +119,10 @@ test("path identity folds case only on Windows hosts", () => {
   assert.strictEqual(pathIdentity("CaseSensitive/Project", "win32"), pathIdentity("casesensitive/project", "win32"));
   assert.notStrictEqual(pathIdentity("CaseSensitive/Project", "linux"), pathIdentity("casesensitive/project", "linux"));
   assert.notStrictEqual(pathIdentity("CaseSensitive/Project", "darwin"), pathIdentity("casesensitive/project", "darwin"));
+  assert.notStrictEqual(pathIdentity("Caf\u00e9/Project", "linux"), pathIdentity("Cafe\u0301/Project", "linux"));
+  assert.notStrictEqual(pathIdentity("Caf\u00e9/Project", "darwin"), pathIdentity("Cafe\u0301/Project", "darwin"));
+  assert.notStrictEqual(pathIdentity("Caf\u00e9/Project", "win32"), pathIdentity("Cafe\u0301/Project", "win32"));
+  assert.notStrictEqual(pathIdentity("\u0130/Project", "win32"), pathIdentity("i\u0307/Project", "win32"));
 });
 
 test("unique project roots preserve case-distinct POSIX directories", () => {
@@ -149,6 +154,111 @@ test("resolveSearchRoots accepts injected host environment without machine defau
   } finally {
     if (previousSharedConfig === undefined) delete process.env.SHARED_UNREAL_CONFIG;
     else process.env.SHARED_UNREAL_CONFIG = previousSharedConfig;
+  }
+});
+
+test("Windows engine discovery does not merge Unicode I-dot lookalike roots", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-idot-engines-"));
+  const roots = [path.join(parent, "\u0130Engine"), path.join(parent, "i\u0307Engine")];
+  try {
+    for (const engineRoot of roots) {
+      const buildBat = path.join(engineRoot, "Engine", "Build", "BatchFiles", "Build.bat");
+      fs.mkdirSync(path.dirname(buildBat), { recursive: true });
+      fs.writeFileSync(buildBat, "@echo off\r\nexit /b 0\r\n", "utf8");
+    }
+    const installs = await findEngineInstalls({
+      hostPlatform: "win32",
+      roots,
+      env: {},
+    });
+    assert.strictEqual(installs.length, 2);
+    assert.deepStrictEqual(
+      new Set(installs.map((item) => item.engineRoot)),
+      new Set(roots.map((item) => path.resolve(item))),
+    );
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("Windows project discovery keeps Unicode I-dot lookalike owners distinct", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-idot-projects-"));
+  const workspaceRoot = path.join(root, "workspace");
+  const projectRoot = path.join(root, "projects");
+  const sharedConfig = path.join(root, "unreal-workspace.json");
+  const localConfig = path.join(root, "agent-mcp.json");
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  const idotProject = createProject(projectRoot, "\u0130Game", "5.8");
+  const lookalikeProject = createProject(projectRoot, "i\u0307Game", "5.8");
+  fs.utimesSync(idotProject, new Date("2025-01-01T00:00:00Z"), new Date("2025-01-01T00:00:00Z"));
+  fs.utimesSync(lookalikeProject, new Date("2025-01-02T00:00:00Z"), new Date("2025-01-02T00:00:00Z"));
+  fs.writeFileSync(sharedConfig, JSON.stringify({ projectSearchRoots: [projectRoot] }), "utf8");
+  fs.writeFileSync(localConfig, "{}", "utf8");
+  const previousSharedConfig = process.env.SHARED_UNREAL_CONFIG;
+  process.env.SHARED_UNREAL_CONFIG = sharedConfig;
+  try {
+    const result = await resolveProjectSelection(workspaceRoot, localConfig, {
+      hostPlatform: "win32",
+      maxDepth: 4,
+    });
+    assert.deepStrictEqual(
+      new Set(result.projects.map((item) => item.projectName)),
+      new Set(["\u0130Game", "i\u0307Game"]),
+    );
+    const selected = await resolveProjectSelection(workspaceRoot, localConfig, {
+      hostPlatform: "win32",
+      hint: "\u0130Game",
+      maxDepth: 4,
+    });
+    assert.strictEqual(selected.selected?.projectName, "\u0130Game");
+  } finally {
+    if (previousSharedConfig === undefined) delete process.env.SHARED_UNREAL_CONFIG;
+    else process.env.SHARED_UNREAL_CONFIG = previousSharedConfig;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows project selection keeps the workspace descendant score", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-win-workspace-score-"));
+  const workspaceRoot = path.join(root, "workspace");
+  const externalRoot = path.join(root, "external");
+  const sharedConfig = path.join(root, "unreal-workspace.json");
+  const localConfig = path.join(root, "agent-mcp.json");
+  const workspaceProject = createProject(workspaceRoot, "WorkspaceGame", "5.8");
+  createProject(externalRoot, "ExternalGame", "5.8");
+  fs.writeFileSync(sharedConfig, JSON.stringify({ projectSearchRoots: [externalRoot] }), "utf8");
+  fs.writeFileSync(localConfig, "{}", "utf8");
+  const previousSharedConfig = process.env.SHARED_UNREAL_CONFIG;
+  process.env.SHARED_UNREAL_CONFIG = sharedConfig;
+  try {
+    const result = await resolveProjectSelection(workspaceRoot, localConfig, {
+      hostPlatform: "win32",
+      maxDepth: 4,
+      env: {},
+    });
+    assert.strictEqual(result.selected?.projectPath, path.resolve(workspaceProject));
+    assert.strictEqual(result.selectionReason, "best-score");
+    assert.ok(result.selected.score > result.projects.find(
+      (item) => item.projectName === "ExternalGame",
+    ).score);
+  } finally {
+    if (previousSharedConfig === undefined) delete process.env.SHARED_UNREAL_CONFIG;
+    else process.env.SHARED_UNREAL_CONFIG = previousSharedConfig;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows workspace descendant remains browseable with slash canonical identities", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-win-browse-scope-"));
+  const workspaceRoot = path.join(root, "workspace");
+  const projectPath = createProject(workspaceRoot, "BrowseGame", "5.8");
+  try {
+    const context = buildProjectBrowsePaths(projectPath, workspaceRoot, "win32");
+    assert.strictEqual(context.browseAvailable, true);
+    assert.strictEqual(context.sourceBrowsePath, "BrowseGame/Source/BrowseGame");
+    assert.strictEqual(context.contentBrowsePath, "BrowseGame/Content");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

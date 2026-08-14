@@ -4,6 +4,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
+const { absolutePathIsWithin } = require("./filesystem-path-identity");
 
 function normalizeVersion(value) {
   const match = String(value || "").match(/(\d+\.\d+)/);
@@ -73,12 +74,7 @@ async function resolveBuildExecutable(engineRoot, hostPlatform = process.platfor
 }
 
 function assertEngineContainment(executable, engineRoot, hostPlatform = process.platform) {
-  const execResolved = path.resolve(executable);
-  const rootResolved = path.resolve(engineRoot);
-  const contained = hostPlatform === "win32"
-    ? execResolved.toLowerCase().startsWith(rootResolved.toLowerCase() + path.sep)
-    : execResolved.startsWith(rootResolved + path.sep);
-  if (!contained) {
+  if (!absolutePathIsWithin(executable, engineRoot, hostPlatform)) {
     throw new Error(`Build executable outside engine root: ${executable}`);
   }
 }

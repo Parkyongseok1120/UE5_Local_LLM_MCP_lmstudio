@@ -449,6 +449,11 @@ test("Automation log persistence failure resolves as a bounded failure", async (
     assert.strictEqual(result.logPersistenceError, result.error);
     assert.strictEqual(result.outputDecodeError, "");
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 10 : 0,
+      retryDelay: 100,
+    });
   }
 });

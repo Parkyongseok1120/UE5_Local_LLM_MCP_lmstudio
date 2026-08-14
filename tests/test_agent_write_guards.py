@@ -44,6 +44,51 @@ const guards = require('./src/write-guards.js');
     assert len(payload) == 2
 
 
+def test_source_basename_collision_does_not_unicode_casefold_distinct_i_dot_names(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "Demo"
+    existing = project / "Source" / "Demo" / "Public" / "\u0130HealthComponent.h"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("a", encoding="utf-8")
+    target = project / "Source" / "Demo" / "Private" / "I\u0307HealthComponent.h"
+    script = f"""
+const guards = require('./src/write-guards.js');
+(async () => {{
+  const hits = await guards.findSourceBasenameCollisions(
+    {json.dumps(str(target))},
+    {json.dumps(str(tmp_path))},
+    {json.dumps(str(project))}
+  );
+  console.log(JSON.stringify(hits));
+}})();
+"""
+    assert _run_node(script) == []
+
+
+def test_deletion_candidate_identity_is_host_aware_without_unicode_casefold() -> None:
+    script = """
+const guards = require('./src/write-guards.js');
+const first = 'Source/\u0130/Thing.cpp';
+const second = 'Source/I\u0307/Thing.cpp';
+console.log(JSON.stringify({
+  unicodeDistinct: ['linux', 'darwin', 'win32'].every(
+    host => guards.deletionCandidateIdentity(first, host) !== guards.deletionCandidateIdentity(second, host)
+  ),
+  windowsAsciiAlias: guards.deletionCandidateIdentity('Source/Foo.cpp', 'win32')
+    === guards.deletionCandidateIdentity('source/foo.cpp', 'win32'),
+  posixAsciiDistinct: guards.deletionCandidateIdentity('Source/Foo.cpp', 'linux')
+    !== guards.deletionCandidateIdentity('source/foo.cpp', 'linux'),
+}));
+"""
+    payload = _run_node(script)
+    assert payload == {
+        "unicodeDistinct": True,
+        "windowsAsciiAlias": True,
+        "posixAsciiDistinct": True,
+    }
+
+
 def test_is_delete_allowed_only_under_source(tmp_path: Path) -> None:
     project = tmp_path / "Demo"
     allowed = project / "Source" / "Demo" / "Private" / "Old.cpp"

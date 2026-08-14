@@ -9,7 +9,24 @@ const test = require("node:test");
 const {
   displayPath,
   resolveReadPath,
+  stripProjectNamePrefix,
 } = require("../src/read-path-resolver");
+
+test("project-prefix identity folds ASCII only on Windows", () => {
+  const projectDir = path.join("Projects", "MyGame");
+  assert.strictEqual(
+    stripProjectNamePrefix("Projects/mygame/Source/MyGame/Foo.cpp", projectDir, "win32"),
+    "Source/MyGame/Foo.cpp",
+  );
+  assert.strictEqual(
+    stripProjectNamePrefix("Projects/mygame/Source/MyGame/Foo.cpp", projectDir, "linux"),
+    "Projects/mygame/Source/MyGame/Foo.cpp",
+  );
+
+  const idotProject = path.join("Projects", "\u0130Game");
+  const lookalike = "Projects/i\u0307game/Source/Demo/Foo.cpp";
+  assert.strictEqual(stripProjectNamePrefix(lookalike, idotProject, "win32"), lookalike);
+});
 
 test("workspace-prefixed active-project paths normalize to project:// paths", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-path-resolver-"));
