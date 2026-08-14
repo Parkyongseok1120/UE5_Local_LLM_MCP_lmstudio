@@ -706,6 +706,153 @@ test("control v2 required tool is forced as one exact schema with server argumen
   }
 });
 
+test("control v2 recovers an exact server-owned read when the chat catalog drops its schema", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-control-v2-read-recovery-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let predictionCount = 0;
+    const model = {
+      identifier: "control-v2-read-recovery-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        predictionCount += 1;
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name), ["read_file"]);
+        assert.deepEqual(opts.rawTools.tools[0].function.parameters.required, []);
+        opts.onToolCallRequestStart(1, { toolCallId: "read-recovered-v2" });
+        opts.onToolCallRequestNameReceived(1, "read_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "read-recovered-v2",
+            type: "function",
+            name: "read_file",
+            arguments: {},
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const ownership = { taskSessionId: "task-control-v2-read", ownerCapability: "owner-control-v2-read" };
+    const requiredPath = "Source/Project_MJS/Public/Animation/CPlayerCharacterAnimInstance.h";
+    const payload = {
+      ok: false,
+      taskAuthorization: ownership,
+      control: {
+        version: 2,
+        epoch: 1,
+        taskSessionId: "task-control-v2-read",
+        routeHash: "route-control-v2-read",
+        phase: "planner",
+        disposition: "require_tool",
+        requiredTool: { name: "read_file", args: { path: requiredPath } },
+        allowedTools: ["read_file"],
+        retryPolicy: { sameSemanticInput: "forbidden" },
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "continue the implementation" }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "feature-intent-v2-read",
+        name: "unreal_feature_intent_resolve",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+    const staleChatTools = [{
+      type: "function",
+      function: { name: "unreal_feature_intent_resolve", parameters: { type: "object", properties: {} } },
+    }];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, staleChatTools), history);
+
+    assert.equal(predictionCount, 1);
+    const end = emitted.find((event) => event.kind === "end");
+    assert.ok(end);
+    assert.equal(end.request.name, "read_file");
+    assert.equal(end.request.arguments.path, requiredPath);
+    assert.ok(end.request.arguments.sessionId);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => (
+      event.type === "server_control_read_schema_recovered"
+      && event.requiredTool === "read_file"
+      && event.epoch === 1
+    )));
+    assert.ok(events.some((event) => (
+      event.type === "context_measurement"
+      && event.serverControlReadSchemaRecovered === true
+      && event.requiredToolSchemaMissing === false
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("control v2 still blocks a missing mutation schema before model invocation", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-control-v2-write-missing-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let predictionCount = 0;
+    const model = {
+      identifier: "control-v2-write-missing-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        predictionCount += 1;
+        throw new Error("target model must not run without the required mutation schema");
+      },
+    };
+    const payload = {
+      ok: true,
+      taskAuthorization: { taskSessionId: "task-control-v2-write", ownerCapability: "owner-control-v2-write" },
+      control: {
+        version: 2,
+        epoch: 2,
+        taskSessionId: "task-control-v2-write",
+        routeHash: "route-control-v2-write",
+        phase: "executor",
+        disposition: "require_tool",
+        requiredTool: { name: "replace_in_file", args: { path: "Source/Demo/Foo.cpp" } },
+        allowedTools: ["replace_in_file"],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "continue the implementation" }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "status-v2-write",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await assert.rejects(
+      generate(controllerFor(model, {}, stateRoot, emitted, [{
+        type: "function",
+        function: { name: "read_file", parameters: { type: "object", properties: {} } },
+      }]), history),
+      /requires replace_in_file, but its MCP schema is not present/,
+    );
+    assert.equal(predictionCount, 0);
+    assert.equal(emitted.some((event) => event.kind === "end"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("required feature intent is suspended until completion-audit evidence is grounded", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-refill-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;

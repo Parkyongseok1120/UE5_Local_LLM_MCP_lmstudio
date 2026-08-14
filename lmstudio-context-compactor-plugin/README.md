@@ -8,7 +8,7 @@ compacted `Chat` to the configured underlying local model when the remaining bud
 With zero or multiple loaded LLMs, the plugin fails with a list of candidates and asks for an
 exact model key. The existing `mcp/unreal-agent` and `mcp/unreal-rag` plugins remain tool providers.
 
-Version 0.4.39 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
+Version 0.4.40 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
 before every prediction and buffers model text/tool calls until LM Studio confirms a safe stop.
 Context-limit and max-output truncations are discarded instead of being presented as completed work.
 Architecture proposals now carry an explicit local/network scope and stable invariant IDs. Bounded local
@@ -25,6 +25,8 @@ Server-required recovery tools are now the only forced schema for their next pre
 multi-read batch can no longer be generated and rejected after a RAG direct-source handoff.
 Provider-qualified LM Studio tool names are normalized before route matching, and server-owned task
 authorization/required arguments are injected into the selected schema before prediction. Initial
+server-controlled direct-source reads can also recover from an LM Studio per-chat catalog snapshot
+that temporarily drops `read_file` or `read_file_range`; mutation schemas still fail closed.
 active-project discovery remains a pre-task control call, while a planner with an already resolved
 project context no longer asks the model to repeat it. A successful bootstrap lookup forces that planner
 immediately, with both planner goal fields overwritten by the exact current user message. Broad feature requests now receive one bounded

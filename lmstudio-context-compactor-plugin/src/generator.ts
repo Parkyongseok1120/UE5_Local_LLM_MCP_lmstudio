@@ -530,6 +530,19 @@ const ARCHITECTURE_EVIDENCE_TOOLS = [
   "unreal_symbol_lookup",
 ];
 const DIRECT_SOURCE_FILE_TOOLS = ["read_file", "read_file_range"];
+const DIRECT_SOURCE_READ_RECOVERY_PROPERTIES: Record<string, Record<string, any>> = {
+  read_file: {
+    path: { type: "string", description: "Server-selected project source path." },
+    maxBytes: { type: "number" },
+    detailLevel: { type: "string", enum: ["compact", "medium", "large", "full"] },
+  },
+  read_file_range: {
+    path: { type: "string", description: "Server-selected project source path." },
+    startLine: { type: "number" },
+    endLine: { type: "number" },
+    detailLevel: { type: "string", enum: ["compact", "medium", "large", "full"] },
+  },
+};
 const ARCHITECTURE_DISCOVERY_TOOLS = [
   ...ARCHITECTURE_EVIDENCE_TOOLS,
   "search_files",
@@ -537,6 +550,51 @@ const ARCHITECTURE_DISCOVERY_TOOLS = [
   "unreal_get_active_project",
   "get_workspace_info",
 ];
+
+function serverControlledDirectReadDefinition(checkpoint: any): any | null {
+  const name = String(checkpoint?.requiredNextTool?.name || "").trim();
+  const canonicalName = DIRECT_SOURCE_FILE_TOOLS.find((candidate) => toolNamesMatch(candidate, name));
+  const args = checkpoint?.requiredNextTool?.args;
+  if (
+    !canonicalName
+    || !args
+    || typeof args !== "object"
+    || Array.isArray(args)
+    || typeof args.path !== "string"
+    || !args.path.trim()
+  ) {
+    return null;
+  }
+  if (
+    canonicalName === "read_file_range"
+    && (!Number.isFinite(Number(args.startLine)) || !Number.isFinite(Number(args.endLine)))
+  ) {
+    return null;
+  }
+
+  const supported = DIRECT_SOURCE_READ_RECOVERY_PROPERTIES[canonicalName];
+  const unsupportedArgument = Object.keys(args).some((key) => !Object.prototype.hasOwnProperty.call(supported, key));
+  if (unsupportedArgument) return null;
+
+  const properties: Record<string, any> = { sessionId: { type: "string" } };
+  for (const key of Object.keys(args)) properties[key] = supported[key];
+  return {
+    type: "function",
+    function: {
+      name,
+      description: (
+        "Execute the exact read-only project source request selected by server control. "
+        + "All read arguments are injected by the control plane."
+      ),
+      parameters: {
+        type: "object",
+        properties,
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  };
+}
 const DETACHED_SIDE_QUERY_TOOLS = [
   "get_workspace_info",
   "get_active_project",
@@ -2204,7 +2262,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   }
 
   const contextLength = await model.getContextLength();
-  const toolDefinitions = ctl.getToolDefinitions();
+  let toolDefinitions = ctl.getToolDefinitions();
   const nextCheckpoint: any = core.buildCheckpoint(messages, checkpoint || {}, { maxCheckpointFacts: 32 });
   const persistedFeatureResume = checkpoint?.featureIntentResume;
   nextCheckpoint.featureIntentResume = null;
@@ -2452,12 +2510,37 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     injectFeatureIntentPostReadRule(history, featureIntentRediscoveryRemaining);
   }
   const advertisedRequiredToolName = String(nextCheckpoint?.requiredNextTool?.name || "").trim();
-  const advertisedRequiredToolExists = Boolean(advertisedRequiredToolName && toolDefinitions.some((tool: any) => (
+  let advertisedRequiredToolExists = Boolean(advertisedRequiredToolName && toolDefinitions.some((tool: any) => (
     toolNamesMatch(advertisedRequiredToolName, tool?.function?.name || tool?.name || "")
   )));
   const advertisedRequiredToolIsRouted = Boolean(advertisedRequiredToolName && (
     nextCheckpoint?.toolRoute?.activeTools || []
   ).some((name: any) => toolNamesMatch(advertisedRequiredToolName, String(name || ""))));
+  let serverControlReadSchemaRecovered = false;
+  if (
+    serverControlV2Active
+    && serverControlV2?.requiredTool
+    && !advertisedRequiredToolExists
+  ) {
+    // LM Studio can retain a stale per-chat tool snapshot across a provider's
+    // tools/list update. If the exact server-owned obligation is a read-only
+    // direct-source call whose arguments are already fixed, a narrow local
+    // serialization schema is sufficient: the MCP provider remains the
+    // call-time authority and no model-selected path or mutation is enabled.
+    const recoveryDefinition = serverControlledDirectReadDefinition(nextCheckpoint);
+    if (recoveryDefinition) {
+      toolDefinitions = [...toolDefinitions, recoveryDefinition];
+      advertisedRequiredToolExists = true;
+      serverControlReadSchemaRecovered = true;
+      await appendEventBestEffort(sessionId, {
+        type: "server_control_read_schema_recovered",
+        at: new Date().toISOString(),
+        epoch: Number(serverControlV2.epoch),
+        requiredTool: String(serverControlV2.requiredTool.name || ""),
+        source: "server_owned_direct_read",
+      });
+    }
+  }
   const invalidRequiredToolContract = Boolean(
     !detachedSideQueryActive
     && !serverControlV2Active
@@ -3160,6 +3243,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     invalidRequiredToolName: invalidRequiredToolContract ? advertisedRequiredToolName : "",
     requiredToolSchemaMissing,
     missingRequiredToolName: requiredToolSchemaMissing ? advertisedRequiredToolName : "",
+    serverControlReadSchemaRecovered,
     evidenceFirstContractForced,
     evidenceFirstContractSatisfied,
     featureIntentDiscoveryHandoffForced,
