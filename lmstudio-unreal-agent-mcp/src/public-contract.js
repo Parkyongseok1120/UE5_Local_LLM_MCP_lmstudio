@@ -25,6 +25,7 @@ function sanitizeModelPayload(value) {
   if (!value || typeof value !== "object") return value;
   const sanitized = {};
   for (const [key, item] of Object.entries(value)) {
+    if (key === "expiryTransition") continue;
     sanitized[key] = key === "taskAuthorization"
       ? compactTaskAuthorization(item)
       : sanitizeModelPayload(item);

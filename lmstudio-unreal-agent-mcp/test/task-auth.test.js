@@ -2244,6 +2244,113 @@ test("required evidence read advances the control epoch before gate handoff", ()
   }
 });
 
+test("failed static finding read is consumed and cannot loop", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-validation-read-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-validation-read-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    ownerCapability: "owner-capability",
+    status: "running",
+    requiredGateSetHash: "gate-set",
+    mutationGeneration: 1,
+    completedGates: {
+      unreal_code_sketch_claim_validate: {
+        status: "completed",
+        gateSetHash: "gate-set",
+        planRevision: "1",
+        activeSliceId: "slice-1",
+        mutationGeneration: 0,
+      },
+    },
+    selectedTargetSnapshots: [
+      { path: "Source/Demo/RuleEngine.cpp", exists: true, fileHash: "before" },
+    ],
+    continuity: {
+      lease: {
+        status: "active",
+        ttlSeconds: 1800,
+        expiresAt: new Date(Date.now() + 90_000).toISOString(),
+      },
+      recovery: { conflicts: [] },
+      checkpoint: {
+        mutationGeneration: 1,
+        modifiedFiles: ["Source/Demo/RuleEngine.cpp"],
+        validation: {
+          status: "failed",
+          firstFinding: { path: "Source/Demo/RuleEngine.cpp" },
+          recovery: {
+            status: "evidence_required",
+            findingFingerprint: "finding-1",
+            targetPath: "Source/Demo/RuleEngine.cpp",
+            mutationGeneration: 1,
+          },
+        },
+      },
+    },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-validation-read",
+      phase: "executor",
+      activeTools: ["read_file", "unreal_code_sketch_claim_validate", "replace_in_file"],
+      selectedSlice: { files: ["Source/Demo/RuleEngine.cpp"] },
+      maxToolCallsPerPhase: 3,
+    },
+    toolRouteUsage: {
+      routeHash: "route-validation-read",
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = { routeHash: "route-validation-read", routePhase: "executor" };
+  try {
+    const reserved = reserveRouteCall(
+      workspace, authorization.taskSessionId, fields, {}, "read_file"
+    );
+    assert.strictEqual(reserved.ok, true);
+    const committed = commitRouteReservation(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file",
+      reserved.reservationId,
+      {
+        directSourceEvidence: {
+          projectRelativePath: "Source/Demo/RuleEngine.cpp",
+          contentHash: "d".repeat(64),
+          lineRange: "1-80",
+        },
+      }
+    );
+    assert.strictEqual(committed.ok, true);
+    assert.strictEqual(
+      committed.state.continuity.checkpoint.validation.recovery.status,
+      "evidence_satisfied"
+    );
+    assert.strictEqual(
+      committed.state.controlState.requiredTool.name,
+      "replace_in_file"
+    );
+    const repeated = reserveRouteCall(
+      workspace, authorization.taskSessionId, fields, {}, "read_file"
+    );
+    assert.strictEqual(repeated.ok, false);
+    assert.strictEqual(repeated.errorCode, "TASK_CONTROL_OBLIGATION_REQUIRED");
+    assert.strictEqual(repeated.nextAction, "replace_in_file");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("RC2 replay D: NOT_FOUND then complete zero-result search records final absence without reread", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-absent-evidence-workspace-"));
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-absent-evidence-state-"));

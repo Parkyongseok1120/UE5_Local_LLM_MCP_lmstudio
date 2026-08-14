@@ -1,0 +1,59 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { deriveValidationScope } = require("../src/validation-scope.js");
+
+test("task validation is bounded to the selected slice", () => {
+  const result = deriveValidationScope({
+    status: "running",
+    continuity: {
+      checkpoint: {
+        mutationGeneration: 3,
+        modifiedFiles: [
+          "Source/Demo/Old.cpp",
+          "Source/Demo/Current.cpp",
+          "Plugins/Feature/Source/Feature/Current.h",
+        ],
+      },
+    },
+    toolRoute: {
+      selectedSlice: {
+        files: [
+          "project://Source/Demo/Current.cpp",
+          "C:/Repo/Demo/Plugins/Feature/Source/Feature/Current.h",
+        ],
+      },
+    },
+  }, 3, { taskBound: true });
+
+  assert.deepStrictEqual(result, {
+    kind: "task_slice",
+    targets: [
+      "Source/Demo/Current.cpp",
+      "Plugins/Feature/Source/Feature/Current.h",
+    ],
+  });
+});
+
+test("project-wide validation requires an unbound call or explicit full audit", () => {
+  assert.deepStrictEqual(
+    deriveValidationScope(null, 0, { taskBound: false }),
+    { kind: "full_audit", targets: [] }
+  );
+  assert.deepStrictEqual(
+    deriveValidationScope(null, 0, { taskBound: true, fullAudit: true }),
+    { kind: "full_audit", targets: [] }
+  );
+});
+
+test("a bound task never silently falls back to a full audit", () => {
+  const result = deriveValidationScope({
+    status: "running",
+    continuity: { checkpoint: { mutationGeneration: 2 } },
+    toolRoute: { selectedSlice: { files: ["Source/Demo/Foo.cpp"] } },
+  }, 3, { taskBound: true });
+
+  assert.strictEqual(result.kind, "task_scope_unavailable");
+  assert.deepStrictEqual(result.targets, []);
+});

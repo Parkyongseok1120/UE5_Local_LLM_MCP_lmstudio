@@ -74,6 +74,42 @@ def _load_rag_mcp_module():
     return module
 
 
+def test_successful_gate_projects_authoritative_control_to_top_level() -> None:
+    mod = _load_rag_mcp_module()
+    payload = {
+        "ok": True,
+        "nextAction": "unreal_code_sketch_claim_validate",
+        "nextActionIsTool": True,
+    }
+    control = {
+        "version": 2,
+        "authoritative": True,
+        "epoch": 4,
+        "phase": "executor",
+        "disposition": "require_tool",
+        "requiredTool": {
+            "name": "replace_in_file",
+            "args": {"path": "Source/Demo/Foo.cpp"},
+        },
+        "allowedTools": ["replace_in_file"],
+    }
+    completed = {
+        "ok": True,
+        "controlEpoch": 4,
+        "control": control,
+        "nextAction": "replace_in_file",
+        "nextActionIsTool": True,
+        "nextActionArgs": {"path": "Source/Demo/Foo.cpp"},
+        "requiredNextTool": "replace_in_file",
+        "requiredNextToolArgs": {"path": "Source/Demo/Foo.cpp"},
+    }
+
+    assert mod._reconcile_gate_completion(payload, completed) is True
+    assert payload["control"] == control
+    assert payload["nextAction"] == "replace_in_file"
+    assert payload["requiredNextTool"] == "replace_in_file"
+
+
 def test_default_profile_is_fail_closed(monkeypatch, tmp_path):
     monkeypatch.delenv("MCP_ESSENTIAL_TOOLS", raising=False)
     monkeypatch.delenv("MCP_EXTENDED_TOOLS", raising=False)

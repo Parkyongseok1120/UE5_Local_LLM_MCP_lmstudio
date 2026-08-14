@@ -1891,7 +1891,7 @@ def validate_sketch(
             else "SourceVerified"
         ),
         "postMutationRequiredAction": (
-            "build_unreal_project" if compiler_required else ""
+            "static_validate_project" if compiler_required else ""
         ),
         "results": results,
         "sketchCharCount": sketch_chars,

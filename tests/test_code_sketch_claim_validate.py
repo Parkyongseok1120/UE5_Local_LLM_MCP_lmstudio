@@ -1456,7 +1456,7 @@ def test_engine_header_miss_escalates_once_to_compiler_proof_not_absence(tmp_pat
     assert result["engineHeaderLookup"]["status"] == "ready"
     assert result["ok"] is True
     assert result["compilerProofRequired"] is True
-    assert result["postMutationRequiredAction"] == "build_unreal_project"
+    assert result["postMutationRequiredAction"] == "static_validate_project"
 
 
 def test_engine_header_contract_rejects_wrong_argument_count(tmp_path):

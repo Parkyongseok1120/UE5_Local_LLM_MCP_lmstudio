@@ -61,6 +61,31 @@ test("late pipeline transitions are derived from facts without an LM", () => {
   };
   assert.equal(requiredName(value), "static_validate_project");
 
+  value.continuity.checkpoint.validation = {
+    status: "failed",
+    firstFinding: { path: "Source/Sample/Feature.cpp" },
+    recovery: {
+      status: "evidence_required",
+      mutationGeneration: 1,
+      targetPath: "Source/Sample/Feature.cpp",
+    },
+  };
+  assert.deepEqual(deriveNextObligation(value).requiredTool, {
+    name: "read_file",
+    args: { path: "Source/Sample/Feature.cpp" },
+  });
+
+  value.continuity.checkpoint.validation.recovery.status = "evidence_satisfied";
+  assert.equal(requiredName(value), "replace_in_file");
+
+  value.mutationGeneration = 2;
+  value.continuity.checkpoint = {
+    mutationGeneration: 2,
+    modifiedFiles: ["Source/Sample/Feature.cpp"],
+    validation: {},
+  };
+  assert.equal(requiredName(value), "static_validate_project");
+
   value.continuity.checkpoint.validation = { status: "passed", proofLevel: "StaticVerified" };
   assert.equal(requiredName(value), "build_unreal_project");
 

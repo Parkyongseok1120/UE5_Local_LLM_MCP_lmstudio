@@ -453,9 +453,11 @@ def test_run_static_validation_scopes_to_write_target(tmp_path: Path) -> None:
     (mock_root / "scripts" / "validate_project_sources.py").write_text(
         "import json, sys\n"
         "has_target = '--write-target' in sys.argv\n"
+        "scope_count = sys.argv.count('--scope-target')\n"
         "print(json.dumps({\n"
         "    'hasErrors': True,\n"
-        "    'hasBlockingErrors': not has_target,\n"
+        "    'hasBlockingErrors': not has_target and not scope_count,\n"
+        "    'scopeTargets': [sys.argv[i + 1] for i, arg in enumerate(sys.argv) if arg == '--scope-target'],\n"
         "    'findingCount': 1,\n"
         "    'deferredCount': 1 if has_target else 0,\n"
         "    'preExistingCount': 0,\n"
@@ -469,10 +471,12 @@ process.env.UNREAL58_ROOT = {json.dumps(str(mock_root))};
 const validateWrite = require('./src/validate-write.js');
 (async () => {{
   const scoped = await validateWrite.runStaticValidation({json.dumps(str(tmp_path))}, {{ writeTarget: 'Source/Demo/New.h' }});
+  const taskScoped = await validateWrite.runStaticValidation({json.dumps(str(tmp_path))}, {{ scopeTargets: ['Source/Demo/New.h', 'Source/Demo/New.cpp'] }});
   const unscoped = await validateWrite.runStaticValidation({json.dumps(str(tmp_path))});
   console.log(JSON.stringify({{
     scopedOk: scoped.ok,
     scopedDeferred: scoped.deferredCount,
+    taskScopeTargets: taskScoped.scopeTargets,
     unscopedOk: unscoped.ok,
   }}));
 }})();
@@ -481,6 +485,10 @@ const validateWrite = require('./src/validate-write.js');
     # With a writeTarget, the mock reports hasBlockingErrors=false -> the write stays.
     assert payload["scopedOk"] is True
     assert payload["scopedDeferred"] == 1
+    assert payload["taskScopeTargets"] == [
+        "Source/Demo/New.h",
+        "Source/Demo/New.cpp",
+    ]
     # Without a writeTarget (explicit static_validate_project call), hasBlockingErrors
     # falls back to hasErrors=true -> unchanged full-project behavior.
     assert payload["unscopedOk"] is False

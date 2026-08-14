@@ -37,6 +37,7 @@ const {
 } = require("./route-recovery-policy.js");
 const { attachCommittedToolOutcomeControl } = require("./post-read-route-control.js");
 const { verifyRuntimeComponent } = require("./runtime-identity.js");
+const { deriveValidationScope } = require("./validation-scope.js");
 
 const {
   Server
@@ -99,6 +100,7 @@ const {
   commitRouteReservation,
   rollbackRouteReservation,
   heartbeatRouteReservation,
+  readTaskState,
   requiredFields,
   listActiveTasks,
   cancelActiveTask,
@@ -723,29 +725,62 @@ function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = n
   };
 }
 
+function validationScopeForTask(args, mutationGeneration) {
+  const taskSessionId = requiredFields(args || {}).taskSessionId;
+  const taskState = taskSessionId
+    ? readTaskState(WORKSPACE_ROOT, taskSessionId)
+    : null;
+  return deriveValidationScope(taskState, mutationGeneration, {
+    fullAudit: args?.fullAudit === true,
+    taskBound: Boolean(taskSessionId),
+  });
+}
+
 function recordValidationContinuityCheckpoint(args, validation, passed, mutationGeneration = 0) {
   if (!REQUIRE_TASK_AUTH_FOR_WRITES || !requiredFields(args || {}).taskSessionId) {
     return { ok: true, skipped: true, reason: "no_active_task_authorization" };
   }
   const findings = Array.isArray(validation?.findings) ? validation.findings : [];
-  const firstBlocking = findings.find((item) => String(item?.severity || "").toLowerCase() === "error")
+  const isBlockingFinding = (item) => (
+    item?.blocking === true
+    || (
+      item?.blocking === undefined
+      && String(item?.severity || "").toLowerCase() === "error"
+    )
+  );
+  const firstBlocking = findings.find((item) => item?.blocking === true)
+    || findings.find((item) => String(item?.severity || "").toLowerCase() === "error")
     || findings[0]
     || null;
+  const firstFinding = firstBlocking ? {
+    severity: String(firstBlocking.severity || ""),
+    code: String(firstBlocking.code || ""),
+    path: String(firstBlocking.path || ""),
+    line: Number(firstBlocking.line || 0),
+    message: String(firstBlocking.message || ""),
+  } : null;
+  const findingFingerprint = firstFinding
+    ? crypto.createHash("sha256").update(JSON.stringify({
+      mutationGeneration: Number(mutationGeneration || 0),
+      ...firstFinding,
+    })).digest("hex").slice(0, 24)
+    : "";
   const compact = {
     status: passed ? "passed" : "failed",
     proofLevel: passed ? "StaticVerified" : "StaticFailed",
     findingCount: Number(validation?.findingCount || findings.length || 0),
-    blockingErrorCount: findings.filter(
-      (item) => String(item?.severity || "").toLowerCase() === "error"
-    ).length,
-    ...(firstBlocking ? {
-      firstFinding: {
-        severity: String(firstBlocking.severity || ""),
-        code: String(firstBlocking.code || ""),
-        path: String(firstBlocking.path || ""),
-        line: Number(firstBlocking.line || 0),
-        message: String(firstBlocking.message || ""),
-      },
+    blockingErrorCount: findings.filter(isBlockingFinding).length,
+    ...(firstFinding ? {
+      firstFinding,
+      ...(!passed ? {
+        recovery: {
+          status: "evidence_required",
+          findingFingerprint,
+          targetPath: firstFinding.path,
+          mutationGeneration: Number(mutationGeneration || 0),
+          failedAt: new Date().toISOString(),
+        },
+      } : {}),
     } : {}),
   };
   const checkpoint = checkpointMutationViaPython(WORKSPACE_ROOT, args, [], {
@@ -1153,6 +1188,7 @@ function validationToolResult(summary, validation, options = {}) {
     "commandSucceeded", "proofSatisfied", "recoveryRequired", "errorCode",
     "retryable", "doNotRetry", "stopCurrentWorkflow", "suggestedToolCalls",
     "validationOverrideAvailable", "buildAllowedForValidatedGeneration", "requiredNextTool",
+    "requiredNextToolArgs", "validationScope",
     "continuityCheckpoint", "taskAuthorization", "toolRoute", "controlEpoch", "control",
   ];
   for (const key of passthrough) {
@@ -2533,9 +2569,10 @@ function allAgentTools() {
       },
       {
         name: "static_validate_project",
-        description: "Run static Unreal compile-readiness validation on active project and enabled plugin source. A failed scan is fresh evidence but is not a passing build proof; fix the first finding and validate a new mutation. Use validationOverride only with a concrete audit note when authoritative UBT evidence is explicitly required.",
+        description: "Run static Unreal compile-readiness validation on the current task slice with related source pairs as advisory context. Set fullAudit=true only for an explicit project-wide audit. A failed scan is fresh evidence but is not a passing build proof; read the first finding, mutate the bounded slice, and validate again.",
         inputSchema: makeJsonSchema({
-          projectRoot: { type: "string", description: "Optional project root or .uproject path. Defaults to active project." }
+          projectRoot: { type: "string", description: "Optional project root or .uproject path. Defaults to active project." },
+          fullAudit: { type: "boolean", description: "Run a project-wide audit instead of the server-owned current task slice. Default false." }
         })
       },
       {
@@ -4757,14 +4794,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         throw err;
       }
-      const validation = await runStaticValidation(projectRoot);
+      const validationScope = validationScopeForTask(
+        args,
+        validationStart.startGeneration
+      );
+      if (validationScope.kind === "task_scope_unavailable") {
+        return fail("Static validation could not bind the current task slice.", {
+          errorCode: "STATIC_VALIDATION_SCOPE_UNAVAILABLE",
+          validationScope,
+          retryable: false,
+          nextSteps: [
+            "Refresh the current task authorization or record the mutation checkpoint.",
+            "Use fullAudit=true only when a project-wide audit is explicitly intended.",
+          ],
+        });
+      }
+      const validation = await runStaticValidation(projectRoot, {
+        scopeTargets: validationScope.targets,
+      });
       const severityCounts = (validation.findings || []).reduce((counts, finding) => {
         const key = String(finding.severity || "unknown").toLowerCase();
         counts[key] = (counts[key] || 0) + 1;
         return counts;
       }, {});
+      const blockingErrorCount = (validation.findings || []).filter((finding) => (
+        finding?.blocking === true
+        || (
+          finding?.blocking === undefined
+          && String(finding?.severity || "").toLowerCase() === "error"
+        )
+      )).length;
       const validationSummary = validationFailed(validation)
-        ? `STATIC VALIDATION FAILED — ${severityCounts.error || 0} error(s), ${severityCounts.warning || 0} warning(s)`
+        ? `STATIC VALIDATION FAILED — ${blockingErrorCount} blocking error(s), ${severityCounts.warning || 0} warning(s)`
         : `STATIC VALIDATION PASSED — ${severityCounts.warning || 0} warning(s)`;
       if (validationFailed(validation)) {
         const loopState = recordValidationFailure(projectRoot, validationStart.startGeneration, validation);
@@ -4784,13 +4845,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             stopCurrentWorkflow: true,
             validationOverrideAvailable: false,
             mutationGeneration: loopState.mutationGeneration,
+            validationScope,
             mutationRollback,
             nextSteps: ["Read the first blocking finding, edit the responsible source file, then validate the new mutation generation."],
           });
         }
         const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration, {
           passed: false,
-          blockingErrorCount: severityCounts.error || 0,
+          blockingErrorCount,
           proofLevel: "StaticFailed",
         });
         if (finish.validationStale) {
@@ -4831,23 +4893,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           proofLevel: finish.validationProofLevel,
           validatedGeneration: finish.validatedGeneration,
           mutationGeneration: finish.mutationGeneration,
+          validationScope,
           pendingMutationTransactions,
           nextSteps: [
-            "Fix the first blocking finding, then run static_validate_project again.",
+            "Read the first blocking finding, then mutate the bounded task slice using the authoritative recovery tool.",
+            "Run static_validate_project again only after the recovery mutation creates a new generation.",
             "Use validationOverride=true only with a concrete audit note when authoritative UBT evidence is explicitly required.",
           ],
         });
-      }
-      if (tx.writtenAbs.some((item) => requiresBuildTransaction(item, activeProject))) {
-        markJournalAwaitingBuild(tx.journal, {
-          mutationGeneration: lastMutation?.mutationGeneration,
-          taskSessionId: requiredFields(args).taskSessionId,
-          projectPath: String(activeProject || ""),
-        });
-      } else {
-        tx.journal.status = "completed";
-        saveJournal(tx.journal);
-        await archiveJournal(tx.journal.transactionId);
       }
       recordValidationSuccess(projectRoot, validationStart.startGeneration);
       const finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration, {
@@ -4874,6 +4927,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         proofLevel: finish.validationProofLevel,
         validatedGeneration: finish.validatedGeneration,
         mutationGeneration: finish.mutationGeneration,
+        validationScope,
         ...(validationCheckpoint.ok ? { continuityCheckpoint: validationCheckpoint } : {}),
         nextSteps: ["Run build_unreal_project if C++ or Build.cs changed."],
         phase: "validating",

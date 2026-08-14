@@ -574,6 +574,19 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             validation_status = str(
                 checkpoint_validation.get("status") or ""
             ).strip().casefold()
+            validation_recovery = (
+                checkpoint_validation.get("recovery")
+                if isinstance(checkpoint_validation.get("recovery"), dict)
+                else {}
+            )
+            validation_recovery_satisfied = bool(
+                str(validation_recovery.get("status") or "")
+                == "evidence_satisfied"
+                and _non_negative_int(
+                    validation_recovery.get("mutationGeneration")
+                )
+                == mutation_generation
+            )
             mutation_required = bool(
                 phase == "executor"
                 and sketch_record
@@ -591,14 +604,17 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             elif current_mutation_checkpoint and validation_status == "passed":
                 required_name = "build_unreal_project"
             elif current_mutation_checkpoint and validation_status == "failed":
-                required_name = "read_file"
-                first_finding = (
-                    checkpoint_validation.get("firstFinding")
-                    if isinstance(checkpoint_validation.get("firstFinding"), dict)
-                    else {}
-                )
-                finding_path = str(first_finding.get("path") or "").strip()
-                required_args = {"path": finding_path} if finding_path else {}
+                if validation_recovery_satisfied:
+                    required_name = _mutation_tool_for_state(state, route)
+                else:
+                    required_name = "read_file"
+                    first_finding = (
+                        checkpoint_validation.get("firstFinding")
+                        if isinstance(checkpoint_validation.get("firstFinding"), dict)
+                        else {}
+                    )
+                    finding_path = str(first_finding.get("path") or "").strip()
+                    required_args = {"path": finding_path} if finding_path else {}
             elif current_mutation_checkpoint:
                 required_name = "static_validate_project"
             elif checkpoint_action and checkpoint_action in active_tools:

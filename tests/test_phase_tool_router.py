@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from phase_tool_router import (  # noqa: E402
     CONTROL_PLANE_TOOLS,
     MUTATION_TOOLS,
+    derive_next_obligation,
     derive_tool_route,
     selection_binding,
 )
@@ -41,6 +42,65 @@ from task_api import (  # noqa: E402
 
 def test_initial_active_project_discovery_is_safe_before_route_ownership() -> None:
     assert "unreal_get_active_project" in CONTROL_PLANE_TOOLS
+
+
+def test_failed_static_read_is_consumed_into_recovery_mutation() -> None:
+    state = {
+        "taskSessionId": "validation-recovery",
+        "status": "running",
+        "planRevision": "1",
+        "activeSliceId": "slice",
+        "requiredGateSetHash": "gates",
+        "mutationGeneration": 1,
+        "completedGates": {
+            "unreal_code_sketch_claim_validate": {
+                "status": "completed",
+                "gateSetHash": "gates",
+                "planRevision": "1",
+                "activeSliceId": "slice",
+                "mutationGeneration": 0,
+            }
+        },
+        "selectedTargetSnapshots": [
+            {"path": "Source/Demo/Foo.cpp", "exists": True, "fileHash": "before"}
+        ],
+        "continuity": {
+            "checkpoint": {
+                "mutationGeneration": 1,
+                "validation": {
+                    "status": "failed",
+                    "firstFinding": {"path": "Source/Demo/Foo.cpp"},
+                    "recovery": {
+                        "status": "evidence_required",
+                        "mutationGeneration": 1,
+                        "targetPath": "Source/Demo/Foo.cpp",
+                    },
+                },
+            }
+        },
+        "toolRoute": {
+            "phase": "executor",
+            "routeHash": "route",
+            "pendingGates": [],
+            "selectedSlice": {"files": ["Source/Demo/Foo.cpp"]},
+            "activeTools": [
+                "read_file",
+                "unreal_code_sketch_claim_validate",
+                "replace_in_file",
+                "static_validate_project",
+                "build_unreal_project",
+            ],
+        },
+    }
+
+    assert derive_next_obligation(state)["requiredTool"] == {
+        "name": "read_file",
+        "args": {"path": "Source/Demo/Foo.cpp"},
+    }
+    state["continuity"]["checkpoint"]["validation"]["recovery"][
+        "status"
+    ] = "evidence_satisfied"
+    assert derive_next_obligation(state)["requiredTool"]["name"] == "replace_in_file"
 
 
 def test_legacy_unbound_snapshots_cannot_override_a_different_active_slice() -> None:

@@ -35,6 +35,8 @@ def sanitize_model_payload(value: Any) -> Any:
         return value
     sanitized: dict[str, Any] = {}
     for key, item in value.items():
+        if key == "expiryTransition":
+            continue
         if key == "taskAuthorization":
             sanitized[key] = compact_task_authorization(item)
         else:

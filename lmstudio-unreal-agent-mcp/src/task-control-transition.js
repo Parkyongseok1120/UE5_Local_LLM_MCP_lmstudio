@@ -170,6 +170,13 @@ function deriveNextObligation(state) {
         ? checkpoint.validation
         : {};
       const validationStatus = String(validation.status || "").trim().toLowerCase();
+      const validationRecovery = validation.recovery && typeof validation.recovery === "object"
+        ? validation.recovery
+        : {};
+      const validationRecoverySatisfied = Boolean(
+        String(validationRecovery.status || "") === "evidence_satisfied"
+        && nonNegativeInt(validationRecovery.mutationGeneration) === mutationGeneration
+      );
       const mutationRequired = Boolean(
         phase === "executor"
         && sketch
@@ -185,9 +192,13 @@ function deriveNextObligation(state) {
       else if (currentMutationCheckpoint && validationStatus === "passed") {
         requiredName = "build_unreal_project";
       } else if (currentMutationCheckpoint && validationStatus === "failed") {
-        requiredName = "read_file";
-        const findingPath = String(validation.firstFinding?.path || "").trim();
-        requiredArgs = findingPath ? { path: findingPath } : {};
+        if (validationRecoverySatisfied) {
+          requiredName = mutationToolForState(state, route);
+        } else {
+          requiredName = "read_file";
+          const findingPath = String(validation.firstFinding?.path || "").trim();
+          requiredArgs = findingPath ? { path: findingPath } : {};
+        }
       } else if (currentMutationCheckpoint) {
         requiredName = "static_validate_project";
       } else if (checkpointAction && activeTools.includes(checkpointAction)) {

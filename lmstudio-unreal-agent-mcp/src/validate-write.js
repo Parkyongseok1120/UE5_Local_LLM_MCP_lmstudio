@@ -226,6 +226,11 @@ async function runStaticValidation(projectRoot, options = {}) {
     ? options.timeoutMs
     : STATIC_VALIDATION_TIMEOUT_MS;
   const writeTarget = options.writeTarget || null;
+  const scopeTargets = [...new Set(
+    (Array.isArray(options.scopeTargets) ? options.scopeTargets : [])
+      .map((item) => String(item || "").trim().replace(/\\/g, "/"))
+      .filter(Boolean)
+  )];
   const script = path.join(UNREAL58_ROOT, "scripts", "validate_project_sources.py");
   if (!fs.existsSync(script)) {
     return {
@@ -248,6 +253,9 @@ async function runStaticValidation(projectRoot, options = {}) {
   if (writeTarget) {
     args.push("--write-target", writeTarget);
   }
+  for (const scopeTarget of scopeTargets) {
+    args.push("--scope-target", scopeTarget);
+  }
   try {
     const { stdout } = await execFile(
       python,
@@ -264,7 +272,9 @@ async function runStaticValidation(projectRoot, options = {}) {
       skipped: false,
       projectRoot,
       writeTarget,
+      scopeTargets: payload.scopeTargets || scopeTargets,
       scanMode: payload.scanMode || "full",
+      scopeKind: payload.scopeKind || (scopeTargets.length ? "task_slice" : "full_audit"),
       scopedFileCount: payload.scopedFileCount || 0,
       elapsedMs: payload.elapsedMs || 0,
       findingCount: payload.findingCount,
@@ -290,7 +300,9 @@ async function runStaticValidation(projectRoot, options = {}) {
         skipped: false,
         projectRoot,
         writeTarget,
+        scopeTargets: parsed.scopeTargets || scopeTargets,
         scanMode: parsed.scanMode || "full",
+        scopeKind: parsed.scopeKind || (scopeTargets.length ? "task_slice" : "full_audit"),
         scopedFileCount: parsed.scopedFileCount || 0,
         elapsedMs: parsed.elapsedMs || 0,
         findingCount: parsed.findingCount,

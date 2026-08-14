@@ -1053,6 +1053,46 @@ function recordAbsentSourceEvidence(state, toolName, callMetadata) {
   };
 }
 
+function satisfyValidationRecovery(state, toolName, callMetadata) {
+  if (!["read_file", "read_file_range"].includes(String(toolName || ""))) return false;
+  const metadata = callMetadata && typeof callMetadata === "object"
+    ? callMetadata.directSourceEvidence
+    : null;
+  if (!metadata || typeof metadata !== "object") return false;
+  const checkpoint = state?.continuity?.checkpoint
+    && typeof state.continuity.checkpoint === "object"
+    ? state.continuity.checkpoint
+    : null;
+  const validation = checkpoint?.validation && typeof checkpoint.validation === "object"
+    ? checkpoint.validation
+    : null;
+  const recovery = validation?.recovery && typeof validation.recovery === "object"
+    ? validation.recovery
+    : null;
+  if (!checkpoint || !validation || !recovery) return false;
+  if (String(validation.status || "").toLowerCase() !== "failed") return false;
+  if (String(recovery.status || "") !== "evidence_required") return false;
+  if (
+    Number(recovery.mutationGeneration || 0) !== Number(state.mutationGeneration || 0)
+    || Number(checkpoint.mutationGeneration || 0) !== Number(state.mutationGeneration || 0)
+  ) {
+    return false;
+  }
+  const expectedPath = normalizeEvidencePath(
+    recovery.targetPath || validation.firstFinding?.path
+  ).toLowerCase();
+  const observedPath = normalizeEvidencePath(metadata.projectRelativePath).toLowerCase();
+  if (!expectedPath || expectedPath !== observedPath) return false;
+  validation.recovery = {
+    ...recovery,
+    status: "evidence_satisfied",
+    evidenceSatisfiedBy: String(toolName),
+    evidenceSatisfiedAt: new Date().toISOString(),
+  };
+  checkpoint.validation = validation;
+  return true;
+}
+
 const DIRECT_EVIDENCE_RECOVERY_CODES = new Set([
   "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED",
 ]);
@@ -1196,6 +1236,7 @@ function mutateRouteBudget(
       current.toolRouteUsage = usage;
       recordDirectSourceEvidence(current, toolName, callMetadata);
       recordAbsentSourceEvidence(current, toolName, callMetadata);
+      satisfyValidationRecovery(current, toolName, callMetadata);
       const resumedGate = pendingDirectEvidenceGate(current, toolName);
       if (resumedGate) {
         const attempts = current.failedGateAttempts && typeof current.failedGateAttempts === "object"

@@ -1475,7 +1475,36 @@ def _reconcile_gate_completion(
     if gate_completion is None:
         return bool(payload.get("ok"))
     payload["gateCompletion"] = gate_completion
+    # Task state owns the public continuation even when local validation also
+    # succeeded. Project the committed v2 control and its compatibility fields
+    # to the top level so adapters never mine a stale pre-gate action.
+    for key in (
+        "taskSessionId",
+        "controlEpoch",
+        "taskRouteTerminal",
+        "taskAuthorization",
+        "toolRoute",
+    ):
+        if key in gate_completion:
+            payload[key] = gate_completion[key]
     if gate_completion.get("ok") is not False:
+        for key in (
+            "nextAction",
+            "nextActionArgs",
+            "nextActionIsTool",
+            "requiredNextTool",
+            "requiredNextToolArgs",
+            "retryable",
+            "doNotRetryUnchanged",
+            "reuseCurrentTaskAuthorization",
+            "stopCurrentWorkflow",
+            "agentInstruction",
+            "control",
+        ):
+            if key in gate_completion:
+                payload[key] = gate_completion[key]
+            else:
+                payload.pop(key, None)
         return bool(gate_completion.get("ok"))
 
     local_failed = payload.get("ok") is False
@@ -1531,7 +1560,10 @@ def _reconcile_gate_completion(
         "stopCurrentWorkflow",
         "agentInstruction",
         "blockerFingerprint",
+        "control",
     ):
+        if key == "control" and local_failed and not repeated_blocker:
+            continue
         if key in gate_completion and (
             repeated_blocker or not local_failed or key not in payload
         ):
@@ -3652,14 +3684,15 @@ def _handle_unreal_code_sketch_claim_validate(
             "required": True,
             "sourceLookupAttempts": 1,
             "nextOracle": "UHT/UBT",
-            "postMutationTool": "build_unreal_project",
+            "postMutationTool": "static_validate_project",
             "symbols": list(payload.get("compilerProofSymbols") or []),
             "bounded": True,
         }
         payload["agentInstruction"] = (
             "Bounded source lookup is exhausted for compiler_required claims. Apply only the "
-            "validated target slice, then call build_unreal_project immediately. Do not call "
-            "unreal_symbol_lookup or repeat this sketch before compiler proof."
+            "validated target slice, then call static_validate_project. If that scoped proof "
+            "passes, follow the authoritative build_unreal_project handoff. Do not call "
+            "unreal_symbol_lookup or repeat this sketch before mutation."
         )
     payload["gatePassed"] = gate_passed
     payload["writeGateClosed"] = not gate_passed

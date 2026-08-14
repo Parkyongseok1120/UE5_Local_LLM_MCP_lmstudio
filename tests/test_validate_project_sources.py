@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from validate_project_sources import resolve_project_root  # noqa: E402
+from validate_project_sources import normalize_scope_target, resolve_project_root  # noqa: E402
 
 
 def test_resolve_project_root_from_uproject(tmp_path: Path) -> None:
@@ -34,6 +34,18 @@ def test_cli_missing_source_returns_exit_code_2(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 2
+
+
+def test_scope_target_rejects_paths_outside_project_code_roots() -> None:
+    assert normalize_scope_target(r"Source\Demo\Actor.cpp") == "Source/Demo/Actor.cpp"
+    assert normalize_scope_target("Plugins/Demo/Source/Demo/Actor.cpp").startswith("Plugins/")
+
+    for unsafe in ("../Outside.cpp", "/tmp/Outside.cpp", "C:/Outside.cpp", "Config/DefaultGame.ini"):
+        try:
+            normalize_scope_target(unsafe)
+        except ValueError:
+            continue
+        raise AssertionError(f"unsafe scope target was accepted: {unsafe}")
 
 
 def test_cli_json_output_on_clean_fixture(tmp_path: Path) -> None:
@@ -140,6 +152,105 @@ def test_cli_write_target_ignores_pre_existing_error_in_other_file(tmp_path: Pat
     # Pre-existing errors in unscanned files are not surfaced on the write path.
     assert payload["hasBlockingErrors"] is False
     assert payload["preExistingCount"] == 0
+
+
+def test_cli_task_scope_does_not_promote_unrelated_project_errors(tmp_path: Path) -> None:
+    project = _write_two_file_project(tmp_path)
+    (project / "Source" / "Demo" / "Existing.h").write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n\nUCLASS()\n'
+        'class DEMO_API UExisting : public UObject\n{\n\tGENERATED_BODY()\n};\n'
+        '#include "Existing.generated.h"\n',
+        encoding="utf-8",
+    )
+    script = SCRIPTS / "validate_project_sources.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--project-root",
+            str(project),
+            "--json",
+            "--scope-target",
+            "Source/Demo/New.h",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+
+    assert result.returncode == 0
+    assert payload["scopeKind"] == "task_slice"
+    assert payload["scopeTargets"] == ["Source/Demo/New.h"]
+    assert not any("Existing.h" in item["path"] for item in payload["findings"])
+
+
+def test_cli_task_scope_keeps_unselected_pair_findings_advisory(tmp_path: Path) -> None:
+    project = _write_two_file_project(tmp_path)
+    module = project / "Source" / "Demo"
+    (module / "New.cpp").write_text('#include "New.h"\n', encoding="utf-8")
+    (module / "New.h").write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n\nUCLASS()\n'
+        'class DEMO_API UNew : public UObject\n{\n\tGENERATED_BODY()\n};\n'
+        '#include "New.generated.h"\n',
+        encoding="utf-8",
+    )
+    script = SCRIPTS / "validate_project_sources.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--project-root",
+            str(project),
+            "--json",
+            "--scope-target",
+            "Source/Demo/New.cpp",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+
+    paired = [item for item in payload["findings"] if item["path"].endswith("New.h")]
+    assert paired
+    assert all(item["blocking"] is False for item in paired)
+    assert payload["preExistingCount"] >= 1
+    assert payload["hasBlockingErrors"] is False
+    assert result.returncode == 0
+
+
+def test_cli_task_scope_blocks_selected_file_error(tmp_path: Path) -> None:
+    project = _write_two_file_project(tmp_path)
+    (project / "Source" / "Demo" / "New.h").write_text(
+        '#pragma once\n#include "CoreMinimal.h"\n\nUCLASS()\n'
+        'class DEMO_API UNew : public UObject\n{\n\tGENERATED_BODY()\n};\n'
+        '#include "New.generated.h"\n',
+        encoding="utf-8",
+    )
+    script = SCRIPTS / "validate_project_sources.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--project-root",
+            str(project),
+            "--json",
+            "--scope-target",
+            "Source/Demo/New.h",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["hasBlockingErrors"] is True
+    assert any(item["blocking"] is True for item in payload["findings"])
+    assert result.returncode == 1
 
 
 def test_cli_write_target_scoped_scan_is_fast(tmp_path: Path) -> None:

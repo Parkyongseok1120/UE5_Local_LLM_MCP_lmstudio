@@ -43,3 +43,19 @@ def test_public_payload_recursively_hides_rotating_authorization_fields() -> Non
         "ownerCapability": "owner-1",
     }
     assert payload["routeHash"] == "visible-diagnostic"
+
+
+def test_public_payload_drops_speculative_expiry_routes() -> None:
+    payload = sanitize_model_payload(
+        {
+            "toolRoute": {
+                "phase": "executor",
+                "expiryTransition": {
+                    "at": "2099-01-01T00:00:00Z",
+                    "route": {"phase": "planner"},
+                },
+            }
+        }
+    )
+
+    assert payload == {"toolRoute": {"phase": "executor"}}

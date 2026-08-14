@@ -72,3 +72,37 @@ test("ordinary discovery reads do not invent a gate continuation", () => {
     original
   );
 });
+
+test("authoritative v2 control cannot be overridden by a legacy pending gate", () => {
+  const commit = recoveryCommit();
+  commit.state.controlState = {
+    version: 2,
+    authoritative: true,
+    epoch: 6,
+    taskSessionId: "task_12345678",
+    phase: "executor",
+    disposition: "continue",
+    requiredTool: null,
+    allowedTools: ["read_file"],
+  };
+  commit.state.toolRoute.expiryTransition = {
+    at: "2099-01-01T00:00:00Z",
+    route: { phase: "planner", activeTools: ["unreal_feature_intent_resolve"] },
+  };
+
+  const payload = postReadGatePayload(commit, "read_file");
+  assert.strictEqual(payload.nextAction, "use_authoritative_control");
+  assert.strictEqual(payload.nextActionIsTool, false);
+
+  const result = attachPostReadRouteControl(
+    { content: [{ type: "text", text: "file body" }] },
+    commit,
+    "read_file"
+  );
+  const mirrored = JSON.parse(result.content[0].text);
+  assert.strictEqual(mirrored.nextAction, "use_authoritative_control");
+  assert.strictEqual(mirrored.nextActionIsTool, false);
+  assert.strictEqual(mirrored.fileContent, "file body");
+  assert.strictEqual(JSON.stringify(result.structuredContent).includes("expiryTransition"), false);
+  assert.ok(result.content[0].text.length < 4_000);
+});
