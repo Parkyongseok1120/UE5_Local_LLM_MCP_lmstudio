@@ -7,8 +7,8 @@
 - 컨텍스트: 62,464 tokens
 - generator: `codex/unreal-context-compactor` 0.4.27 / revision 73
 - MCP: `mcp/unreal-agent`, `mcp/unreal-rag`, `mcp/evidence-first`
-- 대상: `C:\Users\sster\Documents\Git\O-Mock\O_Mock.uproject`
-- 유효 대화: `C:\Users\sster\.lmstudio\conversations\84\1786605994124.conversation.json`
+- 대상: 로컬 Unreal 테스트 프로젝트(경로 비공개)
+- 유효 대화: 로컬 LM Studio 대화 artifact(경로 비공개)
 - compactor session: `1e0274072b81b38eed0d5c9a2f54269b`
 - task session: `7599621d767b40a7`
 
@@ -24,7 +24,7 @@ LNK2019 missing definition이었다. 모델이 근거 없는 readiness map을 �
 `unreal_code_sketch_claim_validate`가 `LINKER_RECOVERY_SEMANTIC_INVENTION`과
 `stopCurrentWorkflow=true`로 차단했다.
 
-O-Mock에는 쓰기가 적용되지 않았다. 첫 `apply_edit_bundle`은 workspace-prefix 경로 정규화
+테스트 프로젝트에는 쓰기가 적용되지 않았다. 첫 `apply_edit_bundle`은 workspace-prefix 경로 정규화
 불일치로 mutation 전에 거절됐고, 이 경계는 read/write가 같은 project-relative 경로 규칙을
 사용하도록 수정했다.
 

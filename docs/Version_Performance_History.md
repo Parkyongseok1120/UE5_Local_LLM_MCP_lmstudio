@@ -4,7 +4,7 @@
 
 ## English
 
-This page summarizes the evolution from v1.0.0 through 1.3.0 Beta5 / RC1. The test suites changed over time, so numbers should be read as saved milestone evidence, not as a perfectly controlled apples-to-apples benchmark.
+This page summarizes the evolution from v1.0.0 through 1.3.0 RC2. The test suites changed over time, so numbers should be read as saved milestone evidence, not as a perfectly controlled apples-to-apples benchmark.
 
 ## Visual Scorecards
 
@@ -25,6 +25,7 @@ The charts below intentionally avoid using Pass@K/Pass@1 as the cross-version sc
 | 1.3.0 Beta4 | Not rescored | Sketch claim hardening and write-path semantic guards landed (formerly labeled RC1), but no new paired live-model run exists yet. Reusing the v1.2.5 score would overstate the evidence. |
 | 1.3.0 Beta5 | Not rescored | Startup/install hotfix on Beta4 (formerly labeled RC2); no new paired live-model run. |
 | 1.3.0 RC1 | Not rescored | Release hygiene and Apple Silicon physical FULL install evidence; still no paired live-model rerun. |
+| 1.3.0 RC2 | Not rescored | Control-plane centralization, idempotence, transition replay, and CI portability fixes; model-side bottleneck is observed but not measured by a paired live-model rerun. |
 
 ```mermaid
 xychart-beta
@@ -70,6 +71,7 @@ xychart-beta
 | 1.3.0 Beta4 | Sketch/write semantic hardening on the Beta3 foundation (was published as RC1) | Automated repository gates plus mutation semantic guard packaging/verify checks. | Untyped container claim waiver; shared denylist for reverse-turn clamp bypass; write-path mutation semantic guard; sketch-gate recovery and routing/auth hardening. | No fresh paired live-model score; physical Ubuntu/macOS Unreal certification, Ollama frontend, frontend-parity measurement, and advanced runtime behavior oracles remain pending. |
 | 1.3.0 Beta5 | Startup/install hotfix on Beta4 (was published as RC2) | Catalog/authorization and install.sh launcher tests. | Stable Essential MCP catalog visibility; macOS Python 3.10+ launcher probing. | No fresh paired live-model score; same pending certification items as Beta4. |
 | 1.3.0 RC1 | Release hygiene draft | Package allowlist, encoding gates, Apple Silicon physical FULL install log. | Portable package forbidden-inventory hardening; darwin-arm64 FULL install PASS recorded. | `releaseReady` false until Windows physical install and remaining gates; no fresh paired live-model score. |
+| 1.3.0 RC2 | Control-plane stabilization prerelease | Automated transition replay, epoch/idempotence/parity contracts, runtime identity, pytest/Node/installer/OSS/CI gates. | Server-owned next-obligation publication closes the known transition-loop class; exact required-tool recovery is explicit across the late pipeline. | No GUI E2E or fresh paired live-model score; long-context retention and exact schema emission remain increasingly visible model-side risks; Windows physical install remains pending. |
 
 ## Field-Level Notes
 
@@ -83,13 +85,13 @@ xychart-beta
 
 ## 1.3.0 Beta Status
 
-v1.2.5 remains the historical compile-fix performance baseline. 1.3.0 Beta4/Beta5/RC1 expand the workflow and release surface, but they do not replace those saved model results with an unmeasured score.
+v1.2.5 remains the historical compile-fix performance baseline. 1.3.0 Beta4/Beta5/RC1/RC2 expand the workflow and release surface, but they do not replace those saved model results with an unmeasured score.
 
 Before a stable 1.3.0 claim, run and publish separate scorecards for compile-fix, semantic refactor, runtime debug, negative control, and advanced Unreal C++ capability. Do not collapse them into one headline score.
 
 ## Korean
 
-이 문서는 v1.0.0부터 1.3.0 Beta5 / RC1까지의 발전 과정을 정리합니다. 중간에 테스트 suite가 바뀌었기 때문에, 수치는 완전히 동일 조건의 벤치마크가 아니라 저장된 milestone 근거로 읽어야 합니다.
+이 문서는 v1.0.0부터 1.3.0 RC2까지의 발전 과정을 정리합니다. 중간에 테스트 suite가 바뀌었기 때문에, 수치는 완전히 동일 조건의 벤치마크가 아니라 저장된 milestone 근거로 읽어야 합니다.
 
 ## 시각화 점수표
 
@@ -110,6 +112,7 @@ Before a stable 1.3.0 claim, run and publish separate scorecards for compile-fix
 | 1.3.0 Beta4 | 재채점하지 않음 | Sketch claim hardening과 write-path semantic guard가 들어왔지만(과거 RC1 표기) 새로운 paired live-model run이 없습니다. v1.2.5 점수를 재사용하면 근거를 과장하게 됩니다. |
 | 1.3.0 Beta5 | 재채점하지 않음 | Beta4 위 startup/install hotfix(과거 RC2 표기). 새 paired live-model run 없음. |
 | 1.3.0 RC1 | 재채점하지 않음 | 릴리스 위생과 Apple Silicon 실기 FULL 설치 근거. paired live-model 재측정은 아직 없음. |
+| 1.3.0 RC2 | 재채점하지 않음 | control-plane 중앙화, 멱등 처리, transition replay, CI 호환성 수정. 모델측 병목은 관찰됐지만 paired live-model run으로 측정하지 않음. |
 
 ```mermaid
 xychart-beta
@@ -155,6 +158,7 @@ xychart-beta
 | 1.3.0 Beta4 | Beta3 기반 sketch/write semantic hardening (과거 RC1 표기) | 자동 저장소 gate와 mutation semantic guard packaging/verify 검사. | Untyped container claim waiver, reverse-turn clamp denylist, write-path mutation semantic guard, sketch-gate recovery와 routing/auth hardening. | 새로운 paired live-model 점수 없음. 실제 Ubuntu/macOS Unreal 인증, Ollama frontend, frontend parity 측정, advanced runtime behavior oracle이 남아 있음. |
 | 1.3.0 Beta5 | Beta4 위 startup/install hotfix (과거 RC2 표기) | Catalog/authorization 및 install.sh launcher 테스트. | Stable Essential MCP catalog 가시성, macOS Python 3.10+ launcher 탐지. | 새로운 paired live-model 점수 없음. Beta4와 동일한 인증 항목이 남아 있음. |
 | 1.3.0 RC1 | 릴리스 위생 draft | Package allowlist, encoding gate, Apple Silicon 실기 FULL 설치 로그. | Portable package forbidden-inventory 강화, darwin-arm64 FULL 설치 PASS 기록. | Windows 실기 전까지 `releaseReady` false. 새로운 paired live-model 점수 없음. |
+| 1.3.0 RC2 | control-plane 안정화 프리릴리스 | transition replay, epoch/idempotence/parity contract, runtime identity, pytest/Node/installer/OSS/CI gate. | 서버 소유 next-obligation으로 알려진 transition-loop 계열을 구조적으로 차단. | GUI E2E와 새 paired score 없음. 긴 문맥 유지와 정확한 schema 생성은 모델측 위험으로 더 뚜렷해졌고 Windows 실기는 대기 중. |
 
 ## 분야별 메모
 
@@ -168,6 +172,6 @@ xychart-beta
 
 ## 1.3.0 Beta 상태
 
-v1.2.5는 historical compile-fix 성능 baseline으로 유지됩니다. 1.3.0 Beta4/Beta5/RC1는 workflow와 release surface를 확장하지만, 저장된 모델 결과를 측정되지 않은 새 점수로 대체하지 않습니다.
+v1.2.5는 historical compile-fix 성능 baseline으로 유지됩니다. 1.3.0 Beta4/Beta5/RC1/RC2는 workflow와 release surface를 확장하지만, 저장된 모델 결과를 측정되지 않은 새 점수로 대체하지 않습니다.
 
 Stable 1.3.0을 주장하기 전 compile-fix, semantic refactor, runtime debug, negative control, advanced Unreal C++ capability를 분리된 scorecard로 실행하고 공개해야 합니다. 하나의 headline 점수로 합치지 않습니다.

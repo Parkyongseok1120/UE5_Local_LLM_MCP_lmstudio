@@ -206,9 +206,29 @@ foreach ($file in $scanFiles) {
                 )) {
                 continue
             }
-            # Synthetic placeholder homes used in unit tests.
-            if ($name -eq 'unix-users' -and $text -match '/Users/example/') {
+            $isUnitTest = (
+                $relPosix -match '(?i)(^|/)tests?(/|$)' -or
+                $relPosix -match '\.test\.js$' -or
+                $relPosix -match '(?i)(^|/)test_'
+            )
+            # Synthetic project names in tests are allowed; runtime/config/docs
+            # remain covered by the forbidden-content rule above.
+            if ($name -eq 'O-Mock' -and $isUnitTest) {
                 continue
+            }
+            # Allow only explicit USERNAME/example placeholder homes in tests.
+            # Remove the known-safe fixture paths and scan the remaining text so
+            # a real personal path in the same test file is still rejected.
+            if ($name -in @('win-users-backslash', 'win-users-slash', 'unix-users', 'unix-home') -and
+                $isUnitTest) {
+                $fixtureText = $text
+                $fixtureText = $fixtureText -replace '(?i)C:\\Users\\(?:USERNAME|example)\\', ''
+                $fixtureText = $fixtureText -replace '(?i)C:/Users/(?:USERNAME|example)/', ''
+                $fixtureText = $fixtureText -replace '/Users/(?:USERNAME|example)/', ''
+                $fixtureText = $fixtureText -replace '/home/(?:USERNAME|example)/', ''
+                if ($fixtureText -notmatch $pattern) {
+                    continue
+                }
             }
             # Scanner / builder source that constructs path regexes from parts still may
             # mention path fragments in comments; allow only self-check scripts.

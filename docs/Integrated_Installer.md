@@ -2,7 +2,7 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release label: **1.3.0 RC1** (prerelease; `portablePackage.releaseReady` is `false` until Windows physical install validation and remaining release gates complete). The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest is `2.1.3`.
+Product release label: **1.3.0 RC2** (GitHub prerelease; `portablePackage.releaseReady` is `false` until Windows physical install validation and remaining release gates complete). The installer reports the same value with `python3 install.py --version`; the independently versioned portable manifest is `2.1.3`.
 
 ## Requirements
 
@@ -10,7 +10,7 @@ Product release label: **1.3.0 RC1** (prerelease; `portablePackage.releaseReady`
 - The installer establishes managed **Python 3.12** first. It downloads **Node.js 20+/npm** for LM Studio context-compactor installs (required whenever LM Studio/Unreal components are selected) and **PowerShell 7 (`pwsh`)** only when `--build-rag` is selected, reducing SAFE-profile failure surface.
 - Runtime archives are pinned by version and SHA-256 for x64/arm64 on Windows, Apple Silicon macOS, and Ubuntu/glibc. [`installer/runtime-manifest.json`](../installer/runtime-manifest.json) is the SSOT for URL, filename, platform, architecture, checksum, executable, and probe metadata. Extraction rejects traversal, unsafe links, encrypted ZIP members, special files, and archive bombs before writing the runtime cache.
 - **Intel macOS:** LM Studio / Unreal / context-compactor installs abort early. Custom Codex / portable_rule / Cline-only installs are allowed.
-- **Apple Silicon macOS:** physical FULL install verified on darwin-arm64 (runtimes, Context Compactor 45/45, LM Studio plugin install/activation, UE 5.8 auto-discovery, full RAG 88,829 chunks, evidence-first MCP smoke, installer `ok: true`). Separate limitations: Unreal Editor asset metadata headless export **FAIL**; LM Studio API server connectivity **UNVERIFIED** when the API server was not running; installer signing/notarization is **not claimed**. See [RC1 notes](Release_Notes_1_3_0_RC1.md).
+- **Apple Silicon macOS:** physical FULL install verified on darwin-arm64 (runtimes, Context Compactor 45/45, LM Studio plugin install/activation, UE 5.8 auto-discovery, full RAG 88,829 chunks, evidence-first MCP smoke, installer `ok: true`). Separate limitations: Unreal Editor asset metadata headless export **FAIL**; LM Studio API server connectivity **UNVERIFIED** when the API server was not running; installer signing/notarization is **not claimed**. See [RC2 notes](Release_Notes_1_3_0_RC2.md).
 - **Windows:** fixture/CI install paths are exercised; physical Windows install is **not yet verified** and keeps `releaseReady` false.
 - SAFE also needs LM Studio 0.4+ for native MCP API use (unsupported on Intel Mac).
 - FULL context compaction additionally needs the LM Studio `lms` CLI.
@@ -37,7 +37,7 @@ If the downloaded PowerShell binary cannot start because host libraries are miss
 sudo apt-get install -y libicu-dev libssl3 zlib1g
 ```
 
-These are implemented and fixture-tested paths. Apple Silicon physical FULL install is recorded in [RC1 notes](Release_Notes_1_3_0_RC1.md); Windows physical certification and the listed Apple Silicon limitations still block `releaseReady`.
+These are implemented and fixture-tested paths. Apple Silicon physical FULL install is recorded in [RC2 notes](Release_Notes_1_3_0_RC2.md); Windows physical certification and the listed Apple Silicon limitations still block `releaseReady`.
 
 ## Start
 

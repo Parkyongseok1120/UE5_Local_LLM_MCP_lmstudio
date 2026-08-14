@@ -98,7 +98,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "skills/evidence-first-code-audit/assets/lmstudio-evidence-first.preset.json",
         "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py",
         "config/evidence_first_benchmark_cases.json",
-        "docs/Release_Notes_1_3_0_RC1.md",
+        "docs/Release_Notes_1_3_0_RC2.md",
         "docs/Release_Notes_1_3_0_Beta4.md",
         "scripts/architecture_reasoning.py",
         "scripts/build_symbol_graph.py",
@@ -148,7 +148,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "runtime-manifest.json",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert packaged_installer_manifest["productVersion"] == "1.3.0 RC1"
+    assert packaged_installer_manifest["productVersion"] == "1.3.0 RC2"
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
     assert (output / "install.sh").read_bytes() == (ROOT / "install.sh").read_bytes()
     windows_launcher = (output / "INSTALL.bat").read_text(encoding="utf-8")

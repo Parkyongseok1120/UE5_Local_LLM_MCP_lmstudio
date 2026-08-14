@@ -730,7 +730,7 @@ def test_active_route_keeps_transport_rag_catalog_profile_stable(monkeypatch, tm
     from tool_exposure import load_stable_manifest
 
     essential = set(load_stable_manifest()["ragEssential"])
-    started = task_start(
+    task_start(
         tmp_path,
         request="Edit Source/Demo/Foo.cpp",
         mode="agent_edit",

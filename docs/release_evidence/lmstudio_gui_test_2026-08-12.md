@@ -7,7 +7,7 @@
 - 모델 파일: `Qwen3.6-27B-NEO-CODE-HERE-2T-OT-Q4_K_S.gguf`
 - 컨텍스트: 72,448 tokens
 - 생성기: `codex/unreal-context-compactor`
-- 프로젝트: `C:\Users\sster\Documents\Git\O-Mock\O_Mock.uproject`
+- 프로젝트: 로컬 Unreal 테스트 프로젝트(경로 비공개)
 
 ## revision 54 — checkpoint 반복
 
@@ -29,13 +29,13 @@ reasoning 진행 표시와 checkpoint 수정은 동작했지만 자연어 기능
 
 ## revision 56 — Architecture 계약 자기증폭 루프
 
-- 대화: `C:\Users\sster\.lmstudio\conversations\84\1786532216327.conversation.json`
+- 대화: 로컬 LM Studio 대화 artifact(경로 비공개)
 - 활성 플러그인: `lmstudio/rag-v1`, `mcp/unreal-agent`, `mcp/unreal-rag`,
   `mcp/evidence-first`, `codex/unreal-context-compactor`
 
 전송 프롬프트:
 
-> 현재 O-Mock 프로젝트를 먼저 읽고 구조와 상태 소유권을 파악한 다음, 로컬 대국에서 사용할 착수 기록과 한 수 되돌리기 기능을 기존 상태 소유권과 충돌하지 않는 작은 독립 시스템으로 설계하고 구현해줘. 기존 네트워크·아이템·미니게임·서버 기능은 건드리지 말고, 필요한 자동 테스트를 추가한 뒤 정적 검증과 Unreal 빌드까지 수행해 결과를 알려줘.
+> 현재 테스트 프로젝트를 먼저 읽고 구조와 상태 소유권을 파악한 다음, 로컬 대국에서 사용할 착수 기록과 한 수 되돌리기 기능을 기존 상태 소유권과 충돌하지 않는 작은 독립 시스템으로 설계하고 구현해줘. 기존 네트워크·아이템·미니게임·서버 기능은 건드리지 말고, 필요한 자동 테스트를 추가한 뒤 정적 검증과 Unreal 빌드까지 수행해 결과를 알려줘.
 
 첫 탐색은 active project 1회, directory 1회, 파일 읽기 4회 뒤 Architecture 검증으로 정상
 수렴했다. 이후 Architecture proposal은 세 번 연속 실패했다.
@@ -47,7 +47,7 @@ reasoning 진행 표시와 checkpoint 수정은 동작했지만 자연어 기능
    추가되어 FullReplan으로 커졌다.
 
 이는 모델 추론 속도가 아니라 공개 schema와 validator 의미론이 만든 진행 차단 루프다. GUI는
-세 번째 Architecture 실패에서 중단했으며 O-Mock 파일에는 새 변경이 없었다.
+세 번째 Architecture 실패에서 중단했으며 테스트 프로젝트 파일에는 새 변경이 없었다.
 
 ## revision 57 — 수정 및 재검증 대상
 

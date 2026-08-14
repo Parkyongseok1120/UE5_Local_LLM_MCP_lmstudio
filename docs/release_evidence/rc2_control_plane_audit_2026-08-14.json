@@ -8,9 +8,13 @@
     "compatibilityClaim": "Source and automated host/project/version matrices are verified; universal physical runtime compatibility is not claimed."
   },
   "ordinaryValidation": {
-    "pytest": "1846 passed, 8 skipped",
-    "agentNpm": "215 passed, 1 skipped",
-    "compactorNpm": "150 passed"
+    "pytest": "1862 passed, 8 skipped",
+    "agentNpm": "222 passed, 1 skipped",
+    "compactorNpm": "163 passed",
+    "ruff": "all scripts/ and tests/ checks passed",
+    "ossReadiness": "passed",
+    "integratedInstallerAndPackage": "66 passed",
+    "transitionHostProjectEngineMatrix": "80 passed"
   },
   "auditRounds": [
     {
@@ -214,7 +218,7 @@
         {
           "kind": "project_source",
           "location": "scripts/feature_intent_fast_path.py:212",
-          "observation": "Bounded fast-path output carries project-convention evidence per target instead of relying on O-Mock assumptions."
+          "observation": "Bounded fast-path output carries project-convention evidence per target instead of relying on fixture-project assumptions."
         },
         {
           "kind": "test",

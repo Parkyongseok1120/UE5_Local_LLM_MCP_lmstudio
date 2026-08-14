@@ -213,8 +213,8 @@ test("build output decoder preserves UTF-8 and decodes Korean Windows output", (
     decodeBuildOutput(lossyCp949, { encoding: "cp949" }),
     "error C2039: 'Empty'"
   );
-  assert.strictEqual(localeOutputEncoding("ko-KR"), "euc-kr");
-  assert.strictEqual(localeOutputEncoding("ja-JP"), "shift_jis");
+  assert.strictEqual(localeOutputEncoding("ko-KR", "win32"), "euc-kr");
+  assert.strictEqual(localeOutputEncoding("ja-JP", "win32"), "shift_jis");
   assert.strictEqual(localeOutputEncoding("en-US", "win32"), "windows-1252");
   assert.strictEqual(localeOutputEncoding("ko-KR", "linux"), "utf-8");
   assert.strictEqual(localeOutputEncoding("ja-JP", "darwin"), "utf-8");

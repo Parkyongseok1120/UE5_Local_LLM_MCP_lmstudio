@@ -108,6 +108,7 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 )
 
 REQUIRED_RUNTIME_FILES = (
+    "docs/Release_Notes_1_3_0_RC2.md",
     "scripts/control_runtime_identity.py",
     "scripts/phase_tool_router.py",
     "scripts/approve_feature_intent.py",
@@ -317,7 +318,7 @@ def _write_launchers(staging: Path) -> None:
         "- **Apple Silicon macOS**: physical FULL install verified on darwin-arm64 "
         "(runtimes, context compactor, LM Studio plugin activation, UE 5.8 auto-detect, "
         "full RAG, evidence-first MCP smoke). Signing/notarization is not claimed; "
-        "see docs/Release_Notes_1_3_0_RC1.md for known limitations.\n"
+        "see docs/Release_Notes_1_3_0_RC2.md for known limitations.\n"
         "- **Intel macOS (x86_64)**: LM Studio is not supported by LM Studio upstream. "
         "LM Studio / Unreal / context-compactor installs abort early. "
         "Custom Codex / portable-rule / Cline-only installs remain allowed.\n"
