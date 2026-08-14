@@ -212,7 +212,7 @@ const ARCHITECTURE_CONTROL_STATES = new Set([
 
 function compactProtocolControl(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  if (Number(value.version || 0) < 1) return null;
+  if (Number(value.version || 0) !== 1) return null;
   return {
     version: Number(value.version),
     taskId: String(value.taskId || "").slice(0, 160),
@@ -223,6 +223,155 @@ function compactProtocolControl(value) {
     retryPolicy: String(value.retryPolicy || "none").slice(0, 40),
     blockerFingerprint: String(value.blockerFingerprint || "").slice(0, 160),
     continuationToken: String(value.continuationToken || "").slice(0, 160),
+  };
+}
+
+const SERVER_CONTROL_DISPOSITIONS = new Set([
+  "continue",
+  "require_tool",
+  "rediscover",
+  "checkpoint",
+  "await_user",
+  "workflow_stop",
+  "complete",
+]);
+
+function compactServerControl(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version || 0) < 2) return null;
+  const epoch = Number(value.epoch);
+  const disposition = String(value.disposition || "").trim().toLowerCase();
+  const taskSessionId = String(value.taskSessionId || "").trim().slice(0, 160);
+  if (!Number.isInteger(epoch) || epoch < 0 || !taskSessionId) return null;
+  if (!SERVER_CONTROL_DISPOSITIONS.has(disposition)) return null;
+  const requiredValue = value.requiredTool;
+  let requiredTool = null;
+  if (requiredValue != null) {
+    if (!requiredValue || typeof requiredValue !== "object" || Array.isArray(requiredValue)) return null;
+    const name = String(requiredValue.name || "").trim();
+    if (!/^[a-z][a-z0-9_-]{1,160}$/i.test(name)) return null;
+    if (
+      requiredValue.args != null
+      && (typeof requiredValue.args !== "object" || Array.isArray(requiredValue.args))
+    ) return null;
+    requiredTool = {
+      name,
+      args: requiredValue.args && typeof requiredValue.args === "object"
+        ? requiredValue.args
+        : {},
+    };
+  }
+  const allowedTools = normalizeToolNames(value.allowedTools).slice(0, 32);
+  if (["require_tool", "checkpoint"].includes(disposition)) {
+    if (!requiredTool) return null;
+    if (allowedTools.length !== 1 || !toolNamesMatch(allowedTools[0], requiredTool.name)) return null;
+  } else if (["await_user", "workflow_stop", "complete"].includes(disposition)) {
+    if (requiredTool || allowedTools.length > 0) return null;
+  } else if (requiredTool) {
+    return null;
+  }
+  const retryValue = String(value.retryPolicy?.sameSemanticInput || "allowed").trim();
+  if (!["allowed", "once", "forbidden"].includes(retryValue)) return null;
+  const blocker = value.blocker && typeof value.blocker === "object" && !Array.isArray(value.blocker)
+    ? {
+      code: String(value.blocker.code || "").slice(0, 120),
+      fingerprint: String(value.blocker.fingerprint || "").slice(0, 160),
+    }
+    : null;
+  return {
+    version: 2,
+    epoch,
+    taskSessionId,
+    routeHash: String(value.routeHash || "").slice(0, 160),
+    phase: String(value.phase || "unknown").slice(0, 160),
+    disposition,
+    requiredTool,
+    allowedTools,
+    retryPolicy: { sameSemanticInput: retryValue },
+    blocker,
+  };
+}
+
+function acceptServerControl(state, incoming) {
+  if (!incoming) return false;
+  const current = compactServerControl(state.serverControl);
+  if (current && current.taskSessionId === incoming.taskSessionId) {
+    if (incoming.epoch < current.epoch) {
+      state.lastDiagnostics.push(
+        `controlEpochRegression=${incoming.epoch}<${current.epoch}`,
+      );
+      return false;
+    }
+    if (incoming.epoch === current.epoch && stableStringify(incoming) !== stableStringify(current)) {
+      state.lastDiagnostics.push(`controlEpochConflict=${incoming.epoch}`);
+      return false;
+    }
+  }
+  state.serverControl = incoming;
+  return true;
+}
+
+function projectServerControl(state) {
+  const control = compactServerControl(state.serverControl);
+  if (!control) return false;
+  state.serverControl = control;
+  state.protocolControl = null;
+  state.taskRouteTerminal = ["workflow_stop", "complete"].includes(control.disposition);
+  if (state.taskRouteTerminal) {
+    state.toolRoute = null;
+  } else {
+    state.toolRoute = {
+      routeHash: control.routeHash,
+      phase: control.phase,
+      activeTools: [...control.allowedTools],
+      selectedSlice: state.toolRoute?.selectedSlice || null,
+    };
+  }
+  state.requiredNextTool = control.requiredTool?.name || null;
+  state.requiredNextToolRef = control.requiredTool
+    ? { sourceField: "control.requiredTool", epoch: control.epoch }
+    : null;
+  state.requiredNextToolArgs = control.requiredTool?.args || null;
+  return true;
+}
+
+function compactEvidenceLedger(value, absent = false) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const files = value.files && typeof value.files === "object" && !Array.isArray(value.files)
+    ? value.files
+    : {};
+  const compactFiles = {};
+  for (const [rawKey, rawEntry] of Object.entries(files).slice(0, 32)) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) continue;
+    const pathValue = String(rawEntry.path || rawKey || "").replace(/\\/g, "/").slice(0, 500);
+    if (!pathValue) continue;
+    if (absent) {
+      compactFiles[String(rawKey).toLowerCase()] = {
+        evidenceId: String(rawEntry.evidenceId || "").slice(0, 80),
+        path: pathValue,
+        searchComplete: rawEntry.searchComplete === true,
+        scopes: Array.isArray(rawEntry.scopes) ? rawEntry.scopes.map(String).slice(0, 8) : [],
+        queries: Array.isArray(rawEntry.queries) ? rawEntry.queries.map(String).slice(0, 8) : [],
+      };
+    } else {
+      compactFiles[String(rawKey).toLowerCase()] = {
+        evidenceId: String(rawEntry.evidenceId || "").slice(0, 80),
+        path: pathValue,
+        contentHash: String(rawEntry.contentHash || "").slice(0, 80),
+        sourceKind: String(rawEntry.sourceKind || "").slice(0, 40),
+        coveredRanges: Array.isArray(rawEntry.coveredRanges)
+          ? rawEntry.coveredRanges.slice(0, 16).map((range) => [Number(range?.[0]), Number(range?.[1])])
+            .filter((range) => Number.isInteger(range[0]) && Number.isInteger(range[1]) && range[0] > 0 && range[1] >= range[0])
+          : [],
+        declarations: Array.isArray(rawEntry.declarations) ? rawEntry.declarations.map(String).slice(0, 32) : [],
+        implementations: Array.isArray(rawEntry.implementations) ? rawEntry.implementations.map(String).slice(0, 32) : [],
+      };
+    }
+  }
+  return {
+    version: Number(value.version || (absent ? 1 : 2)),
+    planRevision: String(value.planRevision || "").slice(0, 160),
+    files: compactFiles,
   };
 }
 
@@ -388,7 +537,27 @@ function boundedArchitecturePatchPreview(value) {
 
 function collectControlFields(value, state) {
   if (!value || typeof value !== "object") return;
-  const protocolControl = compactProtocolControl(value.control);
+  const declaredServerControl = value.control
+    && typeof value.control === "object"
+    && !Array.isArray(value.control)
+    && Number(value.control.version || 0) >= 2;
+  const incomingServerControl = compactServerControl(value.control);
+  if (declaredServerControl && !incomingServerControl) {
+    state.serverControl = null;
+    state.protocolControl = null;
+    state.taskRouteTerminal = true;
+    state.toolRoute = null;
+    state.requiredNextTool = null;
+    state.requiredNextToolRef = null;
+    state.requiredNextToolArgs = null;
+    state.lastDiagnostics.push("invalidServerControlV2=fail_closed");
+    return;
+  }
+  if (incomingServerControl) acceptServerControl(state, incomingServerControl);
+  const authoritativeServerControl = compactServerControl(state.serverControl);
+  const protocolControl = authoritativeServerControl
+    ? null
+    : compactProtocolControl(value.control);
   if (protocolControl) {
     state.protocolControl = protocolControl;
     if (
@@ -448,26 +617,31 @@ function collectControlFields(value, state) {
       ).slice(0, 96),
     };
   }
-  const directActionIsTool = protocolControl
+  const directActionIsTool = authoritativeServerControl
+    ? Boolean(authoritativeServerControl.requiredTool)
+    : protocolControl
     ? protocolControl.nextActionIsTool === true
     : value.nextActionIsTool === true || Boolean(value.requiredNextTool);
-  let directRequiredNextToolSeen = false;
-  let directRequiredNextTool = null;
-  let directAction = protocolControl?.nextAction || "";
-  let directActionField = protocolControl?.nextAction ? "control.nextAction" : "";
+  let directRequiredNextToolSeen = Boolean(authoritativeServerControl?.requiredTool);
+  let directRequiredNextTool = authoritativeServerControl?.requiredTool || null;
+  let directAction = authoritativeServerControl?.requiredTool?.name || protocolControl?.nextAction || "";
+  let directActionField = authoritativeServerControl?.requiredTool
+    ? "control.requiredTool"
+    : (protocolControl?.nextAction ? "control.nextAction" : "");
   // Only requiredNextToolArgs are server-owned equality constraints. Ordinary
   // nextActionArgs are model-facing templates/defaults and may deliberately
   // contain placeholders or omit values the model must derive.
-  let directArgs = value.requiredNextToolArgs && typeof value.requiredNextToolArgs === "object"
+  let directArgs = authoritativeServerControl?.requiredTool?.args
+    || (value.requiredNextToolArgs && typeof value.requiredNextToolArgs === "object"
     ? value.requiredNextToolArgs
-    : null;
+    : null);
   for (const [key, child] of Object.entries(value)) {
     if (key === "control") {
       continue;
-    } else if (!protocolControl && key === "requiredNextTool") {
+    } else if (!protocolControl && !authoritativeServerControl && key === "requiredNextTool") {
       directRequiredNextToolSeen = true;
       directRequiredNextTool = child;
-    } else if (!protocolControl && ["requiredNextAction", "nextAction"].includes(key) && typeof child === "string") {
+    } else if (!protocolControl && !authoritativeServerControl && ["requiredNextAction", "nextAction"].includes(key) && typeof child === "string") {
       const candidate = child.trim();
       if (/^[a-z][a-z0-9_]{2,}(?::[a-z0-9_-]+)?$/.test(candidate)) {
         if (!directAction || key === "nextAction") {
@@ -475,7 +649,7 @@ function collectControlFields(value, state) {
           directActionField = key;
         }
       }
-    } else if (!protocolControl && key === "requiredNextToolArgs" && child && typeof child === "object") {
+    } else if (!protocolControl && !authoritativeServerControl && key === "requiredNextToolArgs" && child && typeof child === "object") {
       directArgs = child;
     } else if (key === "taskRouteTerminal" && child === true) {
       state.taskRouteTerminal = true;
@@ -509,6 +683,10 @@ function collectControlFields(value, state) {
       state.sliceProgress = child;
     } else if (key === "buildVerification" && child && typeof child === "object") {
       state.buildVerification = child;
+    } else if (key === "sourceEvidence" && child && typeof child === "object") {
+      state.sourceEvidence = compactEvidenceLedger(child, false);
+    } else if (key === "absentEvidence" && child && typeof child === "object") {
+      state.absentEvidence = compactEvidenceLedger(child, true);
     } else if (key === "toolRoute" && child && typeof child === "object") {
       if (state.taskRouteTerminal !== true) {
         state.toolRoute = {
@@ -525,6 +703,7 @@ function collectControlFields(value, state) {
     }
     collectControlFields(child, state);
   }
+  if (projectServerControl(state)) return;
   // Parent control fields describe the action that must happen now. Reapply
   // them after recursion so nextActionArgs.requiredNextAction (the action
   // after a recovery checkpoint) cannot overwrite nextAction itself.
@@ -613,6 +792,44 @@ function semanticAnchors(content) {
   return selected.map((row) => `L${row.index + 1}: ${row.text}`);
 }
 
+function exactReadBody(toolName, source) {
+  let body = String(source || "").replace(/\r\n/g, "\n");
+  if (String(toolName || "").toLowerCase().endsWith("read_file_range")) {
+    const split = body.indexOf("\n\n");
+    if (split >= 0 && /^(?:File:|Path-Metadata:|Lines:)/m.test(body.slice(0, split))) {
+      body = body.slice(split + 2);
+    }
+    body = body.split("\n").map((line) => line.replace(/^\d+\|/u, "")).join("\n");
+  } else {
+    body = body
+      .split("\n")
+      .filter((line) => !/^\[(?:path-metadata|read-truncation|line-endings):/iu.test(line))
+      .join("\n");
+  }
+  const maxChars = 12_000;
+  return {
+    content: body.slice(0, maxChars),
+    truncated: body.length > maxChars,
+  };
+}
+
+function coveredRangeForRead(args, payload, source) {
+  const start = Math.max(1, Number(args.startLine || args.start || 1));
+  let end = Number(args.endLine || args.end || 0);
+  if (!Number.isFinite(end) || end < start) {
+    const headerMatch = String(source || "").match(/^Lines:\s*(\d+)-(\d+)/mu);
+    const observedLineCount = Number(
+      payload?.cachedLineCount || (source ? String(source).split(/\r?\n/u).length : 0)
+    );
+    end = headerMatch
+      ? Number(headerMatch[2])
+      : start + Math.max(0, observedLineCount - 1);
+  }
+  return Number.isInteger(start) && Number.isInteger(end) && end >= start
+    ? [[start, end]]
+    : [];
+}
+
 function compactToolEvidence(call, payload, resultContent = "") {
   const name = String(call?.name || "");
   const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
@@ -657,6 +874,7 @@ function compactToolEvidence(call, payload, resultContent = "") {
   }
   if (normalized.endsWith("read_file") || normalized.endsWith("read_file_range")) {
     const source = String(payload?.content || resultContent || "");
+    const exact = exactReadBody(name, source);
     const suppliedAnchors = Array.isArray(payload?.semanticAnchors)
       ? payload.semanticAnchors.filter((line) => typeof line === "string").slice(0, 16)
       : [];
@@ -666,7 +884,11 @@ function compactToolEvidence(call, payload, resultContent = "") {
       startLine: Number(args.startLine || args.start || 0),
       endLine: Number(args.endLine || args.end || 0),
       lineCount: Number(payload?.cachedLineCount || (source ? source.split(/\r?\n/).length : 0)),
+      contentHash: String(payload?.contentHash || "").slice(0, 80),
       evidenceHash: String(payload?.evidenceHash || payload?.contentHash || (source ? sha256(source) : "")).slice(0, 80),
+      coveredRanges: coveredRangeForRead(args, payload, exact.content),
+      exactContent: exact.content,
+      exactContentTruncated: exact.truncated,
       semanticAnchors: suppliedAnchors.length ? suppliedAnchors : semanticAnchors(source),
       repeatDetected: payload?.repeatDetected === true,
       readAttempts: Number(payload?.readAttempts || 1),
@@ -747,7 +969,7 @@ function classifyMutationIntent(text) {
   };
 }
 
-function isReadOnlyUserGoal(text) {
+function classifyUserIntent(text) {
   const source = String(text || "");
   const lower = source.toLowerCase();
   const explicitNoWrite = (
@@ -767,15 +989,20 @@ function isReadOnlyUserGoal(text) {
   // still explicitly asking for an implementation. Mutation intent wins;
   // otherwise ordinary show/describe/status questions are read-only even
   // when the user does not spell out "do not edit".
-  if (classifyMutationIntent(source).isMutation) return false;
-  if (explicitNoWrite) return true;
-  return Boolean(
+  if (classifyMutationIntent(source).isMutation) return "MUTATION";
+  if (explicitNoWrite) return "READ_ONLY";
+  const readOnlyIntent = Boolean(
     /\b(?:what|which|where|show|list|describe|explain|summari[sz]e|inspect|analy[sz]e|review|report)\b/i.test(source)
     || /(?:구조|상태|현황|진행\s*상황|어디까지|의미|내용|목록|경로|문제점|원인)(?:을|를|이|가|은|는|만|부터|에)?\s*(?:알려|보여|설명|요약|분석|확인|말해|찾아|점검)/.test(source)
     || /(?:구조|상태|현황|진행\s*상황|내용|목록|경로)[\s\S]{0,100}(?:봐|살펴)/.test(source)
     || /(?:알려|보여|설명|요약|분석|확인|말해)\s*(?:줘|주세요|봐|보자)?[.!?\s]*$/.test(source)
     || /(?:뭐|무엇|어떤|어디)(?:야|인가|인지|예요|입니까|냐)?[.!?\s]*$/.test(source)
   );
+  return readOnlyIntent ? "READ_ONLY" : "AMBIGUOUS";
+}
+
+function isReadOnlyUserGoal(text) {
+  return classifyUserIntent(text) === "READ_ONLY";
 }
 
 function classifyUserTurnIntent(text, context = {}) {
@@ -869,6 +1096,15 @@ function extractControlState(messages, prior = {}, options = {}) {
       : null,
     architectureControl: canResume && prior.architectureControl
       ? { ...prior.architectureControl }
+      : null,
+    serverControl: canResume && compactServerControl(prior.serverControl)
+      ? compactServerControl(prior.serverControl)
+      : null,
+    sourceEvidence: canResume && compactEvidenceLedger(prior.sourceEvidence, false)
+      ? compactEvidenceLedger(prior.sourceEvidence, false)
+      : null,
+    absentEvidence: canResume && compactEvidenceLedger(prior.absentEvidence, true)
+      ? compactEvidenceLedger(prior.absentEvidence, true)
       : null,
     semanticBlocker: canResume && prior.semanticBlocker
       ? { ...prior.semanticBlocker }
@@ -1024,6 +1260,30 @@ function extractControlState(messages, prior = {}, options = {}) {
         } else {
           state.mutationGeneration = Math.max(state.mutationGeneration, reportedMutationGeneration);
         }
+        const mutationArgs = matchedCall.arguments && typeof matchedCall.arguments === "object"
+          ? matchedCall.arguments
+          : {};
+        const changedPaths = [
+          mutationArgs.path,
+          ...(Array.isArray(mutationArgs.files) ? mutationArgs.files.map((item) => item?.path) : []),
+          ...(Array.isArray(mutationArgs.patches) ? mutationArgs.patches.map((item) => item?.path) : []),
+        ].map((item) => String(item || "").replace(/\\/g, "/").replace(/^project:\/\//i, "").toLowerCase())
+          .filter(Boolean);
+        if (changedPaths.length) {
+          const changed = new Set(changedPaths);
+          state.evidenceFacts = state.evidenceFacts.filter((fact) => {
+            const factPath = String(fact?.path || "").replace(/\\/g, "/").replace(/^project:\/\//i, "").toLowerCase();
+            return !changed.has(factPath);
+          });
+          if (state.sourceEvidence?.files) {
+            state.sourceEvidence.files = Object.fromEntries(
+              Object.entries(state.sourceEvidence.files).filter(([key, entry]) => {
+                const entryPath = String(entry?.path || key).replace(/\\/g, "/").replace(/^project:\/\//i, "").toLowerCase();
+                return !changed.has(entryPath);
+              }),
+            );
+          }
+        }
         // Evidence-level stop/do-not-retry controls remain authoritative until
         // the user changes the goal or a successful mutation changes the source
         // snapshot that made the evidence stale.
@@ -1047,6 +1307,8 @@ function extractControlState(messages, prior = {}, options = {}) {
       // A generated call is only intent. Keep the required tool gate until the
       // paired result is observed and is explicitly non-failing.
       if (
+        !state.serverControl
+        &&
         state.requiredNextTool
         && toolNamesMatch(state.requiredNextTool, matchedCallName)
         && toolResultSucceeded(result)
@@ -1074,7 +1336,9 @@ function extractControlState(messages, prior = {}, options = {}) {
   for (const fact of state.evidenceFacts) {
       const tool = String(fact?.tool || "").toLowerCase();
       let key = stableStringify(fact);
-      if (tool.endsWith("read_file") || tool.endsWith("read_file_range")) key = `read:${fact.path}`;
+      if (tool.endsWith("read_file") || tool.endsWith("read_file_range")) {
+        key = `read:${fact.path}:${fact.contentHash || fact.evidenceHash || "unknown"}`;
+      }
       else if (tool.endsWith("list_directory")) key = `list:${fact.path}`;
       else if (tool.endsWith("search_files")) key = `search:${fact.path}:${fact.query}`;
       else if (tool.endsWith("get_active_project") || tool === "get_workspace_info") key = `project:${tool}`;
@@ -1086,6 +1350,26 @@ function extractControlState(messages, prior = {}, options = {}) {
         if (!Array.isArray(fact.semanticAnchors) || fact.semanticAnchors.length === 0) {
           merged.semanticAnchors = priorFact.semanticAnchors || [];
         }
+        const ranges = [
+          ...(Array.isArray(priorFact.coveredRanges) ? priorFact.coveredRanges : []),
+          ...(Array.isArray(fact.coveredRanges) ? fact.coveredRanges : []),
+        ].filter((range) => Array.isArray(range) && range.length >= 2)
+          .map((range) => [Number(range[0]), Number(range[1])])
+          .filter((range) => Number.isInteger(range[0]) && Number.isInteger(range[1]) && range[0] > 0 && range[1] >= range[0])
+          .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+        merged.coveredRanges = [];
+        for (const range of ranges) {
+          const priorRange = merged.coveredRanges.at(-1);
+          if (!priorRange || range[0] > priorRange[1] + 1) {
+            merged.coveredRanges.push([...range]);
+          } else {
+            priorRange[1] = Math.max(priorRange[1], range[1]);
+          }
+        }
+        if (!fact.exactContent) merged.exactContent = priorFact.exactContent || "";
+        merged.exactContentTruncated = Boolean(
+          fact.exactContent ? fact.exactContentTruncated : priorFact.exactContentTruncated
+        );
         evidenceByKey.set(key, merged);
       } else if (priorFact && tool.endsWith("search_files")) {
         const merged = { ...priorFact, ...fact };
@@ -1113,6 +1397,61 @@ function extractControlState(messages, prior = {}, options = {}) {
     .filter((item) => selectedFiles.has(normalizedProjectPath(item?.path)))
     .slice(-MAX_EDIT_EVIDENCE_FILES);
   return state;
+}
+
+function normalizeProjectEvidencePath(value) {
+  return String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/^project:\/\//i, "")
+    .replace(/^\.\/+/, "")
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+}
+
+function buildWorkingSet(control) {
+  const selectedSlice = control.selectedSlice && typeof control.selectedSlice === "object"
+    ? control.selectedSlice
+    : (control.toolRoute?.selectedSlice && typeof control.toolRoute.selectedSlice === "object"
+      ? control.toolRoute.selectedSlice
+      : null);
+  const rawSelected = selectedSlice
+    ? [
+      ...(Array.isArray(selectedSlice.files) ? selectedSlice.files : []),
+      ...(Array.isArray(selectedSlice.targetFiles) ? selectedSlice.targetFiles : []),
+      ...(Array.isArray(selectedSlice.paths) ? selectedSlice.paths : []),
+    ]
+    : [];
+  const selected = new Set(rawSelected.map((item) => (
+    normalizeProjectEvidencePath(item?.path || item)
+  )).filter(Boolean));
+  const reads = (Array.isArray(control.evidenceFacts) ? control.evidenceFacts : [])
+    .filter((fact) => {
+      const tool = String(fact?.tool || "").toLowerCase();
+      const factPath = normalizeProjectEvidencePath(fact?.path);
+      return (tool.endsWith("read_file") || tool.endsWith("read_file_range"))
+        && factPath
+        && typeof fact.exactContent === "string"
+        && fact.exactContent.length > 0
+        && (selected.size === 0 || selected.has(factPath));
+    });
+  const byPath = new Map();
+  for (const fact of reads) {
+    const pathKey = normalizeProjectEvidencePath(fact.path);
+    const ledgerEntry = control.sourceEvidence?.files?.[pathKey];
+    if (
+      ledgerEntry?.contentHash
+      && fact.contentHash
+      && String(ledgerEntry.contentHash) !== String(fact.contentHash)
+    ) continue;
+    byPath.set(pathKey, {
+      path: String(fact.path || "").replace(/\\/g, "/"),
+      contentHash: String(fact.contentHash || fact.evidenceHash || ""),
+      coveredRanges: Array.isArray(fact.coveredRanges) ? fact.coveredRanges.slice(0, 16) : [],
+      content: String(fact.exactContent || "").slice(0, 12_000),
+      truncated: fact.exactContentTruncated === true,
+    });
+  }
+  return [...byPath.values()].slice(-2);
 }
 
 function buildCheckpoint(messages, prior = {}, options = {}) {
@@ -1155,6 +1494,10 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     architectureProposal: control.architectureProposal,
     protocolControl: control.protocolControl,
     architectureControl: control.architectureControl,
+    serverControl: control.serverControl,
+    sourceEvidence: control.sourceEvidence,
+    absentEvidence: control.absentEvidence,
+    workingSet: buildWorkingSet(control),
     semanticBlocker: control.semanticBlocker,
     sideQuery: control.sideQuery,
     failedToolResults: control.failedToolResults,
@@ -1298,33 +1641,43 @@ function isMajorGoalChange(priorObjective, latestObjective) {
   );
 }
 
-function toolNamesMatch(expected, actual) {
-  // Strip only provider syntax with an explicit structural delimiter. Suffix
-  // matching is unsafe: get_active_project used to match the different
-  // unreal_get_active_project contract merely because one name ended in the
-  // other. A plain underscore-delimited name is therefore never guessed to be
-  // provider-qualified.
-  const canonical = (value) => {
-    const raw = String(value || "").trim().toLowerCase().replace(/\\/g, "/");
-    if (!raw) return "";
-    let name = raw;
-    const slashParts = raw.split("/").filter(Boolean);
-    if (slashParts.length >= 3 && slashParts[0] === "mcp") {
-      name = slashParts[slashParts.length - 1];
-    } else if (raw.startsWith("mcp__")) {
-      const doubleUnderscoreParts = raw.split("__").filter(Boolean);
-      if (doubleUnderscoreParts.length >= 3) {
-        name = doubleUnderscoreParts[doubleUnderscoreParts.length - 1];
-      }
-    }
-    return name
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "");
+function parseProviderQualifiedToolName(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return { qualified: false, functionName: "" };
+  const normalized = raw.replace(/\\/g, "/");
+  const slashParts = normalized.split(/[/:]/u).filter(Boolean);
+  if (slashParts.length >= 3 && slashParts[0] === "mcp") {
+    return {
+      qualified: true,
+      functionName: slashParts.at(-1).replace(/[^a-z0-9_-]/g, ""),
+    };
+  }
+  const doubleParts = normalized.split("__").filter(Boolean);
+  if (doubleParts.length >= 3 && doubleParts[0] === "mcp") {
+    return {
+      qualified: true,
+      functionName: doubleParts.at(-1).replace(/[^a-z0-9_-]/g, ""),
+    };
+  }
+  if (normalized.startsWith("mcp_")) {
+    const knownProviderPrefix = ["mcp_unreal_agent_", "mcp_unreal_rag_"]
+      .find((prefix) => normalized.startsWith(prefix));
+    return {
+      qualified: true,
+      functionName: normalized.slice((knownProviderPrefix || "mcp_").length),
+    };
+  }
+  return {
+    qualified: false,
+    functionName: normalized.replace(/[^a-z0-9_-]/g, "_"),
   };
-  const left = canonical(expected);
-  const right = canonical(actual);
-  if (!left || !right) return false;
-  return left === right;
+}
+
+function toolNamesMatch(expected, actual) {
+  const left = parseProviderQualifiedToolName(expected);
+  const right = parseProviderQualifiedToolName(actual);
+  if (!left.functionName || !right.functionName) return false;
+  return left.functionName === right.functionName;
 }
 
 function expectedToolReserve(toolName, config = {}) {
@@ -1469,6 +1822,9 @@ function summarizeOldMessages(messages, checkpoint) {
   if (checkpoint.protocolControl) {
     lines.push(`protocolControl=${JSON.stringify(checkpoint.protocolControl)}`);
   }
+  if (checkpoint.serverControl) {
+    lines.push(`serverControl=${JSON.stringify(checkpoint.serverControl)}`);
+  }
   if (checkpoint.architectureControl) {
     lines.push(`architectureControl=${JSON.stringify(checkpoint.architectureControl)}`);
   }
@@ -1531,6 +1887,18 @@ function summarizeOldMessages(messages, checkpoint) {
       + "remains available. This bounded cache clears on mutation or a new user goal.",
     );
     lines.push(`repeatEvidence=${JSON.stringify(checkpoint.repeatEvidence)}`);
+  }
+  if (checkpoint.sourceEvidence) {
+    lines.push(`sourceEvidence=${JSON.stringify(checkpoint.sourceEvidence)}`);
+  }
+  if (checkpoint.absentEvidence) {
+    lines.push(`absentEvidence=${JSON.stringify(checkpoint.absentEvidence)}`);
+  }
+  if (Array.isArray(checkpoint.workingSet) && checkpoint.workingSet.length) {
+    lines.push(
+      "workingSetExactCode="
+      + JSON.stringify(checkpoint.workingSet),
+    );
   }
   lines.push(`compactedMessageCount=${(messages || []).length}`);
   lines.push(
@@ -1689,6 +2057,33 @@ function validateCheckpoint(checkpoint) {
     ))) return false;
   }
   if (
+    checkpoint.sourceEvidence !== undefined
+    && checkpoint.sourceEvidence !== null
+    && !compactEvidenceLedger(checkpoint.sourceEvidence, false)
+  ) return false;
+  if (
+    checkpoint.absentEvidence !== undefined
+    && checkpoint.absentEvidence !== null
+    && !compactEvidenceLedger(checkpoint.absentEvidence, true)
+  ) return false;
+  if (checkpoint.workingSet !== undefined) {
+    if (!Array.isArray(checkpoint.workingSet) || checkpoint.workingSet.length > 2) return false;
+    if (checkpoint.workingSet.some((entry) => (
+      !entry
+      || typeof entry !== "object"
+      || Array.isArray(entry)
+      || typeof entry.path !== "string"
+      || !entry.path.trim()
+      || typeof entry.content !== "string"
+      || entry.content.length > 12_000
+    ))) return false;
+  }
+  if (
+    checkpoint.serverControl !== undefined
+    && checkpoint.serverControl !== null
+    && !compactServerControl(checkpoint.serverControl)
+  ) return false;
+  if (
     checkpoint.taskRouteOwnership !== undefined
     && checkpoint.taskRouteOwnership !== null
     && !compactTaskRouteOwnership(checkpoint.taskRouteOwnership)
@@ -1711,6 +2106,7 @@ module.exports = {
   toolResultSucceeded,
   isNonToolNextAction,
   compactTaskRouteOwnership,
+  compactServerControl,
   collectSemanticBlockerFields,
   isContinuationUserMessage,
   mutationToolName,
@@ -1718,6 +2114,7 @@ module.exports = {
   collectControlFields,
   classifyMutationIntent,
   isReadOnlyUserGoal,
+  classifyUserIntent,
   classifyUserTurnIntent,
   isMetaUserMessage,
   findLatestRealUserIndex,
@@ -1732,6 +2129,7 @@ module.exports = {
   sessionFingerprint,
   lmStudioConversationSessionFingerprint,
   isMajorGoalChange,
+  parseProviderQualifiedToolName,
   toolNamesMatch,
   expectedToolReserve,
   budgetDecision,

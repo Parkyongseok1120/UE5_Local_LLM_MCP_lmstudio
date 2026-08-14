@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import os
@@ -39,6 +40,7 @@ from phase_tool_router import (
     MUTATION_TOOLS,
     NON_BUDGETED_REPLAN_TOOLS,
     compact_tool_route,
+    commit_control_transition,
     derive_tool_route,
     effective_tool_route,
     normalized_selection_snapshots,
@@ -55,8 +57,13 @@ from mcp_connection import (
     task_owns_active_tool_route,
 )
 from task_phase import task_phase_from_state
+from mcp_control_envelope import attach_control_envelope
 from task_continuation_state import apply_user_continuation
-from task_gate_history import apply_failed_gate_attempt, repeated_gate_input_preflight
+from task_gate_history import (
+    apply_failed_gate_attempt,
+    completed_gate_input_preflight,
+    repeated_gate_input_preflight,
+)
 from route_recovery_policy import (
     route_recovery_action,
     route_recovery_next_action,
@@ -484,7 +491,16 @@ def _migrate_gate_policy(state: dict[str, Any]) -> bool:
     return narrowed
 
 
-def _refresh_server_owned_state(state: dict[str, Any]) -> dict[str, Any]:
+def _control_epoch(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _refresh_server_owned_state(
+    state: dict[str, Any],
+) -> dict[str, Any]:
     """Refresh selection bindings and the route after every persisted transition."""
 
     gate_set_narrowed = _migrate_gate_policy(state)
@@ -593,7 +609,10 @@ def _refresh_server_owned_state(state: dict[str, Any]) -> dict[str, Any]:
     elif previous_route and previous_route.get("routeHash") != route.get("routeHash"):
         state["toolRouteUsage"]["count"] = 0
         state["toolRouteUsage"]["calls"] = []
-    return state
+    # Route, gate, checkpoint, mutation, build, and automation facts are inputs
+    # only. One transition table owns the published obligation and advances the
+    # epoch exactly when that semantic control changes.
+    return commit_control_transition(state)
 
 
 TASK_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -802,17 +821,9 @@ def active_task_route_context(
                 with _task_lock(workspace, task_dir.name):
                     latest = _read_state(workspace, task_dir.name)
                     if latest:
-                        prior_hash = str(
-                            (latest.get("toolRoute") or {}).get("routeHash") or ""
-                        )
+                        prior_state = copy.deepcopy(latest)
                         latest = _refresh_server_owned_state(latest)
-                        if (
-                            str(
-                                (latest.get("toolRoute") or {}).get("routeHash")
-                                or ""
-                            )
-                            != prior_hash
-                        ):
+                        if latest != prior_state:
                             usage = dict(latest.get("toolRouteUsage") or {})
                             usage["resetReason"] = "gate_ttl_expired"
                             latest["toolRouteUsage"] = usage
@@ -1273,6 +1284,8 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
     public.pop("authToken", None)
     public.pop("ownerCapability", None)
     public.pop("directSourceEvidence", None)
+    public.pop("sourceEvidence", None)
+    public.pop("absentEvidence", None)
     # expiryTransition contains a speculative future route, including a phase
     # that may intentionally hide the current executor/build tools. Exposing
     # that internal fallback through task_status made compact models reason
@@ -1296,9 +1309,22 @@ def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
         # longer callable and must not be rebound by a client-side compactor.
         public_state.pop("toolRoute", None)
         public_state.pop("toolRouteUsage", None)
-    return {
+    source_evidence = (
+        state.get("sourceEvidence")
+        if isinstance(state.get("sourceEvidence"), dict)
+        else state.get("directSourceEvidence")
+        if isinstance(state.get("directSourceEvidence"), dict)
+        else {}
+    )
+    absent_evidence = (
+        state.get("absentEvidence")
+        if isinstance(state.get("absentEvidence"), dict)
+        else {}
+    )
+    payload = {
         "ok": True,
         "taskSessionId": state.get("taskSessionId"),
+        "controlEpoch": _control_epoch(state.get("controlEpoch")),
         "status": state.get("status"),
         "taskRouteTerminal": terminal,
         **ux,
@@ -1314,6 +1340,89 @@ def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
         "state": public_state,
         "job": job,
     }
+    if source_evidence:
+        payload["sourceEvidence"] = source_evidence
+    if absent_evidence:
+        payload["absentEvidence"] = absent_evidence
+    persisted_control = (
+        state.get("controlState")
+        if isinstance(state.get("controlState"), dict)
+        else {}
+    )
+    if persisted_control:
+        payload["control"] = dict(persisted_control)
+    return attach_control_envelope(payload, tool_name="task_api")
+
+
+def finalize_task_result(
+    outcome: dict[str, Any],
+    mutation_response: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind a custom mutation outcome to the same authoritative v2 epoch.
+
+    Several gate/checkpoint functions intentionally return a smaller outcome
+    than ``_task_response``.  Rebuilding control here prevents those paths from
+    silently falling back to legacy client-side action inference.
+    """
+
+    payload = dict(outcome)
+    response = mutation_response if isinstance(mutation_response, dict) else {}
+    response_control = (
+        response.get("control")
+        if isinstance(response.get("control"), dict)
+        else {}
+    )
+    for key in (
+        "taskSessionId",
+        "controlEpoch",
+        "toolRoute",
+        "taskRouteTerminal",
+        "sourceEvidence",
+        "absentEvidence",
+    ):
+        if key not in payload and key in response:
+            payload[key] = response[key]
+    if "controlEpoch" not in payload and "epoch" in response_control:
+        payload["controlEpoch"] = response_control["epoch"]
+    if response_control:
+        payload["control"] = dict(response_control)
+    required = response_control.get("requiredTool")
+    if "requiredNextTool" not in payload and isinstance(required, dict):
+        payload["requiredNextTool"] = required
+    return attach_control_envelope(payload, tool_name="task_api")
+
+
+def _authoritative_control_action(
+    state: dict[str, Any],
+    *,
+    legacy_action: str = "continue_with_current_tool_route",
+    legacy_is_tool: bool = False,
+) -> tuple[str, bool, dict[str, Any]]:
+    """Project the committed transition without re-deriving route intent."""
+
+    control = (
+        state.get("controlState")
+        if isinstance(state.get("controlState"), dict)
+        else {}
+    )
+    if control.get("authoritative") is True:
+        required = (
+            control.get("requiredTool")
+            if isinstance(control.get("requiredTool"), dict)
+            else {}
+        )
+        name = str(required.get("name") or "").strip()
+        return (
+            name or "continue_with_current_tool_route",
+            bool(name),
+            dict(required.get("args") or {}),
+        )
+    return str(legacy_action or ""), bool(legacy_is_tool), {}
+
+
+# Backward-compatible private alias for out-of-tree adapters. New task-owned
+# results must use the named finalizer so review can prove the common exit.
+_task_outcome_with_control = finalize_task_result
 
 
 def _continuity_project_root(workspace: Path, state: dict[str, Any]) -> Path:
@@ -1445,7 +1554,7 @@ def _plan_scope_has_concrete_slices(plan_scope: dict[str, Any]) -> bool:
     )
 
 
-def _bind_feature_request_slice(
+def _bind_explicit_request_slice(
     plan_scope: dict[str, Any],
     request: str,
 ) -> dict[str, Any]:
@@ -2122,7 +2231,7 @@ def task_record_build_recovery(
                 current_state,
                 authorization,
             )
-        return outcome
+        return _task_outcome_with_control(outcome, result)
     return result
 
 
@@ -2395,7 +2504,7 @@ def task_complete_after_successful_build(
         if current:
             outcome["taskAuthorization"] = task_authorization_for_state(current)
             outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result
 
 
 def task_require_automation_after_build(
@@ -2497,7 +2606,7 @@ def task_require_automation_after_build(
         if current:
             outcome["taskAuthorization"] = task_authorization_for_state(current)
             outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result
 
 
 def task_mark_build_recovery_evidence(
@@ -2542,7 +2651,7 @@ def task_mark_build_recovery_evidence(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result
 
 
 _LINKER_SEMANTIC_EXTENSIONS = frozenset(
@@ -3043,6 +3152,45 @@ def bind_active_job(workspace: Path, task_session_id: str, job_id: str) -> dict[
     return _mutate_task_state(workspace, task_session_id, mutate)
 
 
+def _initial_slice_target_snapshots(
+    project_file: str,
+    plan_scope: dict[str, Any],
+    active_slice_id: str,
+) -> list[dict[str, Any]]:
+    """Capture portable existence facts before the first pre-write gate."""
+
+    descriptor = Path(str(project_file or "")).expanduser()
+    if descriptor.suffix.casefold() != ".uproject" or not descriptor.is_file():
+        return []
+    try:
+        root = descriptor.resolve().parent
+    except OSError:
+        return []
+    selected = next(
+        (
+            item
+            for item in plan_scope.get("slices") or []
+            if isinstance(item, dict)
+            and str(item.get("sliceId") or "") == str(active_slice_id or "")
+        ),
+        {},
+    )
+    snapshots: list[dict[str, Any]] = []
+    for raw_path in list(selected.get("files") or [])[:MAX_FILES_PER_SLICE]:
+        relative = str(raw_path or "").replace("\\", "/").strip("/")
+        if not relative:
+            continue
+        try:
+            candidate = (root / relative).resolve()
+            candidate.relative_to(root)
+            exists = candidate.is_file()
+            digest = hashlib.sha1(candidate.read_bytes()).hexdigest() if exists else ""
+        except (OSError, ValueError):
+            continue
+        snapshots.append({"path": relative, "exists": exists, "fileHash": digest})
+    return normalized_selection_snapshots(snapshots)
+
+
 def task_start(
     workspace: Path,
     *,
@@ -3107,8 +3255,7 @@ def task_start(
     feature_required = "unreal_feature_intent_resolve" in required_before_write
 
     plan_scope = _capture_plan_scope(plan_payload)
-    if feature_required:
-        plan_scope = _bind_feature_request_slice(plan_scope, request)
+    plan_scope = _bind_explicit_request_slice(plan_scope, request)
     if plan_scope.get("overflow"):
         return {
             "ok": False,
@@ -3194,6 +3341,7 @@ def task_start(
             "symbols": [],
         },
         "pendingGates": list(required_before_write),
+        "mutationGeneration": 0,
         "maxFilesPerEdit": min(
             MAX_FILES_PER_SLICE,
             max(1, int(write_gate.get("maxFilesPerEdit") or 2)),
@@ -3214,9 +3362,23 @@ def task_start(
         },
         "selectedHypothesisId": "",
         "selectedCandidateId": "",
-        "selectedTargetSnapshots": [],
+        "selectedTargetSnapshots": _initial_slice_target_snapshots(
+            project_file,
+            plan_scope,
+            active_slice_id,
+        ),
         "featureTargetSnapshots": [],
         "directSourceEvidence": {
+            "version": 1,
+            "planRevision": resolved_plan_revision,
+            "files": {},
+        },
+        "sourceEvidence": {
+            "version": 2,
+            "planRevision": resolved_plan_revision,
+            "files": {},
+        },
+        "absentEvidence": {
             "version": 1,
             "planRevision": resolved_plan_revision,
             "files": {},
@@ -3674,12 +3836,18 @@ def _iter_discoverable_task_entries(
             )
             if str(item).strip()
         ]
-        route_next_action = (
-            "unreal_task_status"
-            if route_missing
-            else pending_gates[0]
-            if pending_gates
-            else "continue_with_current_tool_route"
+        route_next_action, route_next_action_is_tool, _ = (
+            _authoritative_control_action(
+                state,
+                legacy_action=(
+                    "unreal_task_status"
+                    if route_missing
+                    else pending_gates[0]
+                    if pending_gates
+                    else "continue_with_current_tool_route"
+                ),
+                legacy_is_tool=bool(route_missing or pending_gates),
+            )
         )
         entries.append(
             {
@@ -3696,7 +3864,7 @@ def _iter_discoverable_task_entries(
                 "routeMissing": route_missing,
                 "pendingGates": pending_gates,
                 "routeNextAction": route_next_action,
-                "routeNextActionIsTool": bool(route_missing or pending_gates),
+                "routeNextActionIsTool": route_next_action_is_tool,
                 "ownsActiveToolRoute": task_owns_active_tool_route(
                     state,
                     conversation_id=conversation_id,
@@ -4911,12 +5079,14 @@ def task_replan(
         )
         if current_writes and not requested_writes:
             authorization = task_authorization_for_state(state)
-            pending_gates = [
-                str(item)
-                for item in (state.get("pendingGates") or [])
-                if str(item).strip()
-            ]
-            next_action = pending_gates[0] if pending_gates else "continue_active_task"
+            next_action, next_action_is_tool, next_action_args = (
+                _authoritative_control_action(state)
+            )
+            if next_action_is_tool:
+                next_action_args.setdefault(
+                    "taskAuthorization",
+                    compact_task_authorization(authorization),
+                )
             outcome = {
                 "ok": False,
                 "error": (
@@ -4930,9 +5100,8 @@ def task_replan(
                 "taskSessionId": str(state.get("taskSessionId") or ""),
                 "planRevision": str(state.get("planRevision") or ""),
                 "nextAction": next_action,
-                "nextActionArgs": {
-                    "taskAuthorization": compact_task_authorization(authorization)
-                },
+                "nextActionIsTool": next_action_is_tool,
+                "nextActionArgs": next_action_args,
                 "taskAuthorization": authorization,
                 "toolRoute": dict(state.get("toolRoute") or {}),
                 "agentInstruction": (
@@ -4950,7 +5119,10 @@ def task_replan(
             else {}
         )
 
-        plan_scope = _capture_plan_scope(plan_payload)
+        plan_scope = _bind_explicit_request_slice(
+            _capture_plan_scope(plan_payload),
+            request,
+        )
         if plan_scope.get("overflow"):
             outcome = {
                 "ok": False,
@@ -5092,7 +5264,11 @@ def task_replan(
                 "selectedCandidateId": "",
                 "selectedIntentId": "",
                 "intentContractHash": "",
-                "selectedTargetSnapshots": [],
+                "selectedTargetSnapshots": _initial_slice_target_snapshots(
+                    current_project or project_identity,
+                    plan_scope,
+                    active_slice_id,
+                ),
                 "featureTargetSnapshots": [],
                 "runtimeDebugSession": {},
                 "featureApproval": {},
@@ -5166,6 +5342,11 @@ def task_replan(
             state,
             active_slice_id=active_slice_id,
         )
+        state["selectedTargetSnapshots"] = _initial_slice_target_snapshots(
+            current_project or project_identity,
+            plan_scope,
+            active_slice_id,
+        )
         # A replan is not a retry-budget reset. An autonomy-blocked task may
         # advance strategy once, but its accumulated retry counters, ceilings,
         # and prior history remain intact.
@@ -5191,6 +5372,16 @@ def task_replan(
             "resetReason": "atomic_replan",
         }
         state["directSourceEvidence"] = {
+            "version": 1,
+            "planRevision": next_revision,
+            "files": {},
+        }
+        state["sourceEvidence"] = {
+            "version": 2,
+            "planRevision": next_revision,
+            "files": {},
+        }
+        state["absentEvidence"] = {
             "version": 1,
             "planRevision": next_revision,
             "files": {},
@@ -5221,7 +5412,7 @@ def task_replan(
             "retryable": True,
         }
     if not outcome.get("ok"):
-        return outcome or result
+        return _task_outcome_with_control(outcome, result) if outcome else result
     current_state = result.get("state") or {}
     outcome.update(
         {
@@ -5248,7 +5439,8 @@ def task_replan(
             outcome["status"] = str(completed_state.get("status") or "completed")
             outcome["planOnlyCompleted"] = True
             outcome = _strip_plan_only_authorization(outcome)
-    return outcome
+            return _task_outcome_with_control(outcome, completed)
+    return _task_outcome_with_control(outcome, result)
 
 
 def _validate_task_slice_plan(
@@ -5494,7 +5686,7 @@ def task_define_slices(
             current = result.get("state") or {}
         outcome["taskAuthorization"] = task_authorization_for_state(current)
         outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
-    return outcome
+    return _task_outcome_with_control(outcome, result)
 
 
 def task_checkpoint(
@@ -5514,6 +5706,7 @@ def task_checkpoint(
     preserve_route_usage: bool = False,
     include_git_changes: bool = True,
     advance_gate_snapshots: bool = False,
+    mutation_generation: int | None = None,
 ) -> dict[str, Any]:
     """Heartbeat, checkpoint, and safely recover a long-running task."""
 
@@ -5554,12 +5747,14 @@ def task_checkpoint(
                 mismatched_fields=mismatches,
             )
         route = dict(state.get("toolRoute") or {})
-        pending_gates = [str(item) for item in route.get("pendingGates") or []]
-        next_action = (
-            pending_gates[0]
-            if pending_gates
-            else "continue_with_current_tool_route"
+        next_action, next_action_is_tool, next_action_args = (
+            _authoritative_control_action(state)
         )
+        if next_action_is_tool:
+            next_action_args.setdefault(
+                "taskAuthorization",
+                compact_task_authorization(task_authorization_for_state(state)),
+            )
         return {
             "ok": True,
             "action": normalized_action,
@@ -5572,6 +5767,8 @@ def task_checkpoint(
             "currentRoutePhase": str(route.get("phase") or ""),
             "routeTransitioned": False,
             "nextAction": next_action,
+            "nextActionIsTool": next_action_is_tool,
+            "nextActionArgs": next_action_args,
             "agentInstruction": (
                 "Checkpoint phase labels are metadata only and never select planner or "
                 "executor. Continue with nextAction using the complete returned "
@@ -5640,6 +5837,11 @@ def task_checkpoint(
                 lease_seconds=lease_seconds,
             )
         elif normalized_action == "record":
+            if mutation_generation is not None:
+                state["mutationGeneration"] = max(
+                    int(state.get("mutationGeneration") or 0),
+                    max(0, int(mutation_generation)),
+                )
             discovered = _checkpoint_path_union(
                 workspace,
                 state,
@@ -5692,6 +5894,7 @@ def task_checkpoint(
                     discovery_warnings=list(discovered["warnings"]),
                     required_next_action=required_next_action,
                     validation=validation,
+                    mutation_generation=int(state.get("mutationGeneration") or 0),
                     note=note,
                 )
                 candidate_checkpoint = dict(
@@ -5888,6 +6091,7 @@ def task_checkpoint(
                             or str(checkpoint.get("requiredNextAction") or "")
                         ),
                         validation={},
+                        mutation_generation=int(state.get("mutationGeneration") or 0),
                         note=note or "Accepted current files during checkpoint rebase.",
                     )
                 except ValueError as exc:
@@ -5983,27 +6187,18 @@ def task_checkpoint(
                         "requiredNextToolArgs",
                         dict(mutation_result.get("nextActionArgs") or {}),
                     )
-                return mutation_result
+                return _task_outcome_with_control(mutation_result, result)
             current_route = dict(mutation_result.get("toolRoute") or {})
-            pending_gates = [
-                str(item) for item in current_route.get("pendingGates") or []
-            ]
-            requested_work_tool = str(required_next_action or "").strip()
-            active_tools = [
-                str(item)
-                for item in current_route.get("activeTools") or []
-                if str(item).strip()
-            ]
-            requested_work_tool_active = bool(
-                requested_work_tool and requested_work_tool in active_tools
+            next_action, next_action_is_tool, next_action_args = (
+                _authoritative_control_action(current_state)
             )
-            next_action = (
-                pending_gates[0]
-                if pending_gates
-                else requested_work_tool
-                if requested_work_tool_active
-                else "continue_with_current_tool_route"
-            )
+            if next_action_is_tool:
+                next_action_args.setdefault(
+                    "taskAuthorization",
+                    compact_task_authorization(
+                        mutation_result.get("taskAuthorization") or {}
+                    ),
+                )
             mutation_result.update(
                 {
                     "checkpointPhaseIsMetadataOnly": True,
@@ -6016,9 +6211,8 @@ def task_checkpoint(
                         != prior_route.get("phase", "")
                     ),
                     "nextAction": next_action,
-                    "nextActionIsTool": bool(
-                        pending_gates or requested_work_tool_active
-                    ),
+                    "nextActionIsTool": next_action_is_tool,
+                    "nextActionArgs": next_action_args,
                     "agentInstruction": (
                         "The checkpoint phase label was recorded as metadata; it did not "
                         "select a role or route. Do not call unreal_task_checkpoint again "
@@ -6037,12 +6231,8 @@ def task_checkpoint(
                 # precedence.  Always bind the compatibility field to the
                 # authoritative route action instead.
                 mutation_result["requiredNextTool"] = next_action
-                mutation_result["requiredNextToolArgs"] = {
-                    "taskAuthorization": compact_task_authorization(
-                        mutation_result.get("taskAuthorization") or {}
-                    )
-                }
-        return mutation_result
+                mutation_result["requiredNextToolArgs"] = dict(next_action_args)
+        return _task_outcome_with_control(mutation_result, result)
     return result
 
 
@@ -6330,6 +6520,34 @@ def task_record_gate(
             }
             return None
         gate_set_hash = str(state.get("requiredGateSetHash") or "")
+        if gate == "unreal_feature_intent_resolve":
+            from feature_intent_contract import target_snapshot_hash
+
+            submitted_target_hash = target_snapshot_hash(list(target_snapshots or []))
+        else:
+            submitted_target_hash = _canonical_hash(
+                normalized_selection_snapshots(target_snapshots)
+            )
+        completed_preflight = completed_gate_input_preflight(
+            state,
+            gate=gate,
+            input_payload=input_payload,
+            current_target_snapshot_hash=submitted_target_hash,
+        )
+        if completed_preflight.get("alreadyCompleted"):
+            record_result = {
+                "ok": True,
+                "status": "already_completed",
+                "statusCode": "GATE_ALREADY_COMPLETED",
+                "gate": gate,
+                "alreadyCompleted": True,
+                "validatorSkipped": True,
+                "record": completed_preflight.get("record") or {},
+                "pendingGates": list(state.get("pendingGates") or []),
+                "doNotRetryUnchanged": True,
+                "retryable": False,
+            }
+            return state
         validated_slice_plan: dict[str, Any] | None = None
         if isinstance(slice_plan, dict) and slice_plan:
             if gate != "unreal_feature_intent_resolve":
@@ -6523,6 +6741,12 @@ def task_record_gate(
             "inputHash": _canonical_hash(input_payload),
             "evidenceHash": _canonical_hash(evidence),
             "targetSnapshots": list(target_snapshots or []),
+            "targetSnapshotHash": _canonical_hash(
+                normalized_selection_snapshots(target_snapshots)
+            ),
+            "planRevision": str(state.get("planRevision") or ""),
+            "activeSliceId": str(state.get("activeSliceId") or ""),
+            "mutationGeneration": int(state.get("mutationGeneration") or 0),
             **feature_binding,
         }
         completed = dict(state.get("completedGates") or {})
@@ -6740,7 +6964,7 @@ def task_record_gate(
                 owner_capability=authorization_identity.get("ownerCapability", ""),
                 conversation_id=authorization_identity.get("conversationId", ""),
             )
-        return record_result
+        return _task_outcome_with_control(record_result, result)
     return result
 
 
@@ -7042,14 +7266,9 @@ def authorize_task_tool(
                 "errorCode": "TASK_STATE_MISSING",
                 "error": f"Unknown task: {task_session_id}",
             }
-        previous_route_hash = str(
-            (state.get("toolRoute") or {}).get("routeHash") or ""
-        )
+        prior_state = copy.deepcopy(state)
         refreshed = _refresh_server_owned_state(state)
-        if (
-            str((refreshed.get("toolRoute") or {}).get("routeHash") or "")
-            != previous_route_hash
-        ):
+        if refreshed != prior_state:
             _write_state(workspace, task_session_id, refreshed)
         state = refreshed
         mismatches = _task_authorization_mismatches(state, authorization)
@@ -7103,6 +7322,48 @@ def authorize_task_tool(
         )
         if not route:
             return {"ok": True, "legacy": True, "state": _public_state(state)}
+
+        control = (
+            state.get("controlState")
+            if isinstance(state.get("controlState"), dict)
+            else {}
+        )
+        allowed_control_tools = {
+            str(item).strip()
+            for item in control.get("allowedTools") or []
+            if str(item).strip()
+        }
+        required_control = (
+            control.get("requiredTool")
+            if isinstance(control.get("requiredTool"), dict)
+            else {}
+        )
+        required_control_name = str(required_control.get("name") or "").strip()
+        if (
+            tool_name not in CONTROL_PLANE_TOOLS
+            and control.get("authoritative") is True
+            and tool_name in {str(item) for item in route.get("activeTools") or []}
+            and tool_name not in allowed_control_tools
+        ):
+            current_authorization = task_authorization_for_state(state)
+            return {
+                "ok": False,
+                "errorCode": "TASK_CONTROL_OBLIGATION_REQUIRED",
+                "error": (
+                    f"{tool_name} is no longer the authoritative next action."
+                ),
+                "alreadySatisfied": True,
+                "reexecutionBlocked": True,
+                "taskSessionId": task_session_id,
+                "taskAuthorization": current_authorization,
+                "toolRoute": compact_tool_route(route),
+                "controlEpoch": _control_epoch(state.get("controlEpoch")),
+                "control": dict(control),
+                "nextAction": required_control_name or "use_authoritative_control",
+                "nextActionIsTool": bool(required_control_name),
+                "nextActionArgs": dict(required_control.get("args") or {}),
+                "retryable": False,
+            }
 
         supplied_hash = str(
             authorization.get("routeHash")
@@ -7292,6 +7553,8 @@ def authorize_task_tool(
                 checkpoint_authorization = task_authorization_for_state(state)
                 return {
                     "ok": False,
+                    "taskSessionId": task_session_id,
+                    "controlEpoch": _control_epoch(state.get("controlEpoch")),
                     "errorCode": "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
                     "error": (
                         f"Phase tool-call budget exhausted ({count}/{limit}); "
@@ -7550,8 +7813,9 @@ def expand_compact_task_authorization(
                     "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
                     "error": "ownerCapability does not own this task session",
                 }
+            prior_state = copy.deepcopy(state)
             refreshed = _refresh_server_owned_state(state)
-            if refreshed != state:
+            if refreshed != prior_state:
                 _write_state(workspace, task_session_id, refreshed)
             return {
                 "ok": True,
@@ -7613,18 +7877,82 @@ def task_gate_failure_preflight(
                     state,
                     mismatched_fields=mismatches,
                 )
-            preflight = repeated_gate_input_preflight(
+            gate = str(gate_name or "").strip()
+            repeated = repeated_gate_input_preflight(
                 state,
-                gate=str(gate_name or "").strip(),
+                gate=gate,
                 input_payload=input_payload,
+            )
+            completed = (
+                state.get("completedGates")
+                if isinstance(state.get("completedGates"), dict)
+                else {}
+            )
+            record = completed.get(gate) if isinstance(completed.get(gate), dict) else {}
+            snapshots: list[dict[str, Any]] = []
+            project_root = _task_project_root(state)
+            if project_root and record:
+                try:
+                    resolved_root = project_root.resolve()
+                    for item in record.get("targetSnapshots") or []:
+                        if not isinstance(item, dict):
+                            continue
+                        relative = str(item.get("path") or "").replace("\\", "/").strip("/")
+                        candidate = Path(str(item.get("absolutePath") or "")).expanduser()
+                        if not candidate.is_absolute():
+                            candidate = resolved_root / relative
+                        candidate = candidate.resolve()
+                        try:
+                            candidate.relative_to(resolved_root)
+                        except ValueError:
+                            snapshots = []
+                            break
+                        exists = candidate.is_file()
+                        snapshots.append(
+                            {
+                                "path": relative,
+                                "absolutePath": str(candidate),
+                                "exists": exists,
+                                "fileHash": (
+                                    hashlib.sha1(candidate.read_bytes()).hexdigest()
+                                    if exists
+                                    else ""
+                                ),
+                            }
+                        )
+                except (OSError, RuntimeError, ValueError):
+                    snapshots = []
+            if gate == "unreal_feature_intent_resolve":
+                from feature_intent_contract import target_snapshot_hash
+
+                current_target_hash = target_snapshot_hash(snapshots) if snapshots else ""
+            else:
+                current_target_hash = (
+                    _canonical_hash(normalized_selection_snapshots(snapshots))
+                    if snapshots
+                    else ""
+                )
+            successful = completed_gate_input_preflight(
+                state,
+                gate=gate,
+                input_payload=input_payload,
+                current_target_snapshot_hash=current_target_hash,
             )
             return {
                 "ok": True,
-                **preflight,
+                **repeated,
+                **successful,
+                "statusCode": (
+                    "GATE_ALREADY_COMPLETED"
+                    if successful.get("alreadyCompleted")
+                    else ""
+                ),
                 "taskAuthorization": compact_task_authorization(
                     task_authorization_for_state(state)
                 ),
                 "toolRoute": compact_tool_route(state.get("toolRoute") or {}),
+                "controlEpoch": _control_epoch(state.get("controlEpoch")),
+                "control": dict(state.get("controlState") or {}),
             }
     except (ValueError, RuntimeError, TaskStateReadError) as exc:
         return {
@@ -7729,7 +8057,7 @@ def task_record_gate_failure(
                 owner_capability=authorization_identity.get("ownerCapability", ""),
                 conversation_id=authorization_identity.get("conversationId", ""),
             )
-        return outcome
+        return _task_outcome_with_control(outcome, result)
     return result
 
 
@@ -7837,7 +8165,7 @@ def task_set_runtime_session(
                 owner_capability=authorization_identity.get("ownerCapability", ""),
                 conversation_id=authorization_identity.get("conversationId", ""),
             )
-        return mutation_result
+        return _task_outcome_with_control(mutation_result, result)
     return result
 
 
@@ -7875,9 +8203,25 @@ def task_direct_source_evidence(
         return _task_state_error(task_session_id, exc)
     if not state:
         return {"ok": False, "error": f"Unknown task: {task_session_id}"}
-    ledger = (
+    source_ledger = (
+        state.get("sourceEvidence")
+        if isinstance(state.get("sourceEvidence"), dict)
+        else {}
+    )
+    legacy_ledger = (
         state.get("directSourceEvidence")
         if isinstance(state.get("directSourceEvidence"), dict)
+        else {}
+    )
+    source_files = (
+        source_ledger.get("files")
+        if isinstance(source_ledger.get("files"), dict)
+        else {}
+    )
+    ledger = source_ledger if source_files else legacy_ledger
+    absent_ledger = (
+        state.get("absentEvidence")
+        if isinstance(state.get("absentEvidence"), dict)
         else {}
     )
     raw_files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
@@ -7891,7 +8235,9 @@ def task_direct_source_evidence(
         "taskSessionId": task_session_id,
         "planRevision": str(state.get("planRevision") or ""),
         "evidencePlanRevision": str(ledger.get("planRevision") or ""),
+        "evidenceVersion": int(ledger.get("version") or 1),
         "files": files,
+        "absentEvidence": absent_ledger,
     }
 
 
@@ -8213,7 +8559,7 @@ def task_issue_feature_approval(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
-    return issued or result
+    return _task_outcome_with_control(issued, result) if issued else result
 
 
 def task_approve_feature_intent(
@@ -8278,7 +8624,7 @@ def task_approve_feature_intent(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result
 
 
 def task_consume_feature_approval(
@@ -8345,4 +8691,4 @@ def task_consume_feature_approval(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result

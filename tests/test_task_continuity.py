@@ -118,7 +118,7 @@ def test_checkpoint_conflict_blocks_then_explicit_rebase_recovers(tmp_path: Path
     assert current["state"]["pendingGates"] == ["unreal_architecture_reasoning"]
 
 
-def test_status_surfaces_checkpoint_next_action_instead_of_cancel_polling(tmp_path: Path) -> None:
+def test_status_does_not_promote_checkpoint_action_outside_active_route(tmp_path: Path) -> None:
     started = task_start(tmp_path, request="Build the edited project", start_background_job=False)
     authorization = _authorization(started)
 
@@ -135,7 +135,9 @@ def test_status_surfaces_checkpoint_next_action_instead_of_cancel_polling(tmp_pa
 
     status = task_status(tmp_path, started["taskSessionId"])
 
-    assert status["nextAction"] == "build_unreal_project"
+    assert "nextAction" not in status
+    assert status["control"]["disposition"] == "continue"
+    assert status["control"]["requiredTool"] is None
 
 
 def test_checkpoint_rejects_paths_outside_project(tmp_path: Path) -> None:

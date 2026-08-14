@@ -9,6 +9,12 @@ const DEFAULT_BUILD_ERROR_LINES = 20;
 const DEFAULT_LOG_RESULT_MAX_CHARS = 24_000;
 const DEFAULT_VALIDATION_FINDING_CAP = 12;
 
+function defaultUnrealPlatform(hostPlatform = process.platform) {
+  if (hostPlatform === "win32") return "Win64";
+  if (hostPlatform === "darwin") return "Mac";
+  return "Linux";
+}
+
 const VALIDATION_CATEGORY_HINTS = {
   UPROPERTY: { group: "GC/Ownership", hint: "Add UPROPERTY() or TObjectPtr with UPROPERTY on retained UObject members.", doc: "RAG_Project_Guidelines/Unreal_Programming/27_Generation_Guardrails_To_Validator_Map.md" },
   TOBJECTPTR: { group: "GC/Ownership", hint: "TObjectPtr members need UPROPERTY() for GC tracking.", doc: "RAG_Project_Guidelines/Unreal_Programming/27_Generation_Guardrails_To_Validator_Map.md" },
@@ -732,18 +738,19 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
   const actionsExecuted = proof.highestObservedActionIndex || proof.actionCount;
   const proofLevel = proof.proofLevel;
   const hasCompileEvidence = Number(proof.compileLineCount || 0) > 0 || Number(proof.linkLineCount || 0) > 0;
+  const platform = build.platform || defaultUnrealPlatform();
 
   let summary;
   if (!result.ok) {
     summary = `BUILD FAILED — ${errorLines.length} likely error line(s)${firstError ? `; first: ${firstError}` : ""}`;
   } else if (actionsExecuted != null && actionsExecuted > 0) {
-    summary = `BUILD SUCCEEDED — ${actionsExecuted} action(s) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
+    summary = `BUILD SUCCEEDED — ${actionsExecuted} action(s) — ${build.target} ${platform} ${build.configuration || "Development"}`;
   } else if (upToDate && actionsExecuted === 0) {
-    summary = `BUILD SUCCEEDED (up to date — 0 files recompiled) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
+    summary = `BUILD SUCCEEDED (up to date — 0 files recompiled) — ${build.target} ${platform} ${build.configuration || "Development"}`;
   } else if (actionsExecuted === 0) {
-    summary = `BUILD SUCCEEDED (compile proof unverified — action count not detected) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
+    summary = `BUILD SUCCEEDED (compile proof unverified — action count not detected) — ${build.target} ${platform} ${build.configuration || "Development"}`;
   } else {
-    summary = `BUILD SUCCEEDED — ${actionsExecuted} action(s) — ${build.target} ${build.platform || "Win64"} ${build.configuration || "Development"}`;
+    summary = `BUILD SUCCEEDED — ${actionsExecuted} action(s) — ${build.target} ${platform} ${build.configuration || "Development"}`;
   }
 
   const payload = {
@@ -879,7 +886,7 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
       projectPath,
       projectFile: path.basename(projectPath),
       target: build.target,
-      platform: build.platform || "Win64",
+      platform,
       configuration: build.configuration || "Development",
       allTargets: build.allTargets
     };
@@ -889,7 +896,7 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
     payload.autoDetected = {
       projectFile: path.basename(projectPath),
       target: build.target,
-      platform: build.platform || "Win64",
+      platform,
       configuration: build.configuration || "Development"
     };
   }
@@ -1036,6 +1043,7 @@ module.exports = {
   compactLogPayload,
   compactMcpContent,
   compactValidationPayload,
+  defaultUnrealPlatform,
   errorPayload,
   extractLikelyCompileErrors,
   compactCompilerDiagnostic,

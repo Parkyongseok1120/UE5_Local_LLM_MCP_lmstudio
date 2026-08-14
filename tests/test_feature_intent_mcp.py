@@ -108,6 +108,66 @@ def test_bounded_existing_file_uses_one_call_server_fast_path(
     assert state["completedGates"][GATE]["targetSnapshots"][0]["exists"] is True
 
 
+def test_explicit_bounded_local_selection_keeps_server_fast_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "O-Mock"
+    target = project / "Source" / "O_Mock" / "GomokuGameMode.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void StartLocalGame() {}\n", encoding="utf-8")
+    project_file = project / "O_Mock.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    request = (
+        "현재 O-Mock 프로젝트의 구현 상태를 먼저 확인하고, 오목 규칙과 로컬 "
+        "플레이부터 시작하는 개발 순서에서 아직 완료되지 않은 가장 앞 단계의 "
+        "핵심 기능 하나를 실제로 완성해줘. 기존 동작과 현재 상태 소유권은 깨지 마."
+    )
+    started = task_start(
+        tmp_path,
+        request=request,
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "featureIntent": {"requiresResolution": True},
+            "orchestration": {"requiredBeforeWrite": [GATE]},
+        },
+    )
+    _record_direct_source_reads(tmp_path, started, project, [target])
+    server = McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        802,
+        {
+            "name": GATE,
+            "arguments": {
+                "taskAuthorization": started["taskAuthorization"],
+                "selectedIntentId": "bounded_local",
+                "selectionRationale": "Use the nearest existing local-play owner.",
+                "slices": [
+                    {
+                        "sliceId": "local_hotseat_init",
+                        "files": ["Source/O_Mock/GomokuGameMode.cpp"],
+                    }
+                ],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True, payload
+    assert payload["selectedIntentId"] == "bounded_local"
+    assert payload["blockingQuestions"] == []
+    assert payload["fastPath"]["applied"] is True
+    assert payload["gateCompletion"]["ok"] is True
+
+
 def test_explicit_bounded_local_selection_uses_server_owned_question_answers(
     tmp_path: Path,
     monkeypatch,
@@ -122,7 +182,7 @@ def test_explicit_bounded_local_selection_uses_server_owned_question_answers(
     header.parent.mkdir(parents=True)
     header.write_text("class AGomokuPlayerController {};\n", encoding="utf-8")
     source.write_text(
-        'void HandlePrimaryClick() { HandlePlaceStone(CurrentPlayerIndex); }\n',
+        "void HandlePrimaryClick() { HandlePlaceStone(CurrentPlayerIndex); }\n",
         encoding="utf-8",
     )
     project_file = project / "O_Mock.uproject"
@@ -266,6 +326,138 @@ def test_blocking_question_recovery_returns_actionable_answer_contract(
     requirements = payload["blockingQuestionRequirements"]
     assert requirements
     assert all(item["answerKey"] and item["question"] for item in requirements)
+
+
+def test_explicit_bounded_local_can_bind_one_new_automation_test_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "O-Mock"
+    tests_dir = project / "Source" / "O_Mock" / "Tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "GomokuStage3TimeSystem.spec.cpp").write_text(
+        '#include "Misc/AutomationTest.h"\n', encoding="utf-8"
+    )
+    project_file = project / "O_Mock.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    target = "Source/O_Mock/Tests/GomokuStage1CoreRules.spec.cpp"
+    started = task_start(
+        tmp_path,
+        request=(
+            "Complete the earliest local-play rule feature and add the required "
+            "automated test without changing current ownership."
+        ),
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "featureIntent": {"requiresResolution": True},
+            "orchestration": {"requiredBeforeWrite": [GATE]},
+        },
+    )
+    server = McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        804,
+        {
+            "name": GATE,
+            "arguments": {
+                "taskAuthorization": started["taskAuthorization"],
+                "selectedIntentId": "bounded_local",
+                "selectionRationale": "Follow the existing module test convention.",
+                "slices": [
+                    {
+                        "sliceId": "stage1_core_rules_test",
+                        "files": [target],
+                    }
+                ],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is True, payload
+    assert payload["fastPath"]["applied"] is True
+    assert payload["fastPath"]["newAutomationTestFiles"] == [target]
+    assert payload["gateCompletion"]["ok"] is True
+    state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert state["completedGates"][GATE]["targetSnapshots"][0]["exists"] is False
+
+
+def test_completion_audit_free_text_cannot_replace_typed_frontier_claims(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project = tmp_path / "PortableProject"
+    target = project / "Source" / "Portable" / "RuleEngine.cpp"
+    target.parent.mkdir(parents=True)
+    target.write_text("void Run() {}\n", encoding="utf-8")
+    project_file = project / "PortableProject.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Find all missing implementation, finish every branch, and complete the feature",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "featureIntent": {"requiresResolution": True},
+            "orchestration": {"requiredBeforeWrite": [GATE]},
+            "executablePlanSlices": [
+                {"sliceId": "completion", "files": ["Source/Portable/RuleEngine.cpp"]}
+            ],
+        },
+    )
+    _record_direct_source_reads(tmp_path, started, project, [target])
+    import unreal_rag_mcp
+
+    monkeypatch.setattr(
+        unreal_rag_mcp,
+        "resolve_feature_intent",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "status": "resolved",
+            "selectedIntentId": "completion_contract",
+            "intentContractHash": "intent-hash",
+            "acceptanceOracleHash": "oracle-hash",
+            "selectedIntentSummary": {"intentId": "completion_contract"},
+            "selectedCandidate": {
+                "acceptanceCriteria": [
+                    {"observer": "automation test", "oracle": "all required branches execute"}
+                ]
+            },
+            "ambiguity": {"recommendedAction": "implement"},
+        },
+    )
+    server = McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        805,
+        {
+            "name": GATE,
+            "arguments": {
+                "taskAuthorization": started["taskAuthorization"],
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "FEATURE_FRONTIER_TYPED_CLAIMS_REQUIRED"
+    assert payload["writeGate"]["writesAllowed"] is False
+    assert payload["featureFrontier"]["ok"] is False
+    state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert GATE not in state.get("completedGates", {})
 
 
 def test_redefining_slice_clears_old_intent_snapshots_before_route_refresh(

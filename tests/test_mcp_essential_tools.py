@@ -127,6 +127,7 @@ def test_feature_intent_schema_is_compact_for_local_tool_calling(monkeypatch, tm
             "slices",
         "activeSliceId",
         "targetFiles",
+        "frontierClaims",
         "taskAuthorization",
     }
     assert properties["slices"]["maxItems"] == 24
@@ -1147,26 +1148,10 @@ def test_validated_architecture_handler_hands_its_slice_to_same_chat_planner(
     assert selected_slice["sliceId"] == "new-helper"
     assert selected_slice["files"] == ["Source/Demo/NewHelper.cpp"]
 
-    server.handle_tool_call(
-        17003,
-        {
-            "name": "unreal_feature_intent_resolve",
-            "arguments": {
-                "taskAuthorization": planner["taskAuthorization"],
-            },
-        },
-    )
-
-    intent = sent[-1]["result"]["structuredContent"]
-    assert intent["ok"] is True, intent
-    assert intent["internalPhases"] == [
-        "SelectIntent",
-        "ResolveSlice",
-        "CaptureSnapshot",
-        "BindIntent",
-    ]
-    assert intent["sliceResolution"]["serverOwned"] is True
-    assert intent["sliceResolution"]["activeSliceId"] == "new-helper"
+    # The validated architecture already owns the concrete local slice. The
+    # risk-adaptive contract does not add a redundant Feature Intent ceremony.
+    assert planner["nextAction"] == "unreal_code_sketch_claim_validate"
+    assert "unreal_feature_intent_resolve" not in planner["toolRoute"]["activeTools"]
 
 
 def test_architecture_handoff_is_not_reused_by_another_chat(monkeypatch, tmp_path) -> None:
@@ -1215,7 +1200,7 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
 
     started = task_start(
         tmp_path,
-        request="Inspect the implementation and select the earliest incomplete feature",
+        request="Inspect the existing RuleEngine implementation and bind one bounded local fix",
         mode="agent_edit",
         project_file=str(project),
         plan_payload={
@@ -1299,7 +1284,7 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
     )
 
     probe = mod.resolve_feature_intent(
-        "Inspect the implementation and select the earliest incomplete feature",
+        "Inspect the existing RuleEngine implementation and bind one bounded local fix",
         write_intent=True,
     )
     selected = probe["candidates"][0]["intentId"]
@@ -1310,7 +1295,7 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
     feature_args = {
         "taskAuthorization": before_auth,
         "selectedIntentId": selected,
-        "selectionRationale": "Bind the earliest incomplete bounded implementation slice.",
+        "selectionRationale": "Bind the bounded local RuleEngine implementation slice.",
         "blockingQuestionAnswers": answers,
         "slices": [
             {
@@ -1348,6 +1333,11 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
             encoding="utf-8"
         )
     )
+    assert evidence_blocked["control"]["version"] == 2
+    assert evidence_blocked["control"]["epoch"] == persisted["controlEpoch"]
+    assert evidence_blocked["control"]["disposition"] == "require_tool"
+    assert evidence_blocked["control"]["requiredTool"]["name"] == "read_file"
+    assert evidence_blocked["control"]["allowedTools"] == ["read_file"]
     relative = "Source/Demo/RuleEngine.cpp"
     persisted["directSourceEvidence"]["files"][relative.casefold()] = {
         "path": relative,
@@ -1356,6 +1346,19 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
         "lineRanges": ["1-200"],
         "tools": ["read_file"],
     }
+    attempt = persisted["failedGateAttempts"]["unreal_feature_intent_resolve"]
+    attempt["recoverySatisfiedBy"] = "read_file"
+    attempt["recoverySatisfiedAt"] = "2026-08-14T00:00:00+00:00"
+    persisted["lastToolOutcome"] = {
+        "tool": "read_file",
+        "status": "succeeded",
+        "planRevision": persisted["planRevision"],
+        "activeSliceId": persisted["activeSliceId"],
+        "mutationGeneration": persisted["mutationGeneration"],
+    }
+    from phase_tool_router import commit_control_transition
+
+    commit_control_transition(persisted)
     (task_root(tmp_path, started["taskSessionId"]) / "state.json").write_text(
         json.dumps(persisted),
         encoding="utf-8",

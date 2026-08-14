@@ -123,6 +123,16 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
         if isinstance(state.get("featureIntent"), dict)
         else {}
     )
+    control_state = (
+        state.get("controlState")
+        if isinstance(state.get("controlState"), dict)
+        else {}
+    )
+    required_control_tool = (
+        control_state.get("requiredTool")
+        if isinstance(control_state.get("requiredTool"), dict)
+        else {}
+    )
     lease = lease_health(continuity)
     checkpoint_conflicts = recovery_conflicts(continuity)
     supervisor = (
@@ -260,16 +270,19 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
                 supervisor.get("nextAction") or "replan_autonomous_strategy"
             )
         else:
-            # A recorded checkpoint is the server's durable handoff between
-            # tool calls. Prefer its concrete next tool over the generic
-            # cancel/resume affordance returned for a running task; otherwise
-            # compact models poll unreal_task_status forever after a mutation
-            # or validation result has already named the next step.
-            next_action = (
-                pending_gates[0]
-                if pending_gates
-                else checkpoint_next_action
-            )
+            # The persisted transition table is the sole next-action owner.
+            # Checkpoint metadata remains available for recovery diagnostics,
+            # but it cannot override the committed obligation.
+            next_action = str(required_control_tool.get("name") or "").strip()
+            if not control_state:
+                # Pure function callers and legacy persisted tasks may predate
+                # committed control v2. This compatibility projection never
+                # overrides a present authoritative control envelope.
+                next_action = (
+                    pending_gates[0]
+                    if pending_gates
+                    else checkpoint_next_action
+                )
 
         continuity_ready = (
             lease.get("active") is True
@@ -306,6 +319,17 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
             "needs_new_hypothesis",
         }:
             next_action = "replan_with_new_runtime_evidence"
+        # Runtime and recovery labels above remain legacy UI guidance only.
+        # Once control v2 exists, no secondary projection may contradict its
+        # exact required tool or manufacture a new public obligation.
+        if control_state.get("authoritative") is True:
+            required_control_name = str(
+                required_control_tool.get("name") or ""
+            ).strip()
+            if required_control_name:
+                next_action = required_control_name
+            elif str(control_state.get("disposition") or "") != "continue":
+                next_action = ""
 
         payload["writeReadiness"] = {
             "ready": ready,
@@ -375,7 +399,8 @@ def task_phase_from_state(state: dict[str, Any], job: dict[str, Any] | None = No
         if next_action:
             payload["nextAction"] = next_action
             payload["nextActionIsTool"] = bool(
-                next_action in required_gates
+                next_action == str(required_control_tool.get("name") or "")
+                or next_action in required_gates
                 or next_action in {
                     "unreal_task_approve",
                     "unreal_task_resume",

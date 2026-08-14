@@ -37,6 +37,7 @@ from mcp_public_contract import compact_task_authorization, sanitize_model_paylo
 from route_recovery_policy import recovery_codes, route_recovery_action
 from rag_context import assemble_context, assemble_context_mixed
 from rag_embeddings import embedding_status
+from control_runtime_identity import verify_runtime_component
 
 _ENGINE_PROJECTS = frozenset({"", "engine", "Engine", "__engine__"})
 
@@ -970,6 +971,49 @@ def _feature_completion_frontier_schema() -> dict[str, Any]:
     }
 
 
+def _feature_frontier_claims_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "maxItems": 32,
+        "description": (
+            "Completion-audit only. Typed missing-work claims whose evidenceRefs "
+            "must resolve to current server source/absence evidence ids. Free-text "
+            "statement is informational and never opens the write gate."
+        ),
+        "items": {
+            "type": "object",
+            "properties": {
+                "claimType": {
+                    "type": "string",
+                    "enum": [
+                        "missing_definition",
+                        "missing_call_edge",
+                        "missing_branch",
+                        "missing_file",
+                        "missing_required_behavior",
+                    ],
+                },
+                "subjectSymbol": {"type": "string"},
+                "objectSymbol": {"type": "string"},
+                "path": {"type": "string"},
+                "targetPath": {"type": "string"},
+                "evidenceRefs": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "items": {"type": "string"},
+                },
+                "statement": {
+                    "type": "string",
+                    "description": "Human-readable explanation only; not gate authority.",
+                },
+            },
+            "required": ["claimType", "evidenceRefs"],
+            "additionalProperties": False,
+        },
+    }
+
+
 def _architecture_proposal_patch_schema() -> dict[str, Any]:
     schema = _architecture_proposal_schema()
     schema.pop("required", None)
@@ -1328,6 +1372,93 @@ def _record_prewrite_gate(
     return result
 
 
+def _finish_gate_preflight(
+    server: McpServer,
+    message_id: Any,
+    *,
+    gate_name: str,
+    preflight: dict[str, Any],
+) -> bool:
+    """Emit a generic completed/failed replay redirect before gate analysis."""
+
+    if not preflight.get("ok"):
+        server.structured_tool_result(message_id, preflight)
+        return True
+    control = preflight.get("control") if isinstance(preflight.get("control"), dict) else {}
+    required = control.get("requiredTool") if isinstance(control.get("requiredTool"), dict) else {}
+    if preflight.get("alreadyCompleted"):
+        payload = {
+            "ok": True,
+            "status": "already_completed",
+            "statusCode": "GATE_ALREADY_COMPLETED",
+            "gate": gate_name,
+            "gatePassed": True,
+            "writeGateClosed": False,
+            "alreadyCompleted": True,
+            "validatorSkipped": True,
+            "resolverSkipped": gate_name == FEATURE_INTENT_GATE,
+            "taskAuthorization": preflight.get("taskAuthorization") or {},
+            "toolRoute": preflight.get("toolRoute") or {},
+            "controlEpoch": preflight.get("controlEpoch", 0),
+            "control": control,
+            "retryable": False,
+            "doNotRetryUnchanged": True,
+            "agentInstruction": (
+                f"{gate_name} already passed for the same plan, slice, mutation generation, "
+                "input, and current target snapshots. Do not validate it again; execute the "
+                "server-required tool from control."
+            ),
+        }
+        if required.get("name"):
+            payload["requiredNextTool"] = str(required["name"])
+            payload["requiredNextToolArgs"] = dict(required.get("args") or {})
+            payload["nextAction"] = str(required["name"])
+            payload["nextActionIsTool"] = True
+        server.structured_tool_result(message_id, payload)
+        return True
+    if preflight.get("blocked"):
+        recovery_contract = (
+            preflight.get("recoveryContract")
+            if isinstance(preflight.get("recoveryContract"), dict)
+            else {}
+        )
+        next_action_args = {
+            "taskAuthorization": preflight.get("taskAuthorization") or {},
+        }
+        if recovery_contract:
+            next_action_args["featureFrontierRecovery"] = recovery_contract
+        blocked_payload = {
+                "ok": False,
+                "status": "blocked",
+                "errorCode": "REPEATED_GATE_BLOCKER",
+                "error": "The same gate input already produced the same blocker twice.",
+                "gate": gate_name,
+                "validatorSkipped": True,
+                "resolverSkipped": gate_name == FEATURE_INTENT_GATE,
+                "equivalentAttemptCount": preflight.get("attemptCount"),
+                "blockerFingerprint": preflight.get("blockerFingerprint"),
+                "validationErrorCode": preflight.get("validationErrorCode"),
+                "nextAction": preflight.get("nextAction"),
+                "nextActionArgs": next_action_args,
+                "nextActionIsTool": preflight.get("nextActionIsTool") is True,
+                "taskAuthorization": preflight.get("taskAuthorization") or {},
+                "toolRoute": preflight.get("toolRoute") or {},
+                "controlEpoch": preflight.get("controlEpoch", 0),
+                "control": control,
+                "retryable": False,
+                "doNotRetryUnchanged": True,
+                "agentInstruction": (
+                    "Do not run this validator again with unchanged arguments. Execute "
+                    "the server control action or change the underlying evidence first."
+                ),
+            }
+        if recovery_contract:
+            blocked_payload["featureFrontierRecovery"] = recovery_contract
+        server.structured_tool_result(message_id, blocked_payload)
+        return True
+    return False
+
+
 def _reconcile_gate_completion(
     payload: dict[str, Any],
     gate_completion: dict[str, Any] | None,
@@ -1389,6 +1520,9 @@ def _reconcile_gate_completion(
         "nextAction",
         "nextActionArgs",
         "nextActionIsTool",
+        "taskSessionId",
+        "controlEpoch",
+        "taskRouteTerminal",
         "taskAuthorization",
         "toolRoute",
         "retryable",
@@ -1614,14 +1748,21 @@ def _feature_intent_target_snapshots(
         except OSError as exc:
             issues.append(f"{relative}: target could not be read ({exc})")
             continue
-        snapshots.append(
-            {
-                "path": relative,
-                "absolutePath": str(candidate),
-                "exists": exists,
-                "fileHash": digest,
-            }
-        )
+        snapshot = {
+            "path": relative,
+            "absolutePath": str(candidate),
+            "exists": exists,
+            "parentExists": candidate.parent.is_dir(),
+            "fileHash": digest,
+        }
+        if not exists and candidate.suffix.casefold() == ".cpp":
+            from feature_intent_fast_path import discover_project_test_convention
+
+            snapshot["projectConventionEvidence"] = discover_project_test_convention(
+                root,
+                relative,
+            )
+        snapshots.append(snapshot)
     if not snapshots:
         issues.append("at least one exact target file snapshot is required")
     return snapshots, issues
@@ -2519,33 +2660,72 @@ def _handle_unreal_feature_intent_resolve(
         project_root,
         target_files,
     )
-    direct_source_ledger = task_direct_source_evidence(
+    evidence_ledger = task_direct_source_evidence(
         server.workspace,
         task_session_id,
     )
     direct_source_evidence = _feature_intent_direct_source_evidence(
         target_snapshots,
-        direct_source_ledger,
+        evidence_ledger,
     )
     completion_audit_state = (
         task_state.get("featureCompletionAudit")
         if isinstance(task_state.get("featureCompletionAudit"), dict)
         else {}
     )
-    completion_audit_required = bool(completion_audit_state.get("required"))
+    from feature_frontier_contract import (
+        is_completion_audit_request,
+        validate_feature_frontier,
+    )
+
+    task_completion_audit_required = bool(completion_audit_state.get("required"))
+    completion_audit_required = bool(
+        task_completion_audit_required or is_completion_audit_request(request)
+    )
+    legacy_frontier_supplied = isinstance(arguments.get("completionFrontier"), dict)
+    typed_frontier_supplied = isinstance(arguments.get("frontierClaims"), list)
     completion_frontier = _validate_feature_completion_frontier(
         arguments.get("completionFrontier"),
-        required=completion_audit_required,
+        required=(
+            task_completion_audit_required
+            and not typed_frontier_supplied
+        ),
         request=request,
         project_root=project_root,
         target_files=target_files,
-        ledger=direct_source_ledger,
+        ledger=evidence_ledger,
     )
     feature_frontier_recovery = _feature_frontier_recovery_contract(
         completion_frontier=completion_frontier,
         target_files=target_files,
         direct_source_evidence=direct_source_evidence,
-        ledger=direct_source_ledger,
+        ledger=evidence_ledger,
+    )
+    frontier_validation = (
+        validate_feature_frontier(
+            arguments.get("frontierClaims"),
+            project_root=project_root,
+            evidence_ledger=evidence_ledger,
+        )
+        if (
+            typed_frontier_supplied
+            or (
+                completion_audit_required
+                and not task_completion_audit_required
+                and not legacy_frontier_supplied
+            )
+        )
+        else {
+            "ok": True,
+            "claims": [],
+            "fingerprint": "",
+            "authority": "not_required",
+        }
+    )
+    frontier_contract_ok = bool(
+        not completion_audit_required
+        or (typed_frontier_supplied and frontier_validation.get("ok"))
+        or (legacy_frontier_supplied and completion_frontier.get("ok"))
     )
     from feature_intent_fast_path import (
         bounded_local_question_answers,
@@ -2563,6 +2743,12 @@ def _handle_unreal_feature_intent_resolve(
         ),
         "_serverCompletionFrontierHash": str(
             completion_frontier.get("frontierHash") or ""
+        ),
+        "_serverFeatureFrontierFingerprint": str(
+            frontier_validation.get("fingerprint") or ""
+        ),
+        "_serverFeatureFrontierErrorCode": str(
+            frontier_validation.get("errorCode") or ""
         ),
     }
     gate_input = {
@@ -2583,39 +2769,12 @@ def _handle_unreal_feature_intent_resolve(
         task_authorization=authorization,
         input_payload=gate_input,
     )
-    if not preflight.get("ok"):
-        server.structured_tool_result(message_id, preflight)
-        return
-    if preflight.get("blocked"):
-        server.structured_tool_result(
-            message_id,
-            {
-                "ok": False,
-                "status": "blocked",
-                "errorCode": "REPEATED_GATE_BLOCKER",
-                "error": "The same gate input already produced the same blocker twice.",
-                "gate": FEATURE_INTENT_GATE,
-                "resolverSkipped": True,
-                "equivalentAttemptCount": preflight.get("attemptCount"),
-                "blockerFingerprint": preflight.get("blockerFingerprint"),
-                "validationErrorCode": preflight.get("validationErrorCode"),
-                "nextAction": preflight.get("nextAction"),
-                "nextActionArgs": {
-                    "taskAuthorization": preflight.get("taskAuthorization") or {},
-                    "featureFrontierRecovery": preflight.get("recoveryContract") or {},
-                },
-                "nextActionIsTool": preflight.get("nextActionIsTool") is True,
-                "featureFrontierRecovery": preflight.get("recoveryContract") or {},
-                "taskAuthorization": preflight.get("taskAuthorization") or {},
-                "toolRoute": preflight.get("toolRoute") or {},
-                "retryable": False,
-                "doNotRetryUnchanged": True,
-                "agentInstruction": (
-                    "Do not run this resolver again with unchanged arguments. Execute "
-                    "nextAction or change the underlying task evidence first."
-                ),
-            },
-        )
+    if _finish_gate_preflight(
+        server,
+        message_id,
+        gate_name=FEATURE_INTENT_GATE,
+        preflight=preflight,
+    ):
         return
 
     explicit_semantic_input = bool(
@@ -2643,11 +2802,17 @@ def _handle_unreal_feature_intent_resolve(
         snapshot_issues=snapshot_issues,
         explicit_semantic_input=explicit_semantic_input,
     )
+    requested_intent_id = str(arguments.get("selectedIntentId") or "").strip()
+    fast_path_semantic_conflict = bool(
+        explicit_semantic_input
+        and (requested_intent_id != "bounded_local" or question_answers)
+    )
     bounded_local_contract_proven = bool(
         fast_path.get("eligible")
         and not snapshot_issues
+        and not fast_path_semantic_conflict
         and not has_architecture_provenance
-        and completion_frontier.get("ok")
+        and frontier_contract_ok
     )
     use_fast_path = bool(
         bounded_local_contract_proven
@@ -2818,7 +2983,18 @@ def _handle_unreal_feature_intent_resolve(
         payload["error"] = "Selected acceptance criteria require explicit observer and oracle."
         payload.setdefault("writeGate", {})["writesAllowed"] = False
 
-    if not completion_frontier.get("ok"):
+    legacy_frontier_required = bool(
+        task_completion_audit_required and not typed_frontier_supplied
+    )
+    typed_frontier_required = bool(
+        completion_audit_required
+        and not task_completion_audit_required
+        and not legacy_frontier_supplied
+    )
+    if (
+        (legacy_frontier_supplied or legacy_frontier_required)
+        and not completion_frontier.get("ok")
+    ):
         semantic_rediscovery = bool(
             feature_frontier_recovery.get("semanticDiscoveryRequired")
         )
@@ -2865,12 +3041,32 @@ def _handle_unreal_feature_intent_resolve(
             }
         )
         payload.setdefault("writeGate", {})["writesAllowed"] = False
-    elif completion_audit_required:
+    elif legacy_frontier_supplied and completion_frontier.get("ok"):
         payload["completionFrontier"] = {
             key: completion_frontier[key]
             for key in ("required", "status", "frontier", "frontierHash")
             if key in completion_frontier
         }
+    if typed_frontier_supplied or typed_frontier_required:
+        payload["featureFrontier"] = frontier_validation
+        if payload.get("ok") and not frontier_validation.get("ok"):
+            payload["ok"] = False
+            payload["status"] = "blocked"
+            payload["errorCode"] = str(
+                frontier_validation.get("errorCode")
+                or "FEATURE_FRONTIER_TYPED_CLAIMS_INVALID"
+            )
+            payload["error"] = (
+                "Completion-audit intent cannot open the write gate without valid typed "
+                "frontier claims bound to current server source/absence evidence."
+            )
+            payload.setdefault("writeGate", {})["writesAllowed"] = False
+            payload["retryable"] = True
+            payload["doNotRetryUnchanged"] = True
+            payload["agentInstruction"] = (
+                "Replace free-text incompleteness statements with supported frontierClaims and "
+                "reference current evidenceId values. Do not retry unchanged claims."
+            )
 
     if payload.get("ok") and not snapshot_issues and not direct_source_evidence.get("ok"):
         missing = list(direct_source_evidence.get("missingTargetFiles") or [])
@@ -2923,6 +3119,8 @@ def _handle_unreal_feature_intent_resolve(
         ),
         "completionFrontier": dict(completion_frontier.get("frontier") or {}),
         "completionFrontierHash": str(completion_frontier.get("frontierHash") or ""),
+        "frontierFingerprint": str(frontier_validation.get("fingerprint") or ""),
+        "frontierClaims": list(frontier_validation.get("claims") or []),
     }
     atomic_slice_plan = (
         {
@@ -3203,6 +3401,27 @@ def _handle_unreal_code_sketch_claim_validate(
         if argument_error:
             _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
             return
+        if task_session_id:
+            from task_api import task_gate_failure_preflight
+
+            gate_input = {
+                key: value
+                for key, value in arguments.items()
+                if key not in {"taskAuthorization", "task_authorization"}
+            }
+            preflight = task_gate_failure_preflight(
+                server.workspace,
+                gate_name="unreal_code_sketch_claim_validate",
+                task_authorization=authorization,
+                input_payload=gate_input,
+            )
+            if _finish_gate_preflight(
+                server,
+                message_id,
+                gate_name="unreal_code_sketch_claim_validate",
+                preflight=preflight,
+            ):
+                return
     graph: dict[str, Any] | None = None
     graph_status: dict[str, Any] = {
         "status": "not_requested" if not project_root else "not_started",
@@ -4872,6 +5091,7 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                     "maxItems": 2,
                     "items": {"type": "string"},
                 },
+                "frontierClaims": _feature_frontier_claims_schema(),
                 "taskAuthorization": _task_authorization_schema(),
             },
             handler=_handle_unreal_feature_intent_resolve,
@@ -5772,6 +5992,9 @@ class McpServer:
                     "serverInfo": {
                         "name": "unreal-rag",
                         "version": "0.3.0",
+                        "runtimeIdentity": (
+                            getattr(self, "runtime_component_status", {}).get("running")
+                        ),
                     },
                 },
             )
@@ -5909,6 +6132,12 @@ class McpServer:
                     "activeProject": str(
                         load_shared_config().get("activeProject") or ""
                     ).strip(),
+                    "runtimeComponent": getattr(
+                        self, "runtime_component_status", {}
+                    ).get("running"),
+                    "runtimeVerified": getattr(
+                        self, "runtime_component_status", {}
+                    ).get("verified") is True,
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -6585,6 +6814,7 @@ class McpServer:
                             "items": {"type": "string"},
                             "description": "Single-slice shorthand when a broad plan has exactly one bounded target set.",
                         },
+                        "frontierClaims": _feature_frontier_claims_schema(),
                         "taskAuthorization": _task_authorization_schema(),
                     },
                     ["taskAuthorization"],
@@ -8934,46 +9164,50 @@ class McpServer:
                     and str(pending_gates[0]) == FEATURE_INTENT_GATE
                     and selected_slice.get("scopeRequired") is True
                 )
-                compile_diagnostic_first = (
-                    str(payload.get("taskKind") or "")
-                    in {"compile_fix", "reflection_fix", "module_fix"}
-                    and "build_unreal_project" in (tool_route.get("activeTools") or [])
+                authoritative_control = (
+                    dict(task.get("control") or {})
+                    if isinstance(task.get("control"), dict)
+                    else dict(task_state.get("controlState") or {})
+                    if isinstance(task_state.get("controlState"), dict)
+                    else {}
                 )
-                next_action = (
-                    "build_unreal_project"
-                    if compile_diagnostic_first
-                    else "discover_bounded_feature_slice"
-                    if feature_slice_discovery
-                    else (
-                        str(pending_gates[0])
-                        if pending_gates
-                        else "continue_with_current_tool_route"
-                    )
+                required_control = (
+                    dict(authoritative_control.get("requiredTool") or {})
+                    if isinstance(authoritative_control.get("requiredTool"), dict)
+                    else {}
+                )
+                required_name = str(required_control.get("name") or "").strip()
+                if required_name:
+                    next_action = required_name
+                elif feature_slice_discovery:
+                    next_action = "discover_bounded_feature_slice"
+                else:
+                    next_action = "continue_with_current_tool_route"
+                compile_diagnostic_first = (
+                    next_action == "build_unreal_project"
+                    and str(payload.get("taskKind") or "")
+                    in {"compile_fix", "reflection_fix", "module_fix"}
                 )
                 payload["nextAction"] = next_action
-                payload["nextActionIsTool"] = next_action not in {
-                    "continue_with_current_tool_route",
-                    "discover_bounded_feature_slice",
-                }
-                payload["nextActionArgs"] = (
-                    {
-                        "taskAuthorization": compact_task_authorization(
-                            task_authorization
-                        ),
-                    }
-                    if compile_diagnostic_first
-                    else {
-                        "taskAuthorization": compact_task_authorization(
-                            task_authorization
-                        )
-                    }
-                )
+                payload["nextActionIsTool"] = bool(required_name)
+                next_action_args = dict(required_control.get("args") or {})
+                if required_name and task_authorization:
+                    next_action_args.setdefault(
+                        "taskAuthorization",
+                        compact_task_authorization(task_authorization),
+                    )
+                payload["nextActionArgs"] = next_action_args
                 if payload["nextActionIsTool"]:
-                    payload["requiredNextToolArgs"] = {
-                        "taskAuthorization": compact_task_authorization(
-                            task_authorization
-                        )
-                    }
+                    payload["requiredNextTool"] = required_name
+                    payload["requiredNextToolArgs"] = dict(next_action_args)
+                else:
+                    payload.pop("requiredNextTool", None)
+                    payload.pop("requiredNextToolArgs", None)
+                if authoritative_control:
+                    payload["control"] = authoritative_control
+                    payload["controlEpoch"] = int(
+                        authoritative_control.get("epoch") or 0
+                    )
                 payload["executionContract"] = {
                     "maxFilesPerSlice": int(tool_route.get("maxFilesPerSlice") or 2),
                     "splitBeforeFirstGate": True,
@@ -9666,6 +9900,8 @@ if __name__ == "__main__":
             index = find_workspace_root() / index
     else:
         index = resolve_index_path()
+    runtime_component_status = verify_runtime_component("rag")
     server = McpServer(index.resolve())
+    server.runtime_component_status = runtime_component_status
     server.emit_catalog_initialized_diagnostic()
     server.run()

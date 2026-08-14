@@ -108,12 +108,16 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 )
 
 REQUIRED_RUNTIME_FILES = (
+    "scripts/control_runtime_identity.py",
     "scripts/phase_tool_router.py",
     "scripts/approve_feature_intent.py",
     "scripts/mutation_semantic_guard.py",
     "scripts/unreal_api_denylist.py",
     "lmstudio-unreal-agent-mcp/src/route-watcher.js",
     "lmstudio-unreal-agent-mcp/src/mutation-semantic-guard.js",
+    "lmstudio-unreal-agent-mcp/src/runtime-identity.js",
+    "lmstudio-unreal-agent-mcp/src/task-control-transition.js",
+    "lmstudio-context-compactor-plugin/src/runtime-identity.js",
 )
 
 # Absolute home-path shapes across Windows / macOS / Linux.
@@ -218,6 +222,7 @@ def _source_files(source: Path, *, include_index: bool) -> Iterable[tuple[Path, 
         tracked_paths = []
 
     if tracked_paths:
+        selected_relatives: set[str] = set()
         for relative in sorted(tracked_paths, key=lambda item: item.as_posix().lower()):
             if not _include(relative, include_index=include_index):
                 continue
@@ -227,6 +232,22 @@ def _source_files(source: Path, *, include_index: bool) -> Iterable[tuple[Path, 
             if path.is_symlink():
                 raise ValueError(f"symlinks are not allowed in portable packages: {relative}")
             selected.append((path, relative))
+            selected_relatives.add(relative.as_posix())
+        # Explicit release-critical files may be new in the current release
+        # candidate before the eventual commit is created. Never widen this to
+        # arbitrary untracked files.
+        for required in REQUIRED_RUNTIME_FILES:
+            if required in selected_relatives:
+                continue
+            relative = Path(required)
+            path = source / relative
+            if path.is_file() and _include(relative, include_index=include_index):
+                if path.is_symlink():
+                    raise ValueError(
+                        f"symlinks are not allowed in portable packages: {relative}"
+                    )
+                selected.append((path, relative))
+                selected_relatives.add(required)
         if include_index:
             index_rel = Path("data/unreal58/rag.sqlite")
             index_path = source / index_rel

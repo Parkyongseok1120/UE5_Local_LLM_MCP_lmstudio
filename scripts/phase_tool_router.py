@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 ROUTE_VERSION = 1
+CONTROL_TRANSITION_VERSION = 2
 MIN_ACTIVE_TOOLS = 5
 MAX_ACTIVE_TOOLS = 10
 MAX_PHASE_TOOL_CALLS = 12
@@ -59,6 +60,18 @@ ALWAYS_DISCOVERABLE_CONTROL_TOOLS = frozenset(
 NON_BUDGETED_REPLAN_TOOLS = frozenset({"unreal_agent_plan"})
 MUTATION_TOOLS = frozenset(
     {"write_file", "replace_in_file", "delete_file", "apply_edit_bundle"}
+)
+_DISCOVERY_TOOL_NAMES = frozenset(
+    {
+        "unreal_rag_search",
+        "unreal_symbol_lookup",
+        "list_directory",
+        "search_files",
+        "read_file",
+        "read_file_range",
+        "read_symbol",
+        "read_unreal_logs",
+    }
 )
 
 _GATE_TO_TOOL = {
@@ -183,10 +196,32 @@ def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
     )
     snapshot_items = snapshot_items if snapshots_match_active_slice else []
     if isinstance(snapshot_items, list) and snapshot_items:
-        declared.extend(
+        snapshot_paths_in_order = [
             str(item.get("path") or item.get("relativePath") or "")
             for item in snapshot_items
             if isinstance(item, dict)
+        ]
+        snapshot_keys = {
+            _normalize_path(path).casefold()
+            for path in snapshot_paths_in_order
+            if _normalize_path(path)
+        }
+        # Snapshots may intentionally narrow a legacy plan slice, but their
+        # canonical hash ordering must not reorder header/source pairs. Keep
+        # the plan's declared order for matching paths, then append any
+        # explicitly slice-bound snapshot path absent from the plan.
+        declared.extend(
+            path
+            for path in active_plan_files
+            if _normalize_path(path).casefold() in snapshot_keys
+        )
+        declared_keys = {
+            _normalize_path(path).casefold() for path in declared
+        }
+        declared.extend(
+            path
+            for path in snapshot_paths_in_order
+            if _normalize_path(path).casefold() not in declared_keys
         )
     elif (
         snapshots_match_active_slice
@@ -304,6 +339,348 @@ def pending_gates_for_state(state: dict[str, Any]) -> list[str]:
     return [gate for gate in required if gate not in valid]
 
 
+def _non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _mutation_tool_for_state(state: dict[str, Any], route: dict[str, Any]) -> str:
+    """Choose the first bounded mutation from server-owned target snapshots."""
+
+    selected_slice = (
+        route.get("selectedSlice")
+        if isinstance(route.get("selectedSlice"), dict)
+        else {}
+    )
+    files = _clean_strings(selected_slice.get("files"))
+    if not files:
+        return ""
+    if len(files) > 1:
+        return "apply_edit_bundle"
+
+    selected = _normalize_path(files[0]).casefold()
+    snapshots = normalized_selection_snapshots(state.get("selectedTargetSnapshots"))
+    if not snapshots:
+        snapshots = normalized_selection_snapshots(state.get("featureTargetSnapshots"))
+    snapshot = next(
+        (
+            item
+            for item in snapshots
+            if _normalize_path(item.get("path") or item.get("relativePath")).casefold()
+            == selected
+        ),
+        {},
+    )
+    if snapshot:
+        return "replace_in_file" if snapshot.get("exists") is True else "write_file"
+    # A legacy task without an existence snapshot must not guess create-vs-replace.
+    # The bundle transaction performs an explicit per-entry existence check.
+    return "apply_edit_bundle"
+
+
+def _completed_gate_matches_transition_scope(
+    state: dict[str, Any],
+    gate: str,
+) -> dict[str, Any]:
+    completed = (
+        state.get("completedGates")
+        if isinstance(state.get("completedGates"), dict)
+        else {}
+    )
+    record = completed.get(gate)
+    if not isinstance(record, dict) or record.get("status") != "completed":
+        return {}
+    if str(record.get("gateSetHash") or "") != str(
+        state.get("requiredGateSetHash") or ""
+    ):
+        return {}
+    if str(record.get("planRevision") or "") != str(state.get("planRevision") or ""):
+        return {}
+    if str(record.get("activeSliceId") or "") != str(state.get("activeSliceId") or ""):
+        return {}
+    return record
+
+
+def _pre_gate_source_read_path(
+    state: dict[str, Any],
+    pending_gates: list[str],
+) -> str:
+    """Return one existing selected target that lacks current direct evidence."""
+
+    if not pending_gates or pending_gates[0] != "unreal_code_sketch_claim_validate":
+        return ""
+    write_gate = state.get("writeGate") if isinstance(state.get("writeGate"), dict) else {}
+    if write_gate.get("mustReadBeforeWrite") is not True:
+        return ""
+    snapshots = normalized_selection_snapshots(state.get("selectedTargetSnapshots"))
+    evidence = (
+        state.get("directSourceEvidence")
+        if isinstance(state.get("directSourceEvidence"), dict)
+        else {}
+    )
+    files = evidence.get("files") if isinstance(evidence.get("files"), dict) else {}
+    evidence_paths = {
+        _normalize_path((item or {}).get("path") or key).casefold()
+        for key, item in files.items()
+        if isinstance(item, dict)
+    }
+    for snapshot in snapshots:
+        path = _normalize_path(snapshot.get("path"))
+        if snapshot.get("exists") is True and path.casefold() not in evidence_paths:
+            return path
+    return ""
+
+
+def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
+    """Derive the one authoritative next action for the complete task pipeline.
+
+    Handlers record facts (gate result, mutation generation, validation checkpoint,
+    build/automation result).  This table alone converts those facts into the
+    model-facing required tool and allowed catalog.
+    """
+
+    route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
+    status = str(state.get("status") or "running").strip().casefold()
+    phase = str(route.get("phase") or "unknown")
+    active_tools = _clean_strings(route.get("activeTools"))
+    pending_gates = _clean_strings(route.get("pendingGates"))
+    required_name = ""
+    required_args: dict[str, Any] = {}
+    disposition = "continue"
+    retry_value = "allowed"
+    blocker_code = ""
+    blocker_fingerprint = ""
+    discovery_only = False
+
+    if status == "completed":
+        disposition = "complete"
+    elif status in {"cancelled", "failed", "cancellation_uncertain"}:
+        disposition = "workflow_stop"
+    elif status in {"pending_approval", "awaiting_approval"}:
+        disposition = "await_user"
+    elif status == "running":
+        build_recovery = (
+            state.get("buildRecovery")
+            if isinstance(state.get("buildRecovery"), dict)
+            else {}
+        )
+        build_verification = (
+            state.get("buildVerification")
+            if isinstance(state.get("buildVerification"), dict)
+            else {}
+        )
+        checkpoint = (
+            (state.get("continuity") or {}).get("checkpoint")
+            if isinstance(state.get("continuity"), dict)
+            and isinstance((state.get("continuity") or {}).get("checkpoint"), dict)
+            else {}
+        )
+        pre_gate_read_path = _pre_gate_source_read_path(state, pending_gates)
+        task_kind = str(state.get("taskKind") or "").strip().casefold()
+        initial_compile_diagnostic = bool(
+            task_kind in {"compile_fix", "reflection_fix", "module_fix"}
+            and pending_gates
+            and _non_negative_int(state.get("mutationGeneration")) == 0
+            and not build_recovery
+            and not state.get("buildBlocker")
+            and not state.get("buildProofHistory")
+        )
+
+        if state.get("slicePlanningRequired") is True:
+            # A feature gate cannot bind a placeholder slice. Discovery is a
+            # server-declared state of the transition table, not a permission
+            # to invoke the pending gate early.
+            discovery_only = True
+        elif str(build_recovery.get("status") or "") == "evidence_required":
+            required_name = str(build_recovery.get("requiredNextTool") or "").strip()
+            required_args = (
+                dict(build_recovery.get("requiredNextToolArgs") or {})
+                if isinstance(build_recovery.get("requiredNextToolArgs"), dict)
+                else {}
+            )
+        elif str(build_verification.get("status") or "") == "pending_automation":
+            required_name = "run_unreal_automation_tests"
+            test_filter = str(build_verification.get("testFilter") or "").strip()
+            required_args = {"testFilter": test_filter} if test_filter else {}
+        elif initial_compile_diagnostic:
+            required_name = "build_unreal_project"
+        elif pre_gate_read_path:
+            required_name = "read_file"
+            required_args = {"path": pre_gate_read_path}
+        elif pending_gates:
+            gate = pending_gates[0]
+            attempts = (
+                state.get("failedGateAttempts")
+                if isinstance(state.get("failedGateAttempts"), dict)
+                else {}
+            )
+            attempt = attempts.get(gate) if isinstance(attempts.get(gate), dict) else {}
+            recovery_satisfied = bool(attempt.get("recoverySatisfiedAt"))
+            recovery_contract = (
+                attempt.get("recoveryContract")
+                if isinstance(attempt.get("recoveryContract"), dict)
+                else {}
+            )
+            repeated_attempt = int(attempt.get("attemptCount") or 0) >= 2
+            semantic_rediscovery_required = bool(
+                recovery_contract.get("semanticDiscoveryRequired")
+            )
+            if (
+                repeated_attempt
+                and not recovery_satisfied
+                and semantic_rediscovery_required
+            ):
+                disposition = "rediscover"
+                retry_value = "forbidden"
+                blocker_code = "REPEATED_GATE_BLOCKER"
+                blocker_fingerprint = str(attempt.get("fingerprint") or "")
+            else:
+                recovery_tool = (
+                    ""
+                    if recovery_satisfied
+                    else str(attempt.get("nextAction") or "").strip()
+                )
+                required_name = recovery_tool if recovery_tool in active_tools else gate
+                retry_value = (
+                    "changed_input_only"
+                    if repeated_attempt and not recovery_satisfied
+                    else ("once" if recovery_tool else "allowed")
+                )
+                if repeated_attempt and not recovery_satisfied:
+                    blocker_code = "REPEATED_GATE_BLOCKER"
+                    blocker_fingerprint = str(attempt.get("fingerprint") or "")
+        else:
+            checkpoint_action = str(checkpoint.get("requiredNextAction") or "").strip()
+            completed_gate_names = set(_valid_completed_gates(state))
+            if checkpoint_action in completed_gate_names:
+                checkpoint_action = ""
+
+            sketch_record = _completed_gate_matches_transition_scope(
+                state,
+                "unreal_code_sketch_claim_validate",
+            )
+            mutation_generation = _non_negative_int(state.get("mutationGeneration"))
+            sketch_generation = _non_negative_int(sketch_record.get("mutationGeneration"))
+            checkpoint_generation = _non_negative_int(
+                checkpoint.get("mutationGeneration")
+            )
+            checkpoint_validation = (
+                checkpoint.get("validation")
+                if isinstance(checkpoint.get("validation"), dict)
+                else {}
+            )
+            validation_status = str(
+                checkpoint_validation.get("status") or ""
+            ).strip().casefold()
+            mutation_required = bool(
+                phase == "executor"
+                and sketch_record
+                and sketch_generation == mutation_generation
+            )
+            current_mutation_checkpoint = bool(
+                phase == "executor"
+                and sketch_record
+                and checkpoint_generation == mutation_generation
+                and mutation_generation > sketch_generation
+            )
+
+            if mutation_required:
+                required_name = _mutation_tool_for_state(state, route)
+            elif current_mutation_checkpoint and validation_status == "passed":
+                required_name = "build_unreal_project"
+            elif current_mutation_checkpoint and validation_status == "failed":
+                required_name = "read_file"
+                first_finding = (
+                    checkpoint_validation.get("firstFinding")
+                    if isinstance(checkpoint_validation.get("firstFinding"), dict)
+                    else {}
+                )
+                finding_path = str(first_finding.get("path") or "").strip()
+                required_args = {"path": finding_path} if finding_path else {}
+            elif current_mutation_checkpoint:
+                required_name = "static_validate_project"
+            elif checkpoint_action and checkpoint_action in active_tools:
+                # Explicit recovery and phase-budget handoffs may carry an
+                # opaque action. Normal pipeline advancement above is derived
+                # exclusively from persisted facts.
+                required_name = checkpoint_action
+
+        if required_name:
+            disposition = "checkpoint" if required_name == "unreal_task_checkpoint" else "require_tool"
+
+    allowed_tools = (
+        [required_name]
+        if required_name
+        else []
+        if disposition in {"complete", "workflow_stop", "await_user"}
+        else [
+            name
+            for name in active_tools
+            if name in _DISCOVERY_TOOL_NAMES
+            or (discovery_only and name == (pending_gates[0] if pending_gates else ""))
+        ]
+        if disposition == "rediscover" or discovery_only
+        else active_tools
+    )
+    required_tool = (
+        {"name": required_name, "args": required_args}
+        if required_name
+        else None
+    )
+    return {
+        "version": CONTROL_TRANSITION_VERSION,
+        "authoritative": True,
+        "taskSessionId": str(state.get("taskSessionId") or ""),
+        "planRevision": str(state.get("planRevision") or ""),
+        "activeSliceId": str(state.get("activeSliceId") or ""),
+        "phase": phase,
+        "disposition": disposition,
+        "requiredTool": required_tool,
+        "allowedTools": allowed_tools,
+        "routeHash": str(route.get("routeHash") or ""),
+        "pendingGates": pending_gates,
+        "retryPolicy": {"sameSemanticInput": retry_value},
+        "blocker": (
+            {"code": blocker_code, "fingerprint": blocker_fingerprint}
+            if blocker_code
+            else None
+        ),
+        "mutationGeneration": _non_negative_int(state.get("mutationGeneration")),
+    }
+
+
+def commit_control_transition(state: dict[str, Any]) -> dict[str, Any]:
+    """Persist control and advance epoch iff its semantic fingerprint changed."""
+
+    control = derive_next_obligation(state)
+    material = [
+        control["taskSessionId"],
+        control["planRevision"],
+        control["activeSliceId"],
+        control["phase"],
+        control["disposition"],
+        control.get("requiredTool"),
+        control["allowedTools"],
+        control["routeHash"],
+        control["pendingGates"],
+        control.get("blocker"),
+        control["mutationGeneration"],
+    ]
+    fingerprint = canonical_hash(material)
+    previous = str(state.get("controlFingerprint") or "")
+    epoch = _non_negative_int(state.get("controlEpoch"))
+    if fingerprint != previous:
+        epoch += 1
+    control["epoch"] = epoch
+    control["fingerprint"] = fingerprint
+    state["controlEpoch"] = epoch
+    state["controlFingerprint"] = fingerprint
+    state["controlState"] = control
+    return state
+
+
 def _phase_and_role(
     state: dict[str, Any],
     *,
@@ -417,11 +794,14 @@ def _active_tools(
         ]
     elif phase == "executor":
         tools = [
+            # Pipeline proof tools stay ahead of optional recovery reads so
+            # the bounded public catalog can never truncate the action that
+            # the central transition table requires.
+            "static_validate_project",
+            "build_unreal_project",
             "read_file",
             "read_file_range",
-            # A build can fail at link/UHT/toolchain stages without a source
-            # coordinate. Build responses explicitly route to the newest log
-            # in that case, so the executor must not reject its own recovery.
+            # Link/UHT/toolchain failures may have no source coordinate.
             "read_unreal_logs",
             # Exact project-source discovery is a normal recovery step when a
             # sketch or symbol lookup cannot verify a project-local helper.
@@ -432,8 +812,6 @@ def _active_tools(
             # slice and return an exact symbol lookup as its required next
             # action. Keep that recovery callable without changing phases.
             "unreal_symbol_lookup",
-            "static_validate_project",
-            "build_unreal_project",
         ]
         # Keep the scope-authoritative sketch gate available after entering the
         # executor. Multi-slice edits can then validate/rebind the next bounded
@@ -530,7 +908,7 @@ def _active_tools(
             unique.append(tool)
     if phase in {"planner", "runtime_analysis", "verifier"}:
         unique = [tool for tool in unique if tool not in MUTATION_TOOLS]
-    return unique[:MAX_ACTIVE_TOOLS]
+    return unique
 
 
 def _prompt_contract(role: str, task_session_id: str, phase: str) -> dict[str, Any]:
@@ -597,6 +975,24 @@ def derive_tool_route(
             or ""
         ) == "pending_automation",
     )
+    if phase == "executor" and any(
+        tool in MUTATION_TOOLS for tool in active_tools
+    ):
+        # Publish the transaction-safe bundle tool plus the one precise
+        # create/replace action supported by the selected target snapshot.
+        # This keeps the catalog bounded without ever truncating Static/Build.
+        mutation_tool = _mutation_tool_for_state(
+            state,
+            {"selectedSlice": selected_slice},
+        )
+        mutation_catalog = _unique_tools(
+            ["apply_edit_bundle", mutation_tool]
+        )
+        active_tools = [
+            tool for tool in active_tools if tool not in MUTATION_TOOLS
+        ]
+        active_tools[4:4] = mutation_catalog
+    active_tools = active_tools[:MAX_ACTIVE_TOOLS]
     checkpoint = state.get("continuity", {}).get("checkpoint")
     checkpoint_next_action = (
         str(checkpoint.get("requiredNextAction") or "").strip()

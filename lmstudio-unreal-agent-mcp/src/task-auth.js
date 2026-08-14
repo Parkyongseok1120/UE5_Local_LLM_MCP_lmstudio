@@ -20,6 +20,7 @@ const {
 const { spawnSync } = require("child_process");
 const { recoveryAction } = require("./route-recovery-policy");
 const { stripProjectNamePrefix } = require("./read-path-resolver");
+const { commitControlTransition } = require("./task-control-transition");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -597,6 +598,41 @@ function validateToolRoute(state, fields, args, toolName) {
     ? state.toolRoute
     : null;
   if (!activeRoute) return { ok: true, legacy: true };
+  const control = state.controlState && typeof state.controlState === "object"
+    ? state.controlState
+    : null;
+  const allowedControlTools = new Set(
+    Array.isArray(control?.allowedTools) ? control.allowedTools.map(String).filter(Boolean) : []
+  );
+  const routeActiveTools = new Set(
+    Array.isArray(activeRoute.activeTools) ? activeRoute.activeTools.map(String).filter(Boolean) : []
+  );
+  if (
+    toolName
+    && control?.authoritative === true
+    && routeActiveTools.has(toolName)
+    && !allowedControlTools.has(toolName)
+  ) {
+    const required = control.requiredTool && typeof control.requiredTool === "object"
+      ? control.requiredTool
+      : {};
+    const requiredName = String(required.name || "").trim();
+    return {
+      ok: false,
+      errorCode: "TASK_CONTROL_OBLIGATION_REQUIRED",
+      error: `${toolName} is no longer the authoritative next action.`,
+      alreadySatisfied: true,
+      reexecutionBlocked: true,
+      toolRoute: activeRoute,
+      taskAuthorization: taskAuthorizationForState(state),
+      controlEpoch: Math.max(0, Number(state.controlEpoch || control.epoch || 0)),
+      control: { ...control },
+      nextAction: requiredName || "use_authoritative_control",
+      nextActionIsTool: Boolean(requiredName),
+      nextActionArgs: required.args && typeof required.args === "object" ? { ...required.args } : {},
+      retryable: false,
+    };
+  }
   const requiredFirstTool = String(activeRoute.requiredFirstTool || "").trim();
   const completion = state.routeFacts?.requiredFirstToolAttempt;
   const requiredFirstToolCompleted = Boolean(
@@ -786,16 +822,69 @@ const DIRECT_SOURCE_EXTENSIONS = new Set([
   ".h", ".hpp", ".inl", ".cpp", ".c", ".cc", ".cxx", ".cs",
 ]);
 
+function normalizeEvidencePath(value) {
+  const relPath = String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/^\/+|\/+$/g, "");
+  if (
+    !relPath
+    || path.posix.isAbsolute(relPath)
+    || relPath.split("/").includes("..")
+  ) return "";
+  return relPath;
+}
+
+function scopedAbsentEvidencePath(scopeRelativePath, query) {
+  const scope = normalizeEvidencePath(scopeRelativePath);
+  const normalizedQuery = normalizeEvidencePath(
+    String(query || "").replace(/^project:\/\//i, "")
+  );
+  if (!normalizedQuery) return "";
+  if (!scope || normalizedQuery.includes("/")) return normalizedQuery;
+  return normalizeEvidencePath(`${scope}/${normalizedQuery}`);
+}
+
+function parseEvidenceRange(value) {
+  if (Array.isArray(value) && value.length >= 2) {
+    const start = Number(value[0]);
+    const end = Number(value[1]);
+    if (Number.isInteger(start) && Number.isInteger(end) && start > 0 && end >= start) {
+      return [start, end];
+    }
+    return null;
+  }
+  const match = String(value || "").trim().match(/^(\d+)(?:-(\d+))?$/u);
+  if (!match) return null;
+  const start = Number(match[1]);
+  const end = Number(match[2] || match[1]);
+  return start > 0 && end >= start ? [start, end] : null;
+}
+
+function mergeEvidenceRanges(values) {
+  const ranges = (Array.isArray(values) ? values : [])
+    .map(parseEvidenceRange)
+    .filter(Boolean)
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  const merged = [];
+  for (const range of ranges) {
+    const prior = merged[merged.length - 1];
+    if (!prior || range[0] > prior[1] + 1) {
+      merged.push([...range]);
+    } else {
+      prior[1] = Math.max(prior[1], range[1]);
+    }
+  }
+  return merged.slice(-16);
+}
+
 function recordDirectSourceEvidence(state, toolName, callMetadata) {
   if (!["read_file", "read_file_range"].includes(String(toolName || ""))) return;
   const metadata = callMetadata && typeof callMetadata === "object"
     ? callMetadata.directSourceEvidence
     : null;
   if (!metadata || typeof metadata !== "object") return;
-  const relPath = String(metadata.projectRelativePath || "")
-    .replace(/\\/g, "/")
-    .replace(/^\.\/+/, "")
-    .replace(/^\/+|\/+$/g, "");
+  const relPath = normalizeEvidencePath(metadata.projectRelativePath);
   const contentHash = String(metadata.contentHash || "").trim().toLowerCase();
   if (
     !relPath
@@ -807,6 +896,75 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     return;
   }
   const planRevision = String(state.planRevision || "");
+  const key = relPath.toLowerCase();
+  const sourceKind = [".h", ".hpp", ".inl"].includes(path.posix.extname(relPath).toLowerCase())
+    ? "declaration"
+    : "implementation";
+  const lineRange = String(metadata.lineRange || "").trim();
+
+  let sourceLedger = state.sourceEvidence && typeof state.sourceEvidence === "object"
+    ? { ...state.sourceEvidence }
+    : {};
+  if (String(sourceLedger.planRevision || "") !== planRevision) {
+    sourceLedger = { version: 2, planRevision, files: {} };
+  }
+  const sourceFiles = sourceLedger.files && typeof sourceLedger.files === "object"
+    ? { ...sourceLedger.files }
+    : {};
+  const sourcePrior = sourceFiles[key] && typeof sourceFiles[key] === "object"
+    ? sourceFiles[key]
+    : {};
+  const sameRevision = String(sourcePrior.contentHash || "") === contentHash;
+  const coveredRanges = mergeEvidenceRanges([
+    ...(sameRevision && Array.isArray(sourcePrior.coveredRanges)
+      ? sourcePrior.coveredRanges
+      : []),
+    lineRange,
+  ]);
+  const sourceTools = new Set(
+    sameRevision && Array.isArray(sourcePrior.tools)
+      ? sourcePrior.tools.map(String)
+      : []
+  );
+  sourceTools.add(String(toolName));
+  const boundedSymbols = (value) => Array.from(new Set(
+    (Array.isArray(value) ? value : []).map(String).map((item) => item.trim()).filter(Boolean)
+  )).slice(0, 32);
+  sourceFiles[key] = {
+    evidenceId: crypto.createHash("sha256")
+      .update(`${key}\0${contentHash}`)
+      .digest("hex")
+      .slice(0, 24),
+    path: relPath,
+    contentHash,
+    sourceKind,
+    coveredRanges,
+    declarations: boundedSymbols([
+      ...(sameRevision && Array.isArray(sourcePrior.declarations)
+        ? sourcePrior.declarations
+        : []),
+      ...(Array.isArray(metadata.declarations) ? metadata.declarations : []),
+    ]),
+    implementations: boundedSymbols([
+      ...(sameRevision && Array.isArray(sourcePrior.implementations)
+        ? sourcePrior.implementations
+        : []),
+      ...(Array.isArray(metadata.implementations) ? metadata.implementations : []),
+    ]),
+    tools: Array.from(sourceTools).slice(-2),
+    recordedAt: new Date().toISOString(),
+  };
+  const boundedSourceEntries = Object.entries(sourceFiles)
+    .sort((left, right) => String(right[1]?.recordedAt || "").localeCompare(String(left[1]?.recordedAt || "")))
+    .slice(0, 32);
+  state.sourceEvidence = {
+    version: 2,
+    planRevision,
+    files: Object.fromEntries(boundedSourceEntries),
+  };
+
+  // Keep the v1 ledger as a derived compatibility projection until every
+  // external client consumes sourceEvidence v2.
   let ledger = state.directSourceEvidence && typeof state.directSourceEvidence === "object"
     ? { ...state.directSourceEvidence }
     : {};
@@ -816,21 +974,15 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
   const files = ledger.files && typeof ledger.files === "object"
     ? { ...ledger.files }
     : {};
-  const key = relPath.toLowerCase();
-  const prior = files[key] && typeof files[key] === "object" ? files[key] : {};
-  const ranges = new Set(Array.isArray(prior.lineRanges) ? prior.lineRanges.map(String) : []);
-  const lineRange = String(metadata.lineRange || "").trim();
-  if (lineRange) ranges.add(lineRange);
-  const tools = new Set(Array.isArray(prior.tools) ? prior.tools.map(String) : []);
-  tools.add(String(toolName));
+  const sourceCurrent = sourceFiles[key];
   files[key] = {
     path: relPath,
     contentHash,
-    sourceKind: [".h", ".hpp", ".inl"].includes(path.posix.extname(relPath).toLowerCase())
-      ? "declaration"
-      : "implementation",
-    lineRanges: Array.from(ranges).slice(-8),
-    tools: Array.from(tools).slice(-2),
+    sourceKind,
+    lineRanges: (sourceCurrent.coveredRanges || [])
+      .map((range) => `${range[0]}-${range[1]}`)
+      .slice(-8),
+    tools: (sourceCurrent.tools || []).slice(-2),
     recordedAt: new Date().toISOString(),
   };
   const boundedEntries = Object.entries(files)
@@ -841,6 +993,89 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     planRevision,
     files: Object.fromEntries(boundedEntries),
   };
+}
+
+function recordAbsentSourceEvidence(state, toolName, callMetadata) {
+  const metadata = callMetadata && typeof callMetadata === "object"
+    ? callMetadata.absentEvidence
+    : null;
+  if (!metadata || typeof metadata !== "object") return;
+  const relPath = normalizeEvidencePath(
+    metadata.projectRelativePath || metadata.query
+  );
+  if (!relPath) return;
+  const planRevision = String(state.planRevision || "");
+  let ledger = state.absentEvidence && typeof state.absentEvidence === "object"
+    ? { ...state.absentEvidence }
+    : {};
+  if (String(ledger.planRevision || "") !== planRevision) {
+    ledger = { version: 1, planRevision, files: {} };
+  }
+  const files = ledger.files && typeof ledger.files === "object"
+    ? { ...ledger.files }
+    : {};
+  const key = relPath.toLowerCase();
+  const prior = files[key] && typeof files[key] === "object" ? files[key] : {};
+  const bounded = (values, limit = 8) => Array.from(new Set(
+    values.map(String).map((item) => item.trim()).filter(Boolean)
+  )).slice(-limit);
+  const scopes = bounded([
+    ...(Array.isArray(prior.scopes) ? prior.scopes : []),
+    metadata.scopePath,
+  ]);
+  const queries = bounded([
+    ...(Array.isArray(prior.queries) ? prior.queries : []),
+    metadata.query,
+  ]);
+  const tools = bounded([
+    ...(Array.isArray(prior.tools) ? prior.tools : []),
+    toolName,
+  ], 3);
+  files[key] = {
+    evidenceId: crypto.createHash("sha256")
+      .update(`absent\0${key}\0${planRevision}`)
+      .digest("hex")
+      .slice(0, 24),
+    path: relPath,
+    searchComplete: Boolean(prior.searchComplete || metadata.searchComplete),
+    scopes,
+    queries,
+    tools,
+    recordedAt: new Date().toISOString(),
+  };
+  const boundedEntries = Object.entries(files)
+    .sort((left, right) => String(right[1]?.recordedAt || "").localeCompare(String(left[1]?.recordedAt || "")))
+    .slice(0, 32);
+  state.absentEvidence = {
+    version: 1,
+    planRevision,
+    files: Object.fromEntries(boundedEntries),
+  };
+}
+
+const DIRECT_EVIDENCE_RECOVERY_CODES = new Set([
+  "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED",
+]);
+const DIRECT_EVIDENCE_TOOLS = new Set(["read_file", "read_file_range"]);
+
+function pendingDirectEvidenceGate(state, toolName) {
+  if (!DIRECT_EVIDENCE_TOOLS.has(String(toolName || ""))) return "";
+  const pendingGates = Array.isArray(state?.pendingGates)
+    ? state.pendingGates.map(String).filter(Boolean)
+    : [];
+  const failedAttempts = state?.failedGateAttempts
+    && typeof state.failedGateAttempts === "object"
+    ? state.failedGateAttempts
+    : {};
+  return pendingGates.find((gate) => {
+    const attempt = failedAttempts[gate]
+      && typeof failedAttempts[gate] === "object"
+      ? failedAttempts[gate]
+      : {};
+    return DIRECT_EVIDENCE_RECOVERY_CODES.has(
+      String(attempt.validationErrorCode || "")
+    ) && DIRECT_EVIDENCE_TOOLS.has(String(attempt.nextAction || ""));
+  }) || "";
 }
 
 function mutateRouteBudget(
@@ -930,6 +1165,7 @@ function mutateRouteBudget(
       usage.reservations = next;
       usage.reserved = next.length;
       current.toolRouteUsage = usage;
+      recordAbsentSourceEvidence(current, toolName, callMetadata);
       current.updatedAt = new Date().toISOString();
       atomicWriteJson(statePath, current);
       return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
@@ -959,6 +1195,29 @@ function mutateRouteBudget(
       usage.calls = calls.slice(-limit);
       current.toolRouteUsage = usage;
       recordDirectSourceEvidence(current, toolName, callMetadata);
+      recordAbsentSourceEvidence(current, toolName, callMetadata);
+      const resumedGate = pendingDirectEvidenceGate(current, toolName);
+      if (resumedGate) {
+        const attempts = current.failedGateAttempts && typeof current.failedGateAttempts === "object"
+          ? { ...current.failedGateAttempts }
+          : {};
+        const attempt = attempts[resumedGate] && typeof attempts[resumedGate] === "object"
+          ? { ...attempts[resumedGate] }
+          : {};
+        attempt.recoverySatisfiedBy = String(toolName);
+        attempt.recoverySatisfiedAt = new Date().toISOString();
+        attempts[resumedGate] = attempt;
+        current.failedGateAttempts = attempts;
+      }
+      current.lastToolOutcome = {
+        tool: String(toolName),
+        status: "succeeded",
+        planRevision: String(current.planRevision || ""),
+        activeSliceId: String(current.activeSliceId || ""),
+        mutationGeneration: Math.max(0, Number(current.mutationGeneration || 0)),
+        committedAt: new Date().toISOString(),
+      };
+      commitControlTransition(current);
       current.updatedAt = new Date().toISOString();
       atomicWriteJson(statePath, current);
       return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
@@ -1010,6 +1269,8 @@ function mutateRouteBudget(
       const checkpointAuthorization = taskAuthorizationForState(current);
       return {
         ok: false,
+        taskSessionId: String(current.taskSessionId || taskSessionId || ""),
+        controlEpoch: Math.max(0, Number(current.controlEpoch || 0)),
         errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
         error: `Phase tool-call budget exhausted (${count + reserved}/${limit}).`,
         toolRoute: route,
@@ -1124,7 +1385,15 @@ function commitRouteReservation(
   );
 }
 
-function rollbackRouteReservation(workspaceRoot, taskSessionId, fields, args, toolName, reservationId = "") {
+function rollbackRouteReservation(
+  workspaceRoot,
+  taskSessionId,
+  fields,
+  args,
+  toolName,
+  reservationId = "",
+  callMetadata = null
+) {
   return mutateRouteBudget(
     workspaceRoot,
     taskSessionId,
@@ -1132,7 +1401,8 @@ function rollbackRouteReservation(workspaceRoot, taskSessionId, fields, args, to
     args,
     toolName,
     "rollback",
-    reservationId
+    reservationId,
+    callMetadata
   );
 }
 
@@ -1693,9 +1963,18 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
       : (Array.isArray(state.pendingGates)
         ? state.pendingGates.map(String).filter(Boolean)
         : []);
-    const routeNextAction = routeMissing
-      ? "unreal_task_status"
-      : (pendingGates[0] || "continue_with_current_tool_route");
+    const control = state.controlState && typeof state.controlState === "object"
+      ? state.controlState
+      : {};
+    const requiredControl = control.requiredTool && typeof control.requiredTool === "object"
+      ? control.requiredTool
+      : {};
+    const requiredControlName = String(requiredControl.name || "").trim();
+    const routeNextAction = control.authoritative === true
+      ? (requiredControlName || "continue_with_current_tool_route")
+      : routeMissing
+        ? "unreal_task_status"
+        : (pendingGates[0] || "continue_with_current_tool_route");
     const connectionMatches = taskConnectionMatches(
       state,
       conversationId,
@@ -1716,7 +1995,9 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
       routeMissing,
       pendingGates,
       routeNextAction,
-      routeNextActionIsTool: Boolean(routeMissing || pendingGates.length),
+      routeNextActionIsTool: control.authoritative === true
+        ? Boolean(requiredControlName)
+        : Boolean(routeMissing || pendingGates.length),
       ownsActiveToolRoute: taskOwnsActiveToolRoute(
         state,
         conversationId,
@@ -1968,7 +2249,8 @@ function checkpointMutationViaPython(workspaceRoot, args, modifiedFiles, options
       + "validation=dict((_stdin or {}).get('validation') or {}), "
       + "note=str((_stdin or {}).get('note') or ''), "
       + "preserve_route_usage=True, include_git_changes=False, "
-      + "advance_gate_snapshots=True)"
+      + "advance_gate_snapshots=True, "
+      + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0))"
     ),
     [],
     {
@@ -1980,6 +2262,7 @@ function checkpointMutationViaPython(workspaceRoot, args, modifiedFiles, options
           ? options.validation
           : {},
         note: String(options.note || "automatic checkpoint after successful mutation"),
+        mutationGeneration: Number(options.mutationGeneration || 0),
       },
     }
   );
@@ -2920,4 +3203,6 @@ module.exports = {
   markBuildRecoveryEvidenceViaPython,
   listToolsRouteContext,
   collectProjectActiveToolUnion,
+  scopedAbsentEvidencePath,
+  pendingDirectEvidenceGate,
 };

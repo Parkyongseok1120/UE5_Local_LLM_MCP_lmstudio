@@ -5,6 +5,9 @@ const path = require("node:path");
 const dir = path.join(__dirname);
 const files = fs.readdirSync(dir).filter((f) => /^local_ai_stage.*\.out\.log$/.test(f));
 const by = {};
+const sourceScope = String(process.env.MCP_AUDIT_SOURCE_SCOPE || "Source/")
+  .replace(/\\/g, "/")
+  .replace(/^\/+|\/+$/g, "");
 
 function readLog(filePath) {
   const buf = fs.readFileSync(filePath);
@@ -34,7 +37,14 @@ for (const f of files) {
   const mutPaths = [
     ...text.matchAll(/tool (write_file|replace_in_file|delete_file) (\S+) .*mutOk=true/g),
   ].map((x) => x[2]);
-  const outside = mutPaths.filter((p) => !p.replace(/\\/g, "/").includes("Source/O_Mock"));
+  const outside = mutPaths.filter((value) => {
+    const normalized = String(value || "").replace(/\\/g, "/").replace(/^\/+/, "");
+    return !(
+      normalized === sourceScope
+      || normalized.startsWith(`${sourceScope}/`)
+      || normalized.includes(`/${sourceScope}/`)
+    );
+  });
   by[stage] = by[stage] || [];
   by[stage].push({
     file: f,
@@ -47,7 +57,8 @@ for (const f of files) {
     bounded,
     activeProject: projects[0] || null,
     mutPaths: [...new Set(mutPaths)],
-    outsideOMock: outside,
+    sourceScope,
+    outsideSourceScope: outside,
   });
 }
 

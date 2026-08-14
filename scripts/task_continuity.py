@@ -198,6 +198,7 @@ def record_checkpoint(
     git_discovery_enabled: bool = True,
     discovery_warnings: list[str] | None = None,
     validation: dict[str, Any] | None = None,
+    mutation_generation: int = 0,
     note: str = "",
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -280,6 +281,7 @@ def record_checkpoint(
         ),
         "requiredNextAction": str(required_next_action or "").strip(),
         "validation": dict(validation or {}),
+        "mutationGeneration": max(0, int(mutation_generation or 0)),
         "note": str(note or "")[:1000],
         "recordedAt": iso_utc(current),
     }

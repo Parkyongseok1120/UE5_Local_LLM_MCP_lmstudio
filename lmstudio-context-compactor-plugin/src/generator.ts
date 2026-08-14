@@ -560,22 +560,7 @@ function injectDetachedSideQueryRule(chat: Chat, request: string): boolean {
     + "do not complete a pending gate, do not plan or mutate, and do not replace the active task objective. "
     + "Answer from bounded evidence, then stop; a later continuation resumes the suspended task."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(DETACHED_SIDE_QUERY_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-    }
-    chat.append("system", rule);
-    return true;
-  } catch {
-    return false;
-  }
+  return upsertLeadingSystemRule(chat, DETACHED_SIDE_QUERY_MARKER, rule);
 }
 
 function injectWorkflowStopRule(chat: Chat, blocker: any): boolean {
@@ -588,26 +573,7 @@ function injectWorkflowStopRule(chat: Chat, blocker: any): boolean {
     + "blocker and the exact missing user/project evidence, then end this turn. Do not claim success or a code change."
     + (instruction ? ` Server instruction: ${instruction}` : "")
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(WORKFLOW_STOP_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    chat.append("system", rule);
-    return true;
-  } catch {
-    return false;
-  }
+  return upsertLeadingSystemRule(chat, WORKFLOW_STOP_MARKER, rule);
 }
 
 function workflowStopFinalResponse(blocker: any, objective: string): string {
@@ -648,26 +614,7 @@ function injectTaskRouteOwnershipRule(chat: Chat, plannerAvailable: boolean): bo
       ? "Before any write, call unreal_agent_plan once with the original user request and continue with its returned route."
       : "The mcp/unreal-rag planner provider is missing from this chat. You may inspect source, but do not claim implementation or attempt writes; report that mcp/unreal-rag must be enabled.")
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(TASK_ROUTE_OWNERSHIP_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    chat.append("system", rule);
-    return true;
-  } catch {
-    return false;
-  }
+  return upsertLeadingSystemRule(chat, TASK_ROUTE_OWNERSHIP_MARKER, rule);
 }
 
 function architectureContractGoalText(
@@ -693,13 +640,11 @@ function requiresArchitectureValidation(goal: string, toolDefinitions: any[]): b
   });
   if (!hasTool) return false;
   const textValue = String(goal || "");
-  return /templates_lobby|authoritative\s+multiplayer|architecture|architectural|structure\s+design|design\s+validation|(?:new|independent|standalone|separate)\s+(?:[\w-]+\s+){0,3}(?:system|subsystem|component|service)|(?:system|subsystem|component|service)\s+(?:design|architecture)|구조\s*설계|설계\s*검증|아키텍처|(?:새(?:로운)?|신규|독립(?:적인)?|별도)\s*(?:\S+\s*){0,3}(?:시스템|서브시스템|컴포넌트|서비스)|(?:시스템|서브시스템|컴포넌트|서비스)(?:으로|을|를|의|\s)*(?:설계|구현|추가|신설)/i.test(textValue);
+  return /authoritative\s+multiplayer|architecture|architectural|structure\s+design|design\s+validation|(?:new|independent|standalone|separate)\s+(?:[\w-]+\s+){0,3}(?:system|subsystem|component|service)|(?:system|subsystem|component|service)\s+(?:design|architecture)|구조\s*설계|설계\s*검증|아키텍처|(?:새(?:로운)?|신규|독립(?:적인)?|별도)\s*(?:\S+\s*){0,3}(?:시스템|서브시스템|컴포넌트|서비스)|(?:시스템|서브시스템|컴포넌트|서비스)(?:으로|을|를|의|\s)*(?:설계|구현|추가|신설)/i.test(textValue);
 }
 
 function requiresTaskRoutePlanning(goal: string): boolean {
-  const source = String(goal || "");
-  if (core.isReadOnlyUserGoal(source)) return false;
-  return core.classifyMutationIntent(source).isMutation;
+  return core.classifyUserIntent(String(goal || "")) === "MUTATION";
 }
 
 function requiresFeatureCompletionAudit(goal: string): boolean {
@@ -714,26 +659,7 @@ function injectPreRoutePlannerHandoffRule(chat: Chat): boolean {
     + "the latest real user request. Do not call another read, search, directory, architecture, or evidence tool "
     + "until the server returns taskAuthorization and toolRoute. Never invent those fields."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(PRE_ROUTE_PLANNER_HANDOFF_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    chat.append("system", rule);
-    return true;
-  } catch {
-    return false;
-  }
+  return upsertLeadingSystemRule(chat, PRE_ROUTE_PLANNER_HANDOFF_MARKER, rule);
 }
 
 function injectInitialActiveProjectBootstrapRule(chat: Chat, toolName: string): boolean {
@@ -743,26 +669,7 @@ function injectInitialActiveProjectBootstrapRule(chat: Chat, toolName: string): 
     + "status, or mutation tools in parallel. The active-project response will bind the exact next planner "
     + "action when a project is selected."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(INITIAL_ACTIVE_PROJECT_BOOTSTRAP_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    chat.append("system", rule);
-    return true;
-  } catch {
-    return false;
-  }
+  return upsertLeadingSystemRule(chat, INITIAL_ACTIVE_PROJECT_BOOTSTRAP_MARKER, rule);
 }
 
 function injectToolCatalogRefreshRule(chat: Chat, toolName: string): boolean {
@@ -773,26 +680,7 @@ function injectToolCatalogRefreshRule(chat: Chat, toolName: string): boolean {
     + "This is catalog synchronization only: do not call health, checkpoint, cancel, read, search, or any RAG tool, "
     + "and do not claim that implementation has started. Continue with the refreshed exact route after its result."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(TOOL_CATALOG_REFRESH_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    chat.append("system", rule);
-    return true;
-  } catch {
-    return false;
-  }
+  return upsertLeadingSystemRule(chat, TOOL_CATALOG_REFRESH_MARKER, rule);
 }
 
 function injectServerRequiredToolRule(chat: Chat, toolName: string, requiredArgs: any): boolean {
@@ -804,26 +692,7 @@ function injectServerRequiredToolRule(chat: Chat, toolName: string, requiredArgs
     + `The latest server result requires ${toolName} now. Call that tool exactly once before any other tool or final answer. `
     + `Required argument constraints: ${boundedArgs}. Do not call health, status, checkpoint, reads, or recovery controls instead.`
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(SERVER_REQUIRED_TOOL_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    chat.append("system", rule);
-    return true;
-  } catch {
-    return false;
-  }
+  return upsertLeadingSystemRule(chat, SERVER_REQUIRED_TOOL_MARKER, rule);
 }
 
 function injectServerRequiredToolRepairRule(
@@ -841,26 +710,7 @@ function injectServerRequiredToolRepairRule(
     + "available tool schema. Derive model-owned fields from retained evidence; server-owned fields are injected. "
     + "Do not explain, read, search, checkpoint, call another function name, or return a final answer."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(SERVER_REQUIRED_TOOL_REPAIR_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    chat.append("system", rule);
-    return true;
-  } catch {
-    return false;
-  }
+  return upsertLeadingSystemRule(chat, SERVER_REQUIRED_TOOL_REPAIR_MARKER, rule);
 }
 
 function architectureRecoveryContinuationRequested(goal: string): boolean {
@@ -891,29 +741,7 @@ function injectArchitectureValidationRule(chat: Chat): boolean {
     + "the evidence needed for the contract, targeting under 2500 output tokens before the tool call completes. "
     + "Never replace a concrete callable path with an unresolved 'RPC or local call' option."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(ARCHITECTURE_GATE_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    if (typeof (chat as any).append === "function") {
-      (chat as any).append("system", rule);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
+  return upsertLeadingSystemRule(chat, ARCHITECTURE_GATE_MARKER, rule);
 }
 
 function injectFeatureIntentAtomicRule(chat: Chat, eligibleEvidencePaths: string[] = []): boolean {
@@ -940,44 +768,7 @@ function injectFeatureIntentAtomicRule(chat: Chat, eligibleEvidencePaths: string
     + "proven gap; never invent a robustness-only mutation to make a completed feature look incomplete."
     + evidenceRule
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(FEATURE_INTENT_ATOMIC_MARKER)) {
-        if (!evidenceRule || current.includes(evidenceRule)) return true;
-        const withoutPriorEvidence = current.replace(
-          /\n\[UNREAL_FEATURE_INTENT_TARGET_EVIDENCE\]\n[^\n]*/gu,
-          "",
-        );
-        if (typeof (message as any).replaceText === "function") {
-          (message as any).replaceText(`${withoutPriorEvidence}${evidenceRule}`);
-          return true;
-        }
-        if (typeof (message as any).appendText === "function") {
-          (message as any).appendText(evidenceRule);
-          return true;
-        }
-        return true;
-      }
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    if (typeof (chat as any).append === "function") {
-      (chat as any).append("system", rule);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
+  return upsertLeadingSystemRule(chat, FEATURE_INTENT_ATOMIC_MARKER, rule);
 }
 
 function upsertLeadingSystemRule(chat: Chat, marker: string, rule: string): boolean {
@@ -1086,29 +877,7 @@ function injectFeatureIntentEvidenceRefillRule(
     + "feature from filenames alone, or manufacture a robustness-only change. Once the evidence threshold is satisfied, "
     + "the resolver will be exposed automatically."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(FEATURE_INTENT_EVIDENCE_REFILL_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    if (typeof (chat as any).append === "function") {
-      (chat as any).append("system", rule);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
+  return upsertLeadingSystemRule(chat, FEATURE_INTENT_EVIDENCE_REFILL_MARKER, rule);
 }
 
 function injectEvidenceFirstContractRule(chat: Chat): boolean {
@@ -1118,29 +887,7 @@ function injectEvidenceFirstContractRule(chat: Chat): boolean {
     + "Intent selection, call evidence_first_contract exactly once with mode=codegen. This is a model-facing audit contract, "
     + "not another task-planning phase. Do not inspect project files or submit Feature Intent until that call succeeds."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(EVIDENCE_FIRST_CONTRACT_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    if (typeof (chat as any).append === "function") {
-      (chat as any).append("system", rule);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
+  return upsertLeadingSystemRule(chat, EVIDENCE_FIRST_CONTRACT_MARKER, rule);
 }
 
 function injectArchitectureSubmissionRule(chat: Chat): boolean {
@@ -1151,29 +898,7 @@ function injectArchitectureSubmissionRule(chat: Chat): boolean {
     + "design, call another discovery tool, or ask the user to retry. If a prior proposal failed, follow its retained "
     + "repairSubmission contract and continue until proposalValidation.ok is true."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(ARCHITECTURE_SUBMISSION_MARKER)) return true;
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    if (typeof (chat as any).append === "function") {
-      (chat as any).append("system", rule);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
+  return upsertLeadingSystemRule(chat, ARCHITECTURE_SUBMISSION_MARKER, rule);
 }
 
 function injectArchitectureCoreChangeRule(chat: Chat, jsonPaths: string[]): boolean {
@@ -1188,39 +913,7 @@ function injectArchitectureCoreChangeRule(chat: Chat, jsonPaths: string[]): bool
     + "rejected payload while satisfying direct-source evidence. These are negative constraints only; derive all "
     + "replacement values yourself and do not emit a final answer before validator success."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes("[UNREAL_ARCHITECTURE_CORE_CHANGE_REQUIRED]")) {
-        if (typeof (message as any).replaceText === "function") {
-          (message as any).replaceText(
-            current.replace(
-              /\[UNREAL_ARCHITECTURE_CORE_CHANGE_REQUIRED\][\s\S]*?(?=\n\[|$)/,
-              rule,
-            ),
-          );
-        }
-        return true;
-      }
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    if (typeof (chat as any).append === "function") {
-      (chat as any).append("system", rule);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
+  return upsertLeadingSystemRule(chat, "[UNREAL_ARCHITECTURE_CORE_CHANGE_REQUIRED]", rule);
 }
 
 function injectArchitecturePayloadRepairRule(chat: Chat, jsonPaths: string[]): boolean {
@@ -1235,39 +928,7 @@ function injectArchitecturePayloadRepairRule(chat: Chat, jsonPaths: string[]): b
     + "Populate every listed field from your own source-grounded design; the paths specify serialization shape "
     + "only and do not supply design values. Do not emit final text before validator success."
   );
-  try {
-    const messages = chat.getMessagesArray();
-    for (const message of messages) {
-      if (message.getRole() !== "system") continue;
-      const current = String(message.getText() || "");
-      if (current.includes(ARCHITECTURE_PAYLOAD_REPAIR_MARKER)) {
-        if (typeof (message as any).replaceText === "function") {
-          (message as any).replaceText(
-            current.replace(
-              /\[UNREAL_ARCHITECTURE_PAYLOAD_REPAIR_REQUIRED\][\s\S]*?(?=\n\[|$)/,
-              rule,
-            ),
-          );
-        }
-        return true;
-      }
-      if (typeof (message as any).appendText === "function") {
-        (message as any).appendText(`\n${rule}`);
-        return true;
-      }
-      if (typeof (message as any).replaceText === "function") {
-        (message as any).replaceText(`${current}\n${rule}`);
-        return true;
-      }
-    }
-    if (typeof (chat as any).append === "function") {
-      (chat as any).append("system", rule);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
+  return upsertLeadingSystemRule(chat, ARCHITECTURE_PAYLOAD_REPAIR_MARKER, rule);
 }
 
 function trailingMetaUserMessage(messages: ChatMessage[]): ChatMessage | null {
@@ -1890,7 +1551,7 @@ function stagedArchitectureContractRequired(goal: string): boolean {
   if (/\b(?:implement|create|build|add|extend)\b.{0,48}\b(?:system|subsystem|component|service|feature)\b|구현\s*슬라이스|마이그레이션|생명\s*주기|소유권|(?:시스템|서브시스템|컴포넌트|서비스|기능).{0,32}(?:구현|추가|생성|신설|확장)|(?:구현|추가|생성|신설|확장).{0,32}(?:시스템|서브시스템|컴포넌트|서비스|기능)/i.test(String(goal || ""))) {
     return true;
   }
-  return /templates_lobby|implementation\s+slice|migration\s+(?:order|plan)|lifecycle|alternative|ownership|구현\s*슬라이스|마이그레이션|생명주기|대안|소유권/i.test(
+  return /implementation\s+slice|migration\s+(?:order|plan)|lifecycle|alternative|ownership|구현\s*슬라이스|마이그레이션|생명주기|대안|소유권/i.test(
     String(goal || ""),
   );
 }
@@ -2550,6 +2211,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   let featureIntentRediscoveryActive = false;
   let featureIntentRediscoveryRemaining = 0;
   nextCheckpoint.compactionGeneration = Number(checkpoint?.compactionGeneration || 0);
+  const serverControlV2 = core.compactServerControl(nextCheckpoint?.serverControl);
+  const serverControlV2Active = Boolean(serverControlV2);
   const trailingMetaUser = trailingMetaUserMessage(messages);
   const architectureGoal = latestUserGoalText(messages);
   const detachedSideQueryActive = Boolean(nextCheckpoint?.sideQuery?.active);
@@ -2570,9 +2233,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   ).trim();
   const workflowStopActive = Boolean(
     !detachedSideQueryActive
-    && nextCheckpoint?.semanticBlocker?.active === true
-    && nextCheckpoint.semanticBlocker.stopCurrentWorkflow === true
-    && !String(nextCheckpoint.semanticBlocker.clearOnTool || "").trim()
+    && (
+      ["workflow_stop", "complete", "await_user"].includes(
+        String(serverControlV2?.disposition || ""),
+      )
+      || (
+        !serverControlV2Active
+        && nextCheckpoint?.semanticBlocker?.active === true
+        && nextCheckpoint.semanticBlocker.stopCurrentWorkflow === true
+        && !String(nextCheckpoint.semanticBlocker.clearOnTool || "").trim()
+      )
+    )
   );
   if (workflowStopActive) {
     injectWorkflowStopRule(history, nextCheckpoint.semanticBlocker);
@@ -2587,6 +2258,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const serverOwnedArchitectureControl = Boolean(nextCheckpoint?.architectureControl);
   const architectureValidationRequired = !detachedSideQueryActive
     && !workflowStopActive
+    && !serverControlV2Active
     && !serverOwnedArchitectureControl && !trailingMetaUser && (
     requiresArchitectureValidation(authoritativeGoal, toolDefinitions)
     || persistedArchitectureRecovery
@@ -2647,6 +2319,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     : null;
   const catalogRefreshNeeded = Boolean(
     !detachedSideQueryActive
+    && !serverControlV2Active
     && routeOwnershipAvailable
     && exactToolRouteAvailable
     && routedMutationTools.length > 0
@@ -2787,6 +2460,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   ).some((name: any) => toolNamesMatch(advertisedRequiredToolName, String(name || ""))));
   const invalidRequiredToolContract = Boolean(
     !detachedSideQueryActive
+    && !serverControlV2Active
     && advertisedRequiredToolName
     && !advertisedRequiredToolExists
     && !advertisedRequiredToolIsRouted
@@ -2797,6 +2471,22 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && !advertisedRequiredToolExists
     && advertisedRequiredToolIsRouted
   );
+  if (
+    serverControlV2Active
+    && serverControlV2?.requiredTool
+    && !advertisedRequiredToolExists
+  ) {
+    await appendEventBestEffort(sessionId, {
+      type: "server_control_schema_missing",
+      at: new Date().toISOString(),
+      epoch: Number(serverControlV2.epoch),
+      requiredTool: String(serverControlV2.requiredTool.name || ""),
+    });
+    throw new Error(
+      `Server control epoch ${serverControlV2.epoch} requires ${serverControlV2.requiredTool.name}, `
+      + "but its MCP schema is not present in the current catalog. Refresh/reconnect the MCP providers before retrying.",
+    );
+  }
   if (invalidRequiredToolContract) {
     // A server-owned exact-tool contract must resolve either to an advertised
     // definition or to the authoritative active route. Older RAG envelopes
@@ -2964,6 +2654,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     EVIDENCE_FIRST_CONTRACT_TOOL_NAME,
   );
   if (
+    !serverControlV2Active
+    &&
     evidenceFirstContractSatisfied
     && toolNamesMatch(
       EVIDENCE_FIRST_CONTRACT_TOOL_NAME,
@@ -2979,6 +2671,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   );
   const evidenceFirstContractForced = Boolean(
     !detachedSideQueryActive
+    && !serverControlV2Active
     && !workflowStopActive
     && routeOwnershipAvailable
     && plannerPhaseActive
@@ -3009,6 +2702,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   );
   const featureIntentEvidenceRefillActive = Boolean(
     !detachedSideQueryActive
+    && !serverControlV2Active
     && !workflowStopActive
     && !evidenceFirstContractForced
     && evidenceFirstContractReady
@@ -3039,6 +2733,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   );
   const featureIntentDiscoveryHandoffForced = Boolean(
     !detachedSideQueryActive
+    && !serverControlV2Active
     && !workflowStopActive
     && !evidenceFirstContractForced
     && !featureIntentEvidenceRefillActive
@@ -3105,7 +2800,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     )
   );
   const architectureEvidenceRefillActive = Boolean(
-    architectureValidationRequired
+    !serverControlV2Active
+    && architectureValidationRequired
     && architectureTool
     && architectureStatus.attempted
     && architectureStatus.lastValidationFailed
@@ -3119,7 +2815,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && !requiredArchitectureTool
   );
   const architectureToolForced = Boolean(
-    architectureValidationRequired
+    !serverControlV2Active
+    && architectureValidationRequired
     && !architectureStatus.validated
     && architectureTool
     && (
@@ -3135,7 +2832,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     }
   }
   const initialActiveProjectBootstrapForced = Boolean(
-    !workflowStopActive
+    !serverControlV2Active
+    && !workflowStopActive
     && !routeOwnershipAvailable
     && activeProjectBootstrapTool
     && plannerTool
@@ -3151,7 +2849,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     );
   }
   const preRoutePlannerForced = Boolean(
-    !workflowStopActive
+    !serverControlV2Active
+    && !workflowStopActive
     && !routeOwnershipAvailable
     && plannerTool
     && !trailingMetaUser
@@ -3249,14 +2948,26 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       networkedContract: networkedContractRequired,
     },
   );
-  const semanticForbiddenTools = Array.isArray(nextCheckpoint?.semanticBlocker?.forbiddenTools)
+  const semanticForbiddenTools = !serverControlV2Active
+    && Array.isArray(nextCheckpoint?.semanticBlocker?.forbiddenTools)
     ? nextCheckpoint.semanticBlocker.forbiddenTools.map((name: any) => String(name || "").trim()).filter(Boolean)
     : [];
   const toolAllowedBySemanticBlocker = (tool: any): boolean => {
     const name = String(tool?.function?.name || tool?.name || "").trim();
     return !semanticForbiddenTools.some((forbidden: string) => toolNamesMatch(forbidden, name));
   };
-  const phaseToolDefinitions = workflowStopActive
+  const serverAllowedTools = Array.isArray(serverControlV2?.allowedTools)
+    ? serverControlV2.allowedTools.map((name: any) => String(name || "").trim()).filter(Boolean)
+    : [];
+  const serverProjectedToolDefinitions = toolDefinitions.filter((tool: any) => (
+    serverAllowedTools.some((allowed: string) => toolNamesMatch(
+      allowed,
+      tool?.function?.name || tool?.name || "",
+    ))
+  ));
+  const phaseToolDefinitions = serverControlV2Active
+    ? serverProjectedToolDefinitions
+    : workflowStopActive
     ? []
     : detachedSideQueryActive
     ? toolDefinitions.filter((tool: any) => detachedSideQueryToolAllowed(
@@ -3302,7 +3013,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   // Exact phase filtering also closes the tools/list refresh race between the
   // two Unreal MCP providers. Architecture recovery already constructs its
   // own narrower catalog, so it remains authoritative while active.
-  const routeSafePhaseToolDefinitions = routeOwnershipAvailable
+  const routeSafePhaseToolDefinitions = serverControlV2Active
+    ? phaseToolDefinitions
+    : routeOwnershipAvailable
     ? phaseToolDefinitions.filter((tool: any) => activeRouteBootstrapToolAllowed(tool, nextCheckpoint))
     : phaseToolDefinitions;
   const contractAwareRouteSafePhaseToolDefinitions = routeSafePhaseToolDefinitions.map((tool: any) => (
@@ -3311,7 +3024,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       ? featureIntentContractTool
       : tool
   ));
-  const routedToolDefinitions = detachedSideQueryActive
+  const routedToolDefinitions = serverControlV2Active
+    ? contractAwareRouteSafePhaseToolDefinitions
+    : detachedSideQueryActive
     ? contractAwareRouteSafePhaseToolDefinitions
     : routeOwnershipAvailable
     && exactToolRouteAvailable
@@ -3325,7 +3040,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         TASK_CHECKPOINT_TOOL_NAME,
         tool?.function?.name || tool?.name || "",
       )));
-  const boundedToolDefinitions = routedToolDefinitions.filter((tool: any) => {
+  const boundedToolDefinitions = serverControlV2Active
+    ? routedToolDefinitions
+    : routedToolDefinitions.filter((tool: any) => {
     const name = String(tool?.function?.name || tool?.name || "");
     return !unchangedControlTools.some((blocked) => toolNamesMatch(blocked, name));
   });
@@ -3623,15 +3340,27 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   // deterministic final response so both real and simulated tool calls are
   // impossible and the user immediately sees why work stopped.
   if (workflowStopActive) {
-    const content = workflowStopFinalResponse(
-      nextCheckpoint.semanticBlocker,
-      `${authoritativeGoal}\n${architectureGoal}`,
-    );
+    const content = serverControlV2Active
+      ? (
+        serverControlV2?.disposition === "complete"
+          ? "The server reports that the active task is complete. No further tool call is permitted."
+          : serverControlV2?.disposition === "await_user"
+          ? `The server is waiting for user input${serverControlV2?.blocker?.code ? ` (${serverControlV2.blocker.code})` : ""}. No tool call is permitted until the user responds.`
+          : `The server stopped the current workflow${serverControlV2?.blocker?.code ? ` (${serverControlV2.blocker.code})` : ""}. No further tool call is permitted for this control epoch.`
+      )
+      : workflowStopFinalResponse(
+        nextCheckpoint.semanticBlocker,
+        `${authoritativeGoal}\n${architectureGoal}`,
+      );
     ctl.fragmentGenerated(content, { reasoningType: "none" });
     await appendEventBestEffort(sessionId, {
       type: "workflow_stop_final_emitted",
       at: new Date().toISOString(),
-      errorCode: String(nextCheckpoint?.semanticBlocker?.errorCode || "SERVER_WORKFLOW_BLOCKED").slice(0, 120),
+      errorCode: String(
+        serverControlV2?.blocker?.code
+        || nextCheckpoint?.semanticBlocker?.errorCode
+        || (serverControlV2?.disposition === "complete" ? "TASK_COMPLETE" : "SERVER_WORKFLOW_BLOCKED"),
+      ).slice(0, 120),
       targetModelInvoked: false,
       toolRequestCount: 0,
     });
@@ -3678,6 +3407,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && !core.isNonToolNextAction(nextCheckpoint.requiredNextTool.name),
   );
   const toolControlPlaneEnforced = strictToolControlPlane
+    || serverControlV2Active
     || requiredToolGateActive
     || architectureToolForced
     || architectureEvidenceRefillActive
@@ -4464,9 +4194,11 @@ export {
   generate,
   injectFeatureIntentAtomicRule,
   injectPreRoutePlannerHandoffRule,
+  injectServerRequiredToolRule,
   injectTaskRouteOwnershipRule,
   networkedArchitectureContractRequired,
   requiresArchitectureValidation,
   reconcilePendingToolCalls,
+  upsertLeadingSystemRule,
 };
 // End of module.

@@ -242,7 +242,8 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
     }
     metadata_only = derive_tool_route(metadata_only_state)
     assert metadata_only["roleSession"] == "executor"
-    assert "replace_in_file" in metadata_only["activeTools"]
+    assert "apply_edit_bundle" in metadata_only["activeTools"]
+    assert "replace_in_file" not in metadata_only["activeTools"]
 
     validated_state = _state(
         writes=True,
@@ -263,7 +264,7 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
         assert validate_phase_tool_route(route) == []
 
 
-def test_compile_plan_recommends_build_without_hard_blocking_diagnostics(
+def test_compile_plan_exposes_diagnostics_but_enforces_one_control_obligation(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -283,13 +284,21 @@ def test_compile_plan_recommends_build_without_hard_blocking_diagnostics(
     )
     authorization = started["taskAuthorization"]
 
-    static_check = authorize_task_tool(
-        tmp_path,
-        tool_name="static_validate_project",
-        task_authorization=authorization,
-        arguments={},
-    )
-    assert static_check["ok"] is True
+    for tool_name, arguments in (
+        ("static_validate_project", {}),
+        ("read_file", {"path": "Source/Demo/Foo.cpp"}),
+        ("unreal_code_sketch_claim_validate", {}),
+    ):
+        denied = authorize_task_tool(
+            tmp_path,
+            tool_name=tool_name,
+            task_authorization=authorization,
+            arguments=arguments,
+        )
+        assert denied["ok"] is False
+        assert denied["errorCode"] == "TASK_CONTROL_OBLIGATION_REQUIRED"
+        assert denied["nextAction"] == "build_unreal_project"
+        assert denied["control"]["authoritative"] is True
 
     build = authorize_task_tool(
         tmp_path,
@@ -298,14 +307,6 @@ def test_compile_plan_recommends_build_without_hard_blocking_diagnostics(
         arguments={},
     )
     assert build["ok"] is True
-
-    source_read = authorize_task_tool(
-        tmp_path,
-        tool_name="read_file",
-        task_authorization=authorization,
-        arguments={"path": "Source/Demo/Foo.cpp"},
-    )
-    assert source_read["ok"] is True
 
 
 def test_successful_build_completion_releases_route_ownership(
@@ -561,6 +562,21 @@ def test_invalidated_code_gate_clears_derived_compiler_proof() -> None:
         "status": "not_required",
         "symbols": [],
     }
+
+
+def test_control_epoch_changes_only_for_semantic_control_transitions() -> None:
+    state = _state(writes=True)
+    state["controlEpoch"] = "corrupt-legacy-value"
+
+    refreshed = _refresh_server_owned_state(state)
+    assert refreshed["controlEpoch"] == 1
+
+    unchanged = _refresh_server_owned_state(refreshed)
+    assert unchanged["controlEpoch"] == 1
+
+    unchanged["status"] = "completed"
+    transitioned = _refresh_server_owned_state(unchanged)
+    assert transitioned["controlEpoch"] == 2
 
 
 def test_build_recovery_scope_is_shared_and_fail_closed(
@@ -973,6 +989,9 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     )
     assert exhausted["ok"] is False
     assert exhausted["errorCode"] == "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
+    assert exhausted["taskSessionId"] == started["taskSessionId"]
+    assert isinstance(exhausted["controlEpoch"], int)
+    assert exhausted["controlEpoch"] >= 0
     assert "action=record" in exhausted["agentInstruction"]
     assert exhausted["nextAction"] == "unreal_task_checkpoint"
     assert exhausted["nextActionArgs"]["action"] == "record"
@@ -1767,9 +1786,9 @@ def test_stale_route_and_suffix_path_escape_fail_closed(
 
     stale = authorize_task_tool(
         tmp_path,
-        tool_name="replace_in_file",
+        tool_name="apply_edit_bundle",
         task_authorization={**authorization, "routeHash": "stale"},
-        arguments={"path": selected_path},
+        arguments={"files": [{"path": selected_path}]},
     )
     assert stale["ok"] is False
     assert stale["errorCode"] == "TASK_ROUTE_STALE"
@@ -1779,17 +1798,17 @@ def test_stale_route_and_suffix_path_escape_fail_closed(
 
     exact = authorize_task_tool(
         tmp_path,
-        tool_name="replace_in_file",
+        tool_name="apply_edit_bundle",
         task_authorization=authorization,
-        arguments={"path": selected_path},
+        arguments={"files": [{"path": selected_path}]},
     )
     assert exact["ok"] is True
 
     suffix_escape = authorize_task_tool(
         tmp_path,
-        tool_name="replace_in_file",
+        tool_name="apply_edit_bundle",
         task_authorization=authorization,
-        arguments={"path": f"Source/Other/{selected_path}"},
+        arguments={"files": [{"path": f"Source/Other/{selected_path}"}]},
     )
     assert suffix_escape["ok"] is False
     assert suffix_escape["errorCode"] == "TASK_SLICE_TARGET_MISMATCH"
@@ -1797,7 +1816,7 @@ def test_stale_route_and_suffix_path_escape_fail_closed(
     assert suffix_escape["taskAuthorization"]["routePhase"] == "executor"
 
 
-def test_executor_can_rebind_next_code_generation_slice_without_replan(
+def test_executor_cannot_rebind_code_generation_slice_before_mutation(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1835,21 +1854,13 @@ def test_executor_can_rebind_next_code_generation_slice_without_replan(
         task_authorization=first["taskAuthorization"],
         arguments={"targetFiles": [second_path]},
     )
-    assert gate_auth["ok"] is True
-    second = task_record_gate(
-        tmp_path,
-        gate_name="unreal_code_sketch_claim_validate",
-        task_authorization=first["taskAuthorization"],
-        input_payload={"sketch": "class ASecond;", "changeKind": "new_file"},
-        evidence={"ok": True},
-        target_snapshots=[{"path": second_path, "exists": False, "fileHash": ""}],
-    )
-    assert second["ok"] is True
-    assert second["toolRoute"]["selectedSlice"]["files"] == [second_path]
-    assert second["taskAuthorization"]["planRevision"] == first["taskAuthorization"]["planRevision"]
+    assert gate_auth["ok"] is False
+    assert gate_auth["errorCode"] == "TASK_CONTROL_OBLIGATION_REQUIRED"
+    assert gate_auth["nextAction"] == "write_file"
+    assert gate_auth["reexecutionBlocked"] is True
 
 
-def test_compile_fix_executor_can_rebind_next_error_slice_without_replan(
+def test_compile_fix_executor_cannot_replace_sketch_before_mutation(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1886,18 +1897,10 @@ def test_compile_fix_executor_can_rebind_next_error_slice_without_replan(
         task_authorization=first["taskAuthorization"],
         arguments={"targetFiles": [second_path]},
     )
-    assert gate_auth["ok"] is True
-    second = task_record_gate(
-        tmp_path,
-        gate_name="unreal_code_sketch_claim_validate",
-        task_authorization=first["taskAuthorization"],
-        input_payload={"sketch": "class ASecond;", "changeKind": "existing_file"},
-        evidence={"ok": True},
-        target_snapshots=[{"path": second_path, "exists": True, "fileHash": "second"}],
-    )
-    assert second["ok"] is True
-    assert second["toolRoute"]["selectedSlice"]["files"] == [second_path]
-    assert second["taskAuthorization"]["planRevision"] == first["taskAuthorization"]["planRevision"]
+    assert gate_auth["ok"] is False
+    assert gate_auth["errorCode"] == "TASK_CONTROL_OBLIGATION_REQUIRED"
+    assert gate_auth["nextAction"] == "replace_in_file"
+    assert gate_auth["reexecutionBlocked"] is True
 
 
 def test_gate_target_snapshots_bind_greenfield_slice_for_executor(

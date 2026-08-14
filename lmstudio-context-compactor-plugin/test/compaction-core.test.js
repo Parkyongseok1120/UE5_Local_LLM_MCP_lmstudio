@@ -42,6 +42,237 @@ test("checkpoint preserves required next tool and exact signature contract", () 
   assert.equal(core.validateCheckpoint(checkpoint), true);
 });
 
+test("control v2 projects the highest epoch and ignores nested legacy actions", () => {
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "Fix the compile error" },
+    { role: "tool", content: JSON.stringify({
+      control: {
+        version: 2,
+        epoch: 5,
+        taskSessionId: "task-control-v2",
+        routeHash: "route-5",
+        phase: "implementation",
+        disposition: "require_tool",
+        requiredTool: { name: "replace_in_file", args: { path: "Source/Demo.cpp" } },
+        allowedTools: ["replace_in_file"],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
+      nested: {
+        requiredNextTool: "search_files",
+        nextAction: "read_file",
+        nextActionIsTool: true,
+      },
+    }) },
+    { role: "tool", content: JSON.stringify({
+      control: {
+        version: 2,
+        epoch: 4,
+        taskSessionId: "task-control-v2",
+        routeHash: "route-4",
+        phase: "discovery",
+        disposition: "require_tool",
+        requiredTool: { name: "search_files", args: {} },
+        allowedTools: ["search_files"],
+        retryPolicy: { sameSemanticInput: "once" },
+      },
+      requiredNextTool: "read_file_range",
+    }) },
+  ]);
+
+  assert.equal(checkpoint.serverControl.epoch, 5);
+  assert.equal(checkpoint.serverControl.routeHash, "route-5");
+  assert.equal(checkpoint.requiredNextTool.name, "replace_in_file");
+  assert.deepEqual(checkpoint.requiredNextTool.args, { path: "Source/Demo.cpp" });
+  assert.deepEqual(checkpoint.toolRoute.activeTools, ["replace_in_file"]);
+  assert.ok(checkpoint.diagnostics.includes("controlEpochRegression=4<5"));
+  assert.equal(core.validateCheckpoint(checkpoint), true);
+});
+
+test("persisted read text mirror advances an exact cross-server gate", () => {
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "finish the local play slice" },
+    { role: "tool", toolResults: [{
+      toolCallId: "read-required-source",
+      name: "read_file",
+      content: JSON.stringify({
+        ok: true,
+        status: "direct_source_evidence_recorded",
+        control: {
+          version: 2,
+          epoch: 5,
+          taskSessionId: "task-cross-server",
+          routeHash: "route-5",
+          phase: "verifier",
+          disposition: "require_tool",
+          requiredTool: {
+            name: "unreal_feature_intent_resolve",
+            args: { taskAuthorization: { taskSessionId: "task-cross-server" } },
+          },
+          allowedTools: ["unreal_feature_intent_resolve"],
+          retryPolicy: { sameSemanticInput: "once" },
+        },
+        fileContent: "void StartLocalPlay() {}\n",
+      }),
+    }] },
+  ]);
+
+  assert.equal(checkpoint.serverControl.epoch, 5);
+  assert.equal(checkpoint.requiredNextTool.name, "unreal_feature_intent_resolve");
+  assert.deepEqual(checkpoint.toolRoute.activeTools, ["unreal_feature_intent_resolve"]);
+  assert.equal(core.validateCheckpoint(checkpoint), true);
+});
+
+test("terminal control v2 cannot resurrect an older required action", () => {
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "Finish the task" },
+    { role: "tool", content: JSON.stringify({
+      control: {
+        version: 2,
+        epoch: 9,
+        taskSessionId: "task-control-v2",
+        routeHash: "route-9",
+        phase: "complete",
+        disposition: "complete",
+        allowedTools: [],
+        retryPolicy: { sameSemanticInput: "forbidden" },
+      },
+      stale: {
+        requiredNextTool: "build_unreal_project",
+        requiredNextToolArgs: { configuration: "Development" },
+      },
+    }) },
+  ]);
+
+  assert.equal(checkpoint.serverControl.disposition, "complete");
+  assert.equal(checkpoint.requiredNextTool, null);
+  assert.equal(checkpoint.toolRoute, null);
+});
+
+test("malformed declared control v2 fails closed without mining nested legacy actions", () => {
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "continue" },
+    { role: "tool", content: JSON.stringify({
+      control: {
+        version: 2,
+        epoch: "not-an-epoch",
+        taskSessionId: "task-control-v2",
+        routeHash: "route-invalid",
+        phase: "implementation",
+        disposition: "require_tool",
+        requiredTool: { name: "replace_in_file", args: {} },
+        allowedTools: ["replace_in_file"],
+      },
+      nested: {
+        requiredNextTool: "replace_in_file",
+        nextAction: "build_unreal_project",
+        nextActionIsTool: true,
+      },
+    }) },
+  ]);
+
+  assert.equal(checkpoint.serverControl, null);
+  assert.equal(checkpoint.requiredNextTool, null);
+  assert.equal(checkpoint.toolRoute, null);
+  assert.ok(checkpoint.diagnostics.includes("invalidServerControlV2=fail_closed"));
+});
+
+test("RC2 replay B/C: checkpoint precedence holds until a newer server epoch resumes deferred intent", () => {
+  const checkpointRequired = {
+    control: {
+      version: 2,
+      epoch: 30,
+      taskSessionId: "task-replay-bc",
+      routeHash: "route-checkpoint",
+      phase: "checkpoint",
+      disposition: "require_tool",
+      requiredTool: { name: "unreal_task_checkpoint", args: { action: "record" } },
+      allowedTools: ["unreal_task_checkpoint"],
+      retryPolicy: { sameSemanticInput: "once" },
+    },
+    deferred: {
+      requiredNextTool: "unreal_feature_intent_resolve",
+      nextAction: "unreal_feature_intent_resolve",
+    },
+  };
+  const before = core.buildCheckpoint([
+    { role: "user", content: "현재 구현의 첫 미완성 기능을 완성해줘" },
+    { role: "tool", content: JSON.stringify(checkpointRequired) },
+  ]);
+  assert.equal(before.requiredNextTool.name, "unreal_task_checkpoint");
+  assert.deepEqual(before.requiredNextTool.args, { action: "record" });
+
+  const after = core.buildCheckpoint([
+    { role: "user", content: "현재 구현의 첫 미완성 기능을 완성해줘" },
+    { role: "tool", content: JSON.stringify(checkpointRequired) },
+    { role: "assistant", toolCalls: [{
+      id: "checkpoint",
+      name: "unreal_task_checkpoint",
+      arguments: { action: "record" },
+    }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "checkpoint",
+      name: "unreal_task_checkpoint",
+      content: JSON.stringify({
+        ok: true,
+        control: {
+          version: 2,
+          epoch: 31,
+          taskSessionId: "task-replay-bc",
+          routeHash: "route-feature-intent",
+          phase: "feature_intent",
+          disposition: "require_tool",
+          requiredTool: { name: "unreal_feature_intent_resolve", args: {} },
+          allowedTools: ["unreal_feature_intent_resolve"],
+          retryPolicy: { sameSemanticInput: "allowed" },
+        },
+      }),
+    }] },
+  ], before);
+  assert.equal(after.serverControl.epoch, 31);
+  assert.equal(after.requiredNextTool.name, "unreal_feature_intent_resolve");
+  assert.deepEqual(after.toolRoute.activeTools, ["unreal_feature_intent_resolve"]);
+});
+
+test("RC2 replay G: hard-compacted repeated blocker cannot resurrect its old write route", () => {
+  const messages = [
+    { role: "user", content: "구현을 계속해줘" },
+    { role: "tool", content: JSON.stringify({
+      control: {
+        version: 2,
+        epoch: 40,
+        taskSessionId: "task-replay-g",
+        routeHash: "route-write",
+        phase: "implementation",
+        disposition: "require_tool",
+        requiredTool: { name: "replace_in_file", args: { path: "Source/Demo.cpp" } },
+        allowedTools: ["replace_in_file"],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
+    }) },
+    { role: "tool", content: JSON.stringify({
+      requiredNextTool: "replace_in_file",
+      control: {
+        version: 2,
+        epoch: 41,
+        taskSessionId: "task-replay-g",
+        routeHash: "route-rediscover",
+        phase: "discovery",
+        disposition: "rediscover",
+        allowedTools: ["search_files", "read_file_range"],
+        retryPolicy: { sameSemanticInput: "forbidden" },
+        blocker: { code: "REPEATED_GATE_BLOCKER", fingerprint: "repeat-g" },
+      },
+    }) },
+  ];
+  const checkpoint = core.buildCheckpoint(messages);
+  const compacted = core.compactSnapshots(messages, checkpoint, { recentCompleteTurns: 0 });
+  const rebuilt = core.buildCheckpoint(compacted, checkpoint);
+  assert.equal(rebuilt.serverControl.epoch, 41);
+  assert.equal(rebuilt.serverControl.disposition, "rediscover");
+  assert.equal(rebuilt.requiredNextTool, null);
+  assert.deepEqual(rebuilt.toolRoute.activeTools, ["search_files", "read_file_range"]);
+});
+
 test("checkpoint recovery nextAction outranks its post-checkpoint requiredNextAction", () => {
   const checkpoint = core.buildCheckpoint([
     { role: "user", content: "continue" },
@@ -654,6 +885,12 @@ test("tool name matching accepts LM Studio provider-qualified MCP paths", () => 
     core.toolNamesMatch("read_file", "mcp/unreal-agent/prefixed_read_file"),
     false,
   );
+  assert.equal(core.toolNamesMatch("read_file", "mcp/other/not_read_file"), false);
+  assert.equal(core.toolNamesMatch("read_file", "mcp__other__not_read_file"), false);
+  assert.deepEqual(
+    core.parseProviderQualifiedToolName("mcp/unreal-agent/read_file"),
+    { qualified: true, functionName: "read_file" },
+  );
 });
 
 test("mutation intent classification is shared across Korean read and write goals", () => {
@@ -882,6 +1119,9 @@ test("read-only side query suspends and continuation restores an active write ob
 });
 
 test("read-only classifier does not capture a request that also asks for a fix", () => {
+  assert.equal(core.classifyUserIntent("지금 프로젝트 구조만 알려줘"), "READ_ONLY");
+  assert.equal(core.classifyUserIntent("프로젝트 구조를 분석하고 문제를 고쳐줘"), "MUTATION");
+  assert.equal(core.classifyUserIntent("그 기능은 어떨까"), "AMBIGUOUS");
   assert.equal(core.isReadOnlyUserGoal("지금 프로젝트 구조만 알려줘"), true);
   assert.equal(core.isReadOnlyUserGoal("프로젝트 구조를 분석하고 문제를 고쳐줘"), false);
   assert.equal(core.isReadOnlyUserGoal("분석만 하지 말고 실제 문제를 고쳐줘"), false);
@@ -1263,6 +1503,80 @@ test("checkpoint retains bounded semantic anchors from LM Studio read_file sourc
   assert.ok(read.semanticAnchors.some((line) => line.includes("UFUNCTION(Server, Reliable)")));
   assert.ok(read.semanticAnchors.some((line) => line.includes("ServerPlaceStone")));
   assert.match(core.summarizeOldMessages(messages, checkpoint), /ServerPlaceStone/);
+});
+
+test("RC2 replay E: working set retains exact selected-slice code and merges covered ranges by hash", () => {
+  const sourcePath = "Source/Demo/RuleEngine.cpp";
+  const contentHash = "b".repeat(64);
+  const messages = [
+    { role: "user", content: "implement the selected slice" },
+    { role: "tool", content: JSON.stringify({ selectedSlice: { id: "slice-1", files: [sourcePath] } }) },
+    { role: "assistant", toolCalls: [{
+      id: "range-1",
+      name: "read_file_range",
+      arguments: { path: sourcePath, startLine: 10, endLine: 20 },
+    }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "range-1",
+      name: "read_file_range",
+      content: JSON.stringify({
+        contentHash,
+        content: "int32 FRuleEngine::Evaluate()\n{\n    return 1;\n}\n",
+      }),
+    }] },
+    { role: "assistant", toolCalls: [{
+      id: "range-2",
+      name: "read_file_range",
+      arguments: { path: sourcePath, startLine: 18, endLine: 30 },
+    }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "range-2",
+      name: "read_file_range",
+      content: JSON.stringify({
+        contentHash,
+        content: "bool FRuleEngine::IsLegal() const\n{\n    return true;\n}\n",
+      }),
+    }] },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  const evidence = checkpoint.evidenceFacts.find((fact) => fact.path === sourcePath);
+  assert.deepEqual(evidence.coveredRanges, [[10, 30]]);
+  assert.equal(checkpoint.workingSet.length, 1);
+  assert.equal(checkpoint.workingSet[0].path, sourcePath);
+  assert.match(checkpoint.workingSet[0].content, /FRuleEngine::IsLegal/);
+  const compacted = core.compactSnapshots(messages, checkpoint, { recentCompleteTurns: 0 });
+  assert.match(core.textOf(compacted[0]), /workingSetExactCode=/);
+  assert.match(core.textOf(compacted[0]), /FRuleEngine::IsLegal/);
+  assert.equal(core.validateCheckpoint(checkpoint), true);
+});
+
+test("successful mutation invalidates the changed file from the exact working set", () => {
+  const sourcePath = "Source/Demo/RuleEngine.cpp";
+  const messages = [
+    { role: "user", content: "fix the rule" },
+    { role: "tool", content: JSON.stringify({ selectedSlice: { files: [sourcePath] } }) },
+    { role: "assistant", toolCalls: [{ id: "read", name: "read_file", arguments: { path: sourcePath } }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "read",
+      name: "read_file",
+      content: JSON.stringify({ contentHash: "c".repeat(64), content: "int32 OldRule = 1;\n" }),
+    }] },
+    { role: "assistant", toolCalls: [{
+      id: "write",
+      name: "replace_in_file",
+      arguments: { path: sourcePath, oldText: "1", newText: "2" },
+    }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "write",
+      name: "replace_in_file",
+      content: JSON.stringify({ ok: true, mutationGeneration: 1 }),
+    }] },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.deepEqual(checkpoint.workingSet, []);
+  assert.equal(checkpoint.evidenceFacts.some((fact) => fact.path === sourcePath), false);
 });
 
 test("cached repeat reads keep semantic anchors and emit an explicit no-reread ledger", () => {
