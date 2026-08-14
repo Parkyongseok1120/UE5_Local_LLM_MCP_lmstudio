@@ -32,9 +32,19 @@ from engine_header_evidence import _signature_contracts  # noqa: E402
 NO_INDEX = Path(__file__).resolve().parent / "_no_such_index.sqlite"
 
 
+@pytest.mark.parametrize(
+    ("host_platform", "expected_key"),
+    [
+        ("win32", "synthetic39.h"),
+        ("linux", "Synthetic39.h"),
+        ("darwin", "Synthetic39.h"),
+    ],
+)
 def test_engine_header_catalog_python_fallback_avoids_per_file_resolve(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    host_platform: str,
+    expected_key: str,
 ) -> None:
     header_root = tmp_path / "Engine" / "Source" / "Runtime" / "Core" / "Public"
     header_root.mkdir(parents=True)
@@ -51,10 +61,13 @@ def test_engine_header_catalog_python_fallback_avoids_per_file_resolve(
 
     monkeypatch.setattr(engine_header_evidence, "_contained", reject_slow_resolve)
 
-    catalog = engine_header_evidence._header_catalog(tmp_path)
+    catalog = engine_header_evidence._header_catalog(
+        tmp_path,
+        host_platform=host_platform,
+    )
 
     assert len(catalog) == 40
-    assert "synthetic39.h" in catalog
+    assert expected_key in catalog
     engine_header_evidence.clear_engine_header_catalog_cache()
 
 
