@@ -10,6 +10,20 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from unreal_rag_mcp import McpServer  # noqa: E402
 
 
+def _wait_for_logging_heartbeat(
+    sent: list[dict],
+    *,
+    timeout_seconds: float = 1.0,
+) -> list[dict]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        logs = [item for item in sent if item.get("method") == "notifications/message"]
+        if logs:
+            return logs
+        time.sleep(0.005)
+    return []
+
+
 def test_progress_token_streams_phases_heartbeats_and_completion(tmp_path: Path) -> None:
     server = McpServer(tmp_path / "missing.sqlite")
     sent: list[dict] = []
@@ -57,10 +71,9 @@ def test_long_tool_without_progress_token_emits_logging_heartbeat(tmp_path: Path
         {},
         interval_seconds=0.01,
     )
-    time.sleep(0.025)
+    logs = _wait_for_logging_heartbeat(sent)
     server.result(42, {"ok": True})
 
-    logs = [item for item in sent if item.get("method") == "notifications/message"]
     assert logs
     assert "unreal_code_sketch_claim_validate" in logs[0]["params"]["data"]
     assert "elapsed" in logs[0]["params"]["data"]
@@ -78,10 +91,9 @@ def test_cold_symbol_lookup_without_progress_token_emits_heartbeat(tmp_path: Pat
         {},
         interval_seconds=0.01,
     )
-    time.sleep(0.025)
+    logs = _wait_for_logging_heartbeat(sent)
     server.result(44, {"ok": True})
 
-    logs = [item for item in sent if item.get("method") == "notifications/message"]
     assert logs
     assert "Unreal and project symbol lookup" in logs[0]["params"]["data"]
     assert "elapsed" in logs[0]["params"]["data"]
