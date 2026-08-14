@@ -419,6 +419,39 @@ def test_single_surface_codegen_uses_guarded_orchestration():
     assert payload["toolPolicy"].index("static_validate_project") < payload["toolPolicy"].index("build_unreal_project")
 
 
+def test_write_plan_uses_server_owned_conditional_post_build_contract():
+    payload = build_agent_plan(
+        "Implement a portable health component and run relevant automation tests",
+        "agent_edit",
+        file_count_hint=1,
+    ).to_dict()
+
+    contract = payload["orchestration"]["completionContract"]
+    assert contract["decisionOwner"] == "latest authoritative server task control"
+    assert contract["whenAutomationRequired"] == [
+        "build_unreal_project",
+        "run_unreal_automation_tests",
+        "complete",
+    ]
+    assert contract["whenAutomationNotRequiredOrDisabled"] == [
+        "build_unreal_project",
+        "complete",
+    ]
+    assert (
+        "automation_if_declared_or_required_by_server_control"
+        in payload["orchestration"]["validationStages"]
+    )
+    assert not any(
+        condition.startswith("Stop only when build_unreal_project")
+        for condition in payload["stopConditions"]
+    )
+    assert any(
+        "run_unreal_automation_tests" in condition
+        and "authoritative server task control" in condition
+        for condition in payload["stopConditions"]
+    )
+
+
 def test_multifile_codegen_is_staged_without_forcing_architecture_gate():
     plan = build_agent_plan(
         "Implement a feature across the controller, game state, and actor",

@@ -1,5 +1,18 @@
 {
   "description": "Tool invocation order by task kind (Phase 20). Writes forbidden unless noted.",
+  "writeCompletionContract": {
+    "decisionOwner": "latest authoritative server task control",
+    "whenAutomationRequired": [
+      "build_unreal_project",
+      "run_unreal_automation_tests",
+      "complete"
+    ],
+    "whenAutomationNotRequiredOrDisabled": [
+      "build_unreal_project",
+      "complete"
+    ],
+    "instruction": "Build success is not unconditionally terminal. After Build, follow the latest server-owned obligation; run Automation only when that control declares or requires it."
+  },
   "tasks": {
     "answer_only": {
       "sequence": [

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from feature_intent_contract import resolve_feature_intent  # noqa: E402
+from phase_tool_router import commit_control_transition  # noqa: E402
 from task_api import (  # noqa: E402
     task_define_slices,
     task_record_gate_failure,
@@ -1489,6 +1490,17 @@ def test_feature_completion_audit_rejects_test_only_frontier_then_binds_function
     assert repeated["errorCode"] == "REPEATED_GATE_BLOCKER"
     assert repeated["gateCompletion"]["validationErrorCode"] == "FEATURE_FRONTIER_UNPROVEN"
     assert repeated["retryable"] is False
+
+    # The repeated-gate policy deliberately removes the blocked gate from the
+    # public route. Fixture the successful Agent read commit that records one
+    # bounded rediscovery before the corrected semantic input can be retried.
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    rediscovered_state = json.loads(state_path.read_text(encoding="utf-8"))
+    failed_attempt = rediscovered_state["failedGateAttempts"][GATE]
+    failed_attempt["recoverySatisfiedBy"] = "read_file"
+    failed_attempt["recoverySatisfiedAt"] = "2026-08-15T00:00:00+00:00"
+    commit_control_transition(rediscovered_state)
+    state_path.write_text(json.dumps(rediscovered_state), encoding="utf-8")
 
     server.handle_tool_call(
         902,

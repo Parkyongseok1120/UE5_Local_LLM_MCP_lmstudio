@@ -29,16 +29,53 @@ def canonical_gate_input_hash(input_payload: dict[str, Any]) -> str:
     return _canonical_hash(input_payload)
 
 
+def _scope_generation(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def failed_gate_attempt_for_current_scope(
+    state: dict[str, Any],
+    gate: str,
+) -> dict[str, Any]:
+    """Return a failed gate record only when all transition owners still match."""
+
+    attempts = state.get("failedGateAttempts")
+    attempts = attempts if isinstance(attempts, dict) else {}
+    attempt = attempts.get(gate)
+    attempt = attempt if isinstance(attempt, dict) else {}
+    if not attempt:
+        return {}
+    scope_fields = {
+        "gateSetHash",
+        "planRevision",
+        "activeSliceId",
+        "mutationGeneration",
+    }
+    matches = bool(
+        scope_fields.issubset(attempt)
+        and
+        str(attempt.get("gateSetHash") or "")
+        == str(state.get("requiredGateSetHash") or "")
+        and str(attempt.get("planRevision") or "")
+        == str(state.get("planRevision") or "")
+        and str(attempt.get("activeSliceId") or "")
+        == str(state.get("activeSliceId") or "")
+        and _scope_generation(attempt.get("mutationGeneration"))
+        == _scope_generation(state.get("mutationGeneration"))
+    )
+    return attempt if matches else {}
+
+
 def repeated_gate_input_preflight(
     state: dict[str, Any],
     *,
     gate: str,
     input_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    attempts = state.get("failedGateAttempts")
-    attempts = attempts if isinstance(attempts, dict) else {}
-    previous = attempts.get(gate)
-    previous = previous if isinstance(previous, dict) else {}
+    previous = failed_gate_attempt_for_current_scope(state, gate)
     exact_repeat = bool(
         int(previous.get("attemptCount") or 0) >= 2
         and str(previous.get("inputHash") or "")
@@ -52,6 +89,11 @@ def repeated_gate_input_preflight(
         "validationErrorCode": str(previous.get("validationErrorCode") or ""),
         "nextAction": str(previous.get("nextAction") or gate),
         "nextActionIsTool": previous.get("nextActionIsTool") is True,
+        "nextActionArgs": (
+            dict(previous.get("nextActionArgs") or {})
+            if isinstance(previous.get("nextActionArgs"), dict)
+            else {}
+        ),
         "recoveryContract": (
             dict(previous.get("recoveryContract") or {})
             if isinstance(previous.get("recoveryContract"), dict)
@@ -202,7 +244,7 @@ def apply_failed_gate_attempt(
         if isinstance(state.get("failedGateAttempts"), dict)
         else {}
     )
-    previous = attempts.get(gate) if isinstance(attempts.get(gate), dict) else {}
+    previous = failed_gate_attempt_for_current_scope(state, gate)
     attempt_count = (
         int(previous.get("attemptCount") or 0) + 1
         if str(previous.get("fingerprint") or "") == fingerprint
@@ -215,6 +257,11 @@ def apply_failed_gate_attempt(
         "validationErrorCode": blocker["validationErrorCode"],
         "nextAction": blocker["nextAction"],
         "nextActionIsTool": evidence.get("nextActionIsTool") is True,
+        "nextActionArgs": (
+            dict(evidence.get("nextActionArgs") or {})
+            if isinstance(evidence.get("nextActionArgs"), dict)
+            else {}
+        ),
         "recoveryContract": (
             dict(evidence.get("featureFrontierRecovery") or {})
             if isinstance(evidence.get("featureFrontierRecovery"), dict)
@@ -222,6 +269,10 @@ def apply_failed_gate_attempt(
         ),
         "inputHash": canonical_gate_input_hash(input_payload),
         "evidenceHash": _canonical_hash(evidence),
+        "gateSetHash": str(state.get("requiredGateSetHash") or ""),
+        "planRevision": str(state.get("planRevision") or ""),
+        "activeSliceId": str(state.get("activeSliceId") or ""),
+        "mutationGeneration": _scope_generation(state.get("mutationGeneration")),
         "updatedAt": updated_at,
     }
     state["failedGateAttempts"] = attempts

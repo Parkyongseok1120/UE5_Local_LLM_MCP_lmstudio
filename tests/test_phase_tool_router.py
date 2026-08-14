@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -27,21 +28,73 @@ from task_api import (  # noqa: E402
     authorize_task_tool,
     release_expired_idle_active_task_route,
     task_checkpoint,
+    task_bind_build_contract,
     task_complete_after_successful_build,
     task_mark_build_recovery_evidence,
+    task_mark_recovery_evidence,
     task_record_build_recovery,
     task_record_gate,
+    task_record_recovery_obligation,
     task_require_automation_after_build,
     task_replan,
     task_root,
     task_start,
     task_status,
+    task_authorization_for_state,
     task_validate_build_recovery_sketch,
 )
 
 
 def test_initial_active_project_discovery_is_safe_before_route_ownership() -> None:
     assert "unreal_get_active_project" in CONTROL_PLANE_TOOLS
+
+
+def _bind_passed_static_checkpoint(
+    workspace: Path,
+    task_session_id: str,
+    mutation_generation: int,
+) -> dict:
+    """Advance a fixture to the real post-static, pre-build authority boundary."""
+
+    state_path = task_root(workspace, task_session_id) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["mutationGeneration"] = mutation_generation
+    required = [str(item) for item in state.get("requiredBeforeWrite") or []]
+    completed = dict(state.get("completedGates") or {})
+    for gate in required:
+        completed.setdefault(
+            gate,
+            {
+                "gate": gate,
+                "status": "completed",
+                "gateSetHash": str(state.get("requiredGateSetHash") or ""),
+                "planRevision": str(state.get("planRevision") or ""),
+                "activeSliceId": str(state.get("activeSliceId") or ""),
+                "mutationGeneration": 0,
+            },
+        )
+    state["completedGates"] = completed
+    state["pendingGates"] = []
+    write_gate = dict(state.get("writeGate") or {})
+    write_gate["completedBeforeWrite"] = sorted(completed)
+    write_gate["pendingBeforeWrite"] = []
+    state["writeGate"] = write_gate
+    continuity = dict(state.get("continuity") or {})
+    checkpoint = dict(continuity.get("checkpoint") or {})
+    checkpoint.update(
+        {
+            "activeSliceId": str(state.get("activeSliceId") or ""),
+            "mutationGeneration": mutation_generation,
+            "requiredNextAction": "build_unreal_project",
+            "validation": {"status": "passed", "proofLevel": "StaticVerified"},
+        }
+    )
+    continuity["checkpoint"] = checkpoint
+    state["continuity"] = continuity
+    _refresh_server_owned_state(state)
+    assert state["controlState"]["requiredTool"]["name"] == "build_unreal_project"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    return state
 
 
 def test_failed_static_read_is_consumed_into_recovery_mutation() -> None:
@@ -387,6 +440,7 @@ def test_successful_build_completion_releases_route_ownership(
             ],
         },
     )
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 3)
 
     completed = task_complete_after_successful_build(
         tmp_path,
@@ -414,6 +468,164 @@ def test_successful_build_completion_releases_route_ownership(
     assert repeated["alreadyCompleted"] is True
 
 
+def test_build_proof_cannot_complete_a_different_task_project_at_same_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_a = tmp_path / "ProjectA" / "ProjectA.uproject"
+    project_b = tmp_path / "ProjectB" / "ProjectB.uproject"
+    project_a.parent.mkdir(parents=True)
+    project_b.parent.mkdir(parents=True)
+    project_a.write_text("{}", encoding="utf-8")
+    project_b.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Build only Project A",
+        mode="agent_edit",
+        project_file=str(project_a),
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": ["Source/A/Feature.cpp"]}
+            ],
+        },
+    )
+    bound = _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 7)
+    assert bound["controlState"]["requiredTool"] == {
+        "name": "build_unreal_project",
+        "args": {
+            "project": os.path.normcase(str(project_a.resolve())),
+            "allowAbsoluteProject": True,
+            "allowEngineFallback": False,
+        },
+    }
+
+    rejected = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        proof_level="Built",
+        mutation_generation=7,
+        build_log_path=str(project_b.parent / ".agent/logs/latest-build.log"),
+        project_file=str(project_b),
+    )
+    assert rejected["ok"] is False
+    assert rejected["errorCode"] == "BUILD_PROOF_PROJECT_MISMATCH"
+    assert task_status(tmp_path, started["taskSessionId"])["state"]["status"] == "running"
+
+    completed = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        proof_level="Built",
+        mutation_generation=7,
+        build_log_path=str(project_a.parent / ".agent/logs/latest-build.log"),
+        project_file=str(project_a),
+    )
+    assert completed["ok"] is True
+    assert completed["status"] == "completed"
+
+
+def test_automation_proof_is_bound_to_build_project_engine_and_exact_filters(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_a = tmp_path / "ProjectA" / "ProjectA.uproject"
+    project_b = tmp_path / "ProjectB" / "ProjectB.uproject"
+    engine_a = tmp_path / "UE_5.5"
+    engine_b = tmp_path / "UE_5.6"
+    for path_value in (project_a.parent, project_b.parent, engine_a, engine_b):
+        path_value.mkdir(parents=True)
+    project_a.write_text("{}", encoding="utf-8")
+    project_b.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Build and automate only Project A",
+        mode="agent_edit",
+        project_file=str(project_a),
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": ["Source/A/Feature.cpp"]}
+            ],
+        },
+    )
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 9)
+    filters = ["ProjectA.Runtime", "ProjectA.Tools"]
+    pending = task_require_automation_after_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        mutation_generation=9,
+        build_log_path=str(project_a.parent / ".agent/logs/latest-build.log"),
+        project_file=str(project_a),
+        engine_root=str(engine_a),
+        resolved_engine_version="5.5.4",
+        test_filter="",
+        test_filters=filters,
+        declared_tests=["ProjectA.Runtime.Rule", "ProjectA.Tools.Rule"],
+    )
+    assert pending["ok"] is True, pending
+    assert pending["control"]["requiredTool"] == {
+        "name": "run_unreal_automation_tests",
+        "args": {
+            "testFilters": filters,
+            "project": os.path.normcase(str(project_a.resolve())),
+            "engineRoot": os.path.normcase(str(engine_a.resolve())),
+        },
+    }
+
+    wrong_project = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=pending["taskAuthorization"],
+        proof_kind="automation",
+        mutation_generation=9,
+        project_file=str(project_b),
+        engine_root=str(engine_a),
+        automation_filters=filters,
+        automation_succeeded_count=2,
+        automation_failed_count=0,
+        automation_queue_empty=True,
+    )
+    assert wrong_project["ok"] is False
+    assert wrong_project["errorCode"] == "AUTOMATION_PROOF_PROJECT_MISMATCH"
+
+    wrong_engine = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=pending["taskAuthorization"],
+        proof_kind="automation",
+        mutation_generation=9,
+        project_file=str(project_a),
+        engine_root=str(engine_b),
+        automation_filters=filters,
+        automation_succeeded_count=2,
+        automation_failed_count=0,
+        automation_queue_empty=True,
+    )
+    assert wrong_engine["ok"] is False
+    assert wrong_engine["errorCode"] == "AUTOMATION_PROOF_ENGINE_MISMATCH"
+    assert task_status(tmp_path, started["taskSessionId"])["state"]["status"] == "running"
+
+    completed = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=pending["taskAuthorization"],
+        proof_kind="automation",
+        mutation_generation=9,
+        project_file=str(project_a),
+        engine_root=str(engine_a),
+        resolved_engine_version="5.5.4",
+        automation_filters=filters,
+        automation_succeeded_count=2,
+        automation_failed_count=0,
+        automation_queue_empty=True,
+    )
+    assert completed["ok"] is True
+    assert completed["status"] == "completed"
+
+
 def test_successful_build_advances_multi_slice_plan_before_completion(
     tmp_path: Path,
     monkeypatch,
@@ -434,6 +646,25 @@ def test_successful_build_advances_multi_slice_plan_before_completion(
                 {"sliceId": "network", "files": ["Source/Demo/Network.cpp"]},
             ],
         },
+    )
+    scoped_state = _bind_passed_static_checkpoint(
+        tmp_path,
+        started["taskSessionId"],
+        1,
+    )
+    scoped_state["failedGateAttempts"] = {
+        "unreal_code_sketch_claim_validate": {
+            "attemptCount": 1,
+            "fingerprint": "old-slice-failure",
+            "gateSetHash": scoped_state["requiredGateSetHash"],
+            "planRevision": scoped_state["planRevision"],
+            "activeSliceId": scoped_state["activeSliceId"],
+            "mutationGeneration": scoped_state["mutationGeneration"],
+        }
+    }
+    (task_root(tmp_path, started["taskSessionId"]) / "state.json").write_text(
+        json.dumps(scoped_state),
+        encoding="utf-8",
     )
 
     advanced = task_complete_after_successful_build(
@@ -461,9 +692,11 @@ def test_successful_build_advances_multi_slice_plan_before_completion(
         "pendingSlices": ["network"],
     }
     assert state["pendingGates"] == ["unreal_code_sketch_claim_validate"]
+    assert state["failedGateAttempts"] == {}
     assert len(state["buildProofHistory"]) == 1
     assert active_task_route_context(tmp_path)["status"] == "active"
 
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 2)
     completed = task_complete_after_successful_build(
         tmp_path,
         task_authorization=advanced["taskAuthorization"],
@@ -499,6 +732,24 @@ def test_pending_build_verification_exposes_automation_exit_gate() -> None:
     assert "replace_in_file" not in route["activeTools"]
 
 
+def test_pending_build_verification_preserves_all_bound_automation_filters() -> None:
+    state = _state(writes=True, files=["Source/Runtime/Feature.cpp"])
+    state["buildVerification"] = {
+        "status": "pending_automation",
+        "activeSliceId": "slice-1",
+        "mutationGeneration": 2,
+        "testFilter": "",
+        "testFilters": ["Runtime.Feature", "Plugin.Tools"],
+    }
+
+    obligation = derive_next_obligation(state)
+
+    assert obligation["requiredTool"] == {
+        "name": "run_unreal_automation_tests",
+        "args": {"testFilters": ["Runtime.Feature", "Plugin.Tools"]},
+    }
+
+
 def test_successful_build_binds_automation_gate_without_completing_task(
     tmp_path: Path,
     monkeypatch,
@@ -517,6 +768,7 @@ def test_successful_build_binds_automation_gate_without_completing_task(
             ],
         },
     )
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 4)
 
     pending = task_require_automation_after_build(
         tmp_path,
@@ -537,6 +789,153 @@ def test_successful_build_binds_automation_gate_without_completing_task(
     assert state["status"] == "running"
     assert state["buildVerification"]["mutationGeneration"] == 4
     assert state["buildProofHistory"][-1]["kind"] == "build"
+
+
+def test_successful_build_binds_all_automation_filters_into_control_args(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Verify the bounded runtime slice",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": ["Source/Runtime/Feature.cpp"]}
+            ],
+        },
+    )
+    filters = ["Runtime.Feature", "Plugin.Tools"]
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 4)
+
+    pending = task_require_automation_after_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        mutation_generation=4,
+        build_log_path=".agent/logs/latest-build.log",
+        test_filter="",
+        test_filters=filters,
+        declared_tests=["Runtime.Feature.Rule", "Plugin.Tools.Rule"],
+    )
+
+    assert pending["ok"] is True, pending
+    assert pending["testFilter"] == ""
+    assert pending["testFilters"] == filters
+    assert pending["control"]["requiredTool"] == {
+        "name": "run_unreal_automation_tests",
+        "args": {"testFilters": filters},
+    }
+
+
+def test_post_build_automation_transition_rejects_stale_generation_and_static_binding(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Build and automate the current slice",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": ["Source/Runtime/Feature.cpp"]}
+            ],
+        },
+    )
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 4)
+
+    stale_generation = task_require_automation_after_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        mutation_generation=3,
+        build_log_path=".agent/logs/stale-build.log",
+        test_filter="Runtime.Feature",
+    )
+    assert stale_generation["ok"] is False
+    assert stale_generation["errorCode"] == "BUILD_PROOF_MUTATION_GENERATION_MISMATCH"
+
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["continuity"]["checkpoint"]["mutationGeneration"] = 3
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    stale_static = task_require_automation_after_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        mutation_generation=4,
+        build_log_path=".agent/logs/current-build.log",
+        test_filter="Runtime.Feature",
+    )
+    assert stale_static["ok"] is False
+    assert stale_static["errorCode"] == "STATIC_VALIDATION_BINDING_REQUIRED"
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "buildVerification" not in persisted
+
+
+def test_automation_completion_rejects_stale_binding_before_final_release(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Complete current Automation proof",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": ["Source/Runtime/Feature.cpp"]}
+            ],
+        },
+    )
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 4)
+    pending = task_require_automation_after_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        mutation_generation=4,
+        build_log_path=".agent/logs/current-build.log",
+        test_filter="Runtime.Feature",
+    )
+    assert pending["ok"] is True
+
+    stale_generation = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=pending["taskAuthorization"],
+        proof_kind="automation",
+        mutation_generation=3,
+        automation_filters=["Runtime.Feature"],
+        automation_succeeded_count=1,
+        automation_failed_count=0,
+        automation_queue_empty=True,
+    )
+    assert stale_generation["ok"] is False
+    assert stale_generation["errorCode"] == "BUILD_PROOF_MUTATION_GENERATION_MISMATCH"
+
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["buildVerification"]["activeSliceId"] = "old-slice"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    stale_slice = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=pending["taskAuthorization"],
+        proof_kind="automation",
+        mutation_generation=4,
+        automation_filters=["Runtime.Feature"],
+        automation_succeeded_count=1,
+        automation_failed_count=0,
+        automation_queue_empty=True,
+    )
+    assert stale_slice["ok"] is False
+    assert stale_slice["errorCode"] == "AUTOMATION_PROOF_BINDING_MISMATCH"
+    assert json.loads(state_path.read_text(encoding="utf-8"))["status"] == "running"
 
 
 def test_compiler_required_gate_is_bound_to_build_before_automation(
@@ -576,6 +975,7 @@ def test_compiler_required_gate_is_bound_to_build_before_automation(
     )
     assert before["compilerProof"]["status"] == "pending_build"
     assert before["compilerProof"]["sliceId"] == "api"
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 3)
 
     pending = task_require_automation_after_build(
         tmp_path,
@@ -711,6 +1111,426 @@ def test_build_recovery_scope_is_shared_and_fail_closed(
     assert exact == {"ok": True, "active": True, "targetFile": target}
 
 
+def test_in_slice_build_recovery_closes_evidence_repair_and_revalidation_loop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_root = tmp_path / "project"
+    target_relative = "Source/Runtime/Feature.cpp"
+    target = project_root / target_relative
+    target.parent.mkdir(parents=True)
+    target.write_text("void BeforeRepair() {}\n", encoding="utf-8")
+    project_file = project_root / "Sample.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Repair the bounded compiler failure",
+        mode="agent_edit",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "compile_fix",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": [target_relative]}
+            ],
+        },
+    )
+    authorization = started["taskAuthorization"]
+    evidence_args = {
+        "path": f"project://{target_relative}",
+        "startLine": 8,
+        "endLine": 24,
+    }
+
+    recorded = task_record_build_recovery(
+        tmp_path,
+        task_authorization=authorization,
+        recovery={
+            "targetFile": target_relative,
+            "requiredNextTool": "read_file_range",
+            "requiredNextToolArgs": evidence_args,
+            "firstError": "Feature.cpp:14: error: missing declaration",
+            "mutationGeneration": 0,
+        },
+    )
+    assert recorded["ok"] is True
+    assert recorded["control"]["requiredTool"] == {
+        "name": "read_file_range",
+        "args": evidence_args,
+    }
+
+    wrong_evidence = task_mark_recovery_evidence(
+        tmp_path,
+        task_authorization=authorization,
+        tool_name="read_file_range",
+        tool_args={**evidence_args, "startLine": 1},
+    )
+    assert wrong_evidence["errorCode"] == "RECOVERY_EVIDENCE_ARGUMENT_MISMATCH"
+
+    observed = task_mark_recovery_evidence(
+        tmp_path,
+        task_authorization=authorization,
+        tool_name="read_file_range",
+        tool_args=evidence_args,
+        evidence_hash="evidence-hash",
+    )
+    assert observed["ok"] is True
+    assert observed["control"]["requiredTool"] == {
+        "name": "unreal_code_sketch_claim_validate",
+        "args": {"targetFiles": [target_relative]},
+    }
+    bridged = task_mark_build_recovery_evidence(
+        tmp_path,
+        task_authorization=authorization,
+        target_file=target_relative,
+    )
+    assert bridged["ok"] is True
+    assert bridged["control"]["requiredTool"]["name"] == (
+        "unreal_code_sketch_claim_validate"
+    )
+    sketch_scope = task_validate_build_recovery_sketch(
+        tmp_path,
+        task_authorization=authorization,
+        target_files=[target_relative],
+        sketch="void AfterRepair() {}",
+        project_root=str(project_root),
+    )
+    assert sketch_scope == {
+        "ok": True,
+        "active": True,
+        "targetFile": target_relative,
+    }
+
+    target_snapshot = {
+        "path": target_relative,
+        "exists": True,
+        "fileHash": hashlib.sha1(target.read_bytes()).hexdigest(),
+    }
+    planned = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=authorization,
+        input_payload={
+            "sketch": "void AfterRepair() {}",
+            "targetFiles": [target_relative],
+        },
+        evidence={"ok": True},
+        target_snapshots=[target_snapshot],
+    )
+    assert planned["ok"] is True, planned
+    assert planned["control"]["requiredTool"]["name"] == "replace_in_file"
+
+    target.write_text("void AfterRepair() {}\n", encoding="utf-8")
+    repaired = task_checkpoint(
+        tmp_path,
+        task_authorization=planned["taskAuthorization"],
+        action="record",
+        phase="executor",
+        modified_files=[str(target)],
+        validation={},
+        include_git_changes=False,
+        mutation_generation=1,
+    )
+    assert repaired["ok"] is True, repaired
+    assert repaired["nextAction"] == "static_validate_project"
+    assert Path(repaired["requiredNextToolArgs"]["projectRoot"]) == (
+        project_root.resolve()
+    )
+    assert repaired["requiredNextToolArgs"]["fullAudit"] is False
+    assert (
+        repaired["requiredNextToolArgs"]["taskAuthorization"]["taskSessionId"]
+        == started["taskSessionId"]
+    )
+
+    validated = task_checkpoint(
+        tmp_path,
+        task_authorization=repaired["taskAuthorization"],
+        action="record",
+        phase="verifier",
+        modified_files=[str(target)],
+        validation={"status": "passed", "proofLevel": "StaticVerified"},
+        include_git_changes=False,
+        mutation_generation=1,
+    )
+    assert validated["ok"] is True, validated
+    assert validated["nextAction"] == "build_unreal_project"
+
+    completed = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=validated["taskAuthorization"],
+        proof_level="Built",
+        mutation_generation=1,
+        build_log_path=".agent/logs/latest-build.log",
+        project_file=str(project_file),
+    )
+    assert completed["ok"] is True, completed
+    assert completed["status"] == "completed"
+    final_state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert "recoveryObligation" not in final_state
+    assert "buildRecovery" not in final_state
+
+
+def test_automation_failure_recovery_routes_logs_to_sketch_then_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_root = tmp_path / "project"
+    target_relative = "Source/Runtime/Feature.cpp"
+    target = project_root / target_relative
+    target.parent.mkdir(parents=True)
+    target.write_text("void RuntimeFeature() {}\n", encoding="utf-8")
+    project_file = project_root / "Sample.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Repair the bounded Automation failure",
+        mode="agent_edit",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": [target_relative]}
+            ],
+        },
+    )
+    authorization = started["taskAuthorization"]
+    log_args = {
+        "mode": "first_error",
+        "maxFiles": 1,
+        "maxLines": 200,
+        "summaryOnly": True,
+    }
+    failed = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=authorization,
+        recovery={
+            "source": "automation",
+            "status": "evidence_required",
+            "scopeDisposition": "in_slice",
+            "errorCode": "AUTOMATION_TEST_FAILED",
+            "mutationGeneration": 0,
+            "requiredTool": {"name": "read_unreal_logs", "args": log_args},
+            "targetFiles": [target_relative],
+        },
+    )
+    assert failed["ok"] is True
+    assert failed["control"]["requiredTool"] == {
+        "name": "read_unreal_logs",
+        "args": log_args,
+    }
+    assert "read_unreal_logs" in failed["toolRoute"]["activeTools"]
+
+    observed = task_mark_recovery_evidence(
+        tmp_path,
+        task_authorization=authorization,
+        tool_name="read_unreal_logs",
+        tool_args=log_args,
+        evidence_hash="automation-log-hash",
+    )
+    assert observed["ok"] is True
+    assert observed["control"]["requiredTool"] == {
+        "name": "unreal_code_sketch_claim_validate",
+        "args": {"targetFiles": [target_relative]},
+    }
+    assert "unreal_code_sketch_claim_validate" in observed["toolRoute"]["activeTools"]
+
+    planned = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=authorization,
+        input_payload={
+            "sketch": "void RuntimeFeatureRepair() {}",
+            "targetFiles": [target_relative],
+        },
+        evidence={"ok": True},
+        target_snapshots=[
+            {
+                "path": target_relative,
+                "exists": True,
+                "fileHash": hashlib.sha1(target.read_bytes()).hexdigest(),
+            }
+        ],
+    )
+    assert planned["ok"] is True, planned
+    assert planned["control"]["requiredTool"]["name"] == "replace_in_file"
+    assert {
+        "read_unreal_logs",
+        "unreal_code_sketch_claim_validate",
+        "replace_in_file",
+    }.issubset(planned["toolRoute"]["activeTools"])
+
+
+def test_expired_recovery_sketch_must_be_reapproved_before_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_root = tmp_path / "project"
+    target_relative = "Source/Runtime/Feature.cpp"
+    target = project_root / target_relative
+    target.parent.mkdir(parents=True)
+    target.write_text("void RuntimeFeature() {}\n", encoding="utf-8")
+    project_file = project_root / "Sample.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Repair one bounded expired sketch",
+        mode="agent_edit",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": [target_relative]}
+            ],
+        },
+    )
+    authorization = started["taskAuthorization"]
+    initial = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=authorization,
+        input_payload={"sketch": "void RuntimeFeatureRepair() {}"},
+        evidence={"ok": True},
+        target_snapshots=[
+            {
+                "path": target_relative,
+                "exists": True,
+                "fileHash": hashlib.sha1(target.read_bytes()).hexdigest(),
+            }
+        ],
+    )
+    assert initial["ok"] is True
+
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["completedGates"]["unreal_code_sketch_claim_validate"]["expiresAt"] = (
+        "2000-01-01T00:00:00+00:00"
+    )
+    state["recoveryObligation"] = {
+        "source": "build",
+        "status": "repair_required",
+        "fingerprint": "expired-repair-sketch",
+        "mutationGeneration": 0,
+        "requiredTool": {},
+        "targetFiles": [target_relative],
+    }
+    _refresh_server_owned_state(state)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert state["toolRoute"]["phase"] == "verifier"
+    assert state["controlState"]["requiredTool"] == {
+        "name": "unreal_code_sketch_claim_validate",
+        "args": {},
+    }
+
+    refreshed_authorization = task_authorization_for_state(state)
+    renewed = task_record_gate(
+        tmp_path,
+        gate_name="unreal_code_sketch_claim_validate",
+        task_authorization=refreshed_authorization,
+        input_payload={"sketch": "void RuntimeFeatureRepairV2() {}"},
+        evidence={"ok": True},
+        target_snapshots=[
+            {
+                "path": target_relative,
+                "exists": True,
+                "fileHash": hashlib.sha1(target.read_bytes()).hexdigest(),
+            }
+        ],
+    )
+    assert renewed["ok"] is True, renewed
+    assert renewed["control"]["requiredTool"]["name"] == "replace_in_file"
+    renewed_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert renewed_state["recoveryObligation"]["status"] == "repair_required"
+
+
+def test_build_contract_binds_one_target_and_rejects_another_valid_target(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    project_file = project_root / "Sample.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Build the authoritative editor target",
+        mode="agent_edit",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": ["Source/Sample/Foo.cpp"]}
+            ],
+        },
+    )
+    state = _bind_passed_static_checkpoint(
+        tmp_path, started["taskSessionId"], mutation_generation=1
+    )
+    authorization = task_authorization_for_state(state)
+    contract = {
+        "project": str(project_file.resolve()),
+        "engineRoot": str((tmp_path / "UE_5.5").resolve()),
+        "target": "SampleEditor",
+        "platform": "Win64",
+        "configuration": "Development",
+        "allowAbsoluteProject": True,
+        "allowEngineFallback": False,
+    }
+    bound = task_bind_build_contract(
+        tmp_path,
+        task_authorization=authorization,
+        build_contract=contract,
+    )
+    assert bound["ok"] is True, bound
+    expected_contract = bound["buildContract"]
+    assert bound["control"]["requiredTool"] == {
+        "name": "build_unreal_project",
+        "args": expected_contract,
+    }
+
+    bound_state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    bound_authorization = task_authorization_for_state(bound_state)
+    wrong_target = authorize_task_tool(
+        tmp_path,
+        tool_name="build_unreal_project",
+        task_authorization=bound_authorization,
+        arguments={**expected_contract, "target": "SampleServer"},
+        consume_budget=False,
+    )
+    assert wrong_target["ok"] is False
+    assert wrong_target["errorCode"] == "TASK_CONTROL_ARGUMENT_MISMATCH"
+    assert wrong_target["nextActionArgs"]["target"] == "SampleEditor"
+
+    exact = authorize_task_tool(
+        tmp_path,
+        tool_name="build_unreal_project",
+        task_authorization=bound_authorization,
+        arguments={**expected_contract, "timeoutMs": 600_000},
+        consume_budget=False,
+    )
+    assert exact["ok"] is True
+
+
 def test_build_recovery_does_not_expand_beyond_active_slice(
     tmp_path: Path,
     monkeypatch,
@@ -760,6 +1580,11 @@ def test_build_recovery_does_not_expand_beyond_active_slice(
         "Source/Demo/DemoPlayerController.h",
         "Source/Demo/DemoPlayerController.cpp",
     ]
+    assert recorded["control"]["disposition"] == "await_user"
+    assert recorded["control"]["requiredTool"] is None
+    assert recorded["control"]["blocker"]["code"] == (
+        "BUILD_FAILURE_OUTSIDE_ACTIVE_SLICE"
+    )
     state = json.loads(
         (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
             encoding="utf-8"
@@ -767,6 +1592,12 @@ def test_build_recovery_does_not_expand_beyond_active_slice(
     )
     assert "buildRecovery" not in state
     assert state["buildBlocker"]["ownerSymbol"] == "ADemoGameMode"
+    assert state["recoveryObligation"]["status"] == "external_blocker"
+    assert state["recoveryObligation"]["errorCode"] == (
+        "BUILD_FAILURE_OUTSIDE_ACTIVE_SLICE"
+    )
+    assert state["controlState"]["allowedTools"] == []
+    assert state["controlState"]["retryPolicy"]["sameSemanticInput"] == "forbidden"
     assert task_validate_build_recovery_sketch(
         tmp_path,
         task_authorization=started["taskAuthorization"],
@@ -1499,7 +2330,14 @@ def test_atomic_replan_discards_prior_plan_recovery_and_execution_evidence(
                 "ownerSymbol": "ADemoGameMode",
                 "missingSymbol": "SetPlayerReady",
             },
+            "buildBlocker": {"status": "out_of_slice"},
             "buildVerification": {"status": "pending_automation"},
+            "automationRecovery": {"status": "evidence_required"},
+            "recoveryObligation": {
+                "source": "automation",
+                "status": "evidence_required",
+                "requiredTool": {"name": "read_unreal_logs", "args": {}},
+            },
             "completionEvidence": {"sliceId": "old_slice"},
             "sliceProvenance": {"source": "old_architecture"},
             "routeFacts": {
@@ -1543,7 +2381,10 @@ def test_atomic_replan_discards_prior_plan_recovery_and_execution_evidence(
     current = replanned["state"]
     for key in (
         "buildRecovery",
+        "buildBlocker",
         "buildVerification",
+        "automationRecovery",
+        "recoveryObligation",
         "completionEvidence",
         "sliceProvenance",
         "routeFacts",

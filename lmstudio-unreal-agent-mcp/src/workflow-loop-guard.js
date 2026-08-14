@@ -1,13 +1,16 @@
 "use strict";
 
 const crypto = require("crypto");
-const path = require("path");
+const {
+  absolutePathIdentity,
+  filesystemPathIdentity,
+  pathHasSuffixIdentity,
+} = require("./filesystem-path-identity");
 
 const projectStates = new Map();
 
-function projectKey(projectRoot) {
-  const resolved = path.resolve(String(projectRoot || "."));
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+function projectKey(projectRoot, hostPlatform = process.platform) {
+  return absolutePathIdentity(projectRoot, hostPlatform);
 }
 
 function generationNumber(value) {
@@ -31,6 +34,7 @@ function stateFor(projectRoot, mutationGeneration) {
       buildFingerprint: "",
       buildRecoveryContract: null,
       recoveryEvidenceByScope: new Map(),
+      recoveryEvidencePrechecks: new Map(),
     };
     projectStates.set(key, state);
   }
@@ -114,6 +118,7 @@ function finishBuildAttempt(projectRoot, mutationGeneration, outcome) {
   state.buildFingerprint = state.buildFailed ? buildFingerprint(outcome) : "";
   state.buildRecoveryContract = null;
   state.recoveryEvidenceByScope = new Map();
+  state.recoveryEvidencePrechecks = new Map();
   return state;
 }
 
@@ -139,7 +144,140 @@ function recordBuildRecoveryContract(projectRoot, mutationGeneration, recovery) 
     targetFile: String(recovery.targetFile || "").replace(/\\/g, "/"),
     evidenceSatisfied: false,
   };
+  state.recoveryEvidencePrechecks = new Map();
   return { ...state.buildRecoveryContract };
+}
+
+function recoveryArgsMatch(expectedValue, actualValue, hostPlatform = process.platform) {
+  const expected = expectedValue && typeof expectedValue === "object"
+    ? expectedValue
+    : {};
+  const actual = actualValue && typeof actualValue === "object"
+    ? actualValue
+    : {};
+  return Object.entries(expected).every(([key, value]) => {
+    // Authorization is a transport lease and is validated by task auth. It is
+    // not part of the compiler diagnostic's semantic evidence identity.
+    if (key === "taskAuthorization" || key === "task_authorization") return true;
+    const supplied = actual[key];
+    if (key === "path") {
+      return filesystemPathIdentity(supplied, hostPlatform, { trimOuterSlashes: true })
+        === filesystemPathIdentity(value, hostPlatform, { trimOuterSlashes: true });
+    }
+    if (typeof value === "number") return Number(supplied) === value;
+    return JSON.stringify(supplied) === JSON.stringify(value);
+  });
+}
+
+function recoveryBudget(options = {}) {
+  const parsed = Number(options.budget);
+  return Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : 5;
+}
+
+function normalizedRecoveryArgs(value, hostPlatform) {
+  const input = value && typeof value === "object" ? value : {};
+  const output = {};
+  for (const key of Object.keys(input).sort()) {
+    if (key === "taskAuthorization" || key === "task_authorization") continue;
+    const item = input[key];
+    output[key] = key === "path"
+      ? filesystemPathIdentity(item, hostPlatform, { trimOuterSlashes: true })
+      : item;
+  }
+  return output;
+}
+
+function recoveryEvidenceIdentity(options, hostPlatform) {
+  return hashParts([
+    String(options.tool || ""),
+    filesystemPathIdentity(options.fileAbsPath || "", hostPlatform, {
+      stripProjectUri: false,
+    }),
+    normalizedRecoveryArgs(options.toolArgs, hostPlatform),
+  ]);
+}
+
+function validateRecoveryContract(state, contract, options, budget, hostPlatform) {
+  if (!contract?.requiredNextTool) return null;
+  if (contract.evidenceSatisfied) {
+    return {
+      blocked: true,
+      active: true,
+      count: 1,
+      budget,
+      reason: "build_recovery_evidence_complete",
+      buildFingerprint: state.buildFingerprint,
+      recoveryContract: { ...contract },
+    };
+  }
+  const requestedTool = String(options.tool || "");
+  if (requestedTool !== String(contract.requiredNextTool || "")) {
+    return {
+      blocked: true,
+      active: true,
+      count: 0,
+      budget,
+      reason: "build_recovery_required_tool_mismatch",
+      buildFingerprint: state.buildFingerprint,
+      recoveryContract: { ...contract },
+    };
+  }
+  const requestedFile = String(options.fileAbsPath || "");
+  const targetFile = String(contract.targetFile || "");
+  if (targetFile && !pathHasSuffixIdentity(requestedFile, targetFile, hostPlatform)) {
+    return {
+      blocked: true,
+      active: true,
+      count: 0,
+      budget,
+      reason: "build_recovery_target_mismatch",
+      buildFingerprint: state.buildFingerprint,
+      recoveryContract: { ...contract },
+    };
+  }
+  if (!recoveryArgsMatch(contract.requiredNextToolArgs, options.toolArgs, hostPlatform)) {
+    return {
+      blocked: true,
+      active: true,
+      count: 0,
+      budget,
+      reason: "build_recovery_required_args_mismatch",
+      buildFingerprint: state.buildFingerprint,
+      recoveryContract: { ...contract },
+    };
+  }
+  return null;
+}
+
+function commitRecoveryEvidence(state, contract, options) {
+  const evidenceByScope = state.recoveryEvidenceByScope instanceof Map
+    ? state.recoveryEvidenceByScope
+    : new Map();
+  state.recoveryEvidenceByScope = evidenceByScope;
+  const count = Number(evidenceByScope.get(options.scopeKey) || 0);
+  if (count >= options.budget) {
+    return {
+      blocked: true,
+      active: true,
+      count,
+      budget: options.budget,
+      scopeKey: options.scopeKey,
+      reason: "build_recovery_evidence_budget_exhausted",
+      buildFingerprint: state.buildFingerprint,
+    };
+  }
+  const nextCount = count + 1;
+  evidenceByScope.set(options.scopeKey, nextCount);
+  if (contract?.requiredNextTool) contract.evidenceSatisfied = true;
+  return {
+    blocked: false,
+    active: true,
+    count: nextCount,
+    budget: options.budget,
+    scopeKey: options.scopeKey,
+    buildFingerprint: state.buildFingerprint,
+    recoveryContract: contract ? { ...contract } : null,
+  };
 }
 
 /**
@@ -148,54 +286,23 @@ function recordBuildRecoveryContract(projectRoot, mutationGeneration, recovery) 
  */
 function recordRecoveryEvidenceCall(projectRoot, mutationGeneration, options = {}) {
   const state = stateFor(projectRoot, mutationGeneration);
-  const parsedBudget = Number(options.budget);
-  const budget = Number.isFinite(parsedBudget) ? Math.max(1, Math.floor(parsedBudget)) : 5;
+  const hostPlatform = String(options.hostPlatform || process.platform);
+  const budget = recoveryBudget(options);
   if (!state.buildFailed) {
     return { blocked: false, active: false, count: 0, budget };
   }
   const contract = state.buildRecoveryContract && typeof state.buildRecoveryContract === "object"
     ? state.buildRecoveryContract
     : null;
-  const requestedTool = String(options.tool || "");
-  if (contract?.requiredNextTool) {
-    if (contract.evidenceSatisfied) {
-      return {
-        blocked: true,
-        active: true,
-        count: 1,
-        budget,
-        reason: "build_recovery_evidence_complete",
-        buildFingerprint: state.buildFingerprint,
-        recoveryContract: { ...contract },
-      };
-    }
-    if (requestedTool && requestedTool !== contract.requiredNextTool) {
-      return {
-        blocked: true,
-        active: true,
-        count: 0,
-        budget,
-        reason: "build_recovery_required_tool_mismatch",
-        buildFingerprint: state.buildFingerprint,
-        recoveryContract: { ...contract },
-      };
-    }
-    const requestedFile = String(options.fileAbsPath || "").replace(/\\/g, "/").toLowerCase();
-    const targetFile = String(contract.targetFile || "").replace(/\\/g, "/").toLowerCase();
-    if (targetFile && requestedFile && !requestedFile.endsWith(`/${targetFile}`)) {
-      return {
-        blocked: true,
-        active: true,
-        count: 0,
-        budget,
-        reason: "build_recovery_target_mismatch",
-        buildFingerprint: state.buildFingerprint,
-        recoveryContract: { ...contract },
-      };
-    }
-    contract.evidenceSatisfied = true;
-  }
   const scopeKey = String(options.scopeKey || "pre_task");
+  const contractFailure = validateRecoveryContract(
+    state,
+    contract,
+    options,
+    budget,
+    hostPlatform
+  );
+  if (contractFailure) return contractFailure;
   const evidenceByScope = state.recoveryEvidenceByScope instanceof Map
     ? state.recoveryEvidenceByScope
     : new Map();
@@ -212,16 +319,66 @@ function recordRecoveryEvidenceCall(projectRoot, mutationGeneration, options = {
       buildFingerprint: state.buildFingerprint,
     };
   }
-  const nextCount = recoveryEvidenceCount + 1;
-  evidenceByScope.set(scopeKey, nextCount);
+  if (options.commitEvidence === false) {
+    const prechecks = state.recoveryEvidencePrechecks instanceof Map
+      ? state.recoveryEvidencePrechecks
+      : new Map();
+    state.recoveryEvidencePrechecks = prechecks;
+    const identity = recoveryEvidenceIdentity(options, hostPlatform);
+    prechecks.set(identity, { budget, scopeKey, hostPlatform, checkedAt: Date.now() });
+    while (prechecks.size > 64) prechecks.delete(prechecks.keys().next().value);
+    return {
+      blocked: false,
+      active: true,
+      count: recoveryEvidenceCount,
+      budget,
+      scopeKey,
+      reservationPending: true,
+      buildFingerprint: state.buildFingerprint,
+      recoveryContract: contract ? { ...contract } : null,
+    };
+  }
+  return commitRecoveryEvidence(state, contract, { budget, scopeKey });
+}
+
+function markRecoveryEvidenceSatisfied(projectRoot, mutationGeneration, options = {}) {
+  const state = stateFor(projectRoot, mutationGeneration);
+  const contract = state.buildRecoveryContract && typeof state.buildRecoveryContract === "object"
+    ? state.buildRecoveryContract
+    : null;
+  if (!state.buildFailed) return { ok: true, active: false };
+  const hostPlatform = String(options.hostPlatform || process.platform);
+  const provisionalBudget = recoveryBudget(options);
+  const contractFailure = validateRecoveryContract(
+    state,
+    contract,
+    options,
+    provisionalBudget,
+    hostPlatform
+  );
+  if (contractFailure) {
+    return { ok: false, ...contractFailure };
+  }
+  const prechecks = state.recoveryEvidencePrechecks instanceof Map
+    ? state.recoveryEvidencePrechecks
+    : new Map();
+  state.recoveryEvidencePrechecks = prechecks;
+  const identity = recoveryEvidenceIdentity(options, hostPlatform);
+  const pending = prechecks.get(identity);
+  if (!pending) {
+    return {
+      ok: false,
+      active: true,
+      count: 0,
+      reason: "build_recovery_evidence_precheck_required",
+    };
+  }
+  prechecks.delete(identity);
+  const committed = commitRecoveryEvidence(state, contract, pending);
   return {
-    blocked: false,
-    active: true,
-    count: nextCount,
-    budget,
-    scopeKey,
-    buildFingerprint: state.buildFingerprint,
-    recoveryContract: contract ? { ...contract } : null,
+    ok: committed.blocked !== true,
+    evidenceCommitted: committed.blocked !== true,
+    ...committed,
   };
 }
 
@@ -240,5 +397,6 @@ module.exports = {
   cancelBuildAttempt,
   recordBuildRecoveryContract,
   recordRecoveryEvidenceCall,
+  markRecoveryEvidenceSatisfied,
   resetWorkflowLoopGuardForTests,
 };

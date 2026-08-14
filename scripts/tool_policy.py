@@ -123,6 +123,29 @@ def gates_for_task(task_kind: str) -> list[str]:
     return [str(gate).strip() for gate in (task.get("gates") or []) if str(gate).strip()]
 
 
+def completion_contract_for_task(task_kind: str) -> dict[str, Any]:
+    """Return the conditional post-Build route for write-enabled task policies."""
+    cfg = load_tool_orchestration()
+    task = (cfg.get("tasks") or {}).get(task_kind) or {}
+    if not bool(task.get("writesAllowed", False)):
+        return {}
+    raw = cfg.get("writeCompletionContract") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        "decisionOwner": str(raw.get("decisionOwner") or ""),
+        "whenAutomationRequired": [
+            str(item) for item in (raw.get("whenAutomationRequired") or []) if str(item)
+        ],
+        "whenAutomationNotRequiredOrDisabled": [
+            str(item)
+            for item in (raw.get("whenAutomationNotRequiredOrDisabled") or [])
+            if str(item)
+        ],
+        "instruction": str(raw.get("instruction") or ""),
+    }
+
+
 def writes_allowed_for_task(task_kind: str) -> bool:
     cfg = load_tool_orchestration()
     task = (cfg.get("tasks") or {}).get(task_kind) or {}

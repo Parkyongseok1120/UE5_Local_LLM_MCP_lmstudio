@@ -4,8 +4,13 @@ const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
 const crypto = require("crypto");
-const { atomicWriteText, atomicCreateText } = require("./atomic-io");
-const { sha256File, sha256Text, replaceWithCAS, createExclusive } = require("./safe-write");
+const { atomicWriteText } = require("./atomic-io");
+const {
+  sha256Text,
+  calculateReplacement,
+  replaceWithCAS,
+  createExclusive,
+} = require("./safe-write");
 const { tryAcquirePathLock, releasePathLock, canonicalLockKey } = require("./write-locks");
 const {
   createJournal,
@@ -15,11 +20,13 @@ const {
   saveJournal,
   pathIdentity,
   requiresBuildValidation,
+  entryMatchesOwnedPostImage,
 } = require("./transaction-journal");
 const { ensureStateRootLayout, resolveAgentStateRoot } = require("./state-root");
 
 const MAX_BUNDLE_FILES = 32;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
+const MAX_BUNDLE_OPERATIONS = 128;
 const DEFAULT_MAX_FILES_PER_EDIT = 2;
 
 const PROTECTED_OVERWRITE_EXT = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs", ".json", ".ini", ".uplugin", ".uproject"]);
@@ -42,6 +49,10 @@ function entryByteSize(item) {
 }
 
 function validateBundleLimits(bundle, maxFilesPerEdit = DEFAULT_MAX_FILES_PER_EDIT) {
+  const operations = [...(bundle?.patches || []), ...(bundle?.files || [])];
+  if (operations.length > MAX_BUNDLE_OPERATIONS) {
+    throw new Error(`apply_edit_bundle: too many operations (max ${MAX_BUNDLE_OPERATIONS})`);
+  }
   const relPaths = bundlePaths(bundle);
   const unique = new Set(relPaths);
   const filePaths = (bundle?.files || [])
@@ -66,7 +77,7 @@ function validateBundleLimits(bundle, maxFilesPerEdit = DEFAULT_MAX_FILES_PER_ED
     throw new Error(`apply_edit_bundle: too many files (max ${MAX_BUNDLE_FILES})`);
   }
   let bytes = 0;
-  for (const item of [...(bundle?.patches || []), ...(bundle?.files || [])]) {
+  for (const item of operations) {
     bytes += entryByteSize(item);
   }
   if (bytes > MAX_BUNDLE_BYTES) {
@@ -150,18 +161,41 @@ async function captureBaseline(targets, journal, stateRoot) {
       preContentBackupPath,
       writeStarted: false,
       writeCompleted: false,
-    });
+    }, stateRoot);
   }
   journal.status = "locked";
-  saveJournal(journal);
+  saveJournal(journal, stateRoot);
   return baseline;
 }
 
-async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) {
+async function commitFromTargets(
+  bundle,
+  targets,
+  baseline,
+  journal,
+  stateRoot,
+  hooks = {},
+  atomicMetadata = null,
+) {
   const writtenAbs = [];
   const writtenAbsSet = new Set();
   const postWriteHashes = {};
   const patchedPaths = new Set();
+  let stageIndex = 0;
+
+  journal.status = "committing";
+  saveJournal(journal, stateRoot);
+  if (atomicMetadata && typeof atomicMetadata === "object") {
+    journal.requiresAtomicCheckpoint = true;
+    journal.checkpointRequired = atomicMetadata.checkpointRequired !== false;
+    journal.checkpointCommitted = false;
+    journal.mutationStateRecorded = false;
+    journal.mutationStateRequired = atomicMetadata.mutationStateRequired !== false;
+    journal.rollbackStateReconciled = false;
+    journal.projectRoot = pathIdentity(atomicMetadata.projectRoot || process.cwd());
+    journal.projectPath = String(atomicMetadata.projectPath || "");
+    journal.taskSessionId = String(atomicMetadata.taskSessionId || "").trim();
+  }
 
   for (const item of bundle?.patches || []) {
     const rel = String(item.path).replace(/\\/g, "/");
@@ -169,6 +203,23 @@ async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) 
     if (!target) throw new Error(`Unknown patch path: ${rel}`);
     const abs = target.abs;
     const base = baseline[rel];
+    const priorContent = base.existedBefore ? await fsp.readFile(abs, "utf8") : "";
+    const planned = calculateReplacement({
+      priorContent,
+      oldText: String(item.oldText || ""),
+      newText: String(item.newText || ""),
+      expectedOccurrences: Number(item.expectedOccurrences ?? 1),
+    });
+    if (!planned.ok) {
+      throw new Error(planned.error || `Patch failed for ${rel}`);
+    }
+    const postHash = sha256Text(planned.updated);
+    const previousEntry = (journal.entries || []).find((entry) => entry.relativePath === rel);
+    const intendedPostHashes = [...new Set([
+      ...(Array.isArray(previousEntry?.intendedPostHashes) ? previousEntry.intendedPostHashes : []),
+      previousEntry?.postHash,
+      postHash,
+    ].filter(Boolean))];
     upsertEntry(journal, {
       relativePath: rel,
       canonicalAbsolutePath: abs,
@@ -176,14 +227,28 @@ async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) 
       existedBefore: base.existedBefore,
       preHash: base.preHash,
       preContentBackupPath: base.preContentBackupPath,
+      postHash,
+      intendedPostHashes,
       writeStarted: true,
-    });
-    const priorContent = base.existedBefore ? await fsp.readFile(abs, "utf8") : "";
+      writeCompleted: false,
+      restored: false,
+    }, stateRoot);
+    stageIndex += 1;
+    if (typeof hooks.afterWriteAhead === "function") {
+      await hooks.afterWriteAhead({
+        operation: "patch",
+        relativePath: rel,
+        stageIndex,
+        priorHash: sha256Text(priorContent),
+        postHash,
+        journal,
+      });
+    }
     // Repeated patches for one file are applied in request order. The first
     // edit is guarded by the caller's/baseline hash; later edits compare their
     // exact oldText against the content produced by the preceding edit.
     const readHash = patchedPaths.has(rel)
-      ? null
+      ? sha256Text(priorContent)
       : (item.readHash || base.preHash || null);
     const result = await replaceWithCAS({
       targetPath: abs,
@@ -196,14 +261,26 @@ async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) 
     if (!result.ok) {
       throw new Error(result.error || `Patch failed for ${rel}`);
     }
-    const postHash = sha256Text(result.updated);
+    if (sha256Text(result.updated) !== postHash) {
+      throw new Error(`Patch plan changed during commit for ${rel}`);
+    }
+    if (typeof hooks.afterDiskWrite === "function") {
+      await hooks.afterDiskWrite({
+        operation: "patch",
+        relativePath: rel,
+        stageIndex,
+        priorHash: sha256Text(priorContent),
+        postHash,
+        journal,
+      });
+    }
     postWriteHashes[rel] = postHash;
     upsertEntry(journal, {
       relativePath: rel,
       postHash,
       writeCompleted: true,
       restored: false,
-    });
+    }, stateRoot);
     patchedPaths.add(rel);
     if (!writtenAbsSet.has(abs)) {
       writtenAbsSet.add(abs);
@@ -223,26 +300,58 @@ async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) 
         throw new Error(`files[] cannot overwrite existing file ${rel}; use patches`);
       }
     }
+    const content = String(item.content || "");
+    const postHash = sha256Text(content);
+    const previousEntry = (journal.entries || []).find((entry) => entry.relativePath === rel);
+    const intendedPostHashes = [...new Set([
+      ...(Array.isArray(previousEntry?.intendedPostHashes) ? previousEntry.intendedPostHashes : []),
+      previousEntry?.postHash,
+      postHash,
+    ].filter(Boolean))];
     upsertEntry(journal, {
       relativePath: rel,
       canonicalAbsolutePath: abs,
       operation: "create",
       existedBefore: base.existedBefore,
       preHash: base.preHash,
+      postHash,
+      intendedPostHashes,
       writeStarted: true,
-    });
+      writeCompleted: false,
+      restored: false,
+    }, stateRoot);
+    stageIndex += 1;
+    if (typeof hooks.afterWriteAhead === "function") {
+      await hooks.afterWriteAhead({
+        operation: "create",
+        relativePath: rel,
+        stageIndex,
+        priorHash: "",
+        postHash,
+        journal,
+      });
+    }
     if (base.existedBefore) {
       throw new Error(`files[] create-only violation for existing path: ${rel}`);
     }
-    await createExclusive(abs, String(item.content || ""));
-    const postHash = sha256Text(String(item.content || ""));
+    await createExclusive(abs, content);
+    if (typeof hooks.afterDiskWrite === "function") {
+      await hooks.afterDiskWrite({
+        operation: "create",
+        relativePath: rel,
+        stageIndex,
+        priorHash: "",
+        postHash,
+        journal,
+      });
+    }
     postWriteHashes[rel] = postHash;
     upsertEntry(journal, {
       relativePath: rel,
       postHash,
       writeCompleted: true,
       restored: false,
-    });
+    }, stateRoot);
     if (!writtenAbsSet.has(abs)) {
       writtenAbsSet.add(abs);
       writtenAbs.push(abs);
@@ -250,7 +359,7 @@ async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) 
   }
 
   journal.status = "committed";
-  saveJournal(journal);
+  saveJournal(journal, stateRoot);
   return { writtenAbs, postWriteHashes };
 }
 
@@ -268,6 +377,14 @@ async function rollbackJournal(journal, stateRoot = resolveAgentStateRoot()) {
       let currentHash = "";
       if (existsNow) {
         currentHash = sha256Text(await fsp.readFile(abs, "utf8"));
+      }
+      const preImageIntact = entry.existedBefore
+        ? existsNow && Boolean(entry.preHash && currentHash === entry.preHash)
+        : !existsNow;
+      if (preImageIntact) {
+        restored.push(rel);
+        upsertEntry(journal, { relativePath: rel, restored: true }, stateRoot);
+        continue;
       }
       if (entry.existedBefore) {
         if (entry.deletedAfter === true) {
@@ -291,7 +408,7 @@ async function rollbackJournal(journal, stateRoot = resolveAgentStateRoot()) {
           unrestored.push(rel);
           upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" }, stateRoot);
           continue;
-        } else if (entry.postHash && currentHash !== entry.postHash) {
+        } else if (!entryMatchesOwnedPostImage(entry, existsNow, currentHash)) {
           externalChangeDetected.push(rel);
           unrestored.push(rel);
           upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" }, stateRoot);
@@ -308,7 +425,7 @@ async function rollbackJournal(journal, stateRoot = resolveAgentStateRoot()) {
         restored.push(rel);
         upsertEntry(journal, { relativePath: rel, restored: true }, stateRoot);
         continue;
-      } else if (entry.postHash && currentHash === entry.postHash) {
+      } else if (entryMatchesOwnedPostImage(entry, existsNow, currentHash)) {
         await fsp.unlink(abs);
       } else {
         externalChangeDetected.push(rel);
@@ -341,7 +458,7 @@ async function applyBundleTransaction(bundle, resolvePathFn, options = {}) {
   const maxFilesPerEdit = Number(options.maxFilesPerEdit || DEFAULT_MAX_FILES_PER_EDIT);
   validateBundleLimits(bundle, maxFilesPerEdit);
   const stateRoot = ensureStateRootLayout(resolveAgentStateRoot());
-  const journal = createJournal({ operation: "apply_edit_bundle" });
+  const journal = createJournal({ operation: "apply_edit_bundle" }, stateRoot);
   const acquired = [];
   let wroteAny = false;
 
@@ -364,7 +481,23 @@ async function applyBundleTransaction(bundle, resolvePathFn, options = {}) {
     }
 
     const baseline = await captureBaseline(targets, journal, stateRoot);
-    const commitResult = await commitFromTargets(bundle, targets, baseline, journal, stateRoot);
+    const commitResult = await commitFromTargets(
+      bundle,
+      targets,
+      baseline,
+      journal,
+      stateRoot,
+      options.transactionHooks || {},
+      options.deferFinalization === true ? {
+        projectRoot: options.projectRoot,
+        projectPath: options.transactionMetadata?.projectPath,
+        taskSessionId: options.taskSessionId,
+        checkpointRequired: options.checkpointRequired !== undefined
+          ? options.checkpointRequired
+          : Boolean(String(options.taskSessionId || "").trim()),
+        mutationStateRequired: true,
+      } : null,
+    );
     wroteAny = commitResult.writtenAbs.length > 0;
 
     let validationResult = { ok: true };
@@ -431,8 +564,14 @@ async function applyBundleTransaction(bundle, resolvePathFn, options = {}) {
       rollbackErrors: [],
       externalChangeDetected: [],
     };
-    const anyCompleted = (journal.entries || []).some((entry) => entry.writeCompleted);
-    if (anyCompleted || wroteAny) {
+    // A process-local exception can arrive after the filesystem write but
+    // before the matching writeCompleted journal update (for example from a
+    // post-write hook or the journal persistence itself).  The durable
+    // write-ahead entry is therefore the rollback authority; relying only on
+    // writeCompleted/wroteAny can falsely report a rollback and archive the
+    // sole recovery record while the post-image is still on disk.
+    const hasDurableWriteIntent = completedEntries(journal).length > 0;
+    if (hasDurableWriteIntent || wroteAny) {
       rollback = await rollbackJournal(journal);
     } else {
       journal.status = "aborted";
@@ -477,5 +616,6 @@ module.exports = {
   finalizeTransaction,
   MAX_BUNDLE_FILES,
   MAX_BUNDLE_BYTES,
+  MAX_BUNDLE_OPERATIONS,
   DEFAULT_MAX_FILES_PER_EDIT,
 };

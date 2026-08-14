@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import subprocess
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -438,6 +439,8 @@ def _reset_plan_execution_state_for_replan(
         "buildRecovery",
         "buildBlocker",
         "buildVerification",
+        "automationRecovery",
+        "recoveryObligation",
         "completionEvidence",
         "sliceProvenance",
         "routeFacts",
@@ -649,6 +652,46 @@ def _canonical_project_identity(
     if not candidate.is_absolute() and workspace is not None:
         candidate = workspace / candidate
     return os.path.normcase(str(candidate.resolve()))
+
+
+def _task_project_proof_binding_issue(
+    state: dict[str, Any],
+    *,
+    workspace: Path,
+    project_file: str,
+    proof_kind: str,
+) -> dict[str, Any] | None:
+    route_scope = (
+        state.get("routeScope")
+        if isinstance(state.get("routeScope"), dict)
+        else {}
+    )
+    raw_expected = str(
+        route_scope.get("projectFile") or state.get("projectFile") or ""
+    ).strip()
+    if not raw_expected:
+        return None
+    scope_workspace_raw = str(
+        route_scope.get("workspaceRoot") or state.get("workspaceRoot") or ""
+    ).strip()
+    scope_workspace = Path(scope_workspace_raw) if scope_workspace_raw else workspace
+    expected = _canonical_project_identity(
+        raw_expected,
+        workspace=scope_workspace,
+    )
+    observed = _canonical_project_identity(project_file, workspace=workspace)
+    if observed and observed == expected:
+        return None
+    prefix = "AUTOMATION" if str(proof_kind).casefold() == "automation" else "BUILD"
+    return {
+        "errorCode": f"{prefix}_PROOF_PROJECT_MISMATCH",
+        "error": (
+            "Build/Automation proof belongs to a different .uproject than the "
+            "authoritative task route."
+        ),
+        "expectedProjectFile": expected,
+        "observedProjectFile": observed,
+    }
 
 
 def _task_owner_path(task_dir: Path) -> Path:
@@ -1298,6 +1341,55 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
     return public
 
 
+def _project_authoritative_control(
+    payload: dict[str, Any],
+    control: dict[str, Any] | None,
+    *,
+    preserve_explicit_action: bool = False,
+) -> dict[str, Any]:
+    """Mirror the v2 SSOT into legacy action fields without losing exact args."""
+
+    result = dict(payload)
+    committed = control if isinstance(control, dict) else {}
+    if committed.get("authoritative") is not True:
+        return result
+    required = (
+        committed.get("requiredTool")
+        if isinstance(committed.get("requiredTool"), dict)
+        else {}
+    )
+    name = str(required.get("name") or "").strip()
+    args = (
+        dict(required.get("args") or {})
+        if isinstance(required.get("args"), dict)
+        else {}
+    )
+    if name:
+        existing_args = (
+            result.get("nextActionArgs")
+            if isinstance(result.get("nextActionArgs"), dict)
+            else result.get("requiredNextToolArgs")
+            if isinstance(result.get("requiredNextToolArgs"), dict)
+            else {}
+        )
+        if isinstance(existing_args.get("taskAuthorization"), dict):
+            args["taskAuthorization"] = dict(existing_args["taskAuthorization"])
+        result["nextAction"] = name
+        result["nextActionIsTool"] = True
+        result["nextActionArgs"] = args
+        result["requiredNextTool"] = name
+        result["requiredNextToolArgs"] = args
+    else:
+        has_explicit_action = bool(str(result.get("nextAction") or "").strip())
+        if not (preserve_explicit_action and has_explicit_action):
+            result.pop("nextAction", None)
+            result.pop("nextActionIsTool", None)
+            result.pop("nextActionArgs", None)
+        result.pop("requiredNextTool", None)
+        result.pop("requiredNextToolArgs", None)
+    return result
+
+
 def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
     job = _active_job(workspace, state)
     ux = task_phase_from_state(state, job)
@@ -1351,6 +1443,11 @@ def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
     )
     if persisted_control:
         payload["control"] = dict(persisted_control)
+        payload = _project_authoritative_control(
+            payload,
+            persisted_control,
+            preserve_explicit_action=True,
+        )
     return attach_control_envelope(payload, tool_name="task_api")
 
 
@@ -1386,9 +1483,11 @@ def finalize_task_result(
         payload["controlEpoch"] = response_control["epoch"]
     if response_control:
         payload["control"] = dict(response_control)
-    required = response_control.get("requiredTool")
-    if "requiredNextTool" not in payload and isinstance(required, dict):
-        payload["requiredNextTool"] = required
+        payload = _project_authoritative_control(
+            payload,
+            response_control,
+            preserve_explicit_action=True,
+        )
     return attach_control_envelope(payload, tool_name="task_api")
 
 
@@ -2080,6 +2179,549 @@ def _carry_forward_unchanged_feature_checkpoint_binding(
     return True
 
 
+def _recovery_obligation_fingerprint(recovery: dict[str, Any]) -> str:
+    required = (
+        recovery.get("requiredTool")
+        if isinstance(recovery.get("requiredTool"), dict)
+        else {}
+    )
+    material = {
+        "source": str(recovery.get("source") or ""),
+        "status": str(recovery.get("status") or ""),
+        "scopeDisposition": str(recovery.get("scopeDisposition") or ""),
+        "errorCode": str(recovery.get("errorCode") or ""),
+        "mutationGeneration": int(recovery.get("mutationGeneration") or 0),
+        "requiredTool": {
+            "name": str(required.get("name") or ""),
+            "args": dict(required.get("args") or {})
+            if isinstance(required.get("args"), dict)
+            else {},
+        },
+        "targetFiles": [
+            str(item or "").replace("\\", "/").strip("/")
+            for item in (recovery.get("targetFiles") or [])
+            if str(item or "").strip()
+        ],
+    }
+    return _canonical_hash(material)
+
+
+def _set_recovery_obligation(
+    state: dict[str, Any],
+    recovery: dict[str, Any],
+    *,
+    increment_attempt: bool = False,
+) -> dict[str, Any]:
+    required = (
+        recovery.get("requiredTool")
+        if isinstance(recovery.get("requiredTool"), dict)
+        else {}
+    )
+    normalized = {
+        "source": str(recovery.get("source") or "").strip(),
+        "status": str(recovery.get("status") or "").strip(),
+        "scopeDisposition": str(
+            recovery.get("scopeDisposition") or "in_slice"
+        ).strip(),
+        "errorCode": str(recovery.get("errorCode") or "").strip(),
+        "mutationGeneration": max(
+            0, int(recovery.get("mutationGeneration") or state.get("mutationGeneration") or 0)
+        ),
+        "requiredTool": {
+            "name": str(required.get("name") or "").strip(),
+            "args": (
+                dict(required.get("args") or {})
+                if isinstance(required.get("args"), dict)
+                else {}
+            ),
+        },
+        "targetFiles": list(
+            dict.fromkeys(
+                str(item or "").replace("\\", "/").strip("/")
+                for item in (recovery.get("targetFiles") or [])
+                if str(item or "").strip()
+            )
+        )[:4],
+        "message": str(recovery.get("message") or "")[:1000],
+        "recordedAt": str(recovery.get("recordedAt") or _utc_now()),
+    }
+    for key in (
+        "evidenceSatisfiedAt",
+        "evidenceSatisfiedBy",
+        "repairPlannedAt",
+        "repairedAt",
+    ):
+        if recovery.get(key):
+            normalized[key] = str(recovery.get(key))
+    normalized["fingerprint"] = _recovery_obligation_fingerprint(normalized)
+    previous = (
+        state.get("recoveryObligation")
+        if isinstance(state.get("recoveryObligation"), dict)
+        else {}
+    )
+    if increment_attempt:
+        normalized["attemptCount"] = (
+            int(previous.get("attemptCount") or 0) + 1
+            if str(previous.get("fingerprint") or "") == normalized["fingerprint"]
+            else 1
+        )
+    else:
+        normalized["attemptCount"] = max(0, int(recovery.get("attemptCount") or 0))
+    state["recoveryObligation"] = normalized
+    return normalized
+
+
+def _active_slice_files_for_recovery(state: dict[str, Any]) -> list[str]:
+    route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
+    selected = (
+        route.get("selectedSlice")
+        if isinstance(route.get("selectedSlice"), dict)
+        else {}
+    )
+    files = selected.get("files") if isinstance(selected.get("files"), list) else []
+    return list(
+        dict.fromkeys(
+            str(item or "").replace("\\", "/").strip("/")
+            for item in files
+            if str(item or "").strip()
+        )
+    )[:4]
+
+
+_CONTROL_TRANSPORT_ARG_KEYS = {
+    "taskAuthorization",
+    "task_authorization",
+    "sessionId",
+    "taskSessionId",
+    "task_session_id",
+    "authToken",
+    "auth_token",
+    "ownerCapability",
+    "owner_capability",
+    "conversationId",
+    "conversation_id",
+    "planId",
+    "plan_id",
+    "planRevision",
+    "plan_revision",
+    "activeSliceId",
+    "active_slice_id",
+    "routeHash",
+    "route_hash",
+    "routePhase",
+    "route_phase",
+}
+_CONTROL_PATH_ARG_KEYS = {
+    "path",
+    "targetfile",
+    "targetfiles",
+    "projectroot",
+    "engineroot",
+    "project",
+    "buildlogpath",
+}
+
+
+def _filesystem_path_identity(value: Any, *, host_platform: str | None = None) -> str:
+    normalized = unicodedata.normalize(
+        "NFC",
+        str(value or "").strip().replace("\\", "/"),
+    )
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized.casefold().startswith("project://"):
+        normalized = normalized[len("project://") :]
+    normalized = normalized.strip("/")
+    windows = (
+        os.name == "nt"
+        if host_platform is None
+        else str(host_platform).strip().casefold() in {"win32", "windows", "nt"}
+    )
+    return normalized.casefold() if windows else normalized
+
+
+def _recovery_args_match(
+    expected: Any,
+    observed: Any,
+    *,
+    key: str = "",
+    host_platform: str | None = None,
+) -> bool:
+    """Return whether observed arguments satisfy the exact server-owned subset."""
+
+    if key in {"taskAuthorization", "task_authorization", "sessionId"}:
+        return True
+    if isinstance(expected, dict):
+        if not isinstance(observed, dict):
+            return False
+        return all(
+            name in observed
+            and _recovery_args_match(
+                value,
+                observed[name],
+                key=str(name),
+                host_platform=host_platform,
+            )
+            for name, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return isinstance(observed, list) and len(expected) == len(observed) and all(
+            _recovery_args_match(
+                left,
+                right,
+                key=key,
+                host_platform=host_platform,
+            )
+            for left, right in zip(expected, observed, strict=True)
+        )
+    if key.lower() in _CONTROL_PATH_ARG_KEYS:
+        return _filesystem_path_identity(
+            expected,
+            host_platform=host_platform,
+        ) == _filesystem_path_identity(
+            observed,
+            host_platform=host_platform,
+        )
+    if isinstance(expected, bool):
+        return observed is expected
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        try:
+            return float(expected) == float(observed)
+        except (TypeError, ValueError):
+            return False
+    return str(expected if expected is not None else "") == str(
+        observed if observed is not None else ""
+    )
+
+
+def _control_args_match(
+    expected: Any,
+    observed: Any,
+    *,
+    host_platform: str | None = None,
+) -> bool:
+    """Match the server-owned semantic subset, excluding transport lease fields."""
+
+    if not isinstance(expected, dict) or not isinstance(observed, dict):
+        return False
+    expected_semantic = {
+        key: value for key, value in expected.items() if key not in _CONTROL_TRANSPORT_ARG_KEYS
+    }
+    observed_semantic = {
+        key: value for key, value in observed.items() if key not in _CONTROL_TRANSPORT_ARG_KEYS
+    }
+    return _recovery_args_match(
+        expected_semantic,
+        observed_semantic,
+        host_platform=host_platform,
+    )
+
+
+def task_record_recovery_obligation(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    recovery: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist one handler outcome before publishing its next action."""
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId")
+        or authorization.get("task_session_id")
+        or ""
+    ).strip()
+    if not task_session_id:
+        return {"ok": True, "active": False}
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                },
+                state,
+                mismatched_fields=mismatches,
+            )
+            return None
+        if str(state.get("status") or "") != "running":
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_NOT_WRITABLE",
+                "error": "Recovery requires a running task",
+            }
+            return None
+        normalized = _set_recovery_obligation(
+            state,
+            dict(recovery or {}),
+            increment_attempt=(
+                str((recovery or {}).get("status") or "")
+                == "environment_recovery"
+            ),
+        )
+        state["updatedAt"] = _utc_now()
+        outcome = {
+            "ok": True,
+            "active": True,
+            "taskSessionId": task_session_id,
+            "recoveryObligation": dict(normalized),
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return _task_outcome_with_control(outcome, result) if outcome else result
+
+
+def task_bind_build_contract(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    build_contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Freeze the server-resolved build tuple before task-bound execution.
+
+    The caller supplies the result of resolveBuildPlan after intentionally
+    omitting model-owned target/platform/configuration overrides.  Once bound,
+    the tuple is immutable for the active task scope and is projected into the
+    authoritative control by the central transition table.
+    """
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId")
+        or authorization.get("task_session_id")
+        or ""
+    ).strip()
+    if not task_session_id:
+        return {"ok": True, "active": False}
+    supplied = build_contract if isinstance(build_contract, dict) else {}
+    normalized = {
+        "project": str(supplied.get("project") or "").strip(),
+        "engineRoot": str(supplied.get("engineRoot") or "").strip(),
+        "target": str(supplied.get("target") or "").strip(),
+        "platform": str(supplied.get("platform") or "").strip(),
+        "configuration": str(supplied.get("configuration") or "").strip(),
+        "allowAbsoluteProject": True,
+        "allowEngineFallback": False,
+    }
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                },
+                state,
+                mismatched_fields=mismatches,
+            )
+            return None
+        if str(state.get("status") or "") != "running":
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_NOT_WRITABLE",
+                "error": "Build contract requires a running task",
+            }
+            return None
+        required = (
+            (state.get("controlState") or {}).get("requiredTool")
+            if isinstance(state.get("controlState"), dict)
+            else {}
+        )
+        if not isinstance(required, dict) or str(required.get("name") or "") != "build_unreal_project":
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_BUILD_CONTRACT_NOT_REQUIRED",
+                    "error": "The authoritative task control does not currently require a build.",
+                },
+                state,
+            )
+            return None
+        if not all(normalized[key] for key in ("project", "engineRoot", "target", "platform", "configuration")):
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_BUILD_CONTRACT_INCOMPLETE",
+                "error": "Server-resolved build contract is incomplete.",
+            }
+            return None
+        if not all(
+            re.fullmatch(r"[A-Za-z0-9_]+", normalized[key])
+            for key in ("target", "platform", "configuration")
+        ):
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_BUILD_CONTRACT_INVALID",
+                "error": "Server-resolved target, platform, and configuration must be simple names.",
+            }
+            return None
+        expected_project = _canonical_project_identity(
+            state.get("projectFile") or "",
+            workspace=workspace,
+        )
+        observed_project = _canonical_project_identity(
+            normalized["project"],
+            workspace=workspace,
+        )
+        if not expected_project or observed_project != expected_project:
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_PROJECT_PROOF_MISMATCH",
+                "error": "Build contract project does not match the authoritative task project.",
+                "expectedProject": expected_project,
+                "observedProject": observed_project,
+            }
+            return None
+        normalized["project"] = expected_project
+        existing = (
+            dict(state.get("buildContract") or {})
+            if isinstance(state.get("buildContract"), dict)
+            else {}
+        )
+        if existing and not _control_args_match(existing, normalized):
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_BUILD_CONTRACT_MISMATCH",
+                    "error": "The task build tuple is already bound and cannot be changed.",
+                },
+                state,
+            )
+            return None
+        state["buildContract"] = existing or dict(normalized)
+        state["updatedAt"] = _utc_now()
+        outcome = {
+            "ok": True,
+            "active": True,
+            "taskSessionId": task_session_id,
+            "buildContract": dict(state["buildContract"]),
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return _task_outcome_with_control(outcome, result) if outcome else result
+
+
+def task_mark_recovery_evidence(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    tool_name: str,
+    tool_args: dict[str, Any] | None = None,
+    evidence_hash: str = "",
+) -> dict[str, Any]:
+    """Consume the exact evidence tool and hand recovery to repair planning."""
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId")
+        or authorization.get("task_session_id")
+        or ""
+    ).strip()
+    if not task_session_id:
+        return {"ok": True, "active": False}
+    observed_tool = str(tool_name or "").strip()
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = {"ok": False, "errorCode": "TASK_AUTH_MISMATCH"}
+            return None
+        recovery = (
+            dict(state.get("recoveryObligation") or {})
+            if isinstance(state.get("recoveryObligation"), dict)
+            else {}
+        )
+        required = (
+            recovery.get("requiredTool")
+            if isinstance(recovery.get("requiredTool"), dict)
+            else {}
+        )
+        expected_tool = str(required.get("name") or "").strip()
+        expected_args = (
+            dict(required.get("args") or {})
+            if isinstance(required.get("args"), dict)
+            else {}
+        )
+        if str(recovery.get("status") or "") != "evidence_required":
+            outcome = {"ok": True, "active": False}
+            return state
+        if not expected_tool or observed_tool != expected_tool:
+            outcome = {
+                "ok": False,
+                "errorCode": "RECOVERY_EVIDENCE_TOOL_MISMATCH",
+                "requiredTool": required,
+            }
+            return None
+        observed_args = dict(tool_args or {})
+        if not _recovery_args_match(expected_args, observed_args):
+            outcome = {
+                "ok": False,
+                "errorCode": "RECOVERY_EVIDENCE_ARGUMENT_MISMATCH",
+                "requiredTool": required,
+            }
+            return None
+        expected_generation = int(recovery.get("mutationGeneration") or 0)
+        if expected_generation != int(state.get("mutationGeneration") or 0):
+            outcome = {
+                "ok": False,
+                "errorCode": "RECOVERY_EVIDENCE_GENERATION_STALE",
+                "expectedMutationGeneration": expected_generation,
+                "mutationGeneration": int(state.get("mutationGeneration") or 0),
+            }
+            return None
+        targets = list(recovery.get("targetFiles") or []) or _active_slice_files_for_recovery(state)
+        repair = {
+            **recovery,
+            "status": "repair_planning_required",
+            "requiredTool": {
+                "name": "unreal_code_sketch_claim_validate",
+                "args": {"targetFiles": targets} if targets else {},
+            },
+            "targetFiles": targets,
+            "evidenceSatisfiedBy": observed_tool,
+            "evidenceSatisfiedAt": _utc_now(),
+            "evidenceHash": str(evidence_hash or "")[:128],
+        }
+        normalized = _set_recovery_obligation(state, repair)
+        completed = (
+            dict(state.get("completedGates") or {})
+            if isinstance(state.get("completedGates"), dict)
+            else {}
+        )
+        completed.pop("unreal_code_sketch_claim_validate", None)
+        state["completedGates"] = completed
+        required_gates = [str(item) for item in state.get("requiredBeforeWrite") or []]
+        state["pendingGates"] = [
+            item for item in required_gates if item not in completed
+        ]
+        write_gate = dict(state.get("writeGate") or {})
+        write_gate["completedBeforeWrite"] = sorted(completed)
+        write_gate["pendingBeforeWrite"] = list(state["pendingGates"])
+        state["writeGate"] = write_gate
+        state["updatedAt"] = _utc_now()
+        outcome = {
+            "ok": True,
+            "active": True,
+            "recoveryObligation": dict(normalized),
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return _task_outcome_with_control(outcome, result) if outcome else result
+
+
 def task_record_build_recovery(
     workspace: Path,
     *,
@@ -2140,11 +2782,19 @@ def task_record_build_recovery(
         if not slice_files:
             return None
         if target_file:
-            target_folded = target_file.casefold()
-            return any(path.casefold() == target_folded for path in slice_files)
+            target_identity = _filesystem_path_identity(target_file)
+            return any(
+                _filesystem_path_identity(path) == target_identity
+                for path in slice_files
+            )
         if semantic_scoped:
-            owner_stem = _linker_owner_stem(owner_symbol).casefold()
-            return any(Path(path).stem.casefold() == owner_stem for path in slice_files)
+            owner_stem = _filesystem_path_identity(
+                _linker_owner_stem(owner_symbol)
+            )
+            return any(
+                _filesystem_path_identity(Path(path).stem) == owner_stem
+                for path in slice_files
+            )
         return None
 
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -2184,6 +2834,20 @@ def task_record_build_recovery(
                 "mutationGeneration": int(payload.get("mutationGeneration") or 0),
                 "recordedAt": _utc_now(),
             }
+            blocker_targets = [target_file] if target_file else slice_files
+            _set_recovery_obligation(
+                state,
+                {
+                    "source": "build",
+                    "status": "external_blocker",
+                    "scopeDisposition": "out_of_slice",
+                    "errorCode": "BUILD_FAILURE_OUTSIDE_ACTIVE_SLICE",
+                    "mutationGeneration": int(payload.get("mutationGeneration") or 0),
+                    "requiredTool": {},
+                    "targetFiles": blocker_targets,
+                    "message": str(payload.get("firstError") or ""),
+                },
+            )
             state["updatedAt"] = _utc_now()
             outcome = {
                 "ok": True,
@@ -2215,6 +2879,20 @@ def task_record_build_recovery(
             "evidenceSatisfied": False,
             "recordedAt": _utc_now(),
         }
+        recovery_targets = [target_file] if target_file else slice_files
+        _set_recovery_obligation(
+            state,
+            {
+                "source": "build",
+                "status": "evidence_required",
+                "scopeDisposition": "in_slice",
+                "errorCode": str(payload.get("errorCode") or "BUILD_FAILED"),
+                "mutationGeneration": int(payload.get("mutationGeneration") or 0),
+                "requiredTool": {"name": required_tool, "args": required_args},
+                "targetFiles": recovery_targets,
+                "message": str(payload.get("firstError") or ""),
+            },
+        )
         state["updatedAt"] = _utc_now()
         outcome = {
             "ok": True,
@@ -2268,6 +2946,90 @@ def _mark_compiler_proof_verified(
     state["compilerProof"] = compiler_proof
 
 
+def _post_static_oracle_binding_issue(
+    state: dict[str, Any],
+    *,
+    mutation_generation: int | None,
+    required_control_tool: str,
+) -> dict[str, Any] | None:
+    """Fail closed unless a build/automation result owns the current validated slice."""
+
+    current_generation = int(state.get("mutationGeneration") or 0)
+    observed_generation = int(mutation_generation or 0)
+    if observed_generation != current_generation:
+        return {
+            "errorCode": "BUILD_PROOF_MUTATION_GENERATION_MISMATCH",
+            "error": (
+                "Build/Automation proof mutation generation is stale for the "
+                "current task state."
+            ),
+            "expectedMutationGeneration": current_generation,
+            "observedMutationGeneration": observed_generation,
+        }
+
+    active_slice_id = str(state.get("activeSliceId") or "")
+    control = (
+        state.get("controlState")
+        if isinstance(state.get("controlState"), dict)
+        else {}
+    )
+    required = (
+        control.get("requiredTool")
+        if isinstance(control.get("requiredTool"), dict)
+        else {}
+    )
+    observed_control_tool = str(required.get("name") or "").strip()
+    control_matches = bool(
+        control.get("authoritative") is True
+        and observed_control_tool == required_control_tool
+        and str(control.get("activeSliceId") or "") == active_slice_id
+        and int(control.get("mutationGeneration") or 0) == current_generation
+    )
+    if not control_matches:
+        return {
+            "errorCode": "BUILD_PROOF_CONTROL_BINDING_MISMATCH",
+            "error": (
+                "Build/Automation proof is not the authoritative next obligation "
+                "for the current slice."
+            ),
+            "expectedControlTool": required_control_tool,
+            "observedControlTool": observed_control_tool,
+            "activeSliceId": active_slice_id,
+        }
+
+    continuity = (
+        state.get("continuity")
+        if isinstance(state.get("continuity"), dict)
+        else {}
+    )
+    checkpoint = (
+        continuity.get("checkpoint")
+        if isinstance(continuity.get("checkpoint"), dict)
+        else {}
+    )
+    validation = (
+        checkpoint.get("validation")
+        if isinstance(checkpoint.get("validation"), dict)
+        else {}
+    )
+    static_matches = bool(
+        str(checkpoint.get("activeSliceId") or "") == active_slice_id
+        and int(checkpoint.get("mutationGeneration") or 0) == current_generation
+        and str(validation.get("status") or "").strip().casefold() == "passed"
+    )
+    if not static_matches:
+        return {
+            "errorCode": "STATIC_VALIDATION_BINDING_REQUIRED",
+            "error": (
+                "Build/Automation proof requires a passed static checkpoint bound "
+                "to the current slice and mutation generation."
+            ),
+            "activeSliceId": active_slice_id,
+            "mutationGeneration": current_generation,
+        }
+    return None
+
+
 def task_complete_after_successful_build(
     workspace: Path,
     *,
@@ -2275,7 +3037,14 @@ def task_complete_after_successful_build(
     proof_level: str = "",
     mutation_generation: int | None = None,
     build_log_path: str = "",
+    project_file: str = "",
+    engine_root: str = "",
+    resolved_engine_version: str = "",
     proof_kind: str = "build",
+    automation_filters: list[str] | None = None,
+    automation_succeeded_count: int = 0,
+    automation_failed_count: int = 0,
+    automation_queue_empty: bool = False,
 ) -> dict[str, Any]:
     """Complete the active slice after a build and release only at plan end.
 
@@ -2349,6 +3118,135 @@ def task_complete_after_successful_build(
             }
             return state
 
+        verification = (
+            state.get("buildVerification")
+            if isinstance(state.get("buildVerification"), dict)
+            else {}
+        )
+        normalized_proof_kind = str(proof_kind or "build").strip().casefold()
+        pending_automation = str(verification.get("status") or "") == "pending_automation"
+        binding_issue = _post_static_oracle_binding_issue(
+            state,
+            mutation_generation=mutation_generation,
+            required_control_tool=(
+                "run_unreal_automation_tests"
+                if pending_automation
+                else "build_unreal_project"
+            ),
+        )
+        if binding_issue:
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "pending_automation" if pending_automation else "running",
+                **binding_issue,
+            }
+            return None
+        project_binding_issue = _task_project_proof_binding_issue(
+            state,
+            workspace=workspace,
+            project_file=project_file,
+            proof_kind="automation" if pending_automation else "build",
+        )
+        if project_binding_issue:
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "pending_automation" if pending_automation else "running",
+                **project_binding_issue,
+            }
+            return None
+        if not pending_automation and normalized_proof_kind != "build":
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "running",
+                "errorCode": "BUILD_PROOF_KIND_MISMATCH",
+                "error": "The current authoritative obligation requires build proof.",
+            }
+            return None
+        if pending_automation:
+            expected_project = str(verification.get("projectFile") or "").strip()
+            observed_project = _canonical_project_identity(
+                project_file,
+                workspace=workspace,
+            )
+            if expected_project and observed_project != expected_project:
+                outcome = {
+                    "ok": False,
+                    "active": True,
+                    "status": "pending_automation",
+                    "errorCode": "AUTOMATION_PROOF_PROJECT_MISMATCH",
+                    "error": "Automation proof project does not match the persisted build proof.",
+                    "expectedProjectFile": expected_project,
+                    "observedProjectFile": observed_project,
+                }
+                return None
+            expected_engine = str(verification.get("engineRoot") or "").strip()
+            observed_engine = _canonical_project_identity(
+                engine_root,
+                workspace=workspace,
+            )
+            if expected_engine and observed_engine != expected_engine:
+                outcome = {
+                    "ok": False,
+                    "active": True,
+                    "status": "pending_automation",
+                    "errorCode": "AUTOMATION_PROOF_ENGINE_MISMATCH",
+                    "error": "Automation proof engine does not match the persisted build proof.",
+                    "expectedEngineRoot": expected_engine,
+                    "observedEngineRoot": observed_engine,
+                }
+                return None
+            expected_filters = [
+                str(item).strip()
+                for item in (
+                    verification.get("testFilters")
+                    if isinstance(verification.get("testFilters"), list)
+                    else [verification.get("testFilter")]
+                )
+                if str(item or "").strip()
+            ]
+            observed_filters = [
+                str(item).strip()
+                for item in (automation_filters or [])
+                if str(item or "").strip()
+            ]
+            automation_valid = bool(
+                normalized_proof_kind == "automation"
+                and expected_filters
+                and observed_filters == expected_filters
+                and automation_queue_empty is True
+                and int(automation_succeeded_count or 0) > 0
+                and int(automation_failed_count or 0) == 0
+                and int(mutation_generation or 0)
+                == int(verification.get("mutationGeneration") or 0)
+                and str(verification.get("activeSliceId") or "")
+                == str(state.get("activeSliceId") or "")
+            )
+            if not automation_valid:
+                outcome = {
+                    "ok": False,
+                    "active": True,
+                    "status": "pending_automation",
+                    "errorCode": "AUTOMATION_PROOF_BINDING_MISMATCH",
+                    "error": (
+                        "Automation completion must cover every bound filter at the "
+                        "pending mutation generation and reach an empty queue."
+                    ),
+                    "expectedFilters": expected_filters,
+                    "observedFilters": observed_filters,
+                }
+                return None
+        elif normalized_proof_kind == "automation":
+            outcome = {
+                "ok": False,
+                "active": True,
+                "errorCode": "AUTOMATION_PROOF_NOT_PENDING",
+                "error": "No server-owned Automation gate is pending.",
+            }
+            return None
+
         completed_at = _utc_now()
         plan_scope = state.get("planScope") if isinstance(state.get("planScope"), dict) else {}
         slice_ids = [
@@ -2371,11 +3269,20 @@ def task_complete_after_successful_build(
         )
         pending_slices = [item for item in slice_ids if item not in completed_slices]
         evidence = {
-            "kind": str(proof_kind or "build"),
+            "kind": normalized_proof_kind,
             "sliceId": active_slice_id,
             "proofLevel": str(proof_level or "Built"),
             "mutationGeneration": int(mutation_generation or 0),
             "buildLogPath": str(build_log_path or ""),
+            "projectFile": _canonical_project_identity(
+                project_file,
+                workspace=workspace,
+            ),
+            "engineRoot": _canonical_project_identity(
+                engine_root,
+                workspace=workspace,
+            ),
+            "resolvedEngineVersion": str(resolved_engine_version or ""),
             "recordedAt": completed_at,
         }
         history = list(state.get("buildProofHistory") or [])
@@ -2396,6 +3303,9 @@ def task_complete_after_successful_build(
         }
         state.pop("buildRecovery", None)
         state.pop("buildVerification", None)
+        state.pop("buildBlocker", None)
+        state.pop("automationRecovery", None)
+        state.pop("recoveryObligation", None)
 
         if pending_slices:
             next_slice_id = pending_slices[0]
@@ -2415,6 +3325,7 @@ def task_complete_after_successful_build(
                 required_gates=required,
             )
             state["completedGates"] = {}
+            state["failedGateAttempts"] = {}
             state["pendingGates"] = list(required)
             write_gate = dict(state.get("writeGate") or {})
             write_gate["completedBeforeWrite"] = []
@@ -2513,7 +3424,11 @@ def task_require_automation_after_build(
     task_authorization: dict[str, Any],
     mutation_generation: int,
     build_log_path: str,
-    test_filter: str,
+    project_file: str = "",
+    engine_root: str = "",
+    resolved_engine_version: str = "",
+    test_filter: str = "",
+    test_filters: list[str] | None = None,
     declared_tests: list[str] | None = None,
 ) -> dict[str, Any]:
     """Persist the post-build Automation exit gate for the current slice."""
@@ -2549,14 +3464,76 @@ def task_require_automation_after_build(
                 "error": "Automation gate requires a running task",
             }
             return None
+        binding_issue = _post_static_oracle_binding_issue(
+            state,
+            mutation_generation=mutation_generation,
+            required_control_tool="build_unreal_project",
+        )
+        if binding_issue:
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "running",
+                **binding_issue,
+            }
+            return None
+        project_binding_issue = _task_project_proof_binding_issue(
+            state,
+            workspace=workspace,
+            project_file=project_file,
+            proof_kind="build",
+        )
+        if project_binding_issue:
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "running",
+                **project_binding_issue,
+            }
+            return None
         recorded_at = _utc_now()
         active_slice_id = str(state.get("activeSliceId") or "")
+        normalized_filters = list(
+            dict.fromkeys(
+                str(item or "").strip()
+                for item in ([*(test_filters or []), test_filter])
+                if str(item or "").strip()
+            )
+        )
+        if not normalized_filters:
+            outcome = {
+                "ok": False,
+                "errorCode": "AUTOMATION_FILTER_BINDING_REQUIRED",
+                "error": "Automation coverage requires at least one server-derived filter.",
+            }
+            return None
+        if len(normalized_filters) > 256:
+            outcome = {
+                "ok": False,
+                "errorCode": "AUTOMATION_FILTER_SET_TOO_LARGE",
+                "error": "Automation coverage exceeds the bounded 256-filter contract.",
+                "filterCount": len(normalized_filters),
+                "maxFilters": 256,
+            }
+            return None
+        state.pop("recoveryObligation", None)
+        state.pop("automationRecovery", None)
         state["buildVerification"] = {
             "status": "pending_automation",
             "activeSliceId": active_slice_id,
             "mutationGeneration": int(mutation_generation or 0),
             "buildLogPath": str(build_log_path or ""),
-            "testFilter": str(test_filter or ""),
+            "projectFile": _canonical_project_identity(
+                project_file,
+                workspace=workspace,
+            ),
+            "engineRoot": _canonical_project_identity(
+                engine_root,
+                workspace=workspace,
+            ),
+            "resolvedEngineVersion": str(resolved_engine_version or ""),
+            "testFilter": normalized_filters[0] if len(normalized_filters) == 1 else "",
+            "testFilters": normalized_filters,
             "declaredTests": [str(item) for item in (declared_tests or [])][:256],
             "recordedAt": recorded_at,
         }
@@ -2568,6 +3545,15 @@ def task_require_automation_after_build(
                 "proofLevel": "Built",
                 "mutationGeneration": int(mutation_generation or 0),
                 "buildLogPath": str(build_log_path or ""),
+                "projectFile": _canonical_project_identity(
+                    project_file,
+                    workspace=workspace,
+                ),
+                "engineRoot": _canonical_project_identity(
+                    engine_root,
+                    workspace=workspace,
+                ),
+                "resolvedEngineVersion": str(resolved_engine_version or ""),
                 "recordedAt": recorded_at,
             }
         )
@@ -2587,13 +3573,14 @@ def task_require_automation_after_build(
             "status": "pending_automation",
             "taskSessionId": task_session_id,
             "activeSliceId": str(state.get("activeSliceId") or ""),
-            "testFilter": str(test_filter or ""),
+            "testFilter": normalized_filters[0] if len(normalized_filters) == 1 else "",
+            "testFilters": normalized_filters,
             "declaredTestCount": len(declared_tests or []),
         }
         _append_log(
             workspace,
             task_session_id,
-            f"Build passed; Automation gate pending for filter {test_filter}",
+            f"Build passed; Automation gate pending for filters {', '.join(normalized_filters)}",
         )
         return state
 
@@ -2635,7 +3622,9 @@ def task_mark_build_recovery_evidence(
         if not expected:
             outcome = {"ok": True, "active": False}
             return state
-        if normalized_target.casefold() != expected.casefold():
+        if _filesystem_path_identity(normalized_target) != _filesystem_path_identity(
+            expected
+        ):
             outcome = {
                 "ok": False,
                 "errorCode": "BUILD_RECOVERY_TARGET_SCOPE_MISMATCH",
@@ -2646,6 +3635,38 @@ def task_mark_build_recovery_evidence(
         recovery["evidenceSatisfied"] = True
         recovery["evidenceRecordedAt"] = _utc_now()
         state["buildRecovery"] = recovery
+        generic = (
+            dict(state.get("recoveryObligation") or {})
+            if isinstance(state.get("recoveryObligation"), dict)
+            else {}
+        )
+        targets = list(generic.get("targetFiles") or []) or [expected]
+        _set_recovery_obligation(
+            state,
+            {
+                **generic,
+                "source": "build",
+                "status": "repair_planning_required",
+                "requiredTool": {
+                    "name": "unreal_code_sketch_claim_validate",
+                    "args": {"targetFiles": targets},
+                },
+                "targetFiles": targets,
+                "evidenceSatisfiedBy": "read_file_range",
+                "evidenceSatisfiedAt": recovery["evidenceRecordedAt"],
+            },
+        )
+        completed = dict(state.get("completedGates") or {})
+        completed.pop("unreal_code_sketch_claim_validate", None)
+        state["completedGates"] = completed
+        required_gates = [str(item) for item in state.get("requiredBeforeWrite") or []]
+        state["pendingGates"] = [
+            item for item in required_gates if item not in completed
+        ]
+        write_gate = dict(state.get("writeGate") or {})
+        write_gate["completedBeforeWrite"] = sorted(completed)
+        write_gate["pendingBeforeWrite"] = list(state["pendingGates"])
+        state["writeGate"] = write_gate
         state["updatedAt"] = _utc_now()
         outcome = {"ok": True, "active": True, "buildRecovery": recovery}
         return state
@@ -2746,10 +3767,10 @@ def _validate_linker_recovery_semantics(
             if str(item or "").strip()
         )
     )
-    owner_stem = _linker_owner_stem(owner_symbol).casefold()
+    owner_stem = _filesystem_path_identity(_linker_owner_stem(owner_symbol))
     owner_targets = [
         target for target in normalized_targets
-        if Path(target).stem.casefold() == owner_stem
+        if _filesystem_path_identity(Path(target).stem) == owner_stem
         and Path(target).suffix.casefold() in {".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh"}
     ]
     common = {
@@ -2944,7 +3965,9 @@ def task_validate_build_recovery_sketch(
             if str(item or "").strip()
         )
     )
-    if len(normalized_targets) != 1 or normalized_targets[0].casefold() != expected.casefold():
+    if len(normalized_targets) != 1 or _filesystem_path_identity(
+        normalized_targets[0]
+    ) != _filesystem_path_identity(expected):
         return {
             "ok": False,
             "active": True,
@@ -3836,7 +4859,7 @@ def _iter_discoverable_task_entries(
             )
             if str(item).strip()
         ]
-        route_next_action, route_next_action_is_tool, _ = (
+        route_next_action, route_next_action_is_tool, route_next_action_args = (
             _authoritative_control_action(
                 state,
                 legacy_action=(
@@ -3865,6 +4888,7 @@ def _iter_discoverable_task_entries(
                 "pendingGates": pending_gates,
                 "routeNextAction": route_next_action,
                 "routeNextActionIsTool": route_next_action_is_tool,
+                "routeNextActionArgs": route_next_action_args,
                 "ownsActiveToolRoute": task_owns_active_tool_route(
                     state,
                     conversation_id=conversation_id,
@@ -3985,6 +5009,21 @@ def task_list_active(
         "tasks": tasks,
         "nextAction": next_action,
         "nextActionIsTool": next_action_is_tool,
+        "nextActionArgs": (
+            dict(owned[0].get("routeNextActionArgs") or {})
+            if not corrupt and len(owned) == 1 and next_action_is_tool
+            else {}
+        ),
+        **(
+            {
+                "requiredNextTool": next_action,
+                "requiredNextToolArgs": dict(
+                    owned[0].get("routeNextActionArgs") or {}
+                ),
+            }
+            if not corrupt and len(owned) == 1 and next_action_is_tool
+            else {}
+        ),
         **(
             {
                 "agentInstruction": (
@@ -5689,6 +6728,197 @@ def task_define_slices(
     return _task_outcome_with_control(outcome, result)
 
 
+_ROLLBACK_CHECKPOINT_CAPABILITY = object()
+_ROLLBACK_TRANSACTION_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _rollback_checkpoint_binding_failure(
+    workspace: Path,
+    state: dict[str, Any],
+    binding: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Validate the durable journal that authorizes an internal rollback checkpoint.
+
+    This is intentionally stronger than task authorization.  It exists only for
+    startup recovery, where the task lease may have expired while the process was
+    down.  A caller cannot use it to checkpoint arbitrary files or tasks: the
+    transaction, task, project, file set, rollback state, and reconciled mutation
+    generation must all match their durable owners.
+    """
+
+    def reject(reason: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "errorCode": "ROLLBACK_CHECKPOINT_BINDING_INVALID",
+            "error": f"Rollback checkpoint binding rejected: {reason}",
+        }
+
+    transaction_id = str(binding.get("transactionId") or "").strip()
+    if not _ROLLBACK_TRANSACTION_ID_RE.fullmatch(transaction_id):
+        return reject("invalid transaction identity")
+    task_session_id = str(binding.get("taskSessionId") or "").strip()
+    try:
+        task_session_id = _validate_task_session_id(task_session_id)
+    except ValueError:
+        return reject("invalid task identity")
+    if task_session_id != str(state.get("taskSessionId") or "").strip():
+        return reject("journal task does not match persisted task state")
+
+    state_root = ensure_state_root_layout(resolve_agent_state_root(workspace))
+    transactions_root = (state_root / "transactions").resolve()
+    journal_path = (transactions_root / f"{transaction_id}.json").resolve()
+    if journal_path.parent != transactions_root or not journal_path.is_file():
+        return reject("durable rollback journal is missing")
+    try:
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return reject("durable rollback journal is unreadable")
+    if not isinstance(journal, dict):
+        return reject("durable rollback journal is malformed")
+    if str(journal.get("transactionId") or "").strip() != transaction_id:
+        return reject("transaction identity mismatch")
+    if str(journal.get("taskSessionId") or "").strip() != task_session_id:
+        return reject("task identity mismatch")
+    if journal.get("requiresAtomicCheckpoint") is not True:
+        return reject("journal is not checkpoint-guarded")
+    if journal.get("checkpointRequired") is False:
+        return reject("journal does not require a task checkpoint")
+    if str(journal.get("status") or "") not in {
+        "rollback_disk_pending",
+        "rollback_state_pending",
+    }:
+        return reject("journal is not awaiting rollback convergence")
+    rollback_intent = (
+        journal.get("rollbackIntent")
+        if isinstance(journal.get("rollbackIntent"), dict)
+        else {}
+    )
+    if rollback_intent.get("active") is not True:
+        return reject("rollback intent is not active")
+    if journal.get("rollbackCheckpointCommitted") is True:
+        return reject("rollback checkpoint is already committed")
+
+    raw_project_root = str(binding.get("projectRoot") or "").strip()
+    if not raw_project_root:
+        return reject("project root is missing")
+    raw_journal_project_root = str(journal.get("projectRoot") or "").strip()
+    if not raw_journal_project_root:
+        return reject("journal project root is missing")
+    project_root = Path(raw_project_root).expanduser().resolve()
+    journal_project_root = Path(raw_journal_project_root).expanduser().resolve()
+    task_project_root = _continuity_project_root(workspace, state).resolve()
+    project_identity = _filesystem_path_identity(project_root)
+    if _filesystem_path_identity(journal_project_root) != project_identity:
+        return reject("journal project does not match the reconciled project")
+    if _filesystem_path_identity(task_project_root) != project_identity:
+        return reject("task project does not match the rollback journal")
+
+    completed_entries = [
+        entry
+        for entry in (journal.get("entries") or [])
+        if isinstance(entry, dict)
+        and (
+            entry.get("writeCompleted") is True
+            or (
+                entry.get("writeStarted") is True
+                and (entry.get("postHash") or entry.get("deletedAfter") is True)
+            )
+        )
+    ]
+    if not completed_entries:
+        return reject("journal has no completed mutation entries")
+
+    journal_absolute: list[str] = []
+    journal_relative: list[str] = []
+    expected_mutation_paths: dict[str, str | None] = {}
+    for entry in completed_entries:
+        raw_absolute = str(entry.get("canonicalAbsolutePath") or "").strip()
+        raw_relative = str(entry.get("relativePath") or "").strip().replace("\\", "/")
+        if not raw_absolute or not raw_relative:
+            return reject("journal mutation path is incomplete")
+        absolute = Path(raw_absolute).expanduser().resolve()
+        try:
+            derived_relative = absolute.relative_to(project_root).as_posix()
+        except ValueError:
+            return reject("journal mutation path is outside the project")
+        if _filesystem_path_identity(derived_relative) != _filesystem_path_identity(raw_relative):
+            return reject("journal relative and absolute paths disagree")
+        relative_identity = _filesystem_path_identity(raw_relative)
+        if entry.get("existedBefore") is True:
+            if not absolute.is_file():
+                return reject("rollback pre-image is missing from disk")
+            try:
+                disk_hash = hashlib.sha256(absolute.read_bytes()).hexdigest()
+            except OSError:
+                return reject("rollback pre-image is unreadable")
+            if disk_hash != str(entry.get("preHash") or "").strip():
+                return reject("rollback pre-image hash does not match the journal")
+            expected_mutation_paths[relative_identity] = disk_hash
+        else:
+            if absolute.exists():
+                return reject("created rollback target still exists")
+            expected_mutation_paths[relative_identity] = None
+        journal_absolute.append(_filesystem_path_identity(absolute))
+        journal_relative.append(relative_identity)
+
+    supplied_files = binding.get("modifiedFiles")
+    if not isinstance(supplied_files, list) or not supplied_files:
+        return reject("rollback file binding is missing")
+    supplied_absolute = [
+        _filesystem_path_identity(Path(str(item)).expanduser().resolve())
+        for item in supplied_files
+        if str(item).strip()
+    ]
+    if (
+        len(supplied_absolute) != len(supplied_files)
+        or len(set(supplied_absolute)) != len(supplied_absolute)
+        or set(supplied_absolute) != set(journal_absolute)
+        or len(set(journal_relative)) != len(journal_relative)
+    ):
+        return reject("rollback file set does not exactly match the journal")
+
+    try:
+        mutation_generation = int(binding.get("mutationGeneration") or 0)
+    except (TypeError, ValueError):
+        return reject("mutation generation is invalid")
+    try:
+        from mutation_generation import read_state as read_mutation_state
+
+        current_mutation = read_mutation_state(project_root)
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return reject("reconciled mutation state is unavailable")
+    if int(current_mutation.get("mutationGeneration") or 0) != mutation_generation:
+        return reject("mutation generation does not match reconciled disk state")
+    mutation_paths = current_mutation.get("paths")
+    if not isinstance(mutation_paths, dict):
+        return reject("reconciled mutation path state is malformed")
+    normalized_mutation_paths = {
+        _filesystem_path_identity(key): str(value or "").strip()
+        for key, value in mutation_paths.items()
+    }
+    for relative_identity, expected_hash in expected_mutation_paths.items():
+        if expected_hash is None:
+            if relative_identity in normalized_mutation_paths:
+                return reject("deleted rollback path remains in mutation state")
+        elif normalized_mutation_paths.get(relative_identity) != expected_hash:
+            return reject("rollback pre-image is not reconciled in mutation state")
+    prior_reconciliation = (
+        journal.get("rollbackReconciliation")
+        if isinstance(journal.get("rollbackReconciliation"), dict)
+        else {}
+    )
+    if (
+        prior_reconciliation.get("mutationGeneration") is not None
+        and int(prior_reconciliation.get("mutationGeneration") or 0)
+        != mutation_generation
+    ):
+        return reject("journal reconciliation generation is stale")
+    return None
+
+
 def task_checkpoint(
     workspace: Path,
     *,
@@ -5707,6 +6937,8 @@ def task_checkpoint(
     include_git_changes: bool = True,
     advance_gate_snapshots: bool = False,
     mutation_generation: int | None = None,
+    _internal_capability: object | None = None,
+    _rollback_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Heartbeat, checkpoint, and safely recover a long-running task."""
 
@@ -5715,6 +6947,11 @@ def task_checkpoint(
         authorization.get("taskSessionId") or authorization.get("task_session_id") or ""
     ).strip()
     normalized_action = str(action or "status").strip().lower()
+    trusted_rollback_checkpoint = bool(
+        normalized_action == "record"
+        and _internal_capability is _ROLLBACK_CHECKPOINT_CAPABILITY
+        and isinstance(_rollback_binding, dict)
+    )
     if not task_session_id:
         return {
             "ok": False,
@@ -5790,7 +7027,23 @@ def task_checkpoint(
         nonlocal advanced_gate_snapshots
         nonlocal checkpoint_recorded
         nonlocal checkpoint_substantive
-        mismatches = _task_authorization_mismatches(state, authorization)
+        rollback_binding_failure = (
+            _rollback_checkpoint_binding_failure(
+                workspace,
+                state,
+                dict(_rollback_binding or {}),
+            )
+            if trusted_rollback_checkpoint
+            else None
+        )
+        if rollback_binding_failure:
+            mutation_result = rollback_binding_failure
+            return None
+        mismatches = (
+            []
+            if trusted_rollback_checkpoint
+            else _task_authorization_mismatches(state, authorization)
+        )
         if mismatches:
             mutation_result = _auth_refresh_failure(
                 {
@@ -5809,6 +7062,55 @@ def task_checkpoint(
                 "errorCode": "TASK_NOT_WRITABLE",
             }
             return None
+        checkpoint_recovery = (
+            state.get("recoveryObligation")
+            if isinstance(state.get("recoveryObligation"), dict)
+            else {}
+        )
+        checkpoint_required = (
+            checkpoint_recovery.get("requiredTool")
+            if isinstance(checkpoint_recovery.get("requiredTool"), dict)
+            else {}
+        )
+        if (
+            not trusted_rollback_checkpoint
+            and str(checkpoint_recovery.get("status") or "")
+            == "checkpoint_rebase_required"
+            and str(checkpoint_required.get("name") or "")
+            == "unreal_task_checkpoint"
+        ):
+            expected_args = (
+                dict(checkpoint_required.get("args") or {})
+                if isinstance(checkpoint_required.get("args"), dict)
+                else {}
+            )
+            observed_args = {
+                "action": normalized_action,
+                "acceptCurrentFiles": bool(accept_current_files),
+                "includeGitChanges": bool(include_git_changes),
+            }
+            if not _control_args_match(expected_args, observed_args):
+                current_authorization = task_authorization_for_state(state)
+                next_args = dict(expected_args)
+                next_args["taskAuthorization"] = compact_task_authorization(
+                    current_authorization
+                )
+                mutation_result = {
+                    "ok": False,
+                    "errorCode": "TASK_CONTROL_ARGUMENT_MISMATCH",
+                    "error": (
+                        "Checkpoint arguments do not match the authoritative "
+                        "rebase obligation."
+                    ),
+                    "taskAuthorization": current_authorization,
+                    "requiredNextTool": "unreal_task_checkpoint",
+                    "requiredNextToolArgs": next_args,
+                    "nextAction": "unreal_task_checkpoint",
+                    "nextActionIsTool": True,
+                    "nextActionArgs": next_args,
+                    "retryable": True,
+                }
+                return None
         authorization_identity = {
             "ownerCapability": str(state.get("ownerCapability") or ""),
             "conversationId": str(state.get("conversationId") or ""),
@@ -5823,6 +7125,7 @@ def task_checkpoint(
         if (
             normalized_action in {"heartbeat", "record"}
             and lease_health(continuity).get("active") is not True
+            and not trusted_rollback_checkpoint
         ):
             mutation_result = {
                 "ok": False,
@@ -5838,9 +7141,44 @@ def task_checkpoint(
             )
         elif normalized_action == "record":
             if mutation_generation is not None:
-                state["mutationGeneration"] = max(
-                    int(state.get("mutationGeneration") or 0),
-                    max(0, int(mutation_generation)),
+                reconciled_generation = max(0, int(mutation_generation))
+                state["mutationGeneration"] = (
+                    reconciled_generation
+                    if trusted_rollback_checkpoint
+                    else max(
+                        int(state.get("mutationGeneration") or 0),
+                        reconciled_generation,
+                    )
+                )
+            recovery_before_checkpoint = (
+                dict(state.get("recoveryObligation") or {})
+                if isinstance(state.get("recoveryObligation"), dict)
+                else {}
+            )
+            if (
+                str(recovery_before_checkpoint.get("status") or "")
+                == "repair_required"
+                and int(state.get("mutationGeneration") or 0)
+                > int(recovery_before_checkpoint.get("mutationGeneration") or 0)
+                and bool(modified_files)
+            ):
+                _set_recovery_obligation(
+                    state,
+                    {
+                        **recovery_before_checkpoint,
+                        "status": "revalidate_required",
+                        "mutationGeneration": int(state.get("mutationGeneration") or 0),
+                        "requiredTool": {
+                            "name": "static_validate_project",
+                            "args": {
+                                "projectRoot": str(
+                                    _continuity_project_root(workspace, state)
+                                ),
+                                "fullAudit": False,
+                            },
+                        },
+                        "repairedAt": _utc_now(),
+                    },
                 )
             discovered = _checkpoint_path_union(
                 workspace,
@@ -5946,6 +7284,72 @@ def task_checkpoint(
                     "discoveryWarnings": discovered["warnings"],
                 }
                 return None
+
+            validation_fact = validation if isinstance(validation, dict) else {}
+            validation_status = str(validation_fact.get("status") or "").casefold()
+            if validation_status == "failed":
+                first_finding = (
+                    validation_fact.get("firstFinding")
+                    if isinstance(validation_fact.get("firstFinding"), dict)
+                    else {}
+                )
+                target_path = str(first_finding.get("path") or "").replace("\\", "/").strip("/")
+                line = max(0, int(first_finding.get("line") or 0))
+                required_args: dict[str, Any] = {"path": target_path} if target_path else {}
+                required_tool = "read_file"
+                if target_path and line > 0:
+                    required_tool = "read_file_range"
+                    required_args.update(
+                        {
+                            "startLine": max(1, line - 20),
+                            "endLine": line + 20,
+                        }
+                    )
+                _set_recovery_obligation(
+                    state,
+                    {
+                        "source": "static",
+                        "status": (
+                            "evidence_required" if target_path else "external_blocker"
+                        ),
+                        "scopeDisposition": (
+                            "in_slice" if target_path else "infrastructure"
+                        ),
+                        "errorCode": str(
+                            first_finding.get("code") or "STATIC_VALIDATION_FAILED"
+                        ),
+                        "mutationGeneration": int(state.get("mutationGeneration") or 0),
+                        "requiredTool": (
+                            {"name": required_tool, "args": required_args}
+                            if target_path
+                            else {}
+                        ),
+                        "targetFiles": [target_path] if target_path else [],
+                        "message": str(first_finding.get("message") or ""),
+                    },
+                )
+            elif validation_status == "passed":
+                recovery_after_validation = (
+                    dict(state.get("recoveryObligation") or {})
+                    if isinstance(state.get("recoveryObligation"), dict)
+                    else {}
+                )
+                if str(recovery_after_validation.get("status") or "") in {
+                    "revalidate_required",
+                    "environment_recovery",
+                }:
+                    _set_recovery_obligation(
+                        state,
+                        {
+                            **recovery_after_validation,
+                            "status": "revalidate_required",
+                            "mutationGeneration": int(state.get("mutationGeneration") or 0),
+                            "requiredTool": {
+                                "name": "build_unreal_project",
+                                "args": {},
+                            },
+                        },
+                    )
             state["autonomySupervisor"] = observe_autonomy(
                 state.get("autonomySupervisor"),
                 state,
@@ -6003,6 +7407,27 @@ def task_checkpoint(
                 state["continuity"] = mark_recovery(
                     continuity,
                     conflicts=conflicts,
+                )
+                _set_recovery_obligation(
+                    state,
+                    {
+                        "source": "checkpoint",
+                        "status": "checkpoint_rebase_required",
+                        "scopeDisposition": "task_checkpoint",
+                        "errorCode": "TASK_CHECKPOINT_CONFLICT",
+                        "mutationGeneration": int(
+                            state.get("mutationGeneration") or 0
+                        ),
+                        "requiredTool": {
+                            "name": "unreal_task_checkpoint",
+                            "args": {
+                                "action": "rebase",
+                                "acceptCurrentFiles": True,
+                                "includeGitChanges": False,
+                            },
+                        },
+                        "conflictCount": len(conflicts),
+                    },
                 )
                 state["autonomySupervisor"] = invalidate_supervisor_validation(
                     state.get("autonomySupervisor"),
@@ -6109,7 +7534,16 @@ def task_checkpoint(
                 )
                 required = [str(item) for item in state.get("requiredBeforeWrite") or []]
                 state["completedGates"] = {}
+                state["failedGateAttempts"] = {}
                 state["pendingGates"] = required
+                for stale_key in (
+                    "buildRecovery",
+                    "buildBlocker",
+                    "buildVerification",
+                    "automationRecovery",
+                    "recoveryObligation",
+                ):
+                    state.pop(stale_key, None)
                 if "unreal_feature_intent_resolve" in required:
                     state["selectedIntentId"] = ""
                     state["intentContractHash"] = ""
@@ -6137,8 +7571,22 @@ def task_checkpoint(
                     state,
                     reason="checkpoint_rebase",
                 )
+                checkpoint_recovery = (
+                    state.get("recoveryObligation")
+                    if isinstance(state.get("recoveryObligation"), dict)
+                    else {}
+                )
+                if str(checkpoint_recovery.get("source") or "") == "checkpoint":
+                    state.pop("recoveryObligation", None)
             else:
                 state["continuity"] = mark_recovery(continuity, conflicts=[])
+                checkpoint_recovery = (
+                    state.get("recoveryObligation")
+                    if isinstance(state.get("recoveryObligation"), dict)
+                    else {}
+                )
+                if str(checkpoint_recovery.get("source") or "") == "checkpoint":
+                    state.pop("recoveryObligation", None)
                 state["autonomySupervisor"] = observe_autonomy(
                     state.get("autonomySupervisor"),
                     state,
@@ -6234,6 +7682,48 @@ def task_checkpoint(
                 mutation_result["requiredNextToolArgs"] = dict(next_action_args)
         return _task_outcome_with_control(mutation_result, result)
     return result
+
+
+def task_checkpoint_rollback_internal(
+    workspace: Path,
+    *,
+    transaction_id: str,
+    task_session_id: str,
+    project_root: str,
+    modified_files: list[str],
+    mutation_generation: int,
+    validation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record a rollback checkpoint from a matching durable journal only.
+
+    This function is not exposed as an MCP action.  The private in-process
+    capability lets startup recovery cross an expired lease only after
+    ``_rollback_checkpoint_binding_failure`` proves exact durable ownership.
+    """
+
+    binding = {
+        "transactionId": str(transaction_id or ""),
+        "taskSessionId": str(task_session_id or ""),
+        "projectRoot": str(project_root or ""),
+        "modifiedFiles": [str(item) for item in (modified_files or [])],
+        "mutationGeneration": max(0, int(mutation_generation or 0)),
+    }
+    return task_checkpoint(
+        workspace,
+        task_authorization={"taskSessionId": str(task_session_id or "")},
+        action="record",
+        phase="executor",
+        modified_files=list(binding["modifiedFiles"]),
+        required_next_action="static_validate_project",
+        validation=dict(validation or {}),
+        note="trusted startup checkpoint after journal-bound rollback",
+        preserve_route_usage=True,
+        include_git_changes=False,
+        advance_gate_snapshots=True,
+        mutation_generation=int(binding["mutationGeneration"]),
+        _internal_capability=_ROLLBACK_CHECKPOINT_CAPABILITY,
+        _rollback_binding=binding,
+    )
 
 
 DEFAULT_GATE_TTL_SECONDS = 2 * 60 * 60
@@ -6651,12 +8141,12 @@ def task_record_gate(
                     {},
                 )
                 bound_paths = {
-                    str(path or "").replace("\\", "/").strip("/").casefold()
+                    _filesystem_path_identity(path)
                     for path in active_slice.get("files") or []
                     if str(path or "").strip()
                 }
                 snapshot_paths = {
-                    str(item.get("path") or "").replace("\\", "/").strip("/").casefold()
+                    _filesystem_path_identity(item.get("path"))
                     for item in target_snapshots or []
                     if isinstance(item, dict) and str(item.get("path") or "").strip()
                 }
@@ -6779,6 +8269,27 @@ def task_record_gate(
                 "gateEvidenceHash": record["evidenceHash"],
                 "updatedAt": now.isoformat(),
             }
+            recovery = (
+                dict(state.get("recoveryObligation") or {})
+                if isinstance(state.get("recoveryObligation"), dict)
+                else {}
+            )
+            if str(recovery.get("status") or "") == "repair_planning_required":
+                _set_recovery_obligation(
+                    state,
+                    {
+                        **recovery,
+                        "status": "repair_required",
+                        "requiredTool": {},
+                        "repairPlannedAt": now.isoformat(),
+                    },
+                )
+                if str(recovery.get("source") or "") == "build":
+                    build_recovery = dict(state.get("buildRecovery") or {})
+                    if build_recovery:
+                        build_recovery["status"] = "repair_required"
+                        build_recovery["repairPlannedAt"] = now.isoformat()
+                        state["buildRecovery"] = build_recovery
         authority_gate = resolve_scope_authority_gate(required)
         gate_targets = (
             dict(state.get("gateTargetSnapshots") or {})
@@ -6826,7 +8337,7 @@ def task_record_gate(
                 # each supplied snapshot must still exactly match its owner
                 # entry (path, existence, and hash).
                 owner_by_path = {
-                    str(item.get("path") or "").casefold(): item
+                    _filesystem_path_identity(item.get("path")): item
                     for item in owner_snapshots
                     if str(item.get("path") or "")
                 }
@@ -6834,7 +8345,7 @@ def task_record_gate(
                     item
                     for item in normalized
                     if owner_by_path.get(
-                        str(item.get("path") or "").casefold()
+                        _filesystem_path_identity(item.get("path"))
                     )
                     != item
                 ]
@@ -7057,7 +8568,7 @@ def _route_argument_issue(
             else {}
         )
         selected_files = {
-            str(item).strip().replace("\\", "/").removeprefix("./").casefold()
+            _filesystem_path_identity(item)
             for item in selected_slice.get("files") or []
             if str(item).strip()
         }
@@ -7095,12 +8606,7 @@ def _route_argument_issue(
                         f"Mutation target is outside selected slice: {candidate}",
                     )
             normalized_requested.append(
-                raw_path.strip()
-                .replace("\\", "/")
-                .removeprefix("./")
-                .removeprefix("project://")
-                .strip("/")
-                .casefold()
+                _filesystem_path_identity(raw_path)
             )
         if len(normalized_requested) > max_files:
             return (
@@ -7339,6 +8845,42 @@ def authorize_task_tool(
             else {}
         )
         required_control_name = str(required_control.get("name") or "").strip()
+        required_control_args = (
+            dict(required_control.get("args") or {})
+            if isinstance(required_control.get("args"), dict)
+            else {}
+        )
+        observed_arguments = arguments if isinstance(arguments, dict) else {}
+        if (
+            control.get("authoritative") is True
+            and required_control_name
+            and tool_name == required_control_name
+            and not _control_args_match(required_control_args, observed_arguments)
+        ):
+            current_authorization = task_authorization_for_state(state)
+            next_args = dict(required_control_args)
+            next_args["taskAuthorization"] = compact_task_authorization(
+                current_authorization
+            )
+            return {
+                "ok": False,
+                "errorCode": "TASK_CONTROL_ARGUMENT_MISMATCH",
+                "error": (
+                    f"{tool_name} arguments do not match the authoritative "
+                    "server-owned obligation."
+                ),
+                "taskSessionId": task_session_id,
+                "taskAuthorization": current_authorization,
+                "toolRoute": compact_tool_route(route),
+                "controlEpoch": _control_epoch(state.get("controlEpoch")),
+                "control": dict(control),
+                "requiredNextTool": required_control_name,
+                "requiredNextToolArgs": next_args,
+                "nextAction": required_control_name,
+                "nextActionIsTool": True,
+                "nextActionArgs": next_args,
+                "retryable": True,
+            }
         if (
             tool_name not in CONTROL_PLANE_TOOLS
             and control.get("authoritative") is True

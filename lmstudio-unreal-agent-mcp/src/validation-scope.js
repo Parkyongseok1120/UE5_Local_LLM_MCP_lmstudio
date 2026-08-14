@@ -1,6 +1,8 @@
 "use strict";
 
-function normalizeValidationScopePath(value) {
+const { filesystemPathIdentity } = require("./filesystem-path-identity");
+
+function normalizeValidationScopePath(value, hostPlatform = process.platform) {
   const normalized = String(value || "")
     .trim()
     .replace(/\\/g, "/")
@@ -9,14 +11,19 @@ function normalizeValidationScopePath(value) {
     .replace(/^\/+|\/+$/g, "");
   if (!normalized || normalized.split("/").includes("..")) return "";
   const parts = normalized.split("/");
+  const sourceRootNames = new Set([
+    filesystemPathIdentity("Source", hostPlatform),
+    filesystemPathIdentity("Plugins", hostPlatform),
+  ]);
   const sourceIndex = parts.findIndex((part) => (
-    ["source", "plugins"].includes(part.toLowerCase())
+    sourceRootNames.has(filesystemPathIdentity(part, hostPlatform))
   ));
   if (sourceIndex < 0) return "";
   return parts.slice(sourceIndex).join("/");
 }
 
 function deriveValidationScope(taskState, mutationGeneration, options = {}) {
+  const hostPlatform = String(options.hostPlatform || process.platform);
   if (options.fullAudit === true || options.taskBound !== true) {
     return { kind: "full_audit", targets: [] };
   }
@@ -46,15 +53,24 @@ function deriveValidationScope(taskState, mutationGeneration, options = {}) {
   const checkpointFiles = Array.isArray(checkpoint.modifiedFiles)
     ? checkpoint.modifiedFiles
     : [];
-  const normalizedSelected = selected.map(normalizeValidationScopePath).filter(Boolean);
-  const normalizedModified = checkpointFiles.map(normalizeValidationScopePath).filter(Boolean);
-  const modifiedKeys = new Set(normalizedModified.map((item) => item.toLowerCase()));
+  const normalizedSelected = selected
+    .map((item) => normalizeValidationScopePath(item, hostPlatform))
+    .filter(Boolean);
+  const normalizedModified = checkpointFiles
+    .map((item) => normalizeValidationScopePath(item, hostPlatform))
+    .filter(Boolean);
+  const modifiedKeys = new Set(normalizedModified.map(
+    (item) => filesystemPathIdentity(item, hostPlatform)
+  ));
   const selectedModified = normalizedSelected.filter(
-    (item) => modifiedKeys.has(item.toLowerCase())
+    (item) => modifiedKeys.has(filesystemPathIdentity(item, hostPlatform))
   );
-  const targets = [...new Set(
-    normalizedSelected.length ? selectedModified : normalizedModified
-  )].slice(0, 4);
+  const targetByIdentity = new Map();
+  for (const target of (normalizedSelected.length ? selectedModified : normalizedModified)) {
+    const identity = filesystemPathIdentity(target, hostPlatform);
+    if (!targetByIdentity.has(identity)) targetByIdentity.set(identity, target);
+  }
+  const targets = [...targetByIdentity.values()].slice(0, 4);
   return targets.length
     ? { kind: "task_slice", targets }
     : {

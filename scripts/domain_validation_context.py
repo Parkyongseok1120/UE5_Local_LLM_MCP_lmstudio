@@ -12,10 +12,11 @@ from typing import Any
 
 from cpp_parse_utils import mask_comments_and_strings
 from plugin_project_context import PluginProjectContext, build_plugin_project_context, resolve_scan_roots
+from unreal_source_extensions import UNREAL_CPP_SOURCE_SUFFIXES, UNREAL_HEADER_SUFFIXES
 
-SOURCE_SUFFIXES = {".h", ".hpp", ".cpp", ".c", ".cc"}
-HEADER_SUFFIXES = {".h", ".hpp"}
-CPP_SUFFIXES = {".cpp", ".c", ".cc"}
+SOURCE_SUFFIXES = UNREAL_CPP_SOURCE_SUFFIXES | UNREAL_HEADER_SUFFIXES
+HEADER_SUFFIXES = UNREAL_HEADER_SUFFIXES
+CPP_SUFFIXES = UNREAL_CPP_SOURCE_SUFFIXES
 CLASS_RE = re.compile(
     r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?(?P<name>[A-Za-z_]\w*)"
     r"(?:\s*:\s*(?:public|protected|private)\s+(?P<base>[A-Za-z_]\w*))?[^;{]*\{"
@@ -172,12 +173,24 @@ class DomainValidationContext:
         parts = list(rel.parts)
         if parts and parts[0].lower() == "private":
             parts[0] = "Public"
-        parts[-1] = f"{cpp_path.stem}.h"
-        candidate = module_root.joinpath(*parts)
-        if candidate.is_file():
-            return candidate.resolve()
+        relative_parent = parts[:-1]
+        direct = [
+            module_root.joinpath(*relative_parent, f"{cpp_path.stem}{suffix}")
+            for suffix in sorted(HEADER_SUFFIXES)
+        ]
+        direct_hits = [candidate.resolve() for candidate in direct if candidate.is_file()]
+        if len(direct_hits) == 1:
+            return direct_hits[0]
         public_root = module_root / "Public"
-        matches = sorted(public_root.rglob(f"{cpp_path.stem}.h")) if public_root.is_dir() else []
+        matches = (
+            sorted(
+                candidate
+                for candidate in public_root.rglob(f"{cpp_path.stem}.*")
+                if candidate.is_file() and candidate.suffix.lower() in HEADER_SUFFIXES
+            )
+            if public_root.is_dir()
+            else []
+        )
         return matches[0].resolve() if len(matches) == 1 else None
 
     def class_text(self, class_name: str, module: str = "") -> str:

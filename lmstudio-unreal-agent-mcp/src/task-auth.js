@@ -20,7 +20,10 @@ const {
 const { spawnSync } = require("child_process");
 const { recoveryAction } = require("./route-recovery-policy");
 const { stripProjectNamePrefix } = require("./read-path-resolver");
-const { commitControlTransition } = require("./task-control-transition");
+const {
+  commitControlTransition,
+  failedGateAttemptForCurrentScope,
+} = require("./task-control-transition");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -367,6 +370,12 @@ function normalizeRoutePath(value) {
   return result.replace(/^\/+|\/+$/g, "");
 }
 
+function filesystemPathIdentity(value, hostPlatform = process.platform) {
+  const normalized = normalizeRoutePath(value).normalize("NFC");
+  const windows = ["win32", "windows", "nt"].includes(String(hostPlatform || "").toLowerCase());
+  return windows ? normalized.toLowerCase() : normalized;
+}
+
 function normalizedSelectionSnapshots(values) {
   if (!Array.isArray(values)) return [];
   return values
@@ -478,12 +487,12 @@ function routePathMatches(requestedAbsolute, state, selectedFile) {
   const projectRoot = projectFile.toLowerCase().endsWith(".uproject")
     ? path.dirname(projectFile)
     : projectFile;
-  const requested = normalizeRoutePath(
+  const requested = filesystemPathIdentity(
     projectRoot
       ? path.relative(path.resolve(projectRoot), path.resolve(requestedAbsolute))
       : requestedAbsolute
-  ).toLowerCase();
-  const selected = normalizeRoutePath(selectedFile).toLowerCase();
+  );
+  const selected = filesystemPathIdentity(selectedFile);
   return Boolean(requested && selected && requested === selected);
 }
 
@@ -593,6 +602,7 @@ function validateToolRoute(state, fields, args, toolName) {
       calls: [],
       resetReason: "gate_ttl_expired",
     };
+    commitControlTransition(state);
   }
   const activeRoute = route && typeof route === "object"
     ? state.toolRoute
@@ -607,6 +617,41 @@ function validateToolRoute(state, fields, args, toolName) {
   const routeActiveTools = new Set(
     Array.isArray(activeRoute.activeTools) ? activeRoute.activeTools.map(String).filter(Boolean) : []
   );
+  const requiredControl = control?.requiredTool && typeof control.requiredTool === "object"
+    ? control.requiredTool
+    : {};
+  const requiredControlName = String(requiredControl.name || "").trim();
+  const requiredControlArgs = requiredControl.args && typeof requiredControl.args === "object"
+    ? requiredControl.args
+    : {};
+  if (
+    toolName
+    && control?.authoritative === true
+    && requiredControlName
+    && toolName === requiredControlName
+    && !controlArgsMatch(requiredControlArgs, args || {})
+  ) {
+    const authorization = taskAuthorizationForState(state);
+    const nextArgs = {
+      ...requiredControlArgs,
+      taskAuthorization: compactTaskAuthorization(authorization),
+    };
+    return {
+      ok: false,
+      errorCode: "TASK_CONTROL_ARGUMENT_MISMATCH",
+      error: `${toolName} arguments do not satisfy the authoritative server-owned obligation.`,
+      toolRoute: activeRoute,
+      taskAuthorization: authorization,
+      controlEpoch: Math.max(0, Number(state.controlEpoch || control.epoch || 0)),
+      control: { ...control },
+      requiredNextTool: requiredControlName,
+      requiredNextToolArgs: nextArgs,
+      nextAction: requiredControlName,
+      nextActionIsTool: true,
+      nextActionArgs: nextArgs,
+      retryable: true,
+    };
+  }
   if (
     toolName
     && control?.authoritative === true
@@ -835,6 +880,43 @@ function normalizeEvidencePath(value) {
   return relPath;
 }
 
+const CONTROL_TRANSPORT_ARG_KEYS = new Set([
+  "taskAuthorization", "task_authorization", "sessionId",
+  "taskSessionId", "task_session_id", "authToken", "auth_token",
+  "ownerCapability", "owner_capability", "conversationId", "conversation_id",
+  "planId", "plan_id", "planRevision", "plan_revision",
+  "activeSliceId", "active_slice_id", "routeHash", "route_hash",
+  "routePhase", "route_phase",
+]);
+const CONTROL_PATH_ARG_KEYS = new Set([
+  "path", "targetfile", "targetfiles", "projectroot",
+  "engineroot", "project", "buildlogpath",
+]);
+
+function controlArgsMatch(expected, observed, key = "", hostPlatform = process.platform) {
+  if (CONTROL_TRANSPORT_ARG_KEYS.has(key)) return true;
+  if (Array.isArray(expected)) {
+    return Array.isArray(observed)
+      && expected.length === observed.length
+      && expected.every((value, index) => controlArgsMatch(value, observed[index], key, hostPlatform));
+  }
+  if (expected && typeof expected === "object") {
+    if (!observed || typeof observed !== "object" || Array.isArray(observed)) return false;
+    const expectedKeys = Object.keys(expected).filter((name) => !CONTROL_TRANSPORT_ARG_KEYS.has(name)).sort();
+    return expectedKeys.every((name) => (
+      Object.prototype.hasOwnProperty.call(observed, name)
+      && controlArgsMatch(expected[name], observed[name], name, hostPlatform)
+    ));
+  }
+  if (CONTROL_PATH_ARG_KEYS.has(String(key).toLowerCase())) {
+    return filesystemPathIdentity(expected, hostPlatform)
+      === filesystemPathIdentity(observed, hostPlatform);
+  }
+  if (typeof expected === "number") return Number(expected) === Number(observed);
+  if (typeof expected === "boolean") return observed === expected;
+  return String(expected ?? "") === String(observed ?? "");
+}
+
 function scopedAbsentEvidencePath(scopeRelativePath, query) {
   const scope = normalizeEvidencePath(scopeRelativePath);
   const normalizedQuery = normalizeEvidencePath(
@@ -896,7 +978,7 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     return;
   }
   const planRevision = String(state.planRevision || "");
-  const key = relPath.toLowerCase();
+  const key = filesystemPathIdentity(relPath);
   const sourceKind = [".h", ".hpp", ".inl"].includes(path.posix.extname(relPath).toLowerCase())
     ? "declaration"
     : "implementation";
@@ -1014,7 +1096,7 @@ function recordAbsentSourceEvidence(state, toolName, callMetadata) {
   const files = ledger.files && typeof ledger.files === "object"
     ? { ...ledger.files }
     : {};
-  const key = relPath.toLowerCase();
+  const key = filesystemPathIdentity(relPath);
   const prior = files[key] && typeof files[key] === "object" ? files[key] : {};
   const bounded = (values, limit = 8) => Array.from(new Set(
     values.map(String).map((item) => item.trim()).filter(Boolean)
@@ -1053,7 +1135,99 @@ function recordAbsentSourceEvidence(state, toolName, callMetadata) {
   };
 }
 
-function satisfyValidationRecovery(state, toolName, callMetadata) {
+function recoveryArgsMatch(expected, observed, key = "", hostPlatform = process.platform) {
+  if (["taskAuthorization", "task_authorization", "sessionId"].includes(key)) return true;
+  if (Array.isArray(expected)) {
+    return Array.isArray(observed)
+      && expected.length === observed.length
+      && expected.every((value, index) => recoveryArgsMatch(value, observed[index], key, hostPlatform));
+  }
+  if (expected && typeof expected === "object") {
+    if (!observed || typeof observed !== "object") return false;
+    return Object.entries(expected).every(([name, value]) => (
+      Object.prototype.hasOwnProperty.call(observed, name)
+      && recoveryArgsMatch(value, observed[name], name, hostPlatform)
+    ));
+  }
+  if (CONTROL_PATH_ARG_KEYS.has(String(key).toLowerCase())) {
+    return filesystemPathIdentity(expected, hostPlatform)
+      === filesystemPathIdentity(observed, hostPlatform);
+  }
+  if (typeof expected === "number") return Number(expected) === Number(observed);
+  if (typeof expected === "boolean") return observed === expected;
+  return String(expected ?? "") === String(observed ?? "");
+}
+
+function reopenCodeSketchForRecovery(state) {
+  const completed = state.completedGates && typeof state.completedGates === "object"
+    ? { ...state.completedGates }
+    : {};
+  delete completed.unreal_code_sketch_claim_validate;
+  state.completedGates = completed;
+  const required = Array.isArray(state.requiredBeforeWrite)
+    ? state.requiredBeforeWrite.map(String).filter(Boolean)
+    : [];
+  state.pendingGates = required.filter((gate) => !completed[gate]);
+  const writeGate = state.writeGate && typeof state.writeGate === "object"
+    ? { ...state.writeGate }
+    : {};
+  writeGate.completedBeforeWrite = Object.keys(completed).sort();
+  writeGate.pendingBeforeWrite = [...state.pendingGates];
+  state.writeGate = writeGate;
+}
+
+function satisfyGenericRecovery(state, toolName, args, metadata) {
+  const obligation = state.recoveryObligation && typeof state.recoveryObligation === "object"
+    ? { ...state.recoveryObligation }
+    : {};
+  const requiredTool = obligation.requiredTool && typeof obligation.requiredTool === "object"
+    ? obligation.requiredTool
+    : {};
+  if (!(
+    String(obligation.status || "") === "evidence_required"
+    && String(requiredTool.name || "") === String(toolName || "")
+    && Number(obligation.mutationGeneration || 0) === Number(state.mutationGeneration || 0)
+    && recoveryArgsMatch(requiredTool.args || {}, args || {})
+  )) return false;
+  const targets = Array.isArray(obligation.targetFiles)
+    ? obligation.targetFiles.map(String).filter(Boolean)
+    : [];
+  const next = {
+    ...obligation,
+    status: "repair_planning_required",
+    requiredTool: {
+      name: "unreal_code_sketch_claim_validate",
+      args: targets.length ? { targetFiles: targets } : {},
+    },
+    evidenceSatisfiedBy: String(toolName),
+    evidenceSatisfiedAt: new Date().toISOString(),
+    evidenceHash: String(metadata?.contentHash || ""),
+  };
+  next.fingerprint = canonicalHash({
+    source: next.source,
+    status: next.status,
+    scopeDisposition: next.scopeDisposition,
+    errorCode: next.errorCode,
+    mutationGeneration: next.mutationGeneration,
+    requiredTool: next.requiredTool,
+    targetFiles: next.targetFiles || [],
+  });
+  next.attemptCount = 0;
+  state.recoveryObligation = next;
+  const legacy = state.buildRecovery && typeof state.buildRecovery === "object"
+    ? { ...state.buildRecovery }
+    : null;
+  if (legacy && String(obligation.source || "") === "build") {
+    legacy.status = "repair_planning_required";
+    legacy.evidenceSatisfied = true;
+    legacy.evidenceRecordedAt = next.evidenceSatisfiedAt;
+    state.buildRecovery = legacy;
+  }
+  reopenCodeSketchForRecovery(state);
+  return true;
+}
+
+function satisfyValidationRecovery(state, toolName, args, callMetadata) {
   if (!["read_file", "read_file_range"].includes(String(toolName || ""))) return false;
   const metadata = callMetadata && typeof callMetadata === "object"
     ? callMetadata.directSourceEvidence
@@ -1075,13 +1249,11 @@ function satisfyValidationRecovery(state, toolName, callMetadata) {
   if (
     Number(recovery.mutationGeneration || 0) !== Number(state.mutationGeneration || 0)
     || Number(checkpoint.mutationGeneration || 0) !== Number(state.mutationGeneration || 0)
-  ) {
-    return false;
-  }
-  const expectedPath = normalizeEvidencePath(
+  ) return false;
+  const expectedPath = filesystemPathIdentity(normalizeEvidencePath(
     recovery.targetPath || validation.firstFinding?.path
-  ).toLowerCase();
-  const observedPath = normalizeEvidencePath(metadata.projectRelativePath).toLowerCase();
+  ));
+  const observedPath = filesystemPathIdentity(normalizeEvidencePath(metadata.projectRelativePath));
   if (!expectedPath || expectedPath !== observedPath) return false;
   validation.recovery = {
     ...recovery,
@@ -1097,24 +1269,50 @@ const DIRECT_EVIDENCE_RECOVERY_CODES = new Set([
   "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED",
 ]);
 const DIRECT_EVIDENCE_TOOLS = new Set(["read_file", "read_file_range"]);
+const REDISCOVERY_EVIDENCE_TOOLS = new Set([
+  "list_directory",
+  "search_files",
+  "read_file",
+  "read_file_range",
+  "read_symbol",
+  "read_unreal_logs",
+]);
 
-function pendingDirectEvidenceGate(state, toolName) {
+function pendingDirectEvidenceGate(state, toolName, args = null) {
   if (!DIRECT_EVIDENCE_TOOLS.has(String(toolName || ""))) return "";
   const pendingGates = Array.isArray(state?.pendingGates)
     ? state.pendingGates.map(String).filter(Boolean)
     : [];
-  const failedAttempts = state?.failedGateAttempts
-    && typeof state.failedGateAttempts === "object"
-    ? state.failedGateAttempts
-    : {};
   return pendingGates.find((gate) => {
-    const attempt = failedAttempts[gate]
-      && typeof failedAttempts[gate] === "object"
-      ? failedAttempts[gate]
-      : {};
-    return DIRECT_EVIDENCE_RECOVERY_CODES.has(
+    const attempt = failedGateAttemptForCurrentScope(state, gate);
+    if (!DIRECT_EVIDENCE_RECOVERY_CODES.has(
       String(attempt.validationErrorCode || "")
-    ) && DIRECT_EVIDENCE_TOOLS.has(String(attempt.nextAction || ""));
+    ) || !DIRECT_EVIDENCE_TOOLS.has(String(attempt.nextAction || ""))) {
+      return false;
+    }
+    if (!args || typeof args !== "object") return true;
+    const expected = attempt.nextActionArgs && typeof attempt.nextActionArgs === "object"
+      ? attempt.nextActionArgs
+      : {};
+    const expectedPath = filesystemPathIdentity(normalizeEvidencePath(expected.path));
+    const observedPath = filesystemPathIdentity(normalizeEvidencePath(args.path));
+    if (expectedPath && expectedPath !== observedPath) return false;
+    for (const key of ["startLine", "endLine"]) {
+      if (expected[key] !== undefined && Number(expected[key]) !== Number(args[key])) return false;
+    }
+    return true;
+  }) || "";
+}
+
+function pendingRepeatedGateRediscovery(state, toolName) {
+  if (!REDISCOVERY_EVIDENCE_TOOLS.has(String(toolName || ""))) return "";
+  if (String(state.controlState?.blocker?.code || "") !== "REPEATED_GATE_BLOCKER") return "";
+  const pendingGates = Array.isArray(state?.pendingGates)
+    ? state.pendingGates.map(String).filter(Boolean)
+    : [];
+  return pendingGates.find((gate) => {
+    const attempt = failedGateAttemptForCurrentScope(state, gate);
+    return Number(attempt.attemptCount || 0) >= 2 && !attempt.recoverySatisfiedAt;
   }) || "";
 }
 
@@ -1236,8 +1434,16 @@ function mutateRouteBudget(
       current.toolRouteUsage = usage;
       recordDirectSourceEvidence(current, toolName, callMetadata);
       recordAbsentSourceEvidence(current, toolName, callMetadata);
-      satisfyValidationRecovery(current, toolName, callMetadata);
-      const resumedGate = pendingDirectEvidenceGate(current, toolName);
+      const recoveryMetadata = callMetadata && typeof callMetadata === "object"
+        ? (callMetadata.directSourceEvidence || callMetadata.absentEvidence || null)
+        : null;
+      // Generic recovery may require any bounded evidence tool (for example
+      // search_files or read_symbol). Validation-checkpoint recovery is the
+      // narrower file-read concern handled immediately afterwards.
+      satisfyGenericRecovery(current, toolName, args, recoveryMetadata);
+      satisfyValidationRecovery(current, toolName, args, callMetadata);
+      const resumedGate = pendingDirectEvidenceGate(current, toolName, args)
+        || pendingRepeatedGateRediscovery(current, toolName);
       if (resumedGate) {
         const attempts = current.failedGateAttempts && typeof current.failedGateAttempts === "object"
           ? { ...current.failedGateAttempts }
@@ -1472,13 +1678,83 @@ function canonicalWorkspaceRoot(value) {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-function canonicalProjectIdentity(value, workspaceRoot = "") {
+function resolvedFilesystemPath(value, workspaceRoot = "") {
   const raw = String(value || "").trim();
   if (!raw) return "";
-  const resolved = path.resolve(
+  let resolved = path.resolve(
     path.isAbsolute(raw) ? raw : path.join(workspaceRoot || process.cwd(), raw)
   );
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  try {
+    if (fs.existsSync(resolved)) {
+      resolved = fs.realpathSync.native
+        ? fs.realpathSync.native(resolved)
+        : fs.realpathSync(resolved);
+    }
+  } catch {
+    // Preserve the lexical absolute path for a missing or temporarily
+    // unavailable path. Callers still compare it fail-closed.
+  }
+  return resolved;
+}
+
+function canonicalProjectIdentity(value, workspaceRoot = "", hostPlatform = process.platform) {
+  const resolved = resolvedFilesystemPath(value, workspaceRoot);
+  if (!resolved) return "";
+  const windows = ["win32", "windows", "nt"].includes(
+    String(hostPlatform || "").toLowerCase()
+  );
+  return windows ? resolved.toLowerCase() : resolved;
+}
+
+function authoritativeTaskProjectFile(state, workspaceRoot = "") {
+  const routeScope = state?.routeScope
+    && typeof state.routeScope === "object"
+    && !Array.isArray(state.routeScope)
+    ? state.routeScope
+    : {};
+  const raw = String(routeScope.projectFile || state?.projectFile || "").trim();
+  if (!raw) return "";
+  const base = String(
+    routeScope.workspaceRoot || state?.workspaceRoot || workspaceRoot || ""
+  ).trim();
+  const resolved = resolvedFilesystemPath(raw, base);
+  return path.extname(resolved).toLowerCase() === ".uproject" ? resolved : "";
+}
+
+function validateResolvedTaskProject(state, workspaceRoot, resolvedProject, options = {}) {
+  const expectedProject = authoritativeTaskProjectFile(state, workspaceRoot);
+  const observedProject = resolvedFilesystemPath(resolvedProject, workspaceRoot);
+  if (!expectedProject) {
+    return options.requireBoundProject === true
+      ? {
+        ok: false,
+        errorCode: "TASK_PROJECT_PROOF_UNBOUND",
+        error: "Task-bound Unreal proof requires an authoritative .uproject route scope.",
+        expectedProject: "",
+        observedProject,
+      }
+      : { ok: true, projectBound: false, expectedProject: "", observedProject };
+  }
+  const expectedIdentity = canonicalProjectIdentity(expectedProject, "", options.hostPlatform);
+  const observedIdentity = canonicalProjectIdentity(observedProject, "", options.hostPlatform);
+  if (!observedIdentity || observedIdentity !== expectedIdentity) {
+    return {
+      ok: false,
+      errorCode: "TASK_PROJECT_PROOF_MISMATCH",
+      error: "Build/Automation proof resolved a different .uproject than the authoritative task route.",
+      expectedProject,
+      observedProject,
+      expectedProjectIdentity: expectedIdentity,
+      observedProjectIdentity: observedIdentity,
+    };
+  }
+  return {
+    ok: true,
+    projectBound: true,
+    expectedProject,
+    observedProject,
+    projectIdentity: expectedIdentity,
+  };
 }
 
 function validateTaskRouteScope(
@@ -1697,6 +1973,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
         calls: [],
         resetReason: "gate_ttl_expired",
       };
+      commitControlTransition(result.state);
       const statePath = result.statePath;
       const acquired = statePath
         ? tryAcquireCrossProcessLock(
@@ -1729,6 +2006,7 @@ function discoverActiveTaskContext(workspaceRoot, activeProject = "", options = 
               calls: [],
               resetReason: "gate_ttl_expired",
             };
+            commitControlTransition(currentState);
             atomicWriteJson(statePath, currentState);
             result.state = currentState;
           }
@@ -2011,6 +2289,9 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
       ? control.requiredTool
       : {};
     const requiredControlName = String(requiredControl.name || "").trim();
+    const requiredControlArgs = requiredControl.args && typeof requiredControl.args === "object"
+      ? { ...requiredControl.args }
+      : {};
     const routeNextAction = control.authoritative === true
       ? (requiredControlName || "continue_with_current_tool_route")
       : routeMissing
@@ -2039,6 +2320,9 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
       routeNextActionIsTool: control.authoritative === true
         ? Boolean(requiredControlName)
         : Boolean(routeMissing || pendingGates.length),
+      routeNextActionArgs: control.authoritative === true && requiredControlName
+        ? requiredControlArgs
+        : {},
       ownsActiveToolRoute: taskOwnsActiveToolRoute(
         state,
         conversationId,
@@ -2205,7 +2489,7 @@ function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], opti
     "import json, sys",
     "from pathlib import Path",
     `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
-    "from task_api import task_cancel, task_cancel_active, task_checkpoint, task_quarantine_corrupt, task_record_build_recovery, task_mark_build_recovery_evidence, task_complete_after_successful_build, task_require_automation_after_build",
+    "from task_api import task_bind_build_contract, task_cancel, task_cancel_active, task_checkpoint, task_checkpoint_rollback_internal, task_quarantine_corrupt, task_record_build_recovery, task_mark_build_recovery_evidence, task_record_recovery_obligation, task_mark_recovery_evidence, task_complete_after_successful_build, task_require_automation_after_build",
     stdinPayload
       ? "_stdin = json.load(sys.stdin)"
       : "_stdin = {}",
@@ -2328,6 +2612,102 @@ function recordBuildRecoveryViaPython(workspaceRoot, args, recovery) {
   );
 }
 
+function checkpointRollbackViaPython(workspaceRoot, binding = {}) {
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_checkpoint_rollback_internal(Path(sys.argv[1]), "
+      + "transaction_id=str((_stdin or {}).get('transactionId') or ''), "
+      + "task_session_id=str((_stdin or {}).get('taskSessionId') or ''), "
+      + "project_root=str((_stdin or {}).get('projectRoot') or ''), "
+      + "modified_files=list((_stdin or {}).get('modifiedFiles') or []), "
+      + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0), "
+      + "validation=dict((_stdin or {}).get('validation') or {}))"
+    ),
+    [],
+    {
+      stdinPayload: {
+        transactionId: String(binding.transactionId || ""),
+        taskSessionId: String(binding.taskSessionId || ""),
+        projectRoot: String(binding.projectRoot || ""),
+        modifiedFiles: Array.isArray(binding.modifiedFiles)
+          ? binding.modifiedFiles.map(String)
+          : [],
+        mutationGeneration: Math.max(0, Number(binding.mutationGeneration || 0)),
+        validation: binding.validation && typeof binding.validation === "object"
+          ? binding.validation
+          : {},
+      },
+    }
+  );
+}
+
+function recordRecoveryObligationViaPython(workspaceRoot, args, recovery) {
+  const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : {};
+  if (!nested.taskSessionId || !recovery || typeof recovery !== "object") {
+    return { ok: true, active: false };
+  }
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_record_recovery_obligation(Path(sys.argv[1]), "
+      + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
+      + "recovery=dict((_stdin or {}).get('recovery') or {}))"
+    ),
+    [],
+    { stdinPayload: { taskAuthorization: nested, recovery } }
+  );
+}
+
+function bindBuildContractViaPython(workspaceRoot, args, buildContract) {
+  const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : {};
+  if (!nested.taskSessionId || !buildContract || typeof buildContract !== "object") {
+    return { ok: true, active: false };
+  }
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_bind_build_contract(Path(sys.argv[1]), "
+      + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
+      + "build_contract=dict((_stdin or {}).get('buildContract') or {}))"
+    ),
+    [],
+    { stdinPayload: { taskAuthorization: nested, buildContract } }
+  );
+}
+
+function markRecoveryEvidenceViaPython(workspaceRoot, args, toolName, toolArgs = {}, evidenceHash = "") {
+  const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : {};
+  if (!nested.taskSessionId || !String(toolName || "").trim()) {
+    return { ok: true, active: false };
+  }
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_mark_recovery_evidence(Path(sys.argv[1]), "
+      + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
+      + "tool_name=str((_stdin or {}).get('toolName') or ''), "
+      + "tool_args=dict((_stdin or {}).get('toolArgs') or {}), "
+      + "evidence_hash=str((_stdin or {}).get('evidenceHash') or ''))"
+    ),
+    [],
+    {
+      stdinPayload: {
+        taskAuthorization: nested,
+        toolName: String(toolName),
+        toolArgs: toolArgs && typeof toolArgs === "object" ? toolArgs : {},
+        evidenceHash: String(evidenceHash || ""),
+      },
+    }
+  );
+}
+
 function completeTaskAfterBuildViaPython(workspaceRoot, args, buildEvidence = {}) {
   const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
     ? args.taskAuthorization
@@ -2343,15 +2723,32 @@ function completeTaskAfterBuildViaPython(workspaceRoot, args, buildEvidence = {}
       + "proof_level=str((_stdin or {}).get('proofLevel') or ''), "
       + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0), "
       + "build_log_path=str((_stdin or {}).get('buildLogPath') or ''), "
-      + "proof_kind=str((_stdin or {}).get('proofKind') or 'build'))"
+      + "project_file=str((_stdin or {}).get('projectFile') or ''), "
+      + "engine_root=str((_stdin or {}).get('engineRoot') or ''), "
+      + "resolved_engine_version=str((_stdin or {}).get('resolvedEngineVersion') or ''), "
+      + "proof_kind=str((_stdin or {}).get('proofKind') or 'build'), "
+      + "automation_filters=list((_stdin or {}).get('automationFilters') or []), "
+      + "automation_succeeded_count=int((_stdin or {}).get('automationSucceededCount') or 0), "
+      + "automation_failed_count=int((_stdin or {}).get('automationFailedCount') or 0), "
+      + "automation_queue_empty=bool((_stdin or {}).get('automationQueueEmpty') is True))"
     ),
     [],
     {
       stdinPayload: {
         taskAuthorization: nested,
         proofLevel: String(buildEvidence.proofLevel || "Built"),
+        proofKind: String(buildEvidence.proofKind || "build"),
         mutationGeneration: Number(buildEvidence.mutationGeneration || 0),
         buildLogPath: String(buildEvidence.buildLogPath || ""),
+        projectFile: String(buildEvidence.projectFile || ""),
+        engineRoot: String(buildEvidence.engineRoot || ""),
+        resolvedEngineVersion: String(buildEvidence.resolvedEngineVersion || ""),
+        automationFilters: Array.isArray(buildEvidence.automationFilters)
+          ? buildEvidence.automationFilters.map(String)
+          : [],
+        automationSucceededCount: Number(buildEvidence.automationSucceededCount || 0),
+        automationFailedCount: Number(buildEvidence.automationFailedCount || 0),
+        automationQueueEmpty: buildEvidence.automationQueueEmpty === true,
       },
     }
   );
@@ -2371,7 +2768,11 @@ function requireAutomationAfterBuildViaPython(workspaceRoot, args, buildEvidence
       + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
       + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0), "
       + "build_log_path=str((_stdin or {}).get('buildLogPath') or ''), "
+      + "project_file=str((_stdin or {}).get('projectFile') or ''), "
+      + "engine_root=str((_stdin or {}).get('engineRoot') or ''), "
+      + "resolved_engine_version=str((_stdin or {}).get('resolvedEngineVersion') or ''), "
       + "test_filter=str((_stdin or {}).get('testFilter') or ''), "
+      + "test_filters=list((_stdin or {}).get('testFilters') or []), "
       + "declared_tests=list((_stdin or {}).get('declaredTests') or []))"
     ),
     [],
@@ -2380,8 +2781,14 @@ function requireAutomationAfterBuildViaPython(workspaceRoot, args, buildEvidence
         taskAuthorization: nested,
         mutationGeneration: Number(buildEvidence.mutationGeneration || 0),
         buildLogPath: String(buildEvidence.buildLogPath || ""),
+        projectFile: String(buildEvidence.projectFile || ""),
+        engineRoot: String(buildEvidence.engineRoot || ""),
+        resolvedEngineVersion: String(buildEvidence.resolvedEngineVersion || ""),
         proofKind: String(buildEvidence.proofKind || "build"),
         testFilter: String(buildEvidence.testFilter || ""),
+        testFilters: Array.isArray(buildEvidence.testFilters)
+          ? buildEvidence.testFilters.map(String)
+          : [],
         declaredTests: Array.isArray(buildEvidence.declaredTests)
           ? buildEvidence.declaredTests.map(String)
           : [],
@@ -2458,6 +2865,13 @@ function listActiveTasks(workspaceRoot, activeProject = "", options = {}) {
       tasks,
       nextAction,
       nextActionIsTool,
+      nextActionArgs: !corrupt.length && owned.length === 1 && nextActionIsTool
+        ? { ...(owned[0].routeNextActionArgs || {}) }
+        : {},
+      ...(!corrupt.length && owned.length === 1 && nextActionIsTool ? {
+        requiredNextTool: nextAction,
+        requiredNextToolArgs: { ...(owned[0].routeNextActionArgs || {}) },
+      } : {}),
       ...(tasks.length && !corrupt.length && owned.length !== 1 ? {
         agentInstruction: (
           "Task listing is diagnostic. A healthy task is never cancelled automatically. "
@@ -3227,6 +3641,9 @@ module.exports = {
   authorizeTaskRouteTool,
   effectiveToolRouteForState,
   validateTaskRouteScope,
+  authoritativeTaskProjectFile,
+  canonicalProjectIdentity,
+  validateResolvedTaskProject,
   SAFE_ROUTE_RECOVERY_TOOLS,
   consumeRouteCall,
   reserveRouteCall,
@@ -3238,12 +3655,20 @@ module.exports = {
   cancelActiveTask,
   quarantineCorruptTask,
   checkpointMutationViaPython,
+  checkpointRollbackViaPython,
   completeTaskAfterBuildViaPython,
   requireAutomationAfterBuildViaPython,
   recordBuildRecoveryViaPython,
   markBuildRecoveryEvidenceViaPython,
+  recordRecoveryObligationViaPython,
+  bindBuildContractViaPython,
+  markRecoveryEvidenceViaPython,
   listToolsRouteContext,
   collectProjectActiveToolUnion,
+  controlArgsMatch,
+  recoveryArgsMatch,
+  filesystemPathIdentity,
   scopedAbsentEvidencePath,
   pendingDirectEvidenceGate,
+  pendingRepeatedGateRediscovery,
 };

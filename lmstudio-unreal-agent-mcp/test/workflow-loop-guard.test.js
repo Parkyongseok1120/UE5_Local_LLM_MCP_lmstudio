@@ -11,6 +11,7 @@ const {
   cancelBuildAttempt,
   recordBuildRecoveryContract,
   recordRecoveryEvidenceCall,
+  markRecoveryEvidenceSatisfied,
   resetWorkflowLoopGuardForTests,
 } = require("../src/workflow-loop-guard");
 
@@ -162,6 +163,11 @@ test("failed build enforces the exact first-error range before other reads", () 
     budget: 8,
     tool: "read_file_range",
     fileAbsPath: "/tmp/Demo/Source/Demo/Foo.cpp",
+    toolArgs: {
+      path: "Source/Demo/Foo.cpp",
+      startLine: 25,
+      endLine: 55,
+    },
   });
   assert.equal(exact.blocked, false);
   assert.equal(exact.count, 1);
@@ -173,6 +179,179 @@ test("failed build enforces the exact first-error range before other reads", () 
   });
   assert.equal(extra.blocked, true);
   assert.equal(extra.reason, "build_recovery_evidence_complete");
+});
+
+test("failed build does not consume recovery evidence for the wrong source range", () => {
+  const project = "/tmp/Demo-range";
+  finishBuildAttempt(project, 32, {
+    commandSucceeded: false,
+    stderr: "Source/Demo/Foo.cpp:40:2: error: bad call",
+  });
+  recordBuildRecoveryContract(project, 32, {
+    targetFile: "Source/Demo/Foo.cpp",
+    requiredNextTool: "read_file_range",
+    requiredNextToolArgs: {
+      path: "Source/Demo/Foo.cpp",
+      startLine: 25,
+      endLine: 55,
+    },
+  });
+
+  const wrongRange = recordRecoveryEvidenceCall(project, 32, {
+    budget: 8,
+    tool: "read_file_range",
+    fileAbsPath: "/tmp/Demo-range/Source/Demo/Foo.cpp",
+    toolArgs: {
+      path: "Source/Demo/Foo.cpp",
+      startLine: 1,
+      endLine: 200,
+    },
+    commitEvidence: false,
+  });
+  assert.equal(wrongRange.blocked, true);
+  assert.equal(wrongRange.reason, "build_recovery_required_args_mismatch");
+
+  const exactRange = recordRecoveryEvidenceCall(project, 32, {
+    budget: 8,
+    tool: "read_file_range",
+    fileAbsPath: "/tmp/Demo-range/Source/Demo/Foo.cpp",
+    toolArgs: {
+      path: "Source/Demo/Foo.cpp",
+      startLine: 25,
+      endLine: 55,
+    },
+    commitEvidence: false,
+  });
+  assert.equal(exactRange.blocked, false);
+  assert.equal(markRecoveryEvidenceSatisfied(project, 32, {
+    tool: "read_file_range",
+    fileAbsPath: "/tmp/Demo-range/Source/Demo/Foo.cpp",
+    toolArgs: {
+      path: "Source/Demo/Foo.cpp",
+      startLine: 25,
+      endLine: 55,
+    },
+  }).ok, true);
+  assert.equal(recordRecoveryEvidenceCall(project, 32, {
+    budget: 8,
+    tool: "read_file_range",
+    fileAbsPath: "/tmp/Demo-range/Source/Demo/Foo.cpp",
+    toolArgs: {
+      path: "Source/Demo/Foo.cpp",
+      startLine: 25,
+      endLine: 55,
+    },
+  }).reason, "build_recovery_evidence_complete");
+});
+
+test("recovery precheck does not consume budget when source I/O never commits", () => {
+  const project = "/tmp/failed-read";
+  finishBuildAttempt(project, 40, {
+    commandSucceeded: false,
+    stderr: "error: recovery read required",
+  });
+  const options = {
+    budget: 1,
+    scopeKey: "task_failed_read",
+    tool: "read_file",
+    fileAbsPath: "/tmp/failed-read/Source/Demo/Foo.cpp",
+    toolArgs: { path: "Source/Demo/Foo.cpp" },
+    commitEvidence: false,
+  };
+
+  const failedIoPrecheck = recordRecoveryEvidenceCall(project, 40, options);
+  assert.equal(failedIoPrecheck.blocked, false);
+  assert.equal(failedIoPrecheck.count, 0);
+  assert.equal(failedIoPrecheck.reservationPending, true);
+
+  const retryPrecheck = recordRecoveryEvidenceCall(project, 40, options);
+  assert.equal(retryPrecheck.blocked, false);
+  assert.equal(retryPrecheck.count, 0);
+
+  const committed = markRecoveryEvidenceSatisfied(project, 40, options);
+  assert.equal(committed.ok, true);
+  assert.equal(committed.evidenceCommitted, true);
+  assert.equal(committed.count, 1);
+
+  const exhausted = recordRecoveryEvidenceCall(project, 40, {
+    ...options,
+    fileAbsPath: "/tmp/failed-read/Source/Demo/Bar.cpp",
+    toolArgs: { path: "Source/Demo/Bar.cpp" },
+  });
+  assert.equal(exhausted.blocked, true);
+  assert.equal(exhausted.reason, "build_recovery_evidence_budget_exhausted");
+});
+
+test("competing recovery commits recheck and consume one remaining budget atomically", async () => {
+  const project = "/tmp/concurrent-read";
+  finishBuildAttempt(project, 41, {
+    commandSucceeded: false,
+    stderr: "error: recovery reads required",
+  });
+  const first = {
+    budget: 1,
+    scopeKey: "task_concurrent",
+    tool: "read_file",
+    fileAbsPath: "/tmp/concurrent-read/Source/Demo/A.cpp",
+    toolArgs: { path: "Source/Demo/A.cpp" },
+    commitEvidence: false,
+  };
+  const second = {
+    ...first,
+    fileAbsPath: "/tmp/concurrent-read/Source/Demo/B.cpp",
+    toolArgs: { path: "Source/Demo/B.cpp" },
+  };
+  assert.equal(recordRecoveryEvidenceCall(project, 41, first).count, 0);
+  assert.equal(recordRecoveryEvidenceCall(project, 41, second).count, 0);
+
+  const results = await Promise.all([
+    Promise.resolve().then(() => markRecoveryEvidenceSatisfied(project, 41, first)),
+    Promise.resolve().then(() => markRecoveryEvidenceSatisfied(project, 41, second)),
+  ]);
+
+  assert.equal(results.filter((item) => item.ok === true).length, 1);
+  assert.equal(results.filter(
+    (item) => item.reason === "build_recovery_evidence_budget_exhausted"
+  ).length, 1);
+  assert.equal(Math.max(...results.map((item) => Number(item.count || 0))), 1);
+});
+
+test("recovery path identity folds case only for Windows", () => {
+  const project = "/tmp/path-case";
+  finishBuildAttempt(project, 42, {
+    commandSucceeded: false,
+    stderr: "Source/Demo/Foo.cpp:1: error: bad case",
+  });
+  recordBuildRecoveryContract(project, 42, {
+    targetFile: "Source/Demo/Foo.cpp",
+    requiredNextTool: "read_file",
+    requiredNextToolArgs: { path: "Source/Demo/Foo.cpp" },
+  });
+  const differentlyCased = {
+    budget: 2,
+    scopeKey: "task_case",
+    tool: "read_file",
+    fileAbsPath: "/tmp/path-case/source/demo/foo.cpp",
+    toolArgs: { path: "source/demo/foo.cpp" },
+    commitEvidence: false,
+  };
+
+  const posix = recordRecoveryEvidenceCall(project, 42, {
+    ...differentlyCased,
+    hostPlatform: "linux",
+  });
+  assert.equal(posix.blocked, true);
+  assert.equal(posix.reason, "build_recovery_target_mismatch");
+
+  const windows = recordRecoveryEvidenceCall(project, 42, {
+    ...differentlyCased,
+    hostPlatform: "win32",
+  });
+  assert.equal(windows.blocked, false);
+  assert.equal(markRecoveryEvidenceSatisfied(project, 42, {
+    ...differentlyCased,
+    hostPlatform: "win32",
+  }).ok, true);
 });
 
 test("validation success clears a prior validation fingerprint", () => {

@@ -1561,11 +1561,15 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
 
         first_error = client.request(
             "tools/call",
-            {"name": "read_unreal_logs", "arguments": {"mode": "first_error"}},
+            {
+                "name": "read_unreal_logs",
+                "arguments": {"mode": "first_error", "fileName": "latest-build.log"},
+            },
             req_id=4,
         )
         first_payload = _tool_payload(first_error)
         assert first_payload["responseMode"] == "first_error"
+        assert first_payload["requestedLogFile"] == "latest-build.log"
         assert first_payload["logs"][0]["firstErrorFound"] is True
         assert any("error C1000" in line for line in first_payload["logs"][0]["lines"])
 

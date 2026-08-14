@@ -5,13 +5,17 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const test = require("node:test");
+const { commitControlTransition } = require("../src/task-control-transition");
 
 const {
   authorizeActiveRouteTool,
   authorizeTaskRouteTool,
   cancelActiveTask,
   checkpointMutationViaPython,
+  bindBuildContractViaPython,
   completeTaskAfterBuildViaPython,
+  authoritativeTaskProjectFile,
+  canonicalProjectIdentity,
   discoverActiveTaskContext,
   discardTaskAuthorizationWithoutActiveRoute,
   expandCompactTaskAuthorization,
@@ -24,6 +28,7 @@ const {
   scopedAbsentEvidencePath,
   selectionBindingForState,
   validateMutationAuth,
+  validateResolvedTaskProject,
 } = require("../src/task-auth");
 
 test("complete absent filename evidence is scoped to its project-relative search root", () => {
@@ -120,8 +125,27 @@ test("successful build bridge completes task state and releases its lease", () =
   fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
     ...authorization,
     status: "running",
+    mutationGeneration: 4,
     writeGate: { writesAllowed: true },
+    toolRoute: {
+      phase: "executor",
+      routeHash: "build-route",
+      activeTools: ["build_unreal_project"],
+      pendingGates: [],
+    },
+    controlState: {
+      authoritative: true,
+      activeSliceId: authorization.activeSliceId,
+      mutationGeneration: 4,
+      requiredTool: { name: "build_unreal_project", args: {} },
+      allowedTools: ["build_unreal_project"],
+    },
     continuity: {
+      checkpoint: {
+        activeSliceId: authorization.activeSliceId,
+        mutationGeneration: 4,
+        validation: { status: "passed" },
+      },
       lease: {
         status: "active",
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -857,6 +881,345 @@ function writeRouteState(stateRoot, state) {
   fs.mkdirSync(taskDir, { recursive: true });
   fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify(state));
 }
+
+test("route discovery persists gate-TTL fallback and control in one state write", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-expiry-control-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-expiry-control-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const value = routeState(projectFile, {
+    requiredGateSetHash: "gate-set",
+    mutationGeneration: 0,
+    completedGates: {
+      unreal_code_sketch_claim_validate: {
+        status: "completed",
+        gateSetHash: "gate-set",
+        planRevision: authorization.planRevision,
+        activeSliceId: authorization.activeSliceId,
+        mutationGeneration: 0,
+      },
+    },
+    selectedTargetSnapshots: [
+      { path: "Source/Demo/Foo.cpp", exists: true, fileHash: "before" },
+    ],
+  });
+  commitControlTransition(value);
+  const oldEpoch = value.controlEpoch;
+  value.toolRoute.expiryTransition = {
+    at: "2000-01-01T00:00:00.000Z",
+    route: {
+      routeHash: "gate-expiry-fallback",
+      phase: "planner",
+      roleSession: "planner",
+      activeTools: ["unreal_code_sketch_claim_validate", "read_file"],
+      pendingGates: ["unreal_code_sketch_claim_validate"],
+      selectedSlice: {
+        sliceId: authorization.activeSliceId,
+        files: ["Source/Demo/Foo.cpp"],
+      },
+    },
+  };
+  writeRouteState(stateRoot, value);
+
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const context = discoverActiveTaskContext(workspace, projectFile);
+    assert.strictEqual(context.status, "active");
+    const persisted = JSON.parse(fs.readFileSync(
+      path.join(stateRoot, "tasks", authorization.taskSessionId, "state.json"),
+      "utf8"
+    ));
+    assert.strictEqual(persisted.toolRoute.routeHash, "gate-expiry-fallback");
+    assert.strictEqual(persisted.controlState.routeHash, "gate-expiry-fallback");
+    assert.strictEqual(
+      persisted.controlState.requiredTool.name,
+      "unreal_code_sketch_claim_validate"
+    );
+    assert.strictEqual(persisted.controlEpoch, oldEpoch + 1);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("build contract bridge freezes the server-resolved build tuple", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-build-contract-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-build-contract-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(projectFile, "{}");
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    status: "running",
+    projectFile,
+    mutationGeneration: 4,
+    writeGate: { writesAllowed: true },
+    requiredBeforeWrite: [],
+    completedGates: {},
+    toolRoute: {
+      phase: "executor",
+      routeHash: "build-route",
+      activeTools: ["build_unreal_project"],
+      pendingGates: [],
+    },
+    controlState: {
+      authoritative: true,
+      activeSliceId: authorization.activeSliceId,
+      mutationGeneration: 4,
+      requiredTool: { name: "build_unreal_project", args: {} },
+      allowedTools: ["build_unreal_project"],
+    },
+    continuity: {
+      checkpoint: {
+        activeSliceId: authorization.activeSliceId,
+        mutationGeneration: 4,
+        requiredNextAction: "build_unreal_project",
+        validation: { status: "passed" },
+      },
+      lease: {
+        status: "active",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const contract = {
+      project: projectFile,
+      engineRoot: path.join(workspace, "UE_5.5"),
+      target: "DemoEditor",
+      platform: "Win64",
+      configuration: "Development",
+      allowAbsoluteProject: true,
+      allowEngineFallback: false,
+    };
+    const result = bindBuildContractViaPython(
+      workspace,
+      { taskAuthorization: authorization },
+      contract
+    );
+    assert.strictEqual(result.ok, true, JSON.stringify(result));
+    const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    assert.strictEqual(state.buildContract.target, "DemoEditor");
+    assert.strictEqual(state.buildContract.platform, "Win64");
+    assert.strictEqual(state.buildContract.configuration, "Development");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("task project proof canonicalizes existing paths and rejects another project", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-project-proof-"));
+  const projectA = path.join(root, "ProjectA", "ProjectA.uproject");
+  const projectB = path.join(root, "ProjectB", "ProjectB.uproject");
+  fs.mkdirSync(path.dirname(projectA), { recursive: true });
+  fs.mkdirSync(path.dirname(projectB), { recursive: true });
+  fs.writeFileSync(projectA, "{}", "utf8");
+  fs.writeFileSync(projectB, "{}", "utf8");
+  const state = {
+    workspaceRoot: root,
+    projectFile: projectA,
+    routeScope: { workspaceRoot: root, projectFile: projectA },
+  };
+
+  assert.equal(authoritativeTaskProjectFile(state, root), fs.realpathSync(projectA));
+  assert.equal(
+    canonicalProjectIdentity(projectA, root),
+    canonicalProjectIdentity(fs.realpathSync(projectA), root)
+  );
+  assert.equal(validateResolvedTaskProject(state, root, projectA).ok, true);
+  const mismatch = validateResolvedTaskProject(state, root, projectB);
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.errorCode, "TASK_PROJECT_PROOF_MISMATCH");
+
+  const alias = path.join(root, "ProjectA-alias.uproject");
+  try {
+    fs.symlinkSync(projectA, alias, "file");
+    assert.equal(validateResolvedTaskProject(state, root, alias).ok, true);
+  } catch (error) {
+    if (!(["EPERM", "EACCES", "UNKNOWN"].includes(String(error.code || "")))) throw error;
+  }
+});
+
+test("static validation rejects a projectRoot outside the authoritative task project", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-static-project-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-static-project-state-"));
+  const projectRoot = path.join(workspace, "ProjectA");
+  const wrongProjectRoot = path.join(workspace, "ProjectB");
+  const projectFile = path.join(projectRoot, "ProjectA.uproject");
+  fs.mkdirSync(projectRoot, { recursive: true });
+  fs.mkdirSync(wrongProjectRoot, { recursive: true });
+  fs.writeFileSync(projectFile, "{}");
+  const value = routeState(projectFile, {
+    workspaceRoot: workspace,
+    projectFile,
+    mutationGeneration: 1,
+    requiredGateSetHash: "gate-set",
+    completedGates: {
+      unreal_code_sketch_claim_validate: {
+        status: "completed",
+        gateSetHash: "gate-set",
+        planRevision: authorization.planRevision,
+        activeSliceId: authorization.activeSliceId,
+        mutationGeneration: 0,
+      },
+    },
+    continuity: {
+      checkpoint: {
+        activeSliceId: authorization.activeSliceId,
+        mutationGeneration: 1,
+        validation: {},
+      },
+    },
+    toolRoute: {
+      routeHash: "route-static-project",
+      phase: "executor",
+      roleSession: "executor",
+      activeTools: ["static_validate_project"],
+      selectedSlice: {
+        sliceId: authorization.activeSliceId,
+        files: ["Source/ProjectA/Foo.cpp"],
+      },
+      maxToolCallsPerPhase: 2,
+    },
+    toolRouteUsage: {
+      routeHash: "route-static-project",
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    },
+  });
+  commitControlTransition(value);
+  writeRouteState(stateRoot, value);
+
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = { routeHash: "route-static-project", routePhase: "executor" };
+  try {
+    assert.deepStrictEqual(value.controlState.requiredTool, {
+      name: "static_validate_project",
+      args: { projectRoot, fullAudit: false },
+    });
+    const rejected = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      { projectRoot: wrongProjectRoot, fullAudit: false },
+      "static_validate_project"
+    );
+    assert.strictEqual(rejected.ok, false);
+    assert.strictEqual(rejected.errorCode, "TASK_CONTROL_ARGUMENT_MISMATCH");
+    assert.strictEqual(rejected.nextAction, "static_validate_project");
+    assert.strictEqual(rejected.requiredNextToolArgs.projectRoot, projectRoot);
+    assert.strictEqual(rejected.requiredNextToolArgs.fullAudit, false);
+    assert.strictEqual(
+      rejected.requiredNextToolArgs.taskAuthorization.taskSessionId,
+      authorization.taskSessionId
+    );
+
+    const accepted = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      { projectRoot, fullAudit: false },
+      "static_validate_project"
+    );
+    assert.strictEqual(accepted.ok, true);
+    assert.strictEqual(
+      rollbackRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        { projectRoot, fullAudit: false },
+        "static_validate_project",
+        accepted.reservationId
+      ).ok,
+      true
+    );
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("active task listing projects exact authoritative required-tool args", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-list-control-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-list-control-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const exactArgs = {
+    path: "project://Source/Demo/Foo.cpp",
+    startLine: 17,
+    endLine: 31,
+  };
+  const ownerCapability = "c".repeat(64);
+  const value = routeState(projectFile, {
+    conversationId: "conv-control-projection",
+    ownerCapability,
+    controlEpoch: 4,
+    controlState: {
+      version: 2,
+      authoritative: true,
+      epoch: 4,
+      taskSessionId: authorization.taskSessionId,
+      planRevision: authorization.planRevision,
+      activeSliceId: authorization.activeSliceId,
+      phase: "executor",
+      disposition: "require_tool",
+      requiredTool: { name: "read_file_range", args: exactArgs },
+      allowedTools: ["read_file_range"],
+      routeHash: "route-1",
+      pendingGates: [],
+      retryPolicy: { sameSemanticInput: "once" },
+      blocker: null,
+      mutationGeneration: 0,
+      fingerprint: "control-fingerprint",
+    },
+  });
+  value.toolRoute.activeTools.push("read_file_range");
+  writeRouteState(stateRoot, value);
+
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const { listActiveTasks } = require("../src/task-auth");
+    const listed = listActiveTasks(workspace, projectFile, { ownerCapability });
+    assert.strictEqual(listed.count, 1);
+    assert.strictEqual(listed.nextAction, "read_file_range");
+    assert.strictEqual(listed.requiredNextTool, "read_file_range");
+    assert.deepStrictEqual(listed.nextActionArgs, exactArgs);
+    assert.deepStrictEqual(listed.requiredNextToolArgs, exactArgs);
+    assert.strictEqual(listed.tasks[0].routeNextAction, "read_file_range");
+    assert.deepStrictEqual(listed.tasks[0].routeNextActionArgs, exactArgs);
+
+    const corruptDir = path.join(stateRoot, "tasks", "corrupt_12345678");
+    fs.mkdirSync(corruptDir, { recursive: true });
+    fs.writeFileSync(path.join(corruptDir, "workspace-root.txt"), workspace);
+    fs.writeFileSync(path.join(corruptDir, "state.json"), "{not-json");
+    const quarantined = listActiveTasks(workspace, projectFile, { ownerCapability });
+    assert.strictEqual(quarantined.corruptCount, 1);
+    assert.strictEqual(quarantined.nextAction, "quarantine_corrupt_task");
+    assert.deepStrictEqual(quarantined.nextActionArgs, {});
+    assert.strictEqual(quarantined.requiredNextTool, undefined);
+    assert.strictEqual(quarantined.requiredNextToolArgs, undefined);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
 
 test("route-aware auth rejects stale route and suffix path escape", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-route-workspace-"));
@@ -2187,12 +2550,18 @@ test("required evidence read advances the control epoch before gate handoff", ()
     status: "running",
     controlEpoch: 4,
     planRevision: "1",
+    requiredGateSetHash: "feature-gates",
+    mutationGeneration: 0,
     pendingGates: ["unreal_feature_intent_resolve"],
     failedGateAttempts: {
       unreal_feature_intent_resolve: {
         validationErrorCode: "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED",
         nextAction: "read_file",
         attemptCount: 1,
+        gateSetHash: "feature-gates",
+        planRevision: "1",
+        activeSliceId: authorization.activeSliceId,
+        mutationGeneration: 0,
       },
     },
     toolRoute: {
@@ -2239,6 +2608,56 @@ test("required evidence read advances the control epoch before gate handoff", ()
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("rollback checkpoint advances task generation and snapshots the restored disk image", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-rollback-checkpoint-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-rollback-checkpoint-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  const target = path.join(workspace, "Source", "Demo", "Foo.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(projectFile, "{}");
+  fs.writeFileSync(target, "// restored\n");
+  writeRouteState(stateRoot, routeState(projectFile));
+  const previousRoot = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const result = checkpointMutationViaPython(
+      workspace,
+      { taskAuthorization: { ...authorization, routeHash: "route-1", routePhase: "executor" } },
+      [target],
+      {
+        requiredNextAction: "static_validate_project",
+        mutationGeneration: 7,
+        validation: {
+          status: "pending",
+          proofLevel: "NeedsStaticValidation",
+          rollback: { reason: "build_recovery_exhausted" },
+        },
+      }
+    );
+    assert.strictEqual(result.ok, true, JSON.stringify(result));
+    const persisted = JSON.parse(fs.readFileSync(
+      path.join(stateRoot, "tasks", authorization.taskSessionId, "state.json"),
+      "utf8"
+    ));
+    assert.strictEqual(persisted.mutationGeneration, 7);
+    assert.strictEqual(persisted.continuity.checkpoint.mutationGeneration, 7);
+    const snapshot = persisted.continuity.checkpoint.fileSnapshots.find(
+      (item) => item.relativePath === "Source/Demo/Foo.cpp"
+    );
+    assert.ok(snapshot);
+    assert.strictEqual(snapshot.exists, true);
+    assert.strictEqual(
+      snapshot.fileHash,
+      require("crypto").createHash("sha256").update("// restored\n").digest("hex")
+    );
+  } finally {
+    if (previousRoot === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previousRoot;
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -2343,6 +2762,211 @@ test("failed static finding read is consumed and cannot loop", () => {
     assert.strictEqual(repeated.ok, false);
     assert.strictEqual(repeated.errorCode, "TASK_CONTROL_OBLIGATION_REQUIRED");
     assert.strictEqual(repeated.nextAction, "replace_in_file");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+for (const recoveryCase of [
+  {
+    tool: "search_files",
+    args: { query: "MissingThing", path: "Source/Demo" },
+  },
+  {
+    tool: "read_symbol",
+    args: { path: "Source/Demo/Foo.cpp", symbol: "Foo::Run" },
+  },
+]) {
+  test(`committed ${recoveryCase.tool} evidence advances generic recovery to repair planning`, () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-generic-recovery-workspace-"));
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-generic-recovery-state-"));
+    const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+    fs.mkdirSync(taskDir, { recursive: true });
+    const value = {
+      ...authorization,
+      status: "running",
+      mutationGeneration: 2,
+      requiredGateSetHash: "gate-set",
+      requiredBeforeWrite: ["unreal_code_sketch_claim_validate"],
+      completedGates: {
+        unreal_code_sketch_claim_validate: {
+          status: "completed",
+          gateSetHash: "gate-set",
+          planRevision: authorization.planRevision,
+          activeSliceId: authorization.activeSliceId,
+          mutationGeneration: 1,
+        },
+      },
+      pendingGates: [],
+      writeGate: { writesAllowed: true, completedBeforeWrite: ["unreal_code_sketch_claim_validate"] },
+      recoveryObligation: {
+        source: "build",
+        status: "evidence_required",
+        mutationGeneration: 2,
+        requiredTool: { name: recoveryCase.tool, args: recoveryCase.args },
+        targetFiles: ["Source/Demo/Foo.cpp"],
+      },
+      toolRoute: {
+        status: "active",
+        routeHash: "route-generic-recovery",
+        phase: "executor",
+        activeTools: [recoveryCase.tool, "unreal_code_sketch_claim_validate"],
+        selectedSlice: {
+          sliceId: authorization.activeSliceId,
+          files: ["Source/Demo/Foo.cpp"],
+        },
+        maxToolCallsPerPhase: 3,
+      },
+      toolRouteUsage: {
+        routeHash: "route-generic-recovery",
+        count: 0,
+        reserved: 0,
+        reservations: [],
+        calls: [],
+      },
+    };
+    commitControlTransition(value);
+    fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify(value));
+
+    const previous = process.env.AGENT_STATE_ROOT;
+    process.env.AGENT_STATE_ROOT = stateRoot;
+    const fields = { routeHash: "route-generic-recovery", routePhase: "executor" };
+    try {
+      const reserved = reserveRouteCall(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        recoveryCase.args,
+        recoveryCase.tool
+      );
+      assert.strictEqual(reserved.ok, true);
+      const committed = commitRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        recoveryCase.args,
+        recoveryCase.tool,
+        reserved.reservationId
+      );
+      assert.strictEqual(committed.ok, true);
+      assert.strictEqual(committed.state.recoveryObligation.status, "repair_planning_required");
+      assert.strictEqual(
+        committed.state.recoveryObligation.requiredTool.name,
+        "unreal_code_sketch_claim_validate"
+      );
+      assert.strictEqual(
+        committed.state.controlState.requiredTool.name,
+        "unreal_code_sketch_claim_validate"
+      );
+      assert.strictEqual(
+        committed.state.completedGates.unreal_code_sketch_claim_validate,
+        undefined
+      );
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+      else process.env.AGENT_STATE_ROOT = previous;
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test("one committed rediscovery tool reopens a repeatedly blocked gate", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-gate-rediscovery-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-gate-rediscovery-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  const gate = "unreal_feature_intent_resolve";
+  const value = {
+    ...authorization,
+    status: "running",
+    mutationGeneration: 0,
+    requiredGateSetHash: "gate-set",
+    pendingGates: [gate],
+    failedGateAttempts: {
+      [gate]: {
+        attemptCount: 2,
+        fingerprint: "invalid-frontier",
+        gateSetHash: "gate-set",
+        planRevision: authorization.planRevision,
+        activeSliceId: authorization.activeSliceId,
+        mutationGeneration: 0,
+        validationErrorCode: "FEATURE_FRONTIER_UNPROVEN",
+        nextAction: "repair_feature_completion_frontier",
+        nextActionIsTool: false,
+      },
+    },
+    writeGate: { writesAllowed: true },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-gate-rediscovery",
+      phase: "planner",
+      activeTools: [gate, "read_file"],
+      pendingGates: [gate],
+      maxToolCallsPerPhase: 3,
+    },
+    toolRouteUsage: {
+      routeHash: "route-gate-rediscovery",
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    },
+  };
+  commitControlTransition(value);
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify(value));
+
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = { routeHash: "route-gate-rediscovery", routePhase: "planner" };
+  try {
+    assert.strictEqual(value.controlState.blocker.code, "REPEATED_GATE_BLOCKER");
+    assert.strictEqual(value.controlState.allowedTools.includes(gate), false);
+    const discovery = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      { path: "Source/Demo/Foo.cpp" },
+      "read_file"
+    );
+    assert.strictEqual(discovery.ok, true);
+    const committed = commitRouteReservation(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      { path: "Source/Demo/Foo.cpp" },
+      "read_file",
+      discovery.reservationId
+    );
+    assert.strictEqual(committed.ok, true);
+    assert.strictEqual(
+      committed.state.failedGateAttempts[gate].recoverySatisfiedBy,
+      "read_file"
+    );
+    assert.strictEqual(committed.state.controlState.requiredTool.name, gate);
+
+    const retry = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      gate
+    );
+    assert.strictEqual(retry.ok, true);
+    assert.strictEqual(
+      rollbackRouteReservation(
+        workspace,
+        authorization.taskSessionId,
+        fields,
+        {},
+        gate,
+        retry.reservationId
+      ).ok,
+      true
+    );
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;

@@ -121,9 +121,12 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "scripts/approve_feature_intent.py",
         "scripts/mutation_semantic_guard.py",
         "scripts/unreal_api_denylist.py",
+        "scripts/unreal_source_extensions.py",
         "scripts/manage_runtime_manifest.py",
         "installer/runtime-manifest.json",
         "lmstudio-unreal-agent-mcp/src/server.js",
+        "lmstudio-unreal-agent-mcp/src/filesystem-path-identity.js",
+        "lmstudio-unreal-agent-mcp/src/recovery-log-contract.js",
         "lmstudio-unreal-agent-mcp/src/route-watcher.js",
         "lmstudio-unreal-agent-mcp/src/mutation-semantic-guard.js",
         "lmstudio-context-compactor-plugin/package-lock.json",
@@ -149,6 +152,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.3.0 RC2"
+    assert packaged_installer_manifest["version"] == "2.1.4"
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
     assert (output / "install.sh").read_bytes() == (ROOT / "install.sh").read_bytes()
     windows_launcher = (output / "INSTALL.bat").read_text(encoding="utf-8")

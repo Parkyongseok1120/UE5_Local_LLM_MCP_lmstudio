@@ -50,13 +50,32 @@ jobs:
           node --test
           test/unreal-detect-portability.test.js
           test/build-executor.test.js
+          test/build-tool-envelope.test.js
           test/automation-executor.test.js
+          test/automation-regression-boundaries.test.js
+          test/edit-bundle-rollback.test.js
+          test/edit-bundle-transaction.test.js
+          test/mutation-generation.test.js
+          test/transaction-journal.test.js
+          test/journal-writeahead-crash.test.js
+          test/recovery-log-contract.test.js
+          test/task-control-transition.test.js
+          test/task-auth.test.js
+          test/tool-read-history.test.js
+          test/validation-scope.test.js
+          test/workflow-loop-guard.test.js
         working-directory: lmstudio-unreal-agent-mcp
 
       - name: Version-local engine evidence and multi-slice routing
         run: >
           python -m pytest
           tests/test_code_sketch_claim_validate.py
+          tests/test_automation_capability_and_gate_bounds.py
+          tests/test_control_transition_parity.py
+          tests/test_task_api_integration.py
+          tests/test_static_recovery_server_bridge.py
+          tests/test_unreal_static_validate.py
+          tests/test_validate_project_sources.py
           tests/test_phase_tool_router.py::test_successful_build_advances_multi_slice_plan_before_completion
           tests/test_phase_tool_router.py::test_successful_build_binds_automation_gate_without_completing_task
           -q --tb=short

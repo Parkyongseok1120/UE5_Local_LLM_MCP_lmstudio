@@ -29,6 +29,75 @@ test("normalizeReadToolArgs canonicalizes read_file_range bounds", () => {
   assert.strictEqual(normalized.endLine, 20);
 });
 
+test("read argument path identity folds case only for Windows", () => {
+  const windows = normalizeReadToolArgs(
+    "read_file",
+    { path: "project://Source/Demo/Foo.cpp" },
+    "win32"
+  );
+  const posix = normalizeReadToolArgs(
+    "read_file",
+    { path: "project://Source/Demo/Foo.cpp" },
+    "linux"
+  );
+  assert.strictEqual(windows.path, "source/demo/foo.cpp");
+  assert.strictEqual(posix.path, "Source/Demo/Foo.cpp");
+});
+
+test("read history shares Windows case aliases but isolates POSIX case-distinct files", () => {
+  clearReadSuccessHistory();
+  const windowsUpper = {
+    ...CONTEXT,
+    hostPlatform: "win32",
+    fileAbsPath: "C:/Project/Source/Demo/Foo.cpp",
+  };
+  const windowsLower = {
+    ...windowsUpper,
+    fileAbsPath: "c:/project/source/demo/foo.cpp",
+  };
+  const upperArgs = normalizeReadToolArgs(
+    "read_file",
+    { path: "Source/Demo/Foo.cpp" },
+    "win32"
+  );
+  const lowerArgs = normalizeReadToolArgs(
+    "read_file",
+    { path: "source/demo/foo.cpp" },
+    "win32"
+  );
+  recordReadSuccess("read_file", upperArgs, windowsUpper, "WINDOWS-CONTENT");
+  assert.strictEqual(
+    checkReadRepeat("read_file", lowerArgs, windowsLower).action,
+    "cache"
+  );
+
+  clearReadSuccessHistory();
+  const posixUpper = {
+    ...CONTEXT,
+    hostPlatform: "linux",
+    fileAbsPath: "/project/Source/Demo/Foo.cpp",
+  };
+  const posixLower = {
+    ...posixUpper,
+    fileAbsPath: "/project/Source/Demo/foo.cpp",
+  };
+  const posixUpperArgs = normalizeReadToolArgs(
+    "read_file",
+    { path: "Source/Demo/Foo.cpp" },
+    "linux"
+  );
+  const posixLowerArgs = normalizeReadToolArgs(
+    "read_file",
+    { path: "Source/Demo/foo.cpp" },
+    "linux"
+  );
+  recordReadSuccess("read_file", posixUpperArgs, posixUpper, "POSIX-UPPER");
+  assert.strictEqual(
+    checkReadRepeat("read_file", posixLowerArgs, posixLower).action,
+    "allow"
+  );
+});
+
 test("identical successful read returns cached repeat on second call", () => {
   clearReadSuccessHistory();
   const tool = "read_file_range";
@@ -215,6 +284,38 @@ test("conversation session isolates process-global evidence cache and budgets", 
   recordReadSuccess(tool, args, chatA, '{"results":[{"file":"A.cpp"}]}');
 
   assert.strictEqual(checkReadRepeat(tool, args, chatA).action, "cache");
+  assert.strictEqual(checkReadRepeat(tool, args, chatB).action, "allow");
+});
+
+test("routed stagnation follows the task across evidence sessions but not into another task", () => {
+  clearReadSuccessHistory();
+  const tool = "search_files";
+  const args = normalizeReadToolArgs(tool, { query: "TaskOwned", path: "project://Source" });
+  const firstTurn = {
+    ...CONTEXT,
+    taskSessionId: "task-a",
+    evidenceSessionId: "chat-a",
+  };
+  recordReadStagnation(tool, args, firstTurn);
+
+  const compactedTurn = { ...firstTurn, evidenceSessionId: "chat-b" };
+  const sameTask = checkReadRepeat(tool, args, compactedTurn);
+  assert.strictEqual(sameTask.action, "stagnation");
+  assert.strictEqual(sameTask.reason, "EVIDENCE_STAGNATION_REPEAT");
+
+  const otherTask = { ...firstTurn, taskSessionId: "task-b" };
+  assert.strictEqual(checkReadRepeat(tool, args, otherTask).action, "allow");
+});
+
+test("unbound stagnation is isolated by evidence session", () => {
+  clearReadSuccessHistory();
+  const tool = "search_files";
+  const args = normalizeReadToolArgs(tool, { query: "ChatOwned", path: "project://Source" });
+  const chatA = { ...CONTEXT, evidenceSessionId: "chat-a" };
+  const chatB = { ...CONTEXT, evidenceSessionId: "chat-b" };
+  recordReadStagnation(tool, args, chatA);
+
+  assert.strictEqual(checkReadRepeat(tool, args, chatA).reason, "EVIDENCE_STAGNATION_REPEAT");
   assert.strictEqual(checkReadRepeat(tool, args, chatB).action, "allow");
 });
 

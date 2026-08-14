@@ -3,11 +3,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from unreal_static_validate import (  # noqa: E402
     Finding,
+    iter_source_files,
+    resolve_write_scope_paths,
     validate_duplicate_source_basenames,
     validate_include_paths_exist,
     validate_unreal_readiness,
@@ -41,6 +45,80 @@ FIXTURE = ROOT / "tests" / "fixtures" / "compile_fix_ceiling" / "missing_gamepla
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def test_portable_cpp_extensions_are_scanned_paired_and_validated(tmp_path: Path) -> None:
+    project = tmp_path / "PortableExtensions"
+    module = project / "Source" / "PortableExtensions"
+    declarations = {
+        "Portable.hh": "#pragma once\n",
+        "Portable.hxx": "#pragma once\n",
+        "Portable.inl": "inline void PortableInline() {}\n",
+        "Portable.ipp": "inline void PortableTemplate() {}\n",
+        "MacFeature.mm": "void UseFeature() { UGameplayStatics::GetGameMode(nullptr); }\n",
+        "MacFeature.hxx": "#pragma once\n",
+        "Ignore.txt": "UCLASS()\n",
+    }
+    for name, content in declarations.items():
+        _write(module / name, content)
+
+    scanned = {path.name for path in iter_source_files(project)}
+    assert scanned == set(declarations) - {"Ignore.txt"}
+
+    scope = resolve_write_scope_paths(
+        project,
+        "Source/PortableExtensions/MacFeature.mm",
+    )
+    assert {path.name for path in scope} == {"MacFeature.mm", "MacFeature.hxx"}
+
+    findings = validate_unreal_readiness(
+        project,
+        scope_paths=[module / "MacFeature.mm"],
+        skip_include_path_checks=True,
+    )
+    assert any(
+        finding.code == "MISSING_CPP_SYMBOL_INCLUDE"
+        and finding.path.endswith("MacFeature.mm")
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("suffix", [".hh", ".hxx", ".inl", ".ipp"])
+def test_portable_header_extensions_use_header_validators(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    project = tmp_path / "PortableHeaders"
+    header = project / "Source" / "PortableHeaders" / f"PortableObject{suffix}"
+    _write(header, "UCLASS()\nclass UPortableObject { GENERATED_BODY() };\n")
+
+    findings = validate_unreal_readiness(project, scope_paths=[header])
+
+    assert any(
+        finding.code == "GENERATED_H_MISSING" and finding.path.endswith(suffix)
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("suffix", [".cxx", ".mm"])
+def test_portable_cpp_implementation_extensions_use_cpp_validators(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    project = tmp_path / "PortableImplementations"
+    source = project / "Source" / "PortableImplementations" / f"PortableFeature{suffix}"
+    _write(source, "void UseFeature() { UGameplayStatics::GetGameMode(nullptr); }\n")
+
+    findings = validate_unreal_readiness(
+        project,
+        scope_paths=[source],
+        skip_include_path_checks=True,
+    )
+
+    assert any(
+        finding.code == "MISSING_CPP_SYMBOL_INCLUDE" and finding.path.endswith(suffix)
+        for finding in findings
+    )
 
 
 def test_duplicate_source_basename_detected(tmp_path: Path) -> None:

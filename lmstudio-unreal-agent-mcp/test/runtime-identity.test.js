@@ -18,6 +18,7 @@ test("agent runtime identity is deterministic and verifiable", () => {
     const result = verifyRuntimeComponent("agent", { componentRoot, manifestPath, required: true });
     assert.equal(result.verified, true);
     assert.equal(result.running.buildHash, identity.buildHash);
+    assert.equal(identity.componentVersion, "0.3.16");
     assert.equal(identity.protocolVersion, 2);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

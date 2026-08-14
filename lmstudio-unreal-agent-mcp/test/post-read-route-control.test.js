@@ -18,6 +18,8 @@ function recoveryCommit() {
       planId: "plan-1",
       planRevision: "1",
       activeSliceId: "local-play",
+      requiredGateSetHash: "gate-set-local-play",
+      mutationGeneration: 0,
       status: "running",
       controlEpoch: 5,
       pendingGates: [
@@ -29,6 +31,10 @@ function recoveryCommit() {
           validationErrorCode: "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED",
           nextAction: "read_file",
           attemptCount: 1,
+          gateSetHash: "gate-set-local-play",
+          planRevision: "1",
+          activeSliceId: "local-play",
+          mutationGeneration: 0,
         },
       },
       toolRoute: {

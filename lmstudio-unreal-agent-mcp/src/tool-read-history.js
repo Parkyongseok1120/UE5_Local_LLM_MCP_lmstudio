@@ -7,6 +7,10 @@
 // New line ranges are always allowed regardless of call count.
 
 const crypto = require("crypto");
+const {
+  absolutePathIdentity,
+  filesystemPathIdentity,
+} = require("./filesystem-path-identity");
 const { stableStringify } = require("./tool-failure-history");
 
 const READ_EVIDENCE_TOOLS = new Set([
@@ -36,12 +40,19 @@ const recentKeys = [];
 // stagnationKey -> { count, at }
 const stagnationEntries = new Map();
 
+function evidenceOwnerKey(context = {}) {
+  const taskSessionId = String(context.taskSessionId || "").trim();
+  if (taskSessionId) return `task:${taskSessionId}`;
+  const evidenceSessionId = String(context.evidenceSessionId || "").trim();
+  return `evidence:${evidenceSessionId}`;
+}
+
 function evidenceContextKey(context = {}) {
   const hash = crypto.createHash("sha256");
-  // Read/search history is process-global, so the generator-owned conversation
-  // session must participate in every cache key. Otherwise a fresh LM Studio
-  // chat inherits the prior chat's 30-minute evidence budget.
-  hash.update(String(context.evidenceSessionId || context.taskSessionId || ""));
+  // A routed task owns one evidence history even if a model-facing sessionId
+  // changes between providers or compaction turns. Unbound observations still
+  // use the conversation session so a fresh chat cannot inherit old evidence.
+  hash.update(evidenceOwnerKey(context));
   hash.update("\u0000");
   hash.update(String(context.fileSignature || context.scopeSignature || ""));
   hash.update("\u0000");
@@ -53,7 +64,11 @@ function buildEvidenceKey(tool, args, context = {}) {
   const hash = crypto.createHash("sha256");
   hash.update(String(tool || ""));
   hash.update("\u0000");
-  hash.update(stableStringify(args || {}));
+  hash.update(stableStringify(normalizeReadToolArgs(
+    tool,
+    args || {},
+    context.hostPlatform || process.platform
+  )));
   hash.update("\u0000");
   hash.update(evidenceContextKey(context));
   return hash.digest("hex");
@@ -61,8 +76,11 @@ function buildEvidenceKey(tool, args, context = {}) {
 
 function fileVersionKey(context = {}) {
   if (!context.fileAbsPath || !context.fileSignature) return null;
-  const sessionId = String(context.evidenceSessionId || context.taskSessionId || "");
-  return `${sessionId}\u0000${context.fileAbsPath}\u0000${context.fileSignature}\u0000${context.mutationGeneration ?? 0}`;
+  const fileIdentity = absolutePathIdentity(
+    context.fileAbsPath,
+    context.hostPlatform || process.platform
+  );
+  return `${evidenceOwnerKey(context)}\u0000${fileIdentity}\u0000${context.fileSignature}\u0000${context.mutationGeneration ?? 0}`;
 }
 
 function prune(now, maxEntries, ttlMs) {
@@ -357,10 +375,15 @@ function recordReadSuccess(tool, args, context = {}, content, options = {}) {
   return { recorded: true, key, attempts: entry.attempts };
 }
 
-function normalizeReadToolArgs(tool, args = {}) {
+function normalizeReadToolArgs(tool, args = {}, hostPlatform = process.platform) {
   const normalized = {};
+  const normalizePath = (value) => filesystemPathIdentity(
+    value,
+    hostPlatform,
+    { trimOuterSlashes: true }
+  );
   if (tool === "read_file") {
-    normalized.path = String(args.path || "");
+    normalized.path = normalizePath(args.path);
     if (args.detailLevel != null) normalized.detailLevel = String(args.detailLevel);
     if (args.maxBytes != null) normalized.maxBytes = Number(args.maxBytes);
     return normalized;
@@ -368,21 +391,21 @@ function normalizeReadToolArgs(tool, args = {}) {
   if (tool === "read_file_range") {
     const startLine = Math.max(1, Number(args.startLine || 1));
     const endLine = Math.max(startLine, Number(args.endLine || startLine));
-    normalized.path = String(args.path || "");
+    normalized.path = normalizePath(args.path);
     normalized.startLine = startLine;
     normalized.endLine = endLine;
     if (args.detailLevel != null) normalized.detailLevel = String(args.detailLevel);
     return normalized;
   }
   if (tool === "read_symbol") {
-    normalized.path = String(args.path || "");
+    normalized.path = normalizePath(args.path);
     normalized.symbol = String(args.symbol || "").trim();
     if (args.contextLines != null) normalized.contextLines = Number(args.contextLines);
     return normalized;
   }
   if (tool === "search_files") {
     normalized.query = String(args.query || "");
-    if (args.path != null) normalized.path = String(args.path);
+    if (args.path != null) normalized.path = normalizePath(args.path);
     if (args.regex != null) normalized.regex = Boolean(args.regex);
     if (args.matchFileNames != null) normalized.matchFileNames = Boolean(args.matchFileNames);
     if (args.maxResults != null) normalized.maxResults = Number(args.maxResults);

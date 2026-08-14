@@ -57,3 +57,54 @@ test("a bound task never silently falls back to a full audit", () => {
   assert.strictEqual(result.kind, "task_scope_unavailable");
   assert.deepStrictEqual(result.targets, []);
 });
+
+test("validation scope folds path case on Windows only", () => {
+  const state = {
+    status: "running",
+    continuity: {
+      checkpoint: {
+        mutationGeneration: 5,
+        modifiedFiles: ["source/demo/feature.cpp"],
+      },
+    },
+    toolRoute: {
+      selectedSlice: { files: ["project://Source/Demo/Feature.cpp"] },
+    },
+  };
+
+  assert.deepStrictEqual(
+    deriveValidationScope(state, 5, { taskBound: true, hostPlatform: "win32" }),
+    { kind: "task_slice", targets: ["Source/Demo/Feature.cpp"] }
+  );
+  const posix = deriveValidationScope(state, 5, {
+    taskBound: true,
+    hostPlatform: "linux",
+  });
+  assert.equal(posix.kind, "task_scope_unavailable");
+  assert.deepStrictEqual(posix.targets, []);
+});
+
+test("validation target deduplication preserves POSIX case-distinct files", () => {
+  const state = {
+    status: "running",
+    continuity: {
+      checkpoint: {
+        mutationGeneration: 6,
+        modifiedFiles: [
+          "Source/Demo/Feature.cpp",
+          "Source/Demo/feature.cpp",
+        ],
+      },
+    },
+    toolRoute: { selectedSlice: { files: [] } },
+  };
+
+  assert.deepStrictEqual(
+    deriveValidationScope(state, 6, { taskBound: true, hostPlatform: "linux" }).targets,
+    ["Source/Demo/Feature.cpp", "Source/Demo/feature.cpp"]
+  );
+  assert.deepStrictEqual(
+    deriveValidationScope(state, 6, { taskBound: true, hostPlatform: "win32" }).targets,
+    ["Source/Demo/Feature.cpp"]
+  );
+});

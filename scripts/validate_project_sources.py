@@ -16,6 +16,7 @@ from unreal_static_validate import (
     has_blocking_write_errors,
     has_static_errors,
     normalize_rel_path,
+    resolve_scan_roots,
     resolve_write_scope_paths,
     validate_unreal_readiness,
 )
@@ -92,8 +93,12 @@ def main() -> int:
 
     root = resolve_project_root(args.project_root)
     source_dir = root / "Source"
-    if not source_dir.is_dir():
-        print(f"[FAIL] Source directory not found: {source_dir}", file=sys.stderr)
+    scan_roots = resolve_scan_roots(root)
+    if not scan_roots:
+        print(
+            f"[FAIL] No Unreal source roots found under Source/ or Plugins/*/Source: {root}",
+            file=sys.stderr,
+        )
         return 2
 
     module_graph = args.module_graph
@@ -183,6 +188,7 @@ def main() -> int:
     payload = {
         "projectRoot": str(root),
         "sourceDir": str(source_dir),
+        "scanRoots": [str(item) for item in scan_roots],
         "writeTarget": write_target,
         "scopeTargets": scope_targets,
         "scanMode": scan_mode,

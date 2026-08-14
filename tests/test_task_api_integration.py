@@ -11,11 +11,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from task_api import (  # noqa: E402
     authorize_task_tool,
+    finalize_task_result,
     task_cancel,
     task_complete_after_successful_build,
     task_define_slices,
     task_continue_active,
     task_list_active,
+    task_record_build_recovery,
     task_record_gate,
     task_record_gate_failure,
     task_root,
@@ -89,6 +91,161 @@ def test_active_task_listing_continues_owned_gate_and_never_auto_cancels(
     assert foreign["nextAction"] == "active_task_requires_explicit_user_decision"
     assert foreign["nextActionIsTool"] is False
     assert "cancel" not in foreign["nextAction"].casefold()
+
+
+def test_exact_control_args_project_through_status_finalize_and_active_list(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    target = "Source/Demo/FirstError.cpp"
+    exact_args = {
+        "path": f"project://{target}",
+        "startLine": 17,
+        "endLine": 31,
+    }
+    started = task_start(
+        tmp_path,
+        request=f"Fix {target}",
+        mode="agent_edit",
+        conversation_id="conv-exact-control",
+        plan_payload={
+            "taskKind": "compile_fix",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "repair", "files": [target]}
+            ],
+        },
+    )
+    recorded = task_record_build_recovery(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        recovery={
+            "targetFile": target,
+            "requiredNextTool": "read_file_range",
+            "requiredNextToolArgs": exact_args,
+            "firstError": f"{target}:20: error",
+            "mutationGeneration": 0,
+        },
+    )
+    assert recorded["ok"] is True
+
+    status = task_status(tmp_path, started["taskSessionId"])
+    assert status["control"]["requiredTool"] == {
+        "name": "read_file_range",
+        "args": exact_args,
+    }
+    for field in ("nextActionArgs", "requiredNextToolArgs"):
+        assert status[field] == exact_args
+    assert status["nextAction"] == status["requiredNextTool"] == "read_file_range"
+    assert status["nextActionIsTool"] is True
+
+    finalized = finalize_task_result(
+        {
+            "ok": False,
+            "errorCode": "SYNTHETIC_HANDLER_RESULT",
+            "nextAction": "stale_legacy_action",
+            "nextActionArgs": {"path": "stale.cpp"},
+        },
+        status,
+    )
+    assert finalized["control"] == status["control"]
+    assert finalized["nextAction"] == finalized["requiredNextTool"] == "read_file_range"
+    assert finalized["nextActionArgs"] == exact_args
+    assert finalized["requiredNextToolArgs"] == exact_args
+
+    listed = task_list_active(
+        tmp_path,
+        conversation_id="conv-exact-control",
+        owner_capability=started["taskAuthorization"]["ownerCapability"],
+    )
+    assert listed["count"] == 1
+    assert listed["nextAction"] == listed["requiredNextTool"] == "read_file_range"
+    assert listed["nextActionArgs"] == exact_args
+    assert listed["requiredNextToolArgs"] == exact_args
+    assert listed["tasks"][0]["routeNextAction"] == "read_file_range"
+    assert listed["tasks"][0]["routeNextActionArgs"] == exact_args
+
+    allowed = authorize_task_tool(
+        tmp_path,
+        tool_name="read_file_range",
+        task_authorization=recorded["taskAuthorization"],
+        arguments={
+            "path": target,
+            "startLine": 17,
+            "endLine": 31,
+            "encoding": "utf-8",
+        },
+    )
+    assert allowed["ok"] is True
+    denied = authorize_task_tool(
+        tmp_path,
+        tool_name="read_file_range",
+        task_authorization=recorded["taskAuthorization"],
+        arguments={"path": target, "startLine": 18, "endLine": 31},
+    )
+    assert denied["ok"] is False
+    assert denied["errorCode"] == "TASK_CONTROL_ARGUMENT_MISMATCH"
+    assert denied["nextActionArgs"]["startLine"] == 17
+
+
+def test_corrupt_task_quarantine_never_leaks_owned_task_arguments(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Fix Source/Demo/Owned.cpp",
+        mode="agent_edit",
+        conversation_id="conv-corrupt-owned",
+        plan_payload={
+            "taskKind": "compile_fix",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {
+                "requiredBeforeWrite": ["unreal_code_sketch_claim_validate"]
+            },
+            "executablePlanSlices": [
+                {"sliceId": "repair", "files": ["Source/Demo/Owned.cpp"]}
+            ],
+        },
+    )
+    owned_args = {
+        "path": "project://Source/Demo/Owned.cpp",
+        "startLine": 9,
+        "endLine": 23,
+    }
+    recorded = task_record_build_recovery(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        recovery={
+            "targetFile": "Source/Demo/Owned.cpp",
+            "requiredNextTool": "read_file_range",
+            "requiredNextToolArgs": owned_args,
+            "mutationGeneration": 0,
+        },
+    )
+    assert recorded["ok"] is True
+
+    corrupt_dir = task_root(tmp_path, started["taskSessionId"]).parent / "corrupt_12345678"
+    corrupt_dir.mkdir(parents=True)
+    (corrupt_dir / "workspace-root.txt").write_text(str(tmp_path), encoding="utf-8")
+    (corrupt_dir / "state.json").write_text("{not-json", encoding="utf-8")
+
+    listed = task_list_active(
+        tmp_path,
+        conversation_id="conv-corrupt-owned",
+        owner_capability=started["taskAuthorization"]["ownerCapability"],
+    )
+
+    assert listed["corruptCount"] == 1
+    assert listed["nextAction"] == "unreal_task_quarantine_corrupt"
+    assert listed["nextActionArgs"] == {}
+    assert "requiredNextTool" not in listed
+    assert "requiredNextToolArgs" not in listed
 
 
 def test_task_status_hides_future_expiry_route_from_public_state(tmp_path: Path) -> None:
@@ -586,10 +743,17 @@ def test_failed_gate_attempts_are_persisted_and_equivalent_retry_is_blocked(
         },
     )
     authorization = started["taskAuthorization"]
+    recovery_args = {
+        "path": "project://Source/Demo/Thing.cpp",
+        "startLine": 8,
+        "endLine": 19,
+    }
     evidence = {
         "ok": False,
         "errorCode": "ENGINE_RETURN_TYPE_MISMATCH",
-        "nextAction": gate,
+        "nextAction": "read_file_range",
+        "nextActionIsTool": True,
+        "nextActionArgs": recovery_args,
         "firstBlocker": {
             "errorCode": "ENGINE_RETURN_TYPE_MISMATCH",
             "symbol": "CalculateDirection",
@@ -605,6 +769,19 @@ def test_failed_gate_attempts_are_persisted_and_equivalent_retry_is_blocked(
         input_payload={"sketch": "float Direction = CalculateDirection(...);"},
         evidence=evidence,
     )
+    after_first = task_status(tmp_path, started["taskSessionId"])
+    failed_attempt = after_first["state"]["failedGateAttempts"][gate]
+    assert failed_attempt["nextActionArgs"] == recovery_args
+    assert failed_attempt["gateSetHash"] == started["state"]["requiredGateSetHash"]
+    assert failed_attempt["planRevision"] == started["state"]["planRevision"]
+    assert failed_attempt["activeSliceId"] == started["state"]["activeSliceId"]
+    assert failed_attempt["mutationGeneration"] == 0
+    assert after_first["control"]["requiredTool"] == {
+        "name": "read_file_range",
+        "args": recovery_args,
+    }
+    assert after_first["nextActionArgs"] == recovery_args
+    assert after_first["requiredNextToolArgs"] == recovery_args
     second = task_record_gate_failure(
         tmp_path,
         gate_name=gate,

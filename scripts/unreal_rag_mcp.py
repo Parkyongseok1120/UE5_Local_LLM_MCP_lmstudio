@@ -1734,6 +1734,7 @@ def _attach_code_sketch_recovery(
             "blockerCount": len(blockers),
             "nextAction": next_action,
             "nextActionArgs": next_action_args,
+            "nextActionIsTool": True,
             "recoveryContext": recovery_context,
             "reuseCurrentTaskAuthorization": isinstance(
                 arguments.get("taskAuthorization") or arguments.get("task_authorization"),
@@ -9842,18 +9843,103 @@ class McpServer:
         context = symbol_signature_instruction(contract) + "\n" + context
         truncated = "assembly budget truncated" in context
         next_detail = next_code_detail(detail) if truncated else None
+        structured = {
+            "matches": rows,
+            "detailLevel": detail,
+            "nextDetailLevel": next_detail,
+            "signatureContract": contract,
+            "indexStaleness": stale_status,
+            "directSourcePreferred": stale_status.get("directSourcePreferred", False),
+            "staleProjectRowsSuppressed": suppressed,
+        }
+        authorization = (
+            arguments.get("taskAuthorization")
+            if isinstance(arguments.get("taskAuthorization"), dict)
+            else {}
+        )
+        if authorization.get("taskSessionId"):
+            from task_api import task_mark_recovery_evidence
+
+            evidence = task_mark_recovery_evidence(
+                self.workspace,
+                task_authorization=authorization,
+                tool_name="unreal_symbol_lookup",
+                tool_args={
+                    key: value
+                    for key, value in arguments.items()
+                    if key not in {"taskAuthorization", "task_authorization"}
+                },
+                evidence_hash=hashlib.sha256(context.encode("utf-8")).hexdigest(),
+            )
+            if evidence.get("active") is True or evidence.get("ok") is False:
+                structured["recoveryEvidence"] = {
+                    "ok": evidence.get("ok") is True,
+                    "active": evidence.get("active") is True,
+                    "errorCode": str(evidence.get("errorCode") or ""),
+                }
+                for key in (
+                    "taskSessionId",
+                    "taskAuthorization",
+                    "toolRoute",
+                    "controlEpoch",
+                    "control",
+                    "nextAction",
+                    "nextActionIsTool",
+                    "nextActionArgs",
+                    "requiredNextTool",
+                    "requiredNextToolArgs",
+                ):
+                    if key in evidence:
+                        structured[key] = evidence[key]
+                if evidence.get("ok") is False:
+                    structured.update(
+                        {
+                            "ok": False,
+                            "errorCode": str(
+                                evidence.get("errorCode")
+                                or "RECOVERY_EVIDENCE_PERSISTENCE_FAILED"
+                            ),
+                            "error": str(
+                                evidence.get("error")
+                                or "Symbol recovery evidence was not committed to task state."
+                            ),
+                            "retryable": bool(evidence.get("retryable", True)),
+                        }
+                    )
+                    self.tool_result(
+                        message_id,
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "errorCode": structured["errorCode"],
+                                "error": structured["error"],
+                                "nextAction": structured.get("nextAction"),
+                                "nextActionIsTool": structured.get("nextActionIsTool"),
+                                "nextActionArgs": structured.get("nextActionArgs"),
+                                "requiredNextTool": structured.get("requiredNextTool"),
+                                "requiredNextToolArgs": structured.get(
+                                    "requiredNextToolArgs"
+                                ),
+                            },
+                            ensure_ascii=False,
+                        ),
+                        structured=structured,
+                        char_limit=int(limits["max_tool_chars"]),
+                        is_error=True,
+                    )
+                    return
+                if evidence.get("control"):
+                    context = json.dumps(
+                        {
+                            "symbolEvidence": context,
+                            **structured,
+                        },
+                        ensure_ascii=False,
+                    )
         self.tool_result(
             message_id,
             context,
-            structured={
-                "matches": rows,
-                "detailLevel": detail,
-                "nextDetailLevel": next_detail,
-                "signatureContract": contract,
-                "indexStaleness": stale_status,
-                "directSourcePreferred": stale_status.get("directSourcePreferred", False),
-                "staleProjectRowsSuppressed": suppressed,
-            },
+            structured=structured,
             char_limit=int(limits["max_tool_chars"]),
         )
 

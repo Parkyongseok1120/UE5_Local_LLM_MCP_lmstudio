@@ -288,6 +288,7 @@ def build_orchestration_decision(
     architecture_required: bool,
     policy: dict[str, Any],
     profile_name: str,
+    completion_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Select a bounded reasoning/validation route for the active model profile."""
     write_task = task_kind in {"edit", "compile_fix", "refactor"}
@@ -324,11 +325,17 @@ def build_orchestration_decision(
 
     validation_stages = ["direct_source_evidence"]
     if write_task:
-        validation_stages.extend(["static_validate_project", "build_unreal_project"])
+        validation_stages.extend(
+            [
+                "static_validate_project",
+                "build_unreal_project",
+                "automation_if_declared_or_required_by_server_control",
+            ]
+        )
     if high_risk:
         validation_stages.append("targeted_regression")
 
-    return {
+    decision = {
         "riskTier": risk_tier,
         "strategy": strategy,
         "profile": profile_name,
@@ -370,6 +377,9 @@ def build_orchestration_decision(
             "It does not prove that LM Studio has multiple models loaded or perform model switching."
         ),
     }
+    if write_task and completion_contract:
+        decision["completionContract"] = dict(completion_contract)
+    return decision
 
 
 def _insert_tool_before(policy: list[str], tool: str, anchors: tuple[str, ...]) -> None:
@@ -1078,7 +1088,12 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
     return common + edit_steps
 
 
-def build_stop_conditions(task_kind: TaskKind, *, runtime_write: bool = False) -> list[str]:
+def build_stop_conditions(
+    task_kind: TaskKind,
+    *,
+    runtime_write: bool = False,
+    completion_contract: dict[str, Any] | None = None,
+) -> list[str]:
     if task_kind == "code_sketch":
         return [
             "Stop after presenting a labeled Proposed sketch backed by symbol evidence.",
@@ -1094,8 +1109,19 @@ def build_stop_conditions(task_kind: TaskKind, *, runtime_write: bool = False) -
             "If evidence is missing, report the exact missing file/log/index instead of guessing.",
             "For cpp_analysis, zero direct source reads is a hard stop; never substitute RAG snippets.",
         ]
+    completion_contract = completion_contract or {}
+    automation_route = " → ".join(completion_contract.get("whenAutomationRequired") or [])
+    build_only_route = " → ".join(
+        completion_contract.get("whenAutomationNotRequiredOrDisabled") or []
+    )
     conditions = [
-        "Stop only when build_unreal_project returns proofLevel=Built for the current changed-file set.",
+        "Build success is a transition point, not an unconditional terminal result.",
+        (
+            "Follow the latest authoritative server task control after Build: "
+            f"{automation_route} when Automation is declared or required; "
+            f"{build_only_route} when Automation is not required or is disabled."
+        ),
+        "Stop only when authoritative task control reports Complete for the current changed-file set.",
         "BuiltStale and BuiltUnverified do not complete a compile-oriented plan slice.",
         "Runtime-oriented work remains runtimePending until PIE/runtime evidence is recorded.",
         "If build fails, report the first actionable error line and retry with compile_fix RAG.",
@@ -1285,7 +1311,7 @@ def build_agent_plan(
     from load_sampling_preset import profile_agent_policy, resolve_profile_name
     from project_context import resolve_active_project_context
     from rag_search import resolve_mode
-    from tool_policy import gates_for_task, tool_sequence_for_task
+    from tool_policy import completion_contract_for_task, gates_for_task, tool_sequence_for_task
 
     resolved = resolve_plan_request(request, latest_user_message)
     request = str(resolved.get("request") or request)
@@ -1348,6 +1374,9 @@ def build_agent_plan(
                 merged_gates.append(gate)
         evidence.gates = merged_gates
     tool_policy = tool_sequence_for_task(tool_policy_key) or tool_sequence_for_task(task_kind)
+    completion_contract = completion_contract_for_task(
+        tool_policy_key
+    ) or completion_contract_for_task(task_kind)
     if task_kind == "inspect_only" and mode in ASSET_METADATA_MODES:
         tool_policy = list(ASSET_METADATA_TOOL_POLICY)
     elif task_kind in {"inspect_only", "cpp_analysis"}:
@@ -1607,6 +1636,7 @@ def build_agent_plan(
         architecture_required=architecture_required,
         policy=policy,
         profile_name=resolve_profile_name(),
+        completion_contract=completion_contract,
     )
     if feature_intent.get("requiresResolution"):
         required = list(orchestration.get("requiredBeforeWrite") or [])
@@ -1749,7 +1779,11 @@ def build_agent_plan(
         project_context=project_context,
         write_gate=write_gate,
         checkpoints=checkpoints,
-        stop_conditions=build_stop_conditions(task_kind, runtime_write=runtime_write),
+        stop_conditions=build_stop_conditions(
+            task_kind,
+            runtime_write=runtime_write,
+            completion_contract=completion_contract,
+        ),
         retry_policy=build_retry_policy(task_kind, policy),
         notes=notes,
         error_route=error_route,

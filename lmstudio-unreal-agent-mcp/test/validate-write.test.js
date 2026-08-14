@@ -9,6 +9,7 @@ const path = require("path");
 const {
   resolveProjectRootForFile,
   resolvePythonExe,
+  resolveValidationRoot,
   validateReplaceOccurrences,
   isValidationInfrastructureFailure
 } = require("../src/validate-write");
@@ -22,6 +23,33 @@ test("resolvePythonExe honors installer-provided PYTHON_EXE", () => {
     if (original === undefined) delete process.env.PYTHON_EXE;
     else process.env.PYTHON_EXE = original;
   }
+});
+
+test("clean home resolves the repo-local validator without UNREAL58_ROOT", () => {
+  const cleanHome = fs.mkdtempSync(path.join(os.tmpdir(), "validate-write-home-"));
+  try {
+    const root = resolveValidationRoot({ envRoot: "", homeDir: cleanHome });
+    assert.equal(root, path.resolve(__dirname, "../.."));
+    assert.equal(
+      fs.existsSync(path.join(root, "scripts", "validate_project_sources.py")),
+      true
+    );
+    assert.notEqual(root, path.join(cleanHome, ".lmstudio", "Unreal58-RAG"));
+  } finally {
+    fs.rmSync(cleanHome, { recursive: true, force: true });
+  }
+});
+
+test("manual LM Studio template declares its repository as the validation root", () => {
+  const templatePath = path.resolve(
+    __dirname,
+    "../config/lmstudio-mcp-unreal-agent.json.template"
+  );
+  const template = JSON.parse(fs.readFileSync(templatePath, "utf8"));
+  assert.equal(
+    template.mcpServers["unreal-agent"].env.UNREAL58_ROOT,
+    "%USERPROFILE%\\.lmstudio\\UE5_Local_LLM_MCP_lmstudio"
+  );
 });
 
 test("expectedOccurrences=1 rejects ambiguous replace", () => {

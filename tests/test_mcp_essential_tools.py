@@ -296,6 +296,85 @@ def test_rag_evidence_tools_advertise_compact_route_ownership(monkeypatch, tmp_p
     ) is True
 
 
+def test_symbol_recovery_evidence_mark_failure_is_authoritative_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    mod = _load_rag_mcp_module()
+    index = tmp_path / "rag.sqlite"
+    index.touch()
+    server = mod.McpServer(index)
+    server.workspace = tmp_path
+
+    monkeypatch.setattr(mod, "symbol_lookup", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(mod, "assemble_context", lambda *_args, **_kwargs: "symbol evidence")
+    monkeypatch.setattr(mod, "active_project_names", lambda: [])
+    import index_staleness
+    import task_api
+
+    monkeypatch.setattr(
+        index_staleness,
+        "project_source_stale_status",
+        lambda **_kwargs: {},
+    )
+    authoritative_control = {
+        "authoritative": True,
+        "epoch": 7,
+        "disposition": "require_tool",
+        "requiredTool": {
+            "name": "unreal_symbol_lookup",
+            "args": {"query": "ExpectedSymbol"},
+        },
+        "allowedTools": ["unreal_symbol_lookup"],
+    }
+    monkeypatch.setattr(
+        task_api,
+        "task_mark_recovery_evidence",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "active": True,
+            "errorCode": "RECOVERY_EVIDENCE_ARGUMENT_MISMATCH",
+            "taskSessionId": "task-symbol-recovery",
+            "controlEpoch": 7,
+            "control": authoritative_control,
+            "nextAction": "unreal_symbol_lookup",
+            "nextActionIsTool": True,
+            "nextActionArgs": {"query": "ExpectedSymbol"},
+            "requiredNextTool": "unreal_symbol_lookup",
+            "requiredNextToolArgs": {"query": "ExpectedSymbol"},
+        },
+    )
+
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_symbol_lookup(
+        401,
+        {
+            "query": "WrongSymbol",
+            "taskAuthorization": {
+                "taskSessionId": "task-symbol-recovery",
+                "ownerCapability": "owner-capability",
+            },
+        },
+    )
+
+    result = sent[-1]["result"]
+    structured = result["structuredContent"]
+    assert result["isError"] is True
+    assert structured["ok"] is False
+    assert structured["errorCode"] == "RECOVERY_EVIDENCE_ARGUMENT_MISMATCH"
+    assert structured["recoveryEvidence"]["ok"] is False
+    assert structured["control"]["version"] == 2
+    assert structured["control"]["epoch"] == 7
+    assert structured["control"]["requiredTool"] == {
+        "name": "unreal_symbol_lookup",
+        "args": {"query": "ExpectedSymbol"},
+    }
+    assert structured["requiredNextTool"] == "unreal_symbol_lookup"
+    assert structured["requiredNextToolArgs"] == {"query": "ExpectedSymbol"}
+    assert "symbol evidence" not in result["content"][0]["text"]
+
+
 def test_route_authorization_refresh_replaces_stale_full_arguments():
     mod = _load_rag_mcp_module()
     arguments = {
@@ -1393,8 +1472,14 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
         "mutationGeneration": persisted["mutationGeneration"],
     }
     from phase_tool_router import commit_control_transition
+    from task_api import task_authorization_for_state
 
     commit_control_transition(persisted)
+    # The owner capability remains stable, while the server-owned route hash
+    # is intentionally refreshed when recovery changes the authoritative next
+    # action.  A real read response carries this refreshed authorization; keep
+    # the replay faithful instead of reusing the pre-failure route lease.
+    feature_args["taskAuthorization"] = task_authorization_for_state(persisted)
     (task_root(tmp_path, started["taskSessionId"]) / "state.json").write_text(
         json.dumps(persisted),
         encoding="utf-8",
@@ -1514,10 +1599,18 @@ def test_compile_fix_plan_reproduces_build_before_requesting_fix_sketch(
     assert payload["taskKind"] == "compile_fix"
     assert payload["nextAction"] == "build_unreal_project"
     assert payload["nextActionArgs"]["taskAuthorization"] == payload["taskAuthorization"]
-    # build_unreal_project is provided by unreal-agent, not this RAG catalog.
-    # Keep this bridge contract deliberately minimal so it remains valid for
-    # every advertised agent build schema.
-    assert set(payload["nextActionArgs"]) == {"taskAuthorization"}
+    # build_unreal_project is provided by unreal-agent, but the task bridge must
+    # still pin the authoritative project and disable project/engine fallback.
+    # Target/platform/configuration remain server-resolved at build preflight.
+    assert set(payload["nextActionArgs"]) == {
+        "taskAuthorization",
+        "project",
+        "allowAbsoluteProject",
+        "allowEngineFallback",
+    }
+    assert Path(payload["nextActionArgs"]["project"]).resolve() == project.resolve()
+    assert payload["nextActionArgs"]["allowAbsoluteProject"] is True
+    assert payload["nextActionArgs"]["allowEngineFallback"] is False
     assert "build_unreal_project" in payload["toolRoute"]["activeTools"]
     assert "requiredFirstTool" not in payload["toolRoute"]
     assert "static_validate_project" in payload["toolRoute"]["activeTools"]

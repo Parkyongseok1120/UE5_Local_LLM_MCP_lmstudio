@@ -325,3 +325,13 @@ test("error clustering finds UHT failure before a long build tail", () => {
   assert.ok(cluster.some((line) => line.includes("OtherCompilationError")));
   assert.ok(!cluster.some((line) => line === "timeline 99"));
 });
+
+test("error clustering recognizes UE Automation failure records", () => {
+  for (const failure of [
+    "Automation Test Failed (Project.Runtime.Rule)",
+    "LogAutomationController: Display: Test Completed. Result={Fail} Name={Rule} Path={Project.Runtime.Rule}",
+  ]) {
+    const cluster = firstErrorCluster(["setup", failure, "tail"], 1, 10);
+    assert.ok(cluster.includes(failure));
+  }
+});

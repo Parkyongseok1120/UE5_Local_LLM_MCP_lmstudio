@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import unicodedata
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
+
+from task_gate_history import failed_gate_attempt_for_current_scope
 
 ROUTE_VERSION = 1
 CONTROL_TRANSITION_VERSION = 2
@@ -73,6 +77,16 @@ _DISCOVERY_TOOL_NAMES = frozenset(
         "read_unreal_logs",
     }
 )
+_REPEATED_GATE_REDISCOVERY_TOOLS = frozenset(
+    {
+        "list_directory",
+        "search_files",
+        "read_file",
+        "read_file_range",
+        "read_symbol",
+        "read_unreal_logs",
+    }
+)
 
 _GATE_TO_TOOL = {
     "architecture_approval": "unreal_architecture_reasoning",
@@ -123,12 +137,57 @@ def _clean_strings(values: Any) -> list[str]:
 
 
 def _normalize_path(value: Any) -> str:
-    text = str(value or "").strip().replace("\\", "/")
+    text = unicodedata.normalize(
+        "NFC",
+        str(value or "").strip().replace("\\", "/"),
+    )
     while text.startswith("./"):
         text = text[2:]
     if text.casefold().startswith("project://"):
         text = text[len("project://") :]
     return text.strip("/")
+
+
+def _path_identity(value: Any, *, host_platform: str | None = None) -> str:
+    normalized = _normalize_path(value)
+    windows = (
+        os.name == "nt"
+        if host_platform is None
+        else str(host_platform).strip().casefold() in {"win32", "windows", "nt"}
+    )
+    return normalized.casefold() if windows else normalized
+
+
+def _authoritative_project_root(state: dict[str, Any]) -> str:
+    workspace_root = str(state.get("workspaceRoot") or "").strip()
+    route_scope = state.get("routeScope") if isinstance(state.get("routeScope"), dict) else {}
+    raw_project = str(route_scope.get("projectFile") or state.get("projectFile") or "").strip()
+    if raw_project:
+        project = os.path.expanduser(raw_project)
+        project_base = str(route_scope.get("workspaceRoot") or workspace_root).strip()
+        if not os.path.isabs(project) and project_base:
+            project = os.path.join(project_base, project)
+        resolved = os.path.abspath(project)
+        return (
+            os.path.dirname(resolved)
+            if os.path.splitext(resolved)[1].casefold() == ".uproject"
+            else resolved
+        )
+    return os.path.abspath(os.path.expanduser(workspace_root)) if workspace_root else ""
+
+
+def _authoritative_project_file(state: dict[str, Any]) -> str:
+    workspace_root = str(state.get("workspaceRoot") or "").strip()
+    route_scope = state.get("routeScope") if isinstance(state.get("routeScope"), dict) else {}
+    raw_project = str(route_scope.get("projectFile") or state.get("projectFile") or "").strip()
+    if not raw_project:
+        return ""
+    project = os.path.expanduser(raw_project)
+    project_base = str(route_scope.get("workspaceRoot") or workspace_root).strip()
+    if not os.path.isabs(project) and project_base:
+        project = os.path.join(project_base, project)
+    resolved = os.path.abspath(project)
+    return resolved if os.path.splitext(resolved)[1].casefold() == ".uproject" else ""
 
 
 def _usable_route_file(value: Any) -> str:
@@ -202,7 +261,7 @@ def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
             if isinstance(item, dict)
         ]
         snapshot_keys = {
-            _normalize_path(path).casefold()
+            _path_identity(path)
             for path in snapshot_paths_in_order
             if _normalize_path(path)
         }
@@ -213,15 +272,15 @@ def _selected_slice(state: dict[str, Any], max_files: int) -> dict[str, Any]:
         declared.extend(
             path
             for path in active_plan_files
-            if _normalize_path(path).casefold() in snapshot_keys
+            if _path_identity(path) in snapshot_keys
         )
         declared_keys = {
-            _normalize_path(path).casefold() for path in declared
+            _path_identity(path) for path in declared
         }
         declared.extend(
             path
             for path in snapshot_paths_in_order
-            if _normalize_path(path).casefold() not in declared_keys
+            if _path_identity(path) not in declared_keys
         )
     elif (
         snapshots_match_active_slice
@@ -346,7 +405,12 @@ def _non_negative_int(value: Any) -> int:
         return 0
 
 
-def _mutation_tool_for_state(state: dict[str, Any], route: dict[str, Any]) -> str:
+def _mutation_tool_for_state(
+    state: dict[str, Any],
+    route: dict[str, Any],
+    *,
+    host_platform: str | None = None,
+) -> str:
     """Choose the first bounded mutation from server-owned target snapshots."""
 
     selected_slice = (
@@ -360,7 +424,7 @@ def _mutation_tool_for_state(state: dict[str, Any], route: dict[str, Any]) -> st
     if len(files) > 1:
         return "apply_edit_bundle"
 
-    selected = _normalize_path(files[0]).casefold()
+    selected = _path_identity(files[0], host_platform=host_platform)
     snapshots = normalized_selection_snapshots(state.get("selectedTargetSnapshots"))
     if not snapshots:
         snapshots = normalized_selection_snapshots(state.get("featureTargetSnapshots"))
@@ -368,7 +432,10 @@ def _mutation_tool_for_state(state: dict[str, Any], route: dict[str, Any]) -> st
         (
             item
             for item in snapshots
-            if _normalize_path(item.get("path") or item.get("relativePath")).casefold()
+            if _path_identity(
+                item.get("path") or item.get("relativePath"),
+                host_platform=host_platform,
+            )
             == selected
         ),
         {},
@@ -406,6 +473,8 @@ def _completed_gate_matches_transition_scope(
 def _pre_gate_source_read_path(
     state: dict[str, Any],
     pending_gates: list[str],
+    *,
+    host_platform: str | None = None,
 ) -> str:
     """Return one existing selected target that lacks current direct evidence."""
 
@@ -422,13 +491,19 @@ def _pre_gate_source_read_path(
     )
     files = evidence.get("files") if isinstance(evidence.get("files"), dict) else {}
     evidence_paths = {
-        _normalize_path((item or {}).get("path") or key).casefold()
+        _path_identity(
+            (item or {}).get("path") or key,
+            host_platform=host_platform,
+        )
         for key, item in files.items()
         if isinstance(item, dict)
     }
     for snapshot in snapshots:
         path = _normalize_path(snapshot.get("path"))
-        if snapshot.get("exists") is True and path.casefold() not in evidence_paths:
+        if (
+            snapshot.get("exists") is True
+            and _path_identity(path, host_platform=host_platform) not in evidence_paths
+        ):
             return path
     return ""
 
@@ -461,6 +536,11 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
     elif status in {"pending_approval", "awaiting_approval"}:
         disposition = "await_user"
     elif status == "running":
+        recovery_obligation = (
+            state.get("recoveryObligation")
+            if isinstance(state.get("recoveryObligation"), dict)
+            else {}
+        )
         build_recovery = (
             state.get("buildRecovery")
             if isinstance(state.get("buildRecovery"), dict)
@@ -488,7 +568,98 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             and not state.get("buildProofHistory")
         )
 
-        if state.get("slicePlanningRequired") is True:
+        recovery_status = str(
+            recovery_obligation.get("status") or ""
+        ).strip().casefold()
+        recovery_tool = (
+            recovery_obligation.get("requiredTool")
+            if isinstance(recovery_obligation.get("requiredTool"), dict)
+            else {}
+        )
+        recovery_tool_name = str(recovery_tool.get("name") or "").strip()
+        recovery_tool_args = (
+            dict(recovery_tool.get("args") or {})
+            if isinstance(recovery_tool.get("args"), dict)
+            else {}
+        )
+        recovery_fingerprint = str(
+            recovery_obligation.get("fingerprint") or ""
+        )
+        pending_gate = pending_gates[0] if pending_gates else ""
+        failed_gate_attempt = (
+            failed_gate_attempt_for_current_scope(state, pending_gate)
+            if pending_gate
+            else {}
+        )
+        repeated_gate_blocker = bool(
+            pending_gate
+            and recovery_tool_name == pending_gate
+            and int(failed_gate_attempt.get("attemptCount") or 0) >= 2
+            and not failed_gate_attempt.get("recoverySatisfiedAt")
+        )
+        if repeated_gate_blocker:
+            disposition = "rediscover"
+            retry_value = "forbidden"
+            blocker_code = "REPEATED_GATE_BLOCKER"
+            blocker_fingerprint = str(
+                failed_gate_attempt.get("fingerprint") or ""
+            )
+        elif recovery_status in {"external_blocker", "await_user"}:
+            disposition = "await_user"
+            retry_value = "forbidden"
+            blocker_code = str(
+                recovery_obligation.get("errorCode")
+                or "RECOVERY_EXTERNAL_BLOCKER"
+            )
+            blocker_fingerprint = recovery_fingerprint
+        elif recovery_status == "environment_recovery":
+            attempt_count = _non_negative_int(
+                recovery_obligation.get("attemptCount")
+            )
+            if recovery_tool_name and attempt_count <= 1:
+                required_name = recovery_tool_name
+                required_args = recovery_tool_args
+                retry_value = "once"
+            else:
+                disposition = "await_user"
+                retry_value = "forbidden"
+                blocker_code = str(
+                    recovery_obligation.get("errorCode")
+                    or "RECOVERY_ENVIRONMENT_BLOCKED"
+                )
+                blocker_fingerprint = recovery_fingerprint
+        elif recovery_status in {
+            "evidence_required",
+            "repair_planning_required",
+            "revalidate_required",
+            "checkpoint_rebase_required",
+        }:
+            if recovery_tool_name:
+                required_name = recovery_tool_name
+                required_args = recovery_tool_args
+                retry_value = "once"
+            else:
+                disposition = "await_user"
+                retry_value = "forbidden"
+                blocker_code = "RECOVERY_REQUIRED_TOOL_MISSING"
+                blocker_fingerprint = recovery_fingerprint
+        elif recovery_status == "repair_required":
+            # An expired current-scope approval is authoritative even when a
+            # recovery mutation would otherwise be ready.  Publishing the
+            # mutation here would contradict gate authorization, which rejects
+            # every mutation until the pending gate succeeds again.
+            if pending_gate:
+                required_name = pending_gate
+                retry_value = "allowed"
+            else:
+                required_name = _mutation_tool_for_state(state, route)
+                retry_value = "once"
+                if not required_name:
+                    disposition = "await_user"
+                    retry_value = "forbidden"
+                    blocker_code = "RECOVERY_MUTATION_SCOPE_MISSING"
+                    blocker_fingerprint = recovery_fingerprint
+        elif state.get("slicePlanningRequired") is True:
             # A feature gate cannot bind a placeholder slice. Discovery is a
             # server-declared state of the transition table, not a permission
             # to invoke the pending gate early.
@@ -502,8 +673,21 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             )
         elif str(build_verification.get("status") or "") == "pending_automation":
             required_name = "run_unreal_automation_tests"
+            test_filters = [
+                str(item).strip()
+                for item in (
+                    build_verification.get("testFilters")
+                    if isinstance(build_verification.get("testFilters"), list)
+                    else []
+                )
+                if str(item).strip()
+            ]
             test_filter = str(build_verification.get("testFilter") or "").strip()
-            required_args = {"testFilter": test_filter} if test_filter else {}
+            required_args = (
+                {"testFilters": test_filters}
+                if test_filters
+                else ({"testFilter": test_filter} if test_filter else {})
+            )
         elif initial_compile_diagnostic:
             required_name = "build_unreal_project"
         elif pre_gate_read_path:
@@ -511,27 +695,10 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             required_args = {"path": pre_gate_read_path}
         elif pending_gates:
             gate = pending_gates[0]
-            attempts = (
-                state.get("failedGateAttempts")
-                if isinstance(state.get("failedGateAttempts"), dict)
-                else {}
-            )
-            attempt = attempts.get(gate) if isinstance(attempts.get(gate), dict) else {}
+            attempt = failed_gate_attempt_for_current_scope(state, gate)
             recovery_satisfied = bool(attempt.get("recoverySatisfiedAt"))
-            recovery_contract = (
-                attempt.get("recoveryContract")
-                if isinstance(attempt.get("recoveryContract"), dict)
-                else {}
-            )
             repeated_attempt = int(attempt.get("attemptCount") or 0) >= 2
-            semantic_rediscovery_required = bool(
-                recovery_contract.get("semanticDiscoveryRequired")
-            )
-            if (
-                repeated_attempt
-                and not recovery_satisfied
-                and semantic_rediscovery_required
-            ):
+            if repeated_attempt and not recovery_satisfied:
                 disposition = "rediscover"
                 retry_value = "forbidden"
                 blocker_code = "REPEATED_GATE_BLOCKER"
@@ -543,14 +710,11 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                     else str(attempt.get("nextAction") or "").strip()
                 )
                 required_name = recovery_tool if recovery_tool in active_tools else gate
-                retry_value = (
-                    "changed_input_only"
-                    if repeated_attempt and not recovery_satisfied
-                    else ("once" if recovery_tool else "allowed")
-                )
-                if repeated_attempt and not recovery_satisfied:
-                    blocker_code = "REPEATED_GATE_BLOCKER"
-                    blocker_fingerprint = str(attempt.get("fingerprint") or "")
+                if required_name == recovery_tool and isinstance(
+                    attempt.get("nextActionArgs"), dict
+                ):
+                    required_args = dict(attempt.get("nextActionArgs") or {})
+                retry_value = "once" if recovery_tool else "allowed"
         else:
             checkpoint_action = str(checkpoint.get("requiredNextAction") or "").strip()
             completed_gate_names = set(_valid_completed_gates(state))
@@ -623,6 +787,41 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 # exclusively from persisted facts.
                 required_name = checkpoint_action
 
+        if required_name == "static_validate_project":
+            project_root = _authoritative_project_root(state)
+            if project_root:
+                required_args = {
+                    "projectRoot": project_root,
+                    "fullAudit": False,
+                }
+        if required_name == "build_unreal_project":
+            project_file = _authoritative_project_file(state)
+            if project_file:
+                required_args = {
+                    **required_args,
+                    "project": project_file,
+                    "allowAbsoluteProject": True,
+                    "allowEngineFallback": False,
+                }
+            build_contract = (
+                state.get("buildContract")
+                if isinstance(state.get("buildContract"), dict)
+                else {}
+            )
+            for key in ("engineRoot", "target", "platform", "configuration"):
+                value = str(build_contract.get(key) or "").strip()
+                if value:
+                    required_args[key] = value
+        if required_name == "run_unreal_automation_tests":
+            project_file = _authoritative_project_file(state)
+            if project_file:
+                required_args = {**required_args, "project": project_file}
+            engine_root = str(build_verification.get("engineRoot") or "").strip()
+            if engine_root:
+                required_args = {
+                    **required_args,
+                    "engineRoot": os.path.abspath(os.path.expanduser(engine_root)),
+                }
         if required_name:
             disposition = "checkpoint" if required_name == "unreal_task_checkpoint" else "require_tool"
 
@@ -634,8 +833,18 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
         else [
             name
             for name in active_tools
-            if name in _DISCOVERY_TOOL_NAMES
-            or (discovery_only and name == (pending_gates[0] if pending_gates else ""))
+            if (
+                name
+                in (
+                    _REPEATED_GATE_REDISCOVERY_TOOLS
+                    if blocker_code == "REPEATED_GATE_BLOCKER"
+                    else _DISCOVERY_TOOL_NAMES
+                )
+                or (
+                    discovery_only
+                    and name == (pending_gates[0] if pending_gates else "")
+                )
+            )
         ]
         if disposition == "rediscover" or discovery_only
         else active_tools
@@ -671,20 +880,7 @@ def commit_control_transition(state: dict[str, Any]) -> dict[str, Any]:
     """Persist control and advance epoch iff its semantic fingerprint changed."""
 
     control = derive_next_obligation(state)
-    material = [
-        control["taskSessionId"],
-        control["planRevision"],
-        control["activeSliceId"],
-        control["phase"],
-        control["disposition"],
-        control.get("requiredTool"),
-        control["allowedTools"],
-        control["routeHash"],
-        control["pendingGates"],
-        control.get("blocker"),
-        control["mutationGeneration"],
-    ]
-    fingerprint = canonical_hash(material)
+    fingerprint = canonical_hash(control)
     previous = str(state.get("controlFingerprint") or "")
     epoch = _non_negative_int(state.get("controlEpoch"))
     if fingerprint != previous:
@@ -705,6 +901,31 @@ def _phase_and_role(
 ) -> tuple[str, str]:
     status = str(state.get("status") or "running").strip().casefold()
     if status != "running":
+        return "verifier", "verifier"
+
+    recovery = (
+        state.get("recoveryObligation")
+        if isinstance(state.get("recoveryObligation"), dict)
+        else {}
+    )
+    recovery_status = str(recovery.get("status") or "").strip().casefold()
+    required = (
+        recovery.get("requiredTool")
+        if isinstance(recovery.get("requiredTool"), dict)
+        else {}
+    )
+    recovery_tool = str(required.get("name") or "").strip()
+    if recovery_status == "repair_required" and pending_gates:
+        return "verifier", "verifier"
+    if recovery_status == "repair_required" or recovery_tool in MUTATION_TOOLS:
+        return "executor", "executor"
+    if recovery_status in {
+        "evidence_required",
+        "repair_planning_required",
+        "revalidate_required",
+        "environment_recovery",
+        "checkpoint_rebase_required",
+    }:
         return "verifier", "verifier"
 
     build_verification = (
@@ -795,6 +1016,7 @@ def _active_tools(
     selected_slice: dict[str, Any],
     has_runtime_session: bool,
     automation_pending: bool = False,
+    recovery_tool: str = "",
 ) -> list[str]:
     if phase == "runtime_analysis":
         tools = [
@@ -908,6 +1130,12 @@ def _active_tools(
             ]
 
     unique = _unique_tools(tools)
+    recovery_name = str(recovery_tool or "").strip()
+    if recovery_name:
+        # The route and public control are projections of the same persisted
+        # recovery fact. Keep the exact obligation callable even when a legacy
+        # phase (notably pending Automation) would otherwise hide it.
+        unique = _unique_tools([recovery_name, *unique])
     safe_fill = [
         "unreal_rag_search",
         "unreal_symbol_lookup",
@@ -975,6 +1203,16 @@ def derive_tool_route(
         selected_slice=selected_slice,
     )
     task_kind = str(state.get("taskKind") or "inspect_only").strip().casefold()
+    recovery = (
+        state.get("recoveryObligation")
+        if isinstance(state.get("recoveryObligation"), dict)
+        else {}
+    )
+    recovery_required = (
+        recovery.get("requiredTool")
+        if isinstance(recovery.get("requiredTool"), dict)
+        else {}
+    )
     active_tools = _active_tools(
         phase=phase,
         task_kind=task_kind,
@@ -990,7 +1228,16 @@ def derive_tool_route(
             ).get("status")
             or ""
         ) == "pending_automation",
+        recovery_tool=str(recovery_required.get("name") or ""),
     )
+    if pending_gates:
+        failed_gate = failed_gate_attempt_for_current_scope(
+            state,
+            pending_gates[0],
+        )
+        failed_recovery_tool = str(failed_gate.get("nextAction") or "").strip()
+        if failed_recovery_tool and failed_gate.get("nextActionIsTool") is True:
+            active_tools = _unique_tools([failed_recovery_tool, *active_tools])
     if phase == "executor" and any(
         tool in MUTATION_TOOLS for tool in active_tools
     ):

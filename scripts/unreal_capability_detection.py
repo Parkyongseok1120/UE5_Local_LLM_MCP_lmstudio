@@ -6,13 +6,38 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+
+from unreal_source_extensions import UNREAL_CPP_SUFFIXES
 
 AUTOMATION_PATTERNS = (
-    re.compile(r"\bIMPLEMENT_(?:CUSTOM_)?SIMPLE_AUTOMATION_TEST\s*\([^,]+,\s*\"([^\"]+)\""),
-    re.compile(r"\bBEGIN_DEFINE_SPEC\s*\([^,]+,\s*\"([^\"]+)\""),
+    re.compile(
+        r'\bIMPLEMENT_CUSTOM_[A-Z0-9_]*AUTOMATION_TEST\s*'
+        r'\([^,]+,\s*[^,]+,\s*(?:TEXT\s*\(\s*)?"([^"]+)"\s*\)?'
+    ),
+    re.compile(
+        r'\bIMPLEMENT_(?!CUSTOM_)[A-Z0-9_]*AUTOMATION_TEST\s*'
+        r'\([^,]+,\s*(?:TEXT\s*\(\s*)?"([^"]+)"\s*\)?'
+    ),
+    re.compile(
+        r'\b(?:BEGIN_DEFINE_SPEC|DEFINE_SPEC)\s*'
+        r'\([^,]+,\s*(?:TEXT\s*\(\s*)?"([^"]+)"\s*\)?'
+    ),
 )
+CQTEST_PATTERNS = (
+    re.compile(
+        r'\bTEST\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*'
+        r'(?:TEXT\s*\(\s*)?"([^"]+)"\s*\)?'
+    ),
+    re.compile(
+        r'\bTEST_CLASS(?:_WITH_(?:ASSERTS|BASE|FLAGS|BASE_AND_FLAGS))?\s*'
+        r'\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*'
+        r'(?:TEXT\s*\(\s*)?"([^"]+)"\s*\)?'
+    ),
+)
+AUTOMATION_SOURCE_EXTENSIONS = UNREAL_CPP_SUFFIXES
 
 FEATURE_PROBES: dict[str, tuple[str, ...]] = {
     "enhancedInput": ("EnhancedInput",),
@@ -112,6 +137,62 @@ def _module_names(descriptor: dict[str, Any], project_root: Path) -> set[str]:
     return {item for item in names if item}
 
 
+def _cpp_code_offsets(text: str) -> bytearray:
+    code = bytearray(len(text))
+    index = 0
+    while index < len(text):
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline
+            continue
+        if text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            index = len(text) if close < 0 else close + 2
+            continue
+        if text.startswith('R"', index):
+            open_paren = text.find("(", index + 2)
+            if 0 <= open_paren - (index + 2) <= 16:
+                delimiter = text[index + 2 : open_paren]
+                close = text.find(f'){delimiter}"', open_paren + 1)
+                if close >= 0:
+                    index = close + len(delimiter) + 2
+                    continue
+        if text[index] in {'"', "'"}:
+            quote = text[index]
+            index += 1
+            while index < len(text):
+                if text[index] == "\\":
+                    index += 2
+                    continue
+                if text[index] == quote:
+                    index += 1
+                    break
+                index += 1
+            continue
+        code[index] = 1
+        index += 1
+    return code
+
+
+def _macro_starts_in_code(text: str, code_offsets: bytearray, index: int) -> bool:
+    if not code_offsets[index]:
+        return False
+    logical_line_start = text.rfind("\n", 0, index) + 1
+    while logical_line_start > 0:
+        previous_line_end = logical_line_start - 1
+        previous_line_start = text.rfind("\n", 0, previous_line_end) + 1
+        if re.search(r"\\\s*$", text[previous_line_start:previous_line_end]) is None:
+            break
+        logical_line_start = previous_line_start
+    return re.match(r"\s*#\s*define\b", text[logical_line_start:index]) is None
+
+
+def _cqtest_registered_root(test_name: str, test_directory: str) -> str:
+    name = str(test_name or "").strip().strip(".")
+    directory = str(test_directory or "").strip().strip(".")
+    return f"{directory}.{name}" if directory and name else ""
+
+
 def _automation_tests(project_root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     roots = [project_root / "Source", project_root / "Plugins"]
@@ -119,7 +200,15 @@ def _automation_tests(project_root: Path) -> list[dict[str, str]]:
         if not root.is_dir():
             continue
         try:
-            paths = list(root.rglob("*.cpp")) + list(root.rglob("*.h"))
+            paths = sorted(
+                (
+                    path
+                    for path in root.rglob("*")
+                    if path.is_file()
+                    and path.suffix.casefold() in AUTOMATION_SOURCE_EXTENSIONS
+                ),
+                key=lambda path: path.as_posix().casefold(),
+            )
         except OSError:
             continue
         for path in paths:
@@ -127,14 +216,32 @@ def _automation_tests(project_root: Path) -> list[dict[str, str]]:
                 text = path.read_text(encoding="utf-8-sig", errors="replace")
             except OSError:
                 continue
+            code_offsets = _cpp_code_offsets(text)
             for pattern in AUTOMATION_PATTERNS:
                 for match in pattern.finditer(text):
+                    if not _macro_starts_in_code(text, code_offsets, match.start()):
+                        continue
                     rows.append(
                         {
                             "name": match.group(1),
                             "path": path.relative_to(project_root).as_posix(),
                         }
                     )
+            for pattern in CQTEST_PATTERNS:
+                for match in pattern.finditer(text):
+                    if not _macro_starts_in_code(text, code_offsets, match.start()):
+                        continue
+                    registered_root = _cqtest_registered_root(
+                        match.group(1),
+                        match.group(2),
+                    )
+                    if registered_root:
+                        rows.append(
+                            {
+                                "name": registered_root,
+                                "path": path.relative_to(project_root).as_posix(),
+                            }
+                        )
     unique: dict[str, dict[str, str]] = {}
     for row in rows:
         unique.setdefault(row["name"].casefold(), row)

@@ -706,6 +706,72 @@ test("control v2 required tool is forced as one exact schema with server argumen
   }
 });
 
+test("server-owned build tuple overwrites model target while preserving optional extras", () => {
+  const { enrichToolRequestControl } = require("../dist/generator.js");
+  const requiredArgs = {
+    project: "C:/Projects/Sample/Sample.uproject",
+    engineRoot: "C:/Epic/UE_5.5",
+    target: "SampleEditor",
+    platform: "Win64",
+    configuration: "Development",
+    allowAbsoluteProject: true,
+    allowEngineFallback: false,
+  };
+  const request = enrichToolRequestControl(
+    {
+      name: "build_unreal_project",
+      arguments: {
+        target: "SampleServer",
+        platform: "Linux",
+        configuration: "Shipping",
+        timeoutMs: 600000,
+      },
+    },
+    "session-build-contract",
+    {
+      requiredNextTool: { name: "build_unreal_project", args: requiredArgs },
+      taskRouteOwnership: {
+        taskSessionId: "task-build-contract",
+        ownerCapability: "owner-build-contract",
+        authToken: "token",
+        planId: "plan",
+        planRevision: "1",
+        activeSliceId: "slice",
+        routeHash: "route",
+        routePhase: "executor",
+      },
+    },
+    "Build Sample",
+    [{
+      type: "function",
+      function: {
+        name: "build_unreal_project",
+        parameters: {
+          type: "object",
+          properties: {
+            project: { type: "string" },
+            engineRoot: { type: "string" },
+            target: { type: "string" },
+            platform: { type: "string" },
+            configuration: { type: "string" },
+            allowAbsoluteProject: { type: "boolean" },
+            allowEngineFallback: { type: "boolean" },
+            timeoutMs: { type: "number" },
+            taskAuthorization: { type: "object" },
+          },
+        },
+      },
+    }],
+  );
+
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(requiredArgs).map((key) => [key, request.arguments[key]])),
+    requiredArgs,
+  );
+  assert.equal(request.arguments.timeoutMs, 600000);
+  assert.equal(request.arguments.taskAuthorization.taskSessionId, "task-build-contract");
+});
+
 test("control v2 recovers an exact server-owned read when the chat catalog drops its schema", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-control-v2-read-recovery-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;

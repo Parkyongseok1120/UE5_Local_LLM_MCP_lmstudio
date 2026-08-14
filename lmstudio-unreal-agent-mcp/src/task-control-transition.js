@@ -1,10 +1,19 @@
 "use strict";
 
 const crypto = require("crypto");
+const path = require("path");
 
 const DISCOVERY_TOOLS = new Set([
   "unreal_rag_search",
   "unreal_symbol_lookup",
+  "list_directory",
+  "search_files",
+  "read_file",
+  "read_file_range",
+  "read_symbol",
+  "read_unreal_logs",
+]);
+const REPEATED_GATE_REDISCOVERY_TOOLS = new Set([
   "list_directory",
   "search_files",
   "read_file",
@@ -36,27 +45,95 @@ function nonNegativeInt(value) {
 }
 
 function normalizePath(value) {
-  return String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/^project:\/\//i, "").replace(/^\/+|\/+$/g, "");
+  let normalized = String(value || "").trim().replace(/\\/g, "/").normalize("NFC");
+  while (normalized.startsWith("./")) normalized = normalized.slice(2);
+  if (/^project:\/\//iu.test(normalized)) normalized = normalized.slice("project://".length);
+  return normalized.replace(/^\/+|\/+$/g, "");
 }
 
-function mutationToolForState(state, route) {
+function transitionPathIdentity(value, hostPlatform = process.platform) {
+  const normalized = normalizePath(value);
+  return ["win32", "windows", "nt"].includes(String(hostPlatform || "").toLowerCase())
+    ? normalized.toLowerCase()
+    : normalized;
+}
+
+function authoritativeProjectRoot(state) {
+  const workspaceRoot = String(state.workspaceRoot || "").trim();
+  const routeScope = state.routeScope && typeof state.routeScope === "object"
+    ? state.routeScope
+    : {};
+  const rawProject = String(routeScope.projectFile || state.projectFile || "").trim();
+  if (rawProject) {
+    const projectBase = String(
+      routeScope.workspaceRoot || workspaceRoot || ""
+    ).trim();
+    const resolvedProject = path.resolve(
+      !path.isAbsolute(rawProject) && projectBase
+        ? path.join(projectBase, rawProject)
+        : rawProject
+    );
+    return path.extname(resolvedProject).toLowerCase() === ".uproject"
+      ? path.dirname(resolvedProject)
+      : resolvedProject;
+  }
+  return workspaceRoot ? path.resolve(workspaceRoot) : "";
+}
+
+function authoritativeProjectFile(state) {
+  const workspaceRoot = String(state.workspaceRoot || "").trim();
+  const routeScope = state.routeScope && typeof state.routeScope === "object"
+    ? state.routeScope
+    : {};
+  const rawProject = String(routeScope.projectFile || state.projectFile || "").trim();
+  if (!rawProject) return "";
+  const projectBase = String(routeScope.workspaceRoot || workspaceRoot || "").trim();
+  const resolvedProject = path.resolve(
+    !path.isAbsolute(rawProject) && projectBase
+      ? path.join(projectBase, rawProject)
+      : rawProject
+  );
+  return path.extname(resolvedProject).toLowerCase() === ".uproject"
+    ? resolvedProject
+    : "";
+}
+
+function mutationToolForState(state, route, hostPlatform = process.platform) {
   const selectedSlice = route.selectedSlice && typeof route.selectedSlice === "object"
     ? route.selectedSlice
     : {};
   const files = cleanStrings(selectedSlice.files);
   if (!files.length) return "";
   if (files.length > 1) return "apply_edit_bundle";
-  const selected = normalizePath(files[0]).toLowerCase();
-  const snapshots = [
-    ...(Array.isArray(state.selectedTargetSnapshots) ? state.selectedTargetSnapshots : []),
-    ...(Array.isArray(state.featureTargetSnapshots) ? state.featureTargetSnapshots : []),
-  ];
+  const selected = transitionPathIdentity(files[0], hostPlatform);
+  const selectedSnapshots = Array.isArray(state.selectedTargetSnapshots)
+    ? state.selectedTargetSnapshots
+    : [];
+  const snapshots = selectedSnapshots.length
+    ? selectedSnapshots
+    : (Array.isArray(state.featureTargetSnapshots) ? state.featureTargetSnapshots : []);
   const snapshot = snapshots.find((item) => (
     item && typeof item === "object"
-    && normalizePath(item.path || item.relativePath).toLowerCase() === selected
+    && transitionPathIdentity(item.path || item.relativePath, hostPlatform) === selected
   ));
   if (!snapshot) return "apply_edit_bundle";
   return snapshot.exists === true ? "replace_in_file" : "write_file";
+}
+
+function failedGateAttemptForCurrentScope(state, gate) {
+  const attempt = state.failedGateAttempts?.[gate]
+    && typeof state.failedGateAttempts[gate] === "object"
+    ? state.failedGateAttempts[gate]
+    : {};
+  if (!Object.keys(attempt).length) return {};
+  if (!["gateSetHash", "planRevision", "activeSliceId", "mutationGeneration"]
+    .every((field) => Object.prototype.hasOwnProperty.call(attempt, field))) return {};
+  return (
+    String(attempt.gateSetHash || "") === String(state.requiredGateSetHash || "")
+    && String(attempt.planRevision || "") === String(state.planRevision || "")
+    && String(attempt.activeSliceId || "") === String(state.activeSliceId || "")
+    && nonNegativeInt(attempt.mutationGeneration) === nonNegativeInt(state.mutationGeneration)
+  ) ? attempt : {};
 }
 
 function completedSketchForScope(state) {
@@ -71,7 +148,7 @@ function completedSketchForScope(state) {
   return record;
 }
 
-function preGateSourceReadPath(state, pendingGates) {
+function preGateSourceReadPath(state, pendingGates, hostPlatform = process.platform) {
   if (!pendingGates.length || pendingGates[0] !== "unreal_code_sketch_claim_validate") return "";
   if (state.writeGate?.mustReadBeforeWrite !== true) return "";
   const evidenceFiles = state.directSourceEvidence?.files && typeof state.directSourceEvidence.files === "object"
@@ -79,12 +156,12 @@ function preGateSourceReadPath(state, pendingGates) {
     : {};
   const evidencePaths = new Set(Object.entries(evidenceFiles)
     .filter(([, item]) => item && typeof item === "object")
-    .map(([key, item]) => normalizePath(item.path || key).toLowerCase()));
+    .map(([key, item]) => transitionPathIdentity(item.path || key, hostPlatform)));
   const snapshots = Array.isArray(state.selectedTargetSnapshots) ? state.selectedTargetSnapshots : [];
   for (const snapshot of snapshots) {
     if (!snapshot || typeof snapshot !== "object" || snapshot.exists !== true) continue;
     const targetPath = normalizePath(snapshot.path || snapshot.relativePath);
-    if (targetPath && !evidencePaths.has(targetPath.toLowerCase())) return targetPath;
+    if (targetPath && !evidencePaths.has(transitionPathIdentity(targetPath, hostPlatform))) return targetPath;
   }
   return "";
 }
@@ -106,6 +183,10 @@ function deriveNextObligation(state) {
   else if (["cancelled", "failed", "cancellation_uncertain"].includes(status)) disposition = "workflow_stop";
   else if (["pending_approval", "awaiting_approval"].includes(status)) disposition = "await_user";
   else if (status === "running") {
+    const recoveryObligation = state.recoveryObligation
+      && typeof state.recoveryObligation === "object"
+      ? state.recoveryObligation
+      : {};
     const buildRecovery = state.buildRecovery && typeof state.buildRecovery === "object" ? state.buildRecovery : {};
     const buildVerification = state.buildVerification && typeof state.buildVerification === "object" ? state.buildVerification : {};
     const checkpoint = state.continuity?.checkpoint && typeof state.continuity.checkpoint === "object"
@@ -125,7 +206,82 @@ function deriveNextObligation(state) {
       )
       && !(Array.isArray(state.buildProofHistory) && state.buildProofHistory.length)
     );
-    if (state.slicePlanningRequired === true) {
+    const recoveryStatus = String(recoveryObligation.status || "").trim().toLowerCase();
+    const recoveryTool = recoveryObligation.requiredTool
+      && typeof recoveryObligation.requiredTool === "object"
+      ? recoveryObligation.requiredTool
+      : {};
+    const recoveryToolName = String(recoveryTool.name || "").trim();
+    const recoveryToolArgs = recoveryTool.args && typeof recoveryTool.args === "object"
+      ? { ...recoveryTool.args }
+      : {};
+    const recoveryFingerprint = String(recoveryObligation.fingerprint || "");
+    const pendingGate = String(pendingGates[0] || "");
+    const failedGateAttempt = pendingGate
+      ? failedGateAttemptForCurrentScope(state, pendingGate)
+      : {};
+    const repeatedGateBlocker = Boolean(
+      pendingGate
+      && recoveryToolName === pendingGate
+      && Number(failedGateAttempt.attemptCount || 0) >= 2
+      && !failedGateAttempt.recoverySatisfiedAt
+    );
+    if (repeatedGateBlocker) {
+      disposition = "rediscover";
+      retryValue = "forbidden";
+      blocker = {
+        code: "REPEATED_GATE_BLOCKER",
+        fingerprint: String(failedGateAttempt.fingerprint || ""),
+      };
+    } else if (["external_blocker", "await_user"].includes(recoveryStatus)) {
+      disposition = "await_user";
+      retryValue = "forbidden";
+      blocker = {
+        code: String(recoveryObligation.errorCode || "RECOVERY_EXTERNAL_BLOCKER"),
+        fingerprint: recoveryFingerprint,
+      };
+    } else if (recoveryStatus === "environment_recovery") {
+      const attemptCount = nonNegativeInt(recoveryObligation.attemptCount);
+      if (recoveryToolName && attemptCount <= 1) {
+        requiredName = recoveryToolName;
+        requiredArgs = recoveryToolArgs;
+        retryValue = "once";
+      } else {
+        disposition = "await_user";
+        retryValue = "forbidden";
+        blocker = {
+          code: String(recoveryObligation.errorCode || "RECOVERY_ENVIRONMENT_BLOCKED"),
+          fingerprint: recoveryFingerprint,
+        };
+      }
+    } else if (["evidence_required", "repair_planning_required", "revalidate_required", "checkpoint_rebase_required"].includes(recoveryStatus)) {
+      if (recoveryToolName) {
+        requiredName = recoveryToolName;
+        requiredArgs = recoveryToolArgs;
+        retryValue = "once";
+      } else {
+        disposition = "await_user";
+        retryValue = "forbidden";
+        blocker = { code: "RECOVERY_REQUIRED_TOOL_MISSING", fingerprint: recoveryFingerprint };
+      }
+    } else if (recoveryStatus === "repair_required") {
+      // A repair may only mutate while its current-scope sketch approval is
+      // still valid. Gate expiry repopulates pendingGates atomically; that fact
+      // must outrank the otherwise-ready recovery mutation or the public
+      // control would require a mutation that authorization rejects.
+      if (pendingGate) {
+        requiredName = pendingGate;
+        retryValue = "allowed";
+      } else {
+        requiredName = mutationToolForState(state, route);
+        retryValue = "once";
+        if (!requiredName) {
+          disposition = "await_user";
+          retryValue = "forbidden";
+          blocker = { code: "RECOVERY_MUTATION_SCOPE_MISSING", fingerprint: recoveryFingerprint };
+        }
+      }
+    } else if (state.slicePlanningRequired === true) {
       discoveryOnly = true;
     } else if (String(buildRecovery.status || "") === "evidence_required") {
       requiredName = String(buildRecovery.requiredNextTool || "").trim();
@@ -134,8 +290,13 @@ function deriveNextObligation(state) {
         : {};
     } else if (String(buildVerification.status || "") === "pending_automation") {
       requiredName = "run_unreal_automation_tests";
+      const testFilters = Array.isArray(buildVerification.testFilters)
+        ? buildVerification.testFilters.map(String).map((item) => item.trim()).filter(Boolean)
+        : [];
       const testFilter = String(buildVerification.testFilter || "").trim();
-      requiredArgs = testFilter ? { testFilter } : {};
+      requiredArgs = testFilters.length
+        ? { testFilters }
+        : (testFilter ? { testFilter } : {});
     } else if (initialCompileDiagnostic) {
       requiredName = "build_unreal_project";
     } else if (preGateReadPath) {
@@ -143,9 +304,7 @@ function deriveNextObligation(state) {
       requiredArgs = { path: preGateReadPath };
     } else if (pendingGates.length) {
       const gate = pendingGates[0];
-      const attempt = state.failedGateAttempts?.[gate] && typeof state.failedGateAttempts[gate] === "object"
-        ? state.failedGateAttempts[gate]
-        : {};
+      const attempt = failedGateAttemptForCurrentScope(state, gate);
       const recoverySatisfied = Boolean(attempt.recoverySatisfiedAt);
       if (Number(attempt.attemptCount || 0) >= 2 && !recoverySatisfied) {
         disposition = "rediscover";
@@ -154,6 +313,9 @@ function deriveNextObligation(state) {
       } else {
         const recoveryTool = recoverySatisfied ? "" : String(attempt.nextAction || "").trim();
         requiredName = activeTools.includes(recoveryTool) ? recoveryTool : gate;
+        if (requiredName === recoveryTool && attempt.nextActionArgs && typeof attempt.nextActionArgs === "object") {
+          requiredArgs = { ...attempt.nextActionArgs };
+        }
         retryValue = recoveryTool ? "once" : "allowed";
       }
     } else {
@@ -205,6 +367,34 @@ function deriveNextObligation(state) {
         requiredName = checkpointAction;
       }
     }
+    if (requiredName === "static_validate_project") {
+      const projectRoot = authoritativeProjectRoot(state);
+      if (projectRoot) requiredArgs = { projectRoot, fullAudit: false };
+    }
+    if (requiredName === "build_unreal_project") {
+      const projectFile = authoritativeProjectFile(state);
+      if (projectFile) {
+        requiredArgs = {
+          ...requiredArgs,
+          project: projectFile,
+          allowAbsoluteProject: true,
+          allowEngineFallback: false,
+        };
+      }
+      const buildContract = state.buildContract && typeof state.buildContract === "object"
+        ? state.buildContract
+        : {};
+      for (const key of ["engineRoot", "target", "platform", "configuration"]) {
+        const value = String(buildContract[key] || "").trim();
+        if (value) requiredArgs[key] = value;
+      }
+    }
+    if (requiredName === "run_unreal_automation_tests") {
+      const projectFile = authoritativeProjectFile(state);
+      if (projectFile) requiredArgs = { ...requiredArgs, project: projectFile };
+      const engineRoot = String(buildVerification.engineRoot || "").trim();
+      if (engineRoot) requiredArgs = { ...requiredArgs, engineRoot: path.resolve(engineRoot) };
+    }
     if (requiredName) disposition = requiredName === "unreal_task_checkpoint" ? "checkpoint" : "require_tool";
   }
 
@@ -214,7 +404,9 @@ function deriveNextObligation(state) {
       ? []
       : disposition === "rediscover" || discoveryOnly
         ? activeTools.filter((name) => (
-          DISCOVERY_TOOLS.has(name)
+          (blocker?.code === "REPEATED_GATE_BLOCKER"
+            ? REPEATED_GATE_REDISCOVERY_TOOLS.has(name)
+            : DISCOVERY_TOOLS.has(name))
           || (discoveryOnly && name === String(pendingGates[0] || ""))
         ))
         : activeTools;
@@ -238,20 +430,7 @@ function deriveNextObligation(state) {
 
 function commitControlTransition(state) {
   const control = deriveNextObligation(state);
-  const material = [
-    control.taskSessionId,
-    control.planRevision,
-    control.activeSliceId,
-    control.phase,
-    control.disposition,
-    control.requiredTool,
-    control.allowedTools,
-    control.routeHash,
-    control.pendingGates,
-    control.blocker,
-    control.mutationGeneration,
-  ];
-  const fingerprint = canonicalHash(material);
+  const fingerprint = canonicalHash(control);
   let epoch = nonNegativeInt(state.controlEpoch);
   if (fingerprint !== String(state.controlFingerprint || "")) epoch += 1;
   control.epoch = epoch;
@@ -266,5 +445,10 @@ module.exports = {
   canonicalHash,
   commitControlTransition,
   deriveNextObligation,
+  failedGateAttemptForCurrentScope,
   mutationToolForState,
+  preGateSourceReadPath,
+  transitionPathIdentity,
+  authoritativeProjectFile,
+  authoritativeProjectRoot,
 };

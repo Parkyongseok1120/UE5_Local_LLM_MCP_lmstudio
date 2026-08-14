@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from task_api import (  # noqa: E402
     task_checkpoint,
     task_record_gate,
+    task_root,
     task_start,
     task_status,
 )
@@ -101,20 +103,44 @@ def test_checkpoint_conflict_blocks_then_explicit_rebase_recovers(tmp_path: Path
     assert recovery["nextActionArgs"]["taskAuthorization"]["taskSessionId"] == started[
         "taskSessionId"
     ]
+    assert recovery["control"]["requiredTool"] == {
+        "name": "unreal_task_checkpoint",
+        "args": {
+            "action": "rebase",
+            "acceptCurrentFiles": True,
+            "includeGitChanges": False,
+        },
+    }
     blocked = task_status(tmp_path, started["taskSessionId"])
     assert blocked["writeReadiness"]["ready"] is False
     assert "checkpoint_conflict" in blocked["writeReadiness"]["blockedReasons"]
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    blocked_state = json.loads(state_path.read_text(encoding="utf-8"))
+    blocked_state["failedGateAttempts"] = {
+        "unreal_architecture_reasoning": {
+            "attemptCount": 1,
+            "fingerprint": "pre-rebase-failure",
+            "gateSetHash": blocked_state["requiredGateSetHash"],
+            "planRevision": blocked_state["planRevision"],
+            "activeSliceId": blocked_state["activeSliceId"],
+            "mutationGeneration": blocked_state["mutationGeneration"],
+        }
+    }
+    state_path.write_text(json.dumps(blocked_state), encoding="utf-8")
 
     rebased = task_checkpoint(
         tmp_path,
         task_authorization=authorization,
         action="rebase",
         accept_current_files=True,
+        include_git_changes=False,
     )
     assert rebased["ok"] is True
     assert rebased["continuity"]["lease"]["epoch"] == 2
     current = task_status(tmp_path, started["taskSessionId"])
+    assert "recoveryObligation" not in current["state"]
     assert current["state"]["completedGates"] == {}
+    assert current["state"]["failedGateAttempts"] == {}
     assert current["state"]["pendingGates"] == ["unreal_architecture_reasoning"]
 
 

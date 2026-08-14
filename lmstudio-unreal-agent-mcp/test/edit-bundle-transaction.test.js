@@ -50,6 +50,27 @@ test("maxFilesPerEdit=2 enforced", async () => {
   );
 });
 
+test("bundle operation count bounds write-ahead hash growth", async () => {
+  process.env.AGENT_STATE_ROOT = tmpDir();
+  const dir = tmpDir();
+  const target = path.join(dir, "A.cpp");
+  fs.writeFileSync(target, "a\n", "utf8");
+  const patches = Array.from({ length: 129 }, () => ({
+    path: "A.cpp",
+    oldText: "a",
+    newText: "a",
+    expectedOccurrences: 1,
+  }));
+  await assert.rejects(
+    () => applyBundleTransaction(
+      { patches },
+      async (rel) => ({ ok: true, absolutePath: path.join(dir, rel) }),
+    ),
+    /too many operations \(max 128\)/i,
+  );
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "a\n");
+});
+
 test("partial write rolls back completed journal entry", async () => {
   process.env.AGENT_STATE_ROOT = ensureStateRootLayout(tmpDir());
   const dir = tmpDir();

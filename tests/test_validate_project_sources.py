@@ -36,6 +36,72 @@ def test_cli_missing_source_returns_exit_code_2(tmp_path: Path) -> None:
     assert result.returncode == 2
 
 
+def test_cli_scans_plugin_only_project_without_game_source(tmp_path: Path) -> None:
+    project = tmp_path / "ContentProject"
+    project.mkdir()
+    (project / "ContentProject.uproject").write_text("{}", encoding="utf-8")
+    plugin = project / "Plugins" / "PortablePlugin"
+    module = plugin / "Source" / "PortablePlugin"
+    (module / "Public").mkdir(parents=True)
+    (module / "Private").mkdir()
+    (plugin / "PortablePlugin.uplugin").write_text(
+        json.dumps(
+            {
+                "FileVersion": 3,
+                "Modules": [{"Name": "PortablePlugin", "Type": "Runtime"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (module / "PortablePlugin.Build.cs").write_text(
+        'PublicDependencyModuleNames.AddRange(new string[] { "Core" });\n',
+        encoding="utf-8",
+    )
+    (module / "Public" / "PortableObject.hxx").write_text(
+        "#pragma once\nUCLASS()\nclass UPortableObject { GENERATED_BODY() };\n",
+        encoding="utf-8",
+    )
+
+    script = SCRIPTS / "validate_project_sources.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--project-root", str(project), "--json"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["scanRoots"] == [str(module)]
+    assert any(
+        item["path"].endswith("PortableObject.hxx")
+        and item["code"] == "GENERATED_H_MISSING"
+        for item in payload["findings"]
+    )
+
+    scoped = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--project-root",
+            str(project),
+            "--json",
+            "--scope-target",
+            "Plugins/PortablePlugin/Source/PortablePlugin/Public/PortableObject.hxx",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    scoped_payload = json.loads(scoped.stdout)
+    assert scoped.returncode == 1
+    assert scoped_payload["scopeKind"] == "task_slice"
+    assert scoped_payload["scopedFileCount"] >= 1
+    assert scoped_payload["hasBlockingErrors"] is True
+
+
 def test_scope_target_rejects_paths_outside_project_code_roots() -> None:
     assert normalize_scope_target(r"Source\Demo\Actor.cpp") == "Source/Demo/Actor.cpp"
     assert normalize_scope_target("Plugins/Demo/Source/Demo/Actor.cpp").startswith("Plugins/")

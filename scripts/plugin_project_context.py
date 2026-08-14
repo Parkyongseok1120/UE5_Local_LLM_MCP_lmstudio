@@ -8,7 +8,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-SOURCE_FILE_SUFFIXES = {".h", ".hpp", ".hh", ".cpp", ".c", ".cc", ".cxx", ".cs"}
+from unreal_source_extensions import UNREAL_HEADER_SUFFIXES, UNREAL_SCAN_SUFFIXES
+
+SOURCE_FILE_SUFFIXES = UNREAL_SCAN_SUFFIXES
 FLAT_FIXTURE_SKIP_DIRS = {
     ".git",
     ".vs",
@@ -51,9 +53,24 @@ def flat_fixture_has_direct_sources(root: Path) -> bool:
 def fallback_scan_roots(project_root: Path | str) -> list[Path]:
     """Never return an ambiguous repo root for deep recursive scans."""
     root = Path(project_root)
+    roots: list[Path] = []
     source = root / "Source"
     if source.is_dir():
-        return [source]
+        roots.append(source)
+    plugins = root / "Plugins"
+    if plugins.is_dir():
+        for plugin_source in sorted(plugins.rglob("Source")):
+            if not plugin_source.is_dir():
+                continue
+            try:
+                relative_parts = plugin_source.relative_to(plugins).parts
+            except ValueError:
+                continue
+            if any(part in FLAT_FIXTURE_SKIP_DIRS for part in relative_parts):
+                continue
+            roots.append(plugin_source)
+    if roots:
+        return list(dict.fromkeys(roots))
     if flat_fixture_has_direct_sources(root):
         return [root]
     return []
@@ -348,12 +365,25 @@ def paired_header_for_cpp(cpp_path: Path, project_root: Path | str) -> Path | No
         if not parts or parts[0].lower() != "private":
             continue
         parts[0] = "Public"
-        parts[-1] = f"{cpp.stem}.h"
-        candidate = module_root.joinpath(*parts)
-        if candidate.is_file():
-            return candidate
+        relative_parent = parts[:-1]
+        direct = [
+            module_root.joinpath(*relative_parent, f"{cpp.stem}{suffix}")
+            for suffix in sorted(UNREAL_HEADER_SUFFIXES)
+        ]
+        direct_hits = [candidate for candidate in direct if candidate.is_file()]
+        if len(direct_hits) == 1:
+            return direct_hits[0]
         public_root = module_root / "Public"
-        matches = sorted(public_root.rglob(f"{cpp.stem}.h")) if public_root.is_dir() else []
+        matches = (
+            sorted(
+                candidate
+                for candidate in public_root.rglob(f"{cpp.stem}.*")
+                if candidate.is_file()
+                and candidate.suffix.lower() in UNREAL_HEADER_SUFFIXES
+            )
+            if public_root.is_dir()
+            else []
+        )
         return matches[0] if len(matches) == 1 else None
     return None
 

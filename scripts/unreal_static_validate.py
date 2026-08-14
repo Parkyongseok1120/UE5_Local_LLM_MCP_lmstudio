@@ -11,6 +11,13 @@ from pathlib import Path
 
 from cpp_parse_utils import extract_macro_blocks, find_balanced_parens, mask_comments_and_strings
 from parse_build_cs import declared_modules_from_text, public_modules_from_text
+from unreal_source_extensions import (
+    UNREAL_CPP_IMPLEMENTATION_SUFFIXES,
+    UNREAL_CPP_SOURCE_SUFFIXES,
+    UNREAL_CPP_SUFFIXES,
+    UNREAL_HEADER_SUFFIXES,
+    UNREAL_SCAN_SUFFIXES,
+)
 from ue_cpp_signatures import (
     FUNCTION_POINTER_TARGET_RE,
     INTERFACE_VIRTUAL_METHOD_RE,
@@ -24,7 +31,10 @@ from ue_cpp_signatures import (
     parse_interface_virtual_methods,
 )
 
-SOURCE_ONLY_SUFFIXES = {".cpp", ".c", ".cc", ".h", ".hpp"}
+CPP_SOURCE_SUFFIXES = UNREAL_CPP_SOURCE_SUFFIXES
+CPP_IMPLEMENTATION_SUFFIXES = UNREAL_CPP_IMPLEMENTATION_SUFFIXES
+CPP_HEADER_SUFFIXES = UNREAL_HEADER_SUFFIXES
+SOURCE_ONLY_SUFFIXES = UNREAL_CPP_SUFFIXES
 IGNORED_PROJECT_DIRS = {
     ".git",
     ".vs",
@@ -109,7 +119,7 @@ def should_ignore_project_path(path: Path) -> bool:
 
 
 def iter_source_files(root: Path, *, scan_roots: list[Path] | None = None) -> list[Path]:
-    suffixes = {".h", ".hpp", ".inl", ".cpp", ".c", ".cc", ".cs"}
+    suffixes = UNREAL_SCAN_SUFFIXES
     try:
         from plugin_project_context import iter_scan_root_files
     except Exception:
@@ -145,19 +155,29 @@ def resolve_write_scope_paths(root: Path, write_target: str) -> list[Path]:
     parent = target_path.parent if target_path.is_file() else (root / Path(rel).parent).resolve()
     stem = target_path.stem if target_path.is_file() else Path(rel).stem
     suffix = target_path.suffix.lower() if target_path.is_file() else Path(rel).suffix.lower()
-    if suffix in {".cpp", ".c", ".cc"}:
-        for ext in (".h", ".hpp"):
+    if suffix in CPP_SOURCE_SUFFIXES:
+        for ext in sorted(CPP_HEADER_SUFFIXES):
             paired = parent / f"{stem}{ext}"
             if paired.is_file():
                 scope[paired.resolve()] = None
-        for paired in _find_module_paired_files(target_path, root, stem, (".h", ".hpp")):
+        for paired in _find_module_paired_files(
+            target_path,
+            root,
+            stem,
+            tuple(sorted(CPP_HEADER_SUFFIXES)),
+        ):
             scope[paired] = None
-    elif suffix in {".h", ".hpp"}:
-        for ext in (".cpp", ".c", ".cc"):
+    elif suffix in CPP_HEADER_SUFFIXES:
+        for ext in sorted(CPP_SOURCE_SUFFIXES):
             paired = parent / f"{stem}{ext}"
             if paired.is_file():
                 scope[paired.resolve()] = None
-        for paired in _find_module_paired_files(target_path, root, stem, (".cpp", ".c", ".cc")):
+        for paired in _find_module_paired_files(
+            target_path,
+            root,
+            stem,
+            tuple(sorted(CPP_SOURCE_SUFFIXES)),
+        ):
             scope[paired] = None
     if target_path.is_file():
         include_index = build_source_include_index(root)
@@ -228,7 +248,7 @@ def _find_module_paired_files(
 def class_headers_from_paths(paths: list[Path], texts: dict[Path, str]) -> dict[str, str]:
     headers: dict[str, str] = {}
     for path in paths:
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         text = texts.get(path, read_text(path))
         for match in re.finditer(r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b", text):
@@ -241,7 +261,7 @@ def class_headers_from_paths(paths: list[Path], texts: dict[Path, str]) -> dict[
 def class_bases_from_paths(paths: list[Path], texts: dict[Path, str]) -> dict[str, str]:
     bases: dict[str, str] = {}
     for path in paths:
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         bases.update(class_base_names(texts.get(path, read_text(path))))
     return bases
@@ -250,7 +270,7 @@ def class_bases_from_paths(paths: list[Path], texts: dict[Path, str]) -> dict[st
 def build_source_include_index_for_paths(paths: list[Path]) -> dict[str, list[str]]:
     index: dict[str, list[str]] = {}
     for path in paths:
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         parts = path.parts
         rel = path.name
@@ -505,7 +525,7 @@ def build_delegate_arity_map(root: Path) -> dict[str, int]:
     """
     type_param_counts: dict[str, int] = {}
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         text = read_text(path)
         for match in DELEGATE_DECLARE_RE.finditer(text):
@@ -518,7 +538,7 @@ def build_delegate_arity_map(root: Path) -> dict[str, int]:
 
     member_arity: dict[str, int] = {}
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         text = read_text(path)
         for match in _DELEGATE_MEMBER_DECL_RE.finditer(text):
@@ -531,7 +551,7 @@ def build_delegate_arity_map(root: Path) -> dict[str, int]:
 def build_delegate_arity_map_from_texts(paths: list[Path], texts: dict[Path, str]) -> dict[str, int]:
     type_param_counts: dict[str, int] = {}
     for path in paths:
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         text = texts.get(path, read_text(path))
         for match in DELEGATE_DECLARE_RE.finditer(text):
@@ -542,7 +562,7 @@ def build_delegate_arity_map_from_texts(paths: list[Path], texts: dict[Path, str
         return {}
     member_arity: dict[str, int] = {}
     for path in paths:
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         text = texts.get(path, read_text(path))
         for match in _DELEGATE_MEMBER_DECL_RE.finditer(text):
@@ -555,7 +575,7 @@ def build_delegate_arity_map_from_texts(paths: list[Path], texts: dict[Path, str
 def build_declared_delegate_types(root: Path) -> set[str]:
     declared: set[str] = set()
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         declared.update(match.group(2) for match in DELEGATE_DECLARE_RE.finditer(read_text(path)))
     return declared
@@ -564,7 +584,7 @@ def build_declared_delegate_types(root: Path) -> set[str]:
 def build_declared_delegate_types_from_texts(paths: list[Path], texts: dict[Path, str]) -> set[str]:
     declared: set[str] = set()
     for path in paths:
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         declared.update(match.group(2) for match in DELEGATE_DECLARE_RE.finditer(texts.get(path, read_text(path))))
     return declared
@@ -583,7 +603,7 @@ def validate_blueprint_assignable_delegate_types(
     are left to UHT/UBT.
     """
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".h", ".hpp"}:
+    if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
         return findings
     declared = declared_delegate_types or set()
     for _start, end, block in extract_macro_blocks(text, "UPROPERTY"):
@@ -616,7 +636,7 @@ def validate_delegate_broadcast_consistency(
     path: Path, text: str, root: Path, arity_map: dict[str, int] | None = None
 ) -> list[Finding]:
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".cpp", ".cc", ".c"}:
+    if path.suffix.lower() not in CPP_SOURCE_SUFFIXES:
         return findings
     arity_map = arity_map or {}
     masked = mask_comments_and_strings(text)
@@ -931,7 +951,7 @@ def class_base_names(text: str) -> dict[str, str]:
 def class_bases(root: Path) -> dict[str, str]:
     bases: dict[str, str] = {}
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         bases.update(class_base_names(read_text(path)))
     return bases
@@ -949,7 +969,7 @@ def validate_project_uobject_type_visibility(
     include_index: dict[str, list[str]],
 ) -> list[Finding]:
     """Require a direct include or forward declaration for project UObject pointer types."""
-    if path.suffix.lower() not in {".h", ".hpp"}:
+    if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
         return []
     masked = mask_comments_and_strings(text)
     included_basenames = {Path(value).name.lower() for _, value in include_lines(text)}
@@ -983,7 +1003,7 @@ def validate_project_uobject_type_visibility(
 def validate_required_includes(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
     rel = str(path.relative_to(root))
-    if path.suffix.lower() in {".h", ".hpp"}:
+    if path.suffix.lower() in CPP_HEADER_SUFFIXES:
         for class_name, base_name in class_base_names(text).items():
             required = BASE_CLASS_INCLUDES.get(base_name)
             if required and not has_include(text, required):
@@ -1016,7 +1036,7 @@ def validate_required_includes(path: Path, text: str, root: Path) -> list[Findin
                     'Gameplay tag value types require "GameplayTagContainer.h" in the header that exposes them.',
                 )
             )
-    if path.suffix.lower() in {".cpp", ".c", ".cc"}:
+    if path.suffix.lower() in CPP_SOURCE_SUFFIXES:
         for token, include_path in CPP_SYMBOL_INCLUDES.items():
             token_index = text.find(token)
             if token_index != -1 and not has_include(text, include_path):
@@ -1038,7 +1058,7 @@ def validate_component_registration_includes(path: Path, text: str, root: Path) 
 
     findings: list[Finding] = []
     rel = str(path.relative_to(root))
-    if path.suffix.lower() not in {".cpp", ".c", ".cc", ".h", ".hpp"}:
+    if path.suffix.lower() not in SOURCE_ONLY_SUFFIXES:
         return findings
 
     patterns = (
@@ -1344,7 +1364,7 @@ def local_module_names(root: Path) -> set[str]:
 
 def include_visibility(path: Path) -> str:
     parts = {part.lower() for part in path.parts}
-    if path.suffix.lower() in {".h", ".hpp"} and "private" not in parts:
+    if path.suffix.lower() in CPP_HEADER_SUFFIXES and "private" not in parts:
         return "public"
     return "private"
 
@@ -1409,7 +1429,11 @@ def validate_enhanced_input(path: Path, text: str, root: Path, build_text: str) 
                         "Enhanced Input BindAction must use an ETriggerEvent argument.",
                     )
                 )
-    if uses_enhanced and path.suffix.lower() == ".cpp" and "EnhancedInputComponent.h" not in text:
+    if (
+        uses_enhanced
+        and path.suffix.lower() in CPP_IMPLEMENTATION_SUFFIXES
+        and "EnhancedInputComponent.h" not in text
+    ):
         findings.append(
             Finding(
                 "warning",
@@ -1463,7 +1487,7 @@ def _class_definition_text(text: str, class_name: str) -> tuple[str, int] | None
 def class_headers(root: Path) -> dict[str, str]:
     headers: dict[str, str] = {}
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         text = read_text(path)
         for match in re.finditer(r"\bclass\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_][A-Za-z0-9_]*)\b", text):
@@ -1575,7 +1599,7 @@ def validate_cpp_declarations(path: Path, text: str, root: Path, headers: dict[s
 def collect_blueprint_native_event_declarations(root: Path) -> list[tuple[str, str, Path, int]]:
     declarations: list[tuple[str, str, Path, int]] = []
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         text = read_text(path)
         current_class = ""
@@ -1611,7 +1635,7 @@ def collect_blueprint_native_event_declarations(root: Path) -> list[tuple[str, s
 
 def validate_blueprint_native_event_implementations(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+    cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in CPP_SOURCE_SUFFIXES]
     if not cpp_paths:
         return findings
     cpp_text = "\n".join(read_text(path) for path in cpp_paths)
@@ -1666,7 +1690,7 @@ def validate_cpp_definitions_missing(
         cpp_paths = scope_cpp_paths
         all_cpp = "\n".join(scope_texts.get(path, read_text(path)) for path in cpp_paths)
     else:
-        cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+        cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in CPP_SOURCE_SUFFIXES]
         if not cpp_paths:
             return findings
         all_cpp = "\n".join(read_text(path) for path in cpp_paths)
@@ -1683,7 +1707,7 @@ def validate_cpp_definitions_missing(
             header_path = scope_header_paths[class_name]
         elif scope_header_paths is None:
             for path in iter_source_files(root):
-                if path.suffix.lower() in {".h", ".hpp"} and class_name in read_text(path):
+                if path.suffix.lower() in CPP_HEADER_SUFFIXES and class_name in read_text(path):
                     header_path = path
                     break
         class_definition = _class_definition_text(header_text, class_name)
@@ -1727,7 +1751,7 @@ def validate_cpp_definitions_missing(
 def collect_rpc_declarations(root: Path) -> list[tuple[str, str, Path, int]]:
     declarations: list[tuple[str, str, Path, int]] = []
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         text = read_text(path)
         current_class = ""
@@ -1763,7 +1787,7 @@ def collect_rpc_declarations(root: Path) -> list[tuple[str, str, Path, int]]:
 
 def validate_rpc_implementations(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+    cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in CPP_SOURCE_SUFFIXES]
     if not cpp_paths:
         return findings
     cpp_text = "\n".join(read_text(path) for path in cpp_paths)
@@ -1795,7 +1819,7 @@ def validate_replication_setup(
     findings: list[Finding] = []
     cpp_paths = scope_cpp_paths
     if cpp_paths is None:
-        cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".cpp", ".c", ".cc"}]
+        cpp_paths = [path for path in iter_source_files(root) if path.suffix.lower() in CPP_SOURCE_SUFFIXES]
     for path in cpp_paths:
         text = scope_texts.get(path, read_text(path)) if scope_texts else read_text(path)
         if "DOREPLIFETIME" not in text:
@@ -1927,7 +1951,7 @@ def validate_include_owner_modules(
     source_paths = scope_paths if scope_paths is not None else iter_source_files(root)
     for path in source_paths:
         path = Path(path).resolve()
-        if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+        if path.suffix.lower() not in SOURCE_ONLY_SUFFIXES:
             continue
         owner_build_file, owner_build_text = owning_build_cs_text(
             path,
@@ -2040,7 +2064,7 @@ def validate_missing_super_lifecycle_call(path: Path, text: str, root: Path) -> 
     Super:: method. This is a common LLM omission that silently breaks base-class
     setup/teardown (e.g. AActor::BeginPlay, UWorldSubsystem::Deinitialize)."""
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
+    if path.suffix.lower() not in CPP_SOURCE_SUFFIXES:
         return findings
     for header, start, body in iter_function_blocks(text):
         name_match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)\s*\(", header)
@@ -2180,7 +2204,7 @@ def validate_component_subsystem_patterns(path: Path, text: str, root: Path) -> 
                 )
             )
 
-    if is_component and path.suffix.lower() in {".cpp", ".cc"}:
+    if is_component and path.suffix.lower() in CPP_IMPLEMENTATION_SUFFIXES:
         class_name = path.stem
         ctor_pattern = rf"\b{re.escape(class_name)}\s*::\s*{re.escape(class_name)}\s*\("
         if re.search(ctor_pattern, text):
@@ -2363,7 +2387,7 @@ def validate_static_mutable_container_members(path: Path, text: str, root: Path)
 
 def validate_typo_includes(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc", ".inl"}:
+    if path.suffix.lower() not in SOURCE_ONLY_SUFFIXES:
         return findings
     rel = str(path.relative_to(root))
     for match in re.finditer(r'#include\s+"([^"]+)"', text):
@@ -2384,7 +2408,7 @@ def validate_typo_includes(path: Path, text: str, root: Path) -> list[Finding]:
 
 def validate_bool_member_parameter_types(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".h", ".hpp"}:
+    if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
         return findings
     masked = mask_comments_and_strings(text)
     bool_members = set(re.findall(r"\bbool\s+(b[A-Z][A-Za-z0-9_]*)\b", masked))
@@ -2422,7 +2446,7 @@ def validate_bool_member_parameter_types(path: Path, text: str, root: Path) -> l
 def build_source_include_index(root: Path) -> dict[str, list[str]]:
     index: dict[str, list[str]] = {}
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp", ".inl"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         if should_ignore_project_path(path):
             continue
@@ -2471,7 +2495,7 @@ def validate_duplicate_source_basenames(root: Path) -> list[Finding]:
     if not source.is_dir():
         return []
     for path in source.rglob("*"):
-        if path.suffix.lower() not in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+        if path.suffix.lower() not in SOURCE_ONLY_SUFFIXES:
             continue
         if should_ignore_project_path(path):
             continue
@@ -2519,7 +2543,7 @@ def validate_include_paths_exist(
             continue
         if write_mode and find_include_owner(normalized, owner_map):
             continue
-        if not (normalized.endswith(".h") or normalized.endswith(".hpp")):
+        if Path(normalized).suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         local_basename_candidates = include_index.get(Path(normalized).name, [])
         if not local_basename_candidates:
@@ -2557,7 +2581,7 @@ def validate_interface_implementer_drift(root: Path) -> list[Finding]:
         return findings
 
     for path in iter_source_files(root):
-        if path.suffix.lower() not in {".h", ".hpp"}:
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
             continue
         text = read_text(path)
         rel = str(path.relative_to(root)).replace("\\", "/")
@@ -2632,7 +2656,7 @@ def validate_multifile_callsite_drift(root: Path) -> list[Finding]:
         if not stale_in_project:
             continue
         for path in iter_source_files(root):
-            if path.suffix.lower() not in {".cpp", ".c", ".cc", ".h", ".hpp"}:
+            if path.suffix.lower() not in SOURCE_ONLY_SUFFIXES:
                 continue
             text = read_text(path)
             rel = str(path.relative_to(root)).replace("\\", "/")
@@ -2974,7 +2998,7 @@ BLUEPRINTPURE_NON_CONST_RE = re.compile(
 
 def validate_uproperty_category_without_exposure(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".h", ".hpp"}:
+    if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
         return findings
     masked = mask_comments_and_strings(text)
     exposure_specifiers = re.compile(
@@ -3010,7 +3034,7 @@ def validate_uproperty_category_without_exposure(path: Path, text: str, root: Pa
 
 def validate_uobject_container_without_uproperty(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".h", ".hpp"}:
+    if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
         return findings
     lines = text.splitlines()
     local_lines = lines_in_function_blocks(text)
@@ -3036,7 +3060,7 @@ def validate_uobject_container_without_uproperty(path: Path, text: str, root: Pa
 
 def validate_tobjectptr_without_uproperty(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".h", ".hpp"}:
+    if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
         return findings
     lines = text.splitlines()
     local_lines = lines_in_function_blocks(text)
@@ -3208,15 +3232,15 @@ def validate_replicated_uproperty_without_doreplifetime(
     findings: list[Finding] = []
     header_paths = scope_header_paths
     if header_paths is None:
-        header_paths = [path for path in iter_source_files(root) if path.suffix.lower() in {".h", ".hpp"}]
+        header_paths = [path for path in iter_source_files(root) if path.suffix.lower() in CPP_HEADER_SUFFIXES]
     cpp_text_by_stem: dict[str, str] = {}
     if scope_texts is not None:
         for path, text in scope_texts.items():
-            if path.suffix.lower() in {".cpp", ".c", ".cc"}:
+            if path.suffix.lower() in CPP_SOURCE_SUFFIXES:
                 cpp_text_by_stem[path.stem.lower()] = text
     else:
         for path in iter_source_files(root):
-            if path.suffix.lower() in {".cpp", ".c", ".cc"}:
+            if path.suffix.lower() in CPP_SOURCE_SUFFIXES:
                 cpp_text_by_stem[path.stem.lower()] = read_text(path)
     for path in header_paths:
         header_text = scope_texts.get(path, read_text(path)) if scope_texts else read_text(path)
@@ -3282,7 +3306,7 @@ def validate_raw_new_delete_uobject(path: Path, text: str, root: Path) -> list[F
 
 def validate_actor_ctor_getworld(path: Path, text: str, root: Path, bases: dict[str, str]) -> list[Finding]:
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".cpp", ".c", ".cc"}:
+    if path.suffix.lower() not in CPP_SOURCE_SUFFIXES:
         return findings
     rel = str(path.relative_to(root))
     for class_name, func_name, _, _, body in iter_cpp_definition_blocks(text):
@@ -3367,7 +3391,7 @@ def validate_fvector_float_precision(path: Path, text: str, root: Path) -> list[
 
 def validate_blueprintpure_missing_const(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    if path.suffix.lower() not in {".h", ".hpp"}:
+    if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
         return findings
     for match in BLUEPRINTPURE_NON_CONST_RE.finditer(text):
         findings.append(
@@ -3477,14 +3501,14 @@ def _run_per_file_validators(
         except Exception as exc:
             _append_validator_internal_error(findings, path, root, "validate_uplugin_descriptor", exc)
         return
-    if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+    if path.suffix.lower() in SOURCE_ONLY_SUFFIXES:
         findings.extend(validate_typo_includes(path, text, root))
         findings.extend(validate_component_subsystem_patterns(path, text, root))
         findings.extend(validate_gengine_world_context(path, text, root))
         findings.extend(validate_known_bad_api_patterns(path, text, root))
         findings.extend(validate_bool_member_parameter_types(path, text, root))
         _run_domain_validators(findings, path, text, root, domain_context)
-    if path.suffix.lower() in {".h", ".hpp"}:
+    if path.suffix.lower() in CPP_HEADER_SUFFIXES:
         findings.extend(validate_generated_h(path, text, root))
         findings.extend(validate_reflected_namespace(path, text, root))
         findings.extend(validate_blueprint_assignable_delegate_types(path, text, root, declared_delegate_types))
@@ -3501,7 +3525,7 @@ def _run_per_file_validators(
         findings.extend(validate_project_uobject_type_visibility(path, text, root, include_index))
         findings.extend(validate_required_includes(path, text, root))
         findings.extend(validate_component_registration_includes(path, text, root))
-    if path.suffix.lower() in {".h", ".hpp", ".cpp", ".c", ".cc"}:
+    if path.suffix.lower() in SOURCE_ONLY_SUFFIXES:
         findings.extend(validate_editor_only_runtime_includes(path, text, root))
         findings.extend(validate_enhanced_input(path, text, root, build_text_value))
         findings.extend(validate_action_request_order(path, text, root))
@@ -3516,7 +3540,7 @@ def _run_per_file_validators(
                     include_owner_map=include_owner_map,
                 )
             )
-    if path.suffix.lower() in {".cpp", ".c", ".cc"}:
+    if path.suffix.lower() in CPP_SOURCE_SUFFIXES:
         findings.extend(validate_required_includes(path, text, root))
         findings.extend(validate_component_registration_includes(path, text, root))
         findings.extend(validate_constructor_lifecycle_usage(path, text, root))
@@ -3563,7 +3587,7 @@ def validate_unreal_readiness(
         headers = class_headers_from_paths(scope, texts)
         header_paths: dict[str, Path] = dict(domain_context.headers_by_class)
         for path in scope:
-            if path.suffix.lower() not in {".h", ".hpp"}:
+            if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
                 continue
             module = domain_context.module_for_path(path)
             header_text = texts.get(path, "")
@@ -3603,8 +3627,8 @@ def validate_unreal_readiness(
         include_index = build_source_include_index(root)
         include_owner_map = load_include_owner_map(module_graph_path) if module_graph_path else {}
         all_source_text = [texts[path] for path in scope]
-        cpp_scope = [path for path in scope if path.suffix.lower() in {".cpp", ".c", ".cc"}]
-        header_scope = [path for path in scope if path.suffix.lower() in {".h", ".hpp"}]
+        cpp_scope = [path for path in scope if path.suffix.lower() in CPP_SOURCE_SUFFIXES]
+        header_scope = [path for path in scope if path.suffix.lower() in CPP_HEADER_SUFFIXES]
         for path in scope:
             _, per_file_build_text = owning_build_cs_text(
                 path,
@@ -3723,7 +3747,7 @@ def validate_unreal_readiness_lightweight(root: Path) -> list[Finding]:
             continue
         text = read_text(path)
         findings.extend(validate_typo_includes(path, text, root))
-        if path.suffix.lower() in {".h", ".hpp"}:
+        if path.suffix.lower() in CPP_HEADER_SUFFIXES:
             findings.extend(validate_uproperty_category_without_exposure(path, text, root))
             findings.extend(validate_generated_h(path, text, root))
             findings.extend(validate_reflected_namespace(path, text, root))
@@ -3731,7 +3755,7 @@ def validate_unreal_readiness_lightweight(root: Path) -> list[Finding]:
             findings.extend(validate_blueprint_native_event_declarations(path, text, root))
             findings.extend(validate_uobject_container_without_uproperty(path, text, root))
             findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
-        if path.suffix.lower() in {".cpp", ".c", ".cc"}:
+        if path.suffix.lower() in CPP_SOURCE_SUFFIXES:
             findings.extend(validate_cpp_declarations(path, text, root, headers))
     return findings
 

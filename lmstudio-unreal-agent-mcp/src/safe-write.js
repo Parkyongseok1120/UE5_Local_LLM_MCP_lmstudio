@@ -55,6 +55,39 @@ async function fileExists(absPath) {
   }
 }
 
+function calculateReplacement({
+  priorContent,
+  oldText,
+  newText,
+  expectedOccurrences,
+  normalizeLineEndings = true,
+}) {
+  const raw = Buffer.isBuffer(priorContent)
+    ? priorContent
+    : Buffer.from(String(priorContent ?? ""), "utf8");
+  const hasCRLF = raw.includes(Buffer.from("\r\n"));
+  const content = raw.toString("utf8");
+  const contentNorm = normalizeLineEndings ? content.replace(/\r\n/g, "\n") : content;
+  const oldTextNorm = normalizeLineEndings ? String(oldText).replace(/\r\n/g, "\n") : String(oldText);
+  const occurrences = oldTextNorm ? contentNorm.split(oldTextNorm).length - 1 : 0;
+  if (expectedOccurrences !== undefined && occurrences !== expectedOccurrences) {
+    return {
+      ok: false,
+      error: `occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`,
+    };
+  }
+  if (occurrences === 0) {
+    return { ok: false, error: "oldText not found in target file" };
+  }
+
+  const replacement = normalizeLineEndings ? String(newText).replace(/\r\n/g, "\n") : String(newText);
+  const updatedNorm = expectedOccurrences === 1
+    ? contentNorm.replace(oldTextNorm, replacement)
+    : contentNorm.split(oldTextNorm).join(replacement);
+  const updated = hasCRLF && normalizeLineEndings ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
+  return { ok: true, updated, occurrences, priorContent: content, preHash: sha256Buffer(raw) };
+}
+
 async function replaceWithCAS({
   targetPath,
   priorContent,
@@ -87,29 +120,17 @@ async function replaceWithCAS({
     }
   }
 
-  const hasCRLF = raw.includes(Buffer.from("\r\n"));
-  const content = raw.toString("utf8");
-  const contentNorm = normalizeLineEndings ? content.replace(/\r\n/g, "\n") : content;
-  const oldTextNorm = normalizeLineEndings ? String(oldText).replace(/\r\n/g, "\n") : String(oldText);
-  const occurrences = oldTextNorm ? contentNorm.split(oldTextNorm).length - 1 : 0;
-  if (expectedOccurrences !== undefined && occurrences !== expectedOccurrences) {
-    return {
-      ok: false,
-      error: `occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`,
-    };
-  }
-  if (occurrences === 0) {
-    return { ok: false, error: "oldText not found in target file" };
-  }
+  const replacement = calculateReplacement({
+    priorContent: raw,
+    oldText,
+    newText,
+    expectedOccurrences,
+    normalizeLineEndings,
+  });
+  if (!replacement.ok) return replacement;
 
-  const replacement = normalizeLineEndings ? String(newText).replace(/\r\n/g, "\n") : String(newText);
-  const updatedNorm = expectedOccurrences === 1
-    ? contentNorm.replace(oldTextNorm, replacement)
-    : contentNorm.split(oldTextNorm).join(replacement);
-  const updated = hasCRLF && normalizeLineEndings ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
-
-  atomicWriteText(resolved, updated);
-  return { ok: true, updated, occurrences, priorContent: content, preHash: sha256Buffer(raw) };
+  atomicWriteText(resolved, replacement.updated);
+  return replacement;
 }
 
 async function createExclusive(targetPath, content) {
@@ -123,6 +144,7 @@ module.exports = {
   sha256File,
   verifyReadHash,
   assertPreCommitHash,
+  calculateReplacement,
   replaceWithCAS,
   createExclusive,
 };

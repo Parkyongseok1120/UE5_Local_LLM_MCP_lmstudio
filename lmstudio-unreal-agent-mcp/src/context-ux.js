@@ -917,6 +917,8 @@ function isInterestingLogLine(line) {
     || /\bUnhandled Exception\b/i.test(line)
     || /\bUnhandled\s+\d+\s+aggregate exceptions?\b/i.test(line)
     || /\bOtherCompilationError\b/i.test(line)
+    || /\bAutomation\s+Test\s+Failed\b/i.test(line)
+    || /\bTest\s+Completed\.\s*Result=\{(?:Fail|Failed)\}/i.test(line)
     || /\bLog\w+:\s*Error:/i.test(line)
     || /\berror:/i.test(line)
   );

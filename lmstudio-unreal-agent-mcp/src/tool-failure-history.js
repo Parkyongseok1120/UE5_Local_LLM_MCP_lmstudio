@@ -25,20 +25,48 @@ function stableStringify(value) {
   return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
 }
 
-function callKey(tool, args) {
-  const hash = crypto.createHash("sha256");
-  hash.update(String(tool || ""));
-  hash.update("\u0000");
-  hash.update(stableStringify(normalizeArgsForFailureKey(tool, args)));
-  return hash.digest("hex");
-}
-
 const READ_FAILURE_NORMALIZE_TOOLS = new Set([
   "read_file",
   "read_file_range",
   "read_symbol",
   "search_files",
 ]);
+
+function readFailureOwnerKey(args = {}) {
+  const source = args && typeof args === "object" ? args : {};
+  const authorization = source.taskAuthorization && typeof source.taskAuthorization === "object"
+    ? source.taskAuthorization
+    : {};
+  const taskSessionId = String(
+    authorization.taskSessionId
+    || authorization.task_session_id
+    || source.taskSessionId
+    || source.task_session_id
+    || ""
+  ).trim();
+  if (taskSessionId) return `task:${taskSessionId}`;
+  const evidenceSessionId = String(
+    source.evidenceSessionId
+    || source.evidence_session_id
+    || source.sessionId
+    || source.session_id
+    || ""
+  ).trim();
+  return `evidence:${evidenceSessionId}`;
+}
+
+function callKey(tool, args) {
+  const hash = crypto.createHash("sha256");
+  const name = String(tool || "");
+  hash.update(name);
+  hash.update("\u0000");
+  if (READ_FAILURE_NORMALIZE_TOOLS.has(name)) {
+    hash.update(readFailureOwnerKey(args));
+    hash.update("\u0000");
+  }
+  hash.update(stableStringify(normalizeArgsForFailureKey(tool, args)));
+  return hash.digest("hex");
+}
 
 /**
  * Align failure-repeat keys with read-history normalization for evidence tools.

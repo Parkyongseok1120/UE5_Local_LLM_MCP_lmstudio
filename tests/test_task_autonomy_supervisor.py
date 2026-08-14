@@ -570,6 +570,7 @@ def test_target_change_invalidates_validation_and_rebase_resets_strategy(
         task_authorization=authorization,
         action="rebase",
         accept_current_files=True,
+        include_git_changes=False,
     )
     assert rebased["ok"] is True
     current = task_status(tmp_path, started["taskSessionId"])

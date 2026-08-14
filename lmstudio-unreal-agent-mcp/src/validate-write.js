@@ -11,9 +11,26 @@ const execFile = promisify(cp.execFile);
 
 const { markUnvalidated, clearValidated } = require("./validation-dirty");
 
-const UNREAL58_ROOT = path.resolve(
-  process.env.UNREAL58_ROOT || path.join(os.homedir(), ".lmstudio", "Unreal58-RAG")
-);
+function resolveValidationRoot(options = {}) {
+  const configured = Object.prototype.hasOwnProperty.call(options, "envRoot")
+    ? String(options.envRoot || "").trim()
+    : String(process.env.UNREAL58_ROOT || "").trim();
+  if (configured) return path.resolve(configured);
+
+  // Portable/repo layout: lmstudio-unreal-agent-mcp/src -> ../../scripts.
+  // Prefer the scripts shipped beside this MCP over a historical home clone.
+  const repositoryRoot = path.resolve(options.repositoryRoot || path.join(__dirname, "..", ".."));
+  if (fs.existsSync(path.join(repositoryRoot, "scripts", "validate_project_sources.py"))) {
+    return repositoryRoot;
+  }
+
+  const homeDir = Object.prototype.hasOwnProperty.call(options, "homeDir")
+    ? String(options.homeDir || "")
+    : os.homedir();
+  return path.resolve(homeDir, ".lmstudio", "Unreal58-RAG");
+}
+
+const VALIDATION_ROOT = resolveValidationRoot();
 function resolveValidateOnWrite() {
   const explicit = String(process.env.VALIDATE_ON_WRITE || "").trim().toLowerCase();
   if (["0", "false", "no", "off"].includes(explicit)) {
@@ -29,7 +46,17 @@ function resolveValidateOnWrite() {
 const VALIDATE_ON_WRITE = resolveValidateOnWrite();
 
 // Full static validation timeout for explicit static_validate_project calls.
-const STATIC_VALIDATION_TIMEOUT_MS = 120000;
+// Keep the default generous for large projects, while allowing installers and
+// hermetic recovery tests to prove the timeout path without waiting two minutes.
+function resolveStaticValidationTimeoutMs() {
+  const raw = Number(process.env.STATIC_VALIDATION_TIMEOUT_MS);
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.max(25, Math.min(Math.trunc(raw), 10 * 60 * 1000));
+  }
+  return 120000;
+}
+
+const STATIC_VALIDATION_TIMEOUT_MS = resolveStaticValidationTimeoutMs();
 
 // Tighter time budget for validation that runs synchronously inside write_file /
 // replace_in_file. Kept well under any client tool timeout so the write tool always
@@ -97,7 +124,7 @@ function isConfigLike(filePath) {
 }
 
 async function runRuntimeConfigCheck(projectRoot) {
-  const script = path.join(UNREAL58_ROOT, "scripts", "runtime_config_checklist.py");
+  const script = path.join(VALIDATION_ROOT, "scripts", "runtime_config_checklist.py");
   if (!fs.existsSync(script)) {
     return { ok: true, skipped: true, reason: "runtime_config_checklist.py missing" };
   }
@@ -106,7 +133,7 @@ async function runRuntimeConfigCheck(projectRoot) {
     const { stdout } = await execFile(
       python,
       [script, "--project-root", projectRoot],
-      { cwd: UNREAL58_ROOT, timeout: 60000, maxBuffer: 1024 * 1024 }
+      { cwd: VALIDATION_ROOT, timeout: 60000, maxBuffer: 1024 * 1024 }
     );
     const payload = JSON.parse(stdout);
     return { ok: payload.ok, skipped: false, payload };
@@ -231,7 +258,7 @@ async function runStaticValidation(projectRoot, options = {}) {
       .map((item) => String(item || "").trim().replace(/\\/g, "/"))
       .filter(Boolean)
   )];
-  const script = path.join(UNREAL58_ROOT, "scripts", "validate_project_sources.py");
+  const script = path.join(VALIDATION_ROOT, "scripts", "validate_project_sources.py");
   if (!fs.existsSync(script)) {
     return {
       ok: false,
@@ -261,7 +288,7 @@ async function runStaticValidation(projectRoot, options = {}) {
       python,
       args,
       {
-        cwd: UNREAL58_ROOT,
+        cwd: VALIDATION_ROOT,
         timeout: timeoutMs,
         maxBuffer: 4 * 1024 * 1024,
       }
@@ -520,6 +547,7 @@ module.exports = {
   VALIDATE_ON_WRITE_TIMEOUT_MS,
   resolveValidateOnWrite,
   resolveValidateOnWriteTimeoutMs,
+  resolveValidationRoot,
   resolvePythonExe,
   validateAfterWrite,
   formatValidationResult,
