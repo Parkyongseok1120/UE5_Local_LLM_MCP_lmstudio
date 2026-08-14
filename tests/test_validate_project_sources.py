@@ -327,8 +327,10 @@ def test_cli_task_scope_does_not_promote_i_dot_twin_file_error(tmp_path: Path) -
     module = project / "Source" / "Demo"
     selected = module / "Public" / "I\u0307" / "Thing.h"
     other = module / "Public" / "\u0130" / "Thing.h"
-    selected.parent.mkdir(parents=True)
-    other.parent.mkdir(parents=True)
+    selected.parent.mkdir(parents=True, exist_ok=True)
+    other.parent.mkdir(parents=True, exist_ok=True)
+    if selected.parent.samefile(other.parent):
+        pytest.skip("host filesystem aliases the two Unicode spellings")
     (module / "Demo.Build.cs").write_text(
         "using UnrealBuildTool;\npublic class Demo : ModuleRules "
         "{ public Demo(ReadOnlyTargetRules Target) : base(Target) {} }\n",

@@ -33,7 +33,7 @@ test("lock identity is host-aware without Unicode case folding", () => {
   );
 });
 
-test("POSIX locks keep canonically similar I-dot files independent", { skip: process.platform === "win32" }, () => {
+test("POSIX locks keep canonically similar I-dot files independent", { skip: process.platform === "win32" }, (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "unicode-locks-"));
   const stateRoot = path.join(root, "state");
   const first = path.join(root, "Source", "\u0130", "Thing.cpp");
@@ -43,6 +43,12 @@ test("POSIX locks keep canonically similar I-dot files independent", { skip: pro
   fs.writeFileSync(first, "first");
   fs.writeFileSync(second, "second");
   try {
+    const firstStat = fs.statSync(first);
+    const secondStat = fs.statSync(second);
+    if (firstStat.dev === secondStat.dev && firstStat.ino === secondStat.ino) {
+      t.skip("host filesystem aliases the two Unicode spellings");
+      return;
+    }
     assert.notStrictEqual(lockFilePath(first, stateRoot), lockFilePath(second, stateRoot));
     assert.strictEqual(tryAcquireCrossProcessLock(first, "first", stateRoot).ok, true);
     assert.strictEqual(tryAcquireCrossProcessLock(second, "second", stateRoot).ok, true);

@@ -68,8 +68,10 @@ def test_posix_locks_keep_canonically_similar_i_dot_files_independent(tmp_path: 
     state_root = tmp_path / "state"
     first = tmp_path / "Source" / "\u0130" / "Thing.cpp"
     second = tmp_path / "Source" / "I\u0307" / "Thing.cpp"
-    first.parent.mkdir(parents=True)
-    second.parent.mkdir(parents=True)
+    first.parent.mkdir(parents=True, exist_ok=True)
+    second.parent.mkdir(parents=True, exist_ok=True)
+    if first.parent.samefile(second.parent):
+        pytest.skip("host filesystem aliases the two Unicode spellings")
     first.write_text("first", encoding="utf-8")
     second.write_text("second", encoding="utf-8")
     try:

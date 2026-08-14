@@ -47,7 +47,9 @@ def test_normalize_locator_does_not_merge_i_dot_sibling_roots(tmp_path, monkeypa
     canonical = tmp_path / "Canonical"
     sibling = tmp_path / "I\u0307Project"
     for root in (physical, canonical, sibling):
-        root.mkdir()
+        root.mkdir(exist_ok=True)
+    if physical.samefile(sibling):
+        pytest.skip("host filesystem aliases the two Unicode spellings")
     monkeypatch.setattr("workspace_paths.canonical_workspace_root", lambda _start=None: canonical)
     candidate = sibling / "Source" / "Thing.cpp"
     for host_platform in ("linux", "darwin", "win32"):
@@ -216,8 +218,11 @@ def test_engine_discovery_orders_semantic_versions(tmp_path):
 @pytest.mark.skipif(sys.platform == "win32", reason="requires POSIX-distinct Unicode engine roots")
 def test_engine_discovery_windows_policy_does_not_unicode_casefold_i_dot_roots(tmp_path):
     parent = tmp_path / "Epic Games"
-    for name in ("UE_5.8-\u0130", "UE_5.8-I\u0307"):
-        (parent / name / "Engine" / "Source").mkdir(parents=True)
+    engine_roots = [parent / name for name in ("UE_5.8-\u0130", "UE_5.8-I\u0307")]
+    for engine_root in engine_roots:
+        (engine_root / "Engine" / "Source").mkdir(parents=True, exist_ok=True)
+    if engine_roots[0].samefile(engine_roots[1]):
+        pytest.skip("host filesystem aliases the two Unicode spellings")
     roots = _discover_engine_roots(
         "win32",
         {"ProgramFiles": str(tmp_path), "ProgramFiles(x86)": ""},

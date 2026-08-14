@@ -38,6 +38,12 @@ function createProject(root, name, engineAssociation) {
   return projectPath;
 }
 
+function sameFilesystemEntry(leftPath, rightPath) {
+  const left = fs.statSync(leftPath);
+  const right = fs.statSync(rightPath);
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
 test("project selection ignores an old PC activeProject and finds projects under current roots", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-portable-select-"));
   const workspaceRoot = path.join(root, "workspace");
@@ -157,7 +163,7 @@ test("resolveSearchRoots accepts injected host environment without machine defau
   }
 });
 
-test("Windows engine discovery does not merge Unicode I-dot lookalike roots", async () => {
+test("Windows engine discovery does not merge Unicode I-dot lookalike roots", async (t) => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-idot-engines-"));
   const roots = [path.join(parent, "\u0130Engine"), path.join(parent, "i\u0307Engine")];
   try {
@@ -165,6 +171,10 @@ test("Windows engine discovery does not merge Unicode I-dot lookalike roots", as
       const buildBat = path.join(engineRoot, "Engine", "Build", "BatchFiles", "Build.bat");
       fs.mkdirSync(path.dirname(buildBat), { recursive: true });
       fs.writeFileSync(buildBat, "@echo off\r\nexit /b 0\r\n", "utf8");
+    }
+    if (sameFilesystemEntry(roots[0], roots[1])) {
+      t.skip("host filesystem aliases the two Unicode spellings");
+      return;
     }
     const installs = await findEngineInstalls({
       hostPlatform: "win32",
@@ -181,7 +191,7 @@ test("Windows engine discovery does not merge Unicode I-dot lookalike roots", as
   }
 });
 
-test("Windows project discovery keeps Unicode I-dot lookalike owners distinct", async () => {
+test("Windows project discovery keeps Unicode I-dot lookalike owners distinct", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-idot-projects-"));
   const workspaceRoot = path.join(root, "workspace");
   const projectRoot = path.join(root, "projects");
@@ -190,6 +200,11 @@ test("Windows project discovery keeps Unicode I-dot lookalike owners distinct", 
   fs.mkdirSync(workspaceRoot, { recursive: true });
   const idotProject = createProject(projectRoot, "\u0130Game", "5.8");
   const lookalikeProject = createProject(projectRoot, "i\u0307Game", "5.8");
+  if (sameFilesystemEntry(idotProject, lookalikeProject)) {
+    t.skip("host filesystem aliases the two Unicode spellings");
+    fs.rmSync(root, { recursive: true, force: true });
+    return;
+  }
   fs.utimesSync(idotProject, new Date("2025-01-01T00:00:00Z"), new Date("2025-01-01T00:00:00Z"));
   fs.utimesSync(lookalikeProject, new Date("2025-01-02T00:00:00Z"), new Date("2025-01-02T00:00:00Z"));
   fs.writeFileSync(sharedConfig, JSON.stringify({ projectSearchRoots: [projectRoot] }), "utf8");

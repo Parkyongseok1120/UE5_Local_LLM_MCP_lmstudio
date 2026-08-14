@@ -293,6 +293,8 @@ test("dual-existing POSIX Unicode projects keep pending build journals isolated"
       existedBefore: false,
       intendedPostContent: "nfd",
     });
+    commitMutationJournal(nfcJournal, "nfc", { projectRoot: nfcProject });
+    commitMutationJournal(nfdJournal, "nfd", { projectRoot: nfdProject });
 
     assert.deepStrictEqual(
       pendingBuildJournals({ projectRoot: nfcProject }).map((item) => item.transactionId),

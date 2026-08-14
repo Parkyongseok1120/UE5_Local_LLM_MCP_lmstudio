@@ -112,7 +112,9 @@ def test_normalize_editor_export_dir_keeps_i_dot_sibling_project(monkeypatch, tm
     project_root = tmp_path / "\u0130Project"
     sibling = tmp_path / "I\u0307Project"
     project_root.mkdir()
-    sibling.mkdir()
+    sibling.mkdir(exist_ok=True)
+    if project_root.samefile(sibling):
+        pytest.skip("host filesystem aliases the two Unicode spellings")
     uproject = project_root / "Demo.uproject"
     uproject.write_text("{}", encoding="utf-8")
     cfg_path = tmp_path / "unreal-workspace.json"
