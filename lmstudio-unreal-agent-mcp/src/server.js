@@ -35,7 +35,8 @@ const {
   REDIRECT_CODES,
   recoveryAction,
 } = require("./route-recovery-policy.js");
-const { attachPostReadRouteControl } = require("./post-read-route-control.js");
+const { attachCommittedToolOutcomeControl } = require("./post-read-route-control.js");
+const { verifyRuntimeComponent } = require("./runtime-identity.js");
 
 const {
   Server
@@ -402,6 +403,7 @@ const PATCH_ONLY_EXISTING_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc
 const fileCache = new Map();
 const readEvidence = new Map();
 let workspaceInfoCache = null;
+let runtimeComponentStatus = null;
 
 const SERVER_VERSION = (() => {
   try {
@@ -659,7 +661,7 @@ async function rollbackPendingMutationJournals(query, reason) {
   };
 }
 
-function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = null) {
+function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = null, mutationGeneration = 0) {
   // Plan-auth off: skip Python continuity checkpoint. Models often still pass a
   // fabricated taskSessionId; task_api would then fail every write for any project.
   if (!REQUIRE_TASK_AUTH_FOR_WRITES) {
@@ -679,6 +681,7 @@ function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = n
   const checkpoint = checkpointMutationViaPython(WORKSPACE_ROOT, args, modifiedFiles, {
     requiredNextAction: "static_validate_project",
     validation: validation || {},
+    mutationGeneration,
   });
   if (!checkpoint || checkpoint.ok !== true) {
     return {
@@ -704,10 +707,16 @@ function recordAutomaticContinuityCheckpoint(args, modifiedFiles, validation = n
     ...(checkpoint.toolRoute && typeof checkpoint.toolRoute === "object"
       ? { toolRoute: checkpoint.toolRoute }
       : {}),
+    ...(Number.isInteger(Number(checkpoint.controlEpoch))
+      ? { controlEpoch: Math.max(0, Number(checkpoint.controlEpoch)) }
+      : {}),
+    ...(checkpoint.control && typeof checkpoint.control === "object"
+      ? { control: checkpoint.control }
+      : {}),
   };
 }
 
-function recordValidationContinuityCheckpoint(args, validation, passed) {
+function recordValidationContinuityCheckpoint(args, validation, passed, mutationGeneration = 0) {
   if (!REQUIRE_TASK_AUTH_FOR_WRITES || !requiredFields(args || {}).taskSessionId) {
     return { ok: true, skipped: true, reason: "no_active_task_authorization" };
   }
@@ -738,6 +747,7 @@ function recordValidationContinuityCheckpoint(args, validation, passed) {
     note: passed
       ? "Static validation passed; build is the next required proof."
       : "Static validation failed; read the first finding before editing or rebuilding.",
+    mutationGeneration,
   });
   if (!checkpoint || checkpoint.ok !== true) {
     return {
@@ -755,6 +765,12 @@ function recordValidationContinuityCheckpoint(args, validation, passed) {
       : {}),
     ...(checkpoint.toolRoute && typeof checkpoint.toolRoute === "object"
       ? { toolRoute: checkpoint.toolRoute }
+      : {}),
+    ...(Number.isInteger(Number(checkpoint.controlEpoch))
+      ? { controlEpoch: Math.max(0, Number(checkpoint.controlEpoch)) }
+      : {}),
+    ...(checkpoint.control && typeof checkpoint.control === "object"
+      ? { control: checkpoint.control }
       : {}),
   };
 }
@@ -1062,7 +1078,7 @@ function validationToolResult(summary, validation, options = {}) {
     "commandSucceeded", "proofSatisfied", "recoveryRequired", "errorCode",
     "retryable", "doNotRetry", "stopCurrentWorkflow", "suggestedToolCalls",
     "validationOverrideAvailable", "buildAllowedForValidatedGeneration", "requiredNextTool",
-    "continuityCheckpoint", "taskAuthorization", "toolRoute",
+    "continuityCheckpoint", "taskAuthorization", "toolRoute", "controlEpoch", "control",
   ];
   for (const key of passthrough) {
     if (options[key] !== undefined) base[key] = options[key];
@@ -1074,10 +1090,36 @@ function validationToolResult(summary, validation, options = {}) {
     if (options.continuityCheckpoint.toolRoute) {
       base.toolRoute = options.continuityCheckpoint.toolRoute;
     }
+    if (Number.isInteger(Number(options.continuityCheckpoint.controlEpoch))) {
+      base.controlEpoch = Math.max(0, Number(options.continuityCheckpoint.controlEpoch));
+    }
+    if (options.continuityCheckpoint.control) {
+      base.control = options.continuityCheckpoint.control;
+    }
   }
   const result = text(JSON.stringify(base, null, 2));
   if (options.isError) result.isError = true;
   return result;
+}
+
+function bindAuthoritativeLifecycleControl(payload, lifecycleResult) {
+  if (!payload || typeof payload !== "object" || !lifecycleResult || typeof lifecycleResult !== "object") {
+    return payload;
+  }
+  for (const key of ["taskAuthorization", "toolRoute", "controlEpoch", "control"]) {
+    if (lifecycleResult[key] !== undefined) payload[key] = lifecycleResult[key];
+  }
+  const required = lifecycleResult.control?.requiredTool;
+  if (required && typeof required === "object" && String(required.name || "").trim()) {
+    payload.requiredNextTool = String(required.name);
+    payload.requiredNextToolArgs = required.args && typeof required.args === "object"
+      ? { ...required.args }
+      : {};
+  } else if (lifecycleResult.control?.authoritative === true) {
+    delete payload.requiredNextTool;
+    delete payload.requiredNextToolArgs;
+  }
+  return payload;
 }
 
 function normalizeForToken(value) {
@@ -1279,6 +1321,8 @@ function emitCatalogInitializedDiagnostic(context = null) {
     routeErrorCode: catalog.routeErrorCode,
     stateRoot: catalog.stateRoot,
     activeProject: getActiveProject(CONFIG_PATH) || "",
+    runtimeComponent: runtimeComponentStatus?.running || null,
+    runtimeVerified: runtimeComponentStatus?.verified === true,
   }));
 }
 function requiredArgumentCheck(tool, args) {
@@ -3091,7 +3135,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       LIST_DIRECTORY_BUDGET.commit(budgetScope, relative || ".");
       const budgetFail = commitDeferredBudgetOrFail();
       if (budgetFail) return budgetFail;
-      return text(JSON.stringify({ path: pathMetadata(resolution), entries: rows }, null, 2));
+      return attachCommittedToolOutcomeControl(
+        text(JSON.stringify({ path: pathMetadata(resolution), entries: rows }, null, 2)),
+        committedDeferredBudget,
+        "list_directory"
+      );
     }
 
     if (name === "read_unreal_logs") {
@@ -3435,7 +3483,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ...readContext,
         evidenceHash: sha256Text(out),
       }, output, { lineRange: { start: 1, end: truncated.endLine } });
-      return attachPostReadRouteControl(
+      return attachCommittedToolOutcomeControl(
         text(output),
         committedDeferredBudget,
         "read_file"
@@ -3519,7 +3567,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ...readContext,
         evidenceHash: sha256Text(content),
       }, output);
-      return attachPostReadRouteControl(
+      return attachCommittedToolOutcomeControl(
         text(output),
         committedDeferredBudget,
         "read_file_range"
@@ -3608,7 +3656,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ...readContext,
         evidenceHash: sha256Text(content),
       }, output);
-      return text(output);
+      return attachCommittedToolOutcomeControl(
+        text(output),
+        committedDeferredBudget,
+        "read_symbol"
+      );
     }
 
     if (name === "write_file") {
@@ -3798,7 +3850,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (committedJournal.status === "completed") {
           await abandonMutationJournal(committedJournal, "completed");
         }
-        const checkpoint = recordAutomaticContinuityCheckpoint(args, [target], validation);
+        const checkpoint = recordAutomaticContinuityCheckpoint(
+          args, [target], validation, mutation?.mutationGeneration || 0
+        );
         if (!checkpoint.ok) {
           return continuityCheckpointFailure(checkpoint, "write_file", [rel], mutation);
         }
@@ -4170,7 +4224,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (committedJournal.status === "completed") {
           await abandonMutationJournal(committedJournal, "completed");
         }
-        const checkpoint = recordAutomaticContinuityCheckpoint(args, [target], validation);
+        const checkpoint = recordAutomaticContinuityCheckpoint(
+          args, [target], validation, mutation?.mutationGeneration || 0
+        );
         if (!checkpoint.ok) {
           return continuityCheckpointFailure(checkpoint, "replace_in_file", [rel], mutation);
         }
@@ -4313,7 +4369,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (committedJournal.status === "completed") {
           await abandonMutationJournal(committedJournal, "completed");
         }
-        const checkpoint = recordAutomaticContinuityCheckpoint(args, [target], null);
+        const checkpoint = recordAutomaticContinuityCheckpoint(
+          args, [target], null, mutation?.mutationGeneration || 0
+        );
         if (!checkpoint.ok) {
           return continuityCheckpointFailure(checkpoint, "delete_file", [rel], mutation);
         }
@@ -4331,6 +4389,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           continuityCheckpoint: checkpoint,
           ...(checkpoint.taskAuthorization ? { taskAuthorization: checkpoint.taskAuthorization } : {}),
           ...(checkpoint.toolRoute ? { toolRoute: checkpoint.toolRoute } : {}),
+          ...(Number.isInteger(Number(checkpoint.controlEpoch))
+            ? { controlEpoch: Math.max(0, Number(checkpoint.controlEpoch)) }
+            : {}),
+          ...(checkpoint.control ? { control: checkpoint.control } : {}),
         }, null, 2));
       } finally {
         releasePathLock(target);
@@ -4523,7 +4585,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const checkpoint = recordAutomaticContinuityCheckpoint(
         args,
         tx.writtenAbs,
-        primaryValidation
+        primaryValidation,
+        lastMutation?.mutationGeneration || 0
       );
       if (!checkpoint.ok) {
         return continuityCheckpointFailure(
@@ -4627,7 +4690,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Re-run static_validate_project after edits settle."],
           });
         }
-        const validationCheckpoint = recordValidationContinuityCheckpoint(args, validation, false);
+        const validationCheckpoint = recordValidationContinuityCheckpoint(
+          args, validation, false, finish.mutationGeneration
+        );
         const pendingMutationTransactions = await markPendingMutationJournals(
           pendingMutationQuery(projectRoot, args, finish.mutationGeneration),
           "validation_failed",
@@ -4676,7 +4741,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           nextSteps: ["Re-run static_validate_project after edits settle."],
         });
       }
-      const validationCheckpoint = recordValidationContinuityCheckpoint(args, validation, true);
+      const validationCheckpoint = recordValidationContinuityCheckpoint(
+        args, validation, true, finish.mutationGeneration
+      );
       await agentNotify(validationSummary);
       return validationToolResult(validationSummary, validation, {
         operation: "static_validate",
@@ -4897,7 +4964,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ...readContext,
         evidenceHash: sha256Text(output),
       }, output);
-      return text(output);
+      return attachCommittedToolOutcomeControl(
+        text(output),
+        committedDeferredBudget,
+        "search_files"
+      );
     }
 
     if (name === "run_command") {
@@ -5022,6 +5093,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             routeOwnershipReleased: false,
             errorCode: String(completion?.errorCode || "TASK_AUTOMATION_COMPLETION_FAILED"),
           };
+      bindAuthoritativeLifecycleControl(payload, completion);
       if (completion?.ok === true) {
         payload.finalizedMutationTransactions = await finalizePendingBuildJournals(
           pendingMutationQuery(projectRoot, args, payload.mutationGeneration),
@@ -5153,7 +5225,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const target = String(build.target || "").trim();
       if (!/^[A-Za-z0-9_]+$/.test(target)) return fail("target must be a simple target name, e.g. MyGameEditor");
 
-      const platform = String(build.platform || "Win64").trim();
+      const platform = String(build.platform || defaultPlatform()).trim();
       const configuration = String(build.configuration || "Development").trim();
 
       if (!/^[A-Za-z0-9_]+$/.test(platform)) return fail("invalid platform");
@@ -5453,6 +5525,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             // Older clients may not accept list-changed notifications.
           }
         }
+        bindAuthoritativeLifecycleControl(payload, lifecycleResult);
       }
       await agentNotify(
         payload.userMessage || payload.summary,
@@ -5491,6 +5564,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main() {
+  runtimeComponentStatus = verifyRuntimeComponent("agent", {
+    componentRoot: path.resolve(__dirname, ".."),
+  });
   try {
     const recovery = await recoverIncompleteJournals(resolveAgentStateRoot());
     if (recovery.recoveryRequired?.length) {

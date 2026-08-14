@@ -58,7 +58,13 @@ def test_count_wrapper_attempts_counts_attempt_directories_only(tmp_path):
 
 
 def test_split_ubt_target_spec_accepts_bare_and_full_targets():
-    assert split_ubt_target_spec("CompileFixEditor") == ("CompileFixEditor", "Win64", "Development")
+    from ubt_utils import host_ubt_platform
+
+    assert split_ubt_target_spec("CompileFixEditor") == (
+        "CompileFixEditor",
+        host_ubt_platform(),
+        "Development",
+    )
     assert split_ubt_target_spec("HoldoutFixtureEditor Win64 Development") == (
         "HoldoutFixtureEditor",
         "Win64",

@@ -29,6 +29,11 @@ lmstudio-context-compactor-plugin/dist/
 .agent/
 .DS_Store
 
+# Local GUI/debug screenshots are never release inputs.
+tmp_*.png
+tmp_*.jpg
+tmp_*.jpeg
+
 # Debug / marathon / personal campaign runtime artifacts
 debug-*.log
 .cursor/debug-*.log

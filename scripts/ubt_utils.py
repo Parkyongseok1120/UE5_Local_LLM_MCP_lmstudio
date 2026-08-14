@@ -4,12 +4,22 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 KNOWN_UBT_PLATFORMS = {"Win64", "Win32", "Linux", "LinuxArm64", "Mac", "Android", "IOS", "TVOS"}
 KNOWN_UBT_CONFIGURATIONS = {"Debug", "DebugGame", "Development", "Test", "Shipping"}
 UBT_STABILITY_FLAGS = ["-NoUBA", "-MaxParallelActions=4"]
 SOURCE_LIKE_SUFFIXES = {".h", ".hpp", ".cpp", ".c", ".cc", ".cs", ".build.cs", ".target.cs"}
+
+
+def host_ubt_platform(host: str | None = None) -> str:
+    current = host or sys.platform
+    if current == "win32":
+        return "Win64"
+    if current == "darwin":
+        return "Mac"
+    return "Linux"
 
 
 def ubt_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -35,21 +45,21 @@ def sanitize_ubt_target(target: str, *, fallback: str = "HoldoutFixtureEditor") 
 
 def split_ubt_target_spec(
     target: str,
-    default_platform: str = "Win64",
+    default_platform: str | None = None,
     default_configuration: str = "Development",
 ) -> tuple[str, str, str]:
     """Return target/platform/configuration from either bare or full target specs."""
     parts = str(target or "").strip().split()
     if len(parts) >= 3 and parts[-2] in KNOWN_UBT_PLATFORMS and parts[-1] in KNOWN_UBT_CONFIGURATIONS:
         return " ".join(parts[:-2]), parts[-2], parts[-1]
-    return str(target or "").strip(), default_platform, default_configuration
+    return str(target or "").strip(), default_platform or host_ubt_platform(), default_configuration
 
 
 def build_ubt_command(
     ubt_path: Path,
     project_file: Path,
     target: str,
-    platform: str = "Win64",
+    platform: str | None = None,
     configuration: str = "Development",
     *,
     stability_flags: list[str] | None = None,

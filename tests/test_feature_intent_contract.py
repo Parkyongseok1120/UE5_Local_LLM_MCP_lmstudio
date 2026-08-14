@@ -11,6 +11,7 @@ from feature_intent_contract import (  # noqa: E402
     DIMENSIONS,
     analyze_feature_intent_ambiguity,
     can_auto_bind_architecture_feature_intent,
+    classify_feature_risk,
     resolve_architecture_bound_feature_intent,
     resolve_feature_intent,
     target_snapshot_hash,
@@ -290,6 +291,63 @@ def test_fewer_than_two_eligible_candidates_is_rejected() -> None:
 
     assert result["ok"] is False
     assert result["errorCode"] == "FEATURE_INTENT_INSUFFICIENT_ELIGIBLE"
+
+
+def test_risk_adaptive_dimensions_do_not_force_network_or_persistence_on_local_change() -> None:
+    candidates = [
+        _complete_candidate("alpha"),
+        _complete_candidate("beta"),
+        _complete_candidate("gamma"),
+    ]
+    for candidate in candidates:
+        candidate["riskClass"] = "bounded_local"
+        candidate["dimensions"]["authorityReplication"] = ""
+        candidate["dimensions"]["persistence"] = ""
+
+    result = resolve_feature_intent(
+        "Implement local null guard in Source/Demo/Thing.cpp",
+        candidates=candidates,
+        write_intent=False,
+    )
+
+    assert result["eligibleCandidateCount"] == 3
+    assert result["errorCode"] == "FEATURE_INTENT_TIE_REQUIRES_SELECTION"
+
+
+def test_networked_risk_still_requires_authority_contract() -> None:
+    candidates = [
+        _complete_candidate("alpha"),
+        _complete_candidate("beta"),
+        _complete_candidate("gamma"),
+    ]
+    for candidate in candidates:
+        candidate["riskClass"] = "networked_runtime"
+    for candidate in candidates[1:]:
+        candidate["dimensions"]["authorityReplication"] = ""
+
+    result = resolve_feature_intent(
+        "Implement replicated multiplayer state",
+        candidates=candidates,
+        write_intent=True,
+    )
+
+    assert result["eligibleCandidateCount"] == 1
+    assert result["errorCode"] == "FEATURE_INTENT_INSUFFICIENT_ELIGIBLE"
+    assert classify_feature_risk("", "single-player local hotseat") == "bounded_local"
+
+
+def test_generated_candidate_ranking_matches_request_risk() -> None:
+    local = resolve_feature_intent(
+        "Inspect the existing RuleEngine and bind one bounded local fix",
+        write_intent=True,
+    )
+    networked = resolve_feature_intent(
+        "Implement replicated multiplayer state with server authority",
+        write_intent=True,
+    )
+
+    assert local["candidates"][0]["intentId"] == "bounded_local"
+    assert networked["candidates"][0]["intentId"] == "authoritative_runtime"
 
 
 def test_compact_default_does_not_expose_candidate_dimension_bodies() -> None:

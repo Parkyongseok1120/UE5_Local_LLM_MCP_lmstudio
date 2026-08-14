@@ -6,7 +6,7 @@
     "%USERPROFILE%\\Documents\\Unreal Projects"
   ],
   "defaultEngineRoot": "",
-  "defaultPlatform": "Win64",
+  "defaultPlatform": "",
   "defaultConfiguration": "Development",
   "activeProject": null
 }

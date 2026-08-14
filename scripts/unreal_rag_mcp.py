@@ -37,6 +37,7 @@ from mcp_public_contract import compact_task_authorization, sanitize_model_paylo
 from route_recovery_policy import recovery_codes, route_recovery_action
 from rag_context import assemble_context, assemble_context_mixed
 from rag_embeddings import embedding_status
+from control_runtime_identity import verify_runtime_component
 
 _ENGINE_PROJECTS = frozenset({"", "engine", "Engine", "__engine__"})
 
@@ -1271,6 +1272,84 @@ def _record_prewrite_gate(
     return result
 
 
+def _finish_gate_preflight(
+    server: McpServer,
+    message_id: Any,
+    *,
+    gate_name: str,
+    preflight: dict[str, Any],
+) -> bool:
+    """Emit a generic completed/failed replay redirect before gate analysis."""
+
+    if not preflight.get("ok"):
+        server.structured_tool_result(message_id, preflight)
+        return True
+    control = preflight.get("control") if isinstance(preflight.get("control"), dict) else {}
+    required = control.get("requiredTool") if isinstance(control.get("requiredTool"), dict) else {}
+    if preflight.get("alreadyCompleted"):
+        payload = {
+            "ok": True,
+            "status": "already_completed",
+            "statusCode": "GATE_ALREADY_COMPLETED",
+            "gate": gate_name,
+            "gatePassed": True,
+            "writeGateClosed": False,
+            "alreadyCompleted": True,
+            "validatorSkipped": True,
+            "resolverSkipped": gate_name == FEATURE_INTENT_GATE,
+            "taskAuthorization": preflight.get("taskAuthorization") or {},
+            "toolRoute": preflight.get("toolRoute") or {},
+            "controlEpoch": preflight.get("controlEpoch", 0),
+            "control": control,
+            "retryable": False,
+            "doNotRetryUnchanged": True,
+            "agentInstruction": (
+                f"{gate_name} already passed for the same plan, slice, mutation generation, "
+                "input, and current target snapshots. Do not validate it again; execute the "
+                "server-required tool from control."
+            ),
+        }
+        if required.get("name"):
+            payload["requiredNextTool"] = str(required["name"])
+            payload["requiredNextToolArgs"] = dict(required.get("args") or {})
+            payload["nextAction"] = str(required["name"])
+            payload["nextActionIsTool"] = True
+        server.structured_tool_result(message_id, payload)
+        return True
+    if preflight.get("blocked"):
+        server.structured_tool_result(
+            message_id,
+            {
+                "ok": False,
+                "status": "blocked",
+                "errorCode": "REPEATED_GATE_BLOCKER",
+                "error": "The same gate input already produced the same blocker twice.",
+                "gate": gate_name,
+                "validatorSkipped": True,
+                "resolverSkipped": gate_name == FEATURE_INTENT_GATE,
+                "equivalentAttemptCount": preflight.get("attemptCount"),
+                "blockerFingerprint": preflight.get("blockerFingerprint"),
+                "validationErrorCode": preflight.get("validationErrorCode"),
+                "nextAction": preflight.get("nextAction"),
+                "nextActionArgs": {
+                    "taskAuthorization": preflight.get("taskAuthorization") or {},
+                },
+                "taskAuthorization": preflight.get("taskAuthorization") or {},
+                "toolRoute": preflight.get("toolRoute") or {},
+                "controlEpoch": preflight.get("controlEpoch", 0),
+                "control": control,
+                "retryable": False,
+                "doNotRetryUnchanged": True,
+                "agentInstruction": (
+                    "Do not run this validator again with unchanged arguments. Execute "
+                    "the server control action or change the underlying evidence first."
+                ),
+            },
+        )
+        return True
+    return False
+
+
 def _reconcile_gate_completion(
     payload: dict[str, Any],
     gate_completion: dict[str, Any] | None,
@@ -1547,15 +1626,21 @@ def _feature_intent_target_snapshots(
         except OSError as exc:
             issues.append(f"{relative}: target could not be read ({exc})")
             continue
-        snapshots.append(
-            {
-                "path": relative,
-                "absolutePath": str(candidate),
-                "exists": exists,
-                "parentExists": candidate.parent.is_dir(),
-                "fileHash": digest,
-            }
-        )
+        snapshot = {
+            "path": relative,
+            "absolutePath": str(candidate),
+            "exists": exists,
+            "parentExists": candidate.parent.is_dir(),
+            "fileHash": digest,
+        }
+        if not exists and candidate.suffix.casefold() == ".cpp":
+            from feature_intent_fast_path import discover_project_test_convention
+
+            snapshot["projectConventionEvidence"] = discover_project_test_convention(
+                root,
+                relative,
+            )
+        snapshots.append(snapshot)
     if not snapshots:
         issues.append("at least one exact target file snapshot is required")
     return snapshots, issues
@@ -1915,36 +2000,12 @@ def _handle_unreal_feature_intent_resolve(
         task_authorization=authorization,
         input_payload=gate_input,
     )
-    if not preflight.get("ok"):
-        server.structured_tool_result(message_id, preflight)
-        return
-    if preflight.get("blocked"):
-        server.structured_tool_result(
-            message_id,
-            {
-                "ok": False,
-                "status": "blocked",
-                "errorCode": "REPEATED_GATE_BLOCKER",
-                "error": "The same gate input already produced the same blocker twice.",
-                "gate": FEATURE_INTENT_GATE,
-                "resolverSkipped": True,
-                "equivalentAttemptCount": preflight.get("attemptCount"),
-                "blockerFingerprint": preflight.get("blockerFingerprint"),
-                "validationErrorCode": preflight.get("validationErrorCode"),
-                "nextAction": preflight.get("nextAction"),
-                "nextActionArgs": {
-                    "taskAuthorization": preflight.get("taskAuthorization") or {},
-                },
-                "taskAuthorization": preflight.get("taskAuthorization") or {},
-                "toolRoute": preflight.get("toolRoute") or {},
-                "retryable": False,
-                "doNotRetryUnchanged": True,
-                "agentInstruction": (
-                    "Do not run this resolver again with unchanged arguments. Execute "
-                    "nextAction or change the underlying task evidence first."
-                ),
-            },
-        )
+    if _finish_gate_preflight(
+        server,
+        message_id,
+        gate_name=FEATURE_INTENT_GATE,
+        preflight=preflight,
+    ):
         return
 
     explicit_semantic_input = bool(
@@ -2446,6 +2507,27 @@ def _handle_unreal_code_sketch_claim_validate(
         if argument_error:
             _invalid_tool_argument(server, message_id, "unreal_code_sketch_claim_validate", argument_error)
             return
+        if task_session_id:
+            from task_api import task_gate_failure_preflight
+
+            gate_input = {
+                key: value
+                for key, value in arguments.items()
+                if key not in {"taskAuthorization", "task_authorization"}
+            }
+            preflight = task_gate_failure_preflight(
+                server.workspace,
+                gate_name="unreal_code_sketch_claim_validate",
+                task_authorization=authorization,
+                input_payload=gate_input,
+            )
+            if _finish_gate_preflight(
+                server,
+                message_id,
+                gate_name="unreal_code_sketch_claim_validate",
+                preflight=preflight,
+            ):
+                return
     graph: dict[str, Any] | None = None
     graph_status: dict[str, Any] = {
         "status": "not_requested" if not project_root else "not_started",
@@ -5010,6 +5092,9 @@ class McpServer:
                     "serverInfo": {
                         "name": "unreal-rag",
                         "version": "0.3.0",
+                        "runtimeIdentity": (
+                            getattr(self, "runtime_component_status", {}).get("running")
+                        ),
                     },
                 },
             )
@@ -5147,6 +5232,12 @@ class McpServer:
                     "activeProject": str(
                         load_shared_config().get("activeProject") or ""
                     ).strip(),
+                    "runtimeComponent": getattr(
+                        self, "runtime_component_status", {}
+                    ).get("running"),
+                    "runtimeVerified": getattr(
+                        self, "runtime_component_status", {}
+                    ).get("verified") is True,
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -8172,46 +8263,50 @@ class McpServer:
                     and str(pending_gates[0]) == FEATURE_INTENT_GATE
                     and selected_slice.get("scopeRequired") is True
                 )
-                compile_diagnostic_first = (
-                    str(payload.get("taskKind") or "")
-                    in {"compile_fix", "reflection_fix", "module_fix"}
-                    and "build_unreal_project" in (tool_route.get("activeTools") or [])
+                authoritative_control = (
+                    dict(task.get("control") or {})
+                    if isinstance(task.get("control"), dict)
+                    else dict(task_state.get("controlState") or {})
+                    if isinstance(task_state.get("controlState"), dict)
+                    else {}
                 )
-                next_action = (
-                    "build_unreal_project"
-                    if compile_diagnostic_first
-                    else "discover_bounded_feature_slice"
-                    if feature_slice_discovery
-                    else (
-                        str(pending_gates[0])
-                        if pending_gates
-                        else "continue_with_current_tool_route"
-                    )
+                required_control = (
+                    dict(authoritative_control.get("requiredTool") or {})
+                    if isinstance(authoritative_control.get("requiredTool"), dict)
+                    else {}
+                )
+                required_name = str(required_control.get("name") or "").strip()
+                if required_name:
+                    next_action = required_name
+                elif feature_slice_discovery:
+                    next_action = "discover_bounded_feature_slice"
+                else:
+                    next_action = "continue_with_current_tool_route"
+                compile_diagnostic_first = (
+                    next_action == "build_unreal_project"
+                    and str(payload.get("taskKind") or "")
+                    in {"compile_fix", "reflection_fix", "module_fix"}
                 )
                 payload["nextAction"] = next_action
-                payload["nextActionIsTool"] = next_action not in {
-                    "continue_with_current_tool_route",
-                    "discover_bounded_feature_slice",
-                }
-                payload["nextActionArgs"] = (
-                    {
-                        "taskAuthorization": compact_task_authorization(
-                            task_authorization
-                        ),
-                    }
-                    if compile_diagnostic_first
-                    else {
-                        "taskAuthorization": compact_task_authorization(
-                            task_authorization
-                        )
-                    }
-                )
+                payload["nextActionIsTool"] = bool(required_name)
+                next_action_args = dict(required_control.get("args") or {})
+                if required_name and task_authorization:
+                    next_action_args.setdefault(
+                        "taskAuthorization",
+                        compact_task_authorization(task_authorization),
+                    )
+                payload["nextActionArgs"] = next_action_args
                 if payload["nextActionIsTool"]:
-                    payload["requiredNextToolArgs"] = {
-                        "taskAuthorization": compact_task_authorization(
-                            task_authorization
-                        )
-                    }
+                    payload["requiredNextTool"] = required_name
+                    payload["requiredNextToolArgs"] = dict(next_action_args)
+                else:
+                    payload.pop("requiredNextTool", None)
+                    payload.pop("requiredNextToolArgs", None)
+                if authoritative_control:
+                    payload["control"] = authoritative_control
+                    payload["controlEpoch"] = int(
+                        authoritative_control.get("epoch") or 0
+                    )
                 payload["executionContract"] = {
                     "maxFilesPerSlice": int(tool_route.get("maxFilesPerSlice") or 2),
                     "splitBeforeFirstGate": True,
@@ -8904,6 +8999,8 @@ if __name__ == "__main__":
             index = find_workspace_root() / index
     else:
         index = resolve_index_path()
+    runtime_component_status = verify_runtime_component("rag")
     server = McpServer(index.resolve())
+    server.runtime_component_status = runtime_component_status
     server.emit_catalog_initialized_diagnostic()
     server.run()

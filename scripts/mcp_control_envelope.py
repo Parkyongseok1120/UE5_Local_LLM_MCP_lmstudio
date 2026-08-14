@@ -260,6 +260,14 @@ def attach_control_envelope(
 ) -> dict[str, Any]:
     result = dict(payload)
     existing = result.get("control") if isinstance(result.get("control"), dict) else {}
+    if (
+        int(existing.get("version") or 0) >= CONTROL_VERSION
+        and existing.get("authoritative") is True
+    ):
+        # Task state already committed this exact envelope and epoch. Public
+        # adapters forward it; they never reinterpret response-shaped fields.
+        result["control"] = dict(existing)
+        return result
     task_context = _task_context(result, existing)
     if int(existing.get("version") or 0) >= CONTROL_VERSION or (
         task_context["taskSessionId"]

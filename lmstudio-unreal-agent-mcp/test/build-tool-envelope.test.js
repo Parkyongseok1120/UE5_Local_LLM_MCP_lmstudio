@@ -8,8 +8,15 @@ const {
   buildToolDisposition,
   extractLikelyCompileErrors,
   compactCompilerDiagnostic,
+  defaultUnrealPlatform,
   firstErrorCluster,
 } = require("../src/context-ux");
+
+test("build response platform defaults follow the host Unreal layout", () => {
+  assert.strictEqual(defaultUnrealPlatform("win32"), "Win64");
+  assert.strictEqual(defaultUnrealPlatform("darwin"), "Mac");
+  assert.strictEqual(defaultUnrealPlatform("linux"), "Linux");
+});
 
 test("out-of-slice build recovery stops instead of authorizing ownership expansion", () => {
   const payload = buildResponsePayload({

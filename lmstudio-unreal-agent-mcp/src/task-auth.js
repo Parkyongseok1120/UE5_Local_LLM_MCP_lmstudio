@@ -20,6 +20,7 @@ const {
 const { spawnSync } = require("child_process");
 const { recoveryAction } = require("./route-recovery-policy");
 const { stripProjectNamePrefix } = require("./read-path-resolver");
+const { commitControlTransition } = require("./task-control-transition");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -597,6 +598,41 @@ function validateToolRoute(state, fields, args, toolName) {
     ? state.toolRoute
     : null;
   if (!activeRoute) return { ok: true, legacy: true };
+  const control = state.controlState && typeof state.controlState === "object"
+    ? state.controlState
+    : null;
+  const allowedControlTools = new Set(
+    Array.isArray(control?.allowedTools) ? control.allowedTools.map(String).filter(Boolean) : []
+  );
+  const routeActiveTools = new Set(
+    Array.isArray(activeRoute.activeTools) ? activeRoute.activeTools.map(String).filter(Boolean) : []
+  );
+  if (
+    toolName
+    && control?.authoritative === true
+    && routeActiveTools.has(toolName)
+    && !allowedControlTools.has(toolName)
+  ) {
+    const required = control.requiredTool && typeof control.requiredTool === "object"
+      ? control.requiredTool
+      : {};
+    const requiredName = String(required.name || "").trim();
+    return {
+      ok: false,
+      errorCode: "TASK_CONTROL_OBLIGATION_REQUIRED",
+      error: `${toolName} is no longer the authoritative next action.`,
+      alreadySatisfied: true,
+      reexecutionBlocked: true,
+      toolRoute: activeRoute,
+      taskAuthorization: taskAuthorizationForState(state),
+      controlEpoch: Math.max(0, Number(state.controlEpoch || control.epoch || 0)),
+      control: { ...control },
+      nextAction: requiredName || "use_authoritative_control",
+      nextActionIsTool: Boolean(requiredName),
+      nextActionArgs: required.args && typeof required.args === "object" ? { ...required.args } : {},
+      retryable: false,
+    };
+  }
   const requiredFirstTool = String(activeRoute.requiredFirstTool || "").trim();
   const completion = state.routeFacts?.requiredFirstToolAttempt;
   const requiredFirstToolCompleted = Boolean(
@@ -1159,12 +1195,28 @@ function mutateRouteBudget(
       current.toolRouteUsage = usage;
       recordDirectSourceEvidence(current, toolName, callMetadata);
       recordAbsentSourceEvidence(current, toolName, callMetadata);
-      if (pendingDirectEvidenceGate(current, toolName)) {
-        // The authoritative required action changes from this evidence read
-        // back to its pending gate. Advance the epoch in the same locked state
-        // write so the compactor can accept that control transition.
-        current.controlEpoch = Math.max(0, Number(current.controlEpoch || 0)) + 1;
+      const resumedGate = pendingDirectEvidenceGate(current, toolName);
+      if (resumedGate) {
+        const attempts = current.failedGateAttempts && typeof current.failedGateAttempts === "object"
+          ? { ...current.failedGateAttempts }
+          : {};
+        const attempt = attempts[resumedGate] && typeof attempts[resumedGate] === "object"
+          ? { ...attempts[resumedGate] }
+          : {};
+        attempt.recoverySatisfiedBy = String(toolName);
+        attempt.recoverySatisfiedAt = new Date().toISOString();
+        attempts[resumedGate] = attempt;
+        current.failedGateAttempts = attempts;
       }
+      current.lastToolOutcome = {
+        tool: String(toolName),
+        status: "succeeded",
+        planRevision: String(current.planRevision || ""),
+        activeSliceId: String(current.activeSliceId || ""),
+        mutationGeneration: Math.max(0, Number(current.mutationGeneration || 0)),
+        committedAt: new Date().toISOString(),
+      };
+      commitControlTransition(current);
       current.updatedAt = new Date().toISOString();
       atomicWriteJson(statePath, current);
       return { ok: true, state: current, toolRoute: route, toolRouteUsage: usage };
@@ -1910,9 +1962,18 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
       : (Array.isArray(state.pendingGates)
         ? state.pendingGates.map(String).filter(Boolean)
         : []);
-    const routeNextAction = routeMissing
-      ? "unreal_task_status"
-      : (pendingGates[0] || "continue_with_current_tool_route");
+    const control = state.controlState && typeof state.controlState === "object"
+      ? state.controlState
+      : {};
+    const requiredControl = control.requiredTool && typeof control.requiredTool === "object"
+      ? control.requiredTool
+      : {};
+    const requiredControlName = String(requiredControl.name || "").trim();
+    const routeNextAction = control.authoritative === true
+      ? (requiredControlName || "continue_with_current_tool_route")
+      : routeMissing
+        ? "unreal_task_status"
+        : (pendingGates[0] || "continue_with_current_tool_route");
     const connectionMatches = taskConnectionMatches(
       state,
       conversationId,
@@ -1933,7 +1994,9 @@ function listRunningTasksForProject(workspaceRoot, activeProject = "", options =
       routeMissing,
       pendingGates,
       routeNextAction,
-      routeNextActionIsTool: Boolean(routeMissing || pendingGates.length),
+      routeNextActionIsTool: control.authoritative === true
+        ? Boolean(requiredControlName)
+        : Boolean(routeMissing || pendingGates.length),
       ownsActiveToolRoute: taskOwnsActiveToolRoute(
         state,
         conversationId,
@@ -2185,7 +2248,8 @@ function checkpointMutationViaPython(workspaceRoot, args, modifiedFiles, options
       + "validation=dict((_stdin or {}).get('validation') or {}), "
       + "note=str((_stdin or {}).get('note') or ''), "
       + "preserve_route_usage=True, include_git_changes=False, "
-      + "advance_gate_snapshots=True)"
+      + "advance_gate_snapshots=True, "
+      + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0))"
     ),
     [],
     {
@@ -2197,6 +2261,7 @@ function checkpointMutationViaPython(workspaceRoot, args, modifiedFiles, options
           ? options.validation
           : {},
         note: String(options.note || "automatic checkpoint after successful mutation"),
+        mutationGeneration: Number(options.mutationGeneration || 0),
       },
     }
   );

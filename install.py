@@ -24,6 +24,11 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+
+from control_runtime_identity import build_runtime_manifest
+
 INSTALL_MANIFEST = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
 PRODUCT_VERSION = str(INSTALL_MANIFEST["productVersion"])
 SKILL_NAME = "evidence-first-code-audit"
@@ -516,6 +521,24 @@ def _sync_directory(path: Path) -> None:
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    """Durably replace one generated file without exposing a partial manifest."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _sync_directory(path.parent)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 @dataclass
@@ -1029,6 +1052,7 @@ def _unreal_entries(
 ) -> dict[str, dict[str, Any]]:
     allow = "1" if args.enable_agent_mode else "0"
     state_root = args.lmstudio_home / "state" / "unreal-agent"
+    runtime_manifest = args.lmstudio_home / "config" / "control-runtime.json"
     rag_entry = {
         "command": str(python_exe),
         "args": [
@@ -1045,6 +1069,9 @@ def _unreal_entries(
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
             "MCP_ESSENTIAL_TOOLS": "1",
+            "CONTROL_RUNTIME_MANIFEST": str(runtime_manifest),
+            "CONTROL_RUNTIME_COMPONENT": "rag",
+            "CONTROL_RUNTIME_REQUIRED": "1",
         },
     }
     agent_entry = {
@@ -1068,6 +1095,9 @@ def _unreal_entries(
             "MCP_ESSENTIAL_TOOLS": "1",
             "MCP_REQUIRE_PLAN_AUTH": "1",
             "VALIDATE_ON_WRITE": allow,
+            "CONTROL_RUNTIME_MANIFEST": str(runtime_manifest),
+            "CONTROL_RUNTIME_COMPONENT": "agent",
+            "CONTROL_RUNTIME_REQUIRED": "1",
         },
     }
     if context_compactor_advisory:
@@ -1458,6 +1488,8 @@ def _install_context_compactor(
                 "context compactor install finished but the plugin was not found at "
                 f"{installed_manifest}. Confirm LM Studio plugin install succeeded on this OS."
             )
+        runtime_manifest_path = installed_manifest.parent / "control-runtime.json"
+        _atomic_write_bytes(runtime_manifest_path, _json_bytes(build_runtime_manifest(ROOT)))
     activation = _activate_context_compactor_in_settings(
         args.lmstudio_home,
         dry_run=args.dry_run,
@@ -1601,6 +1633,7 @@ def install(
 
             shared_path = args.lmstudio_home / "config" / "unreal-workspace.json"
             agent_path = args.lmstudio_home / "config" / "unreal-agent.json"
+            runtime_manifest_path = args.lmstudio_home / "config" / "control-runtime.json"
             shared = _load_json(shared_path, {})
             if not isinstance(shared, dict):
                 raise ValueError("unreal-workspace.json must contain a JSON object")
@@ -1646,6 +1679,9 @@ def install(
                 "activeProject": shared.get("activeProject"),
             }
             tx.write_file(agent_path, _json_bytes(agent_payload))
+            runtime_manifest = build_runtime_manifest(ROOT)
+            tx.write_file(runtime_manifest_path, _json_bytes(runtime_manifest))
+            report["controlRuntimeManifest"] = str(runtime_manifest_path)
             assert mcp_config is not None
             for name, entry in _unreal_entries(
                 args,

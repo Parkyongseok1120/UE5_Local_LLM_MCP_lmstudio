@@ -55,6 +55,44 @@ def repeated_gate_input_preflight(
     }
 
 
+def completed_gate_input_preflight(
+    state: dict[str, Any],
+    *,
+    gate: str,
+    input_payload: dict[str, Any],
+    current_target_snapshot_hash: str,
+) -> dict[str, Any]:
+    """Return an idempotent redirect only for the exact completed gate scope."""
+
+    completed = state.get("completedGates")
+    completed = completed if isinstance(completed, dict) else {}
+    record = completed.get(gate)
+    record = record if isinstance(record, dict) else {}
+    matches = bool(
+        record.get("status") == "completed"
+        and str(record.get("gateSetHash") or "")
+        == str(state.get("requiredGateSetHash") or "")
+        and str(record.get("inputHash") or "")
+        == canonical_gate_input_hash(input_payload)
+        and str(record.get("planRevision") or "")
+        == str(state.get("planRevision") or "")
+        and str(record.get("activeSliceId") or "")
+        == str(state.get("activeSliceId") or "")
+        and int(record.get("mutationGeneration") or 0)
+        == int(state.get("mutationGeneration") or 0)
+        and bool(current_target_snapshot_hash)
+        and str(record.get("targetSnapshotHash") or "")
+        == str(current_target_snapshot_hash)
+    )
+    return {
+        "alreadyCompleted": matches,
+        "gate": gate,
+        "inputHash": canonical_gate_input_hash(input_payload),
+        "targetSnapshotHash": str(current_target_snapshot_hash or ""),
+        "record": record if matches else {},
+    }
+
+
 def canonical_gate_blocker_identity(
     gate: str,
     evidence: dict[str, Any],

@@ -585,7 +585,11 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             },
             3,
         )
-        assert "alpha" in read["result"]["content"][0]["text"]
+        assert read["result"].get("isError") is True
+        read_text = read["result"]["content"][0]["text"]
+        assert "TASK_CONTROL_OBLIGATION_REQUIRED" in read_text
+        assert "static_validate_project" in read_text
+        assert (source_dir / "NewThing.h").read_text(encoding="utf-8") == "int alpha = 1;\n"
 
         rag_replace = _StdioJsonRpc([_python_exe(), str(RAG_SCRIPT), "--index", str(index)], env=env)
         try:
@@ -633,6 +637,23 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
             )
             replace_plan_payload = _tool_payload(replace_plan)
             replace_auth = replace_plan_payload["taskAuthorization"]
+            assert replace_plan_payload["nextAction"] == "read_file"
+            replace_read = client.request(
+                "tools/call",
+                {
+                    "name": "read_file",
+                    "arguments": {
+                        "taskAuthorization": replace_auth,
+                        "path": "Source/DemoGame/Public/NewThing.h",
+                    },
+                },
+                22,
+            )
+            replace_read_payload = _tool_payload(replace_read)
+            assert replace_read_payload["control"]["requiredTool"]["name"] == (
+                "unreal_code_sketch_claim_validate"
+            )
+            replace_auth = replace_read_payload["taskAuthorization"]
             replace_gate = rag_replace.request(
                 "tools/call",
                 {

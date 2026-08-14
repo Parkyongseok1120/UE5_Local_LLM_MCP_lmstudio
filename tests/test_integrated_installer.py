@@ -829,6 +829,22 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
             "VALIDATE_ON_WRITE",
         )
     } == {"1"}
+    runtime_manifest_path = tmp_path / "lmstudio" / "config" / "control-runtime.json"
+    runtime_manifest = json.loads(runtime_manifest_path.read_text(encoding="utf-8"))
+    assert payload["controlRuntimeManifest"] == str(runtime_manifest_path)
+    assert set(runtime_manifest["components"]) == {"agent", "rag", "compactor"}
+    assert env["CONTROL_RUNTIME_MANIFEST"] == str(runtime_manifest_path)
+    assert env["CONTROL_RUNTIME_REQUIRED"] == "1"
+    installed_runtime_manifest = (
+        tmp_path
+        / "lmstudio"
+        / "extensions"
+        / "plugins"
+        / "codex"
+        / "unreal-context-compactor"
+        / "control-runtime.json"
+    )
+    assert installed_runtime_manifest.is_file()
 
 
 def test_full_agent_install_keeps_context_proxy_advisory(tmp_path: Path) -> None:
@@ -851,6 +867,13 @@ def test_full_agent_install_keeps_context_proxy_advisory(tmp_path: Path) -> None
     assert rag_env["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "0"
     assert rag_env["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] == "lmstudio"
     assert rag_env["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] == "300"
+    manifest_path = tmp_path / "lmstudio" / "config" / "control-runtime.json"
+    for name in ("unreal-rag", "unreal-agent"):
+        runtime_env = entries[name]["env"]
+        assert runtime_env["CONTROL_RUNTIME_MANIFEST"] == str(manifest_path)
+        assert runtime_env["CONTROL_RUNTIME_REQUIRED"] == "1"
+    assert rag_env["CONTROL_RUNTIME_COMPONENT"] == "rag"
+    assert entries["unreal-agent"]["env"]["CONTROL_RUNTIME_COMPONENT"] == "agent"
     sys.modules.pop("integrated_install", None)
 
 

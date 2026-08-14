@@ -195,6 +195,12 @@ function attachTaskControlEnvelope(result, existing) {
 function attachControlEnvelope(payload, toolName = "") {
   const result = { ...(payload || {}) };
   const existing = result.control && typeof result.control === "object" ? result.control : {};
+  if (Number(existing.version || 0) >= CONTROL_VERSION && existing.authoritative === true) {
+    // The task-state transaction already committed this semantic envelope.
+    // Node response adapters forward it without mining legacy action fields.
+    result.control = { ...existing };
+    return result;
+  }
   const context = taskContext(result, existing);
   const hasTaskControlContext = Boolean(
     Number(existing.version || 0) >= CONTROL_VERSION

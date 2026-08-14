@@ -135,6 +135,15 @@ except Exception:
     extract_error = None  # type: ignore[assignment]
 
 
+def host_unreal_platform(host: str | None = None) -> str:
+    current = host or sys.platform
+    if current == "win32":
+        return "Win64"
+    if current == "darwin":
+        return "Mac"
+    return "Linux"
+
+
 DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1"
 DEFAULT_UBT_PATH = str(resolve_ubt_path())
 WRAPPER_RULES_PATH = Path("RAG_Project_Guidelines/Unreal_Programming/07_Wrapper_Mandatory_Rules.md")
@@ -4264,7 +4273,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project-file", default="")
     parser.add_argument("--allow-direct-project-write", action="store_true")
     parser.add_argument("--target", default="")
-    parser.add_argument("--platform", default="Win64")
+    parser.add_argument("--platform", default=host_unreal_platform())
     parser.add_argument("--configuration", default="Development")
     parser.add_argument("--ubt-path", default=DEFAULT_UBT_PATH)
     parser.add_argument("--build-timeout", type=int, default=1200)

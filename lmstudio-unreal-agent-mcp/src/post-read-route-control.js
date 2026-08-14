@@ -13,31 +13,41 @@ function postReadGatePayload(commitResult, toolName) {
     : null;
   if (!state || String(state.status || "") !== "running") return null;
   const gateName = pendingDirectEvidenceGate(state, toolName);
-  if (!gateName) return null;
+  const control = state.controlState && typeof state.controlState === "object"
+    ? { ...state.controlState }
+    : {};
+  if (!gateName && control.authoritative !== true) return null;
+  const requiredName = String(control.requiredTool?.name || gateName || "");
 
   const taskAuthorization = taskAuthorizationForState(state);
   return {
     ok: true,
-    status: "direct_source_evidence_recorded",
-    summary: "Direct source evidence was recorded; resume the pending gate once.",
+    status: gateName ? "direct_source_evidence_recorded" : "tool_outcome_committed",
+    summary: gateName
+      ? "Direct source evidence was recorded; resume the pending gate once."
+      : "Tool outcome and authoritative task control were committed atomically.",
     taskSessionId: String(state.taskSessionId || ""),
     controlEpoch: Math.max(0, Number(state.controlEpoch || 0)),
-    nextAction: gateName,
-    nextActionIsTool: true,
+    nextAction: requiredName || "use_authoritative_control",
+    nextActionIsTool: Boolean(requiredName),
+    requiredNextTool: control.requiredTool || null,
     nextActionArgs: { taskAuthorization },
     taskAuthorization,
     toolRoute: state.toolRoute && typeof state.toolRoute === "object"
       ? state.toolRoute
       : {},
-    retryable: true,
-    agentInstruction: (
-      `The required direct source read succeeded. Call ${gateName} once with `
-      + "the returned taskAuthorization; do not read the same file again."
-    ),
+    ...(Object.keys(control).length ? { control } : {}),
+    retryable: false,
+    agentInstruction: gateName
+      ? (
+        `The required direct source read succeeded. Call ${requiredName} once with `
+        + "the returned taskAuthorization; do not read the same file again."
+      )
+      : "Follow only control.requiredTool/allowedTools from this response.",
   };
 }
 
-function attachPostReadRouteControl(result, commitResult, toolName) {
+function attachCommittedToolOutcomeControl(result, commitResult, toolName) {
   const payload = postReadGatePayload(commitResult, toolName);
   if (!payload) return result;
   const structuredContent = sanitizeModelPayload(
@@ -59,7 +69,9 @@ function attachPostReadRouteControl(result, commitResult, toolName) {
       type: "text",
       text: JSON.stringify({
         ...structuredContent,
-        fileContent: sourceText,
+        ...(String(toolName || "").startsWith("read_file")
+          ? { fileContent: sourceText }
+          : { toolOutput: sourceText }),
       }),
     }],
     structuredContent,
@@ -67,6 +79,7 @@ function attachPostReadRouteControl(result, commitResult, toolName) {
 }
 
 module.exports = {
-  attachPostReadRouteControl,
+  attachCommittedToolOutcomeControl,
+  attachPostReadRouteControl: attachCommittedToolOutcomeControl,
   postReadGatePayload,
 };

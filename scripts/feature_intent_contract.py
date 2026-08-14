@@ -19,6 +19,86 @@ DIMENSIONS = (
     "userVisibleBehavior",
     "nonGoals",
 )
+RISK_CLASS_DIMENSIONS = {
+    "bounded_local": (
+        "ownershipLifetime",
+        "failureSemantics",
+        "userVisibleBehavior",
+        "nonGoals",
+    ),
+    "networked_runtime": (
+        "ownershipLifetime",
+        "authorityReplication",
+        "failureSemantics",
+        "userVisibleBehavior",
+        "nonGoals",
+    ),
+    "persistent": (
+        "ownershipLifetime",
+        "persistence",
+        "failureSemantics",
+        "userVisibleBehavior",
+        "nonGoals",
+    ),
+    "async_runtime": (
+        "ownershipLifetime",
+        "failureSemantics",
+        "userVisibleBehavior",
+        "nonGoals",
+    ),
+    "modular": (
+        "ownershipLifetime",
+        "failureSemantics",
+        "nonGoals",
+    ),
+    "general": DIMENSIONS,
+}
+
+
+def classify_feature_risk(value: Any, request: str = "") -> str:
+    explicit = _clean(value).casefold()
+    aliases = {
+        "bounded": "bounded_local",
+        "local": "bounded_local",
+        "networked": "networked_runtime",
+        "network": "networked_runtime",
+        "replicated": "networked_runtime",
+        "persistence": "persistent",
+        "async": "async_runtime",
+        "module": "modular",
+    }
+    if explicit in RISK_CLASS_DIMENSIONS:
+        return explicit
+    if explicit in aliases:
+        return aliases[explicit]
+    text = _clean(request, limit=4000).casefold()
+    if any(marker in text for marker in _DIMENSION_SIGNALS["persistence"]):
+        return "persistent"
+    if any(
+        marker in text
+        for marker in (
+            "single player",
+            "single-player",
+            "local hotseat",
+            "local 2-player",
+            "local two-player",
+            "no replication",
+            "without replication",
+        )
+    ):
+        return "bounded_local"
+    if any(marker in text for marker in _DIMENSION_SIGNALS["authorityReplication"]):
+        return "networked_runtime"
+    if any(marker in text for marker in ("async", "timeout", "cancel", "비동기", "취소")):
+        return "async_runtime"
+    if any(marker in text for marker in ("module", "plugin", "interface", "모듈", "플러그인")):
+        return "modular"
+    return "bounded_local"
+
+
+def required_dimensions_for_risk(risk_class: str, request: str = "") -> tuple[str, ...]:
+    required = list(RISK_CLASS_DIMENSIONS.get(risk_class, DIMENSIONS))
+    return tuple(dict.fromkeys(required))
 
 _DIMENSION_SIGNALS = {
     "ownershipLifetime": (
@@ -100,6 +180,7 @@ def _candidate_templates(request: str, count: int) -> list[dict[str, Any]]:
     templates = [
         {
             "intentId": "bounded_local",
+            "riskClass": "bounded_local",
             "title": "Bounded local behavior",
             "summary": f"Implement {request_summary} in the nearest existing owner with no new global state.",
             "dimensions": {
@@ -130,6 +211,7 @@ def _candidate_templates(request: str, count: int) -> list[dict[str, Any]]:
         },
         {
             "intentId": "authoritative_runtime",
+            "riskClass": "networked_runtime",
             "title": "Authoritative runtime service",
             "summary": f"Implement {request_summary} behind one explicit runtime owner and authority boundary.",
             "dimensions": {
@@ -160,6 +242,7 @@ def _candidate_templates(request: str, count: int) -> list[dict[str, Any]]:
         },
         {
             "intentId": "persistent_contract",
+            "riskClass": "persistent",
             "title": "Persistent user-facing contract",
             "summary": f"Implement {request_summary} as versioned persistent state with explicit migration and fallback.",
             "dimensions": {
@@ -190,6 +273,7 @@ def _candidate_templates(request: str, count: int) -> list[dict[str, Any]]:
         },
         {
             "intentId": "modular_extension",
+            "riskClass": "modular",
             "title": "Modular extension boundary",
             "summary": f"Implement {request_summary} behind a narrow interface suitable for multiple modules.",
             "dimensions": {
@@ -220,6 +304,7 @@ def _candidate_templates(request: str, count: int) -> list[dict[str, Any]]:
         },
         {
             "intentId": "async_resilient",
+            "riskClass": "async_runtime",
             "title": "Asynchronous resilient workflow",
             "summary": f"Implement {request_summary} as a cancellable async operation with explicit timeout semantics.",
             "dimensions": {
@@ -268,7 +353,9 @@ def analyze_feature_intent_ambiguity(
         name: any(marker in text for marker in markers)
         for name, markers in _DIMENSION_SIGNALS.items()
     }
-    missing = [name for name in DIMENSIONS if not present[name]]
+    risk_class = classify_feature_risk("", text)
+    required_dimensions = required_dimensions_for_risk(risk_class, text)
+    missing = [name for name in required_dimensions if not present[name]]
     explicit_exclusion_or = bool(
         re.search(r"\b(?:without|no)\b[^.;]{0,96}\bor\b", text)
     )
@@ -402,6 +489,8 @@ def analyze_feature_intent_ambiguity(
         "writeIntent": bool(write_intent),
         "reversible": inferred_reversible,
         "boundedScope": inferred_bounded,
+        "riskClass": risk_class,
+        "requiredDimensions": list(required_dimensions),
         "missingDimensions": missing,
         "recommendedAction": action,
         "requiresResolution": bool(write_intent and action != "bounded_assumption"),
@@ -451,8 +540,20 @@ def _normalize_candidate(raw: Any, index: int, request: str) -> dict[str, Any]:
         name: _clean(dimensions_source.get(name) or source.get(name))
         for name in DIMENSIONS
     }
+    risk_class = classify_feature_risk(
+        source.get("riskClass"),
+        " ".join(
+            (
+                request,
+                str(source.get("intentId") or ""),
+                str(source.get("title") or ""),
+                str(source.get("summary") or ""),
+            )
+        ),
+    )
+    required_dimensions = required_dimensions_for_risk(risk_class, request)
     criteria, issues = _normalize_criteria(source.get("acceptanceCriteria"), candidate_id)
-    missing_dimensions = [name for name, value in dimensions.items() if not value]
+    missing_dimensions = [name for name in required_dimensions if not dimensions.get(name)]
     if missing_dimensions:
         issues.append(f"{candidate_id}: missing dimensions {', '.join(missing_dimensions)}")
 
@@ -464,19 +565,33 @@ def _normalize_candidate(raw: Any, index: int, request: str) -> dict[str, Any]:
         [_clean(source.get("title")), _clean(source.get("summary")), *dimensions.values()]
     ).lower()
     alignment_hits = len({token for token in request_terms if token in candidate_text})
-    completeness = sum(8 for value in dimensions.values() if value) + min(12, len(criteria) * 6)
+    completeness = (
+        sum(8 for name in required_dimensions if dimensions.get(name))
+        + min(12, len(criteria) * 6)
+    )
     alignment = min(20, alignment_hits * 4)
+    request_risk = classify_feature_risk("", request)
+    risk_alignment = 12 if risk_class == request_risk else 0
     reversible = source.get("reversible") is True
     bounded = source.get("boundedScope") is True
     safety = (6 if reversible else 0) + (4 if bounded else 0)
     risk_weight = max(0, min(5, int(source.get("riskWeight") or 0)))
     specificity = min(10, max(0, len(candidate_text.split()) // 12))
-    score = completeness + alignment + safety + specificity - risk_weight
+    score = (
+        completeness
+        + alignment
+        + risk_alignment
+        + safety
+        + specificity
+        - risk_weight
+    )
     normalized = {
         "intentId": candidate_id,
         "title": _clean(source.get("title")) or f"Candidate {index + 1}",
         "summary": _clean(source.get("summary")) or _clean(request, limit=180),
         "dimensions": dimensions,
+        "riskClass": risk_class,
+        "requiredDimensions": list(required_dimensions),
         "acceptanceCriteria": criteria,
         "reversible": reversible,
         "boundedScope": bounded,
@@ -484,6 +599,7 @@ def _normalize_candidate(raw: Any, index: int, request: str) -> dict[str, Any]:
         "scoreBreakdown": {
             "completeness": completeness,
             "requestAlignment": alignment,
+            "riskClassAlignment": risk_alignment,
             "safety": safety,
             "specificity": specificity,
             "riskPenalty": risk_weight,
@@ -504,6 +620,8 @@ def _compact_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]
             "eligible": item["eligible"],
             "acceptanceCriterionCount": len(item["acceptanceCriteria"]),
             "issues": list(item["issues"])[:3],
+            "riskClass": item["riskClass"],
+            "requiredDimensions": list(item["requiredDimensions"]),
         }
         for item in candidates
     ]
@@ -553,6 +671,8 @@ def resolve_feature_intent(
             "ok": False,
             "errorCode": "FEATURE_INTENT_INSUFFICIENT_ELIGIBLE",
             "error": "At least two complete feature intent candidates are required.",
+            "candidateCount": len(normalized),
+            "eligibleCandidateCount": len(eligible),
             "candidates": _compact_candidates(normalized),
         }
 
@@ -763,6 +883,7 @@ def resolve_architecture_bound_feature_intent(
     ]
     selected = {
         "intentId": "architecture_bound_local",
+        "riskClass": "bounded_local",
         "title": "Validated local architecture contract",
         "summary": decision,
         "dimensions": dimensions,
