@@ -51,6 +51,12 @@ def repeated_gate_input_preflight(
         "blockerFingerprint": str(previous.get("fingerprint") or ""),
         "validationErrorCode": str(previous.get("validationErrorCode") or ""),
         "nextAction": str(previous.get("nextAction") or gate),
+        "nextActionIsTool": previous.get("nextActionIsTool") is True,
+        "recoveryContract": (
+            dict(previous.get("recoveryContract") or {})
+            if isinstance(previous.get("recoveryContract"), dict)
+            else {}
+        ),
         "inputHash": canonical_gate_input_hash(input_payload),
     }
 
@@ -58,21 +64,86 @@ def repeated_gate_input_preflight(
 def canonical_gate_blocker_identity(
     gate: str,
     evidence: dict[str, Any],
+    input_payload: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     first_blocker = (
         evidence.get("firstBlocker")
         if isinstance(evidence.get("firstBlocker"), dict)
         else {}
     )
+    generation = (
+        evidence.get("generationContract")
+        if isinstance(evidence.get("generationContract"), dict)
+        else {}
+    )
+    write_gate = (
+        generation.get("writeGate")
+        if isinstance(generation.get("writeGate"), dict)
+        else evidence.get("writeGate")
+        if isinstance(evidence.get("writeGate"), dict)
+        else {}
+    )
+    issues = generation.get("issues") if isinstance(generation.get("issues"), list) else []
+    material_delta = (
+        generation.get("materialDelta")
+        if isinstance(generation.get("materialDelta"), dict)
+        else {}
+    )
+    payload = input_payload if isinstance(input_payload, dict) else {}
+    validation_error_code = str(evidence.get("errorCode") or "")
+    if validation_error_code == "FEATURE_FRONTIER_UNPROVEN":
+        completion = (
+            evidence.get("completionFrontier")
+            if isinstance(evidence.get("completionFrontier"), dict)
+            else {}
+        )
+        issues = [
+            " ".join(str(item or "").split()).casefold()
+            for item in (completion.get("issues") or [])
+            if str(item or "").strip()
+        ]
+        # Feature-frontier retries may legitimately omit model-facing slice
+        # fields once task ownership has supplied them.  Those shape changes do
+        # not change the rejected frontier.  Bind equivalence to the server's
+        # source ledger plus the normalized frontier and validation findings;
+        # a materially different frontier or new source evidence still resets
+        # the bounded retry count.
+        return {
+            "gate": str(gate or "").strip(),
+            "validationErrorCode": validation_error_code,
+            "nextAction": str(evidence.get("nextAction") or gate),
+            "directSourceEvidenceFingerprint": str(
+                payload.get("_serverDirectSourceEvidenceFingerprint") or ""
+            ),
+            "completionFrontierHash": str(
+                payload.get("_serverCompletionFrontierHash") or ""
+            ),
+            "validationIssuesHash": _canonical_hash(issues),
+        }
+    targets = [
+        str(item or "").replace("\\", "/").strip("/").casefold()
+        for item in (payload.get("targetFiles") or [])
+        if str(item or "").strip()
+    ]
+    semantic_delta = {
+        "status": str(material_delta.get("status") or ""),
+        "definitionDeltas": list(material_delta.get("definitionDeltas") or [])[:16],
+        "novelCodeLines": list(material_delta.get("novelCodeLines") or [])[:8],
+        "explicitDiff": bool(material_delta.get("explicitDiff")),
+    }
     return {
         "gate": str(gate or "").strip(),
-        "validationErrorCode": str(evidence.get("errorCode") or ""),
+        "validationErrorCode": validation_error_code,
         "nextAction": str(evidence.get("nextAction") or gate),
         "blockerErrorCode": str(first_blocker.get("errorCode") or ""),
         "symbol": str(first_blocker.get("symbol") or ""),
         "receiverType": str(first_blocker.get("receiverType") or ""),
         "verdict": str(first_blocker.get("verdict") or ""),
         "coverageStatus": str(first_blocker.get("coverageStatus") or ""),
+        "writeGateReason": " ".join(str(write_gate.get("reason") or "").split()).casefold(),
+        "firstContractIssue": " ".join(str(issues[0] if issues else "").split()).casefold(),
+        "targetFilesHash": _canonical_hash(sorted(dict.fromkeys(targets))),
+        "semanticDeltaHash": _canonical_hash(semantic_delta),
     }
 
 
@@ -86,7 +157,7 @@ def apply_failed_gate_attempt(
 ) -> dict[str, Any]:
     """Mutate one authenticated task state with a failed semantic gate."""
 
-    blocker = canonical_gate_blocker_identity(gate, evidence)
+    blocker = canonical_gate_blocker_identity(gate, evidence, input_payload)
     fingerprint = _canonical_hash(blocker)
     attempts = (
         dict(state.get("failedGateAttempts") or {})
@@ -105,6 +176,12 @@ def apply_failed_gate_attempt(
         "attemptCount": attempt_count,
         "validationErrorCode": blocker["validationErrorCode"],
         "nextAction": blocker["nextAction"],
+        "nextActionIsTool": evidence.get("nextActionIsTool") is True,
+        "recoveryContract": (
+            dict(evidence.get("featureFrontierRecovery") or {})
+            if isinstance(evidence.get("featureFrontierRecovery"), dict)
+            else {}
+        ),
         "inputHash": canonical_gate_input_hash(input_payload),
         "evidenceHash": _canonical_hash(evidence),
         "updatedAt": updated_at,

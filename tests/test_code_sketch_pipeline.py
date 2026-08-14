@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from code_sketch_pipeline import load_declaration_context, validate_active_slice_surface
+from code_sketch_pipeline import (
+    load_declaration_context,
+    proposed_code_surface,
+    validate_active_slice_surface,
+)
 
 
 def _contract(*targets: dict) -> dict:
@@ -287,3 +291,163 @@ def test_task_bound_existing_sketch_accepts_concrete_changed_statement(
 
     assert result["ok"] is True
     assert result["materialDelta"]["status"] == "material_delta"
+
+
+def test_unified_diff_validation_uses_after_image_and_ignores_deleted_owner(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    target = source / "Worker.cpp"
+    target.write_text(
+        "void FWorker::Run() { OldCall(); }\n",
+        encoding="utf-8",
+    )
+    contract = _contract(
+        {
+            "exists": True,
+            "absolutePath": str(target),
+            "path": "Source/Demo/Worker.cpp",
+        }
+    )
+    contract["projectRoot"] = str(tmp_path)
+    sketch = """--- a/Source/Demo/Worker.cpp
++++ b/Source/Demo/Worker.cpp
+@@ -1,2 +1,2 @@
+-void FUnrelatedOwner::Run() { MissingApi(); }
++void FWorker::Run() { NewCall(); }
+"""
+
+    live, info = proposed_code_surface(sketch)
+    assert "FUnrelatedOwner" not in live
+    assert "FWorker::Run" in live
+    assert info["deletedLineCount"] == 1
+
+    result = validate_active_slice_surface(
+        sketch,
+        target_files=["Source/Demo/Worker.cpp"],
+        generation_contract=contract,
+        graph=None,
+        require_material_delta=True,
+    )
+    assert result["surfaceBinding"]["outsideDefinitionOwners"] == []
+    assert result["materialDelta"]["explicitDiff"] is True
+
+
+def test_deletion_only_unified_diff_is_a_material_delta(tmp_path: Path) -> None:
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    target = source / "Worker.cpp"
+    target.write_text("void FWorker::Legacy() {}\n", encoding="utf-8")
+    contract = _contract(
+        {
+            "exists": True,
+            "absolutePath": str(target),
+            "path": "Source/Demo/Worker.cpp",
+        }
+    )
+    contract["projectRoot"] = str(tmp_path)
+    result = validate_active_slice_surface(
+        """--- a/Source/Demo/Worker.cpp
++++ b/Source/Demo/Worker.cpp
+@@ -1 +0,0 @@
+-void FWorker::Legacy() {}
+""",
+        target_files=["Source/Demo/Worker.cpp"],
+        generation_contract=contract,
+        graph=None,
+        require_material_delta=True,
+    )
+    assert result["ok"] is True
+    assert result["materialDelta"]["status"] == "material_delta"
+    assert result["diffSurface"]["deletedLineCount"] == 1
+
+
+def test_unified_diff_headers_cannot_hide_an_out_of_slice_file(tmp_path: Path) -> None:
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    target = source / "Worker.cpp"
+    target.write_text("void Run() {}\n", encoding="utf-8")
+    contract = _contract(
+        {
+            "exists": True,
+            "absolutePath": str(target),
+            "path": "Source/Demo/Worker.cpp",
+        }
+    )
+    contract["projectRoot"] = str(tmp_path)
+
+    result = validate_active_slice_surface(
+        """--- a/Source/Demo/Outside.cpp
++++ b/Source/Demo/Outside.cpp
+@@ -0,0 +1 @@
++int32 HiddenOutOfSliceValue = 1;
+""",
+        target_files=["Source/Demo/Worker.cpp"],
+        generation_contract=contract,
+        graph=None,
+        require_material_delta=True,
+    )
+
+    assert result["ok"] is False
+    assert result["diffSurface"]["targetFiles"] == ["Source/Demo/Outside.cpp"]
+    assert any("outside targetFiles" in issue for issue in result["issues"])
+
+
+def test_new_unresolved_quoted_include_closes_generation_gate(tmp_path: Path) -> None:
+    source = tmp_path / "Source" / "Demo"
+    source.mkdir(parents=True)
+    target = source / "Worker.cpp"
+    target.write_text('#include "Worker.h"\nvoid FWorker::Run() {}\n', encoding="utf-8")
+    (source / "Worker.h").write_text("struct FWorker { void Run(); };\n", encoding="utf-8")
+    contract = _contract(
+        {
+            "exists": True,
+            "absolutePath": str(target),
+            "path": "Source/Demo/Worker.cpp",
+        }
+    )
+    contract["projectRoot"] = str(tmp_path)
+
+    result = validate_active_slice_surface(
+        '#include "DevTest/Test.h"\nvoid FWorker::Run() { NewCall(); }',
+        target_files=["Source/Demo/Worker.cpp"],
+        generation_contract=contract,
+        graph=None,
+        require_material_delta=True,
+    )
+
+    assert result["ok"] is False
+    assert result["quotedIncludes"]["unresolved"][0]["include"] == "DevTest/Test.h"
+
+
+def test_unrelated_module_private_header_does_not_prove_leaf_include(
+    tmp_path: Path,
+) -> None:
+    demo = tmp_path / "Source" / "Demo"
+    unrelated = tmp_path / "Source" / "Unrelated" / "Private"
+    demo.mkdir(parents=True)
+    unrelated.mkdir(parents=True)
+    target = demo / "Worker.cpp"
+    target.write_text("void FWorker::Run() {}\n", encoding="utf-8")
+    (unrelated / "Ghost.h").write_text("struct FGhost {};\n", encoding="utf-8")
+    contract = _contract(
+        {
+            "exists": True,
+            "absolutePath": str(target),
+            "path": "Source/Demo/Worker.cpp",
+        }
+    )
+    contract["projectRoot"] = str(tmp_path)
+
+    result = validate_active_slice_surface(
+        '#include "Ghost.h"\nvoid FWorker::Run() { NewCall(); }',
+        target_files=["Source/Demo/Worker.cpp"],
+        generation_contract=contract,
+        graph=None,
+        require_material_delta=True,
+    )
+
+    assert result["ok"] is False
+    assert result["quotedIncludes"]["unresolved"][0]["include"] == "Ghost.h"
+    assert result["writeGate"]["reason"] == "quoted include path is not source-backed"

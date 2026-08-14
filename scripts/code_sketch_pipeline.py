@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -136,6 +137,90 @@ def _normalized_code(text: str) -> str:
     return re.sub(r"\s+", "", _strip_cpp_comments(text))
 
 
+def proposed_code_surface(sketch: str) -> tuple[str, dict[str, Any]]:
+    """Return only the live after-image of a unified diff sketch.
+
+    Deleted lines describe the preimage and must never be interpreted as code
+    the model proposes to compile.  Plain snippets are returned unchanged.
+    """
+
+    lines = sketch.splitlines()
+    unified = bool(
+        any(line.startswith("@@") for line in lines)
+        or (
+            any(line.startswith("--- ") for line in lines)
+            and any(line.startswith("+++ ") for line in lines)
+        )
+    )
+    if not unified:
+        return sketch, {
+            "isUnifiedDiff": False,
+            "addedLineCount": 0,
+            "deletedLineCount": 0,
+            "contextLineCount": 0,
+            "targetFiles": [],
+        }
+
+    proposed: list[str] = []
+    added = 0
+    deleted = 0
+    context = 0
+    in_hunk = False
+    old_path = ""
+    diff_targets: list[str] = []
+
+    def clean_diff_path(value: str) -> str:
+        candidate = value.split("\t", 1)[0].strip()
+        if candidate.startswith('"') and candidate.endswith('"'):
+            try:
+                candidate = json.loads(candidate)
+            except json.JSONDecodeError:
+                candidate = candidate[1:-1]
+        if candidate.startswith(("a/", "b/")):
+            candidate = candidate[2:]
+        return candidate.replace("\\", "/").strip("/")
+
+    for line in lines:
+        if line.startswith("--- "):
+            old_path = clean_diff_path(line[4:])
+            continue
+        if line.startswith("+++ "):
+            new_path = clean_diff_path(line[4:])
+            target = old_path if new_path == "dev/null" else new_path
+            if target and target != "dev/null" and target not in diff_targets:
+                diff_targets.append(target)
+            continue
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if line.startswith(("diff --git ", "index ")):
+            continue
+        if line == r"\ No newline at end of file":
+            continue
+        if not in_hunk:
+            continue
+        if line.startswith("+"):
+            proposed.append(line[1:])
+            added += 1
+        elif line.startswith("-"):
+            deleted += 1
+        elif line.startswith(" "):
+            proposed.append(line[1:])
+            context += 1
+        else:
+            # Some model-generated hunks omit the mandatory context prefix.
+            # Treat those lines as live context, but never reintroduce a '-' row.
+            proposed.append(line)
+            context += 1
+    return "\n".join(proposed), {
+        "isUnifiedDiff": True,
+        "addedLineCount": added,
+        "deletedLineCount": deleted,
+        "contextLineCount": context,
+        "targetFiles": diff_targets,
+    }
+
+
 def _balanced_body(text: str, start: int) -> tuple[str, int] | None:
     """Return a definition body starting at or after *start*.
 
@@ -214,7 +299,12 @@ def _definition_bodies(text: str) -> list[dict[str, str]]:
     return definitions
 
 
-def _material_delta_contract(sketch: str, existing_target_text: str) -> dict[str, Any]:
+def _material_delta_contract(
+    sketch: str,
+    existing_target_text: str,
+    *,
+    diff_surface: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Prove that an existing-file sketch contains at least one code delta.
 
     This is intentionally a narrow proof.  It catches exact restatements and a
@@ -273,8 +363,13 @@ def _material_delta_contract(sketch: str, existing_target_text: str) -> dict[str
         if re.sub(r"\s+", "", line) not in {"", "{", "}"}
         and re.sub(r"\s+", "", line) not in existing_lines
     ]
+    diff_info = diff_surface if isinstance(diff_surface, dict) else {}
     explicit_diff = bool(
-        re.search(r"(?m)^(?:\+|-)(?!\+\+|--|\s*$).+", sketch)
+        diff_info.get("isUnifiedDiff")
+        and (
+            int(diff_info.get("addedLineCount") or 0) > 0
+            or int(diff_info.get("deletedLineCount") or 0) > 0
+        )
     )
     material = bool(
         explicit_diff
@@ -407,6 +502,166 @@ def _close_gate(contract: dict[str, Any], issue: str, reason: str) -> None:
     contract["writeGate"]["reason"] = reason
 
 
+def _quoted_include_contract(
+    live_sketch: str,
+    *,
+    contract: dict[str, Any],
+    target_files: list[str],
+    existing_target_text: str,
+    engine_root: str | Path | None,
+) -> dict[str, Any]:
+    proposed = list(
+        dict.fromkeys(
+            match.strip().replace("\\", "/")
+            for match in re.findall(r'(?mi)^\s*#\s*include\s*"([^"]+)"', live_sketch)
+            if match.strip()
+        )
+    )
+    existing = {
+        match.strip().replace("\\", "/").casefold()
+        for match in re.findall(
+            r'(?mi)^\s*#\s*include\s*"([^"]+)"',
+            existing_target_text,
+        )
+        if match.strip()
+    }
+    new_includes = [item for item in proposed if item.casefold() not in existing]
+    root_value = str(contract.get("projectRoot") or "").strip()
+    project_root = Path(root_value).expanduser().resolve() if root_value else None
+    if project_root is None and not engine_root:
+        return {
+            "ok": True,
+            "status": "not_grounded",
+            "proposed": proposed,
+            "new": [],
+            "results": [],
+            "unresolved": [],
+        }
+    target_paths = [
+        Path(str(item.get("absolutePath") or "")).expanduser().resolve()
+        for item in (contract.get("targets") or [])
+        if isinstance(item, dict) and str(item.get("absolutePath") or "").strip()
+    ]
+
+    def module_root(path: Path) -> Path | None:
+        for candidate in (path, *path.parents):
+            if candidate.parent.name.casefold() == "source":
+                return candidate
+        return None
+
+    target_module_roots = {
+        str(owner).casefold()
+        for owner in (module_root(path) for path in target_paths)
+        if owner is not None
+    }
+
+    def compiler_visible_project_header(candidate: Path, include: str) -> bool:
+        owner = module_root(candidate)
+        if owner is None:
+            return False
+        if str(owner).casefold() in target_module_roots:
+            return True
+        try:
+            within_module = candidate.relative_to(owner)
+        except ValueError:
+            return False
+        first = within_module.parts[0].casefold() if within_module.parts else ""
+        # A different module's Private header is not a legal public include
+        # merely because an equally named file exists somewhere in the tree.
+        if first not in {"public", "classes"}:
+            return False
+        normalized_include = include.casefold().strip("/")
+        module_name = owner.name.casefold()
+        visible_suffixes = {
+            within_module.as_posix().casefold(),
+            "/".join(within_module.parts[1:]).casefold(),
+            f"{module_name}/{'/'.join(within_module.parts[1:])}".casefold(),
+        }
+        return normalized_include in visible_suffixes or "/" not in normalized_include
+
+    target_stems = {Path(path).stem.casefold() for path in target_files}
+    results: list[dict[str, Any]] = []
+
+    for include in new_includes:
+        generated = include.casefold().endswith(".generated.h")
+        generated_stem = Path(include).name[: -len(".generated.h")].casefold() if generated else ""
+        if generated and generated_stem in target_stems:
+            results.append({"include": include, "status": "generated", "matches": []})
+            continue
+
+        matches: list[Path] = []
+        if project_root is not None and project_root.is_dir():
+            direct_candidates = [project_root / include, project_root / "Source" / include]
+            direct_candidates.extend(path.parent / include for path in target_paths)
+            for candidate in direct_candidates:
+                try:
+                    resolved = candidate.resolve()
+                    resolved.relative_to(project_root)
+                except ValueError:
+                    continue
+                if resolved.is_file() and resolved not in matches:
+                    matches.append(resolved)
+            if not matches:
+                for source_root in (project_root / "Source", project_root / "Plugins"):
+                    if not source_root.is_dir():
+                        continue
+                    try:
+                        candidates = source_root.rglob(Path(include).name)
+                        for candidate in candidates:
+                            if not candidate.is_file():
+                                continue
+                            folded = candidate.as_posix().casefold()
+                            if "/intermediate/" in folded or "/binaries/" in folded:
+                                continue
+                            if (
+                                folded.endswith("/" + include.casefold())
+                                or "/" not in include
+                            ) and compiler_visible_project_header(candidate.resolve(), include):
+                                matches.append(candidate.resolve())
+                                if len(matches) >= 16:
+                                    break
+                    except OSError:
+                        continue
+        if matches:
+            ambiguous = len(matches) > 1
+            results.append(
+                {
+                    "include": include,
+                    "status": "ambiguous_project_include" if ambiguous else "project_resolved",
+                    "matches": [str(path) for path in matches[:8]],
+                    "ambiguous": ambiguous,
+                }
+            )
+            continue
+
+        from engine_header_evidence import resolve_engine_include_path
+
+        engine = resolve_engine_include_path(engine_root, include)
+        results.append(
+            {
+                "include": include,
+                "status": (
+                    "engine_resolved" if engine.get("ok") else str(engine.get("status") or "not_found")
+                ),
+                "matches": list(engine.get("matches") or [])[:8],
+                "ambiguous": bool(engine.get("ambiguous")),
+            }
+        )
+
+    unresolved = [
+        row
+        for row in results
+        if row.get("status") not in {"generated", "project_resolved", "engine_resolved"}
+    ]
+    return {
+        "ok": not unresolved,
+        "proposed": proposed,
+        "new": new_includes,
+        "results": results,
+        "unresolved": unresolved,
+    }
+
+
 def validate_active_slice_surface(
     sketch: str,
     *,
@@ -414,15 +669,23 @@ def validate_active_slice_surface(
     generation_contract: dict[str, Any],
     graph: dict[str, Any] | None,
     require_material_delta: bool = False,
+    engine_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Reject code surfaces that exceed or evade the server-bound source slice."""
 
     contract = generation_contract
+    live_sketch, diff_surface = proposed_code_surface(sketch)
+    contract["diffSurface"] = diff_surface
     labeled_files = re.findall(
         r"(?mi)^\s*(?://|/\*)\s*(?:file\s*:\s*)?"
         r"([A-Za-z0-9_.\\/\-]+\.(?:h|hpp|hh|inl|cpp|cc|cxx|cs))"
         r"(?=\s*(?:[-:]|(?:\*/)?\s*$))",
-        sketch,
+        live_sketch,
+    )
+    labeled_files.extend(
+        str(item)
+        for item in diff_surface.get("targetFiles") or []
+        if str(item).strip()
     )
     allowed_paths = {str(Path(item).as_posix()).casefold() for item in target_files}
     allowed_names = {Path(item).name.casefold() for item in target_files}
@@ -443,7 +706,7 @@ def validate_active_slice_surface(
     reflected_classes = re.findall(
         r"(?ms)\bUCLASS\s*(?:\([^)]*\))?\s*class\s+"
         r"(?:[A-Z][A-Z0-9_]*_API\s+)?([A-Za-z_]\w*)",
-        sketch,
+        live_sketch,
     )
     target_stems = {Path(item).stem.casefold() for item in target_files}
     existing_target_text = ""
@@ -456,9 +719,22 @@ def validate_active_slice_surface(
             ).read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
+    for evidence in contract.get("requiredReads") or []:
+        if not isinstance(evidence, dict):
+            continue
+        path = str(evidence.get("filePath") or "").strip()
+        if not path:
+            continue
+        try:
+            existing_target_text += "\n" + Path(path).read_text(
+                encoding="utf-8-sig",
+                errors="replace",
+            )
+        except OSError:
+            continue
 
     owner_binding = _owner_surface_binding(
-        sketch,
+        live_sketch,
         target_files=target_files,
         contract=contract,
         graph=graph,
@@ -521,7 +797,7 @@ def validate_active_slice_surface(
             if len(symbol_name) > 1 and symbol_name[:1] in {"A", "U", "I", "F"}:
                 reflected_headers[symbol_name[1:].casefold()] = file_name
     wrong_reflected_includes: list[str] = []
-    for include_path in re.findall(r'(?mi)^\s*#\s*include\s*"([^"]+)"', sketch):
+    for include_path in re.findall(r'(?mi)^\s*#\s*include\s*"([^"]+)"', live_sketch):
         include_name = Path(include_path).name
         reflected_type = Path(include_name).stem
         actual_header = reflected_headers.get(reflected_type.casefold(), "")
@@ -536,6 +812,22 @@ def validate_active_slice_surface(
             "reflected include path is not source-backed",
         )
 
+    include_contract = _quoted_include_contract(
+        live_sketch,
+        contract=contract,
+        target_files=target_files,
+        existing_target_text=existing_target_text,
+        engine_root=engine_root,
+    )
+    contract["quotedIncludes"] = include_contract
+    if not include_contract["ok"]:
+        first = include_contract["unresolved"][0]
+        _close_gate(
+            contract,
+            f'quoted include cannot be resolved from project/plugin/engine source: {first["include"]}',
+            "quoted include path is not source-backed",
+        )
+
     modifies_existing = any(
         isinstance(target, dict) and bool(target.get("exists"))
         for target in contract.get("targets") or []
@@ -544,7 +836,11 @@ def validate_active_slice_surface(
         re.search(
             r"(?m)(?:;|[{}]|^\s*#\s*(?:include|define|if|pragma)\b|"
             r"\b(?:UCLASS|USTRUCT|UENUM|UPROPERTY|UFUNCTION|GENERATED_BODY)\s*\()",
-            sketch,
+            live_sketch,
+        )
+        or (
+            diff_surface.get("isUnifiedDiff")
+            and int(diff_surface.get("deletedLineCount") or 0) > 0
         )
     )
     if modifies_existing and not concrete_source:
@@ -557,7 +853,7 @@ def validate_active_slice_surface(
     behavior_placeholders = re.findall(
         r"(?mi)^\s*//[^\n]*\b(?:TODO|FIXME|implement|place|handle|execute|apply)\b"
         r"[^\n]*\bhere\b[^\n]*$",
-        sketch,
+        live_sketch,
     )
     if behavior_placeholders:
         _close_gate(
@@ -567,7 +863,11 @@ def validate_active_slice_surface(
             "requested behavior is still a placeholder",
         )
     if modifies_existing and require_material_delta:
-        material_delta = _material_delta_contract(sketch, existing_target_text)
+        material_delta = _material_delta_contract(
+            live_sketch,
+            existing_target_text,
+            diff_surface=diff_surface,
+        )
         contract["materialDelta"] = material_delta
         if not material_delta["ok"]:
             _close_gate(
@@ -611,4 +911,8 @@ def load_declaration_context(
     return "\n".join(chunks), files
 
 
-__all__ = ["load_declaration_context", "validate_active_slice_surface"]
+__all__ = [
+    "load_declaration_context",
+    "proposed_code_surface",
+    "validate_active_slice_surface",
+]

@@ -1532,9 +1532,9 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
   }
 });
 
-test("planner route honors an advertised eight-call budget", () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-eight-workspace-"));
-  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-eight-state-"));
+test("planner route honors an advertised twelve-call budget", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-twelve-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-twelve-state-"));
   const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
   fs.mkdirSync(taskDir, { recursive: true });
   fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
@@ -1543,14 +1543,14 @@ test("planner route honors an advertised eight-call budget", () => {
     writeGate: { writesAllowed: true },
     toolRoute: {
       status: "active",
-      routeHash: "route-budget-eight",
+      routeHash: "route-budget-twelve",
       phase: "planner",
       activeTools: ["read_file"],
       allowedPathScopes: ["Source"],
-      maxToolCallsPerPhase: 8,
+      maxToolCallsPerPhase: 12,
     },
     toolRouteUsage: {
-      routeHash: "route-budget-eight",
+      routeHash: "route-budget-twelve",
       count: 0,
       reserved: 0,
       reservations: [],
@@ -1559,9 +1559,9 @@ test("planner route honors an advertised eight-call budget", () => {
   }));
   const previous = process.env.AGENT_STATE_ROOT;
   process.env.AGENT_STATE_ROOT = stateRoot;
-  const fields = { routeHash: "route-budget-eight", routePhase: "planner" };
+  const fields = { routeHash: "route-budget-twelve", routePhase: "planner" };
   try {
-    for (let index = 0; index < 8; index += 1) {
+    for (let index = 0; index < 12; index += 1) {
       const reservation = reserveRouteCall(
         workspace,
         authorization.taskSessionId,
@@ -1591,7 +1591,7 @@ test("planner route honors an advertised eight-call budget", () => {
     );
     assert.strictEqual(blocked.ok, false);
     assert.strictEqual(blocked.errorCode, "TASK_PHASE_TOOL_BUDGET_EXHAUSTED");
-    assert.match(blocked.error, /8\/8/);
+    assert.match(blocked.error, /12\/12/);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;

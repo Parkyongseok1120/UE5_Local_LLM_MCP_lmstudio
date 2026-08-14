@@ -510,6 +510,42 @@ def lookup_engine_header_evidence(
     }
 
 
+def resolve_engine_include_path(
+    engine_root: str | Path | None,
+    include_path: str,
+) -> dict[str, Any]:
+    """Resolve an exact quoted include through the cached Engine header catalog."""
+
+    root = Path(engine_root).expanduser().resolve() if engine_root else None
+    normalized = str(include_path or "").replace("\\", "/").strip("/")
+    if root is None or not root.is_dir():
+        return {
+            "ok": False,
+            "status": "engine_root_unavailable",
+            "include": normalized,
+            "matches": [],
+        }
+    if not normalized or Path(normalized).suffix.casefold() not in {".h", ".hpp", ".hh", ".inl"}:
+        return {"ok": False, "status": "invalid_include", "include": normalized, "matches": []}
+    catalog = _header_catalog(root)
+    candidates = catalog.get(Path(normalized).name.casefold(), [])
+    suffix = "/" + normalized.casefold()
+    exact = [
+        path
+        for path in candidates
+        if path.as_posix().casefold().endswith(suffix) and _contained(path, root)
+    ]
+    matches = exact or [path for path in candidates if _contained(path, root)]
+    matches = sorted(matches, key=_candidate_header_rank)
+    return {
+        "ok": bool(matches),
+        "status": "resolved" if matches else "not_found",
+        "include": normalized,
+        "matches": [str(path) for path in matches[:8]],
+        "ambiguous": len(matches) > 1 and not exact,
+    }
+
+
 def clear_engine_header_catalog_cache() -> None:
     _HEADER_CATALOGS.clear()
     _TYPE_DECLARATION_PATHS.clear()

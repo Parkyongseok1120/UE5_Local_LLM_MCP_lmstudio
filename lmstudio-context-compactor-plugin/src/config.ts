@@ -26,6 +26,12 @@ export const configSchematics = createConfigSchematics()
     true,
   )
   .field(
+    "predictionHeartbeatSeconds",
+    "numeric",
+    { displayName: "Prediction heartbeat", subtitle: "Emit a reasoning-status heartbeat after this many silent seconds during local-model inference (1-30 seconds)." },
+    4,
+  )
+  .field(
     "rejectTruncatedPredictions",
     "boolean",
     { displayName: "Reject truncated output", subtitle: "Discard output stopped by the context or max-token limit instead of presenting a partial result as complete." },

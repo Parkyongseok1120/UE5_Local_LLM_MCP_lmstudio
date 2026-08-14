@@ -124,6 +124,7 @@ def exposed_rag_tools() -> frozenset[str]:
 def validate_phase_tool_route(route: dict[str, Any]) -> list[str]:
     from phase_tool_router import (
         MAX_ACTIVE_TOOLS,
+        MAX_PHASE_TOOL_CALLS,
         MIN_ACTIVE_TOOLS,
         MUTATION_TOOLS,
     )
@@ -143,8 +144,10 @@ def validate_phase_tool_route(route: dict[str, Any]) -> list[str]:
     if phantom:
         issues.append(f"activeTools contains non-callable tools: {phantom}")
     max_calls = int(route.get("maxToolCallsPerPhase") or 0)
-    if not 2 <= max_calls <= 8:
-        issues.append("maxToolCallsPerPhase must be between 2 and 8")
+    if not 2 <= max_calls <= MAX_PHASE_TOOL_CALLS:
+        issues.append(
+            f"maxToolCallsPerPhase must be between 2 and {MAX_PHASE_TOOL_CALLS}"
+        )
     role = str(route.get("roleSession") or "")
     if role in {"planner", "runtime", "verifier"} and MUTATION_TOOLS.intersection(
         tools

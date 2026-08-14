@@ -901,11 +901,12 @@ function mutateRouteBudget(
     const reservations = purgeExpiredReservations(usage);
     const count = Number(usage.count || 0);
     const reserved = reservations.length;
-    // Keep the write server aligned with the Python route contract. The
-    // current planner/executor cap is eight, while narrower analysis/verifier
-    // routes may advertise lower limits. Never silently clamp a server-issued
-    // route to a different budget than the route returned to the model.
-    const limit = Math.max(2, Math.min(8, Number(route.maxToolCallsPerPhase || 2)));
+    // Keep the write server aligned with the Python route contract. Planner
+    // routes may advertise twelve calls for completion audits, while executor
+    // and narrower routes still advertise their own lower limits. Never
+    // silently clamp a server-issued route to a different budget than the one
+    // returned to the model.
+    const limit = Math.max(2, Math.min(12, Number(route.maxToolCallsPerPhase || 2)));
     // A routed tool call is active task work. Renew the cross-platform task
     // lease in the same atomic state write as its route-budget mutation.
     renewContinuityLeaseForActivity(current);

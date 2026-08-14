@@ -646,6 +646,28 @@ test("tool name matching accepts LM Studio provider-qualified MCP paths", () => 
     core.toolNamesMatch("unreal_get_active_project", "mcp/unreal-rag/unreal_get_active_project"),
     true,
   );
+  assert.equal(
+    core.toolNamesMatch("get_active_project", "mcp/unreal-rag/unreal_get_active_project"),
+    false,
+  );
+  assert.equal(
+    core.toolNamesMatch("read_file", "mcp/unreal-agent/prefixed_read_file"),
+    false,
+  );
+});
+
+test("mutation intent classification is shared across Korean read and write goals", () => {
+  assert.equal(core.classifyMutationIntent("현재 구현 상태만 알려줘").isMutation, false);
+  assert.equal(core.isReadOnlyUserGoal("현재 구현 상태만 알려줘"), true);
+  assert.equal(
+    core.classifyMutationIntent("구현 상태를 확인하고 가장 앞의 미완료 기능을 완성해줘").isMutation,
+    true,
+  );
+  assert.equal(
+    core.isReadOnlyUserGoal("구현 상태를 확인하고 가장 앞의 미완료 기능을 완성해줘"),
+    false,
+  );
+  assert.equal(core.classifyMutationIntent("수정은 하지 말고 분석만 해줘").isMutation, false);
 });
 
 test("zero retained turns keeps only the minimum recent tail", () => {
@@ -945,7 +967,7 @@ test("required next tool clears only after its matching successful result", () =
   const next = core.buildCheckpoint([
     { role: "user", content: "fix" },
     { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
-    { role: "assistant", content: "", toolCalls: [{ id: "lookup-1", name: "mcp_unreal_symbol_lookup" }] },
+    { role: "assistant", content: "", toolCalls: [{ id: "lookup-1", name: "mcp/unreal-rag/unreal_symbol_lookup" }] },
     { role: "tool", content: JSON.stringify({ ok: true }), toolResults: [{ toolCallId: "lookup-1", content: "{}" }] },
   ], prior);
   assert.equal(next.requiredNextTool, null);
@@ -982,7 +1004,7 @@ test("required next tool remains pending after call dispatch without a result", 
   const next = core.buildCheckpoint([
     { role: "user", content: "fix" },
     { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
-    { role: "assistant", content: "", toolCalls: [{ id: "lookup-1", name: "mcp_unreal_symbol_lookup" }] },
+    { role: "assistant", content: "", toolCalls: [{ id: "lookup-1", name: "mcp/unreal-rag/unreal_symbol_lookup" }] },
   ], prior);
   assert.equal(next.requiredNextTool?.name, "unreal_symbol_lookup");
 });
@@ -995,7 +1017,7 @@ test("failed matching tool result does not clear required next tool", () => {
   const next = core.buildCheckpoint([
     { role: "user", content: "fix" },
     { role: "tool", content: JSON.stringify({ requiredNextTool: "unreal_symbol_lookup" }) },
-    { role: "assistant", content: "", toolCalls: [{ id: "lookup-1", name: "mcp_unreal_symbol_lookup" }] },
+    { role: "assistant", content: "", toolCalls: [{ id: "lookup-1", name: "mcp/unreal-rag/unreal_symbol_lookup" }] },
     { role: "tool", content: JSON.stringify({ ok: false, errorCode: "LOOKUP_FAILED" }), toolResults: [{ toolCallId: "lookup-1", content: "{\"ok\":false}" }] },
   ], prior);
   assert.equal(next.requiredNextTool?.name, "unreal_symbol_lookup");
@@ -1283,9 +1305,109 @@ test("cached repeat reads keep semantic anchors and emit an explicit no-reread l
   assert.equal(reads[0].repeatDetected, true);
   assert.equal(reads[0].readAttempts, 2);
   assert.ok(reads[0].semanticAnchors.some((line) => line.includes("OnRep_Board")));
+  assert.equal(checkpoint.repeatEvidence.length, 1);
+  assert.equal(checkpoint.repeatEvidence[0].path, path);
+  assert.equal(checkpoint.repeatEvidence[0].content, source);
   const summary = core.summarizeOldMessages(messages, checkpoint);
   assert.match(summary, /discoveryLedger=already-read unchanged files/);
   assert.match(summary, /Do not re-read these paths merely to remember them/);
+  assert.match(summary, /repeatEvidenceInstruction=The server returned this exact unchanged body/);
+  assert.match(summary, /do not issue the same tool\/path\/query\/range again/);
+});
+
+test("repeat evidence is bounded and clears after mutation or a new objective", () => {
+  const path = "Source/O_Mock/GomokuRuleEngine.cpp";
+  const source = "bool UGomokuRuleEngine::HasWinAt() const { return true; }";
+  const repeat = {
+    ok: true,
+    cached: true,
+    repeatDetected: true,
+    doNotRepeatRead: true,
+    errorCode: "READ_REPEAT_DETECTED",
+    content: source,
+  };
+  const readMessages = [
+    { role: "user", content: "implement local win detection" },
+    { role: "assistant", toolCalls: [{ id: "read-repeat", name: "read_file_range", arguments: { path, startLine: 450, endLine: 650 } }] },
+    { role: "tool", toolResults: [{ toolCallId: "read-repeat", name: "read_file_range", content: JSON.stringify(repeat) }] },
+  ];
+  const retained = core.buildCheckpoint(readMessages);
+  assert.equal(retained.repeatEvidence.length, 1);
+
+  const afterMutation = core.buildCheckpoint([
+    ...readMessages,
+    { role: "assistant", toolCalls: [{ id: "write-1", name: "replace_in_file", arguments: { path, oldText: "true", newText: "false" } }] },
+    { role: "tool", toolResults: [{ toolCallId: "write-1", name: "replace_in_file", content: JSON.stringify({ ok: true, mutationGeneration: 1 }) }] },
+  ], { priorCheckpoint: retained });
+  assert.deepEqual(afterMutation.repeatEvidence, []);
+
+  const afterNewGoal = core.buildCheckpoint([
+    { role: "user", content: "inspect a different subsystem" },
+  ], { priorCheckpoint: retained });
+  assert.deepEqual(afterNewGoal.repeatEvidence, []);
+});
+
+test("hard compaction retains bounded exact text for the active edit slice only", () => {
+  const target = "Source/O_Mock/GomokuPlayerController.cpp";
+  const dependency = "Source/O_Mock/GomokuRuleEngine.cpp";
+  const targetSource = [
+    "void AGomokuPlayerController::HandlePrimaryClick()",
+    "{",
+    "    GS->HandlePlaceStone(GS->CurrentPlayerIndex, Cell);",
+    "}",
+  ].join("\n");
+  const messages = [
+    { role: "user", content: "implement the bounded local input fix" },
+    {
+      role: "tool",
+      content: JSON.stringify({
+        ok: true,
+        selectedSlice: { sliceId: "local_input", files: [target] },
+        toolRoute: { routeHash: "executor-route", phase: "executor", activeTools: ["read_file_range", "replace_in_file"] },
+      }),
+    },
+    { role: "assistant", toolCalls: [{ id: "target-read", name: "read_file_range", arguments: { path: target, startLine: 60, endLine: 90 } }] },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "target-read",
+        name: "read_file_range",
+        content: JSON.stringify([{ type: "text", text: targetSource }]),
+      }],
+    },
+    { role: "assistant", toolCalls: [{ id: "dependency-read", name: "read_file_range", arguments: { path: dependency, startLine: 450, endLine: 650 } }] },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "dependency-read",
+        name: "read_file_range",
+        content: JSON.stringify([{ type: "text", text: "bool UGomokuRuleEngine::IsValidEmpty(const FIntPoint& Cell) const;" }]),
+      }],
+    },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.equal(checkpoint.editEvidence.length, 1);
+  assert.equal(checkpoint.editEvidence[0].path, target);
+  assert.equal(checkpoint.editEvidence[0].content, targetSource);
+  const summary = core.summarizeOldMessages(messages, checkpoint);
+  assert.match(summary, /editEvidenceInstruction=/);
+  assert.match(summary, /GS->HandlePlaceStone/);
+  assert.equal(checkpoint.editEvidence.some((item) => item.path === dependency), false);
+
+  const afterMutation = core.buildCheckpoint([
+    ...messages,
+    { role: "assistant", toolCalls: [{ id: "write-1", name: "replace_in_file", arguments: { path: target } }] },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "write-1",
+        name: "replace_in_file",
+        content: JSON.stringify({ ok: true, mutationGeneration: 1 }),
+      }],
+    },
+  ], checkpoint);
+  assert.deepEqual(afterMutation.editEvidence, []);
 });
 
 test("unrelated complete payload does not clear required next tool", () => {

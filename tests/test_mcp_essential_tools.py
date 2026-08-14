@@ -122,8 +122,9 @@ def test_feature_intent_schema_is_compact_for_local_tool_calling(monkeypatch, tm
     assert set(properties) == {
         "selectedIntentId",
         "selectionRationale",
-        "blockingQuestionAnswers",
-        "slices",
+            "blockingQuestionAnswers",
+            "completionFrontier",
+            "slices",
         "activeSliceId",
         "targetFiles",
         "taskAuthorization",

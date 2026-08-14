@@ -688,6 +688,39 @@ function applyBuildRecoveryScopeBinding(payload = {}, binding = {}) {
   return payload;
 }
 
+function missingReadTargetRecovery(tool, requestedPath, resolvedRootType) {
+  const sourceTool = String(tool || "read_file_range").trim() || "read_file_range";
+  const sourcePath = String(requestedPath || "").trim();
+  const basename = path.basename(sourcePath.replace(/[\\/]+$/, "")) || sourcePath;
+  const searchArgs = {
+    query: basename,
+    path: resolvedRootType === "active_project" ? "project://Source" : "workspace://",
+    matchFileNames: true,
+  };
+  return {
+    errorCode: "READ_TARGET_NOT_FOUND",
+    retryable: false,
+    stopCurrentWorkflow: false,
+    // This is a temporary handoff, not an evidence-phase shutdown. The
+    // compactor clears it as soon as the exact basename search completes.
+    doNotRetry: [sourceTool],
+    doNotRetryTools: [sourceTool],
+    requiredNextTool: "search_files",
+    requiredNextToolArgs: searchArgs,
+    nextAction: "search_files",
+    nextActionArgs: searchArgs,
+    nextActionIsTool: true,
+    agentInstruction:
+      `The requested path does not exist. Do not retry ${sourceTool} or guess another path. `
+      + "Run the exact basename search once, then use a returned path or treat zero matches as evidence that the file is absent.",
+    nextSteps: [
+      "Run the exact basename search once.",
+      "Use a returned path, or treat a complete zero-result search as proof that this file is absent.",
+    ],
+    suggestedToolCalls: [{ tool: "search_files", args: searchArgs }],
+  };
+}
+
 function buildResponsePayload({ result, build, planResult, projectPath, command, logPath, verbose = false }) {
   const errorLines = extractLikelyCompileErrors(result.stdout, result.stderr);
   const compactErrorLines = errorLines.map((line) => compactCompilerDiagnostic(line)).filter(Boolean);
@@ -1009,6 +1042,7 @@ module.exports = {
   firstErrorCluster,
   isInterestingLogLine,
   formatSessionHandoff,
+  missingReadTargetRecovery,
   parseBuildExecutionSummary,
   resolveAgentResultMaxChars,
   slimWriteSuccessPayload,

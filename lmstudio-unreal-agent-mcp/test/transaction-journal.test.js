@@ -10,6 +10,11 @@ const {
   upsertEntry,
   saveJournal,
   recoverIncompleteJournals,
+  prepareSingleFileJournal,
+  markJournalAwaitingBuild,
+  listPendingJournals,
+  finalizePendingJournals,
+  projectPathIdentity,
 } = require("../src/transaction-journal");
 
 function tempStateRoot() {
@@ -106,4 +111,100 @@ test("recoverIncompleteJournals isolates corrupt json", async () => {
   const report = await recoverIncompleteJournals(stateRoot);
   assert.strictEqual(report.skippedCorrupt.length, 1);
   delete process.env.AGENT_STATE_ROOT;
+});
+
+test("successful mutation remains pending until build proof finalizes it", async () => {
+  const stateRoot = tempStateRoot();
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const project = path.join(stateRoot, "Demo.uproject");
+  const target = path.join(stateRoot, "Source", "Demo", "Thing.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "before\n", "utf8");
+  const journal = prepareSingleFileJournal({
+    operation: "replace_in_file",
+    absolutePath: target,
+    relativePath: "Source/Demo/Thing.cpp",
+    priorContent: "before\n",
+    postContent: "after\n",
+    taskSessionId: "task-one",
+    projectPath: project,
+  });
+  fs.writeFileSync(target, "after\n", "utf8");
+  markJournalAwaitingBuild(journal);
+
+  assert.strictEqual(
+    listPendingJournals({ taskSessionId: "task-one", projectPath: project }).length,
+    1,
+  );
+  const finalized = await finalizePendingJournals({ taskSessionId: "task-one", projectPath: project });
+  assert.deepStrictEqual(finalized.finalized, [journal.transactionId]);
+  assert.strictEqual(listPendingJournals({ taskSessionId: "task-one", projectPath: project }).length, 0);
+  delete process.env.AGENT_STATE_ROOT;
+});
+
+test("single-file journal honors an explicit state root without leaking a duplicate", () => {
+  const stateRoot = tempStateRoot();
+  const defaultRoot = tempStateRoot();
+  process.env.AGENT_STATE_ROOT = defaultRoot;
+  const target = path.join(stateRoot, "Source", "Demo", "Thing.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "before\n", "utf8");
+
+  const journal = prepareSingleFileJournal({
+    operation: "replace_in_file",
+    absolutePath: target,
+    relativePath: "Source/Demo/Thing.cpp",
+    priorContent: "before\n",
+    postContent: "after\n",
+  }, stateRoot);
+
+  assert.ok(fs.existsSync(path.join(
+    stateRoot,
+    "transactions",
+    `${journal.transactionId}.json`,
+  )));
+  assert.ok(!fs.existsSync(path.join(
+    defaultRoot,
+    "transactions",
+    `${journal.transactionId}.json`,
+  )));
+  delete process.env.AGENT_STATE_ROOT;
+});
+
+test("restart recovery restores an agent-deleted file from its backup", async () => {
+  const stateRoot = tempStateRoot();
+  const target = path.join(stateRoot, "Source", "Demo", "Deleted.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "before deletion\n", "utf8");
+  const journal = prepareSingleFileJournal({
+    operation: "delete_file",
+    absolutePath: target,
+    relativePath: "Source/Demo/Deleted.cpp",
+    priorContent: "before deletion\n",
+    postContent: "",
+    deletedAfter: true,
+  }, stateRoot);
+  fs.unlinkSync(target);
+  markJournalAwaitingBuild(journal, {}, stateRoot);
+
+  const report = await recoverIncompleteJournals(stateRoot);
+
+  assert.ok(report.recovered.includes("Source/Demo/Deleted.cpp"));
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "before deletion\n");
+});
+
+test("project path identity folds case only for Windows", () => {
+  const mixed = path.join("ProjectRoot", "Demo.uproject");
+  assert.strictEqual(
+    projectPathIdentity(mixed, "win32"),
+    projectPathIdentity(mixed.toUpperCase(), "win32"),
+  );
+  assert.notStrictEqual(
+    projectPathIdentity(mixed, "linux"),
+    projectPathIdentity(mixed.toUpperCase(), "linux"),
+  );
+  assert.notStrictEqual(
+    projectPathIdentity(mixed, "darwin"),
+    projectPathIdentity(mixed.toUpperCase(), "darwin"),
+  );
 });

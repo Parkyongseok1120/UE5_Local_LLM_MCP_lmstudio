@@ -610,6 +610,61 @@ def test_failed_gate_attempts_are_persisted_and_equivalent_retry_is_blocked(
     assert gate not in current["failedGateAttempts"]
 
 
+def test_feature_frontier_repeat_ignores_model_facing_slice_shape_only(
+    tmp_path: Path,
+) -> None:
+    gate = "unreal_feature_intent_resolve"
+    started = task_start(
+        tmp_path,
+        request="Implement the earliest unfinished behavior",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": [gate]},
+            "executablePlanSlices": [
+                {"sliceId": "rules", "files": ["Source/Demo/Rules.cpp"]}
+            ],
+        },
+    )
+    evidence = {
+        "ok": False,
+        "errorCode": "FEATURE_FRONTIER_UNPROVEN",
+        "nextAction": "repair_feature_completion_frontier",
+        "completionFrontier": {
+            "issues": [
+                "unmetBehavior.locator is not present in the current source file"
+            ]
+        },
+    }
+    server_context = {
+        "_serverDirectSourceEvidenceFingerprint": "same-source-ledger",
+        "_serverCompletionFrontierHash": "same-frontier",
+    }
+
+    first = task_record_gate_failure(
+        tmp_path,
+        gate_name=gate,
+        task_authorization=started["taskAuthorization"],
+        input_payload={
+            **server_context,
+            "targetFiles": ["Source/Demo/Rules.cpp"],
+        },
+        evidence=evidence,
+    )
+    second = task_record_gate_failure(
+        tmp_path,
+        gate_name=gate,
+        task_authorization=started["taskAuthorization"],
+        input_payload=server_context,
+        evidence=evidence,
+    )
+
+    assert first["errorCode"] == "GATE_VALIDATION_FAILED"
+    assert second["errorCode"] == "REPEATED_GATE_BLOCKER"
+    assert second["equivalentAttemptCount"] == 2
+    assert second["blockerFingerprint"] == first["blockerFingerprint"]
+
+
 def test_continuation_preserves_active_task_intent_and_authorization(tmp_path: Path) -> None:
     started = task_start(
         tmp_path,

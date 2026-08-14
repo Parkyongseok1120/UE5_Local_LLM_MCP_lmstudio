@@ -735,6 +735,385 @@ test("empty symbol lookup cannot substitute for the sixth direct source read", a
   }
 });
 
+for (const recoveryCase of [
+  {
+    label: "accepts an equivalent workspace-prefixed target",
+    modelPath: "Git/Demo/Source/Demo/PlayerController.h",
+    committedPath: "Git/Demo/Source/Demo/PlayerController.h",
+    serverBoundPath: false,
+  },
+  {
+    label: "binds a nearby wrong file to the server-owned target",
+    modelPath: "Git/Demo/Source/Demo/GameMode.h",
+    committedPath: "Source/Demo/PlayerController.h",
+    serverBoundPath: true,
+  },
+]) test(`completion audit repairs payload and ${recoveryCase.label}`, async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-target-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-feature-target", ownerCapability: "owner-feature-target" };
+    let predictionCount = 0;
+    const frontier = {
+      milestone: "local_play",
+      candidateFeature: "player input",
+      declarationEvidence: [{ sourcePath: "Source/Demo/RuleEngine.h", locator: "TryPlaceStone" }],
+      implementationEvidence: [{ sourcePath: "Source/Demo/RuleEngine.cpp", locator: "TryPlaceStone" }],
+      implementedBehavior: ["Rule validation exists."],
+      unmetBehavior: {
+        statement: "Handle a local player's board click and place a legal stone",
+        sourcePath: "Source/Demo/PlayerController.cpp",
+        locator: "HandleBoardClick",
+        evidenceType: "direct_source",
+      },
+      priorCandidatesComplete: ["rule validation"],
+    };
+    const emitCall = (opts, id, name, args) => {
+      opts.onToolCallRequestStart(1, { toolCallId: id });
+      opts.onToolCallRequestNameReceived(1, name);
+      opts.onToolCallRequestArgumentFragmentGenerated(1, JSON.stringify(args));
+      opts.onToolCallRequestEnd(1, {
+        toolCallRequest: { id, type: "function", name, arguments: args },
+      });
+    };
+    const model = {
+      identifier: "feature-target-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        predictionCount += 1;
+        const roles = _history.getMessagesArray().map((message) => message.getRole());
+        const firstNonSystem = roles.findIndex((role) => role !== "system");
+        assert.equal(
+          firstNonSystem < 0 ? false : roles.slice(firstNonSystem).includes("system"),
+          false,
+          "Feature recovery must not append a system message after conversation history",
+        );
+        assert.equal(roles.filter((role) => role === "system").length, 1);
+        const names = opts.rawTools.tools.map((tool) => tool.function.name);
+        if (predictionCount <= 2) {
+          assert.deepEqual(names, ["unreal_feature_intent_resolve"]);
+          const required = opts.rawTools.tools[0].function.parameters.required;
+          assert.ok(required.includes("completionFrontier"));
+          assert.ok(required.includes("slices"));
+          assert.equal(required.includes("taskAuthorization"), false);
+          emitCall(opts, `feature-target-${predictionCount}`, "unreal_feature_intent_resolve", {
+            slices: [{
+              sliceId: "player_input",
+              files: [
+                "Source/Demo/PlayerController.h",
+                "Source/Demo/PlayerController.cpp",
+              ],
+            }],
+            targetFiles: [
+              "Source/Demo/PlayerController.h",
+              "Source/Demo/PlayerController.cpp",
+            ],
+            ...(predictionCount === 2 ? { completionFrontier: frontier } : {}),
+          });
+        } else if (predictionCount === 3) {
+          assert.deepEqual(names.sort(), ["read_file", "read_file_range"]);
+          emitCall(opts, "feature-target-read", "read_file", {
+            path: recoveryCase.modelPath,
+          });
+        } else if (predictionCount === 4) {
+          assert.deepEqual(names, ["unreal_feature_intent_resolve"]);
+          emitCall(opts, `feature-target-resume-${predictionCount}`, "unreal_feature_intent_resolve", {
+            targetFiles: ["Source/Demo/WrongTarget.cpp"],
+            slices: [{ sliceId: "wrong", files: ["Source/Demo/WrongTarget.cpp"] }],
+            completionFrontier: frontier,
+          });
+        } else if (predictionCount === 5) {
+          assert.deepEqual(names.sort(), ["read_file", "read_file_range"]);
+          emitCall(opts, "feature-target-second-read", "read_file", {
+            path: "Source/Demo/GameMode.h",
+          });
+        } else if (predictionCount === 6 || predictionCount === 7) {
+          assert.ok(names.includes("read_file"));
+          assert.ok(names.includes("unreal_feature_intent_resolve"));
+          assert.notEqual(opts.rawTools.force, true);
+          emitCall(
+            opts,
+            `feature-post-read-discovery-${predictionCount}`,
+            "read_file",
+            {
+              path: predictionCount === 6
+                ? "Source/Demo/BoardActor.cpp"
+                : "Source/Demo/BoardActor.h",
+            },
+          );
+        } else {
+          assert.equal(predictionCount, 8);
+          assert.deepEqual(names, ["unreal_feature_intent_resolve"]);
+          assert.equal(opts.rawTools.force, true);
+          emitCall(opts, "feature-after-rediscovery", "unreal_feature_intent_resolve", {
+            targetFiles: ["Source/Demo/RuleEngine.h", "Source/Demo/RuleEngine.cpp"],
+            slices: [{
+              sliceId: "new_candidate",
+              files: ["Source/Demo/RuleEngine.h", "Source/Demo/RuleEngine.cpp"],
+            }],
+            completionFrontier: frontier,
+          });
+        }
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      toolRoute: {
+        routeHash: "route-feature-target",
+        phase: "planner",
+        activeTools: ["read_file", "read_file_range", "unreal_feature_intent_resolve"],
+        selectedSlice: { sliceId: "task", files: [] },
+      },
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "unreal_feature_intent_resolve",
+        nextActionIsTool: true,
+      },
+    };
+    const messages = [
+      { role: "system", content: [{ type: "text", text: "Base Qwen-compatible system prompt." }] },
+      { role: "user", content: [{ type: "text", text: "Check current implementation status and implement the earliest incomplete feature." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "plan-feature-target", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "plan-feature-target", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "evidence-feature-target", type: "function", name: "evidence_first_contract", arguments: { mode: "codegen" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "evidence-feature-target", name: "evidence_first_contract", content: '{"ok":true}',
+      }] },
+    ];
+    for (const [index, filePath] of [
+      "Source/Demo/RuleEngine.h",
+      "Source/Demo/RuleEngine.cpp",
+      "Source/Demo/GameState.h",
+      "Source/Demo/GameState.cpp",
+      "Source/Demo/GameMode.h",
+      "Source/Demo/GameMode.cpp",
+    ].entries()) {
+      const id = `feature-target-read-${index}`;
+      messages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id, type: "function", name: "read_file", arguments: { path: filePath },
+      } }] });
+      messages.push({ role: "tool", content: [{
+        type: "toolCallResult", toolCallId: id, name: "read_file", content: '{"ok":true}',
+      }] });
+    }
+    const frontierEvidenceRow = {
+      type: "object",
+      properties: { sourcePath: { type: "string" }, locator: { type: "string" } },
+      required: ["sourcePath", "locator"],
+    };
+    const tools = [
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+      { type: "function", function: { name: "read_file_range", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+      {
+        type: "function",
+        function: {
+          name: "unreal_feature_intent_resolve",
+          parameters: {
+            type: "object",
+            properties: {
+              completionFrontier: {
+                type: "object",
+                properties: {
+                  milestone: { type: "string" },
+                  candidateFeature: { type: "string" },
+                  declarationEvidence: { type: "array", minItems: 1, items: frontierEvidenceRow },
+                  implementationEvidence: { type: "array", minItems: 1, items: frontierEvidenceRow },
+                  implementedBehavior: { type: "array" },
+                  unmetBehavior: {
+                    type: "object",
+                    properties: {
+                      statement: { type: "string" }, sourcePath: { type: "string" },
+                      locator: { type: "string" }, evidenceType: { type: "string" },
+                    },
+                    required: ["statement", "sourcePath", "locator", "evidenceType"],
+                  },
+                  priorCandidatesComplete: { type: "array" },
+                },
+                required: [
+                  "milestone", "candidateFeature", "declarationEvidence", "implementationEvidence",
+                  "implementedBehavior", "unmetBehavior", "priorCandidatesComplete",
+                ],
+              },
+              slices: {
+                type: "array", minItems: 1, items: {
+                  type: "object",
+                  properties: {
+                    sliceId: { type: "string" }, files: { type: "array", minItems: 1 },
+                  },
+                  required: ["sliceId", "files"],
+                },
+              },
+              targetFiles: { type: "array" },
+              taskAuthorization: { type: "object" },
+            },
+            required: ["taskAuthorization"],
+          },
+        },
+      },
+      { type: "function", function: { name: "evidence_first_contract", parameters: { type: "object", properties: {} } } },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), Chat.from({ messages }));
+
+    assert.equal(predictionCount, 3);
+    const committed = emitted.filter((event) => event.kind === "end");
+    assert.equal(committed.length, 1);
+    assert.equal(committed[0].request.name, "read_file");
+    assert.equal(committed[0].request.arguments.path, recoveryCase.committedPath);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const telemetry = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    const recovery = telemetry.find((event) => (
+      event.type === "feature_intent_target_evidence_recovery_completed"
+    ));
+    assert.equal(recovery.serverBoundPath, recoveryCase.serverBoundPath);
+    assert.equal(recovery.requestedPath, "source/demo/playercontroller.h");
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.requiredNextTool.name, "unreal_feature_intent_resolve");
+    assert.deepEqual(
+      checkpoint.requiredNextTool.args.targetFiles,
+      [
+        "Source/Demo/PlayerController.h",
+        "Source/Demo/PlayerController.cpp",
+      ],
+    );
+    assert.equal(
+      telemetry.some((event) => event.type === "feature_intent_resume_locked"),
+      true,
+    );
+
+    const withFirstRead = [
+      ...messages,
+      { role: "assistant", content: [{
+        type: "toolCallRequest", toolCallRequest: committed[0].request,
+      }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: committed[0].request.id,
+        name: committed[0].request.name,
+        content: '{"ok":true}',
+      }] },
+    ];
+    emitted.length = 0;
+    await generate(
+      controllerFor(model, {}, stateRoot, emitted, tools),
+      Chat.from({ messages: withFirstRead }),
+    );
+    assert.equal(predictionCount, 5);
+    const secondCommitted = emitted.filter((event) => event.kind === "end");
+    assert.equal(secondCommitted.length, 1);
+    assert.equal(secondCommitted[0].request.name, "read_file");
+    assert.equal(
+      secondCommitted[0].request.arguments.path,
+      "Source/Demo/PlayerController.cpp",
+    );
+    assert.deepEqual(
+      activeCheckpoint(stateRoot).requiredNextTool.args.targetFiles,
+      [
+        "Source/Demo/PlayerController.h",
+        "Source/Demo/PlayerController.cpp",
+      ],
+    );
+
+    const withBothReads = [
+      ...withFirstRead,
+      { role: "assistant", content: [{
+        type: "toolCallRequest", toolCallRequest: secondCommitted[0].request,
+      }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: secondCommitted[0].request.id,
+        name: secondCommitted[0].request.name,
+        content: '{"ok":true}',
+      }] },
+    ];
+    emitted.length = 0;
+    await generate(
+      controllerFor(model, {}, stateRoot, emitted, tools),
+      Chat.from({ messages: withBothReads }),
+    );
+    assert.equal(predictionCount, 6);
+    const postReadDiscovery = emitted.filter((event) => event.kind === "end");
+    assert.equal(postReadDiscovery.length, 1);
+    assert.equal(postReadDiscovery[0].request.name, "read_file");
+    assert.equal(postReadDiscovery[0].request.arguments.path, "Source/Demo/BoardActor.cpp");
+    const rediscoveryCheckpoint = activeCheckpoint(stateRoot);
+    assert.equal(rediscoveryCheckpoint.requiredNextTool, null);
+    assert.equal(rediscoveryCheckpoint.featureIntentResume.mode, "rediscover_after_target_read");
+    assert.equal(Object.hasOwn(rediscoveryCheckpoint.featureIntentResume, "args"), false);
+
+    const withFirstRediscovery = [
+      ...withBothReads,
+      { role: "assistant", content: [{
+        type: "toolCallRequest", toolCallRequest: postReadDiscovery[0].request,
+      }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: postReadDiscovery[0].request.id,
+        name: postReadDiscovery[0].request.name,
+        content: '{"ok":true}',
+      }] },
+    ];
+    emitted.length = 0;
+    await generate(
+      controllerFor(model, {}, stateRoot, emitted, tools),
+      Chat.from({ messages: withFirstRediscovery }),
+    );
+    assert.equal(predictionCount, 7);
+    const secondDiscovery = emitted.filter((event) => event.kind === "end");
+    assert.equal(secondDiscovery.length, 1);
+    assert.equal(secondDiscovery[0].request.name, "read_file");
+    assert.equal(secondDiscovery[0].request.arguments.path, "Source/Demo/BoardActor.h");
+
+    const withSecondRediscovery = [
+      ...withFirstRediscovery,
+      { role: "assistant", content: [{
+        type: "toolCallRequest", toolCallRequest: secondDiscovery[0].request,
+      }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: secondDiscovery[0].request.id,
+        name: secondDiscovery[0].request.name,
+        content: '{"ok":true}',
+      }] },
+    ];
+    emitted.length = 0;
+    await generate(
+      controllerFor(model, {}, stateRoot, emitted, tools),
+      Chat.from({ messages: withSecondRediscovery }),
+    );
+    assert.equal(predictionCount, 8);
+    const resumed = emitted.filter((event) => event.kind === "end");
+    assert.equal(resumed.length, 1);
+    assert.equal(resumed[0].request.name, "unreal_feature_intent_resolve");
+    assert.deepEqual(
+      resumed[0].request.arguments.targetFiles,
+      ["Source/Demo/RuleEngine.h", "Source/Demo/RuleEngine.cpp"],
+    );
+    assert.equal(resumed[0].request.arguments.slices[0].sliceId, "new_candidate");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("an active route keeps an explicitly server-required replan tool", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-replan-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -1045,6 +1424,669 @@ test("bounded source evidence clears a fake RAG action and hands off to feature 
   }
 });
 
+test("frontier payload repair with no required reads forces Feature Intent", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-frontier-repair-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-frontier-repair", ownerCapability: "owner-frontier-repair" };
+    let predictionCount = 0;
+    const model = {
+      identifier: "frontier-repair-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        predictionCount += 1;
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(
+          opts.rawTools.tools.map((tool) => tool.function.name),
+          ["unreal_feature_intent_resolve"],
+        );
+        const args = { selectedIntentId: "bounded_local" };
+        opts.onToolCallRequestStart(1, { toolCallId: "frontier-repair-submit" });
+        opts.onToolCallRequestNameReceived(1, "unreal_feature_intent_resolve");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, JSON.stringify(args));
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "frontier-repair-submit",
+            type: "function",
+            name: "unreal_feature_intent_resolve",
+            arguments: args,
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      featureCompletionAudit: { required: true, status: "pending" },
+      toolRoute: {
+        routeHash: "route-frontier-repair",
+        phase: "planner",
+        activeTools: ["read_file", "unreal_feature_intent_resolve"],
+        selectedSlice: {
+          sliceId: "local-play",
+          files: ["Source/Demo/GameState.cpp"],
+        },
+      },
+    };
+    const blocked = {
+      ok: false,
+      errorCode: "FEATURE_FRONTIER_UNPROVEN",
+      nextAction: "repair_feature_completion_frontier",
+      nextActionIsTool: false,
+      featureFrontierRecovery: {
+        kind: "repair_completion_frontier",
+        requiredReads: [],
+        requiredFields: ["completionFrontier.unmetBehavior.statement"],
+      },
+      taskAuthorization: ownership,
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "현재 구현 상태를 확인하고 가장 앞의 미완료 핵심 기능을 실제로 구현해줘" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "frontier-plan", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "frontier-plan", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "frontier-evidence-contract", type: "function", name: "evidence_first_contract", arguments: { mode: "codegen" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "frontier-evidence-contract", name: "evidence_first_contract", content: JSON.stringify({ ok: true }),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "frontier-blocked-call", type: "function", name: "unreal_feature_intent_resolve", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "frontier-blocked-call", name: "unreal_feature_intent_resolve", content: JSON.stringify(blocked),
+      }] },
+    ] });
+    const tools = [
+      { type: "function", function: {
+        name: "read_file",
+        parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      } },
+      { type: "function", function: {
+        name: "unreal_feature_intent_resolve",
+        parameters: {
+          type: "object",
+          properties: {
+            selectedIntentId: { type: "string" },
+            taskAuthorization: { type: "object" },
+          },
+          required: ["selectedIntentId", "taskAuthorization"],
+        },
+      } },
+      { type: "function", function: {
+        name: "evidence_first_contract",
+        parameters: { type: "object", properties: { mode: { type: "string" } } },
+      } },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.equal(predictionCount, 1);
+    const ends = emitted.filter((event) => event.kind === "end");
+    assert.equal(ends.length, 1);
+    assert.equal(ends[0].request.name, "unreal_feature_intent_resolve");
+    assert.deepEqual(ends[0].request.arguments.taskAuthorization, ownership);
+    assert.equal(ends.some((event) => event.request.name === "read_file"), false);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => (
+      event.type === "context_measurement"
+        && event.featureFrontierRecoveryActive === true
+        && event.featureFrontierRepairToolForced === true
+        && event.exactRequiredToolForced === true
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("source-contradicted frontier gets two bounded discovery calls before Feature Intent", async () => {
+  for (const discoveryCount of [0, 2]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `context-compactor-frontier-semantic-${discoveryCount}-`));
+    process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+    try {
+      const { generate } = require("../dist/generator.js");
+      const emitted = [];
+      const ownership = {
+        taskSessionId: `task-frontier-semantic-${discoveryCount}`,
+        ownerCapability: "owner-frontier-semantic",
+      };
+      const shouldForceFeature = discoveryCount === 2;
+      const model = {
+        identifier: "frontier-semantic-model",
+        async applyPromptTemplate() { return "formatted"; },
+        async countTokens(value) { return String(value || "").length; },
+        async getContextLength() { return 100_000; },
+        respond(_history, opts) {
+          if (shouldForceFeature) {
+            assert.equal(opts.rawTools.force, true);
+            assert.deepEqual(
+              opts.rawTools.tools.map((tool) => tool.function.name),
+              ["unreal_feature_intent_resolve"],
+            );
+            const args = { selectedIntentId: "bounded_local" };
+            opts.onToolCallRequestStart(1, { toolCallId: "semantic-frontier-submit" });
+            opts.onToolCallRequestNameReceived(1, "unreal_feature_intent_resolve");
+            opts.onToolCallRequestArgumentFragmentGenerated(1, JSON.stringify(args));
+            opts.onToolCallRequestEnd(1, {
+              toolCallRequest: {
+                id: "semantic-frontier-submit",
+                type: "function",
+                name: "unreal_feature_intent_resolve",
+                arguments: args,
+              },
+            });
+          } else {
+            assert.notEqual(opts.rawTools.force, true);
+            const names = opts.rawTools.tools.map((tool) => tool.function.name);
+            assert.ok(names.includes("read_file"));
+            assert.ok(names.includes("unreal_feature_intent_resolve"));
+            const args = { path: "Source/Demo/NextCandidate.cpp" };
+            opts.onToolCallRequestStart(1, { toolCallId: "semantic-discovery-read" });
+            opts.onToolCallRequestNameReceived(1, "read_file");
+            opts.onToolCallRequestArgumentFragmentGenerated(1, JSON.stringify(args));
+            opts.onToolCallRequestEnd(1, {
+              toolCallRequest: {
+                id: "semantic-discovery-read",
+                type: "function",
+                name: "read_file",
+                arguments: args,
+              },
+            });
+          }
+          return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+        },
+      };
+      const route = {
+        ok: true,
+        taskAuthorization: ownership,
+        featureCompletionAudit: { required: true, status: "pending" },
+        toolRoute: {
+          routeHash: `route-frontier-semantic-${discoveryCount}`,
+          phase: "planner",
+          activeTools: ["read_file", "unreal_feature_intent_resolve"],
+          selectedSlice: {
+            sliceId: "local-play",
+            files: ["Source/Demo/BoardActor.cpp"],
+          },
+        },
+      };
+      const blocked = {
+        ok: false,
+        errorCode: "FEATURE_FRONTIER_UNPROVEN",
+        nextAction: "repair_feature_completion_frontier",
+        nextActionIsTool: false,
+        featureFrontierRecovery: {
+          kind: "rediscover_feature_candidate",
+          requiredReads: [],
+          semanticDiscoveryRequired: true,
+          maxDiscoveryCalls: 2,
+          issues: ["explicit no-call claim was contradicted by verified source"],
+        },
+        taskAuthorization: ownership,
+      };
+      const messages = [
+        { role: "user", content: [{ type: "text", text: "Check current implementation status and implement the earliest incomplete core feature." }] },
+        { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+          id: "semantic-plan", type: "function", name: "unreal_agent_plan", arguments: {},
+        } }] },
+        { role: "tool", content: [{
+          type: "toolCallResult", toolCallId: "semantic-plan", name: "unreal_agent_plan", content: JSON.stringify(route),
+        }] },
+        { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+          id: "semantic-contract", type: "function", name: "evidence_first_contract", arguments: { mode: "codegen" },
+        } }] },
+        { role: "tool", content: [{
+          type: "toolCallResult", toolCallId: "semantic-contract", name: "evidence_first_contract", content: JSON.stringify({ ok: true }),
+        }] },
+        { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+          id: "semantic-blocked-call", type: "function", name: "unreal_feature_intent_resolve", arguments: {},
+        } }] },
+        { role: "tool", content: [{
+          type: "toolCallResult", toolCallId: "semantic-blocked-call", name: "unreal_feature_intent_resolve", content: JSON.stringify(blocked),
+        }] },
+      ];
+      for (let index = 0; index < discoveryCount; index += 1) {
+        const id = `semantic-read-${index}`;
+        messages.push(
+          { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+            id, type: "function", name: "read_file", arguments: { path: `Source/Demo/Candidate${index}.cpp` },
+          } }] },
+          { role: "tool", content: [{
+            type: "toolCallResult", toolCallId: id, name: "read_file", content: JSON.stringify({ ok: true }),
+          }] },
+        );
+      }
+      const tools = [
+        { type: "function", function: {
+          name: "read_file",
+          parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+        } },
+        { type: "function", function: {
+          name: "unreal_feature_intent_resolve",
+          parameters: {
+            type: "object",
+            properties: {
+              selectedIntentId: { type: "string" },
+              taskAuthorization: { type: "object" },
+            },
+            required: ["selectedIntentId", "taskAuthorization"],
+          },
+        } },
+        { type: "function", function: {
+          name: "evidence_first_contract",
+          parameters: { type: "object", properties: { mode: { type: "string" } } },
+        } },
+      ];
+
+      await generate(controllerFor(model, {}, stateRoot, emitted, tools), Chat.from({ messages }));
+
+      const end = emitted.find((event) => event.kind === "end");
+      assert.ok(end);
+      assert.equal(
+        end.request.name,
+        shouldForceFeature ? "unreal_feature_intent_resolve" : "read_file",
+      );
+      const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+        .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+      const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+        .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+      assert.ok(events.some((event) => (
+        event.type === "context_measurement"
+          && event.featureFrontierSemanticRediscoveryActive === !shouldForceFeature
+          && event.featureFrontierRepairToolForced === shouldForceFeature
+      )));
+    } finally {
+      delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("terminal repeated frontier blocker does not force the rejected gate again", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-frontier-repeat-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-frontier-repeat", ownerCapability: "owner-frontier-repeat" };
+    let predictionCount = 0;
+    const model = {
+      identifier: "frontier-repeat-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        predictionCount += 1;
+        assert.notEqual(opts.rawTools.force, true);
+        const names = opts.rawTools.tools.map((tool) => tool.function.name);
+        assert.ok(names.includes("read_file"));
+        assert.ok(names.includes("unreal_feature_intent_resolve"));
+        opts.onPredictionFragment({ content: "Inspect a different candidate before retrying the gate." });
+        return { async result() { return { stats: { stopReason: "stop" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      featureCompletionAudit: { required: true, status: "pending" },
+      toolRoute: {
+        routeHash: "route-frontier-repeat",
+        phase: "planner",
+        activeTools: ["read_file", "unreal_feature_intent_resolve"],
+        selectedSlice: {
+          sliceId: "local-play",
+          files: [],
+        },
+      },
+    };
+    const repeated = {
+      ok: false,
+      errorCode: "REPEATED_GATE_BLOCKER",
+      validationErrorCode: "FEATURE_FRONTIER_UNPROVEN",
+      retryable: false,
+      nextAction: "repair_feature_completion_frontier",
+      nextActionIsTool: false,
+      featureFrontierRecovery: {
+        kind: "repair_completion_frontier",
+        requiredReads: [],
+      },
+      taskAuthorization: ownership,
+      gateCompletion: {
+        errorCode: "REPEATED_GATE_BLOCKER",
+        validationErrorCode: "FEATURE_FRONTIER_UNPROVEN",
+        retryable: false,
+      },
+    };
+    const repeatedMessages = [
+      { role: "user", content: [{ type: "text", text: "가장 앞의 미완료 핵심 기능을 실제로 구현해줘" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "repeat-plan", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "repeat-plan", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "repeat-contract", type: "function", name: "evidence_first_contract", arguments: { mode: "codegen" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "repeat-contract", name: "evidence_first_contract", content: JSON.stringify({ ok: true }),
+      }] },
+    ];
+    for (const [index, filePath] of [
+      "Source/Demo/RuleEngine.h",
+      "Source/Demo/RuleEngine.cpp",
+      "Source/Demo/GameState.h",
+      "Source/Demo/GameState.cpp",
+      "Source/Demo/GameMode.h",
+      "Source/Demo/GameMode.cpp",
+    ].entries()) {
+      const id = `repeat-read-${index}`;
+      repeatedMessages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id, type: "function", name: "read_file", arguments: { path: filePath },
+      } }] });
+      repeatedMessages.push({ role: "tool", content: [{
+        type: "toolCallResult", toolCallId: id, name: "read_file", content: JSON.stringify({ ok: true }),
+      }] });
+    }
+    repeatedMessages.push(
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "repeat-frontier", type: "function", name: "unreal_feature_intent_resolve", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "repeat-frontier", name: "unreal_feature_intent_resolve", content: JSON.stringify(repeated),
+      }] },
+    );
+    const history = Chat.from({ messages: repeatedMessages });
+    const tools = [
+      { type: "function", function: {
+        name: "read_file",
+        parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      } },
+      { type: "function", function: {
+        name: "unreal_feature_intent_resolve",
+        parameters: { type: "object", properties: {} },
+      } },
+      { type: "function", function: {
+        name: "evidence_first_contract",
+        parameters: { type: "object", properties: { mode: { type: "string" } } },
+      } },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.equal(predictionCount, 1);
+    assert.equal(emitted.some((event) => event.kind === "end"), false);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => (
+      event.type === "context_measurement"
+        && event.featureFrontierRecoveryActive === false
+        && event.featureFrontierRepairToolForced === false
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("deferred Feature Intent resume does not override a newer checkpoint handoff", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-checkpoint-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let predictionCount = 0;
+    const model = {
+      identifier: "feature-checkpoint-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        predictionCount += 1;
+        if (predictionCount === 1) {
+          opts.onPredictionFragment({ content: "seed" });
+        } else {
+          assert.equal(opts.rawTools.force, true);
+          assert.deepEqual(
+            opts.rawTools.tools.map((tool) => tool.function.name),
+            ["unreal_task_checkpoint"],
+          );
+          opts.onToolCallRequestStart(1, { toolCallId: "budget-checkpoint" });
+          opts.onToolCallRequestNameReceived(1, "unreal_task_checkpoint");
+          opts.onToolCallRequestArgumentFragmentGenerated(1, JSON.stringify({ action: "record" }));
+          opts.onToolCallRequestEnd(1, {
+            toolCallRequest: {
+              id: "budget-checkpoint",
+              type: "function",
+              name: "unreal_task_checkpoint",
+              arguments: { action: "record" },
+            },
+          });
+        }
+        return { async result() { return { stats: { stopReason: predictionCount === 1 ? "stop" : "toolCalls" } }; } };
+      },
+    };
+    const initial = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Continue the active implementation task." }] },
+    ] });
+    await generate(controllerFor(model, {}, stateRoot, emitted, []), initial);
+
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const checkpointPath = path.join(stateRoot, sessionDir.name, "active-checkpoint.json");
+    const seeded = JSON.parse(fs.readFileSync(checkpointPath, "utf8"));
+    seeded.featureIntentResume = {
+      args: { selectedIntentId: "deferred-feature" },
+      observedResultCount: 0,
+    };
+    seeded.requiredNextTool = {
+      name: "unreal_feature_intent_resolve",
+      reference: "feature_intent_target_evidence_resume",
+      args: { selectedIntentId: "deferred-feature" },
+    };
+    fs.writeFileSync(checkpointPath, `${JSON.stringify(seeded, null, 2)}\n`, "utf8");
+
+    const ownership = { taskSessionId: "task-budget", ownerCapability: "owner-budget" };
+    const budgetBlock = {
+      ok: false,
+      errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+      nextAction: "unreal_task_checkpoint",
+      nextActionIsTool: true,
+      nextActionArgs: { action: "record", taskAuthorization: ownership },
+      taskAuthorization: ownership,
+      control: {
+        version: 1,
+        taskId: ownership.taskSessionId,
+        phase: "read_file_range",
+        status: "Blocked",
+        nextAction: "unreal_task_checkpoint",
+        nextActionIsTool: true,
+        retryPolicy: "once",
+      },
+    };
+    const continued = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Continue the active implementation task." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "budgeted-read", type: "function", name: "read_file_range", arguments: { path: "Source/Demo/Rules.cpp" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "budgeted-read", name: "read_file_range", content: JSON.stringify(budgetBlock),
+      }] },
+    ] });
+    const tools = [
+      { type: "function", function: { name: "read_file_range", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "unreal_feature_intent_resolve", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: {
+        name: "unreal_task_checkpoint",
+        parameters: { type: "object", properties: { action: { type: "string" }, taskAuthorization: { type: "object" } } },
+      } },
+    ];
+    emitted.length = 0;
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), continued);
+
+    assert.equal(predictionCount, 2);
+    const end = emitted.find((event) => event.kind === "end");
+    assert.equal(end.request.name, "unreal_task_checkpoint");
+    assert.equal(end.request.arguments.action, "record");
+    assert.deepEqual(end.request.arguments.taskAuthorization, ownership);
+    assert.deepEqual(activeCheckpoint(stateRoot).featureIntentResume.args, {
+      selectedIntentId: "deferred-feature",
+    });
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+
+test("post-read Feature Intent reevaluation does not resurrect stale semantic args after checkpoint", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-reevaluate-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let predictionCount = 0;
+    const model = {
+      identifier: "feature-reevaluate-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        predictionCount += 1;
+        if (predictionCount === 1) {
+          opts.onPredictionFragment({ content: "seed" });
+          return { async result() { return { stats: { stopReason: "stop" } }; } };
+        }
+        const names = opts.rawTools.tools.map((tool) => tool.function.name);
+        assert.ok(names.includes("read_file"));
+        assert.ok(names.includes("list_directory"));
+        assert.equal(names.includes("unreal_feature_intent_resolve"), false);
+        opts.onToolCallRequestStart(1, { toolCallId: "next-candidate-list" });
+        opts.onToolCallRequestNameReceived(1, "list_directory");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"Source/Demo/Tests"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "next-candidate-list",
+            type: "function",
+            name: "list_directory",
+            arguments: { path: "Source/Demo/Tests" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    await generate(
+      controllerFor(model, {}, stateRoot, emitted, []),
+      Chat.from({ messages: [
+        { role: "user", content: [{ type: "text", text: "Implement the earliest incomplete local-play feature." }] },
+      ] }),
+    );
+
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const checkpointPath = path.join(stateRoot, sessionDir.name, "active-checkpoint.json");
+    const ownership = { taskSessionId: "task-reevaluate", ownerCapability: "owner-reevaluate" };
+    const route = {
+      routeHash: "route-reevaluate",
+      phase: "planner",
+      activeTools: ["list_directory", "read_file", "unreal_feature_intent_resolve"],
+      selectedSlice: { sliceId: "task", files: [] },
+    };
+    const seeded = JSON.parse(fs.readFileSync(checkpointPath, "utf8"));
+    seeded.taskRouteOwnership = ownership;
+    seeded.toolRoute = route;
+    seeded.featureIntentResume = {
+      mode: "rediscover_after_target_read",
+      observedResultCount: 0,
+      observedDiscoveryResultCount: 1,
+      maxDiscoveryCalls: 2,
+    };
+    seeded.requiredNextTool = {
+      name: "unreal_feature_intent_resolve",
+      reference: "stale-checkpoint-handoff",
+      args: {
+        taskAuthorization: ownership,
+        targetFiles: ["Source/Demo/AlreadyDisproved.cpp"],
+        completionFrontier: { candidateFeature: "already disproved" },
+      },
+    };
+    fs.writeFileSync(checkpointPath, `${JSON.stringify(seeded, null, 2)}\n`, "utf8");
+
+    const checkpointResult = {
+      ok: true,
+      taskAuthorization: ownership,
+      toolRoute: route,
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+      control: {
+        version: 1,
+        taskId: ownership.taskSessionId,
+        phase: "unreal_task_checkpoint",
+        status: "NeedsAction",
+        nextAction: "unreal_feature_intent_resolve",
+        nextActionIsTool: true,
+        retryPolicy: "none",
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Implement the earliest incomplete local-play feature." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "evidence-contract", type: "function", name: "evidence_first_contract", arguments: { mode: "codegen" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "evidence-contract", name: "evidence_first_contract", content: '{"ok":true}',
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "candidate-target-read", type: "function", name: "read_file", arguments: { path: "Source/Demo/AlreadyDisproved.cpp" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "candidate-target-read", name: "read_file", content: '{"ok":true,"content":"implemented"}',
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "budget-checkpoint", type: "function", name: "unreal_task_checkpoint", arguments: { action: "record" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "budget-checkpoint", name: "unreal_task_checkpoint", content: JSON.stringify(checkpointResult),
+      }] },
+    ] });
+    const tools = [
+      { type: "function", function: { name: "list_directory", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+      { type: "function", function: { name: "unreal_feature_intent_resolve", parameters: { type: "object", properties: { taskAuthorization: { type: "object" } } } } },
+      { type: "function", function: { name: "evidence_first_contract", parameters: { type: "object", properties: {} } } },
+    ];
+    emitted.length = 0;
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.equal(predictionCount, 2);
+    const end = emitted.find((event) => event.kind === "end");
+    assert.equal(end.request.name, "list_directory");
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.requiredNextTool, null);
+    assert.equal(checkpoint.featureIntentResume.mode, "rediscover_after_target_read");
+    assert.equal(Object.hasOwn(checkpoint.featureIntentResume, "args"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+
 test("active project bootstrap forces planner with the exact current user goal", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-active-project-plan-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -1121,6 +2163,174 @@ test("active project bootstrap forces planner with the exact current user goal",
     assert.equal(end.request.name, "unreal_agent_plan");
     assert.equal(end.request.arguments.request, exactGoal);
     assert.equal(emitted.some((event) => event.kind === "failure"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("complete zero-result basename search lets a new Feature target reach the validator", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-new-target-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-feature-new-target", ownerCapability: "owner-feature-new-target" };
+    const target = "Source/Demo/Tests/Stage1LocalPlay.spec.cpp";
+    const model = {
+      identifier: "feature-new-target-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(
+          opts.rawTools.tools.map((tool) => tool.function.name),
+          ["unreal_feature_intent_resolve"],
+        );
+        const args = {
+          slices: [{ sliceId: "new_stage", files: [target] }],
+          completionFrontier: {
+            milestone: "local play",
+            candidateFeature: "local play behavior",
+            declarationEvidence: [],
+            implementationEvidence: [],
+            implementedBehavior: [],
+            unmetBehavior: {
+              statement: "Implement one missing local-play behavior",
+              sourcePath: target,
+              locator: "new file",
+              evidenceType: "direct_source",
+            },
+            priorCandidatesComplete: [],
+          },
+        };
+        opts.onToolCallRequestStart(1, { toolCallId: "feature-new-target-submit" });
+        opts.onToolCallRequestNameReceived(1, "unreal_feature_intent_resolve");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, JSON.stringify(args));
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "feature-new-target-submit",
+            type: "function",
+            name: "unreal_feature_intent_resolve",
+            arguments: args,
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      featureCompletionAudit: { required: true, status: "pending" },
+      toolRoute: {
+        routeHash: "route-feature-new-target",
+        phase: "planner",
+        activeTools: ["read_file", "search_files", "unreal_feature_intent_resolve"],
+        selectedSlice: { sliceId: "task", files: [] },
+      },
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "unreal_feature_intent_resolve",
+        nextActionIsTool: true,
+      },
+    };
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "Check current implementation status and implement the earliest incomplete feature." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "new-target-plan", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "new-target-plan", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "new-target-contract", type: "function", name: "evidence_first_contract", arguments: { mode: "codegen" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "new-target-contract", name: "evidence_first_contract", content: '{"ok":true}',
+      }] },
+    ];
+    for (const [index, filePath] of [
+      "Source/Demo/RuleEngine.h", "Source/Demo/RuleEngine.cpp",
+      "Source/Demo/GameState.h", "Source/Demo/GameState.cpp",
+      "Source/Demo/GameMode.h", "Source/Demo/GameMode.cpp",
+    ].entries()) {
+      const id = `new-target-evidence-${index}`;
+      messages.push(
+        { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+          id, type: "function", name: "read_file", arguments: { path: filePath },
+        } }] },
+        { role: "tool", content: [{
+          type: "toolCallResult", toolCallId: id, name: "read_file", content: '{"ok":true}',
+        }] },
+      );
+    }
+    messages.push(
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "new-target-missing-read", type: "function", name: "read_file", arguments: { path: target },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "new-target-missing-read", name: "read_file", content: JSON.stringify({
+          ok: false,
+          errorCode: "READ_TARGET_NOT_FOUND",
+          requiredNextTool: "search_files",
+          requiredNextToolArgs: {
+            query: "Stage1LocalPlay.spec.cpp", path: "project://Source", matchFileNames: true,
+          },
+          nextAction: "search_files",
+          nextActionIsTool: true,
+        }),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "new-target-zero-search", type: "function", name: "search_files", arguments: {
+          query: "Stage1LocalPlay.spec.cpp", path: "project://Source", matchFileNames: true,
+        },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "new-target-zero-search", name: "search_files", content: JSON.stringify({
+          ok: true, searchComplete: true, incompleteReasons: [], results: [], fileNameResults: [],
+        }),
+      }] },
+    );
+    const tools = [
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+      { type: "function", function: { name: "search_files", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: {
+        name: "unreal_feature_intent_resolve",
+        parameters: {
+          type: "object",
+          properties: {
+            slices: { type: "array" },
+            taskAuthorization: { type: "object" },
+          },
+          required: ["taskAuthorization"],
+        },
+      } },
+      { type: "function", function: { name: "evidence_first_contract", parameters: { type: "object", properties: {} } } },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), Chat.from({ messages }));
+
+    const end = emitted.find((event) => event.kind === "end");
+    assert.ok(end);
+    assert.equal(end.request.name, "unreal_feature_intent_resolve");
+    assert.deepEqual(end.request.arguments.taskAuthorization, ownership);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => (
+      event.type === "feature_intent_new_target_absence_proven"
+        && event.targetFiles.includes("source/demo/tests/stage1localplay.spec.cpp")
+    )));
+    assert.equal(
+      events.some((event) => event.type === "feature_intent_target_evidence_recovery_started"),
+      false,
+    );
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -1643,6 +2853,49 @@ test("atomic output streams reasoning progress but withholds final text until co
       emitted.filter((event) => event.kind === "fragment").map((event) => event.content),
       ["Inspecting project structure...", "Complete."],
     );
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("silent local-model prediction emits a bounded UI heartbeat", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-heartbeat-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const model = {
+      identifier: "heartbeat-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        return {
+          async result() {
+            await new Promise((resolve) => setTimeout(resolve, 1_150));
+            return { stats: { stopReason: "eosFound" } };
+          },
+        };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Inspect the current source state." }] },
+    ] });
+
+    await generate(controllerFor(
+      model,
+      { predictionHeartbeatSeconds: 1 },
+      stateRoot,
+      emitted,
+      [],
+    ), history);
+
+    const heartbeat = emitted.find((event) => (
+      event.kind === "fragment" && event.content.includes("[Working: Model reasoning")
+    ));
+    assert.ok(heartbeat);
+    assert.equal(heartbeat.opts.reasoningType, "reasoning");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -2385,6 +3638,101 @@ test("semantic blocker rejects forbidden evidence calls but allows forward mutat
     assert.deepEqual(activeCheckpoint(stateRoot).semanticBlocker.forbiddenTools.sort(), [
       "read_file", "read_file_range", "read_symbol", "search_files",
     ]);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("missing read target forces one basename search instead of another read", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-missing-read-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let advertisedTools = [];
+    const model = {
+      identifier: "missing-read-recovery-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+        const callId = 1;
+        opts.onToolCallRequestStart(callId, { toolCallId: `call-${callId}` });
+        opts.onToolCallRequestNameReceived(callId, "search_files");
+        opts.onToolCallRequestArgumentFragmentGenerated(callId, "{}");
+        opts.onToolCallRequestEnd(callId, {
+          toolCallRequest: { id: `call-${callId}`, type: "function", name: "search_files", arguments: {} },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const searchArgs = {
+      query: "GomokuLocalPlayTest.cpp",
+      path: "project://Source",
+      matchFileNames: true,
+    };
+    const blocker = {
+      ok: false,
+      errorCode: "READ_TARGET_NOT_FOUND",
+      stopCurrentWorkflow: false,
+      doNotRetry: ["read_file_range"],
+      doNotRetryTools: ["read_file_range"],
+      requiredNextTool: "search_files",
+      requiredNextToolArgs: searchArgs,
+      nextAction: "search_files",
+      nextActionArgs: searchArgs,
+      nextActionIsTool: true,
+      agentInstruction: "Search the exact basename once.",
+      control: {
+        version: 1,
+        phase: "read_file_range",
+        status: "NeedsAction",
+        nextAction: "search_files",
+        nextActionIsTool: true,
+        retryPolicy: "forbidden",
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "구현을 완료해줘" }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "missing-read", type: "function", name: "read_file_range", arguments: {
+          path: "Source/O_Mock/Tests/GomokuLocalPlayTest.cpp", startLine: 380, endLine: 520,
+        },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "missing-read",
+        name: "read_file_range",
+        content: JSON.stringify(blocker),
+      }] },
+    ] });
+    const tools = ["read_file_range", "search_files"].map((name) => ({
+      type: "function",
+      function: {
+        name,
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            path: { type: "string" },
+            matchFileNames: { type: "boolean" },
+          },
+        },
+      },
+    }));
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.deepEqual(advertisedTools, ["search_files"]);
+    assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "read_file_range"), false);
+    const search = emitted.find((event) => event.kind === "end" && event.request.name === "search_files");
+    assert.ok(search);
+    assert.deepEqual(search.request.arguments, searchArgs);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.semanticBlocker.scope, "until_required_tool_success");
+    assert.deepEqual(checkpoint.semanticBlocker.forbiddenTools, ["read_file_range"]);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });

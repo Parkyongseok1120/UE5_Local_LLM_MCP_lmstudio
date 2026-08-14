@@ -20,8 +20,9 @@ test("rollback flags external deletion of existing file", async () => {
   fs.mkdirSync(backupDir, { recursive: true });
   const backupPath = path.join(backupDir, "A.cpp.bak");
   atomicWriteText(backupPath, original);
+  const stateRoot = path.join(root, ".agent");
 
-  const journal = createJournal({ operation: "apply_edit_bundle" });
+  const journal = createJournal({ operation: "apply_edit_bundle" }, stateRoot);
   upsertEntry(journal, {
     relativePath: "Source/A.cpp",
     canonicalAbsolutePath: abs,
@@ -31,11 +32,34 @@ test("rollback flags external deletion of existing file", async () => {
     preContentBackupPath: backupPath,
     postHash: sha256Text("mutated content\n"),
     writeCompleted: true,
-  });
+  }, stateRoot);
   journal.status = "committed";
 
   fs.unlinkSync(abs);
-  const result = await rollbackJournal(journal);
+  const result = await rollbackJournal(journal, stateRoot);
   assert.strictEqual(result.externalChangeDetected.includes("Source/A.cpp"), true);
   assert.strictEqual(fs.existsSync(abs), false);
+});
+
+test("rollback restores an agent-deleted file from its preimage backup", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "delete-rb-"));
+  const stateRoot = path.join(root, ".agent");
+  const abs = path.join(root, "Source", "A.cpp");
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const original = "restore me\n";
+  fs.writeFileSync(abs, original, "utf8");
+  const { prepareSingleFileJournal } = require("../src/transaction-journal");
+  const journal = prepareSingleFileJournal({
+    operation: "delete_file",
+    absolutePath: abs,
+    relativePath: "Source/A.cpp",
+    priorContent: original,
+    postContent: "",
+    deletedAfter: true,
+  }, stateRoot);
+  fs.unlinkSync(abs);
+
+  const result = await rollbackJournal(journal, stateRoot);
+  assert.strictEqual(result.rolledBack, true);
+  assert.strictEqual(fs.readFileSync(abs, "utf8"), original);
 });

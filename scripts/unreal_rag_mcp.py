@@ -872,6 +872,104 @@ def _task_authorization_schema() -> dict[str, Any]:
     return _checkpoint_authorization_schema()
 
 
+def _feature_completion_frontier_schema() -> dict[str, Any]:
+    evidence_row = {
+        "type": "object",
+        "properties": {
+            "sourcePath": {"type": "string", "minLength": 1},
+            "locator": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Exact symbol text or line locator present in the direct source read.",
+            },
+        },
+        "required": ["sourcePath", "locator"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "description": (
+            "Required only when task state says featureCompletionAudit.required=true. "
+            "Proves the earliest unfinished functional behavior from current direct source; "
+            "tests, automation, comments, and documentation alone are not a feature."
+        ),
+        "properties": {
+            "milestone": {"type": "string", "minLength": 1},
+            "candidateFeature": {"type": "string", "minLength": 1},
+            "declarationEvidence": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": evidence_row,
+            },
+            "implementationEvidence": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": evidence_row,
+            },
+            "implementedBehavior": {
+                "type": "array",
+                "maxItems": 24,
+                "items": {"type": "string"},
+            },
+            "unmetBehavior": {
+                "type": "object",
+                "properties": {
+                    "statement": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": (
+                            "A definite, directly observed missing or incorrect runtime behavior. "
+                            "Do not submit an investigation such as confirm/check/verify/ensure, "
+                            "or a conditional such as if needed/if incomplete."
+                        ),
+                    },
+                    "sourcePath": {"type": "string", "minLength": 1},
+                    "locator": {"type": "string", "minLength": 1},
+                    "evidenceType": {
+                        "type": "string",
+                        "enum": ["direct_source", "static_analysis", "build", "automation", "runtime"],
+                    },
+                },
+                "required": ["statement", "sourcePath", "locator", "evidenceType"],
+                "additionalProperties": False,
+            },
+            "priorCandidatesComplete": {
+                "type": "array",
+                "maxItems": 24,
+                "items": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "candidateFeature": {"type": "string"},
+                                "evidence": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["candidateFeature"],
+                            "additionalProperties": False,
+                        },
+                    ]
+                },
+            },
+        },
+        "required": [
+            "milestone",
+            "candidateFeature",
+            "declarationEvidence",
+            "implementationEvidence",
+            "implementedBehavior",
+            "unmetBehavior",
+            "priorCandidatesComplete",
+        ],
+        "additionalProperties": False,
+    }
+
+
 def _architecture_proposal_patch_schema() -> dict[str, Any]:
     schema = _architecture_proposal_schema()
     schema.pop("required", None)
@@ -1159,6 +1257,8 @@ def _record_prewrite_gate(
             "validationErrorCode": str(evidence.get("errorCode") or ""),
             "nextAction": str(evidence.get("nextAction") or gate_name),
             "nextActionArgs": evidence.get("nextActionArgs") or {},
+            "nextActionIsTool": evidence.get("nextActionIsTool") is True,
+            "featureFrontierRecovery": evidence.get("featureFrontierRecovery") or {},
             "recoveryContext": evidence.get("recoveryContext") or {},
             "firstBlocker": evidence.get("firstBlocker") or {},
             "doNotRetryUnchanged": evidence.get("doNotRetryUnchanged") is True,
@@ -1259,7 +1359,18 @@ def _reconcile_gate_completion(
     if isinstance(generation_gate, dict):
         generation_gate["writesAllowed"] = False
 
-    if not local_failed:
+    repeated_blocker = str(gate_completion.get("errorCode") or "") == "REPEATED_GATE_BLOCKER"
+    if repeated_blocker:
+        # The task-owned retry boundary is more authoritative than the local
+        # validator's first-failure diagnostic.  Keeping FEATURE_* at the top
+        # level makes context middleware interpret the terminal repeat as a new
+        # payload-repair request and call the same gate forever.
+        payload["errorCode"] = "REPEATED_GATE_BLOCKER"
+        payload["error"] = str(
+            gate_completion.get("error")
+            or "The same canonical gate blocker was already observed twice."
+        )
+    elif not local_failed:
         payload["errorCode"] = str(
             gate_completion.get("errorCode") or "TASK_GATE_COMPLETION_FAILED"
         )
@@ -1287,7 +1398,9 @@ def _reconcile_gate_completion(
         "agentInstruction",
         "blockerFingerprint",
     ):
-        if key in gate_completion and (not local_failed or key not in payload):
+        if key in gate_completion and (
+            repeated_blocker or not local_failed or key not in payload
+        ):
             payload[key] = gate_completion[key]
     return False
 
@@ -1580,6 +1693,608 @@ def _feature_intent_direct_source_evidence(
     return result
 
 
+def _feature_gap_statement_issues(statement: str) -> list[str]:
+    """Reject only investigation-shaped or non-specific completion claims."""
+
+    lower_statement = str(statement or "").strip().casefold()
+    issues: list[str] = []
+    noncommittal_gap = bool(
+        re.search(
+            r"^\s*(?:confirm|check|verify|inspect|investigate|review|assess|"
+            r"determine\s+whether)\b|"
+            r"\bif\s+(?:needed|necessary|required|incomplete|missing|broken|incorrect)\b|"
+            r"\b(?:when|where)\s+necessary\b|"
+            r"\b(?:may|might|could)\s+(?:be\s+)?(?:missing|incomplete|broken|incorrect)\b|"
+            r"\b(?:may|might)\s+(?:not\s+)?(?:be\s+)?[a-z_]\w*\b|"
+            r"\bcould\s+(?:cause|lead|result|leave|prevent|allow|fail|run|execute|"
+            r"happen|occur|become)\b|"
+            r"^\s*(?:확인|점검|검토|조사|검증)|"
+            r"필요\s*(?:하면|한\s*경우)|"
+            r"(?:미완료|누락|문제)\s*(?:라면|이라면|인지|있는지)",
+            lower_statement,
+        )
+    )
+    if noncommittal_gap:
+        issues.append(
+            "completionFrontier.unmetBehavior.statement must assert an observed missing "
+            "or incorrect runtime behavior; investigation, verification, and conditional "
+            "wording cannot prove an unfinished feature"
+        )
+
+    vague_gap = bool(
+        re.search(
+            r"\b(?:not|is\s+not|isn't|does\s+not|doesn't)\s+fully\b|"
+            r"\b(?:some|several|one\s+or\s+more)\s+"
+            r"(?:branches?|paths?|checks?|parts?|cases?)\b|"
+            r"\b(?:logical|possible|potential|implementation)\s+"
+            r"(?:gap|gaps|issue|issues|problem|problems)\b|"
+            r"\b(?:coherent|robust|complete)\s+(?:path|flow|implementation)\b|"
+            r"완전히|일부\s*(?:분기|경로|검사|부분|경우)|"
+            r"(?:논리적|잠재적|구현상)\s*(?:빈틈|문제|오류)",
+            lower_statement,
+        )
+    )
+    if vague_gap:
+        issues.append(
+            "completionFrontier.unmetBehavior.statement must name one exact current "
+            "code behavior and its observable incorrect outcome; vague completeness or "
+            "scope claims cannot prove an unfinished feature"
+        )
+    return issues
+
+
+def _mask_cpp_comments_and_literals(source: str) -> str:
+    """Mask non-code C++ text while preserving offsets and line breaks."""
+
+    masked = list(source)
+    index = 0
+    state = "code"
+    quote = ""
+    while index < len(source):
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if char == "/" and next_char == "/":
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                state = "line_comment"
+                continue
+            if char == "/" and next_char == "*":
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                state = "block_comment"
+                continue
+            if char in {'"', "'"}:
+                masked[index] = " "
+                quote = char
+                state = "literal"
+        elif state == "line_comment":
+            if char == "\n":
+                state = "code"
+            else:
+                masked[index] = " "
+        elif state == "block_comment":
+            if char == "*" and next_char == "/":
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                state = "code"
+                continue
+            if char != "\n":
+                masked[index] = " "
+        else:
+            if char == "\\" and next_char:
+                masked[index] = " "
+                if next_char != "\n":
+                    masked[index + 1] = " "
+                index += 2
+                continue
+            if char == quote:
+                masked[index] = " "
+                state = "code"
+            elif char != "\n":
+                masked[index] = " "
+        index += 1
+    return "".join(masked)
+
+
+def _cpp_function_definition(
+    source: str,
+    function_name: str,
+    *,
+    required_owner: str = "",
+) -> tuple[str, str] | None:
+    """Return one same-file C++ definition as (owner, masked body)."""
+
+    if not re.fullmatch(r"[A-Za-z_]\w*", function_name):
+        return None
+    masked = _mask_cpp_comments_and_literals(source)
+    pattern = re.compile(
+        r"^[ \t]*(?:[A-Za-z_~][\w:<>,*&~]*[ \t]+)+"
+        r"(?:(?P<owner>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)::)?"
+        + re.escape(function_name)
+        + r"\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept(?:\s*\([^)]*\))?\s*)?"
+        r"(?:->[^{;]+)?\{",
+        re.MULTILINE,
+    )
+    for match in pattern.finditer(masked):
+        owner = str(match.group("owner") or "")
+        if required_owner and owner != required_owner:
+            continue
+        opening = masked.find("{", match.start(), match.end())
+        if opening < 0:
+            continue
+        depth = 0
+        for index in range(opening, len(masked)):
+            if masked[index] == "{":
+                depth += 1
+            elif masked[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    return owner, masked[opening + 1:index]
+    return None
+
+
+def _feature_negative_call_claim_issues(
+    statement: str,
+    locator: str,
+    source: str,
+) -> list[str]:
+    """Disprove an explicit no-call claim with direct or one-hop same-file source."""
+
+    claim = re.search(
+        r"\b(?:(?P<subject>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s+)?"
+        r"(?:never\s+(?:directly\s+)?calls?|"
+        r"does\s+not\s+(?:ever\s+|directly\s+)?call|"
+        r"doesn't\s+(?:ever\s+|directly\s+)?call|"
+        r"fails?\s+to\s+call)\s+"
+        r"(?:[A-Za-z_]\w*::)*(?P<callee>[A-Za-z_]\w*)\b",
+        str(statement or ""),
+        re.IGNORECASE,
+    )
+    if claim is None:
+        return []
+    callee = claim.group("callee")
+
+    locator_calls = re.findall(
+        r"(?:(?P<owner>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)::)?"
+        r"(?P<name>[A-Za-z_]\w*)\s*\(",
+        str(locator or ""),
+    )
+    if not locator_calls:
+        return []
+    locator_owner, entry_name = locator_calls[-1]
+    subject = str(claim.group("subject") or "").split("::")[-1]
+    owner_leaf = str(locator_owner or "").split("::")[-1]
+    subject_matches_locator = bool(
+        not subject
+        or subject.casefold() == entry_name.casefold()
+        or (owner_leaf and owner_leaf.casefold().endswith(subject.casefold()))
+    )
+    if not subject_matches_locator:
+        cited = f"{locator_owner}::{entry_name}" if locator_owner else entry_name
+        return [
+            "completionFrontier.unmetBehavior.statement names no-call subject "
+            f"{subject}, but its verified evidence locator names {cited}; cite the "
+            "owning source function before using an explicit no-call claim"
+        ]
+    entry = _cpp_function_definition(source, entry_name)
+    if entry is None:
+        return []
+    owner, entry_body = entry
+    target_call = re.compile(r"\b" + re.escape(callee) + r"\s*\(")
+    if target_call.search(entry_body):
+        path = f"{entry_name} -> {callee}"
+    else:
+        path = ""
+        control_words = {
+            "alignof", "catch", "decltype", "for", "if", "return", "sizeof",
+            "static_assert", "switch", "typeid", "while",
+        }
+        local_calls = list(
+            dict.fromkeys(
+                name
+                for name in re.findall(r"\b([A-Za-z_]\w*)\s*\(", entry_body)
+                if name not in control_words and name not in {entry_name, callee}
+            )
+        )
+        for delegated_name in local_calls[:64]:
+            delegated = _cpp_function_definition(
+                source,
+                delegated_name,
+                required_owner=owner,
+            )
+            if delegated is not None and target_call.search(delegated[1]):
+                path = f"{entry_name} -> {delegated_name} -> {callee}"
+                break
+    if not path:
+        return []
+    return [
+        "completionFrontier.unmetBehavior.statement claims "
+        f"{callee} is not called, but verified direct source shows {path}"
+    ]
+
+
+def _validate_feature_completion_frontier(
+    frontier: Any,
+    *,
+    required: bool,
+    request: str,
+    project_root: str,
+    target_files: list[str],
+    ledger: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate a model-selected functional frontier against server read evidence."""
+
+    if not required:
+        return {"ok": True, "required": False, "status": "not_required"}
+    if not isinstance(frontier, dict):
+        return {
+            "ok": False,
+            "required": True,
+            "errorCode": "FEATURE_FRONTIER_UNPROVEN",
+            "issues": ["completionFrontier is required for this implementation-status request"],
+        }
+
+    issues: list[str] = []
+    milestone = str(frontier.get("milestone") or "").strip()
+    candidate = str(frontier.get("candidateFeature") or "").strip()
+    unmet = frontier.get("unmetBehavior")
+    if not milestone:
+        issues.append("completionFrontier.milestone is required")
+    if not candidate:
+        issues.append("completionFrontier.candidateFeature is required")
+    if not isinstance(unmet, dict):
+        issues.append("completionFrontier.unmetBehavior must be an object")
+        unmet = {}
+
+    statement = str(unmet.get("statement") or "").strip()
+    unmet_path = str(unmet.get("sourcePath") or "").replace("\\", "/").strip("/")
+    unmet_locator = str(unmet.get("locator") or "").strip()
+    evidence_type = str(unmet.get("evidenceType") or "").strip().lower()
+    if not statement:
+        issues.append("completionFrontier.unmetBehavior.statement is required")
+    if not unmet_path:
+        issues.append("completionFrontier.unmetBehavior.sourcePath is required")
+    if not unmet_locator:
+        issues.append("completionFrontier.unmetBehavior.locator is required")
+    if evidence_type not in {"direct_source", "static_analysis", "build", "automation", "runtime"}:
+        issues.append("completionFrontier.unmetBehavior.evidenceType is unsupported")
+
+    lower_statement = statement.casefold()
+    test_signal = bool(
+        re.search(
+            r"\b(?:test|tests|testing|automation|coverage|fixture|assertion)\b|"
+            r"테스트|자동화|커버리지|검증\s*(?:코드|추가|보강)",
+            lower_statement,
+        )
+    )
+    functional_signal = bool(
+        re.search(
+            r"\b(?:behavior|rule|input|move|state|turn|win|draw|reject|place|"
+            r"replicate|save|load|display|calculate|handle|execute|update)\b|"
+            r"동작|규칙|입력|착수|상태|턴|승리|무승부|거부|배치|복제|저장|로드|표시|계산|처리|갱신",
+            lower_statement,
+        )
+    )
+    test_only_shape = bool(
+        re.search(
+            r"^\s*(?:add|create|write|implement|increase|improve|추가|작성|구현|보강)"
+            r"[^.;\n]*(?:test|tests|automation|coverage|테스트|자동화|커버리지)"
+            r"(?:\s+(?:for|of|to|대상|에\s*대한)[^.;\n]*)?[.;]?\s*$",
+            lower_statement,
+        )
+    )
+    test_absence_shape = bool(
+        re.search(
+            r"(?:^|[.;]\s*)(?:there\s+(?:is|are)\s+)?no\b[^.;\n]{0,180}"
+            r"\b(?:test|tests|testing|automation|coverage|fixture|assertion)\b|"
+            r"\b(?:missing|remaining|earliest|next)\b[^.;\n]{0,120}"
+            r"\b(?:feature|work|gap)\b[^.;\n]{0,120}"
+            r"\b(?:test|tests|testing|automation|coverage|fixture|assertion)\b",
+            lower_statement,
+        )
+    )
+    if test_signal and (test_only_shape or test_absence_shape or not functional_signal):
+        issues.append(
+            "test-only work cannot be the unmet functional behavior for a feature-completion audit"
+        )
+
+    # The source/locator checks below prove that the cited code was actually
+    # inspected.  Keep this lexical check narrow: it only blocks statements that
+    # explicitly remain an investigation or make a non-specific completeness
+    # allegation instead of naming one observed behavioral gap.
+    issues.extend(_feature_gap_statement_issues(statement))
+
+    current_revision = str(ledger.get("planRevision") or "")
+    evidence_revision = str(ledger.get("evidencePlanRevision") or "")
+    raw_files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
+    files = {
+        str(key).replace("\\", "/").strip("/").casefold(): value
+        for key, value in raw_files.items()
+        if isinstance(value, dict)
+    }
+    if not current_revision or current_revision != evidence_revision:
+        issues.append("direct source evidence belongs to a stale plan revision")
+
+    root = Path(project_root).expanduser().resolve() if project_root else None
+    normalized_targets = {
+        str(path or "").replace("\\", "/").strip("/").casefold()
+        for path in target_files
+        if str(path or "").strip()
+    }
+
+    file_cache: dict[str, tuple[str, str]] = {}
+
+    def current_source(source_path: str) -> tuple[str, str] | None:
+        key = source_path.casefold()
+        if key in file_cache:
+            return file_cache[key]
+        if root is None:
+            return None
+        absolute = (root / source_path).resolve()
+        try:
+            absolute.relative_to(root)
+            raw = absolute.read_bytes()
+        except (OSError, ValueError):
+            return None
+        current = (raw.decode("utf-8", errors="replace"), hashlib.sha256(raw).hexdigest())
+        file_cache[key] = current
+        return current
+
+    def locator_exists(locator: str, body: str) -> bool:
+        line_locator = re.fullmatch(
+            r"(?:L|line\s*)?(\d+)(?:\s*[-:]\s*(\d+))?",
+            locator,
+            re.IGNORECASE,
+        )
+        if line_locator:
+            first = int(line_locator.group(1))
+            last = int(line_locator.group(2) or first)
+            line_count = len(body.splitlines())
+            return 1 <= first <= last <= line_count
+        needle = re.sub(r"\s+", " ", locator).strip()
+        return bool(needle and needle in re.sub(r"\s+", " ", body))
+
+    def direct_source_locator_identifies_code(locator: str, body: str) -> bool:
+        """Reject comment/string-only semantic anchors without parsing all C++."""
+
+        masked = _mask_cpp_comments_and_literals(body)
+        line_locator = re.fullmatch(
+            r"(?:L|line\s*)?(\d+)(?:\s*[-:]\s*(\d+))?",
+            locator,
+            re.IGNORECASE,
+        )
+        if line_locator:
+            first = int(line_locator.group(1))
+            last = int(line_locator.group(2) or first)
+            lines = masked.splitlines()
+            return any(
+                1 <= line_number <= len(lines) and lines[line_number - 1].strip()
+                for line_number in range(first, last + 1)
+            )
+        needle = re.sub(r"\s+", " ", locator).strip()
+        return bool(needle and needle in re.sub(r"\s+", " ", masked))
+
+    def validate_evidence_rows(name: str, expected_kind: str) -> list[str]:
+        rows = frontier.get(name)
+        if not isinstance(rows, list) or not rows:
+            issues.append(f"completionFrontier.{name} requires at least one direct-source row")
+            return []
+        accepted: list[str] = []
+        for index, row in enumerate(rows[:16]):
+            if not isinstance(row, dict):
+                issues.append(f"completionFrontier.{name}[{index}] must be an object")
+                continue
+            source_path = str(row.get("sourcePath") or "").replace("\\", "/").strip("/")
+            locator = str(row.get("locator") or "").strip()
+            entry = files.get(source_path.casefold())
+            if not source_path or not locator:
+                issues.append(f"completionFrontier.{name}[{index}] requires sourcePath and locator")
+                continue
+            if not isinstance(entry, dict):
+                issues.append(f"{source_path}: no successful direct source read exists")
+                continue
+            actual_kind = str(entry.get("sourceKind") or "").strip().lower()
+            if actual_kind != expected_kind:
+                issues.append(f"{source_path}: expected {expected_kind} evidence, got {actual_kind or 'unknown'}")
+                continue
+            if root is None:
+                issues.append(f"{source_path}: project root is unavailable")
+                continue
+            current = current_source(source_path)
+            if current is None:
+                issues.append(f"{source_path}: evidence file is unreadable or outside the project")
+                continue
+            body, digest = current
+            if str(entry.get("contentHash") or "").casefold() != digest:
+                issues.append(f"{source_path}: direct source evidence is stale")
+                continue
+            if not locator_exists(locator, body):
+                issues.append(f"{source_path}: locator is not present in the current file: {locator}")
+                continue
+            accepted.append(source_path)
+        return accepted
+
+    declaration_paths = validate_evidence_rows("declarationEvidence", "declaration")
+    implementation_paths = validate_evidence_rows("implementationEvidence", "implementation")
+    all_evidence = {path.casefold() for path in declaration_paths + implementation_paths}
+    if unmet_path and unmet_path.casefold() not in all_evidence:
+        issues.append("unmetBehavior.sourcePath must be one of the verified frontier evidence files")
+    if unmet_path and normalized_targets and unmet_path.casefold() not in normalized_targets:
+        issues.append("unmetBehavior.sourcePath must belong to the active target slice")
+    semantic_claim_issues: list[str] = []
+    if unmet_path and unmet_locator:
+        current = current_source(unmet_path)
+        if current is None:
+            issues.append("unmetBehavior source is unreadable or outside the project")
+        elif not locator_exists(unmet_locator, current[0]):
+            issues.append("unmetBehavior.locator is not present in the current source file")
+        elif (
+            evidence_type == "direct_source"
+            and not direct_source_locator_identifies_code(unmet_locator, current[0])
+        ):
+            issues.append(
+                "unmetBehavior.locator must identify executable/declarative source, not only a comment or string literal"
+            )
+        elif evidence_type == "direct_source" and unmet_path.casefold() in all_evidence:
+            # Keep this bounded to explicit no-call assertions and source already
+            # verified by the read ledger.  One same-owner delegation is enough
+            # to disprove the claim without constructing a general call graph.
+            semantic_claim_issues = _feature_negative_call_claim_issues(
+                statement,
+                unmet_locator,
+                current[0],
+            )
+            issues.extend(semantic_claim_issues)
+
+    prior = frontier.get("priorCandidatesComplete")
+    if prior is not None and not isinstance(prior, list):
+        issues.append("completionFrontier.priorCandidatesComplete must be an array")
+
+    normalized = {
+        "milestone": milestone,
+        "candidateFeature": candidate,
+        "declarationEvidence": list(frontier.get("declarationEvidence") or [])[:16],
+        "implementationEvidence": list(frontier.get("implementationEvidence") or [])[:16],
+        "implementedBehavior": [
+            str(item).strip()
+            for item in (frontier.get("implementedBehavior") or [])[:24]
+            if str(item).strip()
+        ],
+        "unmetBehavior": {
+            "statement": statement,
+            "sourcePath": unmet_path,
+            "locator": unmet_locator,
+            "evidenceType": evidence_type,
+        },
+        "priorCandidatesComplete": list(prior or [])[:24],
+    }
+    return {
+        "ok": not issues,
+        "required": True,
+        "status": "proven" if not issues else "blocked",
+        "errorCode": "" if not issues else "FEATURE_FRONTIER_UNPROVEN",
+        "issues": issues[:24],
+        "semanticDiscoveryRequired": bool(semantic_claim_issues),
+        "frontier": normalized,
+        "frontierHash": hashlib.sha256(
+            json.dumps(
+                normalized,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "requestHash": hashlib.sha256(request.encode("utf-8")).hexdigest(),
+    }
+
+
+def _feature_frontier_recovery_contract(
+    *,
+    completion_frontier: dict[str, Any],
+    target_files: list[str],
+    direct_source_evidence: dict[str, Any],
+    ledger: dict[str, Any],
+) -> dict[str, Any]:
+    raw_files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
+    declarations: list[str] = []
+    implementations: list[str] = []
+    for path, row in raw_files.items():
+        if not isinstance(row, dict):
+            continue
+        # The map key is intentionally case-folded for identity checks.  Never
+        # return that comparison key as an executable path: Linux and macOS may
+        # use case-sensitive project volumes.  The ledger's canonical `path`
+        # is captured from the successful Agent read and is the portable value.
+        normalized = str(row.get("path") or path or "").replace("\\", "/").strip("/")
+        source_kind = str(row.get("sourceKind") or "").strip().lower()
+        if source_kind == "declaration":
+            declarations.append(normalized)
+        elif source_kind == "implementation":
+            implementations.append(normalized)
+    missing_targets = list(
+        dict.fromkeys(
+            [
+                *(direct_source_evidence.get("missingTargetFiles") or []),
+                *(direct_source_evidence.get("staleTargetFiles") or []),
+            ]
+        )
+    )
+    normalized_frontier = (
+        dict(completion_frontier.get("frontier") or {})
+        if isinstance(completion_frontier.get("frontier"), dict)
+        else {}
+    )
+    semantic_discovery_required = bool(
+        completion_frontier.get("semanticDiscoveryRequired")
+    )
+    return {
+        "version": 1,
+        "kind": (
+            "read_selected_target"
+            if missing_targets
+            else (
+                "rediscover_feature_candidate"
+                if semantic_discovery_required
+                else "repair_completion_frontier"
+            )
+        ),
+        "requiredFields": [
+            "completionFrontier.milestone",
+            "completionFrontier.candidateFeature",
+            "completionFrontier.declarationEvidence[].sourcePath",
+            "completionFrontier.declarationEvidence[].locator",
+            "completionFrontier.implementationEvidence[].sourcePath",
+            "completionFrontier.implementationEvidence[].locator",
+            "completionFrontier.implementedBehavior",
+            "completionFrontier.unmetBehavior.statement",
+            "completionFrontier.unmetBehavior.sourcePath",
+            "completionFrontier.unmetBehavior.locator",
+            "completionFrontier.unmetBehavior.evidenceType",
+            "completionFrontier.priorCandidatesComplete",
+        ],
+        "frontierTemplate": {
+            "milestone": str(normalized_frontier.get("milestone") or "<earliest milestone>"),
+            "candidateFeature": str(
+                normalized_frontier.get("candidateFeature") or "<earliest unfinished functional behavior>"
+            ),
+            "declarationEvidence": [
+                {"sourcePath": "<read declaration path>", "locator": "<exact symbol or line>"}
+            ],
+            "implementationEvidence": [
+                {"sourcePath": "<read implementation path>", "locator": "<exact symbol or line>"}
+            ],
+            "implementedBehavior": list(
+                normalized_frontier.get("implementedBehavior") or []
+            )[:24],
+            "unmetBehavior": {
+                "statement": "<concrete missing runtime/gameplay behavior>",
+                "sourcePath": "<one active target path>",
+                "locator": "<exact symbol or line>",
+                "evidenceType": "direct_source",
+            },
+            "priorCandidatesComplete": list(
+                normalized_frontier.get("priorCandidatesComplete") or []
+            )[:24],
+        },
+        "eligibleEvidence": {
+            "declarationFiles": sorted(dict.fromkeys(declarations))[:24],
+            "implementationFiles": sorted(dict.fromkeys(implementations))[:24],
+        },
+        "targetFiles": list(dict.fromkeys(target_files))[:2],
+        "requiredReads": missing_targets[:2],
+        "semanticDiscoveryRequired": semantic_discovery_required,
+        "maxDiscoveryCalls": 2 if semantic_discovery_required else 0,
+        "issues": list(completion_frontier.get("issues") or [])[:24],
+        "retryRule": (
+            "The cited semantic claim was contradicted or bound to the wrong owner. "
+            "Inspect a different bounded candidate before resubmitting Feature Intent."
+            if semantic_discovery_required
+            else "Change completionFrontier or read the listed target; never retry unchanged arguments."
+        ),
+    }
+
+
 def _handle_unreal_feature_intent_resolve(
     server: McpServer,
     message_id: Any,
@@ -1804,9 +2519,33 @@ def _handle_unreal_feature_intent_resolve(
         project_root,
         target_files,
     )
+    direct_source_ledger = task_direct_source_evidence(
+        server.workspace,
+        task_session_id,
+    )
     direct_source_evidence = _feature_intent_direct_source_evidence(
         target_snapshots,
-        task_direct_source_evidence(server.workspace, task_session_id),
+        direct_source_ledger,
+    )
+    completion_audit_state = (
+        task_state.get("featureCompletionAudit")
+        if isinstance(task_state.get("featureCompletionAudit"), dict)
+        else {}
+    )
+    completion_audit_required = bool(completion_audit_state.get("required"))
+    completion_frontier = _validate_feature_completion_frontier(
+        arguments.get("completionFrontier"),
+        required=completion_audit_required,
+        request=request,
+        project_root=project_root,
+        target_files=target_files,
+        ledger=direct_source_ledger,
+    )
+    feature_frontier_recovery = _feature_frontier_recovery_contract(
+        completion_frontier=completion_frontier,
+        target_files=target_files,
+        direct_source_evidence=direct_source_evidence,
+        ledger=direct_source_ledger,
     )
     from feature_intent_fast_path import (
         bounded_local_question_answers,
@@ -1821,7 +2560,10 @@ def _handle_unreal_feature_intent_resolve(
     failure_input_context = {
         "_serverDirectSourceEvidenceFingerprint": str(
             direct_source_evidence.get("fingerprint") or ""
-        )
+        ),
+        "_serverCompletionFrontierHash": str(
+            completion_frontier.get("frontierHash") or ""
+        ),
     }
     gate_input = {
         key: value
@@ -1860,7 +2602,10 @@ def _handle_unreal_feature_intent_resolve(
                 "nextAction": preflight.get("nextAction"),
                 "nextActionArgs": {
                     "taskAuthorization": preflight.get("taskAuthorization") or {},
+                    "featureFrontierRecovery": preflight.get("recoveryContract") or {},
                 },
+                "nextActionIsTool": preflight.get("nextActionIsTool") is True,
+                "featureFrontierRecovery": preflight.get("recoveryContract") or {},
                 "taskAuthorization": preflight.get("taskAuthorization") or {},
                 "toolRoute": preflight.get("toolRoute") or {},
                 "retryable": False,
@@ -1898,11 +2643,15 @@ def _handle_unreal_feature_intent_resolve(
         snapshot_issues=snapshot_issues,
         explicit_semantic_input=explicit_semantic_input,
     )
-    use_fast_path = bool(
+    bounded_local_contract_proven = bool(
         fast_path.get("eligible")
         and not snapshot_issues
-        and not explicit_semantic_input
         and not has_architecture_provenance
+        and completion_frontier.get("ok")
+    )
+    use_fast_path = bool(
+        bounded_local_contract_proven
+        and not explicit_semantic_input
     )
     effective_selected_intent = str(arguments.get("selectedIntentId") or "")
     effective_rationale = str(arguments.get("selectionRationale") or "")
@@ -1913,6 +2662,18 @@ def _handle_unreal_feature_intent_resolve(
             "Server strict fast path: existing one-module target, reversible local "
             "change, and no authority, replication, persistence, or ownership expansion."
         )
+        effective_answers = bounded_local_question_answers()
+    elif (
+        bounded_local_contract_proven
+        and effective_selected_intent == "bounded_local"
+        and not effective_answers
+    ):
+        # Selection/rationale are model-facing semantic input, but the answers
+        # below describe constraints already proved by the server-owned slice,
+        # snapshots, completion frontier, and strict bounded-local policy.  Do
+        # not force the model to restate these same constraints in another tool
+        # call; that was the source of the Feature Intent retry loop seen in the
+        # LM Studio execution path.
         effective_answers = bounded_local_question_answers()
 
     if architecture_bound_local:
@@ -1982,12 +2743,49 @@ def _handle_unreal_feature_intent_resolve(
         for key, value in full_resolution.items()
         if key not in {"contract", "selectedCandidate"}
     }
-    if use_fast_path:
+    if bounded_local_contract_proven and effective_selected_intent == "bounded_local":
         payload["fastPath"] = {
             **fast_path,
             "applied": True,
             "selectionRationale": effective_rationale,
+            "serverOwnedQuestionAnswers": question_answers in (None, {}),
         }
+    if payload.get("errorCode") == "FEATURE_INTENT_BLOCKING_QUESTIONS":
+        missing_dimensions = list(
+            (full_resolution.get("ambiguity") or {}).get("missingDimensions") or []
+        )[:3]
+        unresolved_questions = list(full_resolution.get("blockingQuestions") or [])
+        question_requirements = [
+            {
+                "answerKey": str(dimension),
+                "question": str(unresolved_questions[index]),
+            }
+            for index, dimension in enumerate(missing_dimensions)
+            if index < len(unresolved_questions)
+        ]
+        payload.update(
+            {
+                "nextAction": FEATURE_INTENT_GATE,
+                "nextActionIsTool": True,
+                "nextActionArgs": {
+                    "selectedIntentId": str(
+                        full_resolution.get("selectedIntentId") or ""
+                    ),
+                    "selectionRationale": effective_rationale,
+                    "taskAuthorization": compact_task_authorization(authorization),
+                },
+                "blockingQuestionRequirements": question_requirements,
+                "retryable": True,
+                "doNotRetryUnchanged": True,
+                "reuseCurrentTaskAuthorization": True,
+                "agentInstruction": (
+                    "Answer each blockingQuestionRequirements entry using its answerKey, "
+                    "add those answers to nextActionArgs.blockingQuestionAnswers, and call "
+                    "unreal_feature_intent_resolve once. Preserve the returned selection, "
+                    "slice, completion frontier, and task authorization."
+                ),
+            }
+        )
     if approval_result is not None:
         payload["approval"] = approval_result
     if snapshot_issues:
@@ -2019,6 +2817,60 @@ def _handle_unreal_feature_intent_resolve(
         payload["errorCode"] = "FEATURE_INTENT_ORACLE_INVALID"
         payload["error"] = "Selected acceptance criteria require explicit observer and oracle."
         payload.setdefault("writeGate", {})["writesAllowed"] = False
+
+    if not completion_frontier.get("ok"):
+        semantic_rediscovery = bool(
+            feature_frontier_recovery.get("semanticDiscoveryRequired")
+        )
+        payload.update(
+            {
+                "ok": False,
+                "status": "blocked",
+                "errorCode": "FEATURE_FRONTIER_UNPROVEN",
+                "error": (
+                    "The selected feature is not a direct-source-proven earliest unfinished "
+                    "functional behavior. Test-only work cannot satisfy this request."
+                ),
+                "completionFrontier": completion_frontier,
+                "featureFrontierRecovery": feature_frontier_recovery,
+                "nextAction": (
+                    "rediscover_feature_candidate"
+                    if semantic_rediscovery
+                    else "repair_feature_completion_frontier"
+                ),
+                "nextActionArgs": {
+                    "taskAuthorization": compact_task_authorization(authorization),
+                    "featureFrontierRecovery": feature_frontier_recovery,
+                },
+                "nextActionIsTool": False,
+                "retryable": True,
+                "doNotRetryUnchanged": True,
+                "stopCurrentWorkflow": False,
+                "agentInstruction": (
+                    "The cited no-call semantic claim was contradicted by direct source or bound "
+                    "to the wrong owning function. Do not restate that candidate. Inspect a "
+                    "different bounded candidate, then submit a materially new Feature Intent "
+                    "frontier; preserve the current task and session."
+                    if semantic_rediscovery
+                    else (
+                        "Use the current direct-source evidence to identify one concrete missing "
+                        "runtime/gameplay behavior in the earliest milestone. If the inspected "
+                        "candidate is already functionally complete, advance to the next candidate "
+                        "and, when necessary, rebind a new bounded slice in the same Feature Intent "
+                        "call. Do not select test coverage, automation, comments, or documentation "
+                        "as the feature itself. Follow featureFrontierRecovery and resubmit once "
+                        "with a changed completionFrontier; this recovery action is not a tool."
+                    )
+                ),
+            }
+        )
+        payload.setdefault("writeGate", {})["writesAllowed"] = False
+    elif completion_audit_required:
+        payload["completionFrontier"] = {
+            key: completion_frontier[key]
+            for key in ("required", "status", "frontier", "frontierHash")
+            if key in completion_frontier
+        }
 
     if payload.get("ok") and not snapshot_issues and not direct_source_evidence.get("ok"):
         missing = list(direct_source_evidence.get("missingTargetFiles") or [])
@@ -2069,6 +2921,8 @@ def _handle_unreal_feature_intent_resolve(
         "resolutionAction": str(
             (full_resolution.get("ambiguity") or {}).get("recommendedAction") or ""
         ),
+        "completionFrontier": dict(completion_frontier.get("frontier") or {}),
+        "completionFrontierHash": str(completion_frontier.get("frontierHash") or ""),
     }
     atomic_slice_plan = (
         {
@@ -2084,7 +2938,12 @@ def _handle_unreal_feature_intent_resolve(
         gate_name=FEATURE_INTENT_GATE,
         arguments=arguments,
         evidence=payload,
-        gate_passed=bool(payload.get("ok") and oracle_valid and not snapshot_issues),
+        gate_passed=bool(
+            payload.get("ok")
+            and oracle_valid
+            and not snapshot_issues
+            and completion_frontier.get("ok")
+        ),
         target_snapshots=target_snapshots,
         intent_binding=intent_binding,
         slice_plan=atomic_slice_plan,
@@ -2393,6 +3252,13 @@ def _handle_unreal_code_sketch_claim_validate(
     generation_contract: dict[str, Any] | None = None
     declaration_context = ""
     declaration_context_files: list[str] = []
+    shared_config = load_shared_config()
+    engine_root = str(
+        arguments.get("engineRoot")
+        or os.environ.get("UNREAL_ENGINE_ROOT")
+        or shared_config.get("defaultEngineRoot")
+        or ""
+    ).strip()
     if not oversized:
         effective_change_kind = str(arguments.get("changeKind") or "").strip()
         if not effective_change_kind:
@@ -2407,6 +3273,7 @@ def _handle_unreal_code_sketch_claim_validate(
         )
         from code_sketch_pipeline import (
             load_declaration_context,
+            proposed_code_surface,
             validate_active_slice_surface,
         )
 
@@ -2416,21 +3283,18 @@ def _handle_unreal_code_sketch_claim_validate(
             generation_contract=generation_contract,
             graph=graph,
             require_material_delta=bool(task_session_id),
+            engine_root=engine_root or None,
         )
         declaration_context, declaration_context_files = load_declaration_context(
             generation_contract
         )
+        validation_sketch, _ = proposed_code_surface(sketch)
+    else:
+        validation_sketch = sketch
 
-    shared_config = load_shared_config()
-    engine_root = str(
-        arguments.get("engineRoot")
-        or os.environ.get("UNREAL_ENGINE_ROOT")
-        or shared_config.get("defaultEngineRoot")
-        or ""
-    ).strip()
     server.progress_phase(message_id, "Validating source claims against engine headers")
     payload = validate_sketch(
-        sketch,
+        validation_sketch,
         server.index,
         top_k=max(1, min(16, int(arguments.get("topK") or 5))),
         graph=graph,
@@ -3982,6 +4846,7 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                 "selectedIntentId": {"type": "string"},
                 "selectionRationale": {"type": "string"},
                 "blockingQuestionAnswers": {"type": "object"},
+                "completionFrontier": _feature_completion_frontier_schema(),
                 "slices": {
                     "type": "array",
                     "minItems": 1,
@@ -5686,6 +6551,7 @@ class McpServer:
                                 "FEATURE_INTENT_BLOCKING_QUESTIONS."
                             ),
                         },
+                        "completionFrontier": _feature_completion_frontier_schema(),
                         "slices": {
                             "type": "array",
                             "minItems": 1,

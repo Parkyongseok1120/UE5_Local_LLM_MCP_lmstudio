@@ -185,7 +185,7 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
     assert planner["roleSession"] == "planner"
     assert not MUTATION_TOOLS.intersection(planner["activeTools"])
     assert "list_directory" in planner["activeTools"]
-    assert planner["maxToolCallsPerPhase"] == 8
+    assert planner["maxToolCallsPerPhase"] == 12
 
     compile_planner_state = _state(writes=True)
     compile_planner_state["taskKind"] = "compile_fix"
@@ -259,7 +259,7 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
 
     for route in (planner, executor, runtime, verifier):
         assert 5 <= len(route["activeTools"]) <= 10
-        assert 2 <= route["maxToolCallsPerPhase"] <= 8
+        assert 2 <= route["maxToolCallsPerPhase"] <= 12
         assert validate_phase_tool_route(route) == []
 
 

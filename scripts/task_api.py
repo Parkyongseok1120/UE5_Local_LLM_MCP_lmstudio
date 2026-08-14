@@ -3099,6 +3099,11 @@ def task_start(
         if isinstance(plan_payload.get("featureIntent"), dict)
         else {}
     )
+    feature_audit_plan = (
+        plan_payload.get("featureCompletionAudit")
+        if isinstance(plan_payload.get("featureCompletionAudit"), dict)
+        else {}
+    )
     feature_required = "unreal_feature_intent_resolve" in required_before_write
 
     plan_scope = _capture_plan_scope(plan_payload)
@@ -3257,6 +3262,23 @@ def task_start(
         "planRevision": resolved_plan_revision,
         "checkpointHash": "",
         "targetSnapshotHash": "",
+    }
+    state["featureCompletionAudit"] = {
+        "version": 1,
+        "required": bool(
+            feature_audit_plan.get("required")
+            or feature_plan.get("requiresFeatureCompletionAudit")
+        ),
+        "status": (
+            "pending"
+            if (
+                feature_audit_plan.get("required")
+                or feature_plan.get("requiresFeatureCompletionAudit")
+            )
+            else "not_required"
+        ),
+        "frontier": {},
+        "frontierHash": "",
     }
     supervisor_config = (
         plan_payload.get("autonomySupervisor")
@@ -5016,6 +5038,11 @@ def task_replan(
             if isinstance(plan_payload.get("featureIntent"), dict)
             else {}
         )
+        feature_audit_plan = (
+            plan_payload.get("featureCompletionAudit")
+            if isinstance(plan_payload.get("featureCompletionAudit"), dict)
+            else {}
+        )
         feature_required = "unreal_feature_intent_resolve" in required
         new_auth_token = uuid.uuid4().hex
         state.update(
@@ -5107,6 +5134,23 @@ def task_replan(
                     "planRevision": next_revision,
                     "checkpointHash": "",
                     "targetSnapshotHash": "",
+                },
+                "featureCompletionAudit": {
+                    "version": 1,
+                    "required": bool(
+                        feature_audit_plan.get("required")
+                        or feature_plan.get("requiresFeatureCompletionAudit")
+                    ),
+                    "status": (
+                        "pending"
+                        if (
+                            feature_audit_plan.get("required")
+                            or feature_plan.get("requiresFeatureCompletionAudit")
+                        )
+                        else "not_required"
+                    ),
+                    "frontier": {},
+                    "frontierHash": "",
                 },
                 "continuity": initialize_continuity(
                     task_session_id=task_session_id,
@@ -6335,6 +6379,19 @@ def task_record_gate(
             supplied_target_hash = str(
                 supplied_binding.get("targetSnapshotHash") or ""
             ).strip()
+            completion_audit = (
+                state.get("featureCompletionAudit")
+                if isinstance(state.get("featureCompletionAudit"), dict)
+                else {}
+            )
+            completion_frontier = (
+                supplied_binding.get("completionFrontier")
+                if isinstance(supplied_binding.get("completionFrontier"), dict)
+                else {}
+            )
+            completion_frontier_hash = str(
+                supplied_binding.get("completionFrontierHash") or ""
+            ).strip()
             actual_target_hash = target_snapshot_hash(list(target_snapshots or []))
             if not (
                 selected_intent_id
@@ -6352,6 +6409,17 @@ def task_record_gate(
                     "ok": False,
                     "error": "Feature intent target snapshots do not match the selected contract.",
                     "errorCode": "FEATURE_INTENT_TARGET_MISMATCH",
+                }
+                return None
+            if completion_audit.get("required") and not (
+                completion_frontier and completion_frontier_hash
+            ):
+                record_result = {
+                    "ok": False,
+                    "error": (
+                        "This task requires a direct-source-proven feature completion frontier."
+                    ),
+                    "errorCode": "FEATURE_FRONTIER_UNPROVEN",
                 }
                 return None
             if validated_slice_plan is not None:
@@ -6421,6 +6489,8 @@ def task_record_gate(
                 "planRevision": str(state.get("planRevision") or ""),
                 "checkpointHash": checkpoint_hash,
                 "targetSnapshotHash": actual_target_hash,
+                "completionFrontier": completion_frontier,
+                "completionFrontierHash": completion_frontier_hash,
             }
         if gate == "unreal_code_sketch_claim_validate":
             scope_contract = _code_sketch_target_scope_contract(
@@ -6583,6 +6653,19 @@ def task_record_gate(
                 }
             )
             state["featureIntent"] = feature_state
+            completion_state = dict(state.get("featureCompletionAudit") or {})
+            if completion_state.get("required"):
+                completion_state.update(
+                    {
+                        "status": "proven",
+                        "frontier": dict(feature_binding.get("completionFrontier") or {}),
+                        "frontierHash": str(
+                            feature_binding.get("completionFrontierHash") or ""
+                        ),
+                        "planRevision": str(state.get("planRevision") or ""),
+                    }
+                )
+                state["featureCompletionAudit"] = completion_state
             semantic_selection_changed = bool(
                 previous_intent_id
                 and (

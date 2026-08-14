@@ -252,7 +252,7 @@ async function commitFromTargets(bundle, targets, baseline, journal, stateRoot) 
   return { writtenAbs, postWriteHashes };
 }
 
-async function rollbackJournal(journal) {
+async function rollbackJournal(journal, stateRoot = resolveAgentStateRoot()) {
   const restored = [];
   const unrestored = [];
   const errors = [];
@@ -268,16 +268,32 @@ async function rollbackJournal(journal) {
         currentHash = sha256Text(await fsp.readFile(abs, "utf8"));
       }
       if (entry.existedBefore) {
+        if (entry.deletedAfter === true) {
+          if (existsNow) {
+            externalChangeDetected.push(rel);
+            unrestored.push(rel);
+            upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" }, stateRoot);
+            continue;
+          }
+          const deletedBackup = entry.preContentBackupPath;
+          if (deletedBackup && fs.existsSync(deletedBackup)) {
+            atomicWriteText(abs, fs.readFileSync(deletedBackup, "utf8"));
+            restored.push(rel);
+            upsertEntry(journal, { relativePath: rel, restored: true }, stateRoot);
+            continue;
+          }
+          throw new Error(`missing backup for ${rel}`);
+        }
         if (!existsNow) {
           externalChangeDetected.push(rel);
           unrestored.push(rel);
-          upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
+          upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" }, stateRoot);
           continue;
         }
         if (entry.postHash && currentHash !== entry.postHash) {
           externalChangeDetected.push(rel);
           unrestored.push(rel);
-          upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
+          upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" }, stateRoot);
           continue;
         }
         const backup = entry.preContentBackupPath;
@@ -288,18 +304,18 @@ async function rollbackJournal(journal) {
         }
       } else if (!existsNow) {
         restored.push(rel);
-        upsertEntry(journal, { relativePath: rel, restored: true });
+        upsertEntry(journal, { relativePath: rel, restored: true }, stateRoot);
         continue;
       } else if (entry.postHash && currentHash === entry.postHash) {
         await fsp.unlink(abs);
       } else {
         externalChangeDetected.push(rel);
         unrestored.push(rel);
-        upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
+        upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" }, stateRoot);
         continue;
       }
       restored.push(rel);
-      upsertEntry(journal, { relativePath: rel, restored: true });
+      upsertEntry(journal, { relativePath: rel, restored: true }, stateRoot);
     } catch (err) {
       errors.push({ path: rel, error: String(err.message || err) });
       unrestored.push(rel);
@@ -308,7 +324,7 @@ async function rollbackJournal(journal) {
 
   const rolledBack = unrestored.length === 0 && errors.length === 0;
   journal.status = rolledBack ? "rolled_back" : "rollback_incomplete";
-  saveJournal(journal);
+  saveJournal(journal, stateRoot);
   return {
     rolledBack,
     rollbackIncomplete: !rolledBack,
@@ -377,9 +393,15 @@ async function applyBundleTransaction(bundle, resolvePathFn, options = {}) {
       };
     }
 
-    journal.status = "completed";
-    saveJournal(journal);
-    await archiveJournal(journal.transactionId, stateRoot);
+    if (options.deferFinalization === true) {
+      Object.assign(journal, options.transactionMetadata || {});
+      journal.status = "awaiting_build";
+      saveJournal(journal);
+    } else {
+      journal.status = "completed";
+      saveJournal(journal);
+      await archiveJournal(journal.transactionId, stateRoot);
+    }
 
     return {
       ok: true,

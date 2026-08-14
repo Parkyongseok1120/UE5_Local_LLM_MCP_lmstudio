@@ -3,6 +3,10 @@
 const crypto = require("node:crypto");
 
 const COMPACTION_SCHEMA_VERSION = 2;
+const MAX_EDIT_EVIDENCE_FILES = 2;
+const MAX_EDIT_EVIDENCE_CHARS = 16000;
+const MAX_REPEAT_EVIDENCE_FILES = 1;
+const MAX_REPEAT_EVIDENCE_CHARS = 12000;
 const DEFAULT_COMPACTION_CONFIG = Object.freeze({
   enabled: true,
   observeOnly: false,
@@ -671,6 +675,78 @@ function compactToolEvidence(call, payload, resultContent = "") {
   return null;
 }
 
+function normalizedProjectPath(value) {
+  const source = String(value || "").replaceAll("\\", "/").replace(/^\/+/, "");
+  const withoutScheme = source.replace(/^(?:project|workspace):\/\//i, "");
+  const sourceIndex = withoutScheme.toLowerCase().indexOf("source/");
+  const pluginsIndex = withoutScheme.toLowerCase().indexOf("plugins/");
+  const configIndex = withoutScheme.toLowerCase().indexOf("config/");
+  const indexes = [sourceIndex, pluginsIndex, configIndex].filter((index) => index >= 0);
+  return indexes.length ? withoutScheme.slice(Math.min(...indexes)) : withoutScheme;
+}
+
+function selectedSliceFiles(selectedSlice) {
+  return Array.isArray(selectedSlice?.files)
+    ? selectedSlice.files.map(normalizedProjectPath).filter(Boolean).slice(0, MAX_EDIT_EVIDENCE_FILES)
+    : [];
+}
+
+function compactEditEvidence(call, payload, resultContent, selectedSlice) {
+  const name = String(call?.name || "");
+  if (!/read_file(?:_range)?$/i.test(name)) return null;
+  const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
+  const path = normalizedProjectPath(args.path || payload?.path?.displayPath || payload?.path || "");
+  const selectedFiles = selectedSliceFiles(selectedSlice);
+  if (!path || !selectedFiles.some((file) => path === file || path.endsWith(`/${file}`))) return null;
+  const source = String(payload?.content || resultContent || "");
+  if (!source.trim()) return null;
+  return {
+    path,
+    tool: name,
+    startLine: Number(args.startLine || args.start || 0),
+    endLine: Number(args.endLine || args.end || 0),
+    content: source.slice(0, MAX_EDIT_EVIDENCE_CHARS),
+    truncated: source.length > MAX_EDIT_EVIDENCE_CHARS,
+    evidenceHash: String(payload?.evidenceHash || payload?.contentHash || sha256(source)).slice(0, 80),
+  };
+}
+
+function compactRepeatEvidence(call, payload) {
+  const name = String(call?.name || "");
+  if (!/^(?:read_file|read_file_range|read_symbol|search_files)$/i.test(name)) return null;
+  if (payload?.repeatDetected !== true || payload?.doNotRepeatRead !== true) return null;
+  const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
+  const source = String(payload?.content || "");
+  if (!source.trim()) return null;
+  return {
+    tool: name,
+    path: normalizedProjectPath(args.path || payload?.path?.displayPath || payload?.path || ""),
+    query: String(args.query || "").slice(0, 500),
+    startLine: Number(args.startLine || args.start || 0),
+    endLine: Number(args.endLine || args.end || 0),
+    content: source.slice(0, MAX_REPEAT_EVIDENCE_CHARS),
+    truncated: source.length > MAX_REPEAT_EVIDENCE_CHARS,
+    evidenceHash: String(payload?.evidenceHash || payload?.contentHash || sha256(source)).slice(0, 80),
+    errorCode: String(payload?.errorCode || "READ_REPEAT_DETECTED").slice(0, 120),
+  };
+}
+
+function classifyMutationIntent(text) {
+  const source = String(text || "");
+  const withoutExplicitNegation = source
+    .replace(/\b(?:do\s+not|don't|dont)\s+(?:fix|edit|patch|change|modify|write|delete|rename|build|implement|create|add)\b/gi, " ")
+    .replace(/(?:구현|완성|개발|만들|추가|고쳐|고치|수정|패치|리팩터|작성|삭제|적용|반영|편집|변경|이름\s*바꿔|빌드)(?:은|는|을|를|이|가|도)?\s*하(?:지\s*)?(?:마(?:라|세요)?|말(?:아|고|라|자|기)?)/g, " ");
+  const isMutation = Boolean(
+    /\b(?:implement|create|add|fix|patch|edit|modify|refactor|write|delete|rename|build|complete|finish)\b/i.test(withoutExplicitNegation)
+    || /(?:구현|완성|개발|만들|추가|고쳐|고치|수정|패치|리팩터|작성|삭제|적용|반영|편집|변경|이름\s*바꿔|빌드)(?:(?:을|를|이|가|은|는|부터|까지|도|에|으로|로)\s*)?(?:해|하|할|해서|하고|해줘|하세요|할까|해야|시작|진행|우선|실행|줘|주세요)/.test(withoutExplicitNegation)
+    || /(?:실제로|직접)\s*(?:구현|완성|개발|수정|적용|반영)/.test(withoutExplicitNegation)
+  );
+  return {
+    isMutation,
+    kind: isMutation ? "mutation" : "non_mutation",
+  };
+}
+
 function isReadOnlyUserGoal(text) {
   const source = String(text || "");
   const lower = source.toLowerCase();
@@ -691,15 +767,7 @@ function isReadOnlyUserGoal(text) {
   // still explicitly asking for an implementation. Mutation intent wins;
   // otherwise ordinary show/describe/status questions are read-only even
   // when the user does not spell out "do not edit".
-  const mutationSource = source
-    .replace(/\b(?:do\s+not|don't|dont)\s+(?:fix|edit|patch|change|modify|write|delete|rename|build)\b/gi, " ")
-    .replace(/(?:구현|완성|개발|만들|추가|고쳐|수정|패치|리팩터|작성|삭제|적용|반영|편집|변경|이름\s*바꿔|빌드)(?:은|는|을|를|이|가|도)?\s*하(?:지\s*)?(?:마(?:라|세요)?|말(?:아|고|라|자|기)?)/g, " ");
-  const mutationIntent = (
-    /\b(?:implement|create|add|fix|patch|edit|modify|refactor|write|delete|rename|build)\b/i.test(mutationSource)
-    || /(?:구현|완성|개발|만들|추가|고쳐|수정|패치|리팩터|작성|삭제|적용|반영|이름\s*바꿔|빌드)(?:(?:을|를|이|가|은|는|부터|까지|도|에|으로|로)\s*)?(?:해|하|할|해서|하고|해줘|하세요|할까|해야|시작|진행|우선|실행|줘|주세요)/.test(mutationSource)
-    || /(?:실제로|직접)\s*(?:구현|완성|개발|수정|적용|반영)/.test(mutationSource)
-  );
-  if (mutationIntent) return false;
+  if (classifyMutationIntent(source).isMutation) return false;
   if (explicitNoWrite) return true;
   return Boolean(
     /\b(?:what|which|where|show|list|describe|explain|summari[sz]e|inspect|analy[sz]e|review|report)\b/i.test(source)
@@ -811,6 +879,8 @@ function extractControlState(messages, prior = {}, options = {}) {
     failedToolResults: canResume && Array.isArray(prior.failedToolResults) ? [...prior.failedToolResults] : [],
     facts: canResume && Array.isArray(prior.facts) ? [...prior.facts] : [],
     evidenceFacts: canResume && Array.isArray(prior.evidenceFacts) ? [...prior.evidenceFacts] : [],
+    editEvidence: canResume && Array.isArray(prior.editEvidence) ? [...prior.editEvidence] : [],
+    repeatEvidence: canResume && Array.isArray(prior.repeatEvidence) ? [...prior.repeatEvidence] : [],
   };
   const toolCallsById = new Map();
   const anonymousToolCalls = [];
@@ -853,6 +923,7 @@ function extractControlState(messages, prior = {}, options = {}) {
         continue;
       }
       state.sideQuery = null;
+      if (state.objective && userText !== state.objective) state.repeatEvidence = [];
       state.objective = userText.slice(0, 1200);
       state.constraints = state.constraints.filter((item) =>
         typeof item === "string" && !item.startsWith("active_goal:") && !item.startsWith("read_only_"));
@@ -911,6 +982,25 @@ function extractControlState(messages, prior = {}, options = {}) {
       if (toolResultSucceeded(result)) {
         const evidence = compactToolEvidence(matchedCall, resultPayloads.slice(-1)[0] || {}, result.content);
         if (evidence) state.evidenceFacts.push(evidence);
+        const editEvidence = compactEditEvidence(
+          matchedCall,
+          resultPayloads.slice(-1)[0] || {},
+          result.content,
+          state.selectedSlice,
+        );
+        if (editEvidence && resultPayloads.slice(-1)[0]?.repeatDetected !== true) {
+          state.editEvidence = [
+            ...state.editEvidence.filter((item) => normalizedProjectPath(item?.path) !== editEvidence.path),
+            editEvidence,
+          ].slice(-MAX_EDIT_EVIDENCE_FILES);
+        }
+        const repeatEvidence = compactRepeatEvidence(
+          matchedCall,
+          resultPayloads.slice(-1)[0] || {},
+        );
+        if (repeatEvidence) {
+          state.repeatEvidence = [repeatEvidence].slice(-MAX_REPEAT_EVIDENCE_FILES);
+        }
       }
       if (!toolResultSucceeded(result)) {
         const failurePayload = parseJsonObjects(result.content).slice(-1)[0] || {};
@@ -938,6 +1028,10 @@ function extractControlState(messages, prior = {}, options = {}) {
         // the user changes the goal or a successful mutation changes the source
         // snapshot that made the evidence stale.
         state.semanticBlocker = null;
+        // Exact pre-mutation text is stale as soon as a write succeeds. A
+        // post-mutation validation read may repopulate this bounded cache.
+        state.editEvidence = [];
+        state.repeatEvidence = [];
       }
       if (
         toolResultSucceeded(result)
@@ -1014,6 +1108,10 @@ function extractControlState(messages, prior = {}, options = {}) {
       }
   }
   state.evidenceFacts = [...evidenceByKey.values()].slice(-cap);
+  const selectedFiles = new Set(selectedSliceFiles(state.selectedSlice));
+  state.editEvidence = state.editEvidence
+    .filter((item) => selectedFiles.has(normalizedProjectPath(item?.path)))
+    .slice(-MAX_EDIT_EVIDENCE_FILES);
   return state;
 }
 
@@ -1069,6 +1167,8 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     diagnostics: control.lastDiagnostics,
     facts: control.facts,
     evidenceFacts: control.evidenceFacts,
+    editEvidence: control.editEvidence,
+    repeatEvidence: control.repeatEvidence,
     pendingToolCall: prior.pendingToolCall || null,
     pendingToolCalls: Array.isArray(prior.pendingToolCalls) ? [...prior.pendingToolCalls] : [],
     completedToolCallIds: Array.isArray(prior.completedToolCallIds) ? [...prior.completedToolCallIds].slice(-256) : [],
@@ -1181,7 +1281,7 @@ function isMajorGoalChange(priorObjective, latestObjective) {
       }
       return "readonly";
     }
-    if (/\b(implement|refactor|fix|patch|edit|write|compile|build|구현|수정|리팩터)\b/i.test(text)) {
+    if (classifyMutationIntent(text).isMutation) {
       return "write";
     }
     if (/\b(analyze|review|find|structure|구조|분석|버그|조사|찾아)\b/i.test(text)) {
@@ -1199,25 +1299,32 @@ function isMajorGoalChange(priorObjective, latestObjective) {
 }
 
 function toolNamesMatch(expected, actual) {
-  // LM Studio SDK revisions have exposed the same MCP tool as either a plain
-  // function name or a provider-qualified path. Compare a separator-normalized
-  // form so `mcp/unreal-rag/unreal_agent_plan` and `unreal_agent_plan` bind to
-  // one contract. Only an explicit MCP-qualified name may use suffix matching:
-  // ordinary tools such as `get_active_project` and
-  // `unreal_get_active_project` are different contracts.
-  const normalize = (value) => String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  const left = normalize(expected);
-  const right = normalize(actual);
+  // Strip only provider syntax with an explicit structural delimiter. Suffix
+  // matching is unsafe: get_active_project used to match the different
+  // unreal_get_active_project contract merely because one name ended in the
+  // other. A plain underscore-delimited name is therefore never guessed to be
+  // provider-qualified.
+  const canonical = (value) => {
+    const raw = String(value || "").trim().toLowerCase().replace(/\\/g, "/");
+    if (!raw) return "";
+    let name = raw;
+    const slashParts = raw.split("/").filter(Boolean);
+    if (slashParts.length >= 3 && slashParts[0] === "mcp") {
+      name = slashParts[slashParts.length - 1];
+    } else if (raw.startsWith("mcp__")) {
+      const doubleUnderscoreParts = raw.split("__").filter(Boolean);
+      if (doubleUnderscoreParts.length >= 3) {
+        name = doubleUnderscoreParts[doubleUnderscoreParts.length - 1];
+      }
+    }
+    return name
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+  };
+  const left = canonical(expected);
+  const right = canonical(actual);
   if (!left || !right) return false;
-  if (left === right) return true;
-  const providerMatches = (qualified, plain) => (
-    qualified.startsWith("mcp_") && qualified.endsWith(`_${plain}`)
-  );
-  return providerMatches(left, right) || providerMatches(right, left);
+  return left === right;
 }
 
 function expectedToolReserve(toolName, config = {}) {
@@ -1408,6 +1515,23 @@ function summarizeOldMessages(messages, checkpoint) {
     }
     lines.push(`evidenceFacts=${JSON.stringify(checkpoint.evidenceFacts)}`);
   }
+  if (checkpoint.editEvidence?.length) {
+    lines.push(
+      "editEvidenceInstruction=The exact unchanged target text below is retained specifically for the active "
+      + "selected slice. Reuse it for the bounded mutation; do not re-read the same target merely to recover "
+      + "discarded context. If truncated=true and the needed edit text is outside the retained body, request "
+      + "one narrower exact range.",
+    );
+    lines.push(`editEvidence=${JSON.stringify(checkpoint.editEvidence)}`);
+  }
+  if (checkpoint.repeatEvidence?.length) {
+    lines.push(
+      "repeatEvidenceInstruction=The server returned this exact unchanged body from a cached repeat. "
+      + "Use it now; do not issue the same tool/path/query/range again. Other genuinely unread evidence "
+      + "remains available. This bounded cache clears on mutation or a new user goal.",
+    );
+    lines.push(`repeatEvidence=${JSON.stringify(checkpoint.repeatEvidence)}`);
+  }
   lines.push(`compactedMessageCount=${(messages || []).length}`);
   lines.push(
     "Only use this summary for continuity. The checkpoint objective is the latest user goal; "
@@ -1541,6 +1665,29 @@ function validateCheckpoint(checkpoint) {
     if (checkpoint.sideQuery.active !== true || typeof checkpoint.sideQuery.request !== "string") return false;
   }
   if (checkpoint.evidenceFacts !== undefined && !Array.isArray(checkpoint.evidenceFacts)) return false;
+  if (checkpoint.repeatEvidence !== undefined) {
+    if (!Array.isArray(checkpoint.repeatEvidence)) return false;
+    if (checkpoint.repeatEvidence.length > MAX_REPEAT_EVIDENCE_FILES) return false;
+    if (checkpoint.repeatEvidence.some((item) => (
+      !item
+      || typeof item !== "object"
+      || typeof item.tool !== "string"
+      || !item.tool.trim()
+      || typeof item.content !== "string"
+      || item.content.length > MAX_REPEAT_EVIDENCE_CHARS
+    ))) return false;
+  }
+  if (checkpoint.editEvidence !== undefined) {
+    if (!Array.isArray(checkpoint.editEvidence) || checkpoint.editEvidence.length > MAX_EDIT_EVIDENCE_FILES) return false;
+    if (checkpoint.editEvidence.some((item) => (
+      !item
+      || typeof item !== "object"
+      || Array.isArray(item)
+      || typeof item.path !== "string"
+      || typeof item.content !== "string"
+      || item.content.length > MAX_EDIT_EVIDENCE_CHARS
+    ))) return false;
+  }
   if (
     checkpoint.taskRouteOwnership !== undefined
     && checkpoint.taskRouteOwnership !== null
@@ -1569,6 +1716,7 @@ module.exports = {
   mutationToolName,
   toolArgumentsSatisfy,
   collectControlFields,
+  classifyMutationIntent,
   isReadOnlyUserGoal,
   classifyUserTurnIntent,
   isMetaUserMessage,

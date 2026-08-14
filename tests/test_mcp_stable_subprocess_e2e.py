@@ -989,6 +989,43 @@ def test_agent_read_file_range_success(tmp_path: Path) -> None:
         client.close()
 
 
+def test_agent_missing_read_range_returns_exact_search_handoff(tmp_path: Path) -> None:
+    client = _start_agent_client(tmp_path)
+    try:
+        result = client.request(
+            "tools/call",
+            {
+                "name": "read_file_range",
+                "arguments": {
+                    "path": "Source/O_Mock/Tests/GomokuLocalPlayTest.cpp",
+                    "startLine": 380,
+                    "endLine": 520,
+                },
+            },
+            req_id=2,
+        )
+
+        assert result["result"].get("isError") is True
+        payload = _tool_payload(result)
+        search_args = {
+            "query": "GomokuLocalPlayTest.cpp",
+            "path": "workspace://",
+            "matchFileNames": True,
+        }
+        assert payload["errorCode"] == "READ_TARGET_NOT_FOUND"
+        assert payload["stopCurrentWorkflow"] is False
+        assert payload["doNotRetryTools"] == ["read_file_range"]
+        assert payload["requiredNextTool"] == "search_files"
+        assert payload["requiredNextToolArgs"] == search_args
+        assert payload["nextAction"] == "search_files"
+        assert payload["nextActionIsTool"] is True
+        assert payload["suggestedToolCalls"] == [
+            {"tool": "search_files", "args": search_args}
+        ]
+    finally:
+        client.close()
+
+
 def test_agent_read_symbol_success(tmp_path: Path) -> None:
     source_dir = tmp_path / "Source" / "Demo"
     source_dir.mkdir(parents=True)

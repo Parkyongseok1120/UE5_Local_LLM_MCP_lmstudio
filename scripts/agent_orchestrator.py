@@ -223,6 +223,7 @@ class AgentPlan:
     fix_evidence: dict[str, Any] = field(default_factory=dict)
     ambiguity_gate: dict[str, Any] = field(default_factory=dict)
     feature_intent: dict[str, Any] = field(default_factory=dict)
+    feature_completion_audit: dict[str, Any] = field(default_factory=dict)
     source_evidence: dict[str, Any] = field(default_factory=dict)
     tool_discovery_candidates: list[dict[str, Any]] = field(default_factory=list)
     plan_graph_delta: dict[str, Any] = field(default_factory=dict)
@@ -258,6 +259,8 @@ class AgentPlan:
             payload["ambiguityGate"] = self.ambiguity_gate
         if self.feature_intent:
             payload["featureIntent"] = self.feature_intent
+        if self.feature_completion_audit:
+            payload["featureCompletionAudit"] = self.feature_completion_audit
         if self.source_evidence:
             payload["sourceEvidence"] = self.source_evidence
         if self.error_route:
@@ -1482,6 +1485,7 @@ def build_agent_plan(
     ) or {}
     ambiguity_gate: dict[str, Any] = {}
     feature_intent: dict[str, Any] = {}
+    feature_completion_audit: dict[str, Any] = {}
     architecture_required = domain_profile.architecture_required or domain_kind == "architecture"
     if architecture_required:
         ambiguity_gate = architecture_ambiguity_gate(request)
@@ -1527,7 +1531,17 @@ def build_agent_plan(
                 gate_extras["architectureDecisionId"] = decision.decision_id
 
     if task_kind in {"edit", "refactor"}:
-        from feature_intent_contract import resolve_feature_intent
+        from feature_intent_contract import (
+            requires_feature_completion_audit,
+            resolve_feature_intent,
+        )
+
+        completion_audit_required = requires_feature_completion_audit(request)
+        feature_completion_audit = {
+            "version": 1,
+            "required": completion_audit_required,
+            "status": "pending" if completion_audit_required else "not_required",
+        }
 
         feature_resolution = resolve_feature_intent(
             request,
@@ -1549,6 +1563,7 @@ def build_agent_plan(
                 (feature_resolution.get("ambiguity") or {}).get(
                     "requiresResolution"
                 )
+                or completion_audit_required
             ),
             "recommendedAction": str(
                 (feature_resolution.get("ambiguity") or {}).get(
@@ -1556,7 +1571,13 @@ def build_agent_plan(
                 )
                 or ""
             ),
+            "requiresFeatureCompletionAudit": completion_audit_required,
         }
+        if completion_audit_required:
+            notes.append(
+                "Feature completion audit is required: bind only a direct-source-backed "
+                "functional gap; test-only work cannot be the selected feature."
+            )
         if feature_intent["requiresResolution"]:
             notes.append(
                 "Feature intent is ambiguous: choose one compact candidate and "
@@ -1743,6 +1764,7 @@ def build_agent_plan(
         fix_evidence=fix_evidence,
         ambiguity_gate=ambiguity_gate,
         feature_intent=feature_intent,
+        feature_completion_audit=feature_completion_audit,
         source_evidence=source_evidence,
         tool_discovery_candidates=tool_discovery_candidates,
         plan_graph_delta=plan_graph_delta,

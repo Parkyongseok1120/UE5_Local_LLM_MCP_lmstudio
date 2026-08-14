@@ -379,6 +379,83 @@ function requestedToolName(request: any): string {
   return String(request?.name || "").trim();
 }
 
+function observedToolResultCount(messages: ChatMessage[], toolName: string): number {
+  const snapshots = core.snapshotMessages(messages);
+  const callNames = new Map<string, string>();
+  for (const snapshot of snapshots) {
+    for (const call of snapshot.toolCalls || []) {
+      if (call?.id) callNames.set(String(call.id), String(call.name || ""));
+    }
+  }
+  let count = 0;
+  for (const snapshot of snapshots) {
+    for (const result of snapshot.toolResults || []) {
+      const matchedName = String(
+        result?.name
+        || callNames.get(String(result?.toolCallId || ""))
+        || "",
+      );
+      if (toolNamesMatch(toolName, matchedName)) count += 1;
+    }
+  }
+  return count;
+}
+
+function observedToolResultCountForNames(messages: ChatMessage[], toolNames: string[]): number {
+  const snapshots = core.snapshotMessages(messages);
+  const callNames = new Map<string, string>();
+  for (const snapshot of snapshots) {
+    for (const call of snapshot.toolCalls || []) {
+      if (call?.id) callNames.set(String(call.id), String(call.name || ""));
+    }
+  }
+  let count = 0;
+  for (const snapshot of snapshots) {
+    for (const result of snapshot.toolResults || []) {
+      const matchedName = String(
+        result?.name
+        || callNames.get(String(result?.toolCallId || ""))
+        || "",
+      );
+      if (toolNames.some((name) => toolNamesMatch(name, matchedName))) count += 1;
+    }
+  }
+  return count;
+}
+
+function successfulToolResultCountSinceLatest(
+  messages: ChatMessage[],
+  boundaryToolName: string,
+  toolNames: string[],
+): number {
+  const snapshots = core.snapshotMessages(messages);
+  const callNames = new Map<string, string>();
+  let count = 0;
+  for (const snapshot of snapshots) {
+    for (const call of snapshot.toolCalls || []) {
+      if (call?.id) callNames.set(String(call.id), String(call.name || ""));
+    }
+    for (const result of snapshot.toolResults || []) {
+      const matchedName = String(
+        result?.name
+        || callNames.get(String(result?.toolCallId || ""))
+        || "",
+      );
+      if (toolNamesMatch(boundaryToolName, matchedName)) {
+        count = 0;
+        continue;
+      }
+      if (
+        core.toolResultSucceeded(result)
+        && toolNames.some((name) => toolNamesMatch(name, matchedName))
+      ) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
 function toolNamesMatch(expected: string, actual: string): boolean {
   return core.toolNamesMatch(expected, actual);
 }
@@ -429,7 +506,11 @@ const ARCHITECTURE_SUBMISSION_MARKER = "[UNREAL_ARCHITECTURE_SUBMISSION_REQUIRED
 const ARCHITECTURE_PAYLOAD_REPAIR_MARKER = "[UNREAL_ARCHITECTURE_PAYLOAD_REPAIR_REQUIRED]";
 const ARCHITECTURE_TOOL_NAME = "unreal_architecture_reasoning";
 const FEATURE_INTENT_ATOMIC_MARKER = "[UNREAL_FEATURE_INTENT_ATOMIC_GATE]";
+const FEATURE_INTENT_EVIDENCE_MARKER = "[UNREAL_FEATURE_INTENT_TARGET_EVIDENCE]";
+const FEATURE_INTENT_PAYLOAD_REPAIR_MARKER = "[UNREAL_FEATURE_INTENT_PAYLOAD_REPAIR_REQUIRED]";
+const FEATURE_INTENT_RECOVERY_MARKER = "[UNREAL_FEATURE_INTENT_RECOVERY]";
 const FEATURE_INTENT_EVIDENCE_REFILL_MARKER = "[UNREAL_FEATURE_INTENT_EVIDENCE_REFILL]";
+const FEATURE_INTENT_POST_READ_MARKER = "[UNREAL_FEATURE_INTENT_POST_READ_REEVALUATION]";
 const FEATURE_INTENT_TOOL_NAME = "unreal_feature_intent_resolve";
 const EVIDENCE_FIRST_CONTRACT_MARKER = "[EVIDENCE_FIRST_CONTRACT_REQUIRED]";
 const EVIDENCE_FIRST_CONTRACT_TOOL_NAME = "evidence_first_contract";
@@ -618,7 +699,7 @@ function requiresArchitectureValidation(goal: string, toolDefinitions: any[]): b
 function requiresTaskRoutePlanning(goal: string): boolean {
   const source = String(goal || "");
   if (core.isReadOnlyUserGoal(source)) return false;
-  return /\b(?:implement|create|add|build|fix|patch|edit|modify|refactor|write)\b|구현|만들|추가|수정|고쳐|리팩터|작성|빌드/i.test(source);
+  return core.classifyMutationIntent(source).isMutation;
 }
 
 function requiresFeatureCompletionAudit(goal: string): boolean {
@@ -835,7 +916,14 @@ function injectArchitectureValidationRule(chat: Chat): boolean {
   return false;
 }
 
-function injectFeatureIntentAtomicRule(chat: Chat): boolean {
+function injectFeatureIntentAtomicRule(chat: Chat, eligibleEvidencePaths: string[] = []): boolean {
+  const normalizedEvidence = [...new Set(eligibleEvidencePaths
+    .map((value) => String(value || "").replace(/\\/g, "/").trim())
+    .filter(Boolean))].slice(0, 24);
+  const evidenceRule = normalizedEvidence.length > 0
+    ? (`\n${FEATURE_INTENT_EVIDENCE_MARKER}\nOnly select targetFiles/slices and completionFrontier evidence from these successful direct-source reads: `
+      + `${JSON.stringify(normalizedEvidence)}. If the desired candidate is outside this set, read its owning declaration and implementation before resubmitting.`)
+    : "";
   const rule = (
     `${FEATURE_INTENT_ATOMIC_MARKER}\n`
     + "Submit exactly one unreal_feature_intent_resolve model-facing call for this gate. If selectedSlice.files "
@@ -844,15 +932,35 @@ function injectFeatureIntentAtomicRule(chat: Chat): boolean {
     + "phases. Never call unreal_task_define_slices separately for feature intent. When the user asks for the "
     + "current implementation status or the earliest incomplete feature, bind only a candidate whose owning "
     + "declaration and implementation were both read and whose unmet behavior is concrete in that evidence. "
+    + "For that audit, include completionFrontier in the same call with milestone, candidateFeature, "
+    + "declarationEvidence[{sourcePath,locator}], implementationEvidence[{sourcePath,locator}], "
+    + "implementedBehavior, unmetBehavior{statement,sourcePath,locator,evidenceType}, and "
+    + "priorCandidatesComplete. The unmet behavior must be functional source behavior, never test coverage alone. "
     + "If the evidence shows a candidate is already complete, continue bounded discovery or select the next "
     + "proven gap; never invent a robustness-only mutation to make a completed feature look incomplete."
+    + evidenceRule
   );
   try {
     const messages = chat.getMessagesArray();
     for (const message of messages) {
       if (message.getRole() !== "system") continue;
       const current = String(message.getText() || "");
-      if (current.includes(FEATURE_INTENT_ATOMIC_MARKER)) return true;
+      if (current.includes(FEATURE_INTENT_ATOMIC_MARKER)) {
+        if (!evidenceRule || current.includes(evidenceRule)) return true;
+        const withoutPriorEvidence = current.replace(
+          /\n\[UNREAL_FEATURE_INTENT_TARGET_EVIDENCE\]\n[^\n]*/gu,
+          "",
+        );
+        if (typeof (message as any).replaceText === "function") {
+          (message as any).replaceText(`${withoutPriorEvidence}${evidenceRule}`);
+          return true;
+        }
+        if (typeof (message as any).appendText === "function") {
+          (message as any).appendText(evidenceRule);
+          return true;
+        }
+        return true;
+      }
       if (typeof (message as any).appendText === "function") {
         (message as any).appendText(`\n${rule}`);
         return true;
@@ -870,6 +978,96 @@ function injectFeatureIntentAtomicRule(chat: Chat): boolean {
     return false;
   }
   return false;
+}
+
+function upsertLeadingSystemRule(chat: Chat, marker: string, rule: string): boolean {
+  const replaceMarkedBlock = (current: string): string => {
+    const start = current.indexOf(marker);
+    if (start < 0) return current ? `${current.replace(/\s+$/u, "")}\n${rule}` : rule;
+    const nextMarker = current.indexOf("\n[", start + marker.length);
+    const end = nextMarker >= 0 ? nextMarker : current.length;
+    return `${current.slice(0, start)}${rule}${current.slice(end)}`;
+  };
+  try {
+    const current = String(chat.getSystemPrompt() || "");
+    chat.replaceSystemPrompt(replaceMarkedBlock(current));
+    return true;
+  } catch {
+    // Older SDK-compatible test doubles may not implement Chat's system-prompt
+    // helpers. Update an existing system message in place, but never append a
+    // system message after user/assistant/tool history because Qwen/ChatML
+    // templates require system content to remain at the beginning.
+    try {
+      const messages = chat.getMessagesArray();
+      for (const message of messages) {
+        if (message.getRole() !== "system") continue;
+        const updated = replaceMarkedBlock(String(message.getText() || ""));
+        if (typeof (message as any).replaceText === "function") {
+          (message as any).replaceText(updated);
+          return true;
+        }
+      }
+      if (messages.length === 0 && typeof (chat as any).append === "function") {
+        (chat as any).append("system", rule);
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function injectFeatureIntentPayloadRepairRule(chat: Chat, missingPaths: string[]): boolean {
+  const paths = [...new Set(missingPaths.map((value) => String(value || "").trim()).filter(Boolean))]
+    .slice(0, 32);
+  const rule = (
+    `${FEATURE_INTENT_PAYLOAD_REPAIR_MARKER}\n`
+    + "The previous Feature Intent call was discarded before MCP dispatch because required JSON fields were missing. "
+    + `Serialize exactly one unreal_feature_intent_resolve call and include these schema paths: ${JSON.stringify(paths)}. `
+    + "Use retained direct-source evidence for every value. Do not explain, read, checkpoint, or omit completionFrontier."
+  );
+  return upsertLeadingSystemRule(chat, FEATURE_INTENT_PAYLOAD_REPAIR_MARKER, rule);
+}
+
+function injectFeatureIntentRecoveryRule(
+  chat: Chat,
+  recovery: any,
+  semanticDiscoveryRemaining = 0,
+): boolean {
+  const bounded = recovery && typeof recovery === "object" && !Array.isArray(recovery)
+    ? JSON.stringify(recovery).slice(0, 8_000)
+    : "{}";
+  const semanticDiscovery = recovery?.semanticDiscoveryRequired === true;
+  const remaining = Math.max(0, Math.min(2, Number(semanticDiscoveryRemaining || 0)));
+  const rule = semanticDiscovery && remaining > 0
+    ? (
+      `${FEATURE_INTENT_RECOVERY_MARKER}\n`
+      + "Feature Intent remains pending because the prior semantic claim was contradicted by source or cited the "
+      + "wrong owning function. Do not repair or restate that candidate yet. Inspect a different bounded candidate "
+      + `with at most ${remaining} additional discovery call(s), then submit a materially new completionFrontier. `
+      + `Recovery contract: ${bounded}. Keep the current task/session and do not checkpoint to refresh this allowance.`
+    )
+    : (
+      `${FEATURE_INTENT_RECOVERY_MARKER}\n`
+      + "Feature Intent remains pending, but the prior unchanged call must not be repeated. Follow this structured "
+      + `recovery contract: ${bounded}. Read any listed missing target evidence first; otherwise submit one materially `
+      + "changed completionFrontier using the required fields/template. Do not call checkpoint as a substitute for recovery."
+    );
+  return upsertLeadingSystemRule(chat, FEATURE_INTENT_RECOVERY_MARKER, rule);
+}
+
+function injectFeatureIntentPostReadRule(chat: Chat, remainingDiscoveryCalls: number): boolean {
+  const remaining = Math.max(0, Math.min(2, Number(remainingDiscoveryCalls || 0)));
+  const rule = (
+    `${FEATURE_INTENT_POST_READ_MARKER}\n`
+    + "The direct-source read requested for a proposed Feature Intent has completed. That read is evidence, not "
+    + "approval of the pre-read semantic claim. Do not replay the old completionFrontier or its old target binding. "
+    + "If the new source disproves that candidate, inspect the next bounded candidate or submit a materially new "
+    + `frontier. At most ${remaining} additional discovery call(s) remain before Feature Intent must be attempted again. `
+    + "Keep the current task/session ownership and do not checkpoint merely to refresh this allowance."
+  );
+  return upsertLeadingSystemRule(chat, FEATURE_INTENT_POST_READ_MARKER, rule);
 }
 
 function injectFeatureIntentEvidenceRefillRule(
@@ -1092,6 +1290,9 @@ function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
   directSourceFileEvidenceCount: number;
   directSourceDeclarationCount: number;
   directSourceImplementationCount: number;
+  directSourceFileEvidencePaths: string[];
+  directSourceDeclarationPaths: string[];
+  directSourceImplementationPaths: string[];
   evidenceCallsSinceLastAttempt: number;
   discoveryCallsSinceLastAttempt: number;
   uniqueEvidenceSinceLastAttempt: number;
@@ -1262,6 +1463,9 @@ function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
     directSourceFileEvidenceCount: directSourceFileEvidence.size,
     directSourceDeclarationCount: directSourceDeclarationEvidence.size,
     directSourceImplementationCount: directSourceImplementationEvidence.size,
+    directSourceFileEvidencePaths: [...directSourceFileEvidence].sort(),
+    directSourceDeclarationPaths: [...directSourceDeclarationEvidence].sort(),
+    directSourceImplementationPaths: [...directSourceImplementationEvidence].sort(),
     evidenceCallsSinceLastAttempt,
     discoveryCallsSinceLastAttempt,
     uniqueEvidenceSinceLastAttempt: evidenceSinceLastAttempt.size,
@@ -1274,6 +1478,73 @@ function architectureGateStatus(messages: ChatMessage[], checkpoint: any): {
     stagedContractRequired,
     networkedContractRequired,
   };
+}
+
+function latestFeatureFrontierState(messages: ChatMessage[]): {
+  recovery: any | null;
+  terminalRepeated: boolean;
+} {
+  const snapshots = core.snapshotMessages(messages);
+  const calls = new Map<string, any>();
+  let recovery: any | null = null;
+  let terminalRepeated = false;
+  for (const snapshot of snapshots) {
+    for (const call of snapshot.toolCalls || []) {
+      const id = String(call?.id || "").trim();
+      if (id) calls.set(id, call);
+    }
+    for (const result of snapshot.toolResults || []) {
+      const call = calls.get(String(result?.toolCallId || "").trim());
+      const name = String(result?.name || call?.name || "").trim();
+      if (!toolNamesMatch(FEATURE_INTENT_TOOL_NAME, name)) continue;
+      for (const payload of core.parseJsonObjects(result?.content)) {
+        const errorCode = String(payload?.errorCode || "").trim();
+        const validationErrorCode = String(
+          payload?.validationErrorCode
+          || payload?.gateCompletion?.validationErrorCode
+          || "",
+        ).trim();
+        const repeatedFrontierBlocker = Boolean(
+          errorCode === "REPEATED_GATE_BLOCKER"
+          && validationErrorCode === "FEATURE_FRONTIER_UNPROVEN"
+          && (
+            payload?.retryable === false
+            || payload?.gateCompletion?.retryable === false
+          )
+        );
+        if (repeatedFrontierBlocker) {
+          // This is the bounded retry boundary, not another payload repair.
+          // Leave normal planner reads/discovery available so evidence can
+          // materially change, but never force the rejected gate again.
+          recovery = null;
+          terminalRepeated = true;
+        } else if (
+          errorCode === "FEATURE_FRONTIER_UNPROVEN"
+          || validationErrorCode === "FEATURE_FRONTIER_UNPROVEN"
+        ) {
+          terminalRepeated = false;
+          recovery = payload?.featureFrontierRecovery
+            || payload?.gateCompletion?.featureFrontierRecovery
+            || {
+              kind: "repair_completion_frontier",
+              requiredFields: [
+                "completionFrontier.milestone",
+                "completionFrontier.candidateFeature",
+                "completionFrontier.declarationEvidence",
+                "completionFrontier.implementationEvidence",
+                "completionFrontier.implementedBehavior",
+                "completionFrontier.unmetBehavior",
+                "completionFrontier.priorCandidatesComplete",
+              ],
+            };
+        } else if (payload?.ok === true || payload?.gatePassed === true) {
+          recovery = null;
+          terminalRepeated = false;
+        }
+      }
+    }
+  }
+  return { recovery, terminalRepeated };
 }
 
 function appendRequired(schema: any, fields: string[]): void {
@@ -1405,6 +1676,33 @@ function architectureSubmissionTool(
   return cloned;
 }
 
+function featureIntentSubmissionTool(
+  tool: any,
+  options: { completionAuditRequired?: boolean; sliceInputRequired?: boolean } = {},
+): any {
+  if (!tool || (!options.completionAuditRequired && !options.sliceInputRequired)) return tool;
+  let cloned: any;
+  try {
+    cloned = JSON.parse(JSON.stringify(tool));
+  } catch {
+    return tool;
+  }
+  const callable = cloned?.function && typeof cloned.function === "object"
+    ? cloned.function
+    : cloned;
+  const parameters = callable?.parameters;
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return cloned;
+  const properties = parameters.properties;
+  if (!properties || typeof properties !== "object") return cloned;
+  if (options.completionAuditRequired && properties.completionFrontier) {
+    appendRequired(parameters, ["completionFrontier"]);
+  }
+  if (options.sliceInputRequired && properties.slices) {
+    appendRequired(parameters, ["slices"]);
+  }
+  return cloned;
+}
+
 function requiredSchemaLeafPaths(schema: any, basePath: string, depth = 0): string[] {
   if (!schema || typeof schema !== "object" || depth > 12) return basePath ? [basePath] : [];
   const required = Array.isArray(schema.required)
@@ -1487,6 +1785,105 @@ function architecturePayloadViolationPaths(request: any, tool: any): string[] {
     ? request.arguments
     : {};
   return [...new Set(schemaContractViolationPaths(parameters, args))].slice(0, 64);
+}
+
+function featureIntentPayloadViolationPaths(request: any, tool: any): string[] {
+  if (!toolNamesMatch(FEATURE_INTENT_TOOL_NAME, requestedToolName(request))) return [];
+  const callable = tool?.function && typeof tool.function === "object" ? tool.function : tool;
+  const parameters = callable?.parameters;
+  const args = request?.arguments && typeof request.arguments === "object"
+    ? request.arguments
+    : {};
+  return [...new Set(schemaContractViolationPaths(parameters, args))].slice(0, 64);
+}
+
+function normalizeProjectSourcePath(value: any): string {
+  const normalized = String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/^project:\/\//i, "")
+    .replace(/^\.\//, "")
+    .trim()
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+  if (!normalized) return "";
+  if (normalized.startsWith("source/") || normalized.startsWith("plugins/")) return normalized;
+  const sourceMarker = normalized.indexOf("/source/");
+  if (sourceMarker < 0) return normalized;
+  const pluginMarker = normalized.lastIndexOf("/plugins/", sourceMarker);
+  return normalized.slice((pluginMarker >= 0 ? pluginMarker : sourceMarker) + 1);
+}
+
+function featureIntentRequestedTargetFiles(request: any): string[] {
+  const args = request?.arguments && typeof request.arguments === "object"
+    ? request.arguments
+    : {};
+  const normalize = (value: any) => String(value || "").replace(/\\/g, "/").replace(/^project:\/\//i, "").replace(/^\.\//, "").trim().replace(/^\/+|\/+$/g, "");
+  const direct = Array.isArray(args.targetFiles) ? args.targetFiles : [];
+  const slices = Array.isArray(args.slices) ? args.slices : [];
+  const activeSliceId = String(args.activeSliceId || "").trim();
+  const selected = activeSliceId
+    ? slices.find((item: any) => String(item?.sliceId || item?.slice_id || "").trim() === activeSliceId)
+    : slices[0];
+  const fromSlice = Array.isArray(selected?.files) ? selected.files : [];
+  return [...new Set([...direct, ...fromSlice].map(normalize).filter(Boolean))].slice(0, 4);
+}
+
+function knownAbsentFeatureIntentTargetFiles(
+  messages: ChatMessage[],
+  targetFiles: string[],
+): string[] {
+  const targets = new Map(
+    targetFiles
+      .map((path) => [normalizeProjectSourcePath(path), path] as const)
+      .filter(([normalized]) => Boolean(normalized)),
+  );
+  if (targets.size === 0) return [];
+  const snapshots = core.snapshotMessages(messages);
+  const calls = new Map<string, any>();
+  const absent = new Set<string>();
+  for (const snapshot of snapshots) {
+    for (const call of snapshot.toolCalls || []) {
+      if (call?.id) calls.set(String(call.id), call);
+    }
+    for (const result of snapshot.toolResults || []) {
+      const call = calls.get(String(result?.toolCallId || ""));
+      const name = String(result?.name || call?.name || "");
+      if (!toolNamesMatch("search_files", name) || !core.toolResultSucceeded(result)) continue;
+      const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
+      if (args.matchFileNames !== true) continue;
+      const query = String(args.query || "").replace(/\\/g, "/").split("/").pop()?.trim().toLowerCase();
+      if (!query) continue;
+      const searchRoot = normalizeProjectSourcePath(args.path || "");
+      for (const payload of core.parseJsonObjects(result?.content)) {
+        const complete = payload?.searchComplete === true
+          && (!Array.isArray(payload?.incompleteReasons) || payload.incompleteReasons.length === 0);
+        const zeroMatches = (!Array.isArray(payload?.results) || payload.results.length === 0)
+          && (!Array.isArray(payload?.fileNameResults) || payload.fileNameResults.length === 0);
+        if (!complete || !zeroMatches) continue;
+        for (const normalized of targets.keys()) {
+          const basename = normalized.split("/").pop() || "";
+          const rootCoversTarget = !searchRoot
+            || normalized === searchRoot
+            || normalized.startsWith(`${searchRoot}/`);
+          if (basename === query && rootCoversTarget) absent.add(normalized);
+        }
+      }
+    }
+  }
+  return [...absent];
+}
+
+function unreadFeatureIntentTargetFiles(
+  request: any,
+  successfulPaths: string[],
+  knownAbsentPaths: string[] = [],
+): string[] {
+  const readable = new Set(successfulPaths.map(normalizeProjectSourcePath).filter(Boolean));
+  const absent = new Set(knownAbsentPaths.map(normalizeProjectSourcePath).filter(Boolean));
+  return featureIntentRequestedTargetFiles(request).filter((path) => (
+    !readable.has(normalizeProjectSourcePath(path))
+    && !absent.has(normalizeProjectSourcePath(path))
+  ));
 }
 
 function stagedArchitectureContractRequired(goal: string): boolean {
@@ -2147,7 +2544,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
 
   const contextLength = await model.getContextLength();
   const toolDefinitions = ctl.getToolDefinitions();
-  const nextCheckpoint = core.buildCheckpoint(messages, checkpoint || {}, { maxCheckpointFacts: 32 });
+  const nextCheckpoint: any = core.buildCheckpoint(messages, checkpoint || {}, { maxCheckpointFacts: 32 });
+  const persistedFeatureResume = checkpoint?.featureIntentResume;
+  nextCheckpoint.featureIntentResume = null;
+  let featureIntentRediscoveryActive = false;
+  let featureIntentRediscoveryRemaining = 0;
   nextCheckpoint.compactionGeneration = Number(checkpoint?.compactionGeneration || 0);
   const trailingMetaUser = trailingMetaUserMessage(messages);
   const architectureGoal = latestUserGoalText(messages);
@@ -2273,6 +2674,110 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const effectiveFeatureIntentEvidenceReadThreshold = featureCompletionAuditRequired
     ? Math.max(featureIntentEvidenceReadThreshold, 6)
     : featureIntentEvidenceReadThreshold;
+  if (
+    persistedFeatureResume
+    && typeof persistedFeatureResume === "object"
+    && !Array.isArray(persistedFeatureResume)
+  ) {
+    const currentFeatureResultCount = observedToolResultCount(messages, FEATURE_INTENT_TOOL_NAME);
+    const featureResultPending = currentFeatureResultCount
+      <= Number(persistedFeatureResume.observedResultCount || 0);
+    const currentDiscoveryResultCount = observedToolResultCountForNames(
+      messages,
+      ARCHITECTURE_DISCOVERY_TOOLS,
+    );
+    const resumeMode = String(persistedFeatureResume.mode || "legacy_exact");
+    const restoreExactResume = () => {
+      nextCheckpoint.featureIntentResume = persistedFeatureResume;
+      const newerRequiredTool = String(nextCheckpoint?.requiredNextTool?.name || "").trim();
+      // Preserve a newer checkpoint/control-plane handoff. Once it succeeds,
+      // the deferred target-read flow becomes eligible again.
+      if (!newerRequiredTool || toolNamesMatch(FEATURE_INTENT_TOOL_NAME, newerRequiredTool)) {
+        nextCheckpoint.requiredNextTool = {
+          name: FEATURE_INTENT_TOOL_NAME,
+          reference: "feature_intent_target_evidence_resume",
+          args: mergeServerOwnedArguments({}, persistedFeatureResume.args || {}),
+        };
+      }
+    };
+    if (featureResultPending && resumeMode === "awaiting_target_read") {
+      const targetReadCompleted = currentDiscoveryResultCount
+        > Number(persistedFeatureResume.observedDiscoveryResultCount || 0);
+      const resumedTargetFiles = featureIntentRequestedTargetFiles({
+        arguments: persistedFeatureResume.args || {},
+      });
+      const knownAbsentTargets = knownAbsentFeatureIntentTargetFiles(
+        messages,
+        resumedTargetFiles,
+      );
+      const unreadTargets = targetReadCompleted
+        ? unreadFeatureIntentTargetFiles(
+          { arguments: persistedFeatureResume.args || {} },
+          architectureStatus.directSourceFileEvidencePaths,
+          knownAbsentTargets,
+        )
+        : [];
+      if (!targetReadCompleted || unreadTargets.length > 0) {
+        // Multiple target files may still need the same bounded read handoff.
+        // The request cannot reach MCP while unread targets remain: the
+        // post-prediction recovery below replaces it with the next exact read.
+        restoreExactResume();
+      } else {
+        // The newly read source may disprove the model's pre-read hypothesis.
+        // Drop semantic args completely instead of freezing them across hard
+        // compaction, and grant two ordinary bounded discovery observations.
+        nextCheckpoint.featureIntentResume = {
+          mode: "rediscover_after_target_read",
+          observedResultCount: currentFeatureResultCount,
+          observedDiscoveryResultCount: currentDiscoveryResultCount,
+          maxDiscoveryCalls: 2,
+        };
+        featureIntentRediscoveryActive = true;
+        featureIntentRediscoveryRemaining = 2;
+        await appendEventBestEffort(sessionId, {
+          type: "feature_intent_post_read_reevaluation_started",
+          at: new Date().toISOString(),
+          staleSemanticArgumentsDiscarded: true,
+          maxDiscoveryCalls: 2,
+        });
+      }
+    } else if (featureResultPending && resumeMode === "rediscover_after_target_read") {
+      const used = Math.max(
+        0,
+        currentDiscoveryResultCount
+          - Number(persistedFeatureResume.observedDiscoveryResultCount || 0),
+      );
+      const maxCalls = Math.max(1, Math.min(2, Number(persistedFeatureResume.maxDiscoveryCalls || 2)));
+      if (used < maxCalls) {
+        nextCheckpoint.featureIntentResume = persistedFeatureResume;
+        featureIntentRediscoveryActive = true;
+        featureIntentRediscoveryRemaining = maxCalls - used;
+      } else {
+        await appendEventBestEffort(sessionId, {
+          type: "feature_intent_post_read_reevaluation_completed",
+          at: new Date().toISOString(),
+          reason: "bounded_discovery_consumed",
+          discoveryCallsUsed: used,
+        });
+      }
+    } else if (featureResultPending) {
+      // Backward-compatible handling for durable checkpoints written before
+      // post-read semantic re-evaluation was introduced.
+      restoreExactResume();
+    }
+  }
+  if (
+    featureIntentRediscoveryActive
+    && toolNamesMatch(
+      FEATURE_INTENT_TOOL_NAME,
+      String(nextCheckpoint?.requiredNextTool?.name || ""),
+    )
+  ) {
+    nextCheckpoint.requiredNextTool = null;
+  }
+  if (featureIntentRediscoveryActive) {
+    injectFeatureIntentPostReadRule(history, featureIntentRediscoveryRemaining);
+  }
   const advertisedRequiredToolName = String(nextCheckpoint?.requiredNextTool?.name || "").trim();
   const advertisedRequiredToolExists = Boolean(advertisedRequiredToolName && toolDefinitions.some((tool: any) => (
     toolNamesMatch(advertisedRequiredToolName, tool?.function?.name || tool?.name || "")
@@ -2322,11 +2827,130 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ? nextCheckpoint.toolRoute.selectedSlice.files.filter((path: any) => String(path || "").trim())
     : [];
   const plannerPhaseActive = String(nextCheckpoint?.toolRoute?.phase || "").toLowerCase() === "planner";
+  const directSourcePairStems = new Set(
+    architectureStatus.directSourceDeclarationPaths.map((path: string) => (
+      path.replace(/\\/g, "/").replace(/\.(?:h|hh|hpp|hxx|inl)$/i, "").toLowerCase()
+    )),
+  );
+  const targetBoundEvidencePairReady = architectureStatus.directSourceImplementationPaths.some(
+    (path: string) => directSourcePairStems.has(
+      path.replace(/\\/g, "/").replace(/\.(?:c|cc|cpp|cxx|m|mm|cs)$/i, "").toLowerCase(),
+    ),
+  );
   const featureIntentEvidenceReady = Boolean(
     architectureStatus.directSourceFileEvidenceCount >= effectiveFeatureIntentEvidenceReadThreshold
     && architectureStatus.directSourceImplementationCount >= (featureCompletionAuditRequired ? 2 : 1)
     && architectureStatus.directSourceDeclarationCount >= (featureCompletionAuditRequired ? 2 : 1)
+    && (!featureCompletionAuditRequired || targetBoundEvidencePairReady)
   );
+  const featureFrontierState = latestFeatureFrontierState(messages);
+  const featureFrontierRecovery = featureFrontierState.recovery;
+  const featureFrontierTerminalRepeated = featureFrontierState.terminalRepeated;
+  if (
+    featureFrontierTerminalRepeated
+    && toolNamesMatch(
+      FEATURE_INTENT_TOOL_NAME,
+      String(nextCheckpoint?.requiredNextTool?.name || ""),
+    )
+  ) {
+    // A bounded semantic repeat ends the old exact-serialization obligation.
+    // Keep the task and planner route alive so a different source candidate can
+    // be inspected, but do not immediately force the rejected gate a third time.
+    nextCheckpoint.requiredNextTool = null;
+    nextCheckpoint.featureIntentResume = null;
+  }
+  const featureFrontierRecoveryActive = Boolean(
+    !detachedSideQueryActive
+    && !featureIntentRediscoveryActive
+    && plannerPhaseActive
+    && featureCompletionAuditRequired
+    && featureFrontierRecovery,
+  );
+  let featureFrontierRepairToolForced = false;
+  let featureFrontierSemanticRediscoveryActive = false;
+  let featureFrontierSemanticRediscoveryRemaining = 0;
+  if (featureFrontierRecoveryActive) {
+    const requiredReads = Array.isArray(featureFrontierRecovery?.requiredReads)
+      ? featureFrontierRecovery.requiredReads.filter((path: any) => String(path || "").trim())
+      : [];
+    const semanticDiscoveryRequired = featureFrontierRecovery?.semanticDiscoveryRequired === true;
+    const semanticDiscoveryLimit = Math.max(
+      1,
+      Math.min(2, Number(featureFrontierRecovery?.maxDiscoveryCalls || 2)),
+    );
+    const semanticDiscoveryUsed = semanticDiscoveryRequired
+      ? successfulToolResultCountSinceLatest(
+        messages,
+        FEATURE_INTENT_TOOL_NAME,
+        ARCHITECTURE_DISCOVERY_TOOLS,
+      )
+      : 0;
+    featureFrontierSemanticRediscoveryActive = Boolean(
+      semanticDiscoveryRequired
+      && requiredReads.length === 0
+      && semanticDiscoveryUsed < semanticDiscoveryLimit
+    );
+    featureFrontierSemanticRediscoveryRemaining = featureFrontierSemanticRediscoveryActive
+      ? semanticDiscoveryLimit - semanticDiscoveryUsed
+      : 0;
+    if (
+      featureFrontierSemanticRediscoveryActive
+      && toolNamesMatch(
+        FEATURE_INTENT_TOOL_NAME,
+        String(nextCheckpoint?.requiredNextTool?.name || ""),
+      )
+    ) {
+      // The semantic validator result is newer than an earlier checkpoint's
+      // Feature handoff.  Clear only that stale gate requirement while the
+      // bounded source re-evaluation is active.
+      nextCheckpoint.requiredNextTool = null;
+    }
+    injectFeatureIntentRecoveryRule(
+      history,
+      featureFrontierRecovery,
+      featureFrontierSemanticRediscoveryRemaining,
+    );
+    const requiredBeforeFrontierRepair = String(
+      nextCheckpoint?.requiredNextTool?.name || "",
+    ).trim();
+    const frontierRepairMayUseRequired = Boolean(
+      !requiredBeforeFrontierRepair
+      || toolNamesMatch(FEATURE_INTENT_TOOL_NAME, requiredBeforeFrontierRepair)
+    );
+    // FEATURE_FRONTIER_UNPROVEN has two distinct recovery shapes.  A non-empty
+    // requiredReads list authorizes bounded source discovery.  An empty list is
+    // a model-only payload repair and must return directly to Feature Intent;
+    // leaving all planner tools exposed lets compaction-triggered re-reads cycle
+    // forever without changing the frontier.  Preserve checkpoint/control-plane
+    // requirements by taking this ownership only when no different exact tool
+    // is already pending.
+    if (
+      requiredReads.length === 0
+      && !featureFrontierSemanticRediscoveryActive
+      && featureIntentTool
+      && featureIntentRouted
+      && frontierRepairMayUseRequired
+    ) {
+      nextCheckpoint.requiredNextTool = {
+        name: FEATURE_INTENT_TOOL_NAME,
+        reference: {
+          sourceField: "compactor.featureFrontierRepair",
+          value: FEATURE_INTENT_TOOL_NAME,
+        },
+        args: null,
+      };
+      featureFrontierRepairToolForced = true;
+    }
+  }
+  const featureIntentContractTool = featureIntentSubmissionTool(featureIntentTool, {
+    completionAuditRequired: featureCompletionAuditRequired,
+    sliceInputRequired: selectedSliceFiles.length === 0,
+  });
+  const contractAwareToolDefinitions = toolDefinitions.map((tool: any) => (
+    toolNamesMatch(FEATURE_INTENT_TOOL_NAME, tool?.function?.name || tool?.name || "")
+      ? featureIntentContractTool
+      : tool
+  ));
   const checkpointRecoveryRequired = toolNamesMatch(
     TASK_CHECKPOINT_TOOL_NAME,
     String(nextCheckpoint?.requiredNextTool?.name || ""),
@@ -2396,6 +3020,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && !architectureValidationRequired
     && !checkpointRecoveryRequired
     && evidenceRefillMaySuspendRequired
+    && !featureFrontierRecoveryActive
     && !featureIntentEvidenceReady
   );
   if (featureIntentEvidenceRefillActive) {
@@ -2426,15 +3051,26 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && !architectureValidationRequired
     && !checkpointRecoveryRequired
     && featureHandoffMayUseRequired
+    && !featureFrontierRecoveryActive
+    && !featureIntentRediscoveryActive
+    && !featureFrontierTerminalRepeated
     && featureIntentEvidenceReady
   );
   if (featureIntentDiscoveryHandoffForced) {
+    const priorFeatureArgs = toolNamesMatch(
+      FEATURE_INTENT_TOOL_NAME,
+      String(nextCheckpoint?.requiredNextTool?.name || ""),
+    ) && nextCheckpoint?.requiredNextTool?.args
+      && typeof nextCheckpoint.requiredNextTool.args === "object"
+      && !Array.isArray(nextCheckpoint.requiredNextTool.args)
+      ? nextCheckpoint.requiredNextTool.args
+      : null;
     nextCheckpoint.requiredNextTool = {
       name: FEATURE_INTENT_TOOL_NAME,
       reference: { sourceField: "compactor.boundedEvidenceHandoff", value: FEATURE_INTENT_TOOL_NAME },
-      args: null,
+      args: priorFeatureArgs,
     };
-    injectFeatureIntentAtomicRule(history);
+    injectFeatureIntentAtomicRule(history, architectureStatus.directSourceFileEvidencePaths);
   }
   const architectureContractGoal = architectureContractGoalText(
     messages,
@@ -2583,7 +3219,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   injectRepeatedControlBoundaryRule(history, unchangedControlTools);
   const exactRequiredToolDefinition: any = detachedSideQueryActive
     ? null
-    : taskOwnedRequiredToolDefinition(nextCheckpoint, toolDefinitions, sessionId);
+    : taskOwnedRequiredToolDefinition(nextCheckpoint, contractAwareToolDefinitions, sessionId);
   const exactRequiredToolForced = Boolean(
     !workflowStopActive
     && exactRequiredToolDefinition
@@ -2669,17 +3305,23 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const routeSafePhaseToolDefinitions = routeOwnershipAvailable
     ? phaseToolDefinitions.filter((tool: any) => activeRouteBootstrapToolAllowed(tool, nextCheckpoint))
     : phaseToolDefinitions;
+  const contractAwareRouteSafePhaseToolDefinitions = routeSafePhaseToolDefinitions.map((tool: any) => (
+    !tool?.__serverOwnedInjectedArgs
+    && toolNamesMatch(FEATURE_INTENT_TOOL_NAME, tool?.function?.name || tool?.name || "")
+      ? featureIntentContractTool
+      : tool
+  ));
   const routedToolDefinitions = detachedSideQueryActive
-    ? routeSafePhaseToolDefinitions
+    ? contractAwareRouteSafePhaseToolDefinitions
     : routeOwnershipAvailable
     && exactToolRouteAvailable
     && !architectureToolForced
     && !architectureEvidenceRefillActive
     && !featureIntentEvidenceRefillActive
-    ? routeSafePhaseToolDefinitions.filter((tool: any) => routeAllowsTool(tool, nextCheckpoint))
+    ? contractAwareRouteSafePhaseToolDefinitions.filter((tool: any) => routeAllowsTool(tool, nextCheckpoint))
     : (checkpointExplicitlyRequired
-      ? routeSafePhaseToolDefinitions
-      : routeSafePhaseToolDefinitions.filter((tool: any) => !toolNamesMatch(
+      ? contractAwareRouteSafePhaseToolDefinitions
+      : contractAwareRouteSafePhaseToolDefinitions.filter((tool: any) => !toolNamesMatch(
         TASK_CHECKPOINT_TOOL_NAME,
         tool?.function?.name || tool?.name || "",
       )));
@@ -2699,6 +3341,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     const { __serverOwnedInjectedArgs: _injected, ...publicDefinition } = tool;
     return publicDefinition;
   });
+  const featureIntentModelFacingTool: any = modelFacingToolDefinitions.find((tool: any) => (
+    toolNamesMatch(FEATURE_INTENT_TOOL_NAME, tool?.function?.name || tool?.name || "")
+  )) || featureIntentContractTool;
   const currentFormatted = await model.applyPromptTemplate(history);
   const inputTokens = await model.countTokens(currentFormatted);
   const toolSchemaTokens = await model.countTokens(JSON.stringify(modelFacingToolDefinitions));
@@ -2719,6 +3364,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     strictToolControlPlane: Boolean(configValue(ctl, "strictToolControlPlane", false)),
     bufferUntilPredictionComplete: Boolean(configValue(ctl, "bufferUntilPredictionComplete", true)),
     streamReasoningProgress: Boolean(configValue(ctl, "streamReasoningProgress", true)),
+    predictionHeartbeatSeconds: finiteNumber(
+      configValue(ctl, "predictionHeartbeatSeconds", 4), 4, 1, 30,
+    ),
     rejectTruncatedPredictions: Boolean(configValue(ctl, "rejectTruncatedPredictions", true)),
     requireCheckpointPersistence,
     softRemainingTokens: finiteNumber(configValue(ctl, "softRemainingTokens", 14000), 14000, hardRemainingTokens),
@@ -2799,7 +3447,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     evidenceFirstContractSatisfied,
     featureIntentDiscoveryHandoffForced,
     featureIntentEvidenceReady,
+    featureIntentTargetBoundEvidenceReady: targetBoundEvidencePairReady,
     featureIntentEvidenceRefillActive,
+    featureFrontierRecoveryActive,
+    featureFrontierRepairToolForced,
+    featureFrontierSemanticRediscoveryActive,
+    featureFrontierSemanticRediscoveryRemaining,
     featureCompletionAuditRequired,
     effectiveFeatureIntentEvidenceReadThreshold,
     detachedSideQueryActive,
@@ -3013,6 +3666,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
 
   const events: any[] = [];
   const requests: any[] = [];
+  let deferredRequiredNextTool: any | null = null;
+  let predictionHeartbeatCount = 0;
   const strictToolControlPlane = Boolean(config.strictToolControlPlane);
   // A persisted requiredNextTool is a safety gate even when the optional
   // strict mode is disabled. Otherwise a model can emit an unrelated tool
@@ -3064,58 +3719,92 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     } else if (outputBuffered) events.push(event);
     else emitEvent(event);
   };
-  const runPrediction = async (predictionTools: any[], forceTool: boolean): Promise<string> => {
+  const runPrediction = async (
+    predictionTools: any[],
+    forceTool: boolean,
+    progressLabel = "Model reasoning",
+  ): Promise<string> => {
     guardGeneratorAbort(ctl);
-    const prediction = model.respond(modelChat, {
-      maxTokens: Number(config.maxOutputReserve),
-      temperature: Number(config.temperature),
-      ...(predictionTools.length > 0 ? {
-        rawTools: {
-          type: "toolArray",
-          tools: predictionTools,
-          ...(forceTool ? { force: true } : {}),
-        },
-      } : {}),
-      contextOverflowPolicy: "stopAtLimit",
-      signal: ctl.abortSignal,
-      onPredictionFragment(fragment: any) {
-        recordEvent({
-          kind: "fragment",
-          content: String(fragment.content || ""),
-          opts: fragmentOptions(fragment),
-        });
-      },
-      onToolCallRequestStart(callId: number, info: any) {
-        recordEvent({ kind: "start", callId, toolCallId: info?.toolCallId });
-      },
-      onToolCallRequestNameReceived(callId: number, name: string) {
-        recordEvent({ kind: "name", callId, name });
-      },
-      onToolCallRequestArgumentFragmentGenerated(callId: number, content: string) {
-        recordEvent({ kind: "args", callId, content });
-      },
-      onToolCallRequestEnd(callId: number, info: any) {
-        const rawRequest = info?.toolCallRequest || {};
-        const request = enrichToolRequestControl(
-          rawRequest,
-          sessionId,
-          nextCheckpoint,
-          authoritativeGoal,
-          modelFacingToolDefinitions,
+    const predictionStartedAt = Date.now();
+    let lastVisibleProgressAt = predictionStartedAt;
+    const heartbeatIntervalMs = Number(config.predictionHeartbeatSeconds) * 1000;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    if (config.streamReasoningProgress && heartbeatIntervalMs > 0) {
+      heartbeat = setInterval(() => {
+        const now = Date.now();
+        if ((ctl as any)?.abortSignal?.aborted || now - lastVisibleProgressAt < heartbeatIntervalMs) return;
+        predictionHeartbeatCount += 1;
+        lastVisibleProgressAt = now;
+        ctl.fragmentGenerated(
+          `\n[Working: ${progressLabel} - ${Math.max(1, Math.floor((now - predictionStartedAt) / 1000))}s elapsed]\n`,
+          {
+            reasoningType: "reasoning",
+            containsDrafted: false,
+            isStructural: true,
+          },
         );
-        if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
-          replaceBufferedArgumentFragments(events, callId, request.arguments);
-        }
-        requests.push({ callId, request });
-        recordEvent({ kind: "end", callId, request });
-      },
-      onToolCallRequestFailure(callId: number, error: Error) {
-        recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
-      },
-    });
-    const predictionResult: any = await predictionResultWithAbort(prediction, ctl);
-    guardGeneratorAbort(ctl);
-    return String(predictionResult?.stats?.stopReason || "");
+      }, Math.min(1000, heartbeatIntervalMs));
+    }
+    try {
+      const prediction = model.respond(modelChat, {
+        maxTokens: Number(config.maxOutputReserve),
+        temperature: Number(config.temperature),
+        ...(predictionTools.length > 0 ? {
+          rawTools: {
+            type: "toolArray",
+            tools: predictionTools,
+            ...(forceTool ? { force: true } : {}),
+          },
+        } : {}),
+        contextOverflowPolicy: "stopAtLimit",
+        signal: ctl.abortSignal,
+        onPredictionFragment(fragment: any) {
+          if (
+            config.streamReasoningProgress
+            && String(fragment?.reasoningType || "none") !== "none"
+          ) {
+            lastVisibleProgressAt = Date.now();
+          }
+          recordEvent({
+            kind: "fragment",
+            content: String(fragment.content || ""),
+            opts: fragmentOptions(fragment),
+          });
+        },
+        onToolCallRequestStart(callId: number, info: any) {
+          recordEvent({ kind: "start", callId, toolCallId: info?.toolCallId });
+        },
+        onToolCallRequestNameReceived(callId: number, name: string) {
+          recordEvent({ kind: "name", callId, name });
+        },
+        onToolCallRequestArgumentFragmentGenerated(callId: number, content: string) {
+          recordEvent({ kind: "args", callId, content });
+        },
+        onToolCallRequestEnd(callId: number, info: any) {
+          const rawRequest = info?.toolCallRequest || {};
+          const request = enrichToolRequestControl(
+            rawRequest,
+            sessionId,
+            nextCheckpoint,
+            authoritativeGoal,
+            modelFacingToolDefinitions,
+          );
+          if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
+            replaceBufferedArgumentFragments(events, callId, request.arguments);
+          }
+          requests.push({ callId, request });
+          recordEvent({ kind: "end", callId, request });
+        },
+        onToolCallRequestFailure(callId: number, error: Error) {
+          recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
+        },
+      });
+      const predictionResult: any = await predictionResultWithAbort(prediction, ctl);
+      guardGeneratorAbort(ctl);
+      return String(predictionResult?.stats?.stopReason || "");
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+    }
   };
   const unsafeStopReasons = new Set(["contextLengthReached", "failed", "modelUnloaded"]);
   const predictionTruncated = (reason: string): boolean => (
@@ -3133,6 +3822,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       stopReason: reason || "unspecified",
       bufferedEventCount: events.length,
       streamedReasoningEventCount,
+      predictionHeartbeatCount,
       toolRequestCount: requests.length,
       outputCommitted: false,
       outputCommitPending: !truncatedPrediction,
@@ -3150,6 +3840,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       || preRoutePlannerForced
       || catalogRefreshForced
       || exactRequiredToolForced,
+    architectureToolForced
+      ? "Architecture validation"
+      : (architectureEvidenceRefillActive || featureIntentEvidenceRefillActive
+        ? "Source evidence analysis"
+        : (exactRequiredToolForced
+          ? `Running: ${exactRequiredToolName}`
+          : "Model reasoning")),
   );
   await recordPredictionCompletion(stopReason);
   if (predictionTruncated(stopReason)) {
@@ -3213,6 +3910,215 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         + "No generated tool call was committed.",
       );
     }
+  }
+  const incompleteFeatureIntentPaths = featureCompletionAuditRequired
+    ? [...new Set(requests.flatMap((entry) => (
+      featureIntentPayloadViolationPaths(entry.request, featureIntentContractTool)
+    )))]
+    : [];
+  if (incompleteFeatureIntentPaths.length > 0) {
+    await appendEventBestEffort(sessionId, {
+      type: "feature_intent_payload_repair_started",
+      at: new Date().toISOString(),
+      missingRequiredPaths: incompleteFeatureIntentPaths,
+      priorToolRequestCount: requests.length,
+    });
+    events.length = 0;
+    requests.length = 0;
+    injectFeatureIntentPayloadRepairRule(modelChat, incompleteFeatureIntentPaths);
+    stopReason = await runPrediction(
+      [featureIntentModelFacingTool].filter(Boolean),
+      true,
+      "Recovery: Feature Intent payload",
+    );
+    await recordPredictionCompletion(stopReason, "feature_intent_payload");
+    if (predictionTruncated(stopReason)) {
+      throw new Error(
+        `Feature Intent payload repair was discarded because it did not complete safely (stopReason=${stopReason}).`,
+      );
+    }
+    const repairedFeatureRequests = requests.filter((entry) => (
+      toolNamesMatch(FEATURE_INTENT_TOOL_NAME, requestedToolName(entry.request))
+    ));
+    const remainingFeatureViolations = [...new Set(repairedFeatureRequests.flatMap((entry) => (
+      featureIntentPayloadViolationPaths(entry.request, featureIntentContractTool)
+    )))];
+    const repaired = repairedFeatureRequests.length === 1 && remainingFeatureViolations.length === 0;
+    await appendEventBestEffort(sessionId, {
+      type: repaired
+        ? "feature_intent_payload_repair_completed"
+        : "feature_intent_payload_repair_failed",
+      at: new Date().toISOString(),
+      missingRequiredPaths: remainingFeatureViolations,
+      toolRequestCount: requests.length,
+    });
+    if (!repaired) {
+      nextCheckpoint.requiredNextTool = null;
+      await persistCheckpoint(
+        sessionId,
+        nextCheckpoint,
+        requireCheckpointPersistence,
+        "feature_intent_payload_repair_failed",
+      );
+      throw new Error(
+        "Feature Intent output was discarded after one bounded payload repair because required JSON-schema "
+        + `paths are still missing: ${(remainingFeatureViolations.length
+          ? remainingFeatureViolations
+          : incompleteFeatureIntentPaths).join(", ")}.`,
+      );
+    }
+  }
+  const producedFeatureIntentRequest = requests.find((entry) => (
+    toolNamesMatch(FEATURE_INTENT_TOOL_NAME, requestedToolName(entry.request))
+  ));
+  const producedFeatureTargets = producedFeatureIntentRequest
+    ? featureIntentRequestedTargetFiles(producedFeatureIntentRequest.request)
+    : [];
+  const knownAbsentFeatureTargets = knownAbsentFeatureIntentTargetFiles(
+    messages,
+    producedFeatureTargets,
+  );
+  const unreadFeatureTargets = producedFeatureIntentRequest
+    ? unreadFeatureIntentTargetFiles(
+      producedFeatureIntentRequest.request,
+      architectureStatus.directSourceFileEvidencePaths,
+      knownAbsentFeatureTargets,
+    )
+    : [];
+  if (producedFeatureIntentRequest && knownAbsentFeatureTargets.length > 0) {
+    await appendEventBestEffort(sessionId, {
+      type: "feature_intent_new_target_absence_proven",
+      at: new Date().toISOString(),
+      targetFiles: knownAbsentFeatureTargets,
+      evidence: "complete_exact_basename_search_zero_matches",
+    });
+  }
+  if (unreadFeatureTargets.length > 0) {
+    const requiredPath = unreadFeatureTargets[0];
+    await appendEventBestEffort(sessionId, {
+      type: "feature_intent_target_evidence_recovery_started",
+      at: new Date().toISOString(),
+      unreadTargetFiles: unreadFeatureTargets,
+      selectedReadPath: requiredPath,
+    });
+    events.length = 0;
+    requests.length = 0;
+    nextCheckpoint.requiredNextTool = null;
+    injectFeatureIntentRecoveryRule(modelChat, {
+      kind: "read_selected_target",
+      requiredReads: unreadFeatureTargets,
+      nextTool: "read_file",
+      nextToolArgs: { path: requiredPath },
+    });
+    const directReadTools = contractAwareToolDefinitions.filter((tool: any) => (
+      DIRECT_SOURCE_FILE_TOOLS.some((name) => toolNamesMatch(
+        name,
+        tool?.function?.name || tool?.name || "",
+      ))
+    ));
+    stopReason = await runPrediction(directReadTools, true, "Reading selected target source");
+    await recordPredictionCompletion(stopReason, "feature_intent_target_evidence");
+    if (predictionTruncated(stopReason)) {
+      throw new Error(
+        `Feature target evidence recovery was discarded because it did not complete safely (stopReason=${stopReason}).`,
+      );
+    }
+    const requestedReadEntry = requests.length === 1 ? requests[0] : null;
+    const requestedRead = requestedReadEntry?.request || null;
+    const requestedReadName = requestedToolName(requestedRead);
+    const modelRequestedReadPath = normalizeProjectSourcePath(
+      requestedRead?.arguments?.path || requestedRead?.arguments?.filePath || "",
+    );
+    const directReadToolProduced = Boolean(
+      requestedRead
+      && DIRECT_SOURCE_FILE_TOOLS.some((name) => toolNamesMatch(name, requestedReadName))
+    );
+    let serverBoundPath = false;
+    if (
+      directReadToolProduced
+      && modelRequestedReadPath !== normalizeProjectSourcePath(requiredPath)
+    ) {
+      // The server-owned Feature Intent request already identified the exact
+      // unread target.  Asking the target model to copy that path is only a
+      // serialization step, not a semantic choice.  Bind the one allowed
+      // direct-read request to the authoritative path so a nearby header or
+      // similarly named file cannot turn a recoverable read into a terminal
+      // GUI failure.
+      const reboundArguments = {
+        ...(requestedRead.arguments && typeof requestedRead.arguments === "object"
+          ? requestedRead.arguments
+          : {}),
+        path: requiredPath,
+      };
+      delete (reboundArguments as any).filePath;
+      requestedRead.arguments = reboundArguments;
+      if (requestedReadEntry) {
+        replaceBufferedArgumentFragments(
+          events,
+          requestedReadEntry.callId,
+          reboundArguments,
+        );
+      }
+      serverBoundPath = true;
+    }
+    const requestedReadPath = normalizeProjectSourcePath(
+      requestedRead?.arguments?.path || requestedRead?.arguments?.filePath || "",
+    );
+    const targetReadReady = Boolean(
+      directReadToolProduced
+      && requestedReadPath === normalizeProjectSourcePath(requiredPath)
+    );
+    await appendEventBestEffort(sessionId, {
+      type: targetReadReady
+        ? "feature_intent_target_evidence_recovery_completed"
+        : "feature_intent_target_evidence_recovery_failed",
+      at: new Date().toISOString(),
+      requiredPath,
+      requestedTool: requestedReadName,
+      modelRequestedPath: modelRequestedReadPath,
+      requestedPath: requestedReadPath,
+      serverBoundPath,
+    });
+    if (!targetReadReady) {
+      requests.length = 0;
+      events.length = 0;
+      await persistCheckpoint(
+        sessionId,
+        nextCheckpoint,
+        requireCheckpointPersistence,
+        "feature_intent_target_evidence_recovery_failed",
+      );
+      throw new Error(
+        `Feature Intent selected unread target ${requiredPath}, but the bounded recovery did not serialize an equivalent direct-source read.`,
+      );
+    }
+    deferredRequiredNextTool = {
+      name: FEATURE_INTENT_TOOL_NAME,
+      reference: "feature_intent_target_evidence_resume",
+      // Preserve the complete semantic request that selected this target.  On
+      // the next LM Studio prediction the control plane injects these exact
+      // arguments, so the model cannot silently choose a different feature or
+      // target after the required read completes.
+      args: mergeServerOwnedArguments(
+        {},
+        producedFeatureIntentRequest?.request?.arguments || {},
+      ),
+    };
+    nextCheckpoint.featureIntentResume = {
+      mode: "awaiting_target_read",
+      args: mergeServerOwnedArguments(
+        {},
+        producedFeatureIntentRequest?.request?.arguments || {},
+      ),
+      observedResultCount: observedToolResultCount(
+        messages,
+        FEATURE_INTENT_TOOL_NAME,
+      ),
+      observedDiscoveryResultCount: observedToolResultCountForNames(
+        messages,
+        ARCHITECTURE_DISCOVERY_TOOLS,
+      ),
+    };
   }
   if (requiredToolGateActive && !architectureValidationRequired && requests.length === 0) {
     await persistCheckpoint(
@@ -3490,6 +4396,18 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   }
 
   const acceptedRequests = requests.filter((entry) => verdictByCallId.get(entry.callId)?.ok !== false);
+  if (deferredRequiredNextTool && acceptedRequests.length === 1) {
+    nextCheckpoint.requiredNextTool = deferredRequiredNextTool;
+    await appendEventBestEffort(sessionId, {
+      type: "feature_intent_resume_locked",
+      at: new Date().toISOString(),
+      requiredTool: FEATURE_INTENT_TOOL_NAME,
+      targetFiles: featureIntentRequestedTargetFiles(
+        producedFeatureIntentRequest?.request,
+      ),
+      recoveryRead: acceptedRequests[0]?.request?.arguments?.path || "",
+    });
+  }
   if (acceptedRequests.length > 0) {
     const observedResults = core.snapshotMessages(messages)
       .flatMap((message: any) => message.toolResults || []);
@@ -3534,6 +4452,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     stopReason: stopReason || "unspecified",
     emittedEventCount: events.length,
     streamedReasoningEventCount,
+    predictionHeartbeatCount,
     toolRequestCount: requests.length,
     outputCommitted: true,
   });

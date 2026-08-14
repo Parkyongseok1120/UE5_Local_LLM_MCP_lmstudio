@@ -13,6 +13,7 @@ from typing import Any
 ROUTE_VERSION = 1
 MIN_ACTIVE_TOOLS = 5
 MAX_ACTIVE_TOOLS = 10
+MAX_PHASE_TOOL_CALLS = 12
 DEFAULT_MAX_FILES_PER_SLICE = 2
 MAX_FILES_PER_SLICE = 4
 MAX_SYMBOLS = 3
@@ -620,9 +621,10 @@ def derive_tool_route(
     max_calls = {
         # An existing multi-class feature commonly needs a directory listing,
         # both sides of two declaration/definition pairs, and one gate attempt.
-        # Eight read-only/planning calls avoid a noisy forced checkpoint while
-        # remaining bounded.
-        "planner": 8,
+        # Completion-frontier discovery may need three declaration/implementation
+        # pairs plus directory/search inventory and one gate handoff. Twelve
+        # remains bounded while avoiding a checkpoint immediately before the gate.
+        "planner": MAX_PHASE_TOOL_CALLS,
         # A compile/link repair commonly needs a symbol lookup, both sides of
         # a declaration/definition pair, a sketch gate, a mutation, static
         # validation, and a rebuild. Eight keeps that complete evidence-to-

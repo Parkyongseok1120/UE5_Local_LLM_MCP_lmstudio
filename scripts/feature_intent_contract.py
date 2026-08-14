@@ -61,6 +61,29 @@ _WRITE_SIGNALS = (
     "구현", "생성", "추가", "수정", "개선", "고쳐", "리팩터",
 )
 
+_COMPLETION_AUDIT_SIGNALS = (
+    r"\b(?:current\s+implementation|implementation\s+status|earliest\s+incomplete|"
+    r"first\s+incomplete|what\s+remains|first\s+unfinished)\b",
+    r"현재\s*(?:구현\s*)?상태",
+    r"구현\s*상태",
+    r"(?:가장\s*)?(?:앞|이른|먼저)[^\n]{0,40}(?:미완성|미완료|완료되지\s*않)",
+    r"아직\s*완료되지\s*않",
+    r"미완(?:성|료)[^\n]{0,20}(?:기능|단계)",
+)
+
+
+def requires_feature_completion_audit(request: str) -> bool:
+    """Return whether writes must be selected from a proven completion frontier.
+
+    This is server-side policy, not a prompt hint.  A request to inspect the
+    current implementation and complete the earliest missing behavior cannot
+    safely bind Feature Intent until direct source evidence proves both the
+    completed predecessors and one concrete functional gap.
+    """
+
+    source = _clean(request, limit=8000)
+    return any(re.search(pattern, source, re.IGNORECASE) for pattern in _COMPLETION_AUDIT_SIGNALS)
+
 
 def _canonical_hash(value: Any) -> str:
     raw = json.dumps(
